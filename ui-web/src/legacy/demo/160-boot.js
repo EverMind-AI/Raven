@@ -1,10 +1,11 @@
 /* ══ boot ═════════════════════════════════════════════════════════
    Declared here but queued after the whole assembled script: in live mode
-   every synchronous DS installer must run before the first data-driven paint.
+   every synchronous source installer must run before the first data-driven
+   paint.
    Each step is isolated so one failure stays visible and the rest still
    renders. */
 
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { bootError } from './040-state.js'
 import { sessionDraw, sessionOpen, sessionRows } from './050-rail.js'
 import { goState } from './090-composer.js'
@@ -127,7 +128,7 @@ export function install() {
    file:// or ?stub=1, which is what build.py's docstring points a design pass at
    -- no live layer runs, so this is the only call that ever lifts it. Returning
    early here left the splash over the overlay for the whole session. */
-  DS.onboard ??= demoOnbBackend();
+  sources.onboard ??= demoOnbBackend();
 
   addEventListener('load', () => {
     if (/[?&]onboard=demo/.test(location.search)) showOnboard();

@@ -6,6 +6,7 @@ import { CronApp } from './CronPage'
 import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
 
 import type { Shell } from '../../shell/bridge'
 import type { CronJob, CronSource } from './types'
@@ -31,7 +32,7 @@ function job(over: Partial<CronJob> = {}): CronJob {
 
 /* The island runs against the same two seams production wires up: a fake
    shell on window.RavenShell (T returns its key, so tests assert catalogue
-   keys, not translations) and a fixture source on window.DS.cron. */
+   keys, not translations) and a fixture source on sources.cron. */
 function install(rows: CronJob[], over: Partial<CronSource> = {}) {
   const calls: string[] = []
   const source: CronSource = {
@@ -52,7 +53,7 @@ function install(rows: CronJob[], over: Partial<CronSource> = {}) {
     showPage: (id) => shellCalls.push(['showPage', id]),
   }
   window.RavenShell = fakeShell
-  window.DS = { cron: source }
+  setSources({ cron: source })
   document.body.innerHTML =
     '<section id="cronPage"><div id="cronBody"></div></section>' +
     '<div class="veil" id="jobVeil" data-open="false"></div>' +
@@ -101,6 +102,7 @@ afterEach(() => {
   })
   cleanup()
   vi.restoreAllMocks()
+  resetSources()
 })
 
 describe('cron island', () => {

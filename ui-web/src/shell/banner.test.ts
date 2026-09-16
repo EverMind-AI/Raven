@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { draw, setFault } from './banner'
+import { resetSources, setSources } from '../state/sources'
 
 import type { BannerSource } from './banner'
 import type { Shell } from './bridge'
@@ -22,7 +23,7 @@ function wire(needsWebsearch = false, withSource = true): Wired {
   }
   window.RavenShell = shell
   const source: BannerSource = { websearchNeeds: () => needsWebsearch }
-  window.DS = withSource ? { banner: source } : {}
+  setSources(withSource ? { banner: source } : {})
   document.body.innerHTML = '<div id="bannerHost"></div>'
   return w
 }
@@ -34,10 +35,10 @@ afterEach(() => {
   /* A source, before the reset. `setFault` also draws, and a draw with no fault
      left to show consults the seam -- so clearing the module's state needs a
      source installed even after a case that deliberately ran without one. */
-  window.DS = { banner: { websearchNeeds: () => false } satisfies BannerSource }
+  setSources({ banner: { websearchNeeds: () => false } satisfies BannerSource })
   setFault(null)
   delete window.RavenShell
-  delete window.DS
+  resetSources()
   document.body.innerHTML = ''
 })
 

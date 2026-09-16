@@ -2,7 +2,7 @@
    The renderer is the rail island (ui-web/src/features/rail/). The fixture source
    owns its rows; live mode replaces the whole source with live-owned storage. */
 
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { SESSION_FIXTURES } from './030-fixtures.js'
 import { turn } from './040-state.js'
 import { openDemoSession } from './060-conversation.js'
@@ -13,7 +13,7 @@ function markNewCurrent() { RavenIslands.rail.markNew(); }
    the live layer no longer replaces it, which is the part that mattered. */
 function renameTitle() { RavenIslands.rail.rename(); }
 
-const sessionSource = () => DS.sessions;
+const sessionSource = () => sources.sessions;
 const sessionRows = () => sessionSource().snapshot().rows;
 const sessionReplace = (rows) => sessionSource().replace(rows);
 const sessionDraw = () => RavenIslands.rail.draw();
@@ -28,7 +28,7 @@ export function install() {
    deleteAll is the exception and is installed by demo/130-settings.js, next to
    the rest of that page's writes, because wiping the list here means clearing
    page state only this layer can reach. */
-  DS.sessions ??= (() => {
+  sources.sessions ??= (() => {
     let rows = SESSION_FIXTURES;
     return {
       snapshot: () => ({ rows, cur: sessionCurrent(), busy: turn.busy() }),

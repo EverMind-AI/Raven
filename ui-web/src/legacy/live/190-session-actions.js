@@ -5,7 +5,7 @@
    delegated run's pane never claims to fork a session it does not have. */
 
 import { gateway } from '../../state/gateway'
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { $, T } from '../demo/010-kernel.js'
 import { confirmAsk, down, sess } from '../demo/040-state.js'
 import { sessionDraw, sessionOpen, sessionRows } from '../demo/050-rail.js'
@@ -51,7 +51,7 @@ async function compressNow() {
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  DS.transcript.branch = () => {
+  sources.transcript.branch = () => {
     gateway().call('session.branch', { session_id: sessionCurrent() })
       .then((r) => {
         if (!r.session_id) { toast(T('gui.sess.branch_empty')); return; }
@@ -64,7 +64,7 @@ export function install() {
       .catch((e) => toast(T('gui.op.branch_failed', { detail: e.message || e })));
   };
 
-  DS.composer.slash.forEach((x) => {
+  sources.composer.slash.forEach((x) => {
     if (x.id === 'gui.clear') {
       x.fn = () => confirmAsk(T('gui.clear_title'), T('gui.clear_body'), T('gui.clear_yes'), () => {
         /* Which conversation was cleared, read once. The reply used to ask for the

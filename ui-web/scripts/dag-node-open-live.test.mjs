@@ -46,10 +46,10 @@ async function harness({ rows = [{ kind: 'spawn', agent: 'raven', label: 'qc' }]
     },
   })
   await fakeGateway(() => Promise.resolve({}))
-  const { DS } = await import('../src/legacy/seam/000-datasource.js')
-  DS.transcript = {}
+  const { setSources, sources } = await import('../src/state/sources')
+  setSources({ transcript: {} })
   part.install()
-  return { part, DS, calls }
+  return { part, sources, calls }
 }
 
 afterEach(() => {
@@ -88,9 +88,9 @@ describe('opening a graph node from the live layer', () => {
 
   it('opens a spawn record without the palette either', async () => {
     deskReady(true)
-    const { DS, calls } = await harness()
+    const { sources, calls } = await harness()
 
-    DS.transcript.openSpawn('raven', 'qc')
+    sources.transcript.openSpawn('raven', 'qc')
 
     expect(calls).toEqual([['openRow', 'qc']])
   })
@@ -102,10 +102,10 @@ describe('opening a graph node from the live layer', () => {
        to look; the window this MR stops opening a palette beside was never
        raised on this branch. */
     deskReady(true)
-    const { DS, calls } = await harness({ rows: [] })
+    const { sources, calls } = await harness({ rows: [] })
     vi.useFakeTimers()
 
-    DS.transcript.openSpawn('raven', 'qc')
+    sources.transcript.openSpawn('raven', 'qc')
     /* The retries run on a 700ms ladder; four of them exhaust it. */
     await vi.advanceTimersByTimeAsync(700 * 5)
 
@@ -115,9 +115,9 @@ describe('opening a graph node from the live layer', () => {
 
   it('keeps the panel view for a spawn record without the desk', async () => {
     deskReady(false)
-    const { DS, calls } = await harness()
+    const { sources, calls } = await harness()
 
-    DS.transcript.openSpawn('raven', 'qc')
+    sources.transcript.openSpawn('raven', 'qc')
 
     expect(calls).toEqual([['setWs', true, 'agents'], ['openRow', 'qc']])
   })

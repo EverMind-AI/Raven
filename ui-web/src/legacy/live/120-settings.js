@@ -14,7 +14,7 @@
    it can happen at all. Refusing one notice is a decision about that notice. */
 
 import { gateway } from '../../state/gateway'
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { $, LANG, T, langSet } from '../demo/010-kernel.js'
 import { TOOL_GROUPS } from '../demo/030-fixtures.js'
 import { modelCurrent, modelSet, queueDraw, sess, turn } from '../demo/040-state.js'
@@ -179,7 +179,7 @@ const settingsErr = (e) => (e.data && e.data.detail) || e.message || e;
    One key, both front ends: config.language also drives the TUI (which
    polls it) and the language the agent replies in. */
 /* Named, and a local rather than a binding the demo layer declares for this
-   layer to fill: the pick reaches it through DS.settings.setLang below.
+   layer to fill: the pick reaches it through sources.settings.setLang below.
    langSet moves the language and the catalogue together; what is added here is
    the persist and the redraw of everything drawn from JavaScript. */
 async function langPickLive(next, { persist } = {}) {
@@ -350,7 +350,7 @@ function stagedTier() { const t = staged.tier; staged.tier = null; return t; }
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  DS.banner = {
+  sources.banner = {
     websearchNeeds: () => false,
   };
 
@@ -373,7 +373,7 @@ export function install() {
       .catch(() => { toast(T('gui.perm.save_failed')); return false; });
   };
 
-  DS.settings = {
+  sources.settings = {
     load: async () => {
       /* The tool inventory is part of settings. Loading it here keeps every
        opener on the island's one refresh path rather than replacing the
@@ -477,7 +477,7 @@ export function install() {
     setLang: (v) => { langPickLive(v, { persist: true }); },
   };
 
-  DS.tier = {
+  sources.tier = {
     read: async () => {
       /* A draft asks too, and the handler answers the catalogue and its default
        for a key it has never seen -- which is exactly what the first turn of a
@@ -501,7 +501,7 @@ export function install() {
     },
   };
 
-  DS.model = {
+  sources.model = {
     providers: () => providersLive,
     persist: persistModel,
     setProtocol: async (model, provider, protocol) => {
@@ -512,7 +512,7 @@ export function install() {
     openProviderModels: (provider) => RavenIslands.settings.openProviderModels(provider),
   };
 
-  DS.composer.beforeSend = openModelsForMissingProvider;
+  sources.composer.beforeSend = openModelsForMissingProvider;
 
   $('#modelChip').onclick = () => {
     if (openModelsForMissingProvider()) return;

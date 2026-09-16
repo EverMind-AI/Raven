@@ -13,7 +13,7 @@
    re-measure what the write just changed. */
 
 import { gateway } from '../../state/gateway'
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { drawWs, setWs, wsOpen, wsPick } from '../demo/100-workspace.js'
 import { bootPage } from '../demo/160-boot.js'
 import { onEvent } from './050-turn.js'
@@ -113,7 +113,7 @@ function dagOpenNode(runId, n) {
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  DS.xa = {
+  sources.xa = {
     load: (probe) => xaFetch(!!probe),
     act: async (op, row, args) => {
       const a = args || {};
@@ -184,7 +184,7 @@ export function install() {
    answer. Assigned as fields, the way live/060-parked.js and
    live/190-session-actions.js add theirs -- the source object itself was built
    back in live/040-history.js. */
-  DS.transcript.openDagNode = (runId, nodeId, summary) => dagOpenNode(runId, { id: nodeId, summary });
+  sources.transcript.openDagNode = (runId, nodeId, summary) => dagOpenNode(runId, { id: nodeId, summary });
 
   /* Per-node status for a card whose events are long gone: `dag.get` reads the
    run back off disk, reconciled against the registry, so a graph reopened from
@@ -194,21 +194,21 @@ export function install() {
    dependency, a prompt template or an input -- a field this mapper did not name
    was a field the card could not have. The shape the card wants is decided by the
    adapter that reads it (ui-web/src/features/dag/nodes.ts), not by this seam. */
-  DS.transcript.dagRun = (runId) => gateway().call('dag.get', { run_id: runId, session_key: sessionCurrent() })
+  sources.transcript.dagRun = (runId) => gateway().call('dag.get', { run_id: runId, session_key: sessionCurrent() })
     .then((r) => (r && r.run) || {});
 
   /* One spawned run's messages so far. Answers a MOVING stream while the run is
    live: the record's own transcript.jsonl is only written when the run finishes,
    and until then `subagent.context` serves the activity collector's copy, which
    the acp backend republishes on every update it receives. */
-  DS.transcript.spawnRecord = (callId) =>
+  sources.transcript.spawnRecord = (callId) =>
     gateway().call('subagent.context', { id: callId, session_id: sessionCurrent() });
 
   /* Every delegated call this conversation made. Read once per conversation, to
    turn a restored card's task id into the record id its stream is read by: a
    record's directory is `<stamp>-<task_id>`, so the row is found by suffix. */
-  DS.transcript.spawnList = () => {
-    /* Guarded like DS.agents.list is: a server without the subagent surface answers
+  sources.transcript.spawnList = () => {
+    /* Guarded like sources.agents.list is: a server without the subagent surface answers
      -32601, and a card that asked would then re-ask on every reopen for an answer
      that cannot arrive. */
     if (!rpcHas('subagent')) return Promise.resolve([]);
@@ -219,7 +219,7 @@ export function install() {
   /* "View in workspace" on a spawn row: open the panel on the run's own record,
    not just on the list. The list may not have caught the new run yet, so a
    couple of short retries cover the gap between the call and its row. */
-  DS.transcript.openSpawn = (agent, label) => {
+  sources.transcript.openSpawn = (agent, label) => {
     /* Same rule as dagOpenNode: `openRow` below raises the window, and in desk
      mode that is the whole answer. The panel's agents view is only needed where
      there are no windows. */
@@ -265,8 +265,9 @@ export function install() {
     },
   });
 
-  /* This is the live manifest's last part. Every synchronous DS installer is now
-   in place, so the first data-driven paint cannot observe a fixture source. */
+  /* This is the live manifest's last part. Every synchronous source installer
+   is now in place, so the first data-driven paint cannot observe a fixture
+   source. */
   queueMicrotask(bootPage);
 }
 

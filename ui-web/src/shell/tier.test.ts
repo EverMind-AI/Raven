@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as session from './session'
 import * as tier from './tier'
+import { resetSources, setSources } from '../state/sources'
 
 import type { Shell } from './bridge'
 import type { TierReply, TierSource } from './tier'
@@ -44,7 +45,7 @@ function source(): void {
     read: () => { asked.push(null); return answer(null) },
     set: (mode) => { asked.push(mode); return answer(mode) },
   }
-  window.DS = { tier: src } as unknown as typeof window.DS
+  setSources({ tier: src })
 }
 
 beforeEach(() => {
@@ -63,6 +64,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   tier._resetForTests()
   session._resetForTests()
+  resetSources()
 })
 
 const chip = (): HTMLElement => document.getElementById('tierChip')!

@@ -6,6 +6,7 @@ import { BrowserApp } from './BrowserPage'
 import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
 
 import type { Shell } from '../../shell/bridge'
 import type { BrowserSource, ChromiumSource, LinksSource, UrlRow } from './types'
@@ -17,7 +18,7 @@ const shellCalls: Array<[string, unknown]> = []
 
 /* The island runs against the same two seams production wires up: a fake
    shell on window.RavenShell (T returns its key, so tests assert catalogue
-   keys, not translations) and a source on window.DS.browser. */
+   keys, not translations) and a source on sources.browser. */
 function wire(source: BrowserSource, lang = 'en'): void {
   shellCalls.length = 0
   document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'
@@ -33,7 +34,7 @@ function wire(source: BrowserSource, lang = 'en'): void {
     wsShows: () => true,
   }
   window.RavenShell = fakeShell
-  window.DS = { browser: source }
+  setSources({ browser: source })
   document.body.innerHTML = '<div class="ws-body" id="wsBody"></div>'
 }
 
@@ -90,6 +91,7 @@ afterEach(() => {
   cleanup()
   store._resetForTests()
   vi.restoreAllMocks()
+  resetSources()
 })
 
 describe('browser island, links shape (the fixture source)', () => {

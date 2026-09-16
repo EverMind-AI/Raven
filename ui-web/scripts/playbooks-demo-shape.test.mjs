@@ -31,10 +31,10 @@ async function fixtures() {
   const part = await loadPart(() => import('../src/legacy/demo/154-playbooks.js'), {
     globals: { RavenIslands: { playbooks: { open() {}, close() {} } } },
   })
-  const { DS } = await import('../src/legacy/seam/000-datasource.js')
+  const { sources } = await import('../src/state/sources')
   part.install()
-  if (!DS.playbooks) throw new Error('DS.playbooks is absent from the demo layer')
-  return DS.playbooks
+  if (!sources.playbooks) throw new Error('sources.playbooks is absent from the demo layer')
+  return sources.playbooks
 }
 
 describe('the demo playbook fixtures', () => {

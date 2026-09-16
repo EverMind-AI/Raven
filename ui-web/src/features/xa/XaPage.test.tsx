@@ -6,6 +6,7 @@ import { XaApp } from './XaPage'
 import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
 
 import type { Shell } from '../../shell/bridge'
 import type { XaActArgs, XaRow, XaSource } from './types'
@@ -42,7 +43,7 @@ function row(over: Partial<XaRow> = {}): XaRow {
 
 /* The island runs against the same two seams production wires: a fake
    shell on window.RavenShell (T returns its key, so tests assert catalogue
-   keys, not translations) and a fixture source on window.DS.xa. */
+   keys, not translations) and a fixture source on sources.xa. */
 function install(rows: XaRow[], over: Partial<XaSource> = {}) {
   const acts: Array<[string, string, XaActArgs]> = []
   const loads: boolean[] = []
@@ -81,7 +82,7 @@ function install(rows: XaRow[], over: Partial<XaSource> = {}) {
     },
   }
   window.RavenShell = fakeShell
-  window.DS = { xa: source }
+  setSources({ xa: source })
   document.body.innerHTML =
     '<section id="xaPage"><div id="xaBody"></div></section>' +
     '<aside id="detail" data-open="false"><b id="dTitle">—</b><div id="dBody"></div></aside>' +
@@ -189,6 +190,7 @@ afterEach(() => {
     store.sheetDismissed()
   })
   cleanup()
+  resetSources()
 })
 
 describe('xa island', () => {

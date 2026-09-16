@@ -5,7 +5,7 @@
    source before the first paint. */
 
 import { gateway } from '../../state/gateway'
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { T } from '../demo/010-kernel.js'
 import { CHANNELS, chanName } from '../demo/030-fixtures.js'
 import { rpcHas } from './220-browser.js'
@@ -41,7 +41,7 @@ let gatewayRunningLive = false;
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  DS.conn = {
+  sources.conn = {
     /* `initial` is the page-open fetch: only that one toasts a failed load or
      warns about a gateway that is not receiving -- a background reload (the
      scan poll's refresh) stays silent, as the old page did. */

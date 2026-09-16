@@ -9,6 +9,7 @@ import * as attachmentCache from '../../shell/attachment-cache'
 import * as tail from '../transcript/tail'
 
 import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources } from '../../state/sources'
 
 import type { ComposerSource, SlashCmd } from './types'
 import type { Shell } from '../../shell/bridge'
@@ -102,7 +103,7 @@ function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; cal
     ...over,
   }
   window.RavenShell = fakeShell
-  window.DS = { composer: source }
+  setSources({ composer: source })
   document.body.innerHTML = DOCK
   return { source, calls }
 }
@@ -154,6 +155,7 @@ afterEach(() => {
   lang = 'zh'
   vi.useRealTimers()
   vi.restoreAllMocks()
+  resetSources()
 })
 
 describe('the send button', () => {

@@ -12,7 +12,7 @@
 // Stable per-name hue: same plugin, same colour, every render and page.
 // Kept as a shell helper because the memory drawer uses it too.
 
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { $, T, mk } from './010-kernel.js'
 import { PLUGINS, attnCount } from './030-fixtures.js'
 import { closeDetail, decorateCloseDetail, decorateExtSet, decorateShowPage, extTab } from './120-capabilities.js'
@@ -137,8 +137,8 @@ export function install() {
 
   /* The fixture source: a canned catalog behind the same interface the rpc
    source implements. Registered, not declared-for-override -- live mode
-   installs its own DS.plugins and this object is never consulted. */
-  DS.plugins ??= (() => {
+   installs its own sources.plugins and this object is never consulted. */
+  sources.plugins ??= (() => {
     const CATS = ['developer', 'productivity', 'data'];
     const MARKET = [
       { id: 'github-mcp', name: 'GitHub', publisher: 'github.com', verified: true,

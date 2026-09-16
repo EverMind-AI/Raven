@@ -11,7 +11,7 @@
    this source leaves out are the ones a run would have needed: the watch that
    keeps the list fresh, the per-run record, and the painter that draws one. */
 
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { $, T } from './010-kernel.js'
 import { WS, bumpWs, drawWs, hunkFromEdit, hunkFromUnified, hunkFromWrite, setWs, setWsFull, wsArgs, wsOpen, wsPick, wsRecordChange, wsShowsTurn, wsTab, wsWide } from './100-workspace.js'
 import { composing } from './150-chrome.js'
@@ -61,7 +61,7 @@ function wsOnToolDone(name, args, ok, preview, ms, diff) {
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  DS.agents ??= { list: async () => [] };
+  sources.agents ??= { list: async () => [] };
 
   $('#wsBtn').onclick = () => RavenIslands.workspace.toggleDesk();
   $('#wsClose').onclick = () => setWs(false);

@@ -10,6 +10,8 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { fakeGateway, loadPart, looseQuery } from '../../../scripts/legacy-part.mjs'
 
+import type { Sources } from '../../state/sources'
+
 interface Answer {
   deleted?: string | null
   still_on_disk?: boolean
@@ -17,18 +19,24 @@ interface Answer {
 
 interface Row { id: string; title: string }
 
-/* What the parts install onto the seam. `DS` is a bare `{}` in the legacy
-   source, so the shape a test drives it through is declared here. */
-interface Seam {
-  composer: object
-  transcript: object
-  sessions: { remove(s: Row): void; deleteAll(): Promise<void> }
+/* The two verbs this test drives, off the source the part installs. Narrower
+   than RailSource on purpose: the part installs them onto whatever object the
+   demo layer registered, and a test that named the whole interface would have
+   to fake every other verb to say anything about these two. */
+interface Sessions { remove(s: Row): void; deleteAll(): Promise<void> }
+
+/* Imported after loadPart, never at the top of the file: loadPart resets the
+   module registry, so the graph it loads gets a fresh state/sources -- and a
+   binding taken before that reset belongs to the previous one. */
+async function seam(): Promise<{ set(patch: Partial<Sources>): void; sessions(): Sessions }> {
+  const { setSources, sources } = await import('../../state/sources')
+  return { set: setSources, sessions: () => sources.sessions as unknown as Sessions }
 }
 
 const label = (key: string, vars?: Record<string, unknown>) =>
   (vars ? `${key}|${JSON.stringify(vars)}` : key)
 
-/* `DS.sessions.remove` as live/080-overrides.js installs it. The rest of that
+/* `sources.sessions.remove` as live/080-overrides.js installs it. The rest of that
    part reaches for dozens of collaborators that have nothing to do with the
    decision under test, so those are fakes; the decision is the part's own.
    `RavenIslands.rail.removeRow` is what "the row goes" means -- nothing else
@@ -74,14 +82,11 @@ async function harness(answer: Answer | Error) {
     if (answer instanceof Error) throw answer
     return answer
   })
-  const { DS } = await import('../../legacy/seam/000-datasource.js')
-  const ds = DS as unknown as Seam
-  ds.composer = {}
-  ds.sessions = {} as Seam['sessions']
-  ds.transcript = {}
+  const ds = await seam()
+  ds.set({ composer: {}, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
   part.install()
   return {
-    run: async (s: Row) => { ds.sessions.remove(s); await settled },
+    run: async (s: Row) => { ds.sessions().remove(s); await settled },
     left,
     toast,
   }
@@ -153,11 +158,10 @@ async function bulkHarness(answers: Record<string, Answer | Error>) {
     if (a instanceof Error) throw a
     return a
   })
-  const { DS } = await import('../../legacy/seam/000-datasource.js')
-  const ds = DS as unknown as Seam
-  ds.sessions = {} as Seam['sessions']
+  const ds = await seam()
+  ds.set({ sessions: {} } as unknown as Partial<Sources>)
   part.install()
-  return { deleteAll: () => ds.sessions.deleteAll(), left: () => live.map((s) => s.id) }
+  return { deleteAll: () => ds.sessions().deleteAll(), left: () => live.map((s) => s.id) }
 }
 
 describe('clearing every session from the rail', () => {

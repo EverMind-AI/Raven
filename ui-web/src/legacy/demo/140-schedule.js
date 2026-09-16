@@ -4,7 +4,7 @@
    handler and the live layer's redrawAll still call -- and the fixture
    source. */
 
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { $, T } from './010-kernel.js'
 import { CRONS, FREQ } from './030-fixtures.js'
 import { sessionDraw, sessionOpen, sessionRows } from './050-rail.js'
@@ -29,7 +29,7 @@ function drawKb() {
    run-opening actions in both layers, and the live layer's turn refresh and
    redrawAll still call -- and the fixture source. Opening a run closes this
    page and lands on the session it made, which is why the source's own
-   actions close it: DS.cron.runNow and DS.cron.openRun below, and the live
+   actions close it: sources.cron.runNow and sources.cron.openRun below, and the live
    twin at live/100-schedules.js. The rail opens the page by importing the
    island (features/rail/RailPage.tsx); it does not come through here. */
 function closeCron() { RavenIslands.cron.close(); }
@@ -47,8 +47,8 @@ export function install() {
   /* The fixture source: the demo has no memory engine behind it, so it
    answers list with the down marker and the island shows the page's down
    note. Registered, not declared-for-override -- live mode installs its
-   own DS.memory and this object is never consulted. */
-  DS.memory ??= {
+   own sources.memory and this object is never consulted. */
+  sources.memory ??= {
     stats: async () => null,
     list: async () => { throw { down: true }; },
     remove: async () => {},
@@ -56,9 +56,9 @@ export function install() {
 
   /* The fixture source: the demo's canned jobs behind the same interface the
    rpc source implements. Registered, not declared-for-override -- live mode
-   installs its own DS.cron and this object is never consulted. cronWhen and
+   installs its own sources.cron and this object is never consulted. cronWhen and
    cronExprHuman live in the island bundle now (window globals). */
-  DS.cron ??= {
+  sources.cron ??= {
     rows: async () => CRONS,
     toggle: async (j) => {
       j.on = !j.on;
@@ -86,7 +86,7 @@ export function install() {
       const s = { id: 'n' + Date.now(), title: j.name, last: T('gui.cron.manual_run'), when: T('gui.sess.just_now'),
         run: null, from: 'cron', job: j.id };
       sessionRows().unshift(s); sessionSet(s.id); sessionDraw(); sessionOpen(s);
-      DS.composer.send(j.what);
+      sources.composer.send(j.what);
       toast(T('gui.cron.running_x', { name: j.name }));
     },
     openRun: async (j, run) => {

@@ -4,7 +4,7 @@
    seam replaces the fixture source before the first paint. */
 
 import { gateway } from '../../state/gateway'
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { T } from '../demo/010-kernel.js'
 import { sess } from '../demo/040-state.js'
 import { sessionDraw, sessionOpen, sessionRows } from '../demo/050-rail.js'
@@ -64,7 +64,7 @@ function jobToSave(j) {
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  DS.cron = {
+  sources.cron = {
     rows: () => gateway().call('cron.list', {}).then((r) => r.jobs.map(cronToRow)),
     toggle: (j) => gateway().call('cron.set_enabled', { id: j.id, enabled: !j.on })
       .then(() => toast(T(!j.on ? 'gui.cron.resumed_x' : 'gui.cron.paused_x', { name: j.name })))

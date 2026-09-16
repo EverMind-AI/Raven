@@ -15,17 +15,17 @@ import { describe, expect, it } from 'vitest'
 
 import { fakeGateway, loadPart } from './legacy-part.mjs'
 
-/* `DS.agents.instanceSend` as the part installs it, with the real `mediaOf`
+/* `sources.agents.instanceSend` as the part installs it, with the real `mediaOf`
    and the real note text behind it -- the note is what splits the message. */
 async function sender(calls) {
   const part = await loadPart(() => import('../src/legacy/live/230-tabs.js'), {
     globals: { sessionCurrent: () => 's1', RavenIslands: {} },
   })
   await fakeGateway((method, params) => { calls.push([method, params]); return Promise.resolve({}) })
-  const { DS } = await import('../src/legacy/seam/000-datasource.js')
+  const { sources } = await import('../src/state/sources')
   part.install()
-  if (!DS.agents?.instanceSend) throw new Error('instanceSend is absent from the live layer')
-  return DS.agents.instanceSend
+  if (!sources.agents?.instanceSend) throw new Error('instanceSend is absent from the live layer')
+  return sources.agents.instanceSend
 }
 
 const { I18N } = await import('../src/legacy/demo/010-kernel.js')

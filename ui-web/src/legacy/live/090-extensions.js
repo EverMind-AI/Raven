@@ -4,7 +4,7 @@
    settings.set. */
 
 import { gateway } from '../../state/gateway'
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { T } from '../demo/010-kernel.js'
 import { pmToggle } from '../demo/153-plugins.js'
 
@@ -130,7 +130,7 @@ async function loadExt() {
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  DS.capabilities = {
+  sources.capabilities = {
     loaded: () => extLoaded,
     load: async () => { await loadExt(); return true; },
   };

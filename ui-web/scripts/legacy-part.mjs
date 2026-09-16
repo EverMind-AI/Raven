@@ -61,7 +61,7 @@ export async function fakeGateway(handler) {
   return transport
 }
 
-/* The parts of one layer ('seam' / 'demo' / 'live') in the order
+/* The parts of one layer ('demo' / 'live') in the order
    src/legacy/index.js installs them, which is the order the concatenated
    script ran them in. A few rules are about the shape of the source rather
    than about a behaviour a harness can drive, and the install order is what

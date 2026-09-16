@@ -1,7 +1,7 @@
 /* ---- boot ---------------------------------------------------------- */
 
 import { gateway } from '../../state/gateway'
-import { DS } from '../seam/000-datasource.js'
+import { sources } from '../../state/sources'
 import { hostPlatformSet } from '../demo/010-kernel.js'
 import { sess } from '../demo/040-state.js'
 import { sessionRows } from '../demo/050-rail.js'
@@ -20,7 +20,7 @@ import { resumeUpgrade, showUpNote, watchForUpdates } from './210-update-notice.
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  DS.onboard = {
+  sources.onboard = {
     options: () => gateway().call('model.options', {}),
     saveKey: (slug, api_key, api_base) => gateway().call('model.save_key', {
       slug,

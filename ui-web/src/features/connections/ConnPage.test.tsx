@@ -6,6 +6,7 @@ import { ConnApp } from './ConnPage'
 import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
 
 import type { Shell } from '../../shell/bridge'
 import type { ConnChannel, ConnQr, ConnSource } from './types'
@@ -30,7 +31,7 @@ function chan(over: Partial<ConnChannel> = {}): ConnChannel {
 
 /* The island runs against the same two seams production wires up: a fake
    shell on window.RavenShell (T returns its key, so tests assert catalogue
-   keys, not translations) and a fixture source on window.DS.conn. */
+   keys, not translations) and a fixture source on sources.conn. */
 function install(rows: ConnChannel[], over: Partial<ConnSource> = {}) {
   const calls: Array<[string, unknown]> = []
   const source: ConnSource = {
@@ -64,7 +65,7 @@ function install(rows: ConnChannel[], over: Partial<ConnSource> = {}) {
     showPage: (id) => shellCalls.push(['showPage', id]),
   }
   window.RavenShell = fakeShell
-  window.DS = { conn: source }
+  setSources({ conn: source })
   document.body.innerHTML =
     '<section id="connPage"><div id="connBody"></div></section>' +
     '<div class="veil" id="connVeil" data-open="false"></div>' +
@@ -165,6 +166,7 @@ afterEach(() => {
   })
   cleanup()
   vi.restoreAllMocks()
+  resetSources()
 })
 
 describe('connections island', () => {

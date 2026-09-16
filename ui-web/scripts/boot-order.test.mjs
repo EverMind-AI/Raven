@@ -105,7 +105,7 @@ describe('the page boot order', () => {
     const body = last.slice(opened, last.indexOf('\n}\n', opened))
     expect(body.trimEnd().endsWith('queueMicrotask(bootPage);')).toBe(true)
 
-    const installs = [...live.matchAll(/^\s*DS\.[A-Za-z0-9_.]+\s*=/gm)]
+    const installs = [...live.matchAll(/^\s*sources\.[A-Za-z0-9_.]+\s*=/gm)]
     expect(installs.length).toBeGreaterThan(10)
 
     const listed = [...index.matchAll(/^import \* as \w+ from '\.\/live\/([^']+)'$/gm)].map((m) => m[1])
@@ -125,7 +125,7 @@ describe('first-run model setup', () => {
   })
 
   it('guards New Task, Send, and the model selector with the same redirect', () => {
-    expect(live).toContain('DS.composer.beforeSend = openModelsForMissingProvider;')
+    expect(live).toContain('sources.composer.beforeSend = openModelsForMissingProvider;')
     expect(live.match(/if \(openModelsForMissingProvider\(\)\) return;/g)).toHaveLength(2)
   })
 })

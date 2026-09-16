@@ -21,10 +21,10 @@ async function source(answers) {
     calls.push([method, params])
     return Promise.resolve(answers[method])
   })
-  const { DS } = await import('../src/legacy/seam/000-datasource.js')
+  const { sources } = await import('../src/state/sources')
   part.install()
-  if (!DS.playbooks) throw new Error('DS.playbooks is absent from the live layer')
-  return { source: DS.playbooks, calls }
+  if (!sources.playbooks) throw new Error('sources.playbooks is absent from the live layer')
+  return { source: sources.playbooks, calls }
 }
 
 describe('the live playbook source', () => {
