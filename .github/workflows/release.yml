@@ -75,6 +75,9 @@ jobs:
           # Raven-Design and Raven-PPT disabled when they are not installed.
           uv build --wheel plugins-dist/design-engine -o dist
           uv build --wheel plugins-dist/ppt-engine -o dist
+          # The hosted-memory plugin (Mem0 / Zep / MemOS) ships too; install.sh
+          # does not pull it yet, so it installs by hand with `uv tool install --with`.
+          uv build --wheel plugins-dist/cloud-memory -o dist
 
       # 4) Sanity gate: the wheel MUST contain the bundle and MUST NOT carry
       #    node_modules or ui-tui sources (keeps the wheel lean and the smoke honest).

@@ -1,0 +1,40 @@
+[plugin]
+id                 = "cloud-memory"
+version            = "0.1.0"
+display_name       = "Cloud memory (Mem0 / Zep / MemOS)"
+raven              = ">=0.1"
+bundled            = false
+
+# Three hosted services, one shape each: an HTTP client and an API key. The
+# host runs whichever ``memory.backend`` names; the other two stay inert.
+[[plugin.contributes.memory_backends]]
+name    = "mem0"
+factory = "raven_cloud_memory.mem0:make_backend"
+
+[[plugin.contributes.memory_backends]]
+name    = "zep"
+factory = "raven_cloud_memory.zep:make_backend"
+
+[[plugin.contributes.memory_backends]]
+name    = "memos"
+factory = "raven_cloud_memory.memos:make_backend"
+
+[[plugin.contributes.onboard]]
+name    = "mem0"
+factory = "raven_cloud_memory.onboard:make_mem0_step"
+
+[[plugin.contributes.onboard]]
+name    = "zep"
+factory = "raven_cloud_memory.onboard:make_zep_step"
+
+[[plugin.contributes.onboard]]
+name    = "memos"
+factory = "raven_cloud_memory.onboard:make_memos_step"
+
+# Each backend reads the slice keyed by its own name --
+# ``plugins.config["mem0"]``, ``["zep"]``, ``["memos"]`` -- so the three keys
+# never share a slot. Identity is not declared here: ``user_id`` comes from
+# the host through ``ServiceLocator``, never from a plugin's own slice.
+[plugin.config_schema]
+api_key  = { type = "string" }
+base_url = { type = "string" }

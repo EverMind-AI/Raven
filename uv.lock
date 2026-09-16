@@ -10,6 +10,7 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "cloud-memory",
     "design-engine",
     "everos-memory",
     "ppt-engine",
@@ -538,6 +539,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b9/2e/0090cbf739cee7d23781ad4b89a9894a41538e4fcf4c31dcdd705b78eb8b/click-8.1.8.tar.gz", hash = "sha256:ed53c9d8990d83c2a27deae68e4ee337473f6330c040a31d4225c9574d16096a", size = 226593, upload-time = "2024-12-21T18:38:44.339Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7e/d4/7ebdbd03970677812aac39c869717059dbb71a4cfc033ca6e5221787892c/click-8.1.8-py3-none-any.whl", hash = "sha256:63c132bbbed01578a06712a2d1f497bb62d9c1c0d329b7903a866228027263b2", size = 98188, upload-time = "2024-12-21T18:38:41.666Z" },
+]
+
+[[package]]
+name = "cloud-memory"
+version = "0.1.0"
+source = { editable = "plugins-dist/cloud-memory" }
+dependencies = [
+    { name = "httpx" },
+    { name = "raven" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.28.0,<1.0.0" },
+    { name = "raven", editable = "." },
 ]
 
 [[package]]
@@ -3726,6 +3742,7 @@ channels = [
     { name = "wecom-aibot-sdk-python" },
 ]
 dev = [
+    { name = "cloud-memory" },
     { name = "design-engine" },
     { name = "everos-memory" },
     { name = "ppt-engine" },
@@ -3770,6 +3787,7 @@ requires-dist = [
     { name = "anyio", marker = "extra == 'sandbox'", specifier = ">=4.0" },
     { name = "boxlite", marker = "sys_platform != 'win32' and extra == 'sandbox'", specifier = "==0.9.5" },
     { name = "click", specifier = ">=8.1" },
+    { name = "cloud-memory", marker = "extra == 'dev'", editable = "plugins-dist/cloud-memory" },
     { name = "croniter", specifier = ">=6.0.0,<7.0.0" },
     { name = "design-engine", marker = "extra == 'dev'", editable = "plugins-dist/design-engine" },
     { name = "dingtalk-stream", marker = "extra == 'channel-dingtalk'", specifier = ">=0.24.0,<1.0.0" },
