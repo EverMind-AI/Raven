@@ -5219,6 +5219,8 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-pane:has(.instance-conversation) .desk-pane-body { overflow: hidden; }
 .desk-pane-body > .diff { min-height: 100%; }
 .desk-pane-body > .fwrap { height: 100%; }
+.desk-pane-body > .desk-browser { height: 100%; display: flex; flex-direction: column; }
+.desk-pane:has(.desk-browser) .desk-pane-body { overflow: hidden; }
 .instance-conversation { position: relative; height: 100%; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .instance-conversation .satx { flex: 1; min-height: 0; overflow-y: auto; }
 /* Room for the composer, and the glass the transcript scrolls under -- but only

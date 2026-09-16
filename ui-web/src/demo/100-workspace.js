@@ -120,8 +120,9 @@ function wsRecordChange(path, kind, hunk) {
 
 function setWs(open, tab) {
   if (open && tab && document.documentElement.classList.contains('desk-ready')) {
-    const desk = RavenIslands.workspace && RavenIslands.workspace.openDeskTab;
-    if (desk && tab !== 'browser') { desk(tab); return; }
+    const ws = RavenIslands.workspace || {};
+    if (tab === 'browser' && ws.openDeskBrowser) { ws.openDeskBrowser(); return; }
+    if (ws.openDeskTab && tab !== 'browser') { ws.openDeskTab(tab); return; }
   }
   wsOpen = open;
   if (tab) wsTab = tab;
@@ -170,8 +171,9 @@ function bumpWs() {
    note rather than being replaced by the launcher. */
 function wsPick(tab) {
   if (document.documentElement.classList.contains('desk-ready')) {
-    const desk = RavenIslands.workspace && RavenIslands.workspace.openDeskTab;
-    if (desk && tab !== 'browser') { desk(tab); return; }
+    const ws = RavenIslands.workspace || {};
+    if (tab === 'browser' && ws.openDeskBrowser) { ws.openDeskBrowser(); return; }
+    if (ws.openDeskTab && tab !== 'browser') { ws.openDeskTab(tab); return; }
   }
   wsTab = tab; wsPicked = true;
   drawWs(); bumpWs();

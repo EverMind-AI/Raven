@@ -142,7 +142,15 @@ export const noFavAdd = (origin: string): void => {
   noFav.add(origin)
 }
 
+/* Whether a desk pane is hosting the view. The legacy panel answers through
+   `wsShows`; the desk hides that panel outright, so a pane says so itself. */
+let deskPane = false
+export function setDeskPane(on: boolean): void {
+  deskPane = on
+}
+
 export function showing(): boolean {
+  if (deskPane) return true
   const s = shell()
   return s.wsShows ? s.wsShows('browser') : false
 }

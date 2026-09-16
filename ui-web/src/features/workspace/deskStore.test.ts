@@ -109,6 +109,17 @@ describe('desk store', () => {
     expect(desk.getState().solo).toBeNull()
   })
 
+  it('gives the shared browser one window, however often it is asked for', () => {
+    /* One Chromium, one stream: a second window would show the first one's
+       page, and the agent's first browser call of every turn asks for this. */
+    desk.openDeskBrowser()
+    desk.openDeskFile('/workspace/a.ts')
+    desk.openDeskBrowser()
+
+    expect(desk.getState().panes.map((pane) => pane.id)).toEqual(['browser', 'file:/workspace/a.ts'])
+    expect(desk.getState().active).toBe('browser')
+  })
+
   it('still replaces a file pane, because that is how it re-reads', () => {
     /* `FileView` renders the file object directly. Re-opening is what picks up a
        download path the first caller did not pass, and what makes `FileBody`
@@ -313,6 +324,12 @@ describe('what a reload finds on the desk', () => {
     desk.openDeskAgentRecord({ kind: 'spawn', id: 'call-7', agent: 'raven', label: 'research' })
 
     expect(desk.saved('s1')!.open).toEqual([{ k: 'record', id: 'call-7' }])
+  })
+
+  it('records the browser window, which reopens from its kind alone', () => {
+    desk.openDeskBrowser()
+
+    expect(desk.saved('s1')!.open).toEqual([{ k: 'browser' }])
   })
 
   it('records no diff window', () => {

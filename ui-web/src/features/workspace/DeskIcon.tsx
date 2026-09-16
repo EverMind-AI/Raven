@@ -6,7 +6,13 @@ import type { JSX } from 'react'
 /* Tabs and panes share this table: a pane's kind is not a tab (there is no
    `file` tab any more, and no `deliverables` pane -- a deliverable opens as the
    file it is), so the parameter is the union rather than either one. */
-export function DeskIcon({ kind }: { kind: DeskTab | 'file' }): JSX.Element {
+export function DeskIcon({ kind }: { kind: DeskTab | 'file' | 'browser' }): JSX.Element {
+  if (kind === 'browser') return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M3.5 12h17M12 3.5c3 3 3 14 0 17M12 3.5c-3 3-3 14 0 17" />
+    </svg>
+  )
   if (kind === 'agents') return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
       <rect x="5" y="7" width="14" height="11" rx="3" />

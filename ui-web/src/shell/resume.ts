@@ -61,6 +61,10 @@ async function whenListed<T>(pick: () => T | null, ask: () => Promise<void>, ope
 }
 
 async function replay(intent: DeskIntent): Promise<void> {
+  if (intent.k === 'browser') {
+    desk.openDeskBrowser()
+    return
+  }
   if (intent.k === 'file') {
     desk.openDeskFile(intent.path)
     return

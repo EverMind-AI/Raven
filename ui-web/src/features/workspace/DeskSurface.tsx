@@ -3,6 +3,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 
+import { BrowserApp } from '../browser/BrowserPage'
+import * as browser from '../browser/store'
 import { AgentRecordConversation, InstanceConversation } from '../subagents/SubagentsPage'
 import { InstanceMode } from '../subagents/InstanceMode'
 import { InstanceModel } from '../subagents/InstanceModel'
@@ -69,7 +71,8 @@ function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
          slug, a name for the machine. Read the other way round, a graph node's
          pane was headed by its id whatever the run knew about it. */
       ? pane.row.label || pane.row.node || pane.row.id || t('gui.ws.agents')
-      : pane.kind === 'file' ? pane.file.path.split('/').pop() || pane.file.path : pane.change.name
+      : pane.kind === 'browser' ? t('gui.ws.browser')
+        : pane.kind === 'file' ? pane.file.path.split('/').pop() || pane.file.path : pane.change.name
   return (
     <section
       ref={(el) => refPane(pane.id, el)}
@@ -110,8 +113,30 @@ function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
         {pane.kind === 'file' ? <FileView ws={workspace.shared()} file={pane.file} /> : null}
         {pane.kind === 'agent' ? <InstanceConversation row={pane.row} /> : null}
         {pane.kind === 'agent-record' ? <AgentRecordConversation row={pane.row} /> : null}
+        {pane.kind === 'browser' ? <BrowserPaneBody /> : null}
       </div>
     </section>
+  )
+}
+
+/* The shared Chromium's view, in a desk window. The browser island was written
+   for the legacy panel's box and reads its visibility off that panel, which
+   the desk hides; the pane stands in for the box and says it is showing. */
+function BrowserPaneBody(): JSX.Element {
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (box.current) browser.setHost(box.current)
+    browser.hook()
+    browser.setDeskPane(true)
+    return () => {
+      browser.setDeskPane(false)
+      browser.hidden()
+    }
+  }, [])
+  return (
+    <div ref={box} className="ws-body desk-browser">
+      <BrowserApp />
+    </div>
   )
 }
 

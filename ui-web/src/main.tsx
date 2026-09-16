@@ -453,6 +453,7 @@ window.RavenIslands = {
     hunkFromUnified: workspaceHunks.fromUnified,
     toggleDesk: desk.toggleDesk,
     openDeskTab: desk.openDeskTab,
+    openDeskBrowser: desk.openDeskBrowser,
     openFile: desk.openDeskFile,
     openDiff: desk.openDeskDiff,
     openAgent: desk.openDeskAgent,

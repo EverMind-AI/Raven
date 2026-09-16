@@ -34,6 +34,7 @@ export type DeskIntent =
   | { k: 'file'; path: string }
   | { k: 'agent'; agent: string; handle: string; run?: string; node?: string }
   | { k: 'record'; id?: string; run?: string; node?: string; label?: string }
+  | { k: 'browser' }
 
 export interface DeskSaved {
   tab: DeskTab
@@ -56,6 +57,7 @@ const KEPT = slot<DeskSaved>('desk', 2)
 export const saved = (key: string): DeskSaved | null => KEPT.read(key)
 
 const intentOf = (pane: DeskPane): DeskIntent | null => {
+  if (pane.kind === 'browser') return { k: 'browser' }
   if (pane.kind === 'file') {
     return { k: 'file', path: pane.file.path }
   }
@@ -489,6 +491,14 @@ export function openDeskAgent(row: InstanceRow, recordId?: string | null): void 
      is nothing there for opening one to clear. */
   readItem('agents', `${row.agent}:${row.handle}`)
   addPane({ id: `agent:${row.agent}:${row.handle}`, kind: 'agent', row }, supersedes)
+}
+
+/* One pane, one browser: the shared Chromium has a single stream, so a second
+   window would show the first one's page. */
+export const BROWSER_PANE_ID = 'browser'
+
+export function openDeskBrowser(): void {
+  addPane({ id: BROWSER_PANE_ID, kind: 'browser' })
 }
 
 export function openDeskAgentRecord(row: AgentRow): void {

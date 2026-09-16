@@ -15,6 +15,7 @@ export type DeskPane =
   | { id: string; kind: 'file'; file: WsFile }
   | { id: string; kind: 'agent'; row: InstanceRow }
   | { id: string; kind: 'agent-record'; row: AgentRow }
+  | { id: 'browser'; kind: 'browser' }
 
 export interface DeskSplits {
   column: number

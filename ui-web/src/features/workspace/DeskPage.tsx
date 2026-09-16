@@ -14,6 +14,7 @@ export {
   notifyDesk,
   openDeskAgent,
   openDeskAgentRecord,
+  openDeskBrowser,
   openDeskDiff,
   openDeskFile,
   openDeskTab,
