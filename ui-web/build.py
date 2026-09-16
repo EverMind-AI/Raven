@@ -196,9 +196,12 @@ def main() -> None:
 
 def _check_boot_snapshot(index: Path, url: str, golden: str) -> None:
     """Refuse a page whose booted DOM shape moved; see scripts/boot-snapshot.mjs."""
+    node = shutil.which("node")
+    if node is None:
+        raise SystemExit("ui-web/build.py: node is not on PATH; the boot snapshot gate needs it")
     result = subprocess.run(
         [
-            "node",
+            node,
             str(ROOT / "scripts" / "boot-snapshot.mjs"),
             str(index),
             "--url",
