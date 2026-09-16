@@ -106,8 +106,8 @@ const el = <T extends HTMLElement>(id: string): T | null => document.getElementB
 /* The chip reads its own state, which is why it carries no hover label: the
    detail of each tier belongs in the panel the click opens. Nothing to remove
    for that -- page.html ships #permChip with no data-tip and no data-i18n-tip
-   for applyI18n to fill, and the legacy drawPerm's `delete chip.dataset.tip`
-   was dead there too. It did not come across. */
+   for the lang store to fill, and the legacy drawPerm's
+   `delete chip.dataset.tip` was dead there too. It did not come across. */
 export function draw(): void {
   const cur = TIERS.find((p) => p.id === mode) || TIERS[0]!
   const name = el('permName')

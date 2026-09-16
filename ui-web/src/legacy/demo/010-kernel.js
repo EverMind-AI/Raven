@@ -1,28 +1,28 @@
 /* ═══════════════════════════════════════════════════════════════════
-   The page's own small runtime: the message catalogue and the helpers
-   every part reaches for. There is one data path now -- a page with no
-   raven behind it reads the same contract off a fixture transport
-   (ui-web/src/rpc/fixtures/) -- so nothing here knows which.
+   The page's own small runtime: the helpers every part reaches for.
+   There is one data path now -- a page with no raven behind it reads the
+   same contract off a fixture transport (ui-web/src/rpc/fixtures/) -- so
+   nothing here knows which.
+
+   The message catalogue and the language are src/i18n/t.ts and
+   src/state/lang.ts; what is left here is the names the other parts still
+   import, re-exported from those two.
    ═══════════════════════════════════════════════════════════════════ */
 
-import catalog from '../../../../i18n/messages.json'
+import { code as LANG, I18N, T, fillVars, slashText, slashName, slashHelp } from '../../i18n/t'
+import * as lang from '../../state/lang'
 
 const $ = (s) => document.querySelector(s);
 const mk = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x != null) n.textContent = x; return n; };
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
 
-/* ── i18n ────────────────────────────────────────────────────────────
-   The catalogue comes from i18n/messages.json at build time —
-   the same file the TUI generates its own copy from, so one edit moves
-   both front ends. LANG mirrors config.language. */
-const I18N = { slash: catalog.slash, ui: catalog.ui };
-let LANG = 'en';
 /* The only writer of LANG, and the reason it has one: the current language and
    the catalogue rendered over the static markup have to move together, and
-   three separate places used to assign the first and remember the second. The
-   live layer calls this rather than assigning; what it adds on top is the
-   persist and the redraw of everything drawn from JavaScript. */
-function langSet(v) { LANG = v; applyI18n(); }
+   three separate places used to assign the first and remember the second. Both
+   halves are state/lang.ts now, and this forwards to the setter that does not
+   notify: moving the language has never repainted what is drawn from
+   JavaScript, which every caller does for itself. */
+function langSet(v) { lang.setQuiet(v); }
 /* The GATEWAY host's OS family -- host-side actions (reveal in Finder) happen
    there, not in this browser. The UA is only the prior for the usual localhost
    case; system.hello corrects it. The live layer calls the setter rather than
@@ -39,36 +39,6 @@ function hostPlatformSet(v) { HOST_PLATFORM = v; }
 function applyDecorators(list, base) {
   return (list ?? []).reduce((f, wrap) => wrap(f), base);
 }
-const fillVars = (s, vars) =>
-  vars ? String(s).replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : String(s);
-
-const T = (key, vars, fallback) => {
-  const e = I18N.ui[key] || {};
-  return fillVars(e[LANG] != null ? e[LANG] : (e.en != null ? e.en : (fallback != null ? fallback : key)), vars);
-};
-
-const slashText = (id) => {
-  const e = I18N.slash[id] || {};
-  return (LANG !== 'en' && e[LANG]) || e.en || {};
-};
-const slashName = (id) => slashText(id).name || id;
-const slashHelp = (id) => slashText(id).help || '';
-
-/* Static markup carries keys, not copy: data-i18n for text, -ph for a
-   placeholder, -title / -aria for the two attributes that are read out. */
-function applyI18n(root) {
-  (root || document).querySelectorAll('[data-i18n]').forEach((n) => { n.textContent = T(n.dataset.i18n); });
-  (root || document).querySelectorAll('[data-i18n-ph]').forEach((n) => { n.placeholder = T(n.dataset.i18nPh); });
-  (root || document).querySelectorAll('[data-i18n-title]').forEach((n) => { n.title = T(n.dataset.i18nTitle); });
-  (root || document).querySelectorAll('[data-i18n-aria]').forEach((n) => {
-    n.setAttribute('aria-label', T(n.dataset.i18nAria));
-  });
-  (root || document).querySelectorAll('[data-i18n-tip]').forEach((n) => {
-    n.dataset.tip = T(n.dataset.i18nTip);
-  });
-  document.documentElement.lang = LANG === 'zh' ? 'zh-CN' : 'en';
-}
-
 /* Verbs come from i18n; a tool without an entry keeps its raw name rather
    than getting a made-up translation. mcp_* names show as [server] tool. */
 const MCP_RE = /^mcp_([^_]+)_(.+)$/;
@@ -125,4 +95,4 @@ export function install() {
     : /Win/.test(navigator.platform) ? 'windows' : 'linux';
 }
 
-export { $, mk, esc, I18N, LANG, langSet, HOST_PLATFORM, hostPlatformSet, applyDecorators, fillVars, T, slashText, slashName, slashHelp, applyI18n, MCP_RE, rawVerb, ACP_TITLE_RE, callParts, verb, verbIng, dur, COPY_ICO, tipFlash }
+export { $, mk, esc, I18N, LANG, langSet, HOST_PLATFORM, hostPlatformSet, applyDecorators, fillVars, T, slashText, slashName, slashHelp, MCP_RE, rawVerb, ACP_TITLE_RE, callParts, verb, verbIng, dur, COPY_ICO, tipFlash }
