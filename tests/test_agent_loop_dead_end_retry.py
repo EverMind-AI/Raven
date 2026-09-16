@@ -14,13 +14,16 @@ confident wrong one, and to empty this trigger while doing it.
 
 from __future__ import annotations
 
+import asyncio
+import json
+
 import pytest
 
 from raven.agent.loop import TURN_BUDGETS_KEY, AgentLoop, TurnBudgets, turn_budgets, turn_path
 from raven.agent.loop.bundles import EngineWiring, HostWiring, ToolWiring, TurnPolicy
 from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.contracts.loop_hooks import AgentHook, HookDecision
-from raven.providers.base import LLMProvider, LLMResponse
+from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
 
@@ -93,6 +96,10 @@ class _Scripted(LLMProvider):
         if self._step >= len(plan):
             self._plan += 1
             self._step = 0
+        if isinstance(out, BaseException):
+            # Counted before it is raised: an attempt that dies mid-flight is still
+            # an attempt that ran, and the tests below read that count.
+            raise out
         return out
 
     def get_default_model(self) -> str:
@@ -589,6 +596,103 @@ async def test_an_agent_that_budgets_no_rerun_is_salvaged_exactly_as_before(tmp_
     assert provider.attempts_used == 1
     assert hook.calls == 1
     assert out[0] == _Salvages.answer
+
+
+# --------------------------------------------------------------------------- #
+# What a rerun must not throw away with the attempt it discards                #
+# --------------------------------------------------------------------------- #
+
+
+def _typed_mid_turn(text: str) -> TurnRequest:
+    """A message the reader sends while the turn is already running, which the
+    scheduler merges into it (``BusyPolicy.INJECT``) rather than queueing."""
+    return TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="cli", chat_id="c1", sender_id="u", chat_type=ChatType.DM),
+        text=text,
+    )
+
+
+def _persisted(workspace) -> list[dict]:
+    """Everything the turn filed, markers included."""
+    files = sorted((workspace / "sessions").rglob("*.jsonl"))
+    assert files, "the turn filed nothing at all"
+    records = [json.loads(line) for f in files for line in f.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [r for r in records if r.get("_type") != "metadata"]
+
+
+@pytest.mark.asyncio
+async def test_a_correction_typed_while_the_attempt_ran_survives_the_rerun(tmp_path):
+    """The rerun throws the attempt's research away and asks the question again.
+    A correction the reader typed mid-turn is not research: the loop took it off the
+    inject queue, which does not offer it twice, so a seed rebuilt from the original
+    question alone silently un-asks it -- and the model answers the question the
+    reader had already corrected.
+    """
+    waiting = [_typed_mid_turn("Correction: Bob Jones, not Alice.")]
+    provider = _Scripted(_dead(), _answers("Bob Jones won it."))
+    agent = _loop(tmp_path, provider, [_Budgeted(dead_end_retries=1)])
+
+    await agent._process_message(
+        _req("who won, Alice?"), session_key="s1", drain=lambda: [waiting.pop()] if waiting else []
+    )
+
+    assert provider.attempts_used == 2, "the rerun ran, so there was a seed to check"
+    rerun_seed = provider.seeds[1]
+    assert any("Bob Jones, not Alice" in str(m.get("content")) for m in rerun_seed), (
+        "the rerun re-asked a question the reader had already corrected"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_correction_the_rerun_carried_is_in_what_the_turn_files(tmp_path):
+    """The other half of the same loss. Persistence reads the list the last attempt
+    returned, so a correction dropped from the rerun's seed is missing from the
+    session too -- and the next turn's history says the reader never sent it.
+    """
+    waiting = [_typed_mid_turn("Correction: Bob Jones, not Alice.")]
+    provider = _Scripted(_dead(), _answers("Bob Jones won it."))
+    agent = _loop(tmp_path, provider, [_Budgeted(dead_end_retries=1)])
+
+    await agent._process_message(
+        _req("who won, Alice?"), session_key="s1", drain=lambda: [waiting.pop()] if waiting else []
+    )
+
+    filed = _persisted(tmp_path)
+    assert any("Bob Jones, not Alice" in str(m.get("content")) for m in filed), (
+        "the session does not record a correction the reader sent and the model was shown"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_during_the_rerun_files_the_rerun_s_own_work(tmp_path):
+    """A rerun runs on a list of its own. The rescue that files a cancelled turn was
+    handed the first attempt's list, so a tool the reader watched the rerun run --
+    and its result -- reached the screen and then nothing: the record stopped at
+    work that had already been discarded.
+    """
+    provider = _Scripted(
+        _dead(),
+        [
+            LLMResponse(
+                content="",
+                tool_calls=[ToolCallRequest(id="call-a", name="list_dir", arguments={"path": "."})],
+                finish_reason="tool_calls",
+            ),
+            asyncio.CancelledError(),
+        ],
+    )
+    agent = _loop(tmp_path, provider, [_Budgeted(dead_end_retries=1)])
+
+    with pytest.raises(asyncio.CancelledError):
+        await agent._process_message(_req("look around"), session_key="s1")
+
+    filed = _persisted(tmp_path)
+    assert filed[-1].get("turn_ended", {}).get("status") == "cancelled"
+    calls = [c["id"] for m in filed for c in (m.get("tool_calls") or [])]
+    assert "call-a" in calls, "the rerun's tool call is not in what the cancel filed"
+    results = {str(m.get("tool_call_id")) for m in filed if m.get("role") == "tool"}
+    assert set(calls) <= results, "every filed tool call still needs a filed result"
 
 
 # --------------------------------------------------------------------------- #

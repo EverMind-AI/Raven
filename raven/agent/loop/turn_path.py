@@ -15,6 +15,7 @@ from raven.agent.loop._shared import (
     _IMAGE_SOURCES_KEY,
     _MAX_ITER_STATIC_FALLBACK,
     _MAX_ITER_SYNTHESIS_PROMPT,
+    _MID_TURN_USER_KEY,
     _NOTICE_KEY,
     _ORIGIN_KEY,
     _REASONING_MS_KEY,
@@ -1090,7 +1091,10 @@ class TurnPathMixin:
                         prefix = inj_text + "\n" if inj_text else ""
                         inj_text = f"{prefix}[injected message; attached files: {', '.join(inj_paths)}]"
                     if inj_text:
-                        messages.append({"role": "user", "content": inj_text})
+                        # Marked because the queue has now given this up: it was
+                        # delivered once, to a turn that may yet be thrown away and
+                        # run again. The mark is what lets the rerun carry it.
+                        messages.append({"role": "user", "content": inj_text, _MID_TURN_USER_KEY: True})
                         logger.info("inject: merged a mid-turn user message")
 
             # Proactive compaction layer (config-gated, factory-off): the same
@@ -2551,6 +2555,11 @@ class TurnPathMixin:
 
         async def _attempt(seed: list[dict], attempt: int):
             pending.update(rerun=False, reasons=[])
+            # The list this attempt appends to, for the rescue paths below. A rerun
+            # runs on a list of its own, and a turn cancelled during one used to be
+            # saved from the first attempt's -- so a tool the reader watched run in
+            # the rerun, and its result, were not in what the cancel filed.
+            live["messages"] = seed
             return await self._run_agent_loop(
                 seed,
                 on_progress=on_progress,
@@ -2582,6 +2591,19 @@ class TurnPathMixin:
         retry_seed = [dict(m) for m in initial_messages] if retries_left else None
         turn_t0 = monotonic()
         pending: dict[str, Any] = {"rerun": False, "reasons": []}
+        live: dict[str, list[dict]] = {"messages": initial_messages}
+
+        def _seed_for_the_rerun(msgs: list[dict]) -> list[dict]:
+            """The question again, plus whatever the reader said while the attempt ran.
+
+            The rerun exists to discard an attempt's research, and a correction typed
+            mid-turn is not research: the loop took it off the inject queue, which will
+            not offer it twice, so a seed rebuilt from the question alone silently
+            un-asks it. Read off the whole finished list rather than its tail, because
+            compaction may have moved the tail, and rebuilt from the untouched snapshot
+            each time, so carrying one forward twice cannot double it.
+            """
+            return [dict(m) for m in retry_seed] + [dict(m) for m in msgs if m.get(_MID_TURN_USER_KEY)]
 
         def _dead_reasons(final_content: str | None, msgs: list[dict], status: str) -> list[str]:
             # The scaffolding goes before the reading. This question used to be asked
@@ -2645,14 +2667,14 @@ class TurnPathMixin:
                         # attempt this is: the loop serves every agent, and the
                         # budget allows more reruns than the one.
                         await on_progress("That attempt produced no answer; running the turn again.")
-                    final_content, _, all_msgs, outcome = await _attempt([dict(m) for m in retry_seed], attempt_no)
+                    final_content, _, all_msgs, outcome = await _attempt(_seed_for_the_rerun(all_msgs), attempt_no)
         except asyncio.CancelledError:
             # A stop is not a failure, but it is also not amnesia: what already
             # streamed is work the reader saw, so it lands in the session with a
             # note saying a person ended the turn. Then the cancel proceeds.
             self._save_broken_turn(
                 session,
-                initial_messages,
+                live["messages"],
                 turn_start_idx,
                 turn_received_at,
                 streamed,
@@ -2663,7 +2685,7 @@ class TurnPathMixin:
         except Exception as exc:
             self._save_broken_turn(
                 session,
-                initial_messages,
+                live["messages"],
                 turn_start_idx,
                 turn_received_at,
                 streamed,
