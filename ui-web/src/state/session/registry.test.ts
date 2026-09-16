@@ -1,68 +1,80 @@
 // @vitest-environment happy-dom
-/* The live layer's session switch: what a round trip is allowed to paint once
+/* The registry's session switch: what a round trip is allowed to paint once
  * the reader has moved on, and when the new-task screen comes down.
  *
- * Driven through the real openLiveSession / startDraft / subscribe rather than
- * through assertions about their source, because the defect this pins is a
- * matter of ordering between two in-flight opens -- nothing about the text of
- * either function says which of them wins.
+ * Driven through the real switch rather than through assertions about its
+ * source, because the defect this pins is a matter of ordering between two
+ * in-flight opens -- nothing about the text of either function says which of
+ * them wins.
  */
 
 import { describe, expect, it } from 'vitest'
 
-import { fakeGateway, loadPart } from './legacy-part.mjs'
+import { fakeGateway, loadPart } from '../../../scripts/legacy-part.mjs'
 
-async function harness({ rows, deferSubscribe } = {}) {
-  const calls = []
+import type { SessRow } from '../../features/rail/types'
+
+type Registry = typeof import('./registry')
+type Overrides = typeof import('../../legacy/live/080-overrides.js')
+
+interface Row { id: string; title?: string; status?: string | null }
+interface Staged { model: unknown; tier: string | null; perm: string | null }
+
+async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?: boolean } = {}) {
+  const calls: unknown[][] = []
   document.body.innerHTML = '<h1 id="title"></h1><div id="stage"></div><div id="flash"></div>'
-  const boxes = {}
+  const boxes: Record<string, HTMLElement | null | undefined> = {}
   for (const id of ['#title', '#stage', '#flash']) boxes[id] = document.getElementById(id.slice(1))
   /* The top-bar editor stands IN PLACE OF h1#title, so while it is open that id
      resolves to nothing; committing puts the heading back and writes the typed
      name onto the row the editor captured when it opened. */
   const editor = { commit: () => {} }
-  const spare = new Map()
-  const $ = (selector) => {
+  const spare = new Map<string, HTMLElement>()
+  const $ = (selector: string): HTMLElement | null => {
     if (selector in boxes || selector === '#title') return boxes[selector] || null
     /* Everything install() wires that this file is not about. */
     if (!spare.has(selector)) spare.set(selector, document.createElement('div'))
-    return spare.get(selector)
+    return spare.get(selector) as HTMLElement
   }
-  let current = null
-  const state = { fresh: '1' }
-  const pending = []
-  const subs = []
-  /* The seam the live layer reaches openLiveSession through: sessionOpen is
-     sources.sessions.open, which the boot guard installs as openLiveSession. Bound
+  let current: string | null = null
+  const state: { fresh: string | null } = { fresh: '1' }
+  const pending: Array<{ id: string; res: (v: unknown) => void; rej: (e: unknown) => void }> = []
+  const subs: Array<{ id: string; res: () => void }> = []
+  /* The seam the registry reaches its own switch through: sessionOpen is
+     sources.sessions.open, which the boot guard installs as the switch. Bound
      through this holder rather than stubbed, so the reconnect drives the real
      function. */
-  const api = {}
-  const part = await loadPart(() => import('../src/legacy/live/080-overrides.js'), {
+  const api: { switchTo?: Registry['switchTo'] } = {}
+  /* The part is loaded first and the seam imported after it, which is the
+     order that keeps one module graph: a mock consulted from inside another
+     mock's factory would hand the override layer the unmocked parked-turn
+     module. */
+  const part = await loadPart(() => import('../../legacy/live/080-overrides.js'), {
     fakes: {
-      'src/shell/session': { current: () => current, setCurrent: (id) => { current = id; calls.push(['sessionSet', id]) } },
-      'src/features/rail/title': { plainTitle: (s) => String(s) },
-      'src/shell/toast': { show: (text) => calls.push(['toast', text]) },
-      'src/shell/ctxchip': { set: (used) => calls.push(['setCtx', used]) },
+      'src/shell/session': { current: () => current, setCurrent: (id: string | null) => { current = id; calls.push(['sessionSet', id]) } },
+      'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
+      'src/shell/toast': { show: (text: string) => calls.push(['toast', text]) },
+      'src/shell/ctxchip': { set: (used: number) => calls.push(['setCtx', used]) },
       'src/shell/banner': { draw: () => {} },
       'src/shell/tier': { load: () => calls.push(['loadTier']) },
       'src/shell/perm': { setFromConfig: () => {} },
-      'demo/010-kernel.js': { $, T: (key) => key },
+      'demo/010-kernel.js': { $, T: (key: string) => key },
       'demo/040-state.js': {
-        loadDraft: (id) => calls.push(['loadDraft', id]),
+        loadDraft: (id: string) => calls.push(['loadDraft', id]),
         parkDraft: () => {},
         queueClear: () => {},
         queueRestore: () => {},
-        sess: (id) => (rows || []).find((r) => r.id === id),
+        sess: (id: string) => (rows || []).find((r) => r.id === id),
         stop_: () => {},
         turn: {
           dispatch: () => {}, busy: () => false, snapshot: () => ({}),
-          restore: () => {}, reduce: (phase) => phase,
+          restore: () => {}, reduce: (phase: unknown) => phase,
         },
       },
       'demo/050-rail.js': {
         markNewCurrent: () => {},
         sessionDraw: () => calls.push(['sessionDraw']),
-        sessionOpen: (s) => api.openLiveSession(s),
+        sessionOpen: (s: Row) => api.switchTo!(s as SessRow),
         sessionReplace: () => {},
         sessionRows: () => rows || [],
       },
@@ -72,85 +84,87 @@ async function harness({ rows, deferSubscribe } = {}) {
       },
       'demo/070-transcript.js': {
         killStatus: () => {},
-        showStatus: (text) => calls.push(['showStatus', text]),
+        showStatus: (text: string) => calls.push(['showStatus', text]),
       },
       'demo/090-composer.js': { drawMeter: () => {}, goState: () => {}, ta: { focus: () => {} } },
       'demo/100-workspace.js': { setWs: () => {}, wsOnHistory: () => {}, wsReset: () => {} },
       'demo/120-capabilities.js': { drawCapsBadge: () => {}, showPage: () => {} },
       'demo/152-skills.js': { drawCaps: () => {} },
       'live/040-history.js': {
-        renderHistory: (messages) => { state.fresh = null; calls.push(['renderHistory', messages[0]]) },
+        renderHistory: (messages: Array<{ text: string }>) => { state.fresh = null; calls.push(['renderHistory', messages[0]]) },
       },
       'live/060-parked.js': {
         parkTurn: () => calls.push(['parkTurn']),
         restoreTurn: () => calls.push(['restoreTurn']),
       },
-      'src/features/workspace/source': { wsSetRoot: (root) => calls.push(['wsSetRoot', root]) },
+      'src/features/workspace/source': { wsSetRoot: (root: string) => calls.push(['wsSetRoot', root]) },
     },
     islands: {
       /* The streaming buffer the turn state resets through. */
       transcript: { nudge: () => {}, stopStream: () => {} },
-      workspace: { loadDeliveries: (id) => calls.push(['loadDeliveries', id]) },
+      workspace: { loadDeliveries: (id: string) => calls.push(['loadDeliveries', id]) },
       view: {
-        resume: (id) => calls.push(['viewResume', id]),
-        refreshDag: (id) => calls.push(['viewRefreshDag', id]),
+        resume: (id: string) => calls.push(['viewResume', id]),
+        refreshDag: (id: string) => calls.push(['viewRefreshDag', id]),
       },
       /* What the heading held when the editor was ended, so the order is
          assertable: ending it has to come before anything reads or writes
          h1#title, and while one is open that id resolves to nothing. */
       rail: {
         endRename: () => {
-          calls.push(['endRename', boxes['#title'] ? boxes['#title'].textContent : null])
+          calls.push(['endRename', boxes['#title'] ? boxes['#title']!.textContent : null])
           editor.commit()
         },
       },
     },
   })
-  Object.assign(api, part)
-  await fakeGateway((method, params) => {
+  const registry = (await import('./registry')) as Registry
+  api.switchTo = registry.switchTo
+  await fakeGateway((method: string, params: Record<string, string> = {}) => {
     calls.push(['rpc', method, params || {}])
     if (method === 'session.resume') {
-      return new Promise((res, rej) => pending.push({ id: params.session_id, res, rej }))
+      return new Promise((res, rej) => pending.push({ id: params.session_id!, res, rej }))
     }
     if (method === 'turn.subscribe') {
       const answer = { subscription_id: `sub:${params.session_key}` }
       if (!deferSubscribe) return Promise.resolve(answer)
-      return new Promise((res) => subs.push({ id: params.session_key, res: () => res(answer) }))
+      return new Promise((res) => subs.push({ id: params.session_key!, res: () => res(answer) }))
     }
     /* The model and permission refreshes a switch starts are the real ones
        here, and an empty envelope is a valid answer to both. */
     return Promise.resolve({})
   })
-  const parked = await import('../src/legacy/live/060-parked.js')
-  const turnState = await import('../src/legacy/live/050-turn.js')
-  const { setSources } = await import('../src/state/sources')
-  setSources({ composer: {}, sessions: {}, transcript: {} })
-  const rpcUi = await import('../src/legacy/live/020-rpc.js')
-  part.install()
+  const parked = await import('../../legacy/live/060-parked.js')
+  const turnState = await import('../../legacy/live/050-turn.js')
+  const overrides = part as Overrides
+  const { setSources } = await import('../sources')
+  setSources({ composer: {}, sessions: {}, transcript: {} } as never)
+  const rpcUi = await import('../../legacy/live/020-rpc.js')
+  overrides.install()
   const env = {
-    live: turnState.live,
-    subBySession: parked.subBySession,
-    subSession: parked.subSession,
-    parkedTurns: parked.parkedTurns,
-    staged: part.staged,
+    live: turnState.live as { subId: string | null },
+    subBySession: parked.subBySession as Record<string, string>,
+    subSession: parked.subSession as Record<string, string>,
+    parkedTurns: parked.parkedTurns as Map<string, unknown>,
+    staged: overrides.staged as Staged,
     sessionCurrent: () => current,
-    sessionSet: (id) => { current = id; calls.push(['sessionSet', id]) },
-    sess: (id) => (rows || []).find((r) => r.id === id),
+    sessionSet: (id: string | null) => { current = id; calls.push(['sessionSet', id]) },
+    sess: (id: string) => (rows || []).find((r) => r.id === id),
   }
-  const asked = (method) => calls.filter((c) => c[0] === 'rpc' && c[1] === method).map((c) => c[2])
+  const asked = (method: string) => calls.filter((c) => c[0] === 'rpc' && c[1] === method).map((c) => c[2])
   return {
-    subscribe: part.subscribe,
-    startDraft: part.startDraft,
-    openLiveSession: part.openLiveSession,
+    subscribe: registry.subscribe,
+    startDraft: registry.switchToDraft,
+    openLiveSession: (row: Row) => registry.switchTo(row as SessRow),
     /* The handler live/020-rpc.js's reconnect UI runs once the transport says
        the socket is back. Registered by install(), one registrar today. */
-    onReconnect: [...rpcUi.reconnectHandlers][0],
+    onReconnect: [...(rpcUi.reconnectHandlers as Set<() => Promise<void>>)][0]!,
     calls,
     env,
     state,
     asked,
-    title: () => (boxes['#title'] ? boxes['#title'].textContent : null),
-    openEditor: (typed) => {
+    title: () => (boxes['#title'] ? boxes['#title']!.textContent : null),
+    openEditor: (typed: string) => {
       const heading = boxes['#title']
       const captured = (rows || []).find((r) => r.id === current)
       delete boxes['#title']
@@ -160,21 +174,21 @@ async function harness({ rows, deferSubscribe } = {}) {
         editor.commit = () => {}
       }
     },
-    settle: (id, payload) => {
+    settle: (id: string, payload?: unknown) => {
       const found = pending.find((p) => p.id === id)
       if (!found) throw new Error(`no session.resume is in flight for ${id}`)
       pending.splice(pending.indexOf(found), 1)
       found.res(payload || { session_id: id, messages: [{ text: id }], info: {} })
       return new Promise((r) => setTimeout(r, 0))
     },
-    fail: (id, error) => {
+    fail: (id: string, error?: Error) => {
       const found = pending.find((p) => p.id === id)
       if (!found) throw new Error(`no session.resume is in flight for ${id}`)
       pending.splice(pending.indexOf(found), 1)
       found.rej(error || new Error('gone'))
       return new Promise((r) => setTimeout(r, 0))
     },
-    settleSub: (id) => {
+    settleSub: (id: string) => {
       const found = subs.find((p) => p.id === id)
       if (!found) throw new Error(`no turn.subscribe is in flight for ${id}`)
       subs.splice(subs.indexOf(found), 1)
@@ -186,11 +200,12 @@ async function harness({ rows, deferSubscribe } = {}) {
        for the conversation (features/rail/RailPage.tsx). Every switch a reader
        makes has this shape, and the pointer moving first is what lets a late
        answer tell that it is no longer the page. */
-    click: (row) => { env.sessionSet(row.id); return part.openLiveSession(row) },
+    click: (row: Row) => { env.sessionSet(row.id); return registry.switchTo(row as SessRow) },
   }
 }
 
-const painted = (calls) => calls.filter((c) => c[0] === 'renderHistory').map((c) => c[1] && c[1].text)
+const painted = (calls: unknown[][]) =>
+  calls.filter((c) => c[0] === 'renderHistory').map((c) => (c[1] as { text: string } | undefined)?.text)
 
 describe('the live session switch', () => {
   it('paints one conversation when one is opened', async () => {
@@ -249,13 +264,13 @@ describe('the live session switch', () => {
   })
 
   /* The reconnect is the one caller that builds a DETACHED { id, title } for
-     openLiveSession; every other one hands over the live row, whose title the
+     the switch; every other one hands over the live row, whose title the
      commit mutates in place. So it is the only one that can read a title, have
      the editor commit a different one underneath it, and then paint the value it
-     captured -- which is what happened, because the teardown lives inside
-     openLiveSession and ran after the lookup here.
+     captured -- which is what happened, because the teardown lives inside the
+     switch and ran after the lookup here.
 
-     Driven through the real reconnect handler rather than openLiveSession: the
+     Driven through the real reconnect handler rather than the switch: the
      ordering is between the two, so a test that calls the inner one cannot see
      it. */
   it('paints the title the editor committed, not the one it read first', async () => {
@@ -276,7 +291,7 @@ describe('the live session switch', () => {
 
     expect(h.calls).toContainEqual(['endRename', null])
     expect(h.title()).toBe('reconciliation audit')
-    expect(h.env.sess('a').title).toBe('reconciliation audit')
+    expect(h.env.sess('a')!.title).toBe('reconciliation audit')
   })
 
   it('drops the answer to an open the reader left for a new task', async () => {
@@ -432,7 +447,7 @@ describe('the live session switch', () => {
     /* The pick was for the conversation the reader was writing, and they left it
        without sending. Kept, it is spent by whichever conversation is sent next
        -- an invisible choice crossing from one conversation to another. Reset on
-       both paths out of a draft, exactly where `pendingModel` is. */
+       both paths out of a draft, exactly where the staged model is. */
     const h = await harness({ rows: [{ id: 'a' }] })
 
     h.env.staged.tier = 'max'
@@ -483,7 +498,7 @@ describe('the live session switch', () => {
     expect(h.env.staged.perm).toBeNull()
 
     /* Keyed to the opened id, then to no id at all: a draft runs the default. */
-    expect(h.asked('config.get').map((p) => p.session_id ?? null)).toEqual(['a', null])
+    expect(h.asked('config.get').map((p) => (p as { session_id?: string }).session_id ?? null)).toEqual(['a', null])
   })
 
   it('refreshes the model for the conversation being opened, not the one left behind', async () => {
@@ -498,6 +513,6 @@ describe('the live session switch', () => {
     h.openLiveSession({ id: 'b', title: 'Beta' })
     await h.settle('b')
 
-    expect(h.asked('model.options').map((p) => p.session_id)).toEqual(['a', 'b'])
+    expect(h.asked('model.options').map((p) => (p as { session_id?: string }).session_id)).toEqual(['a', 'b'])
   })
 })
