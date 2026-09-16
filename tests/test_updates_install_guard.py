@@ -224,3 +224,29 @@ class TestTheVerdict:
         fault = guard.inspect_install()
         assert fault is not None
         assert fault.reason == "upgrading"
+
+
+class TestTheMarkerPathReachesNoFurtherThanTheKernel:
+    """The handoff writes the marker from the environment it is replacing.
+
+    `_handoff_upgrade` calls `write_marker` while still running out of the old
+    uv tool environment, which carries only what that install depended on. A
+    marker path resolved through `raven.config` pulls pydantic in behind it and
+    the upgrade dies at the last step before the helper is even spawned.
+    """
+
+    def test_resolving_it_does_not_import_the_config_layer(self) -> None:
+        probe = (
+            "import sys\n"
+            "from raven.updates import install_guard\n"
+            "install_guard.marker_path()\n"
+            "leaked = sorted(m for m in sys.modules if m == 'pydantic' or m.startswith('raven.config'))\n"
+            "assert not leaked, leaked\n"
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert completed.returncode == 0, completed.stderr

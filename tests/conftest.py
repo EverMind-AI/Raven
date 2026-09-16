@@ -611,6 +611,69 @@ def _no_openrouter_network(tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _no_provider_probe(monkeypatch):
+    """Keep the credential probe's socket off the network, and only the socket.
+
+    `model.options` asks every configured provider for `/v1/models` to learn
+    what it serves, and a test that writes an address gets a real connection
+    attempt to it. On a developer's machine an unroutable address is refused in
+    milliseconds; on a CI runner the packets go nowhere and it waits out the
+    two-second timeout instead -- twice per call of the picker, which is how
+    `[ovms]`, whose address is `10.0.0.5:8080`, came to wait nearly four
+    seconds for something it was never going to reach.
+
+    Fenced at `_probe_models_endpoint`, the one place every HTTP probe opens its
+    client, rather than at `test_provider`: the vocabulary a caller reads back
+    -- `unknown_provider`, `not_configured`, `no_probe_endpoint` -- is decided
+    above this line, and a test asking which of those a section earns is asking
+    about that code, not about the network. A probe that hands in its own
+    `transport` is mounting a fake server on purpose, and that is the injection
+    point the function documents, so those go through untouched.
+    """
+    from raven.config import update_providers
+
+    real = update_providers._probe_models_endpoint
+
+    def unreachable(url, headers, *, timeout_s, transport=None, extras=()):
+        if transport is not None:
+            return real(url, headers, timeout_s=timeout_s, transport=transport, extras=extras)
+        return {
+            "ok": False,
+            "status": "network_error",
+            "elapsed_ms": 0,
+            "http_status": None,
+            "models_count": None,
+            "model_ids": None,
+            "error": "no probe in tests",
+        }
+
+    monkeypatch.setattr(update_providers, "_probe_models_endpoint", unreachable)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _no_huggingface_lookup(monkeypatch):
+    """Keep LiteLLM's context-window lookup off huggingface.co.
+
+    `rates._try_litellm_context_window` asks `litellm.get_model_info`, and for a
+    model whose row carries no window LiteLLM fetches
+    `huggingface.co/<model>/raw/main/config.json` to read `max_position_embeddings`.
+    It is one request per process, cached afterwards, which is why it lands on
+    whichever test in a worker happens to ask first -- a different name on every
+    run, each charged one to four seconds of waiting it did not cause.
+
+    The sibling above keeps raven's own catalogue fetch off the wire for the same
+    reason; this one was missed because the request is made inside LiteLLM rather
+    than here. `None` is the answer that function already gives when the fetch
+    fails, so nothing downstream sees a shape it does not handle.
+    """
+    from litellm import utils as litellm_utils
+
+    monkeypatch.setattr(litellm_utils, "_get_max_position_embeddings", lambda model_name: None)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_real_acp_journal(tmp_path, monkeypatch):
     """Keep ACP wire journals out of the real home.
 

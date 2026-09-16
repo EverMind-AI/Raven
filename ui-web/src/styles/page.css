@@ -3704,7 +3704,7 @@ details[open] summary { margin-bottom: 8px; }
    stacked over a lone button spends a row restating what the button already
    shows. The note a refused write leaves still drops to its own line. */
 .scard.inline { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
-.scard.inline > button { justify-self: end; }
+.scard.inline > button, .scard.inline > select, .scard.inline > .tkrow { justify-self: end; }
 .scard.inline > .nlmsg { grid-column: 1 / -1; }
 .snote {
   display: flex; align-items: flex-start; gap: 7px; font-size: 11.5px; color: var(--faint);
