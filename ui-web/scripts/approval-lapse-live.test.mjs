@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { fakeRpc, loadPart } from './legacy-part.mjs'
+import { fakeGateway, loadPart } from './legacy-part.mjs'
 
 async function run(reason) {
   const seen = { toasts: [], closed: [], turns: [] }
@@ -38,9 +38,9 @@ async function run(reason) {
       toast: (text) => seen.toasts.push(text),
     },
   })
-  const rpc = await fakeRpc(() => Promise.resolve({}))
+  const transport = await fakeGateway(() => Promise.resolve({}))
   part.install()
-  rpc.notify['approval.closed']({ approval_id: 'a1', conversation_id: 'tui:one', reason })
+  transport.emit('approval.closed', { approval_id: 'a1', conversation_id: 'tui:one', reason })
   return seen
 }
 

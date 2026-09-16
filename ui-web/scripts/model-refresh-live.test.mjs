@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { fakeRpc, loadPart, looseQuery } from './legacy-part.mjs'
+import { fakeGateway, loadPart, looseQuery } from './legacy-part.mjs'
 
 /* The settings part and the override part in one fresh graph: `viewGen` and
  * `staged` live in the second one and the first reads both.
@@ -53,7 +53,7 @@ async function live({ session = null, answers = null } = {}) {
       loadTier: () => {},
     },
   })
-  await fakeRpc((method, params) => {
+  await fakeGateway((method, params) => {
     if (switching) return new Promise(() => {})
     calls.push([method, params])
     /* `?? {}` so a call the case did not name -- the refresh a write kicks

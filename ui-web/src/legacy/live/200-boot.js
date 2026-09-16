@@ -1,5 +1,6 @@
 /* ---- boot ---------------------------------------------------------- */
 
+import { gateway } from '../../state/gateway'
 import { DS } from '../seam/000-datasource.js'
 import { hostPlatformSet } from '../demo/010-kernel.js'
 import { sess } from '../demo/040-state.js'
@@ -9,7 +10,7 @@ import { appVersionSet } from '../demo/130-settings.js'
 import { cronWarm } from '../demo/140-schedule.js'
 import { hideSplash, showOnboard } from '../demo/160-boot.js'
 import { shellReady } from './010-boot-guard.js'
-import { SURFACE, authFail, bootFail, rpc } from './020-rpc.js'
+import { SURFACE, authFail, bootFail } from './020-rpc.js'
 import { loadSessions } from './030-sessions.js'
 import { openLiveSession, startDraft } from './080-overrides.js'
 import { loadExt } from './090-extensions.js'
@@ -20,15 +21,15 @@ import { resumeUpgrade, showUpNote, watchForUpdates } from './210-update-notice.
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
   DS.onboard = {
-    options: () => rpc.call('model.options', {}),
-    saveKey: (slug, api_key, api_base) => rpc.call('model.save_key', {
+    options: () => gateway().call('model.options', {}),
+    saveKey: (slug, api_key, api_base) => gateway().call('model.save_key', {
       slug,
       ...(api_key ? { api_key } : {}),
       ...(api_base ? { api_base } : {}),
     }),
-    setModel: (value, provider) => rpc.call('config.set', { key: 'model', value, provider }),
+    setModel: (value, provider) => gateway().call('config.set', { key: 'model', value, provider }),
     recheck: async () => {
-      try { return (await rpc.call('setup.status', {})).provider_configured !== false; }
+      try { return (await gateway().call('setup.status', {})).provider_configured !== false; }
       catch { return true; }
     },
   };
@@ -42,15 +43,16 @@ export function install() {
     /* The first connect is the one place where a socket that never opened really
      does mean the session is not welcome: nothing has been served to this page
      yet that could have come from a gateway which then went away. The rejoin
-     path decides differently, and has to -- see rpc.rejoin. */
-    if (!(await rpc.connect())) { authFail(); return; }
+     path decides differently, and has to -- see the transport's rejoin and the
+     reconnect UI in live/020-rpc.js. */
+    if (!(await gateway().connect())) { authFail(); return; }
     try {
-      const hello = await rpc.call('system.hello', { client_version: '0.1.0', surface: SURFACE });
+      const hello = await gateway().call('system.hello', { client_version: '0.1.0', surface: SURFACE });
       if (hello && hello.platform) hostPlatformSet(hello.platform);
       // Before the first paint of anything data-driven: config.language decides
       // what every label below says.
       await loadLang();
-      const v = await rpc.call('system.version', {});
+      const v = await gateway().call('system.version', {});
       if (v.raven_version) appVersionSet(v.raven_version);
       drawFoot();
       /* Absent until system.version carries them; the row simply stays hidden,
@@ -62,7 +64,7 @@ export function install() {
        installs whatever is newest at click time. Ask again with `check: true`,
        after the paint and deliberately not awaited, so the number the reader is
        shown is the number they will get. */
-      rpc.call('system.version', { check: true })
+      gateway().call('system.version', { check: true })
         .then((fresh) => { if (fresh && fresh.update_available) showUpNote('ver', fresh.latest_version); })
         .catch(() => {});
       await loadSessions();
@@ -86,7 +88,7 @@ export function install() {
        page itself stays available on first run; ?onboard=1 retains the
        standalone onboarding flow for an explicit design or support pass. */
       try {
-        const setup = await rpc.call('setup.status', {});
+        const setup = await gateway().call('setup.status', {});
         setupState.providerConfigured = setup.provider_configured !== false;
         /* ?onboard=demo asked for the canned flow, which the demo shell has
          already put on screen. Both write into #onb, so opening this one would

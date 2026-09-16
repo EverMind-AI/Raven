@@ -8,13 +8,13 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { fakeRpc, loadPart } from './legacy-part.mjs'
+import { fakeGateway, loadPart } from './legacy-part.mjs'
 
 /* The seam the part installs, driven against a transport of our own: the
    filter is the whole subject, so the rows it is handed have to be ours. */
 async function roster(call) {
   const part = await loadPart(() => import('../src/legacy/live/230-tabs.js'))
-  await fakeRpc(call)
+  await fakeGateway(call)
   const { DS } = await import('../src/legacy/seam/000-datasource.js')
   part.install()
   if (!DS.agents) throw new Error('DS.agents is absent from the live layer')

@@ -5,7 +5,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { fakeRpc, loadPart, looseQuery } from '../../../scripts/legacy-part.mjs'
+import { fakeGateway, loadPart, looseQuery } from '../../../scripts/legacy-part.mjs'
 
 interface CapabilitiesSource {
   loaded(): boolean
@@ -190,7 +190,7 @@ describe('the live extension source', () => {
       }
       return ext
     })
-    await fakeRpc(call)
+    await fakeGateway(call)
     const skillsPart = await import('../../legacy/live/140-skills.js')
     const pluginsPart = await import('../../legacy/live/150-plugins.js')
     extPart.install()

@@ -3,12 +3,12 @@
 /* One delete per session, and a session that refuses stays in the list -- the
    rail must never claim something is gone while the file is still on disk. */
 
+import { gateway } from '../../state/gateway'
 import { DS } from '../seam/000-datasource.js'
 import { T } from '../demo/010-kernel.js'
 import { dropDraft } from '../demo/040-state.js'
 import { sessionReplace, sessionRows } from '../demo/050-rail.js'
 import { drawSettings } from '../demo/130-settings.js'
-import { rpc } from './020-rpc.js'
 import { startDraft } from './080-overrides.js'
 
 /* Everything this part used to do while the concatenated page script ran, in
@@ -29,7 +29,7 @@ export function install() {
          was removed, and when there was nothing to remove; keep it when the
          file survived, or when a server too old to carry the field leaves the
          question open. */
-        const r = await rpc.call('session.delete', { session_id: s.id });
+        const r = await gateway().call('session.delete', { session_id: s.id });
         if (r.deleted !== s.id && r.still_on_disk !== false) continue;
         gone.push(s.id); dropDraft(s.id);
       } catch { /* counted by what is left below */ }

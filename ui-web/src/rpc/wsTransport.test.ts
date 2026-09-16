@@ -5,9 +5,10 @@ import { WsTransport } from './wsTransport'
 
 import type { ConnectionState } from './transport'
 
-/* The behaviour under test is the whole of ui-web/src/live/020-rpc.js's rpc
-   object, so the first five cases are the ones scripts/rpc-connect.test.mjs
-   made against that file, with its FakeSocket brought along. */
+/* The behaviour under test is the whole of the rpc client that used to live in
+   ui-web/src/legacy/live/020-rpc.js, so the first five cases are the ones
+   scripts/rpc-connect.test.mjs made against that object, with its FakeSocket
+   brought along. That file is gone; these are its cases. */
 
 /* Enough of a socket to be opened, closed, written to and fed a frame.
    `readyState` starts CONNECTING, which is the state the page's own first

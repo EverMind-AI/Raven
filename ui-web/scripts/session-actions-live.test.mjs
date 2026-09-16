@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { fakeRpc, loadPart, looseQuery } from './legacy-part.mjs'
+import { fakeGateway, loadPart, looseQuery } from './legacy-part.mjs'
 
 async function harness({ rows }) {
   const calls = []
@@ -57,7 +57,7 @@ async function harness({ rows }) {
       toast: (text) => calls.push(['toast', text]),
     },
   })
-  await fakeRpc((method, params) => {
+  await fakeGateway((method, params) => {
     calls.push(['rpc', method, params && params.session_id])
     return new Promise((res, rej) => { settle = { res, rej } })
   })

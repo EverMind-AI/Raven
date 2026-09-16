@@ -1,9 +1,9 @@
 /* ---- session list ------------------------------------------------ */
 
+import { gateway } from '../../state/gateway'
 import { T } from '../demo/010-kernel.js'
 import { sess } from '../demo/040-state.js'
 import { sessionDraw, sessionReplace, sessionRows } from '../demo/050-rail.js'
-import { rpc } from './020-rpc.js'
 
 const DAY = 86400000;
 /* A row's stamp says when its visible conversation last changed, so it carries a
@@ -33,7 +33,7 @@ let cronNames = {};
 
 async function loadCronNames() {
   try {
-    const r = await rpc.call('cron.list', {});
+    const r = await gateway().call('cron.list', {});
     cronNames = {};
     (r.jobs || []).forEach((j) => { cronNames[j.id] = j.name; });
   } catch { /* keep whatever we had */ }
@@ -88,7 +88,7 @@ const SESS_CHANNELS = ['tui', 'cron'];
 
 async function loadSessions() {
   await loadCronNames();
-  const r = await rpc.call('session.list', { channels: SESS_CHANNELS });
+  const r = await gateway().call('session.list', { channels: SESS_CHANNELS });
   sessionReplace((r.sessions || []).map(rowFrom).sort((a, b) => (b.at || 0) - (a.at || 0)));
 }
 

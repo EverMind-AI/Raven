@@ -3,6 +3,7 @@
    what is genuinely live-side: which step is open, which calls are in
    flight, the say buffer the session row's preview reads, and the clocks. */
 
+import { gateway } from '../../state/gateway'
 import { DS } from '../seam/000-datasource.js'
 import { $, T, dur } from '../demo/010-kernel.js'
 import { down, queueShift, sess, sheetSession, turn } from '../demo/040-state.js'
@@ -13,7 +14,6 @@ import { drawMeter, goState } from '../demo/090-composer.js'
 import { setWs } from '../demo/100-workspace.js'
 import { wsOnTool, wsOnToolDone } from '../demo/110-subagents.js'
 import { refreshCron } from '../demo/140-schedule.js'
-import { rpc } from './020-rpc.js'
 import { SESS_CHANNELS, cleanPreview, cronNames, okOf, rowFrom, touchSession } from './030-sessions.js'
 import { park } from './060-parked.js'
 import { drainQueue, leaveDeletedSession, liveSend, softStop } from './080-overrides.js'
@@ -377,7 +377,7 @@ async function namingGaveUp(id) {
   const pending = namingTimers.get(id);
   let title = '';
   try {
-    const r = await rpc.call('session.title', { session_id: id });
+    const r = await gateway().call('session.title', { session_id: id });
     title = (r && r.title) || '';
   } catch { /* fall through to the captured line */ }
   settleNaming(id, title || (pending && pending.fallback) || '');
@@ -413,7 +413,7 @@ async function namingSuperseded(id) {
   if (!namingTimers.get(id)) return;
   let title = '';
   try {
-    const r = await rpc.call('session.title', { session_id: id });
+    const r = await gateway().call('session.title', { session_id: id });
     title = (r && r.title) || '';
   } catch { /* keep what the row shows */ }
   settleNaming(id, title);
@@ -444,7 +444,7 @@ function beginNaming(text) {
 
 async function refreshList() {
   try {
-    const r = await rpc.call('session.list', { channels: SESS_CHANNELS });
+    const r = await gateway().call('session.list', { channels: SESS_CHANNELS });
     const rows = (r.sessions || []).map(rowFrom);
     // Pins and persisted fields come from the server. Only the running/done
     // marker is client state; a not-yet-saved current row also survives until
@@ -491,7 +491,7 @@ export function install() {
    is reloaded and the group is simply gone -- which is exactly how an older
    resident gateway, with no session.pin to call at all, presents itself. Put
    the row back and say so. */
-  DS.sessions.pin = (id, pinned) => rpc.call('session.pin', { session_id: id, pinned: !!pinned })
+  DS.sessions.pin = (id, pinned) => gateway().call('session.pin', { session_id: id, pinned: !!pinned })
     .catch((e) => {
       const s = sess(id);
       if (s) { s.pin = !pinned; sessionDraw(); }

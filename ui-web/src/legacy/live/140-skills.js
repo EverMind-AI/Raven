@@ -9,9 +9,9 @@
    `{handled: true}`, the contract the island's catch reads. Both refresh the
    live source through loadExt so every installed surface answers the change. */
 
+import { gateway } from '../../state/gateway'
 import { DS } from '../seam/000-datasource.js'
 import { T } from '../demo/010-kernel.js'
-import { rpc } from './020-rpc.js'
 import { extLoaded, loadExt, skillsLive } from './090-extensions.js'
 
 const skillhubErr = (e) => (e.data && e.data.detail) || e.message || e;
@@ -20,17 +20,17 @@ const skillhubErr = (e) => (e.data && e.data.detail) || e.message || e;
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
   DS.skills = {
-    search: (p) => rpc.call('skillhub.search', {
+    search: (p) => gateway().call('skillhub.search', {
       query: p.query, category: p.category, page: p.page, limit: p.limit,
     }),
-    detail: (id) => rpc.call('skillhub.detail', { id }),
-    install: (id) => rpc.call('skillhub.install', { id })
+    detail: (id) => gateway().call('skillhub.detail', { id }),
+    install: (id) => gateway().call('skillhub.install', { id })
       .then(() => loadExt().catch(() => {}))
       .catch((e) => {
         toast(T('gui.plug.op_failed', { err: skillhubErr(e) }));
         throw { handled: true };
       }),
-    remove: (name) => rpc.call('skillhub.remove', { name })
+    remove: (name) => gateway().call('skillhub.remove', { name })
       .then(() => loadExt().catch(() => {}))
       .catch((e) => {
         toast(T('gui.plug.op_failed', { err: skillhubErr(e) }));

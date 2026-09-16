@@ -12,10 +12,10 @@
    availability check, which can cost up to ten seconds per entry and would only
    re-measure what the write just changed. */
 
+import { gateway } from '../../state/gateway'
 import { DS } from '../seam/000-datasource.js'
 import { drawWs, setWs, wsOpen, wsPick } from '../demo/100-workspace.js'
 import { bootPage } from '../demo/160-boot.js'
-import { rpc } from './020-rpc.js'
 import { onEvent } from './050-turn.js'
 import { rpcHas } from './220-browser.js'
 
@@ -65,7 +65,7 @@ function xaRowOf(r) {
 let xaSeen = new Map();
 
 async function xaFetch(probe) {
-  const res = await rpc.call('subagents.list', { probe: !!probe });
+  const res = await gateway().call('subagents.list', { probe: !!probe });
   /* A probe-less list reports every row as "unknown", which would blank the
      health line of a row that was ready a second ago -- connecting an agent
      would look like it broke it. The verdict cannot have changed by writing
@@ -121,14 +121,14 @@ export function install() {
         /* Only name / description / key travel: every execution field comes from
          the preset server-side. A page that could post a command line would make
          "which agent is this" unanswerable. */
-        await rpc.call('subagents.add', {
+        await gateway().call('subagents.add', {
           preset: row.preset || row.name,
           name: a.new_name || undefined,
           description: a.description || undefined,
           api_key: a.api_key || undefined,
         });
       } else if (op === 'update') {
-        await rpc.call('subagents.update', {
+        await gateway().call('subagents.update', {
           name: row.name,
           new_name: a.new_name && a.new_name !== row.name ? a.new_name : undefined,
           description: a.description,
@@ -139,7 +139,7 @@ export function install() {
          entry, so the server writes one from the folder's own manifest and puts
          the flag on it -- which is why connecting one back on is this same call
          and not a second mechanism. */
-        await rpc.call('subagents.toggle', { name: row.name, enabled: !!a.enabled });
+        await gateway().call('subagents.toggle', { name: row.name, enabled: !!a.enabled });
       } else if (op === 'migrate') {
         /* A stale transport is the one connect that cannot be a flag. There is no
          "change the transport" write -- `subagents.update` touches name,
@@ -148,8 +148,8 @@ export function install() {
          entry replaced rather than an entry mutated underneath its session
          handles. Toggling `enabled` would have left `upgrade_to` standing and
          the old command line in place. */
-        await rpc.call('subagents.remove', { name: row.name });
-        await rpc.call('subagents.add', {
+        await gateway().call('subagents.remove', { name: row.name });
+        await gateway().call('subagents.add', {
           preset: row.preset || row.name,
           name: row.name,
           description: row.description || undefined,
@@ -163,17 +163,17 @@ export function install() {
          The verdict is recorded server-side and comes back on the refetched
          rows (`last_test_ok` / `last_test_at_ms` / `last_test_detail`), so
          nothing here has to hold it. */
-        await rpc.call('subagents.test', { name: row.name, source: row.configured ? 'config' : 'preset' });
+        await gateway().call('subagents.test', { name: row.name, source: row.configured ? 'config' : 'preset' });
       } else if (op === 'test_cancel') {
         /* Kills the agent's process group server-side. The test's own call is
          still open on another connection and answers `cancelled: true` from
          there, so this one has nothing to report and only has to arrive. */
-        await rpc.call('subagents.test_cancel', { name: row.name });
+        await gateway().call('subagents.test_cancel', { name: row.name });
       } else if (op === 'build') {
         /* Returns as soon as the build is under way, not when it is done: it is a
          few hundred MB of downloads. The row's `building` flag is what says it is
          still going, and the store polls the list while any row carries it. */
-        await rpc.call('subagents.build', { name: row.name });
+        await gateway().call('subagents.build', { name: row.name });
       }
       return xaFetch(false);
     },
@@ -194,7 +194,7 @@ export function install() {
    dependency, a prompt template or an input -- a field this mapper did not name
    was a field the card could not have. The shape the card wants is decided by the
    adapter that reads it (ui-web/src/features/dag/nodes.ts), not by this seam. */
-  DS.transcript.dagRun = (runId) => rpc.call('dag.get', { run_id: runId, session_key: sessionCurrent() })
+  DS.transcript.dagRun = (runId) => gateway().call('dag.get', { run_id: runId, session_key: sessionCurrent() })
     .then((r) => (r && r.run) || {});
 
   /* One spawned run's messages so far. Answers a MOVING stream while the run is
@@ -202,7 +202,7 @@ export function install() {
    and until then `subagent.context` serves the activity collector's copy, which
    the acp backend republishes on every update it receives. */
   DS.transcript.spawnRecord = (callId) =>
-    rpc.call('subagent.context', { id: callId, session_id: sessionCurrent() });
+    gateway().call('subagent.context', { id: callId, session_id: sessionCurrent() });
 
   /* Every delegated call this conversation made. Read once per conversation, to
    turn a restored card's task id into the record id its stream is read by: a
@@ -212,7 +212,7 @@ export function install() {
      -32601, and a card that asked would then re-ask on every reopen for an answer
      that cannot arrive. */
     if (!rpcHas('subagent')) return Promise.resolve([]);
-    return rpc.call('subagent.list', { session_id: sessionCurrent() })
+    return gateway().call('subagent.list', { session_id: sessionCurrent() })
       .then((r) => (r && r.items) || []);
   };
 

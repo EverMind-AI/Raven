@@ -4,14 +4,14 @@
    channels.* over /rpc. Installing onto the seam replaces the fixture
    source before the first paint. */
 
+import { gateway } from '../../state/gateway'
 import { DS } from '../seam/000-datasource.js'
 import { T } from '../demo/010-kernel.js'
 import { CHANNELS, chanName } from '../demo/030-fixtures.js'
-import { rpc } from './020-rpc.js'
 import { rpcHas } from './220-browser.js'
 
 async function loadChannels() {
-  const r = await rpc.call('channels.status', {});
+  const r = await gateway().call('channels.status', {});
   const byName = Object.fromEntries(r.channels.map((c) => [c.name, c]));
   CHANNELS.forEach((c) => {
     const s = byName[c.id];
@@ -73,7 +73,7 @@ export function install() {
    * the connect path did, disconnect only ever wrote `false`. */
     toggle: (c, on) => {
       c.on = on;
-      return rpc.call('channels.configure', { name: c.id, fields: {}, enabled: on })
+      return gateway().call('channels.configure', { name: c.id, fields: {}, enabled: on })
         .then(() => toast(T('gui.conn.toggled', { name: chanName(c), state: T(on ? 'gui.conn.enabled' : 'gui.conn.disabled') })))
         .catch((e) => {
           c.on = !on;
@@ -87,7 +87,7 @@ export function install() {
     apply: async (c, patch, enable) => {
       try {
         const fields = patch && Object.keys(patch).length ? patch : {};
-        await rpc.call('channels.configure', { name: c.id, fields, enabled: !!enable });
+        await gateway().call('channels.configure', { name: c.id, fields, enabled: !!enable });
         if (Object.keys(fields).length) toast(T('gui.conn.saved_x', { name: chanName(c) }));
         await loadChannels();
       } catch (e) {
@@ -99,7 +99,7 @@ export function install() {
      same waiting frame the old panel kept. */
     qr: (c) => (typeof rpcHas === 'function' && !rpcHas('channels')
       ? Promise.resolve(null)
-      : rpc.call('channels.qr', { name: c.id })),
+      : gateway().call('channels.qr', { name: c.id })),
   };
 }
 
