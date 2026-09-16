@@ -187,8 +187,11 @@ async def test_a_resume_answers_the_parked_turn_instead_of_starting_a_second_one
                 {"message": {"role": "ROLE_USER", "parts": [{"text": "start"}], "messageId": "m1"}},
             )
             assert "error" not in first
-            task_id = first["result"]["id"]
-            assert first["result"]["status"]["state"] == "TASK_STATE_INPUT_REQUIRED"
+            # `SendMessage` answers inside `SendMessageResponse`; `GetTask` below
+            # answers with a bare `Task`. The asymmetry is the binding's, measured
+            # against the SDK transport's own parser, not a local choice.
+            task_id = first["result"]["task"]["id"]
+            assert first["result"]["task"]["status"]["state"] == "TASK_STATE_INPUT_REQUIRED"
 
             second = await rpc(
                 "SendMessage",
@@ -205,7 +208,7 @@ async def test_a_resume_answers_the_parked_turn_instead_of_starting_a_second_one
             # response (see runtime.py's on_message_send), so the state here is
             # not asserted -- only that the resume was accepted for the same task.
             assert "error" not in second
-            assert second["result"]["id"] == task_id
+            assert second["result"]["task"]["id"] == task_id
 
             final = None
             for _ in range(100):

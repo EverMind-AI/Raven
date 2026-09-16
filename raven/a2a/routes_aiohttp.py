@@ -13,9 +13,11 @@ request handler, so an unknown caller never starts a turn.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 from a2a.server.context import ServerCallContext
+from a2a.types import Message, SendMessageResponse, Task
 from a2a.utils.errors import JSON_RPC_ERROR_CODE_MAP
 from a2a.utils.proto_utils import to_stream_response
 from aiohttp import web
@@ -115,6 +117,40 @@ def _as_stream_response(event: Any) -> Any:
     return to_stream_response(event) if isinstance(event, ProtoMessage) else event
 
 
+def _as_send_message_response(result: Any) -> Any:
+    """The wire envelope for a non-streaming `SendMessage` reply.
+
+    The same rule as `_as_stream_response`, on the other half of the dispatch.
+    `RequestHandler.on_message_send` answers with a bare `Task` or `Message`,
+    but the JSON-RPC binding carries `SendMessageResponse`, whose oneof is what
+    names which of the two arrived. A conformant client parses `result` as that
+    envelope and rejects a bare `Task` on the field the envelope has no room for
+    -- so a successful turn is unreadable to every client that chooses the
+    non-streaming call.
+
+    Only this method needs it, measured against the SDK's own transport rather
+    than assumed: `get_task` and `cancel_task` parse a bare `Task`, and
+    `on_list_tasks` already returns `ListTasksResponse` itself.
+    """
+    if isinstance(result, Task):
+        return SendMessageResponse(task=result)
+    if isinstance(result, Message):
+        return SendMessageResponse(message=result)
+    # The opaque double in tests/test_a2a_routes.py answers with plain dicts,
+    # which have no envelope to be put into -- the guard `_to_jsonable` uses.
+    return result
+
+
+RESPONSE_ENVELOPES: dict[str, Callable[[Any], Any]] = {"SendMessage": _as_send_message_response}
+"""Methods whose JSON-RPC result is an envelope around the handler's return.
+
+A table rather than a branch, beside `METHODS` and `STREAMING_METHODS`, because
+the set is a property of the binding: a method added to `METHODS` has to be
+checked against the SDK transport's parser, and an absent entry here is the
+claim that its handler already returns the type the client parses.
+"""
+
+
 def _interface_url(request: web.Request, config: A2aConfig) -> str:
     """Where this agent's JSON-RPC interface is, as *this* caller reached it.
 
@@ -194,6 +230,8 @@ def add_a2a_routes(app: web.Application, config: A2aConfig, handler: Any) -> Non
 
         try:
             result = await getattr(handler, method_name)(params, context)
+            if (envelope := RESPONSE_ENVELOPES.get(method)) is not None:
+                result = envelope(result)
             # Serialization stays inside the guarded region, same as the streaming branch's
             # json.dumps: a result that fails to convert or encode is a caller-facing
             # InternalError, not an unhandled exception that falls through to a bare 500.
