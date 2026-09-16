@@ -3,7 +3,7 @@
  * The 49 parts were one concatenated script whose order was load-bearing, and
  * ES modules do not honour that order: each evaluates when the graph first
  * reaches it, depth first. Both layers also contain a cycle -- 14 files in
- * demo/, 13 in live/ -- so inside one, a module can be evaluated before the
+ * demo/, 7 in live/ -- so inside one, a module can be evaluated before the
  * cycle-mate it reads has run at all.
  *
  * So the order was taken out of the evaluation: a module body may only
@@ -174,8 +174,12 @@ describe('the codemod leaf list', () => {
   })
 
   it('finds the two cycles the layers are known to have', () => {
+    /* 14 in demo/, 7 in live/. The live knot was 13 while every part that
+       speaks to the gateway imported the rpc client from live/020-rpc.js;
+       those parts reach the transport through state/gateway.ts now, which is
+       outside the layer, so six of them left the cycle. */
     const sizes = [...new Set([...sccOf.values()].filter((c) => c.length > 1))].map((c) => c.length).sort((a, b) => b - a)
-    expect(sizes).toEqual([14, 13])
+    expect(sizes).toEqual([14, 7])
   })
 })
 

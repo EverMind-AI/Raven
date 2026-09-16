@@ -44,6 +44,10 @@ function harness(startAsDraft: boolean) {
   const rows: Row[] = []
   let pointer: string | null = startAsDraft ? null : 'already-open'
   let minted = 0
+  /* The transport the sliced functions reach through `gateway()`. A fake
+     rather than the installed one: this harness evaluates the functions in a
+     scope of its own, so the seam it hands them is a parameter like every
+     other collaborator. */
   const rpc = {
     call: vi.fn(async (method: string) => {
       log.push(`rpc:${method}`)
@@ -51,11 +55,12 @@ function harness(startAsDraft: boolean) {
       return { session_id: `made-${minted}`, info: { cwd: '/w' } }
     }),
   }
+  const gateway = (): typeof rpc => rpc
   const say = (name: string) => (...args: unknown[]): void => {
     log.push(args.length && typeof args[0] === 'string' ? `${name}:${args[0] as string}` : name)
   }
   const build = new Function(
-    'rpc', 'T', 'sessionCurrent', 'sessionSet', 'sessionRows', 'claimDraft',
+    'gateway', 'T', 'sessionCurrent', 'sessionSet', 'sessionRows', 'claimDraft',
     'applyStagedModel', 'applyStagedTier', 'applyStagedPerm', 'sessionDraw',
     'subscribe', 'wsSetRoot', 'startAsDraft', 'touchSession', 'beginNaming',
     'mediaOf', 'namingDeclined',
@@ -70,7 +75,7 @@ function harness(startAsDraft: boolean) {
     setDraft: (on: boolean) => void
   }
   const built = build(
-    rpc,
+    gateway,
     (key: string) => key,
     () => pointer,
     (id: string | null) => { pointer = id; log.push(`pointer:${String(id)}`) },

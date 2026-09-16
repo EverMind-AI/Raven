@@ -11,8 +11,8 @@
    so an absent surface answers with no rows rather than an error, and
    `absent` is what the island's empty state reads to tell the two apart. */
 
+import { gateway } from '../../state/gateway'
 import { DS } from '../seam/000-datasource.js'
-import { rpc } from './020-rpc.js'
 import { mediaOf } from './080-overrides.js'
 import { rpcGone, rpcHas } from './220-browser.js'
 
@@ -29,11 +29,11 @@ export function install() {
      disabled cli) were listed as if they were available. An agent that is off
      but has instances still gets a group: `orderAgentGroups` unions these names
      with the ones on the instance rows, so its history stays reachable. */
-    roster: () => rpc.call('subagents.list', { probe: false })
+    roster: () => gateway().call('subagents.list', { probe: false })
       .then(r => (r.rows || []).filter(row => row.enabled)),
     list: (sessionId) => {
       if (!rpcHas('subagent')) return Promise.resolve([]);
-      return rpc.call('subagent.list', { session_id: sessionId })
+      return gateway().call('subagent.list', { session_id: sessionId })
         .then((r) => (r && r.items) || [])
         /* Absent surface -> no rows (the island words that empty state); a call
            that merely failed rethrows, so the page keeps what it last drew --
@@ -43,8 +43,8 @@ export function install() {
     /* A call is addressed by conversation and call, not by call alone: its
      record lives inside that conversation's own directory. A dag node is
      addressed by (run, node), reconciled server-side against the registry. */
-    context: (id) => rpc.call('subagent.context', { id, session_id: sessionCurrent() }),
-    node: (runId, node) => rpc.call('dag.node', { run_id: runId, node, session_key: sessionCurrent() })
+    context: (id) => gateway().call('subagent.context', { id, session_id: sessionCurrent() }),
+    node: (runId, node) => gateway().call('dag.node', { run_id: runId, node, session_key: sessionCurrent() })
       .then((r) => (r && r.node) || {}),
     absent: () => !rpcHas('subagent'),
     /* The stateful handles. Scoped to the open session like everything else here,
@@ -53,16 +53,16 @@ export function install() {
      reader guess. */
     instances: (sessionId) => {
       if (!rpcHas('subagents')) return Promise.resolve([]);
-      return rpc.call('subagents.instances', { session_key: sessionId })
+      return gateway().call('subagents.instances', { session_key: sessionId })
         .then((r) => (r && r.instances) || [])
         .catch((e) => { if (rpcGone('subagents', e)) return []; throw e; });
     },
     /* Addressed by (agent, handle) inside the open session: a handle is unique
      per agent, not globally, so both halves travel. */
     instanceHistory: (agent, handle) =>
-      rpc.call('subagents.instance.history', { session_key: sessionCurrent(), agent, handle }).then((r) => r || {}),
+      gateway().call('subagents.instance.history', { session_key: sessionCurrent(), agent, handle }).then((r) => r || {}),
     instanceForget: (agent, handle) =>
-      rpc.call('subagents.instance.forget', { session_key: sessionCurrent(), agent, handle }).then(() => undefined),
+      gateway().call('subagents.instance.forget', { session_key: sessionCurrent(), agent, handle }).then(() => undefined),
     /* A turn addressed to one instance rather than to the conversation: the same
      `turn.send` the composer uses, with a `target`. An instance's turn runs on
      its own lane, so it is concurrent with the main agent's and with every other
@@ -72,20 +72,20 @@ export function install() {
      (`mediaOf`, above): a direct chat's files reach the sub-agent by path only
      when this call carries them, and it used to carry none. */
     instanceSend: (agent, handle, text) =>
-      rpc.call('turn.send', { session_key: sessionCurrent(), content: text, target: { agent, handle }, ...mediaOf(text) })
+      gateway().call('turn.send', { session_key: sessionCurrent(), content: text, target: { agent, handle }, ...mediaOf(text) })
         .then(() => undefined),
     instanceCreate: (agent, sessionKey) =>
-      rpc.call('subagents.instance.create', { agent, session_key: sessionKey })
+      gateway().call('subagents.instance.create', { agent, session_key: sessionKey })
         .then((r) => r && r.instance),
     /* One reply serves report and set alike, and carries this agent's own rungs
      with it, so the control needs no second call for its menu. `null` clears the
      override rather than setting a mode -- there is no sentinel id for it, and
      an agent is free to call one of its own modes "default". */
     instanceMode: (agent, handle) =>
-      rpc.call('subagents.instance.set_mode', { session_key: sessionCurrent(), agent, handle })
+      gateway().call('subagents.instance.set_mode', { session_key: sessionCurrent(), agent, handle })
         .then((r) => r || {}),
     instanceSetMode: (agent, handle, mode) =>
-      rpc.call('subagents.instance.set_mode', mode === null
+      gateway().call('subagents.instance.set_mode', mode === null
         ? { session_key: sessionCurrent(), agent, handle, clear: true }
         : { session_key: sessionCurrent(), agent, handle, mode })
         .then((r) => r || {}),
@@ -94,10 +94,10 @@ export function install() {
      here -- cleared means the agent's own choice, which this host cannot name --
      so there is no second field to read back. */
     instanceModel: (agent, handle) =>
-      rpc.call('subagents.instance.set_model', { session_key: sessionCurrent(), agent, handle })
+      gateway().call('subagents.instance.set_model', { session_key: sessionCurrent(), agent, handle })
         .then((r) => r || {}),
     instanceSetModel: (agent, handle, model) =>
-      rpc.call('subagents.instance.set_model', model === null
+      gateway().call('subagents.instance.set_model', model === null
         ? { session_key: sessionCurrent(), agent, handle, clear: true }
         : { session_key: sessionCurrent(), agent, handle, model })
         .then((r) => r || {}),

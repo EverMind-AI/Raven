@@ -8,7 +8,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { fakeRpc, loadPart, looseQuery } from '../../../scripts/legacy-part.mjs'
+import { fakeGateway, loadPart, looseQuery } from '../../../scripts/legacy-part.mjs'
 
 interface Answer {
   deleted?: string | null
@@ -70,7 +70,7 @@ async function harness(answer: Answer | Error) {
       },
     },
   })
-  await fakeRpc(async () => {
+  await fakeGateway(async () => {
     if (answer instanceof Error) throw answer
     return answer
   })
@@ -148,7 +148,7 @@ async function bulkHarness(answers: Record<string, Answer | Error>) {
     },
     globals: { sessionCurrent: () => null, sessionSet: () => {}, toast: () => {} },
   })
-  await fakeRpc(async (_method: string, p: { session_id: string }) => {
+  await fakeGateway(async (_method: string, p: { session_id: string }) => {
     const a = answers[p.session_id]
     if (a instanceof Error) throw a
     return a

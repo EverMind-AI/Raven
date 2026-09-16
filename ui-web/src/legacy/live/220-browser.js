@@ -9,8 +9,8 @@
    island tracks its own surface, but the `subagent.*` source (230-tabs.js)
    still reads these. */
 
+import { gateway } from '../../state/gateway'
 import { DS } from '../seam/000-datasource.js'
-import { rpc } from './020-rpc.js'
 
 const RPC_ABSENT = new Set();
 const rpcGone = (name, e) => {
@@ -26,6 +26,22 @@ const brB64Blob = (b64) => {
   return new Blob([u], { type: 'image/jpeg' });
 };
 
+/* Screencast frames arrive as binary WS messages:
+   "RVF1" + u32 header length + JSON header + raw JPEG. */
+function onFrameBytes(buf) {
+  const u8 = new Uint8Array(buf);
+  if (u8.length < 8 || u8[0] !== 0x52 || u8[1] !== 0x56 || u8[2] !== 0x46 || u8[3] !== 0x31) return;
+  const hl = new DataView(buf).getUint32(4);
+  let head;
+  try { head = JSON.parse(new TextDecoder().decode(u8.subarray(8, 8 + hl))); } catch { return; }
+  if (DS.browser.onFrame) DS.browser.onFrame(head, new Blob([u8.subarray(8 + hl)], { type: 'image/jpeg' }));
+}
+
+/* Old servers still notify frames as base64 JSON; same hook after decode. */
+function onFrameJson(p) {
+  if (DS.browser.onFrame) DS.browser.onFrame(p, p.jpeg ? brB64Blob(p.jpeg) : null);
+}
+
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
@@ -33,31 +49,22 @@ export function install() {
     embedded: true,
     urls: () => RavenIslands.workspace.urls(),
     openUrl: (u) => RavenIslands.chrome.openUrl(u),
-    frame: (p) => rpc.call('browser.frame', p),
-    open: (p) => rpc.call('browser.open', p),
-    watch: (p) => rpc.call('browser.watch', p),
-    mode: (p) => rpc.call('browser.mode', p),
-    close: () => rpc.call('browser.close', {}),
-    tabs: (p) => rpc.call('browser.tabs', p),
-    input: (p) => rpc.call('browser.input', p),
+    frame: (p) => gateway().call('browser.frame', p),
+    open: (p) => gateway().call('browser.open', p),
+    watch: (p) => gateway().call('browser.watch', p),
+    mode: (p) => gateway().call('browser.mode', p),
+    close: () => gateway().call('browser.close', {}),
+    tabs: (p) => gateway().call('browser.tabs', p),
+    input: (p) => gateway().call('browser.input', p),
     onFrame: null,
   };
 
   /* Screencast frames arrive as binary WS messages:
    "RVF1" + u32 header length + JSON header + raw JPEG. */
-  rpc.binary = (buf) => {
-    const u8 = new Uint8Array(buf);
-    if (u8.length < 8 || u8[0] !== 0x52 || u8[1] !== 0x56 || u8[2] !== 0x46 || u8[3] !== 0x31) return;
-    const hl = new DataView(buf).getUint32(4);
-    let head;
-    try { head = JSON.parse(new TextDecoder().decode(u8.subarray(8, 8 + hl))); } catch { return; }
-    if (DS.browser.onFrame) DS.browser.onFrame(head, new Blob([u8.subarray(8 + hl)], { type: 'image/jpeg' }));
-  };
+  gateway().binary(onFrameBytes);
 
   /* Old servers still notify frames as base64 JSON; same hook after decode. */
-  rpc.notify['browser.frame'] = (p) => {
-    if (DS.browser.onFrame) DS.browser.onFrame(p, p.jpeg ? brB64Blob(p.jpeg) : null);
-  };
+  gateway().on('browser.frame', onFrameJson);
 }
 
-export { RPC_ABSENT, rpcGone, rpcHas, brB64Blob }
+export { RPC_ABSENT, rpcGone, rpcHas, brB64Blob, onFrameBytes, onFrameJson }

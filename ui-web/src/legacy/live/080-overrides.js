@@ -1,5 +1,6 @@
 /* ---- overrides ----------------------------------------------------- */
 
+import { gateway } from '../../state/gateway'
 import { DS } from '../seam/000-datasource.js'
 import { $, T } from '../demo/010-kernel.js'
 import { claimDraft, confirmAsk, dropDraft, loadDraft, parkDraft, queueClear, queuePush, queueShift, sess, sheetsForget, stop_, turn } from '../demo/040-state.js'
@@ -10,7 +11,7 @@ import { drawMeter, goState, ta } from '../demo/090-composer.js'
 import { setWs, wsOnHistory, wsReset } from '../demo/100-workspace.js'
 import { drawCapsBadge, showPage } from '../demo/120-capabilities.js'
 import { drawCaps } from '../demo/152-skills.js'
-import { SURFACE, rpc } from './020-rpc.js'
+import { SURFACE, onReconnect } from './020-rpc.js'
 import { rowPreview, touchSession } from './030-sessions.js'
 import { renderHistory } from './040-history.js'
 import { beginNaming, live, namingDeclined, resetTurnState, turnDur } from './050-turn.js'
@@ -24,7 +25,7 @@ async function subscribe(sessionKey) {
   // stream, so a parked turn's events and the visible ones never double up.
   if (subBySession[sessionKey]) { claimStream(sessionKey); return; }
   try {
-    const r = await rpc.call('turn.subscribe', { session_key: sessionKey });
+    const r = await gateway().call('turn.subscribe', { session_key: sessionKey });
     subBySession[sessionKey] = r.subscription_id;
     subSession[r.subscription_id] = sessionKey;
     claimStream(sessionKey);
@@ -38,7 +39,7 @@ async function subscribe(sessionKey) {
    is a round trip, and the reader can leave before it answers. Claiming it
    anyway routed a background session's stream onto the open one's transcript;
    the events belong in that session's parked buffer instead (see
-   rpc.notify.event). */
+   live/070-notify.js's onStreamEvent). */
 function claimStream(sessionKey) {
   if (sessionKey !== sessionCurrent()) return;
   live.subId = subBySession[sessionKey] || null;
@@ -75,7 +76,7 @@ async function applyStagedModel(sessionId, gen) {
   if (!staged.model) return;
   const pm = staged.model; staged.model = null;
   try {
-    await rpc.call('config.set', { key: 'model', value: pm.model, provider: pm.provider, session_id: sessionId });
+    await gateway().call('config.set', { key: 'model', value: pm.model, provider: pm.provider, session_id: sessionId });
   } catch (e) {
     // Said out loud, not just reversed: the pick was announced as staged, so a
     // silent chip flip back would be an unexplained contradiction.
@@ -96,7 +97,7 @@ async function applyStagedTier(sessionId) {
   const mode = stagedTier();
   if (!mode) return;
   try {
-    await rpc.call('session.set_mode', { session_key: sessionId, mode });
+    await gateway().call('session.set_mode', { session_key: sessionId, mode });
   } catch (e) {
     toast(`${T('gui.tier.title')}: ${(e && ((e.data && e.data.detail) || e.message)) || e}`);
   }
@@ -110,7 +111,7 @@ async function applyStagedPerm(sessionId) {
   const mode = stagedPerm();
   if (!mode) return;
   try {
-    await rpc.call('config.set', { key: 'permissions.mode', value: mode, scope: 'session', session_id: sessionId });
+    await gateway().call('config.set', { key: 'permissions.mode', value: mode, scope: 'session', session_id: sessionId });
   } catch (e) {
     toast(`${T('gui.perm.title')}: ${(e && ((e.data && e.data.detail) || e.message)) || e}`);
   }
@@ -234,7 +235,7 @@ async function openLiveSession(s) {
     return;
   }
   try {
-    const r = await rpc.call('session.resume', { session_id: s.id, session_key: s.id });
+    const r = await gateway().call('session.resume', { session_id: s.id, session_key: s.id });
     /* Somebody else's page now. Everything below writes what the reader is
        looking at -- the pointer, the rail selection, the context ring, the
        transcript, the panes -- so a spent ticket has to stop here rather than
@@ -372,7 +373,7 @@ async function promote(preview, atPointer) {
      reads the view as it stood when the promotion began rather than whatever
      the reader has opened since. */
   const gen = viewGen;
-  const r = await rpc.call('session.create', {});
+  const r = await gateway().call('session.create', {});
   wsSetRoot(r.info && r.info.cwd);
   const s = { id: r.session_id, title: T('gui.new_task'), last: preview || T('gui.sess.not_started'),
     when: T('gui.sess.just_now'), at: Math.floor(Date.now() / 1000), run: null, live: true, persisted: false };
@@ -429,7 +430,7 @@ function dispatchSend(text, failed) {
   /* `=== false`, not falsy: a server too old to carry the field says nothing
      at all, and reading that as "declined" would tear down a placeholder
      while a title really is on its way. */
-  rpc.call('turn.send', { session_key: current, content: text, ...mediaOf(text) })
+  gateway().call('turn.send', { session_key: current, content: text, ...mediaOf(text) })
     .then(r => { if (r && r.naming === false) namingDeclined(current); })
     .catch(failed);
 }
@@ -463,7 +464,7 @@ function liveSend(text) {
        the two differ only when the reader opened another conversation inside
        the promotion above, and making them agree is a fix about where a raced
        first message lands, not about this one. Left alone deliberately. */
-    const sent = await rpc.call('turn.send', { session_key: sessionCurrent(), content: text, ...mediaOf(text) });
+    const sent = await gateway().call('turn.send', { session_key: sessionCurrent(), content: text, ...mediaOf(text) });
     if (sent && sent.naming === false) namingDeclined(id);
   })().catch(failed);
 }
@@ -508,7 +509,7 @@ function forgetSubscription(sessionId) {
   delete subBySession[sessionId];
   delete subSession[subId];
   if (live.subId === subId) live.subId = null;
-  rpc.call('turn.unsubscribe', { subscription_id: subId }).catch(() => {});
+  gateway().call('turn.unsubscribe', { subscription_id: subId }).catch(() => {});
 }
 
 async function leaveDeletedSession(sessionId) {
@@ -545,8 +546,8 @@ async function leaveArchivedSession(sessionId) {
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  rpc.onReconnect = async () => {
-    await rpc.call('system.hello', { client_version: '0.1.0', surface: SURFACE }).catch(() => {});
+  onReconnect(async () => {
+    await gateway().call('system.hello', { client_version: '0.1.0', surface: SURFACE }).catch(() => {});
     killStatus();
     // A fresh socket voids every server-side subscription, and the events a
     // parked turn missed while the socket was down are unrecoverable — drop
@@ -608,8 +609,7 @@ export function install() {
         try { drawCaps(); } catch { /* extensions page not built yet */ }
       })
       .catch(() => {});
-  };
-  ;
+  });
 
   /* The two actions, installed on the source the composer already asks. `stop`
    is the go button's other half and the Escape key's; `send` is what the island
@@ -629,7 +629,7 @@ export function install() {
     if (!turn.cancellable()) return;
     const owner = sessionCurrent();
     turn.dispatch({ type: 'cancel' });
-    rpc.call('turn.cancel', { session_key: owner })
+    gateway().call('turn.cancel', { session_key: owner })
       .then(() => {
         transitionTurn(owner, { type: 'idle' });
         if (sessionCurrent() === owner) { drawMeter(); goState(); sessionDraw(); drainQueue(); }
@@ -643,7 +643,7 @@ export function install() {
   DS.sessions.remove = function (s) {
     confirmAsk(T('gui.sess.delete_title'), T('gui.sess.delete_body', { title: s.title }), T('gui.sess.delete'), async () => {
       try {
-        const r = await rpc.call('session.delete', { session_id: s.id });
+        const r = await gateway().call('session.delete', { session_id: s.id });
         /* A null `deleted` is two answers and only one of them may drop the row.
          Nothing left to remove -- an unknown key, or a conversation whose first
          turn never saved a file -- is the reader's own goal, so the row goes; a
@@ -665,14 +665,14 @@ export function install() {
   DS.sessions.archive = async function (s) {
     try {
       const at = sessionRows().findIndex(row => row.id === s.id);
-      const result = await rpc.call('session.archive', { session_id: s.id, archived: true });
+      const result = await gateway().call('session.archive', { session_id: s.id, archived: true });
       if (!result.archived || result.session_key !== s.id) throw new Error(`session ${s.id} was not archived`);
       await leaveArchivedSession(s.id);
       toast(T('gui.sess.archived', { title: s.title }), {
         label: T('gui.undo'),
         fn: async () => {
           try {
-            const restored = await rpc.call('session.archive', { session_id: s.id, archived: false });
+            const restored = await gateway().call('session.archive', { session_id: s.id, archived: false });
             if (restored.archived || restored.session_key !== s.id) {
               throw new Error(`session ${s.id} was not restored`);
             }
@@ -703,7 +703,7 @@ export function install() {
      its flag back. The row moved optimistically, so a name the server rejected
      (too long for the metadata record) looks identical to one it took until the
      page is reloaded and the old name is simply back. */
-    rpc.call('session.title', { session_id: id, title }).catch((e) => {
+    gateway().call('session.title', { session_id: id, title }).catch((e) => {
       const s = sess(id);
       if (s) { s.title = previous; sessionDraw(); }
       if (id === sessionCurrent()) {

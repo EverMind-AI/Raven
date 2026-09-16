@@ -13,6 +13,7 @@
    normal-looking replies the whole time, and live mode is the only mode where
    it can happen at all. Refusing one notice is a decision about that notice. */
 
+import { gateway } from '../../state/gateway'
 import { DS } from '../seam/000-datasource.js'
 import { $, LANG, T, langSet } from '../demo/010-kernel.js'
 import { TOOL_GROUPS } from '../demo/030-fixtures.js'
@@ -26,7 +27,6 @@ import { drawConn } from '../demo/145-connections.js'
 import { drawMoreFly } from '../demo/150-chrome.js'
 import { drawCaps } from '../demo/152-skills.js'
 import { drawPb } from '../demo/154-playbooks.js'
-import { rpc } from './020-rpc.js'
 import { draft, staged, viewGen } from './080-overrides.js'
 import { loadExt, toolsLive } from './090-extensions.js'
 import { askUpgrade, showUpNote } from './210-update-notice.js'
@@ -46,7 +46,7 @@ function stagedPerm() { const p = staged.perm; staged.perm = null; return p; }
 
 async function loadEveros() {
   try {
-    everosLive = await rpc.call('settings.everos', {});
+    everosLive = await gateway().call('settings.everos', {});
   } catch { /* section rows render as unset; writes still surface their error */ }
 }
 
@@ -65,7 +65,7 @@ async function loadPermMode(sid, gen) {
   const ticket = gen !== undefined ? gen : viewGen;
   let r;
   try {
-    r = await rpc.call('config.get', { keys: ['permissions.mode'], ...(sid ? { session_id: sid } : {}) });
+    r = await gateway().call('config.get', { keys: ['permissions.mode'], ...(sid ? { session_id: sid } : {}) });
   } catch {
     return;
   }
@@ -75,7 +75,7 @@ async function loadPermMode(sid, gen) {
 const pushPermMode = () => loadPermMode(sessionCurrent());
 
 async function loadSettings() {
-  const r = await rpc.call('settings.get', {});
+  const r = await gateway().call('settings.get', {});
   RAW = r.settings || {};
   configPathLive = r.config_path || configPathLive;
   drawBanner();
@@ -131,7 +131,7 @@ async function loadProviders(sid, gen) {
   // generation it captured then -- the answer is about that older view, and a
   // ticket taken here would read as current.
   const ticket = gen !== undefined ? gen : viewGen;
-  const mo = await rpc.call('model.options', target ? { session_id: target } : {});
+  const mo = await gateway().call('model.options', target ? { session_id: target } : {});
   // model.options does its catalogue work off-thread, so responses can land out
   // of click order. A refresh keyed to a superseded view must not repaint the
   // page the reader has since moved to.
@@ -189,7 +189,7 @@ async function langPickLive(next, { persist } = {}) {
   redrawAll();
   if (!persist) return;
   try {
-    await rpc.call('config.set', { key: 'language', value: next });
+    await gateway().call('config.set', { key: 'language', value: next });
     langRemember(next);
   } catch (e) {
     /* Put it back rather than leaving the page in a language the gateway does
@@ -243,7 +243,7 @@ function redrawAll() {
 }
 
 /* The language the gateway last agreed to, kept where a page that cannot
-   reach it can still read it. `loadLang` runs only after `rpc.connect()`
+   reach it can still read it. `loadLang` runs only after the connect
    succeeds, so on a failed connect nothing sets the language at all -- and
    the sign-in notice, the one message that explains the empty page, arrives
    in English on a Chinese install. Wrapped like the look settings, because
@@ -265,7 +265,7 @@ function langRestore() {
 
 async function loadLang() {
   try {
-    const r = await rpc.call('config.get', { keys: ['language'] });
+    const r = await gateway().call('config.get', { keys: ['language'] });
     const v = r && r.config && r.config.language;
     if (v === 'en' || v === 'zh') { langSet(v); langRemember(v); redrawAll(); }
   } catch { /* stay on the built-in default */ }
@@ -305,7 +305,7 @@ async function persistModel(m, provider, scope) {
   if (scope === 'default') {
     const p = { key: 'model', value: m, provider, scope: 'default' };
     if (sid) p.session_id = sid;
-    const r = await rpc.call('config.set', p);
+    const r = await gateway().call('config.set', p);
     // Reflect the new default only once it lands, so a refusal leaves the
     // settings row on the pair the config still holds.
     defaultModelLive = m;
@@ -325,7 +325,7 @@ async function persistModel(m, provider, scope) {
     return;
   }
   if (sid) {
-    await rpc.call('config.set', { key: 'model', value: m, provider, session_id: sid });
+    await gateway().call('config.set', { key: 'model', value: m, provider, session_id: sid });
     return;
   }
   staged.model = { model: m, provider };
@@ -363,7 +363,7 @@ export function install() {
   window.persistPermMode = (m) => {
     const sid = sessionCurrent();
     if (!sid) { staged.perm = m; return true; }
-    return rpc.call('config.set', { key: 'permissions.mode', value: m, scope: 'session', session_id: sid })
+    return gateway().call('config.set', { key: 'permissions.mode', value: m, scope: 'session', session_id: sid })
       .then((r) => {
         if (r && r.applied) return true;
         toast(T('gui.perm.save_failed'));
@@ -387,7 +387,7 @@ export function install() {
      handled tag tells the island to only redraw. */
     set: async (key, value) => {
       try {
-        await rpc.call('settings.set', { key, value });
+        await gateway().call('settings.set', { key, value });
         await loadSettings();
         pushPermMode();
         toast(T('gui.set.saved'));
@@ -404,7 +404,7 @@ export function install() {
        it across -- what this page holds is `****set****`. */
       if (borrowFrom) p.borrow_from = borrowFrom;
       try {
-        await rpc.call('settings.everosSet', p);
+        await gateway().call('settings.everosSet', p);
         await loadEveros();
         toast(T('gui.set.mem.saved'));
       } catch (e) {
@@ -413,16 +413,24 @@ export function install() {
       }
       return settingsSnapshot();
     },
-    usage: (sessionKey) => rpc.call('settings.usage', { session_key: sessionKey || null }),
+    usage: (sessionKey) => gateway().call('settings.usage', { session_key: sessionKey || null }),
+    /* The four writes spelled out rather than built as `'model.' + op`: a
+       composed name is a string nothing can check, and these are the four the
+       pane offers (`ProviderOp` in features/settings/types.ts declares the
+       same set). */
     provider: async (op, params) => {
-      await rpc.call('model.' + op, params);
+      if (op === 'save_key') await gateway().call('model.save_key', params);
+      else if (op === 'add_model') await gateway().call('model.add_model', params);
+      else if (op === 'remove_model') await gateway().call('model.remove_model', params);
+      else if (op === 'disconnect') await gateway().call('model.disconnect', params);
+      else throw new Error(`no provider op ${op}`);
       await loadProviders();
       return settingsSnapshot();
     },
     /* A read, so no reload after it: the fetched list is the drawer's own state
      and the page behind it has not changed. Adding a row from that list goes
      through `provider` above, which does refresh. */
-    fetchModels: (slug) => rpc.call('model.fetch_models', { slug }),
+    fetchModels: (slug) => gateway().call('model.fetch_models', { slug }),
     model: () => defaultModelLive,
     defaultProvider: () => defaultProviderLive,
     version: () => APP_VERSION,
@@ -434,7 +442,7 @@ export function install() {
       try {
         /* check:true = fetch now, not the daily cache: the button says check for
          updates, and a person who just clicked it is asking about now. */
-        const v = await rpc.call('system.version', { check: true });
+        const v = await gateway().call('system.version', { check: true });
         if (v.raven_version) appVersionSet(v.raven_version);
         if (v.update_available) {
           showUpNote('ver', v.latest_version);
@@ -470,7 +478,7 @@ export function install() {
       /* A draft asks too, and the handler answers the catalogue and its default
        for a key it has never seen -- which is exactly what the first turn of a
        new conversation will run at. */
-      const r = await rpc.call('session.set_mode', { session_key: sessionCurrent() || '' });
+      const r = await gateway().call('session.set_mode', { session_key: sessionCurrent() || '' });
       tierMenu = (r && r.availableModes) || tierMenu;
       return r;
     },
@@ -483,7 +491,7 @@ export function install() {
         staged.tier = mode;
         return { mode, availableModes: tierMenu };
       }
-      const r = await rpc.call('session.set_mode', { session_key: sid, mode });
+      const r = await gateway().call('session.set_mode', { session_key: sid, mode });
       tierMenu = (r && r.availableModes) || tierMenu;
       return r;
     },
@@ -493,7 +501,7 @@ export function install() {
     providers: () => providersLive,
     persist: persistModel,
     setProtocol: async (model, provider, protocol) => {
-      await rpc.call('model.set_protocol', { model, slug: provider, protocol });
+      await gateway().call('model.set_protocol', { model, slug: provider, protocol });
       await loadProviders();
     },
     openSettings: () => RavenIslands.settings.open(),

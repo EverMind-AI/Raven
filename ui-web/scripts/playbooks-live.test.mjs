@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'
 
-import { fakeRpc, loadPart } from './legacy-part.mjs'
+import { fakeGateway, loadPart } from './legacy-part.mjs'
 
 const contract = JSON.parse(readFileSync(new URL('../../rpc-schema/openrpc.json', import.meta.url), 'utf8'))
 const declared = new Set(contract.methods.map((m) => m.name))
@@ -17,7 +17,7 @@ const declared = new Set(contract.methods.map((m) => m.name))
 async function source(answers) {
   const calls = []
   const part = await loadPart(() => import('../src/legacy/live/167-playbooks.js'))
-  await fakeRpc((method, params) => {
+  await fakeGateway((method, params) => {
     calls.push([method, params])
     return Promise.resolve(answers[method])
   })

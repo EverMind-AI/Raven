@@ -3,10 +3,10 @@
    mutations are intercepted with property setters that persist through
    settings.set. */
 
+import { gateway } from '../../state/gateway'
 import { DS } from '../seam/000-datasource.js'
 import { T } from '../demo/010-kernel.js'
 import { pmToggle } from '../demo/153-plugins.js'
-import { rpc } from './020-rpc.js'
 
 const fmt2 = (n) => String(n).padStart(2, '0');
 function fmtStamp(ms) {
@@ -44,7 +44,7 @@ let extLoaded = false;
    toggle lands on the next turn. Not the same promise as the plugin toggle below:
    plugins.disabled is still read at startup, and its toast still says so. */
 function persistDisabledTools() {
-  rpc.call('settings.set', { key: 'tools.disabledTools', value: disabledToolsLive })
+  gateway().call('settings.set', { key: 'tools.disabledTools', value: disabledToolsLive })
     .then(() => toast(T('gui.op.saved_next_turn')))
     .catch((e) => toast(T('gui.op.save_failed', { detail: e.message || e })));
 }
@@ -93,7 +93,7 @@ function mkPluginRow(p) {
       pluginsDisabledLive = v === 'on'
         ? pluginsDisabledLive.filter((x) => x !== id)
         : [...new Set([...pluginsDisabledLive, id])];
-      rpc.call('settings.set', { key: 'plugins.disabled', value: pluginsDisabledLive })
+      gateway().call('settings.set', { key: 'plugins.disabled', value: pluginsDisabledLive })
         .then(() => toast(T('gui.op.saved_restart')))
         .catch((e) => toast(T('gui.op.save_failed', { detail: e.message || e })));
     },
@@ -117,7 +117,7 @@ function mkMcpRow(m) {
 }
 
 async function loadExt() {
-  const [ext, cfg] = await Promise.all([rpc.call('ext.list', {}), rpc.call('settings.get', {})]);
+  const [ext, cfg] = await Promise.all([gateway().call('ext.list', {}), gateway().call('settings.get', {})]);
   const raw = cfg.settings || {};
   disabledToolsLive = (raw.tools && raw.tools.disabledTools) || [];
   pluginsDisabledLive = (raw.plugins && raw.plugins.disabled) || [];

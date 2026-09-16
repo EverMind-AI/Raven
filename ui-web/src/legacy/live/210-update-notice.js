@@ -9,10 +9,10 @@
    rail-foot row because to the reader they are one sentence — something newer
    exists — and they differ only in what the click does. */
 
+import { gateway } from '../../state/gateway'
 import { $, T } from '../demo/010-kernel.js'
 import { confirmAsk, turn, upShade } from '../demo/040-state.js'
 import { APP_VERSION } from '../demo/130-settings.js'
-import { rpc } from './020-rpc.js'
 
 let upKind = null;
 let upLatest = null;
@@ -90,7 +90,7 @@ async function runUpgrade() {
   const shade = upShade();
   shade.say(T('gui.upg.working'));
   try {
-    await rpc.call('system.upgrade', {});
+    await gateway().call('system.upgrade', {});
   } catch (e) {
     /* The server saw an install already in flight. That is the dialog the
        reader wanted, not an error -- adopt the run instead of reporting it. */
