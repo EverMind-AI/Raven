@@ -6,10 +6,10 @@ contribution points, and config schema — everything the registry needs
 to know without importing the plugin's code.
 
 The single root table is ``[plugin]``. Contribution arrays are
-``[[plugin.contributes.<kind>]]``; the six kinds consumed today are
-``memory_backends``, ``tools``, ``hooks``, ``services``, ``tool_gates`` and
-``session_observers``, and the model ignores kinds it does not know so a
-manifest written for a later host still loads.
+``[[plugin.contributes.<kind>]]``; the seven kinds consumed today are
+``memory_backends``, ``tools``, ``hooks``, ``services``, ``tool_gates``,
+``session_observers`` and ``onboard``, and the model ignores kinds it does
+not know so a manifest written for a later host still loads.
 
 Validation rules worth flagging:
 
@@ -40,6 +40,13 @@ from pydantic import (
 # any non-empty identifier-ish suffix.
 _FACTORY_REF_RE = re.compile(r"^[A-Za-z_][\w.]*:[A-Za-z_]\w*$")
 
+# A memory-backend name is also a skill-source namespace: skill_hub.py
+# splits a qualified skill id as ``<name>/<id>`` at the first slash, so a
+# slash in the name would break that split, and ``local`` / ``hub`` already
+# name the two built-in skill sources.
+_BACKEND_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+_RESERVED_BACKEND_NAMES = frozenset({"local", "hub"})
+
 
 class _ManifestBase(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
@@ -50,6 +57,21 @@ class MemoryBackendContribution(_ManifestBase):
 
     name: str = Field(min_length=1)
     factory: str = Field(min_length=1)
+
+    @field_validator("name")
+    @classmethod
+    def _name_is_a_valid_skill_namespace(cls, v: str) -> str:
+        if not _BACKEND_NAME_RE.match(v):
+            raise ValueError(
+                f"memory_backend name must match {_BACKEND_NAME_RE.pattern!r} "
+                f"-- it becomes the '<name>/<id>' skill-source namespace, got {v!r}",
+            )
+        if v in _RESERVED_BACKEND_NAMES:
+            raise ValueError(
+                f"memory_backend name {v!r} is reserved for a built-in skill "
+                f"source ({sorted(_RESERVED_BACKEND_NAMES)}) and cannot be reused",
+            )
+        return v
 
     @field_validator("factory")
     @classmethod
@@ -182,12 +204,36 @@ class SessionObserverContribution(_ManifestBase):
         return v
 
 
+class OnboardContribution(_ManifestBase):
+    """One ``[[plugin.contributes.onboard]]`` entry.
+
+    ``factory`` is a ``module.path:callable`` resolving to a
+    ``Callable[[PluginContext], OnboardStep]`` -- it returns one object
+    satisfying :class:`~raven.contracts.onboard.OnboardStep`. ``raven
+    onboard`` lends the wizard shell as one ``OnboardUI`` and records the
+    returned ``StepOutcome``; the plugin never writes ``memory.backend``
+    itself (paper: contracts/onboard.py).
+    """
+
+    name: str = Field(min_length=1)
+    factory: str = Field(min_length=1)
+
+    @field_validator("factory")
+    @classmethod
+    def _factory_is_module_path(cls, v: str) -> str:
+        if not _FACTORY_REF_RE.match(v):
+            raise ValueError(
+                f"factory must be 'module.path:callable', got {v!r}",
+            )
+        return v
+
+
 class Contributes(_ManifestBase):
     """All contribution arrays for a single manifest.
 
-    ``memory_backends``, ``tools``, ``hooks``, ``services``, ``tool_gates``
-    and ``session_observers`` are consumed today; the model keeps extra
-    fields silently so future contribution types don't break older hosts
+    ``memory_backends``, ``tools``, ``hooks``, ``services``, ``tool_gates``,
+    ``session_observers`` and ``onboard`` are consumed today; the model keeps
+    extra fields silently so future contribution types don't break older hosts
     reading newer manifests.
     """
 
@@ -197,6 +243,7 @@ class Contributes(_ManifestBase):
     services: list[ServiceContribution] = Field(default_factory=list)
     tool_gates: list[ToolGateContribution] = Field(default_factory=list)
     session_observers: list[SessionObserverContribution] = Field(default_factory=list)
+    onboard: list[OnboardContribution] = Field(default_factory=list)
 
 
 class PluginManifest(_ManifestBase):
@@ -211,7 +258,6 @@ class PluginManifest(_ManifestBase):
     display_name: str | None = None
     raven: str | None = None  # the host version the plugin declares; nothing enforces it
     bundled: bool = False
-    enabled_by_default: bool = False
     contributes: Contributes = Field(default_factory=Contributes)
     config_schema: dict[str, Any] = Field(default_factory=dict)
 
@@ -227,12 +273,30 @@ class PluginManifest(_ManifestBase):
             ("service", self.contributes.services),
             ("tool_gate", self.contributes.tool_gates),
             ("session_observer", self.contributes.session_observers),
+            ("onboard", self.contributes.onboard),
         ):
             names = [c.name for c in items]
             if len(names) != len(set(names)):
                 dupes = sorted({n for n in names if names.count(n) > 1})
                 raise ValueError(
                     f"duplicate {kind} name(s) in manifest {self.id!r}: {dupes}",
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _onboard_matches_own_backend(self) -> "PluginManifest":
+        # An onboard screen configures the backend it is named after; a
+        # manifest cannot contribute a screen for a backend it does not
+        # own. This also keeps build_onboard_steps' plugin-id lookup
+        # correct: an onboard entry's owning plugin is the same plugin
+        # that owns the backend of the same name.
+        backend_names = {c.name for c in self.contributes.memory_backends}
+        for step in self.contributes.onboard:
+            if step.name not in backend_names:
+                raise ValueError(
+                    f"onboard {step.name!r} in manifest {self.id!r} has no "
+                    f"memory_backend of the same name in this manifest "
+                    f"(backends here: {sorted(backend_names)})",
                 )
         return self
 
@@ -271,6 +335,7 @@ class PluginManifest(_ManifestBase):
 __all__ = [
     "Contributes",
     "MemoryBackendContribution",
+    "OnboardContribution",
     "PluginManifest",
     "ToolContribution",
 ]

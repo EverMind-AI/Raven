@@ -395,9 +395,8 @@ async def test_a_declared_identity_becomes_a_memory_record(tmp_path, monkeypatch
         directory=record.dir,
         filename=record.file("memory.json").name,
         agent="Raven-Code",
-        identity=manager_mod.EverosIdentity(
-            user_id="raven-code", agent_id=None, base_url="http://everos.test", session_prefix="cli:"
-        ),
+        backend=object(),
+        scope=manager_mod.MemoryScope(block={"user_id": "raven-code"}, session_prefix="cli:"),
         resolve_session_id=_noop_key,
         budget_s=0.0,
     )
@@ -434,7 +433,7 @@ def _spawn_manager(tmp_path, *, agent: str, backend, identity=None):
                 name=agent,
                 command="cat {agent_id}",
                 resume_command="cat --resume {agent_id}",
-                everos={"userId": agent, "agentId": agent} if identity is not None else None,
+                memory={"userId": agent, "agentId": agent} if identity is not None else None,
             )
         ],
     )
@@ -468,9 +467,9 @@ def _fake_record_calls(monkeypatch):
 
 
 def _identity() -> "object":
-    from raven.agent.subagent_memory import EverosIdentity
+    from raven.agent.subagent_memory import MemoryScope
 
-    return EverosIdentity(user_id="raven-code", agent_id=None, base_url="http://everos.test", session_prefix="cli:")
+    return MemoryScope(block={"user_id": "raven-code"}, session_prefix="cli:")
 
 
 @pytest.mark.asyncio

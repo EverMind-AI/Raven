@@ -40,17 +40,17 @@ from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.registry import AgentRegistry, AgentRow
 from raven.agent.subagent_memory import (
     TRACE_BUDGET_S,
-    EverosIdentity,
-    identity_from_config,
+    MemoryScope,
     prime_from_turn,
     record_memories,
+    scope_from_config,
+    started_backend,
     trace_session_id,
 )
 from raven.config.paths import get_sandbox_dir
 from raven.config.schema import TIER_LADDER, ExecToolConfig
 from raven.context_engine.segments.render import dispatch_language_line
 from raven.contracts.llm_provider import LLMProvider
-from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missing_note
 from raven.observability import semconv
 from raven.providers.binding import ModelBinding, resolve
 from raven.sandbox import SandboxConfig, build_executor
@@ -124,32 +124,13 @@ async def _write_spawn_status(session_key: str | None, agent: str, handle: str, 
         )
 
 
-def _host_everos_base_url() -> str:
-    """The host's own everos service, used by any sub-agent that names none.
-
-    Empty when the plugin is not installed: raven runs no everos then, and the
-    address it would otherwise default to is the plugin's own constant. An
-    agent that named its own address is unaffected -- it never reads this.
-    """
-    if not everos_plugin_installed():
-        logger.warning("Sub-agent memory has no host address: {}", everos_plugin_missing_note())
-        return ""
-    from raven_everos.health import DEFAULT_EVEROS_BASE_URL, configured_base_url
-
-    try:
-        from raven.config.raven import load_raven_config
-
-        return configured_base_url(load_raven_config())
-    except Exception:  # noqa: BLE001 - a missing plugin config must not sink the manager
-        return DEFAULT_EVEROS_BASE_URL
-
-
 async def write_memory_record_for(
     *,
     directory: Path,
     filename: str,
     agent: str,
-    identity: EverosIdentity,
+    backend,
+    scope,
     resolve_session_id,
     instance: str | None = None,
     budget_s: float | None = None,
@@ -163,7 +144,8 @@ async def write_memory_record_for(
     kwargs = {"budget_s": budget_s} if budget_s is not None else {}
     await record_memories(
         agent=agent,
-        identity=identity,
+        backend=backend,
+        scope=scope,
         resolve_session_id=resolve_session_id,
         write=_write,
         instance=instance,
@@ -531,17 +513,35 @@ class SubagentManager:
         """Advertised capabilities of every enabled agent (for the tool descriptions)."""
         return self.registry.meta()
 
-    def everos_identity(self, agent: str | None) -> EverosIdentity | None:
-        """The declared identity for ``agent``, or ``None`` when it declared none.
+    def memory_scope(self, agent: str | None) -> MemoryScope | None:
+        """The declared memory block for ``agent``, or ``None`` when it has none.
 
         Read off the registry row rather than kept in a map of its own: the row
-        holds the config the identity is declared in, so a hot ``apply_agents``
+        holds the config the block is declared in, so a hot ``apply_agents``
         cannot leave the two disagreeing.
         """
         row = self.registry.get(agent or "")
         if row is None:
             return None
-        return identity_from_config(getattr(row.config, "everos", None), _host_everos_base_url())
+        return scope_from_config(getattr(row.config, "memory", None))
+
+    def _memory_backend(self):
+        """A fresh, unstarted memory backend, or ``None`` when there is not one.
+
+        Built here rather than held: this runs off the dispatch path, after a
+        call has already answered, and a record nobody is waiting on must not
+        keep a backend alive for the life of the manager. Its caller owns the
+        ``start`` / ``stop`` pair around the one record (``started_backend``).
+        """
+        from raven.config import load_config
+        from raven.config.raven import load_raven_config
+        from raven.core.plugin_stack import maybe_build_memory_backend
+
+        try:
+            return maybe_build_memory_backend(load_config().workspace_path, load_raven_config())
+        except Exception as exc:  # noqa: BLE001 - an audit trail must not disturb a run
+            logger.warning("Sub-agent memory record: no backend ({})", exc)
+            return None
 
     def _schedule_memory_record(
         self,
@@ -555,56 +555,61 @@ class SubagentManager:
         instance: str | None = None,
         turn: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Record what this call wrote into everos, in the background.
+        """Record what this call wrote into long-term memory, in the background.
 
-        Never awaited by the dispatch path: everos extraction runs an LLM, and a
+        Never awaited by the dispatch path: extraction runs a model, and a
         sub-agent's reply must not wait on the host's bookkeeping. Callers must
         not schedule this for a call that ended via ``CancelledError``: that
         poller would be created after the cancellation sweep took its snapshot,
         leaving it unreapable (see ``cancel_all`` / ``cancel_by_session``).
 
-        ``turn`` is only read for a ``trace`` identity, whose memories nobody
-        wrote -- it is what gets primed. An ``agent`` identity's memories were
-        already written by the sub-agent itself, so its resolver still looks up
-        the session id the registry has on file.
+        ``turn`` is only read for a ``trace`` source, whose memories nobody
+        wrote -- it is what gets handed over. An ``agent`` source's memories
+        were already written by the sub-agent itself, so its resolver still
+        looks up the session id the registry has on file.
         """
-        identity = self.everos_identity(agent)
-        if identity is None:
+        scope = self.memory_scope(agent)
+        if scope is None:
             return
 
-        if identity.source == "trace":
-            # The host owns both the write and the read here, so it mints the
-            # join key instead of resolving one the sub-agent committed.
-            session_id = trace_session_id(agent or "", task_id)
-            rows = turn or []
+        async def _run() -> None:
+            async with started_backend(self._memory_backend(), label="Sub-agent memory record") as backend:
+                if backend is None:
+                    return
+                if scope.source == "trace":
+                    # The host owns both the write and the read here, so it mints
+                    # the join key instead of resolving one the sub-agent committed.
+                    session_id = trace_session_id(agent or "", task_id)
+                    rows = turn or []
 
-            async def _resolve() -> str | None:
-                return session_id
+                    async def _resolve() -> str | None:
+                        return session_id
 
-            async def _prime(sid: str) -> bool:
-                return await prime_from_turn(identity=identity, session_id=sid, turn=rows)
+                    async def _prime(sid: str) -> bool:
+                        return await prime_from_turn(backend=backend, scope=scope, session_id=sid, turn=rows)
 
-            prime, budget = _prime, TRACE_BUDGET_S
-        else:
+                    prime, budget = _prime, TRACE_BUDGET_S
+                else:
 
-            async def _resolve() -> str | None:
-                agent_id = await get_registry().lookup(session_key or "default", agent or "", handle)
-                return f"{identity.session_prefix}{agent_id}" if agent_id else None
+                    async def _resolve() -> str | None:
+                        agent_id = await get_registry().lookup(session_key or "default", agent or "", handle)
+                        return f"{scope.session_prefix}{agent_id}" if agent_id else None
 
-            prime, budget = None, None
+                    prime, budget = None, None
 
-        task = asyncio.create_task(
-            write_memory_record_for(
-                directory=directory,
-                filename=filename,
-                agent=agent or "",
-                identity=identity,
-                resolve_session_id=_resolve,
-                instance=instance,
-                budget_s=budget,
-                prime=prime,
-            )
-        )
+                await write_memory_record_for(
+                    directory=directory,
+                    filename=filename,
+                    agent=agent or "",
+                    backend=backend,
+                    scope=scope,
+                    resolve_session_id=_resolve,
+                    instance=instance,
+                    budget_s=budget,
+                    prime=prime,
+                )
+
+        task = asyncio.create_task(_run())
         self._track_record(task, session_key)
 
     def _track_record(self, task: asyncio.Task, session_key: str | None) -> None:

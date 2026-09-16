@@ -15,8 +15,9 @@ The SkillForgeRouter is assembled from up to three sources:
 
 - :class:`LocalSkillSource` — always; wraps the builder's existing
   ``LocalPool`` + ``SkillRegistry`` (no second disk scan).
-- :class:`EverosSkillSource` — only when a ``backend`` is wired. Bridges
-  ``backend.recall(agent_id=...)`` into the router.
+- :class:`BackendSkillSource` — only when a ``backend`` is wired. Bridges
+  ``backend.recall(agent_id=...)`` into the router under the configured
+  ``memory.backend`` name.
 - :class:`HubSkillSource` — only when ``skillForge.router.hub.endpoint``
   is set: the remote Skill Hub marketplace.
 
@@ -207,7 +208,7 @@ def _build_router(
 ) -> "SkillForgeRouter":
     """Assemble the 1-to-3 source SkillForgeRouter for segment 5."""
     from raven.memory_engine import (
-        EverosSkillSource,
+        BackendSkillSource,
         HubSkillSource,
         LocalSkillSource,
         SkillForgeRouter,
@@ -226,15 +227,17 @@ def _build_router(
         local_source.weight = float(weights["local"])
     sources = [local_source]
 
-    # ── Source 2: Everos (conditional on backend) ───────────────────
+    # ── Source 2: the memory backend (conditional on backend) ───────
     if backend is not None:
-        everos_source = EverosSkillSource(
+        backend_name = memory_config.backend
+        backend_source = BackendSkillSource(
             backend=backend,
             agent_id=memory_config.agent_id,
+            name=backend_name,
         )
-        if "everos" in weights:
-            everos_source.weight = float(weights["everos"])
-        sources.append(everos_source)
+        if backend_name in weights:
+            backend_source.weight = float(weights[backend_name])
+        sources.append(backend_source)
 
     # ── Source 3: Hub (conditional on remote endpoint) ──────────────
     hub_cfg = skill_forge_router_config.hub

@@ -53,7 +53,7 @@ if TYPE_CHECKING:
         MemoryBackendContractTests,
     )
     from raven.memory_engine.skill_forge import (
-        EverosSkillSource,
+        BackendSkillSource,
         HubSkillSource,
         LLMGateFilter,
         LocalSkillCatalog,
@@ -74,7 +74,7 @@ __all__ = [
     "DAILY_FIRE_PLAN_HEADER",
     "BehaviorsExtractor",
     "BehaviorsOffsets",
-    "EverosSkillSource",
+    "BackendSkillSource",
     "HubSkillSource",
     "LLMGateFilter",
     "LocalSkillCatalog",
@@ -103,7 +103,7 @@ __all__ = [
 _FACE: dict[str, str] = {
     "BehaviorsExtractor": "raven.memory_engine.consolidate.behaviors_extractor",
     "BehaviorsOffsets": "raven.memory_engine.consolidate.behaviors_extractor",
-    "EverosSkillSource": "raven.memory_engine.skill_forge",
+    "BackendSkillSource": "raven.memory_engine.skill_forge",
     "HubSkillSource": "raven.memory_engine.skill_forge",
     "LLMGateFilter": "raven.memory_engine.skill_forge",
     "LocalSkillCatalog": "raven.memory_engine.skill_forge",

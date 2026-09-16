@@ -49,7 +49,7 @@ REQUIRED_SECTIONS = ("llm",)
 # rerank lane without rerank, and without the multimodal llm images / PDFs /
 # audio never make it in. Reported, never treated as a fault.
 #
-# Every optional role the wizard can write belongs here: `update_everos`
+# Every optional role the wizard can write belongs here: `raven_everos.config`
 # WRITABLE_SECTIONS is the source of that list, and a role missing from here is
 # one that can fail to build with nobody saying so.
 DEGRADING_SECTIONS = ("embedding", "rerank", "multimodal")
@@ -92,6 +92,13 @@ def capability_available(capabilities: dict[str, bool], section: str) -> bool | 
     return value if isinstance(value, bool) else None
 
 
+def base_url_from_slice(slice_: dict[str, Any] | None) -> str:
+    """Where the backend listens, per its own config slice."""
+    if isinstance(slice_, dict) and slice_.get("base_url"):
+        return str(slice_["base_url"])
+    return DEFAULT_EVEROS_BASE_URL
+
+
 def configured_base_url(config: Any) -> str:
     """Where the backend will actually be, per ``plugins.config``.
 
@@ -106,7 +113,7 @@ def configured_base_url(config: Any) -> str:
     for key in ("everos-memory", "everos"):
         slice_ = slices.get(key)
         if isinstance(slice_, dict) and slice_.get("base_url"):
-            return str(slice_["base_url"])
+            return base_url_from_slice(slice_)
     return DEFAULT_EVEROS_BASE_URL
 
 

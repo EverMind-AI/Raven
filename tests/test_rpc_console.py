@@ -73,15 +73,15 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         "sessionTitle.provider",
         "translate.model",
         "translate.provider",
-        "knowledge.embeddingModel",
-        "knowledge.embeddingProvider",
+        "embedding.model",
+        "embedding.provider",
         # The pair keys. No new reach over the six leaves above: each delegates
         # to their validators and writes the same two fields. What it adds is
         # that both land in one transaction, which is what a settings surface
         # writes so a pin cannot be persisted half-applied.
         "sessionTitle",
         "translate",
-        "knowledge",
+        "embedding",
         # No new reach: the same key has been writable through config.set (the
         # chip and /perm) since the gate landed; this lets the settings panel
         # write the default a new conversation starts on.

@@ -9,7 +9,6 @@ receives (including the episode family cascade).
 
 from __future__ import annotations
 
-import sys
 from types import SimpleNamespace
 
 import pytest
@@ -46,6 +45,7 @@ async def test_stats_reads_all_four_kinds(monkeypatch):
     out = await memory.memory_stats({})
     assert out == {
         "ok": True,
+        "note": None,
         "base_url": "http://x",
         "episodes": 7,
         "profiles": 1,
@@ -152,70 +152,59 @@ async def test_list_wraps_transport_errors(monkeypatch):
 # ── memory.delete ────────────────────────────────────────────────────────
 
 
-class _FakeRepo:
-    def __init__(self, row=None):
-        self.row = row
-        self.deleted: list[str] = []
+class _RecordingBackend:
+    """A backend that records the delete it was asked for and answers it.
 
-    async def get_by_id(self, id_value):
-        return self.row
+    The host has no business knowing how a memory is stored, so these tests
+    assert what crosses the seam -- the id and the backend's own kind string --
+    and nothing about storage. The tests they replace asserted LanceDB
+    predicates, which is how the host came to delete an index row while the
+    markdown behind it, EverOS's source of truth, kept the text: the memory
+    reappeared on the next rebuild of that file after the user was told it was
+    gone.
+    """
 
-    async def delete(self, predicate):
-        self.deleted.append(predicate)
+    def __init__(self, answer: bool = True) -> None:
+        self.answer = answer
+        self.calls: list[tuple[str, str | None]] = []
+
+    async def delete(self, memory_id: str, *, kind: str | None = None) -> bool:
+        self.calls.append((memory_id, kind))
+        return self.answer
 
 
-def _install_fake_everos(monkeypatch, repos):
-    mod = SimpleNamespace(**repos)
-    monkeypatch.setitem(sys.modules, "everos.infra.persistence.lancedb", mod)
-
-
-@pytest.fixture
-def fake_everos_env(monkeypatch):
-    monkeypatch.setattr("raven.config.update_everos.configure_everos_env", lambda: None)
-    monkeypatch.setattr("raven.config.update_everos.ensure_everos_home", lambda: None)
+def _loop_with(backend):
+    return lambda: SimpleNamespace(backend=backend)
 
 
 @pytest.mark.asyncio
-async def test_delete_episode_cascades_family(monkeypatch, fake_everos_env):
-    ep = _FakeRepo(row=SimpleNamespace(parent_id="mc-1"))
-    facts, foresight = _FakeRepo(), _FakeRepo()
-    _install_fake_everos(
-        monkeypatch,
-        {
-            "episode_repo": ep,
-            "atomic_fact_repo": facts,
-            "foresight_repo": foresight,
-            "agent_case_repo": _FakeRepo(),
-            "agent_skill_repo": _FakeRepo(),
-            "user_profile_repo": _FakeRepo(),
-        },
-    )
-    out = await memory.memory_delete({"kind": "episode", "id": "e'1"})
+async def test_delete_goes_through_the_backend_that_owns_the_memory():
+    backend = _RecordingBackend()
+
+    out = await memory.memory_delete({"kind": "episode", "id": "ep-1"}, agent_loop_factory=_loop_with(backend))
+
     assert out == {"ok": True, "removed": 1}
-    assert ep.deleted == ["id = 'e''1'"]
-    assert facts.deleted == ["parent_id = 'mc-1'"]
-    assert foresight.deleted == ["parent_id = 'mc-1'"]
+    assert backend.calls == [("ep-1", "episode")]
 
 
 @pytest.mark.asyncio
-async def test_delete_skill_no_cascade(monkeypatch, fake_everos_env):
-    skill = _FakeRepo()
-    facts = _FakeRepo()
-    _install_fake_everos(
-        monkeypatch,
-        {
-            "episode_repo": _FakeRepo(),
-            "atomic_fact_repo": facts,
-            "foresight_repo": _FakeRepo(),
-            "agent_case_repo": _FakeRepo(),
-            "agent_skill_repo": skill,
-            "user_profile_repo": _FakeRepo(),
-        },
-    )
-    out = await memory.memory_delete({"kind": "agent_skill", "id": "sk1"})
-    assert out["ok"] is True
-    assert skill.deleted == ["id = 'sk1'"]
-    assert facts.deleted == []
+async def test_the_kind_reaches_the_backend_verbatim():
+    """It is the backend's own vocabulary, echoed back from its listing."""
+    backend = _RecordingBackend()
+
+    await memory.memory_delete({"kind": "agent_skill", "id": "sk1"}, agent_loop_factory=_loop_with(backend))
+
+    assert backend.calls == [("sk1", "agent_skill")]
+
+
+@pytest.mark.asyncio
+async def test_a_backend_that_will_not_delete_is_reported_not_claimed():
+    """``False`` is a real answer -- this kind cannot be removed here. Reporting
+    success would repeat the bug this path was rewritten for."""
+    backend = _RecordingBackend(answer=False)
+
+    with pytest.raises(InternalError):
+        await memory.memory_delete({"kind": "profile", "id": "p1"}, agent_loop_factory=_loop_with(backend))
 
 
 @pytest.mark.asyncio
@@ -248,14 +237,69 @@ class TestWithoutTheMemoryPlugin:
         assert out["episodes"] == 0
 
     @pytest.mark.asyncio
-    async def test_list_fails_typed_and_names_the_distribution(self):
-        with everos_plugin_absent(), pytest.raises(InternalError) as exc:
-            await memory.memory_list({"kind": "episode"})
+    async def test_list_answers_an_empty_page_that_says_why(self):
+        """Not an error: there is no store to list, and a retry button offers
+        an action that cannot help. The page shows the sentence instead."""
+        with everos_plugin_absent():
+            out = await memory.memory_list({"kind": "episode"})
 
-        assert "everos-memory" in str(exc.value)
+        assert out["items"] == []
+        assert "everos-memory" in out["note"]
 
     @pytest.mark.asyncio
     async def test_an_unknown_kind_is_still_the_first_answer(self):
         """Argument validation does not depend on a backend being installed."""
         with everos_plugin_absent(), pytest.raises(ConfigValidationError):
             await memory.memory_list({"kind": "nope"})
+
+
+# ── why the page is empty ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_no_plugin_explains_itself_instead_of_showing_zeros():
+    """Four zeros read as "your memories are gone". They are not gone; this
+    install never had the plugin that keeps them."""
+    with everos_plugin_absent():
+        stats = await memory.memory_stats({})
+        listing = await memory.memory_list({"kind": "episode"})
+
+    assert stats["ok"] is False
+    assert "everos-memory" in stats["note"]
+    assert listing["items"] == [] and "everos-memory" in listing["note"]
+
+
+@pytest.mark.asyncio
+async def test_a_different_backend_says_this_page_is_not_where_they_are(monkeypatch):
+    """The plugin is installed and memory works -- somewhere this page does not
+    read. Showing zeros here says the opposite of what is true."""
+    monkeypatch.setattr(
+        "raven.config.raven.load_raven_config",
+        lambda *a, **k: SimpleNamespace(
+            memory=SimpleNamespace(backend="mem0", user_id="u", agent_id="a"), plugins=SimpleNamespace(config={})
+        ),
+    )
+
+    stats = await memory.memory_stats({})
+    listing = await memory.memory_list({"kind": "episode"})
+
+    assert stats["ok"] is False
+    assert "mem0" in stats["note"]
+    assert listing["items"] == [] and "mem0" in listing["note"]
+
+
+@pytest.mark.asyncio
+async def test_the_configured_backend_gets_no_note(monkeypatch):
+    """The note exists to explain an empty page, not to decorate a working one."""
+    monkeypatch.setattr(
+        "raven.config.raven.load_raven_config",
+        lambda *a, **k: SimpleNamespace(
+            memory=SimpleNamespace(backend="everos", user_id="u", agent_id="a"), plugins=SimpleNamespace(config={})
+        ),
+    )
+    post, _ = _post_returning([{"data": {"total_count": 3}} for _ in range(4)])
+    monkeypatch.setattr(memory, "_post", post)
+
+    stats = await memory.memory_stats({})
+
+    assert stats["note"] is None

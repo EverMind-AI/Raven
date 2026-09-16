@@ -144,7 +144,6 @@ async def test_add_direction_synthetic_plugin_rides_to_a_real_turn(tmp_path: Pat
         version = "0.0.1"
         display_name = "Synthetic capability"
         raven = ">=0.1"
-        enabled_by_default = true
         [[plugin.contributes.tools]]
         name = "synth_echo"
         factory = "synth_cap_pkg.tools:make_tool"

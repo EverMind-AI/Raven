@@ -1,10 +1,10 @@
-"""EverosSkillSource — re-emit ``MemoryBackend`` agent-track hits as RouterHits.
+"""BackendSkillSource — re-emit ``MemoryBackend`` agent-track hits as RouterHits.
 
 This is the source through which **the self-evolving skill track**
 plugs into the router. The backend's ``recall(agent_id=...)``
 returns :class:`Memory` records; we re-wrap them as :class:`RouterHit`
-with the ``everos/`` prefix so :class:`SkillForgeRouter` can RRF-fuse them
-against Local + Mass.
+prefixed with the configured ``memory.backend`` name so
+:class:`SkillForgeRouter` can RRF-fuse them against Local + Mass.
 
 The source is **host code, not part of any plugin**. The actual
 backend behind it can be the bundled EverOS plugin or any other
@@ -52,9 +52,13 @@ def _short_name_for(text: str) -> str:
     return text[:40]
 
 
-class EverosSkillSource:
+class BackendSkillSource:
     """Adapter that turns ``backend.recall(agent_id=...)`` into the
     third member of :class:`SkillForgeRouter`'s source set.
+
+    ``name`` is the configured ``memory.backend`` contribution name: the
+    prefix of every qualified id this source emits and the key the
+    after-turn feedback dispatcher routes usage signals by.
 
     ``weight = 0.9`` sits between Local (1.0 — most trusted, hand-
     curated) and Mass (0.8 — imported, may not match project
@@ -63,16 +67,17 @@ class EverosSkillSource:
     less than Local).
     """
 
-    name: str = "everos"
     weight: float = 0.9
 
     def __init__(
         self,
         backend: "MemoryBackend",
         agent_id: str,
+        name: str,
     ) -> None:
         self._backend = backend
         self._agent_id = agent_id
+        self.name = name
 
     async def search(
         self,
@@ -99,12 +104,12 @@ class EverosSkillSource:
             name = (m.metadata.get("name") if m.metadata else None) or _short_name_for(m.text)
             out.append(
                 RouterHit(
-                    qualified_id=f"everos/{native_id}",
+                    qualified_id=f"{self.name}/{native_id}",
                     name=name,
                     content=m.text,
                     score=m.score,
                     meta={
-                        "source": "everos",
+                        "source": self.name,
                         # The original Memory.metadata flows through —
                         # the after-turn feedback dispatcher reads
                         # things like ``owner_type`` / ``episode_type``
@@ -116,4 +121,4 @@ class EverosSkillSource:
         return out
 
 
-__all__ = ["EverosSkillSource"]
+__all__ = ["BackendSkillSource"]

@@ -3,11 +3,11 @@
 Two responsibilities, split deliberately:
 
 1. **Activation** (:meth:`activate`) — for each discovered plugin
-   admitted by the user's config (``plugins.disabled`` opt-out list +
-   ``enabled_by_default`` flag), resolve each contributed factory
-   reference (``module.path:callable``) into an actual callable and
-   record it in the factory table. This is where plugin Python code is
-   first imported — manifests up to this point have been pure data.
+   admitted by the user's config (``plugins.disabled`` opt-out list),
+   resolve each contributed factory reference (``module.path:callable``)
+   into an actual callable and record it in the factory table. This is
+   where plugin Python code is first imported — manifests up to this
+   point have been pure data.
 
 2. **Lookup** (:meth:`get_memory_backend_factory` etc.) — the synchronous
    lookups the assembly root builds a backend through.
@@ -50,6 +50,7 @@ ToolFactory = Callable[[Any], Any]
 HookFactory = Callable[[Any], Any]
 ToolGateFactory = Callable[[Any], Any]
 SessionObserverFactory = Callable[[Any], Any]
+OnboardFactory = Callable[[Any], Any]
 
 
 class PluginError(Exception):
@@ -90,6 +91,7 @@ class PluginRegistry:
         self._services: dict[str, _ActivatedFactory] = {}
         self._tool_gates: dict[str, _ActivatedFactory] = {}
         self._session_observers: dict[str, _ActivatedFactory] = {}
+        self._onboard: dict[str, _ActivatedFactory] = {}
 
     # ── Activation ───────────────────────────────────────────────
 
@@ -101,23 +103,12 @@ class PluginRegistry:
     ) -> None:
         """Resolve and register every contribution from every admitted plugin.
 
-        A plugin is admitted iff:
-
-        - its id is not in ``disabled`` (user opt-out), AND
-        - ``enabled_by_default`` is True OR the host has another reason
-          to include it. PG-2 enforces only the first rule; PG-3 layers
-          on the second when wired to the user config.
+        A plugin is admitted iff its id is not in ``disabled``.
         """
         for d in discovered:
             mf = d.manifest
             if mf.id in disabled:
                 logger.info("plugin %s disabled by user config", mf.id)
-                continue
-            if not mf.enabled_by_default:
-                logger.info(
-                    "plugin %s not enabled by default; skipping (use explicit opt-in once supported)",
-                    mf.id,
-                )
                 continue
             self._activate_one(mf, source=d.source, location=d.location)
 
@@ -223,6 +214,19 @@ class PluginRegistry:
                 factory=factory,
             )
             logger.debug("registered session_observer %s from %s", observer.name, mf.id)
+        for step in mf.contributes.onboard:
+            if step.name in self._onboard:
+                prev = self._onboard[step.name]
+                raise PluginConflictError(
+                    f"onboard {step.name!r} contributed by both {prev.plugin_id!r} and {mf.id!r}",
+                )
+            factory = self._resolve_factory(mf.id, step.factory)
+            self._onboard[step.name] = _ActivatedFactory(
+                plugin_id=mf.id,
+                name=step.name,
+                factory=factory,
+            )
+            logger.debug("registered onboard %s from %s", step.name, mf.id)
 
     @staticmethod
     def _ensure_importable(source: ManifestOrigin, location: Path | None) -> None:
@@ -362,6 +366,24 @@ class PluginRegistry:
         except KeyError as e:
             raise PluginNotFoundError(
                 f"no session_observer named {name!r} (registered: {self.session_observer_names()})",
+            ) from e
+
+    def onboard_names(self) -> list[str]:
+        """Stable-ordered list of registered onboard-step names."""
+        return sorted(self._onboard)
+
+    def onboard_plugin_id(self, name: str) -> str | None:
+        """Plugin id that contributed onboard step ``name``, or ``None``."""
+        entry = self._onboard.get(name)
+        return entry.plugin_id if entry is not None else None
+
+    def get_onboard_factory(self, name: str) -> OnboardFactory:
+        """Look up the factory for onboard step ``name``. Raises ``PluginNotFoundError``."""
+        try:
+            return self._onboard[name].factory
+        except KeyError as e:
+            raise PluginNotFoundError(
+                f"no onboard step named {name!r} (registered: {self.onboard_names()})",
             ) from e
 
     def get_hook_factory(self, name: str) -> HookFactory:
@@ -535,6 +557,32 @@ class PluginRegistry:
         )
         return factory(ctx)
 
+    @trace.instrument("plugin.load", extract=semconv.plugin_load("onboard"))
+    def build_onboard_step(
+        self,
+        name: str,
+        *,
+        config: dict[str, Any],
+        services: "ServiceLocator",
+        logger: logging.Logger | None = None,
+    ) -> Any:
+        """Resolve the named onboard factory and call it with a fresh
+        ``PluginContext``, returning the constructed ``OnboardStep``.
+
+        Symmetric with :meth:`build_session_observer`: synchronous
+        construction, exceptions propagate so the host sees the real cause.
+        ``raven onboard`` runs the returned step with the wizard shell it
+        lends (paper: contracts/onboard.py).
+        """
+        factory = self.get_onboard_factory(name)
+        config = self._admit(self._onboard[name], config)
+        ctx = PluginContext(
+            config=config,
+            services=services,
+            logger=logger or logging.getLogger(f"raven.plugins.{name}"),
+        )
+        return factory(ctx)
+
     def _admit(self, entry: "_ActivatedFactory", config: dict[str, Any]) -> dict[str, Any]:
         """Admit a config slice against the owning manifest's declaration.
 
@@ -552,6 +600,7 @@ class PluginRegistry:
 __all__ = [
     "HookFactory",
     "MemoryBackendFactory",
+    "OnboardFactory",
     "PluginConflictError",
     "PluginError",
     "PluginFactoryImportError",

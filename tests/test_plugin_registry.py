@@ -13,6 +13,7 @@ from raven.plugins import (
     DiscoveredPlugin,
     ManifestOrigin,
     MemoryBackendContribution,
+    OnboardContribution,
     PluginConflictError,
     PluginContext,
     PluginFactoryImportError,
@@ -51,16 +52,16 @@ def _make_discovered(
     plugin_id: str,
     *,
     backends: list[tuple[str, str]] | None = None,
-    enabled: bool = True,
+    onboard: list[tuple[str, str]] | None = None,
     bundled: bool = False,
 ) -> DiscoveredPlugin:
     mf = PluginManifest(
         id=plugin_id,
         version="0.1.0",
         bundled=bundled,
-        enabled_by_default=enabled,
         contributes=Contributes(
             memory_backends=[MemoryBackendContribution(name=n, factory=f) for n, f in (backends or [])],
+            onboard=[OnboardContribution(name=n, factory=f) for n, f in (onboard or [])],
         ),
     )
     return DiscoveredPlugin(
@@ -153,7 +154,7 @@ class TestEnablement:
         assert reg.activated_ids() == []
         assert reg.memory_backend_names() == []
 
-    def test_non_default_plugin_is_skipped(self) -> None:
+    def test_every_discovered_plugin_not_disabled_is_activated(self) -> None:
         def fake_factory(ctx):
             return "x"
 
@@ -166,11 +167,10 @@ class TestEnablement:
                     backends=[
                         ("everos", "_test_plugin_d:make_backend"),
                     ],
-                    enabled=False,
                 ),
             ]
         )
-        assert reg.activated_ids() == []
+        assert reg.activated_ids() == ["plug"]
 
 
 # ---------------------------------------------------------------------------
@@ -294,3 +294,67 @@ class TestLookup:
         mf = reg.manifest_for("plug")
         assert mf is not None
         assert mf.id == "plug"
+
+
+def test_build_onboard_step_calls_the_factory(tmp_path: Path) -> None:
+    _install_test_module(
+        "_test_onboard",
+        {
+            "make_onboard_step": lambda ctx: ("step", ctx.config),
+            "make_backend": lambda ctx: "backend",
+        },
+    )
+    reg = PluginRegistry()
+    reg.activate(
+        [
+            _make_discovered(
+                "plug",
+                backends=[("plug", "_test_onboard:make_backend")],
+                onboard=[("plug", "_test_onboard:make_onboard_step")],
+            )
+        ]
+    )
+    assert reg.onboard_names() == ["plug"]
+    assert reg.onboard_plugin_id("plug") == "plug"
+    step = reg.build_onboard_step(
+        "plug",
+        config={"k": 1},
+        services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
+    )
+    assert step == ("step", {"k": 1})
+
+
+def test_build_onboard_step_rejects_an_unknown_name(tmp_path: Path) -> None:
+    reg = PluginRegistry()
+    with pytest.raises(PluginNotFoundError):
+        reg.build_onboard_step(
+            "nobody",
+            config={},
+            services=ServiceLocator(workspace=tmp_path, user_id="default", agent_id="default"),
+        )
+
+
+def test_two_plugins_contribute_same_onboard_name() -> None:
+    """mrbot's cross-owner scenario: plugin A owns backend 'shared'; plugin
+    B, to satisfy the manifest rule that its onboard name matches its own
+    backend name, must also contribute a backend named 'shared'. That
+    backend collides with A's before either onboard step registers, so
+    activation refuses -- B can never receive A's config slice because B
+    never activates at all."""
+    _install_test_module("_test_onboard_a", {"make_backend": lambda ctx: "a"})
+    _install_test_module(
+        "_test_onboard_b",
+        {"make_backend": lambda ctx: "b", "make_onboard_step": lambda ctx: "b"},
+    )
+    reg = PluginRegistry()
+    with pytest.raises(PluginConflictError, match="memory_backend 'shared'"):
+        reg.activate(
+            [
+                _make_discovered("alpha", backends=[("shared", "_test_onboard_a:make_backend")]),
+                _make_discovered(
+                    "beta",
+                    backends=[("shared", "_test_onboard_b:make_backend")],
+                    onboard=[("shared", "_test_onboard_b:make_onboard_step")],
+                ),
+            ]
+        )
