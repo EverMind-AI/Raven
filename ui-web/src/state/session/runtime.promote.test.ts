@@ -49,7 +49,7 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
      the order that keeps one module graph: the fakes are installed around the
      modules the first import reaches, and one it did not is loaded afterwards
      without them. */
-  await loadPart(async () => { await import('./runtime'); return import('../../legacy/live/080-overrides.js') }, {
+  await loadPart(async () => { await import('./runtime'); return import('../install') }, {
     fakes: {
       'src/shell/banner': { draw: () => {} },
       'src/shell/tier': { load: () => {} },
@@ -78,7 +78,8 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
       'demo/060-conversation.js': { ask: () => {}, pitch: () => {}, splitAtts: (t: string) => ({ text: t, atts: [] }), unpitch: () => {} },
       'demo/070-transcript.js': { killStatus: () => {}, showStatus: () => {} },
       'demo/090-composer.js': { drawMeter: () => {}, goState: () => {}, ta: { focus: () => {} } },
-      'demo/100-workspace.js': { setWs: () => {}, wsOnHistory: () => {}, wsReset: () => {} },
+      'demo/100-workspace.js': { setWs: () => {}, wsReset: () => {} },
+      'src/features/workspace/record': { wsOnHistory: () => {} },
       'demo/120-capabilities.js': { drawCapsBadge: () => {}, showPage: () => {} },
       'demo/152-skills.js': { drawCaps: () => {} },
       'src/features/rail/source': { rowPreview: (t: string) => t, touchSession: (id: string) => log.push(`touch:${id}`) },

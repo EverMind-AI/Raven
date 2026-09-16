@@ -6,18 +6,21 @@
  * that takes belongs to the island that is drawing it. The interval was
  * untested while it lived in the legacy layer, which is the half a rewrite can
  * silently drop -- nothing else fails when a panel merely stops refreshing.
+ *
+ * Opened by the page's wiring, beside the handlers for the pushes that do
+ * exist (src/state/install.ts), so that is what this drives.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { loadPart } from '../../../scripts/legacy-part.mjs'
+import { fakeGateway, loadPart } from '../../../scripts/legacy-part.mjs'
 
 import type { Sources } from '../../state/sources'
 
 async function harness() {
-  const part = await loadPart(async () => {
+  const wiring = await loadPart(async () => {
     await import('./source')
-    return import('../../legacy/live/230-tabs.js')
+    return import('../../state/install')
   }, {
     fakes: {
       'src/shell/session': { current: () => 's1' },
@@ -25,12 +28,14 @@ async function harness() {
     },
     islands: { transcript: { agentStage: () => {} }, subagents: { directEvent: () => {} } },
   })
+  await fakeGateway(() => Promise.resolve({}))
   const { setSources, sources } = await import('../../state/sources')
-  setSources({ agents: {} } as unknown as Partial<Sources>)
-  /* The interval is opened by install(), so the clock has to be fake before
-     it runs. */
+  setSources({ composer: { slash: [] }, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+  wiring.installSources()
+  /* The interval is opened with the push handlers, so the clock has to be fake
+     before they install. */
   vi.useFakeTimers()
-  part.install()
+  wiring.installPushes()
   return { sources }
 }
 

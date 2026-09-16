@@ -29,7 +29,7 @@ async function harness({ rows = [] as Row[] } = {}) {
   await loadPart(async () => {
     await import('./runtime'); await import('./stages')
     await import('./pipeline')
-    return import('../../legacy/live/080-overrides.js')
+    return import('../install')
   }, {
     fakes: {
       'src/shell/session': {
@@ -85,11 +85,12 @@ async function harness({ rows = [] as Row[] } = {}) {
       },
       'demo/090-composer.js': { drawMeter: () => {}, goState: () => {} },
       'demo/100-workspace.js': {
-        drawWs: () => {}, setWs: () => {}, wsOnHistory: () => {}, wsReset: () => {},
+        drawWs: () => {}, setWs: () => {}, wsReset: () => {},
         wsRestore: () => {}, wsView: () => ({ tab: 'diff', picked: false }), wsOpen: false,
       },
       'demo/120-capabilities.js': { drawCapsBadge: () => {}, showPage: () => {} },
       'demo/152-skills.js': { drawCaps: () => {} },
+      'src/features/workspace/record': { wsOnHistory: () => {} },
       'src/features/rail/source': { rowPreview: (t: string) => t, touchSession: () => {} },
       'src/features/transcript/source': { renderHistory: () => log.push(['history']) },
     },
@@ -117,11 +118,11 @@ async function harness({ rows = [] as Row[] } = {}) {
     return Promise.resolve({})
   })
   const { setSources } = await import('../sources')
-  setSources({ composer: {}, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
-  const overrides = await import('../../legacy/live/080-overrides.js')
-  const rpcUi = await import('../../legacy/live/020-rpc.js')
-  overrides.install()
-  /* The push handlers, which live/070-notify.js installs on the page. */
+  setSources({ composer: { slash: [] }, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+  const wiring = await import('../install')
+  const connection = await import('../connection')
+  wiring.installActions()
+  /* The push handlers, which the page's wiring installs beside them. */
   pipeline.installPipeline()
   const tick = () => new Promise((r) => setTimeout(r, 0))
   return {
@@ -142,7 +143,7 @@ async function harness({ rows = [] as Row[] } = {}) {
     frame: (key: string, event: unknown) => {
       transport.emit('event', { subscription_id: `sub:${key}`, event })
     },
-    onReconnect: [...(rpcUi.reconnectHandlers as Set<() => Promise<void>>)][0]!,
+    onReconnect: [...(connection.reconnectHandlers as Set<() => Promise<void>>)][0]!,
     tick,
   }
 }

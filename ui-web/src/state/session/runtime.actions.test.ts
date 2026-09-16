@@ -17,8 +17,7 @@ import { fakeGateway, loadPart, looseQuery } from '../../../scripts/legacy-part.
 import type { Sources } from '../sources'
 
 type Runtime = typeof import('./runtime')
-type Overrides = typeof import('../../legacy/live/080-overrides.js')
-type Writes = typeof import('../../legacy/live/130-writes.js')
+type Wiring = typeof import('../install')
 
 interface Row { id: string; title?: string; last?: string; pin?: boolean }
 
@@ -31,13 +30,13 @@ async function harness({ rows }: { rows: Row[] }) {
   let current: string | null = 'a'
   let settle: { res: (v: unknown) => void; rej: (e: unknown) => void } | null = null
   const slash = [{ id: 'gui.clear' }, { id: 'gui.compress' }]
-  /* The runtime is imported first and the part that wires it after, which is
+  /* The runtime is imported first and the module that wires it after, which is
      the order that keeps one module graph: the fakes are installed around the
      modules the first import reaches, and one it did not is loaded afterwards
      without them. */
   await loadPart(async () => {
     await import('./runtime')
-    return import('../../legacy/live/190-session-actions.js')
+    return import('../install')
   }, {
     fakes: {
       'src/shell/session': {
@@ -71,7 +70,7 @@ async function harness({ rows }: { rows: Row[] }) {
         pitch: () => calls.push(['pitch']),
       },
       'demo/090-composer.js': { drawMeter: () => calls.push(['drawMeter']) },
-      'live/210-update-notice.js': { showUpNote: () => {} },
+      'src/state/updates': { showUpNote: () => {} },
     },
   })
   const runtime = (await import('./runtime')) as Runtime
@@ -80,9 +79,10 @@ async function harness({ rows }: { rows: Row[] }) {
     return new Promise((res, rej) => { settle = { res, rej } })
   })
   const { setSources } = await import('../sources')
-  setSources({ composer: { slash }, transcript: {} } as unknown as Partial<Sources>)
-  const part = await import('../../legacy/live/190-session-actions.js')
-  part.install()
+  setSources({ composer: { slash }, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+  const wiring = await import('../install')
+  wiring.installSources()
+  wiring.installActions()
   const tick = () => new Promise((r) => setTimeout(r, 0))
   return {
     clear: () => runtime.clear(),
@@ -263,7 +263,7 @@ interface Answer {
   session_key?: string
 }
 
-/* The rail verbs as live/080-overrides.js and live/050-turn.js install them.
+/* The rail verbs as the page's wiring and its session source install them.
    The rest of those parts reaches for dozens of collaborators that have
    nothing to do with the decision under test, so those are fakes; the decision
    is the part's own. `islands.rail.removeRow` is what "the row goes" means --
@@ -281,7 +281,7 @@ async function railHarness(
   let settled: Promise<void> = Promise.resolve()
   await loadPart(async () => {
     await import('./runtime')
-    return import('../../legacy/live/080-overrides.js')
+    return import('../install')
   }, {
     fakes: {
       'src/shell/session': { current: () => current, setCurrent: (id: string | null) => { current = id } },
@@ -319,12 +319,12 @@ async function railHarness(
     return answer
   })
   const { setSources } = await import('../sources')
-  setSources({ composer: {}, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
-  const overrides = (await import('../../legacy/live/080-overrides.js')) as Overrides
-  const turn = await import('../../legacy/live/050-turn.js')
-  overrides.install()
-  /* The pin is the turn part's install, on the same source object. */
-  turn.install()
+  setSources({ composer: { slash: [] }, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+  const wiring = (await import('../install')) as Wiring
+  const { sessionsSource } = await import('../boot')
+  /* The pin is a verb of the session source itself, which the boot installs. */
+  setSources({ sessions: sessionsSource } as unknown as Partial<Sources>)
+  wiring.installActions()
   const tick = () => new Promise((r) => setTimeout(r, 0))
   return {
     remove: async (s: Row) => { runtime.remove(s as never); await settled },
@@ -462,7 +462,7 @@ async function bulkHarness(answers: Record<string, Answer | Error>) {
   let live = Object.keys(answers).map((id) => ({ id, title: id }))
   await loadPart(async () => {
     await import('../../features/rail/leave')
-    return import('../../legacy/live/130-writes.js')
+    return import('../boot')
   }, {
     fakes: {
       'demo/010-kernel.js': { $: looseQuery(), T: label },
@@ -484,9 +484,8 @@ async function bulkHarness(answers: Record<string, Answer | Error>) {
     return a
   })
   const { setSources } = await import('../sources')
-  setSources({ sessions: {} } as unknown as Partial<Sources>)
-  const part = (await import('../../legacy/live/130-writes.js')) as Writes
-  part.install()
+  const { sessionsSource } = await import('../boot')
+  setSources({ sessions: sessionsSource } as unknown as Partial<Sources>)
   return { deleteAll: () => runtime.deleteAll(), left: () => live.map((s) => s.id) }
 }
 

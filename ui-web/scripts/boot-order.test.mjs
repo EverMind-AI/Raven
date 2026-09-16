@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-/* The page defers its first data-driven paint until live sources exist. */
+/* The page defers its first data-driven paint until every source is installed. */
 
 import { readFileSync } from 'node:fs'
 /* Off cwd, not off `import.meta.url`: under happy-dom that is an http URL. */
@@ -7,12 +7,18 @@ import { resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { loadPart, partNames, partTexts } from './legacy-part.mjs'
+import { loadPart, moduleText, partNames } from './legacy-part.mjs'
 
 const liveParts = partNames('live')
-const liveTexts = partTexts('live').map(([, text]) => text)
-const live = liveTexts.join('')
 const index = readFileSync(resolve(process.cwd(), 'src/legacy/index.js'), 'utf8')
+const bootText = moduleText('state/boot.ts')
+const installText = moduleText('state/install.ts')
+/* The page's own half, as one text: the claim on the first frame, the wiring
+   and the gateway sequence were four files of the live layer and are two
+   modules now, and every rule below is about the whole of it rather than about
+   which of the two a line sits in. */
+const wiring = bootText + installText + moduleText('state/connection.ts')
+  + moduleText('state/updates.ts') + moduleText('legacy/live/120-settings.js')
 
 const STEPS = [
   'lookLoad', 'paneLoad', 'setRail', 'sessionDraw', 'sessionOpen', 'drawCapsBadge',
@@ -75,8 +81,8 @@ describe('the page boot order', () => {
 
   it('lets live claim the first paint and tolerates its empty session source', async () => {
     const { part, calls, queued } = await harness()
-    /* What live/010-boot-guard.js does on its way in: the demo boot backs off
-       and the live half decides when the splash lifts. */
+    /* What the boot's claim on the first frame does on its way in: the demo
+       boot backs off and the page decides when the splash lifts. */
     part.claimBoot()
     queued.shift()()
     expect(calls).toEqual([])
@@ -87,64 +93,84 @@ describe('the page boot order', () => {
     expect(calls.map(([name]) => name)).toEqual(STEPS.filter((name) => name !== 'sessionOpen'))
   })
 
-  /* The parts are modules, so "before" is not a position in one concatenated
-     text: it is the order src/legacy/index.js installs them in. Three things
-     carry the rule -- the queue is the last part's, it is the last thing that
-     part installs, and the index installs the live parts in that order, after
-     the demo half and only in live mode. */
-  it('queues live boot only after every synchronous source installer', () => {
-    const carriers = liveParts.filter((_, i) => liveTexts[i].includes('queueMicrotask(bootPage);'))
-    expect(carriers).toEqual([liveParts.at(-1)])
+  /* "Before" is not a position in one concatenated text any more: it is the
+     order `boot()` calls its three steps in, and the queue being the last of
+     them. */
+  it('queues the first paint only after every synchronous source installer', () => {
+    const carriers = [
+      ['state/boot.ts', bootText],
+      ['state/install.ts', installText],
+    ].filter(([, text]) => text.includes('queueMicrotask(bootPage)'))
+    expect(carriers.map(([name]) => name)).toEqual(['state/boot.ts'])
 
-    const last = liveTexts.at(-1)
-    const opened = last.indexOf('export function install() {')
-    const body = last.slice(opened, last.indexOf('\n}\n', opened))
-    expect(body.trimEnd().endsWith('queueMicrotask(bootPage);')).toBe(true)
+    const opened = bootText.indexOf('export function boot(): void {')
+    const body = bootText.slice(opened, bootText.indexOf('\n}\n', opened))
+    /* The three steps in order, and the queue after all of them. */
+    expect([...body.matchAll(/^ {2}(?:void )?(\w+)\(/gm)].map((m) => m[1]))
+      .toEqual(['claimFirstFrame', 'installPage', 'sequence', 'queueMicrotask'])
+    expect(body.trimEnd().endsWith('queueMicrotask(bootPage)')).toBe(true)
 
-    const installs = [...live.matchAll(/^\s*sources\.[A-Za-z0-9_.]+\s*=/gm)]
+    const installs = [...installText.matchAll(/^\s*sources\.[A-Za-z0-9_.]+\s*=/gm)]
     expect(installs.length).toBeGreaterThan(10)
+    /* installPage() is what boot() calls, so every list has to be in it. */
+    const lists = installText.slice(installText.indexOf('export function installPage(): void {'))
+    for (const step of ['installSources', 'installPushes', 'installActions', 'installDevHooks']) {
+      expect(lists).toContain(`${step}()`)
+    }
+  })
 
+  /* The chrome installs first, and both halves of it in every mode. The live
+     half used to be skipped for a page opened from disk or with ?stub=1, where
+     the demo half's fixture sources answered instead; the fixtures are
+     responders behind the transport now (src/rpc/fixtures/), so one set of
+     parts installs and the URL only decides which transport they read
+     (src/state/transport.ts). */
+  it('installs the legacy chrome in the manifests order, before the boot', () => {
     const listed = [...index.matchAll(/^import \* as \w+ from '\.\/live\/([^']+)'$/gm)].map((m) => m[1])
     expect(listed).toEqual(liveParts)
     expect(index).toContain('for (const part of DEMO) part.install()')
-    /* Both halves, in every mode. The live half used to be skipped for a page
-       opened from disk or with ?stub=1, where the demo half's fixture sources
-       answered instead; the fixtures are responders behind the transport now
-       (src/rpc/fixtures/), so one set of parts installs and the URL only
-       decides which transport they read (src/state/transport.ts). */
     expect(index).toContain('for (const part of LIVE) part.install()')
     expect(index).not.toContain('liveMode')
     expect(index.indexOf('for (const part of DEMO)')).toBeLessThan(index.indexOf('for (const part of LIVE)'))
 
-    expect(live).not.toContain('CRONS.length = 0')
+    const main = moduleText('main.tsx')
+    expect(main.indexOf('installLegacy()')).toBeLessThan(main.indexOf('boot()'))
+
+    expect(wiring).not.toContain('CRONS.length = 0')
   })
 })
 
 describe('first-run model setup', () => {
   it('records missing-provider state without opening onboarding automatically', () => {
-    expect(live).toContain('setupState.providerConfigured = setup.provider_configured !== false;')
-    expect(live).not.toMatch(/setup\.provider_configured === false\s*\|\|/)
+    expect(wiring).toContain('setupState.providerConfigured = setup.provider_configured !== false')
+    expect(wiring).not.toMatch(/setup\.provider_configured === false\s*\|\|/)
   })
 
   it('guards New Task, Send, and the model selector with the same redirect', () => {
-    expect(live).toContain('sources.composer.beforeSend = openModelsForMissingProvider;')
-    expect(live.match(/if \(openModelsForMissingProvider\(\)\) return;/g)).toHaveLength(2)
+    expect(wiring).toContain('composer.beforeSend = openModelsForMissingProvider')
+    expect(wiring.match(/if \(openModelsForMissingProvider\(\)\) return/g)).toHaveLength(2)
   })
 })
 
-/* Where the live layer starts recording which conversation the tab is on.
-   An ordering rule no unit test can hold: the demo shell has already opened its
-   canned session by the time this part installs, and the line above it clears
+/* Where the page starts recording which conversation the tab is on.
+   An ordering rule no unit test can hold: the demo chrome has already opened its
+   canned session by the time the boot runs, and the line above it clears
    the pointer again. Watching before either of those wrote `a` into the note and
    then deleted it, so a reload never had a conversation to come back to. */
-describe('the live boot guard', () => {
-  const guard = readFileSync(resolve(process.cwd(), 'src/legacy/live/010-boot-guard.js'), 'utf8')
-
+describe('the claim on the first frame', () => {
   it('starts the view watch, and only after it has cleared the pointer', () => {
-    const clear = guard.indexOf('sessionSet(null)')
-    const watch = guard.indexOf('islands.view.watch()')
+    const clear = bootText.indexOf('sessionSet(null)')
+    const watch = bootText.indexOf('islands.view.watch()')
     expect(clear).toBeGreaterThan(-1)
     expect(watch).toBeGreaterThan(clear)
+  })
+
+  /* Both of those paint, and both read the session source, so it has to answer
+     before either runs. */
+  it('installs the session source before it holds the rail', () => {
+    const install = bootText.indexOf('sources.sessions = sessionsSource')
+    expect(install).toBeGreaterThan(-1)
+    expect(bootText.indexOf('islands.rail.hold()')).toBeGreaterThan(install)
   })
 })
 
@@ -156,7 +182,7 @@ describe('the permission chip mirrors every settings load', () => {
   const settingsSource = readFileSync(resolve(process.cwd(), 'src/features/settings/source.ts'), 'utf8')
 
   it('each loadSettings call site pushes the mode afterwards', () => {
-    const text = live + settingsSource
+    const text = wiring + settingsSource
     const callers = [...text.matchAll(/(?<!function )loadSettings\(\)/g)].length
     const pushes = [...text.matchAll(/pushPermMode\(\)|\.then\(pushPermMode\)/g)].length
     expect(callers).toBeGreaterThanOrEqual(3)

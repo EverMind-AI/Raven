@@ -46,6 +46,11 @@ ASSETV_MARK = "__ASSETV__"
 # do while the concatenated script ran, and several of them read what an earlier
 # one wrote. src/legacy/index.js calls them in exactly this order -- regenerate
 # it (scripts/legacy-index.mjs) after renaming, adding or removing a part.
+#
+# The live manifest is down to one part. The page's own wiring and boot are
+# src/state/{install,boot}.ts now; what is left here is the settings chrome,
+# which holds the whole-page redraw the Python test outside this directory reads
+# by source text -- so this file name and this entry stay until that test goes.
 _DEMO_PARTS = [
     "010-kernel.js",
     "040-state.js",
@@ -67,32 +72,7 @@ _DEMO_PARTS = [
     "160-boot.js",
 ]
 _LIVE_PARTS = [
-    "010-boot-guard.js",
-    "020-rpc.js",
-    "030-sessions.js",
-    "040-history.js",
-    "050-turn.js",
-    "060-parked.js",
-    "070-notify.js",
-    "080-overrides.js",
-    "090-extensions.js",
-    "100-schedules.js",
-    "110-connections.js",
     "120-settings.js",
-    "130-writes.js",
-    "140-skills.js",
-    "150-plugins.js",
-    "160-memory.js",
-    "165-knowledge.js",
-    "167-playbooks.js",
-    "170-workspace.js",
-    "180-attachments.js",
-    "190-session-actions.js",
-    "200-boot.js",
-    "210-update-notice.js",
-    "220-browser.js",
-    "230-tabs.js",
-    "240-external-agents.js",
 ]
 
 

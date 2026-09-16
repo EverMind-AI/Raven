@@ -160,9 +160,9 @@ describe('a markdown link target', () => {
 })
 
 /* ---- what the panel records, and how it counts turns -------------------- */
-/* Both still live in the page layer (src/legacy/demo/100-workspace.js) and
-   neither was driven before. Characterisation ahead of the rewrite that moves
-   the bookkeeping into this feature. */
+/* The record is this feature's own module now (./record.ts); the panel chrome
+   it draws through -- the badge, the redraw, which view is up -- is still the
+   page's (src/legacy/demo/100-workspace.js) and is faked here. */
 
 interface Shared {
   changes: Array<Record<string, unknown>>
@@ -173,42 +173,32 @@ interface Shared {
 }
 
 async function panel() {
-  const { loadPart, looseQuery } = await import('../../../scripts/legacy-part.mjs')
-  const calls: unknown[][] = []
+  const { loadPart } = await import('../../../scripts/legacy-part.mjs')
   const shared: Shared = { changes: [], urls: [], file: null, turn: 0, unseen: 0 }
-  const part = await loadPart(() => import('../../legacy/demo/100-workspace.js'), {
+  const part = await loadPart(() => import('./record'), {
     fakes: {
-      'demo/010-kernel.js': {
-        $: looseQuery(),
-        T: (key: string) => key,
-        HOST_PLATFORM: 'mac',
+      'demo/010-kernel.js': { T: (key: string) => key },
+      'demo/100-workspace.js': {
+        bumpWs: () => {},
+        drawWs: () => {},
+        wsShortPath: (path: string) => path,
+        wsShowsTurn: () => false,
       },
-      'demo/110-subagents.js': {
-        wsOnTool: (name: string, args: unknown, replay: boolean) => calls.push(['tool', name, args, replay]),
-        wsOnToolDone: (name: string, _args: unknown, _ok: boolean, _preview: string, _took: unknown, diff: string) =>
-          calls.push(['done', name, diff]),
-      },
-      'src/shell/toast': { show: () => {} },
     },
     islands: {
+      /* Three tellable hunks: which builder a replayed call reached for, and
+         whether the tool's own diff replaced the guess, are both read off the
+         row rather than off a spy -- the record and the replay are one module
+         now, so a spy could only stand in for one of them. */
       workspace: {
         shared: () => shared,
-        hunkFromEdit: () => ({ add: 1, del: 0, rows: [] }),
-        hunkFromWrite: () => ({ add: 1, del: 0, rows: [] }),
-        hunkFromUnified: () => ({ add: 1, del: 0, rows: [] }),
-        notifyDesk: () => {},
-        reset: () => {},
+        hunkFromEdit: () => ({ add: 1, del: 0, rows: ['guessed'] }),
+        hunkFromWrite: () => ({ add: 2, del: 0, rows: ['whole file'] }),
+        hunkFromUnified: (diff: string) => ({ add: 5, del: 3, rows: [diff] }),
       },
-      subagents: { reset: () => {} },
     },
   })
-  part.install()
-  /* The path shortener is the workspace source's, which the live part installs
-     -- the offline page reads the same one now, so nothing registers a
-     fixture stand-in for it any more. Only the one verb the record needs. */
-  const { sources } = await import('../../state/sources')
-  sources.workspace = { shortPath: (path: string) => path } as unknown as NonNullable<typeof sources.workspace>
-  return { part, shared, calls }
+  return { part, shared }
 }
 
 describe('rebuilding the panel from a stored conversation', () => {
@@ -230,7 +220,7 @@ describe('rebuilding the panel from a stored conversation', () => {
   })
 
   it('replays each stored call with its arguments, and swaps in the stored diff', async () => {
-    const { part, calls } = await panel()
+    const { part, shared } = await panel()
 
     part.wsOnHistory([
       { role: 'assistant', tool_calls: [
@@ -240,10 +230,15 @@ describe('rebuilding the panel from a stored conversation', () => {
       { role: 'tool', tool_call_id: 'c1', diff: '@@ -1 +1 @@' },
     ])
 
-    expect(calls).toEqual([
-      ['tool', 'edit_file', { path: 'a.py' }, true],
-      ['done', 'edit_file', '@@ -1 +1 @@'],
-    ])
+    /* One row, from the one call whose arguments parsed: `exec` names no path
+       and its stored arguments are not JSON, so it records nothing. */
+    expect(shared.changes).toHaveLength(1)
+    const row = shared.changes[0] as { key: string; add: number; del: number; hunks: Array<{ rows: string[] }> }
+    expect(row.key).toBe('a.py')
+    /* The hunk guessed from the arguments is REPLACED by the stored diff, not
+       added to it, so the counts are the diff's alone. */
+    expect(row.hunks.map((h) => h.rows)).toEqual([['@@ -1 +1 @@']])
+    expect([row.add, row.del]).toEqual([5, 3])
   })
 
   it('marks everything it restored as already read', async () => {

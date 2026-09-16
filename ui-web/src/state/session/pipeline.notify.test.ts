@@ -34,14 +34,12 @@ async function harness({ rows = [] as Row[], current = 'tui:open' as string | nu
     sheets: [] as Sheet[],
     sent: [] as Array<[string, unknown]>,
   }
-  /* The modules under test are imported deepest first and the part that wires
-     them last, which is the order that keeps one module graph: the fakes are
-     installed around the modules the first import reaches, and one it did not
-     is loaded afterwards without them. */
+  /* The modules under test are imported deepest first, which is the order that
+     keeps one module graph: the fakes are installed around the modules the
+     first import reaches. */
   await loadPart(async () => {
     await import('./runtime'); await import('./stages')
-    await import('./pipeline')
-    return import('../../legacy/live/070-notify.js')
+    return import('./pipeline')
   }, {
     fakes: {
       'src/shell/session': { current: () => current },
@@ -84,8 +82,7 @@ async function harness({ rows = [] as Row[], current = 'tui:open' as string | nu
   })
   const { setSources } = await import('../sources')
   setSources({ composer: {}, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
-  const part = await import('../../legacy/live/070-notify.js')
-  part.install()
+  pipeline.installPipeline()
   return {
     pipeline,
     transport,

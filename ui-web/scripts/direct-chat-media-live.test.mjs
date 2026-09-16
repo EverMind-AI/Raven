@@ -7,7 +7,7 @@
  * `target` only, so every ordinary direct chat reached the server with no
  * files whatever the reader attached. The rule that turns the note in the
  * text into the typed field already existed for the page composer (`mediaOf`);
- * this pins that the instance send goes through it, against the part the page
+ * this pins that the instance send goes through it, against the source the page
  * installs rather than a copy of it.
  */
 
@@ -15,23 +15,25 @@ import { describe, expect, it } from 'vitest'
 
 import { fakeGateway, loadPart } from './legacy-part.mjs'
 
-/* `sources.agents.instanceSend` as the part installs it, with the real `mediaOf`
+/* `sources.agents.instanceSend` as the page installs it, with the real `mediaOf`
    and the real note text behind it -- the note is what splits the message. */
 async function sender(calls) {
-  const part = await loadPart(() => import('../src/legacy/live/230-tabs.js'), {
+  const wiring = await loadPart(() => import('../src/state/install'), {
     fakes: { 'src/shell/session': { current: () => 's1' } },
   })
   await fakeGateway((method, params) => { calls.push([method, params]); return Promise.resolve({}) })
-  const { sources } = await import('../src/state/sources')
-  part.install()
-  if (!sources.agents?.instanceSend) throw new Error('instanceSend is absent from the live layer')
+  const { setSources, sources } = await import('../src/state/sources')
+  /* The two seam objects the chrome builds, which this case does not install. */
+  setSources({ composer: {}, transcript: {} })
+  wiring.installSources()
+  if (!sources.agents?.instanceSend) throw new Error('instanceSend is absent from the page wiring')
   return sources.agents.instanceSend
 }
 
 const { I18N } = await import('../src/legacy/demo/010-kernel.js')
 const note = I18N.ui['gui.att.note'].en
 
-describe('the live instance send', () => {
+describe('the instance send', () => {
   it('turns the attachment note in the text into the typed media field', async () => {
     const calls = []
     const send = await sender(calls)

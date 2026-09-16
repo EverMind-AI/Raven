@@ -2,9 +2,9 @@
  *
  * The 48 parts were one concatenated script whose order was load-bearing, and
  * ES modules do not honour that order: each evaluates when the graph first
- * reaches it, depth first. Both layers also contain a cycle -- 14 files in
- * demo/, 6 in live/ -- so inside one, a module can be evaluated before the
- * cycle-mate it reads has run at all.
+ * reaches it, depth first. The layers also contained cycles -- 14 files in
+ * demo/, 6 in live/ -- so inside one, a module could be evaluated before the
+ * cycle-mate it reads had run at all.
  *
  * So the order was taken out of the evaluation: a module body may only
  * DECLARE, everything else lives in its install(), and src/legacy/index.js
@@ -174,9 +174,8 @@ describe('the conversion leaf list', () => {
   })
 
   it('finds the cycles the layers are known to have', () => {
-    /* Two knots in demo/, both of them chrome reading chrome: the workspace
-       panel with its sub-agent hooks and the shortcut table, and the
-       capabilities page with its skills tab.
+    /* One knot left in demo/, and it is chrome reading chrome: the
+       capabilities page and its skills tab.
 
        It was one knot of 14 while the offline data lived in the layer. The
        live knot was 13 while every part that speaks to the gateway imported
@@ -188,9 +187,12 @@ describe('the conversion leaf list', () => {
        The demo knot broke the same way: the fixtures are responders behind the
        transport now (src/rpc/fixtures/), so the parts that held it -- the
        session rail, the conversation, the replay and the composer -- no longer
-       read each other's data. */
+       read each other's data. The three-member knot that survived that was the
+       workspace panel, its sub-agent hooks and the shortcut table; it broke
+       when the record the hooks write moved to features/workspace/record.ts,
+       so the panel no longer reads the part that reads it. */
     const sizes = [...new Set([...sccOf.values()].filter((c) => c.length > 1))].map((c) => c.length).sort((a, b) => b - a)
-    expect(sizes).toEqual([3, 2])
+    expect(sizes).toEqual([2])
   })
 })
 

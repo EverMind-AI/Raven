@@ -1,33 +1,37 @@
-/* The live layer installs a playbook source that speaks the contract.
+// @vitest-environment happy-dom
+/* The page installs a playbook source that speaks the contract.
  *
  * Two failures this catches without a gateway: a method name the dispatcher does
  * not register (which reads as -32601 at the moment a reader opens the page),
- * and an answer the island is handed still wrapped -- both of which the fixture
- * source cannot reveal, because in demo mode this file never runs. */
+ * and an answer the island is handed still wrapped. */
 
 import { readFileSync } from 'node:fs'
+/* Off cwd, not off `import.meta.url`: under happy-dom that is an http URL. */
+import { resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
 import { fakeGateway, loadPart } from './legacy-part.mjs'
 
-const contract = JSON.parse(readFileSync(new URL('../../rpc-schema/openrpc.json', import.meta.url), 'utf8'))
+const contract = JSON.parse(readFileSync(resolve(process.cwd(), '../rpc-schema/openrpc.json'), 'utf8'))
 const declared = new Set(contract.methods.map((m) => m.name))
 
 async function source(answers) {
   const calls = []
-  const part = await loadPart(() => import('../src/legacy/live/167-playbooks.js'))
+  const wiring = await loadPart(() => import('../src/state/install'))
   await fakeGateway((method, params) => {
     calls.push([method, params])
     return Promise.resolve(answers[method])
   })
-  const { sources } = await import('../src/state/sources')
-  part.install()
-  if (!sources.playbooks) throw new Error('sources.playbooks is absent from the live layer')
+  const { setSources, sources } = await import('../src/state/sources')
+  /* The two seam objects the chrome builds, which this case does not install. */
+  setSources({ composer: {}, transcript: {} })
+  wiring.installSources()
+  if (!sources.playbooks) throw new Error('sources.playbooks is absent from the page wiring')
   return { source: sources.playbooks, calls }
 }
 
-describe('the live playbook source', () => {
+describe('the page playbook source', () => {
   it('calls methods the contract declares', async () => {
     const { source: src, calls } = await source({
       'playbooks.list': { playbooks: [{ name: 'a' }] },

@@ -97,9 +97,8 @@ export const islands = {
     detach: browser.detach,
     hidden: browser.hidden,
   },
-  /* What the legacy layers still reach for: wsReset clears the list with the
-     session, and the dag sheet (live/240-external-agents.js) opens nodes,
-     reads rows and marks the open selection. */
+  /* What the page still reaches for: wsReset clears the list with the session,
+     and the dag panel opens nodes, reads rows and marks the open selection. */
   subagents: {
     draw: subagents.draw,
     detach: subagents.detach,
@@ -122,13 +121,10 @@ export const islands = {
     reconcile: rail.reconcileRows,
     removeRow: rail.removeSessionRow,
   },
-  /* Not a React island either, and not a renderer at all: the dag panel's
-     geometry and its two summary lines. The graph itself is still drawn by
-     live/240-external-agents.js, which reads these -- the layout walkers and
-     the sentences are where this domain's edge cases live (a cycle, a fan-out
-     that has to read as a diamond, a summary counting more nodes than the
-     graph holds), and inside the live layer none of it was reachable from a
-     test. */
+  /* The delegated graph. The layout walkers and the sentences are where this
+     domain's edge cases live (a cycle, a fan-out that has to read as a
+     diamond, a summary counting more nodes than the graph holds), and inside
+     the live layer none of it was reachable from a test. */
   dag: {
     /* The adapter that turns a `dag.run_started` payload into nodes, so the
        sheet and the transcript's card agree on what a node is. */
@@ -246,10 +242,15 @@ export const islands = {
     notifyDesk: desk.notifyDesk,
   },
   /* The composer island: the dock at the bottom of the chat. The shims in
-     demo/090-composer.js call these by name, and the parked-turn machinery
-     (live/060) carries the live clock's anchor through them. The tray is no
-     longer reachable from out here: live's send used to take the staged paths
-     off it, and the island folds them into the message itself now. */
+     demo/090-composer.js call these by name, and the residency rule
+     (state/session/residency.ts) carries a parked turn's clock anchor through
+     them. The tray is no longer reachable from out here: the page's send used
+     to take the staged paths off it, and the island folds them into the
+     message itself now.
+
+     Most of the rest is carried for stage C: the twenty-one queue, draft and
+     sheet verbs below have no reader left now that demo/040-state.js imports
+     the island modules directly. */
   composer: {
     turn: composer.turn,
     goPaint: composer.goPaint,
@@ -298,9 +299,9 @@ export const islands = {
     clarifyClose: clarify.close,
   },
   /* The transcript island: the conversation area's renderer. The legacy
-     shims (demo/060, demo/070, demo/080) and the live turn machine
-     (live/040, live/050, live/230) drive these; the DOM they used to build
-     is drawn by the island into a lane host inside #stage or a stage box. */
+     shims (demo/060, demo/070) and the pipeline's stages
+     (state/session/stages.ts) drive these; the DOM they used to build is
+     drawn by the island into a lane host inside #stage or a stage box. */
   transcript: {
     ask: transcript.ask,
     step: transcript.step,
@@ -329,8 +330,6 @@ export const islands = {
     setStuck: transcriptTail.setStuck,
   },
 }
-
-export type RavenIslands = typeof islands
 
 /* The desk, handed to the two island stores that open something in it. Handed
    rather than reached for: features/workspace/deskStore imports both of them

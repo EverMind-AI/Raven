@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
-/* What the desk's agent list is a list OF, asserted on the shipped live layer.
+/* What the desk's agent list is a list OF, asserted on the shipped wiring.
  *
- * The roster seam is three lines of wiring with no island behind it, so nothing
+ * The roster seam is one line of wiring with no island behind it, so nothing
  * in the vitest suite reaches it -- which is how a filter on the wrong field
  * survived: `vendored` is true of every agent that ships WITH raven, so the
  * four bundled ones were dropped while disabled rows were kept. */
@@ -10,14 +10,16 @@ import { describe, expect, it } from 'vitest'
 
 import { fakeGateway, loadPart } from './legacy-part.mjs'
 
-/* The seam the part installs, driven against a transport of our own: the
+/* The seam the page installs, driven against a transport of our own: the
    filter is the whole subject, so the rows it is handed have to be ours. */
 async function roster(call) {
-  const part = await loadPart(() => import('../src/legacy/live/230-tabs.js'))
+  const wiring = await loadPart(() => import('../src/state/install'))
   await fakeGateway(call)
-  const { sources } = await import('../src/state/sources')
-  part.install()
-  if (!sources.agents) throw new Error('sources.agents is absent from the live layer')
+  const { setSources, sources } = await import('../src/state/sources')
+  /* The two seam objects the chrome builds, which this case does not install. */
+  setSources({ composer: {}, transcript: {} })
+  wiring.installSources()
+  if (!sources.agents) throw new Error('sources.agents is absent from the page wiring')
   return sources.agents.roster
 }
 
@@ -32,7 +34,7 @@ const ROWS = [
 
 const ask = async () => (await roster(async () => ({ rows: ROWS })))()
 
-describe('the live agent roster', () => {
+describe('the installed agent roster', () => {
   it('lists every agent that is registered and available', async () => {
     /* Bundled and third-party alike: where an agent came from is not a reason
        to hide one the user can dispatch to right now. */

@@ -7,8 +7,9 @@
  * export name, and the island bag is an object, which `islands` assigns over.
  *
  * Every load starts from module state as fresh as a reload's, because a part
- * holds real state -- `viewGen`, `parkedTurns`, the naming timers -- and a
- * case that ran before must not be visible in the next one.
+ * and the modules around it hold real state -- the panel's open view, the
+ * session registry, the naming timers -- and a case that ran before must not
+ * be visible in the next one.
  */
 import { readdirSync, readFileSync } from 'node:fs'
 /* Off cwd, not off `import.meta.url`: under happy-dom that is an http URL. */
@@ -20,7 +21,7 @@ const mocked = new Set()
 
 /**
  * @param importPart a thunk that imports the part under test, e.g.
- *   `() => import('../src/legacy/live/050-turn.js')`. A thunk rather than a
+ *   `() => import('../src/legacy/demo/100-workspace.js')`. A thunk rather than a
  *   path so the specifier stays static and Vite can resolve it.
  * @param fakes exports to replace, keyed by part path under src/legacy/
  *   (`'demo/050-rail.js'`) or, for a module outside the layers, by its path
