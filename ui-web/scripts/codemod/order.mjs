@@ -2,8 +2,11 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
+
+import { requireConcatEra } from './concat-era.mjs'
 const UIWEB = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SRC = join(UIWEB, 'src', 'legacy')
+requireConcatEra(SRC)
 const py = readFileSync(join(UIWEB, 'build.py'), 'utf8')
 const manifest = (n) => [...py.match(new RegExp(`_${n}_PARTS = \\[([\\s\\S]*?)\\]`))[1].matchAll(/"([^"]+)"/g)].map((x) => x[1])
 function concat(dir, parts) {
