@@ -81,5 +81,17 @@ def mount_gateway_face(
         return None
     from raven.a2a.runtime import build_request_handler, make_run_turn_from_factory
 
-    handler = build_request_handler(config, make_run_turn_from_factory(agent_loop_factory))
+    def roster() -> list[Any]:
+        """The live sub-agent set, or empty when no loop is up yet.
+
+        Resolved per call for the same reason the turn runner is: at mount time
+        the loop does not exist, and a later hot-reload swaps it. An empty list
+        is a truthful answer for a gateway whose loop has not started -- the
+        extended card then names no sub-agents rather than failing the call.
+        """
+        loop = agent_loop_factory()
+        manager = getattr(loop, "subagents", None)
+        return list(manager.list_agents()) if manager is not None else []
+
+    handler = build_request_handler(config, make_run_turn_from_factory(agent_loop_factory), roster=roster)
     return handler if mount_if_allowed(app, config, handler=handler) else None

@@ -216,18 +216,51 @@ through `raven.rpc.bootstrap`.
 
 ### The Agent Card
 
-Served at `/.well-known/agent-card.json`, declaring one entry in `supportedInterfaces` --
-the JSON-RPC binding at `protocolVersion: "1.0"` -- plus `capabilities`, `skills` and the
-`securitySchemes` the next section enforces.
+There are two, because the protocol splits one description across two authentication
+states, and that split is the answer to a question the Card cannot otherwise resolve.
+
+The **public card** is served at `/.well-known/agent-card.json` by a plain GET with no
+token check, declaring one entry in `supportedInterfaces` -- the JSON-RPC binding at
+`protocolVersion: "1.0"` -- plus `capabilities`, `skills` and the `securitySchemes` the
+next section enforces. It has to be unauthenticated: a caller reads it to learn which
+scheme to authenticate with, so requiring the credential first would be circular.
+
+The **extended card** is a `GetExtendedAgentCard` RPC, which rides the same bearer check as
+every other method. Its caller has already presented the credential the public card named,
+so it is the only one of the two that may say what this host can actually do.
 
 `capabilities` is four fields (`streaming`, `push_notifications`, `extensions`,
 `extended_agent_card`) and each is answered by what this build actually does, never
 optimistically: `push_notifications` is false because it is out of scope below, and
 `streaming` is true per the Streaming section.
 
-Skills are derived from what the host can do rather than hand-written, following the rule
-the registry design set for capability fields: derived in one place, because a hand-filled
-field is wrong on some agent by construction.
+Skills are one fixed entry rather than derived from what the host can do, and the Card is
+where the registry design's derive-once rule stops applying. That rule exists so a
+capability field cannot go stale against the thing it describes, and it is the right rule
+for a field a caller must be able to trust. The Card is the one surface here that answers
+*before* authentication: `serve_card` is a plain GET with no token check, and it has to be,
+because a caller reads the Card to learn which scheme to authenticate with. Deriving skills
+would therefore publish the host's capability inventory -- which sub-agents are installed,
+which tools are enabled -- to anyone who can reach the port, with no credential. A single
+general-assistance entry says what every Raven can do and discloses nothing about which one
+this is.
+
+That reasoning is about the channel, not the field, so it governs anything that would name
+the host's inventory on the public card -- an `AgentCapabilities.extensions` entry included.
+A capability list does not become safe by moving to a different key in the same
+unauthenticated document.
+
+The extended card is where the derive-once rule does apply. It carries one skill per
+sub-agent on the live roster, derived per call rather than baked when the face is mounted:
+on the gateway-mounted hosting the loop that owns that roster does not exist yet at mount
+time, and a hot `apply_agents` would otherwise leave the answer stale. A host given no
+roster answers `ExtendedAgentCardNotConfiguredError`, the protocol's own word for it.
+
+`capabilities.extended_agent_card` reports what this process can actually answer rather
+than what the build implements, which is why the card route asks the handler instead of
+deciding for itself: the flag and the method's answer are two statements about one fact,
+assembled in different places, and a card that advertises a card this process cannot
+produce sends the caller to a refusal.
 
 ### Authenticating the caller
 
