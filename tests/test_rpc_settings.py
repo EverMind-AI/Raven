@@ -224,18 +224,31 @@ class TestEmbeddingCardFollowsTheEndpointHome:
                 }
             )
 
-    async def test_a_model_with_nobody_to_serve_it_is_refused(self, everos_toml, tmp_path, monkeypatch) -> None:
-        """Stored, it reads as configured on every screen while every reader
-        resolves it to nothing."""
+    async def test_half_a_pin_is_refused_from_either_end(self, everos_toml, tmp_path, monkeypatch) -> None:
+        """Both halves or neither. A model with nobody to serve it reads as
+        configured on every screen while every reader resolves it to nothing;
+        a provider with nothing to run is the same write from the other end,
+        reported as saved and storing nothing anyone can use."""
+        import json
+
         cfg = tmp_path / "config.json"
-        cfg.write_text("{}", encoding="utf-8")
+        cfg.write_text(
+            json.dumps({"providers": {"siliconflow": {"apiKey": "sk", "apiBase": "https://sf/v1"}}}), encoding="utf-8"
+        )
         # The process-wide pointer rather than two patched names: the pin is
         # read back through the loader, which binds `get_config_path` itself.
         raven_home.set_config_path(cfg)
         everos_toml.write_text('[llm]\nmodel = "m"\n', encoding="utf-8")
 
-        with pytest.raises(ConfigValidationError, match="provider"):
+        with pytest.raises(ConfigValidationError, match="needs the provider"):
             await rpc_console.settings_everos_set({"section": "embedding", "fields": {"model": "orphan"}})
+
+        # The card's lender picker with the model box left blank sends exactly
+        # this, and used to come back applied.
+        with pytest.raises(ConfigValidationError, match="needs the model"):
+            await rpc_console.settings_everos_set({"section": "embedding", "fields": {}, "borrow_from": "siliconflow"})
+
+        assert "embedding" not in json.loads(cfg.read_text(encoding="utf-8"))
 
     async def test_the_card_survives_ravens_own_startup_binding(self, everos_toml, tmp_path, monkeypatch) -> None:
         """The page as a running install reaches it: after `backend.start()`.

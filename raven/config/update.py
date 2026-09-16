@@ -496,14 +496,18 @@ def _refuse_a_pin_that_cannot_embed(clean: dict[str, Any], *, path: "Path") -> N
     """
     provider = str(clean.get("provider") or "")
     model = str(clean.get("model") or "")
+    # Both halves or neither. A model with nobody to serve it reads as
+    # configured on every screen while every reader resolves it to nothing --
+    # which is how a wizard came to report semantic memory over a service
+    # running on keywords alone. A provider with nothing to run is the same
+    # write from the other end: accepted, reported as saved, and storing
+    # nothing anyone can use.
     if not provider:
-        # A model with nobody to serve it. Stored, it reads as configured on
-        # every screen while every reader resolves it to nothing -- which is
-        # how a wizard came to report semantic memory over a service running
-        # on keywords alone.
         if model:
             raise EmbeddingPinError("an embedding model needs the provider that serves it")
         return
+    if not model:
+        raise EmbeddingPinError("an embedding provider needs the model to run on it")
 
     from raven.config.update_providers import resolve_provider_credentials
 
@@ -514,8 +518,6 @@ def _refuse_a_pin_that_cannot_embed(clean: dict[str, Any], *, path: "Path") -> N
     if resolved is None:
         raise EmbeddingPinError(f"provider {provider!r} has no usable credential, so nothing could be embedded with it")
 
-    if not model:
-        return
     from raven.providers import catalog
 
     row = catalog.describe(provider, model)
