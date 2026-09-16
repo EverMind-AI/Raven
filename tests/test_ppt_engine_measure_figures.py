@@ -399,6 +399,28 @@ def test_a_cover_spelled_as_a_negative_fill_rect_is_the_same_crop(deck, png):
     assert found[0].detail["shown_share"] == pytest.approx(0.281, abs=0.002)
 
 
+def test_a_corner_mark_is_not_a_cropped_figure() -> None:
+    """The bundled templates ship 0.9x0.8in corner ornaments cover-fitted to a few
+    percent of their bitmap; reported as `figure_crop` on every clone of their page,
+    they asked the author to recompose a seal. Under a square inch a frame is a mark."""
+    from raven_ppt.services.measure.figures import MARK_AREA_IN2
+    from raven_ppt.services.measure.geometry import Rect
+
+    mark = Figure(
+        page=8,
+        name="图片 11",
+        box=Rect(0.0, 6.71, 0.89, 6.71 + 0.79),
+        digest="x",
+        pixels=(798, 440),
+        crop=(0.4, 0.4, 0.0, 0.0),
+        inset=(0.0, 0.0, 0.0, 0.0),
+        tiled=False,
+    )
+    assert mark.box.width * mark.box.height < MARK_AREA_IN2
+    assert mark.shown_share < 0.5
+    assert cropped_figures([mark]) == []
+
+
 def test_a_fit_stated_twice_is_counted_once():
     """`compose._fill_crop` restates a template's fillRect fit as an srcRect against the
     frame; read as two crops the pair says a quarter is shown when the page shows over

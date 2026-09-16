@@ -189,6 +189,8 @@ _KEYWORDS = {
 }
 ICON_NAMES = sorted(_DATA)
 _GRID = 24.0
+# Upstream draws every icon with a 2-unit stroke on that grid.
+_STROKE_UNITS = 2
 _CURVE_STEPS = 8
 # How small a run has to be, on the 24 grid, to be one of upstream's dots rather
 # than a stroke. Nothing in the packaged set lands between the two: every dot is
@@ -261,7 +263,7 @@ def _dot_square(points, side):
 
     Sized to the pen rather than to the icon, because that is what a round cap is
     -- the pen set down once. A dot scaled off `size` instead would swell into a
-    blot beside strokes that keep their `width_pt` however large the icon gets.
+    blot beside strokes drawn with a `width_pt` the caller fixed.
     """
     xs = [x for x, _ in points]
     ys = [y for _, y in points]
@@ -436,12 +438,16 @@ def the_ink_an_icon_covers(name, size=1.0):
     )
 
 
-def add_icon(slide, name, left, top, size, colour, width_pt=1.75):
+def add_icon(slide, name, left, top, size, colour, width_pt=None):
     """Draw `name` in a square of side `size` with its top-left at (left, top).
 
     `left`, `top` and `size` are EMU: `Inches(0.4)`, not `0.4`. A bare `0.4` is four
     ten-millionths of an inch and would draw a shape that rounds to nothing, so it is
     refused.
+
+    The pen is a twelfth of the side unless `width_pt` says otherwise: the icons are
+    drawn with a 2-unit stroke on a 24-unit grid, and a fixed 1.75pt pen made every
+    0.7in icon a hairline at a third of its designed weight.
 
     Hands back the shapes it drew -- a list -- carrying `.box` for
     the ink they cover, in inches. The ink is not the square: `target` fills
@@ -460,7 +466,7 @@ def add_icon(slide, name, left, top, size, colour, width_pt=1.75):
     name = _resolve(name)
     colour = _line_color(colour)
     scale = side / _GRID
-    stroke = int(width_pt * 12700)
+    stroke = int(width_pt * 12700) if width_pt else int(scale * _STROKE_UNITS)
     shapes = []
     for polyline in _polylines(name):
         points = [(left + x * scale, top + y * scale) for x, y in polyline]

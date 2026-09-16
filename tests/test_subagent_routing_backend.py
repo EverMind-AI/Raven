@@ -684,7 +684,12 @@ class TestWhatTheShippedRouteSaysWhenItKeepsTheDeck:
         note = self._note()
 
         assert "Where the material is thin, search" in note
-        assert "Where a picture is missing, search for that too" in note
+        # A fourth live run, the first with image_search registered, generated a
+        # skyline of the Bund and never searched: the note had said "search" and
+        # named no tool, while it named `image_generate` for the backgrounds.
+        assert "Where a picture is missing, `image_search` it" in note
+        assert "never a stand-in for something a search would find" in note
+        assert "`read_skill local/deck-to-pptx`" in note
         assert "every section opener get a background picture" in note
         assert "Look at the page as it stands" in note
         assert "no text, no letters, no numbers" in note

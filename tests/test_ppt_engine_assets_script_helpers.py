@@ -328,7 +328,7 @@ def test_no_shape_helper_takes_a_type_size_a_face_or_a_placement_from_its_caller
     Which is how `preset(..., width_pt=1.5)` and `connect(..., width_pt=1.5)` arrived
     without anyone weighing them. The ruling, written here so the next one is argued
     rather than repeated: `width_pt` stays. It is the pen and not the type -- how thick
-    a drawn line is, the same quantity `add_icon(width_pt=1.75)` already took -- and
+    a drawn line is, the same quantity `add_icon(width_pt=...)` already took -- and
     the hard invariant's red line is the type size and the font face, which decide
     whether a page can be read and which the engine's own ladder owns. Nothing about a
     1.5pt rule can make a page illegible, and there is no other way to say "hairline"
@@ -551,9 +551,9 @@ def test_the_dots_upstream_hides_inside_a_round_cap_are_drawn_at_the_weight_of_a
     `key` simply were not there.
 
     Asserted on the geometry rather than on the picture: the dot has to have width and
-    height a renderer can put ink in, and it has to be the width of the pen -- a dot
-    scaled off `size` would swell into a blot beside strokes that keep their `width_pt`
-    however large the icon is drawn.
+    height a renderer can put ink in, and it has to be the width of the pen -- which is
+    a twelfth of the side by default, so a dot is the disc a round cap leaves at that
+    weight and no wider.
     """
     from pptx import Presentation
     from pptx.enum.dml import MSO_FILL
@@ -569,9 +569,10 @@ def test_the_dots_upstream_hides_inside_a_round_cap_are_drawn_at_the_weight_of_a
     slide = deck.slides.add_slide(deck.slide_layouts[6])
     drawn = module.add_icon(slide, "warning", Inches(1), Inches(1), Inches(0.4), "#0B5FA5")
 
+    pen = Inches(0.4) // 12
     dots = [shape for shape in drawn if shape.fill.type == MSO_FILL.SOLID]
     assert len(dots) == 1, "`warning` is a triangle, a bar and the dot under it"
-    assert dots[0].width == dots[0].height == Pt(1.75)
+    assert dots[0].width == dots[0].height == pen
     assert dots[0].fill.fore_color.rgb == module._line_color("#0B5FA5")
 
     # One shape back per stub, in every icon that had one, and the shape count is
@@ -580,7 +581,7 @@ def test_the_dots_upstream_hides_inside_a_round_cap_are_drawn_at_the_weight_of_a
         shapes = module.add_icon(slide, name, Inches(1), Inches(1), Inches(0.4), "#0B5FA5")
         painted = [shape for shape in shapes if shape.fill.type == MSO_FILL.SOLID]
         assert len(painted) == sum(span <= 0.02 for span in _spans(name)), name
-        assert all(shape.width == shape.height == Pt(1.75) for shape in painted), name
+        assert all(shape.width == shape.height == pen for shape in painted), name
 
     # The dot tracks the pen and not the box: the same square at four times the size,
     # a wider square only when the caller asks for a wider stroke.
@@ -600,7 +601,7 @@ def test_a_stroke_too_short_to_look_like_one_is_still_drawn_as_a_stroke(helpers)
     """
     from pptx import Presentation
     from pptx.enum.dml import MSO_FILL
-    from pptx.util import Inches, Pt
+    from pptx.util import Inches
 
     module = helpers.ppt_icons
     deck = Presentation()
@@ -612,7 +613,32 @@ def test_a_stroke_too_short_to_look_like_one_is_still_drawn_as_a_stroke(helpers)
             # A stroke keeps the pen on its outline; only a dot is painted.
             assert shape.fill.type == MSO_FILL.BACKGROUND, f"{name} lost a stroke to the dot rule"
             assert shape.line.color.rgb == module._line_color("#0B5FA5"), name
-            assert shape.line.width == Pt(1.75), name
+            assert shape.line.width == Inches(0.4) // 12, name
+
+
+def test_the_pen_is_a_twelfth_of_the_side_unless_the_caller_fixes_it(helpers) -> None:
+    """Tabler draws every icon with a 2-unit stroke on a 24-unit grid, so the weight
+    is a twelfth of whatever side the icon is drawn at. A fixed 1.75pt pen kept that
+    proportion only at 0.29in; at the 0.7in a card carries it was a third of the
+    designed weight, and every delivered deck's icons read as hairlines."""
+    from pptx import Presentation
+    from pptx.enum.dml import MSO_FILL
+    from pptx.util import Inches, Pt
+
+    module = helpers.ppt_icons
+    deck = Presentation()
+    slide = deck.slides.add_slide(deck.slide_layouts[6])
+
+    for side in (0.4, 0.7, 1.4):
+        strokes = [
+            shape
+            for shape in module.add_icon(slide, "target", Inches(1), Inches(1), Inches(side), "#0B5FA5")
+            if shape.fill.type == MSO_FILL.BACKGROUND
+        ]
+        assert strokes and all(shape.line.width == Inches(side) // 12 for shape in strokes), side
+
+    fixed = module.add_icon(slide, "target", Inches(1), Inches(1), Inches(0.7), "#0B5FA5", width_pt=1.5)
+    assert all(shape.line.width == Pt(1.5) for shape in fixed if shape.fill.type == MSO_FILL.BACKGROUND)
 
 
 def test_the_icon_module_answers_a_miss_the_same_way_the_service_does(helpers) -> None:
@@ -717,8 +743,8 @@ def test_what_an_icon_says_it_will_cover_is_what_it_covers(helpers) -> None:
     the geometry, so this is the property that makes either worth trusting. It holds
     to the EMU everywhere except where one of upstream's dots sits within half a pen
     of an edge: `add_icon` paints a dot as a pen-wide square centred on a stub with no
-    length, so the paint reaches half a pen further than the stub does -- 0.0122in at
-    the default 1.75pt, and never more.
+    length, so the paint reaches half a pen further than the stub does -- 0.0167in at
+    the default pen of a 0.4in icon, and never more.
 
     Every eighth name plus the ones that carry the interesting cases, and a fresh
     slide each: python-pptx re-reads the whole shape tree to pick the next shape id,
@@ -729,7 +755,7 @@ def test_what_an_icon_says_it_will_cover_is_what_it_covers(helpers) -> None:
     from pptx.util import Inches
 
     module = helpers.ppt_icons
-    half_a_pen = 1.75 / 72 / 2
+    half_a_pen = 0.4 / 12 / 2
     names = sorted(
         set(module.ICON_NAMES[::8])
         | {"target", "check", "minus", "chart_bar", "warning", "braille", "json"}

@@ -11,6 +11,7 @@ import argparse
 import importlib.util
 import json
 import os
+import shlex
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -24,19 +25,26 @@ ENGINE_PACKAGE = "raven_design"
 
 PRODUCT = "raven-design"
 
+# The build interpreter the deck skill names. `python3` on PATH is whichever
+# the machine has; the one with python-pptx and raven_ppt is the one this
+# launcher runs on, and a symlink to a venv's python loses the venv (CPython
+# resolves it back to the base interpreter), so the shim is a shell wrapper.
+INTERPRETER_SHIM = "raven-python"
+INTERPRETER_SHIM_CMD = "raven-python.cmd"
+
 MODES_DIR = HERE / "modes"
 MODE_LABELS = {
     "medium": (
         "Medium",
-        "Bounded: 60 tool iterations. A quick draft or a small revision.",
+        "400 tool iterations at low reasoning effort. A quick draft or a small revision.",
     ),
     "high": (
         "High",
-        "The default: 150 tool iterations.",
+        "The default: 400 tool iterations.",
     ),
     "max": (
         "Max",
-        "300 tool iterations. A full deliverable where the ceiling matters more than the bill.",
+        "400 tool iterations at the host's full reasoning effort. A full deliverable where the ceiling matters more than the bill.",
     ),
 }
 BASELINE_MODE = "high"
@@ -56,6 +64,28 @@ def env_value(name: str) -> str | None:
 def state_root() -> Path:
     """Everything this product persists lands here, never in this folder."""
     return render.product_state_root(PRODUCT, override=env_value("DESIGN_STATE_ROOT"))
+
+
+def write_interpreter_shim(root: Path) -> Path:
+    """Write ``<root>/bin/raven-python`` and ``raven-python.cmd`` running this interpreter; return the bin dir.
+
+    Rewritten on every launch: a reinstall moves the interpreter, and a shim
+    pointing at the old one would fail exactly the way `python3` does.
+    """
+    bin_dir = root / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    # Two files for one command: the POSIX shell resolves `raven-python` to the
+    # extensionless script, and cmd.exe resolves it to `raven-python.cmd` through
+    # PATHEXT -- a shell script is not executable there at all.
+    for name, text in (
+        (INTERPRETER_SHIM, f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n'),
+        (INTERPRETER_SHIM_CMD, f'@echo off\r\n"{sys.executable}" %*\r\n'),
+    ):
+        staged = bin_dir / f".{name}.{os.getpid()}"
+        staged.write_text(text, encoding="utf-8", newline="")
+        staged.chmod(0o755)
+        os.replace(staged, bin_dir / name)
+    return bin_dir
 
 
 def engine_skill_dir() -> Path | None:
@@ -94,6 +124,23 @@ def configure_image_generation(config: dict, host: dict) -> None:
     render.inherit_media_image(config, host)
 
 
+def inherit_everos_address(config: dict, host: dict) -> str | None:
+    """Point this product's memory at the host's EverOS server, when the host names one.
+
+    The product config carries the stock port; a host that runs its own EverOS on
+    another port (every second instance on one machine does) would otherwise send
+    this lane's turns to whatever answers on the stock one.
+    """
+    host_slice = ((host.get("plugins") or {}).get("config") or {}).get("everos-memory") or {}
+    base_url = host_slice.get("base_url") if isinstance(host_slice, dict) else None
+    if not isinstance(base_url, str) or not base_url.strip():
+        return None
+    own = config.setdefault("plugins", {}).setdefault("config", {}).setdefault("everos-memory", {})
+    if isinstance(own, dict):
+        own["base_url"] = base_url.strip()
+    return base_url.strip()
+
+
 def render_config(source: Path) -> Path:
     """Write a copy of ``source`` with the secrets merged in, under the state root.
 
@@ -105,8 +152,13 @@ def render_config(source: Path) -> Path:
     config = json.loads(source.read_text(encoding="utf-8"))
     host = render.host_config()
 
-    config.setdefault("tools", {})["web"] = deepcopy((host.get("tools") or {}).get("web") or {})
+    web = deepcopy((host.get("tools") or {}).get("web") or {})
+    # The picture search is off unless a product asks for it; this one places
+    # pictures, so it asks, on top of whatever vendor and key the host holds.
+    web.setdefault("search", {})["images"] = True
+    config.setdefault("tools", {})["web"] = web
     configure_image_generation(config, host)
+    inherit_everos_address(config, host)
 
     defaults = config.setdefault("agents", {}).setdefault("defaults", {})
     for key in ("model", "provider", "reasoningEffort"):
@@ -192,6 +244,15 @@ def render_config(source: Path) -> Path:
     # Still no plugins.dirs: the design-engine wheel arrives by entry point,
     # never by directory (the everos-memory shape).
     root.mkdir(parents=True, exist_ok=True)
+
+    # Appended, never prepended: `python3` stays the machine's own, and an
+    # operator's pathAppend keeps every entry they wrote ahead of ours.
+    exec_config = config.setdefault("tools", {}).setdefault("exec", {})
+    if isinstance(exec_config, dict):
+        own = str(exec_config.get("pathAppend") or "")
+        bin_dir = str(write_interpreter_shim(root))
+        exec_config["pathAppend"] = os.pathsep.join(part for part in (own, bin_dir) if part)
+
     render.sweep_stale_renders(root)
     return render.write_rendered(config, root)
 

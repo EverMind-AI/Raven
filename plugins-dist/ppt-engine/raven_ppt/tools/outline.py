@@ -433,12 +433,6 @@ class PptOutlineTool(Tool):
             borrowed_said = _borrows_for(stranded, state)
             if borrowed_said:
                 examples_said += borrowed_said
-        # The ask and `repeated_prototype` say the same thing about the same pages, and the
-        # finding says it more precisely. `_asks` already returns early for a blocking
-        # finding, so this stand-down is belt and braces at the current severity; it is kept
-        # because it states the exclusion where the two are chosen rather than leaving it to
-        # a control-flow accident one severity change away from speaking twice.
-        reused = "" if any(f.kind == "repeated_prototype" for f in findings) else _reused_prototypes(outline, state)
         asks = _asks(
             errands,
             blocking,
@@ -446,7 +440,6 @@ class PptOutlineTool(Tool):
             unprototyped,
             outline,
             examples_said,
-            reused,
         )
         if reordered:
             asks.insert(
@@ -1037,8 +1030,8 @@ def _pale_accent_note(state: Any) -> str:
 def _borrows_for(pages: list, state: Any) -> str:
     """Reference pages for the pages no example of the bound template can carry.
 
-    The other half of the same offer `_reused_prototypes` makes, at the other moment:
-    there an example fits and has been used already, here no example fits at all.
+    For the pages no example of the bound template fits at all; a page repeating an
+    example that fits is `_repeated_prototype`'s, and only past its threshold.
     """
     if not pages or state.template is None:
         return ""
@@ -1086,104 +1079,10 @@ def _matched_borrows(pages: list, offers: list) -> tuple[list[str], list[int]]:
 
 
 # How many pages in a row on one example read as a series rather than a habit. Five case
-# pages built alike so a reader compares them across is the deck this was written against,
-# and two adjacent pages on one example is the ordinary repetition the ask is about; at
-# three in a row "built alike on purpose" is the likelier reading, and the ask says so
-# rather than pulling one page out of the middle of it.
+# pages built alike so a reader compares them across is the deck this was written against;
+# at three in a row "built alike on purpose" is the likelier reading, and the refusal
+# leaves the run alone rather than pulling one page out of the middle of it.
 SERIES_RUN = 3
-
-
-def _reused_prototypes(outline: Outline, state: Any) -> str:
-    """The ask that names another page for each page repeating an example.
-
-    An ask rather than a finding: a template with fewer example pages than the deck
-    has pages *has* to repeat one, so repetition is not an error and refusing it would
-    refuse the decks this is meant to help. What the author is missing is not a rule,
-    it is the alternative, by number, so it is a choice from a list rather than a thing
-    to go and look up.
-
-    This template's own unused examples come first, and the other templates' reference
-    pages only for a page none of those fits. Measured on a delivered deck: twenty pages
-    on ten of the template's eleven content examples, one example five times and another
-    three, while five examples -- among them the one with the largest picture slot the
-    template draws, 35% of the page -- started nothing; the borrow offer alone would have
-    sent the author to another template past the pages it already had. The template's
-    own furniture (cover, index, divider, closing) repeats by design and is not counted.
-    """
-    from collections import Counter
-
-    from raven_ppt.services.template.menu import menu
-
-    if state.template is None or not outline.pages:
-        return ""
-    entries = menu(state.template.source)
-    house = {entry.number for entry in entries if entry.role}
-    counted = [
-        page for page in outline.pages if page.prototype is not None and (page.borrowed or page.prototype not in house)
-    ]
-    used = Counter((page.borrowed, page.prototype) for page in counted)
-    repeated = {source for source, count in used.items() if count >= PROTOTYPE_REUSED}
-    if not repeated:
-        return ""
-    runs = _series(counted)
-    in_series = {number for run in runs for number in run}
-    # The first page on an example keeps it; the ones after it are the ones with
-    # somewhere else to go -- unless they sit inside a series.
-    seen: set = set()
-    repeating = []
-    for page in counted:
-        key = (page.borrowed, page.prototype)
-        if key in repeated and key in seen and page.page not in in_series:
-            repeating.append(page)
-        seen.add(key)
-    if not repeating:
-        return ""
-    taken = {page.prototype for page in outline.pages if page.prototype is not None and not page.borrowed}
-    examples = [entry for entry in entries if not entry.role and not entry.hidden]
-    unused = [entry for entry in examples if entry.number not in taken]
-    own_named, own_matched = _matched_examples(repeating, unused, examples, state)
-    left = [page for page in repeating if page.page not in own_matched]
-    borrow_named: list[str] = []
-    borrow_matched: list[int] = []
-    if left:
-        offers = _borrowable_offers(state)
-        if offers:
-            borrow_named, borrow_matched = _matched_borrows(left, offers)
-    if not own_named and not borrow_named:
-        return ""
-    ordered = sorted(repeated, key=lambda one: (one[0], one[1]))
-    numbers = ", ".join(f"{one[1]}" if not one[0] else f"{one[0]} page {one[1]}" for one in ordered)
-    beyond_first = sum(count - 1 for count in used.values() if count >= PROTOTYPE_REUSED)
-    said = (
-        f"prototype{'s' if len(ordered) > 1 else ''} {numbers} each start more than one of this deck's "
-        f"{len(outline.pages)} pages ({beyond_first} page(s) repeat one). "
-        "Repeating an example is not wrong -- a template with fewer example pages than the deck has pages has to"
-    )
-    if runs:
-        series = " and ".join(f"pages {run[0]}-{run[-1]}, in a row on {_source_said(counted, run[0])}," for run in runs)
-        said += (
-            f" -- and {series} read as a series built alike so a reader can compare them, so they are left alone here"
-        )
-    said += ". "
-    if own_named:
-        said += (
-            f"But {len(unused)} of this template's {len(examples)} content examples start no page of this deck. "
-            "By what each repeating page says it carries: "
-            + "; ".join(own_named)
-            + ". Record `prototype: N` on that page and clone it with `clone_page(prs, prototype(tpl, N))`, "
-            "then `replace_text` per line. "
-        )
-    if borrow_named:
-        said += (
-            f"For page{'s' if len(borrow_matched) > 1 else ''} {', '.join(str(number) for number in borrow_matched)} "
-            "this template has no unused example left that fits, and the other bundled templates ship reference "
-            "pages this deck can borrow -- a "
-            "borrowed page arrives in this deck's own colours and master with only its arrangement carried across: "
-            + "; ".join(borrow_named)
-            + ". Borrow one with `clone_page(prs, prototype(bundled('<template>'), N))` and record "
-            "`borrowed: '<template>'` and `prototype: N` on that page of the plan." + _pale_accent_note(state)
-        )
-    return said.rstrip()
 
 
 def _series(pages: list) -> list[list[int]]:
@@ -1203,11 +1102,6 @@ def _series(pages: list) -> list[list[int]]:
     if len(run) >= SERIES_RUN:
         runs.append(run)
     return runs
-
-
-def _source_said(pages: list, number: int) -> str:
-    page = next(one for one in pages if one.page == number)
-    return f"{page.borrowed} page {page.prototype}" if page.borrowed else str(page.prototype)
 
 
 def _matched_examples(pages: list, unused: list, examples: list, state: Any) -> tuple[list[str], list[int]]:
@@ -1396,13 +1290,12 @@ def _repeated_prototype(outline: Outline, state: Any) -> list:
     within a minute of being refused. A warning would have filed all three as proposed.
     The refusal names a page to move each repeat to, which is what keeps it a gate the
     author can act on rather than a wall. A consecutive run of `SERIES_RUN` or more on
-    one example is a series and its pages are not counted, the same reading
-    `_reused_prototypes` already takes: a comparison a reader makes across pages is the
+    one example is a series and its pages are not counted: a comparison a reader makes across pages is the
     one deck this would otherwise have no way to plan, since the escape the message
     offers for it is a sentence and not a switch.
 
-    Sharper than `_reused_prototypes`, which speaks for any repetition: this one is about
-    the case where one example starts more of the deck than every other page put together.
+    Only the case where one example starts more of the deck than every other page put together;
+    a template with fewer examples than the deck has pages has to repeat one, and that is not refused.
     Only when this template's own unused examples can carry the pages that repeat, which
     is what keeps a template with two body layouts out of it -- there the repetition is
     the template's doing, and the borrow offer, which stays an offer, is the only answer.
@@ -1433,11 +1326,9 @@ def _repeated_prototype(outline: Outline, state: Any) -> list:
     on_it = [page for page in started if (page.borrowed, page.prototype) == source]
     in_series = {number for run in _series(started) for number in run}
     # The first page keeps the prototype; the rest are the ones with somewhere to go,
-    # the same division the ask makes -- less the ones inside a series, which
-    # `_reused_prototypes` already reads as intentional and leaves alone. The two have
-    # to agree: this one refused, as one page repeated, the consecutive run that one
-    # accepts as a comparison a reader is meant to make across pages, and the refusal's
-    # own offer to keep the prototype for such a series had no way to be taken.
+    # less the ones inside a series, which reads as intentional: a consecutive run is a
+    # comparison a reader is meant to make across pages, and refusing it as one page
+    # repeated left the offer to keep the prototype for such a series with no way to be taken.
     repeating = [page for page in on_it[1:] if page.page not in in_series]
     if not repeating:
         return []
@@ -1857,14 +1748,11 @@ def _asks(
     unprototyped: list[int] | None = None,
     outline: Outline | None = None,
     examples: str = "",
-    reused: str = "",
 ) -> list[str]:
     asks: list[str] = []
     if blocking:
         asks.append("fix what is refused above and call ppt_outline again -- nothing is recorded until it clears")
         return asks
-    if reused:
-        asks.append(reused)
     if unprototyped:
         asks.append(
             f"pages {', '.join(str(number) for number in unprototyped)} have no template prototype. "

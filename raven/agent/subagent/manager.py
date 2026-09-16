@@ -211,6 +211,7 @@ class SubagentManager:
         web_search_provider: str = "serper",
         web_fetch_provider: str = "jina",
         web_provider_keys: dict[str, str] | None = None,
+        image_search: bool = False,
         max_concurrent: int = 8,
         max_spawns_per_hour: int = 30,
         agents: list | None = None,
@@ -265,6 +266,7 @@ class SubagentManager:
         self.web_search_provider = web_search_provider
         self.web_fetch_provider = web_fetch_provider
         self.web_provider_keys = web_provider_keys
+        self.image_search = image_search
         self.exec_config = exec_config or ExecToolConfig()
         self.restrict_to_workspace = restrict_to_workspace
         self._sandbox_config = sandbox_config
@@ -367,6 +369,7 @@ class SubagentManager:
             web_search_provider=self.web_search_provider,
             web_fetch_provider=self.web_fetch_provider,
             web_provider_keys=self.web_provider_keys,
+            image_search=self.image_search,
             tools_allow=getattr(build, "tools_allow", None),
             skills_allow=getattr(build, "skills_allow", None),
             mcp_allow=getattr(row.config, "mcps", None),
@@ -392,6 +395,7 @@ class SubagentManager:
             web_search_provider=self.web_search_provider,
             web_fetch_provider=self.web_fetch_provider,
             web_provider_keys=self.web_provider_keys,
+            image_search=self.image_search,
             tools_allow=getattr(build, "tools_allow", None),
             skills_allow=getattr(build, "skills_allow", None),
         )

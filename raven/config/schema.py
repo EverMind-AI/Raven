@@ -1020,6 +1020,11 @@ class WebSearchConfig(Base):
     """The Serper key on the pre-vendor layout. Still honoured, read after
     ``tools.web.providers.serper.apiKey``; new writes go to the vendor slot."""
     max_results: int = 5
+    images: bool = False
+    """Whether ``image_search`` is offered beside ``web_search``. Off unless a
+    deployment or a product folder turns it on: the deck lane that places
+    pictures does, in its own ``config.json``; a lane that reads pages keeps the
+    tool face it always had."""
 
 
 class WebFetchConfig(Base):

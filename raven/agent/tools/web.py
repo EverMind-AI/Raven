@@ -8,11 +8,13 @@ anything reads it. The Serper and Jina branches are byte-identical to what
 these tools always sent; do not tidy them into the others.
 """
 
+import asyncio
 import json
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from loguru import logger
@@ -404,6 +406,319 @@ class WebSearchTool(Tool):
                 }
             )
         return {"organic": organic}
+
+
+# Below this a picture is already soft at half-page width on a 1280px canvas.
+IMAGE_MIN_WIDTH = 640
+# How many of one call's queries are in flight at once: a courtesy bound on one endpoint.
+IMAGE_SEARCH_CONCURRENCY = 4
+# How many queries one call takes; a twenty-page deck does not need more distinct pictures.
+IMAGE_MAX_QUERIES = 12
+
+#: The ``web_search`` vendors that also have an image surface. Exa and AnySearch
+#: search pages only; a deployment on one of those searches pictures through the
+#: default vendor's key when it holds one. Tavily answers without dimensions, so
+#: its hits are offered as "size unknown" rather than dropped.
+IMAGE_SEARCH_VENDORS: tuple[str, ...] = ("serper", "serpapi", "brave", "tavily", "firecrawl")
+
+
+def image_search_vendor(selected: str, key_for: "Callable[[str], str | None] | None" = None) -> str:
+    """The vendor ``image_search`` speaks to, given the one ``web_search`` selected.
+
+    The selected vendor when it has an image surface -- and, when ``key_for`` is
+    given, when a key resolves for it; Serper otherwise. A host running Tavily
+    on Tavily's key searches pictures through Tavily; a host running Exa, or
+    one whose Tavily has no key, searches them through the Serper key it holds.
+    """
+    if selected in IMAGE_SEARCH_VENDORS and (key_for is None or key_for(selected)):
+        return selected
+    return DEFAULT_SEARCH_PROVIDER
+
+
+@dataclass(frozen=True)
+class ImageHit:
+    """One picture as every vendor is read into: where it is, how big, and whose."""
+
+    title: str
+    image_url: str
+    width: int | None
+    height: int | None
+    source: str
+    page: str
+
+
+class ImageSearchTool(Tool):
+    """Search pictures through the selected vendor's image surface.
+
+    A built-in beside ``web_search`` rather than a recipe in a skill: the Design lane
+    was told to call Serper's image endpoint from ``exec`` with a key "already
+    configured" in a file whose path nothing named, and a live run probed for the
+    key, found none, and generated every picture instead. A tool is registered,
+    gated on its vendor's key the way ``web_search`` is, and withheld while that key
+    is absent. The vendor follows ``tools.web.search.provider`` where that vendor has
+    an image surface (see :data:`IMAGE_SEARCH_VENDORS`) and is Serper otherwise.
+    """
+
+    name = "image_search"
+    description = (
+        "Search the web for pictures: each result carries the direct image URL, its pixel size where the "
+        "vendor reports one, and the page it came from; anything known to be too small to hold up on a "
+        "screen is dropped rather than offered. For a real logo, product shot, photograph or published "
+        "chart; image_generate is for pictures that do not exist yet. Pass every picture the task needs "
+        "as queries=[...] in one call -- they run together and come back grouped by query. Download what "
+        "you pick and look at it before placing it: a hit the right size can still be a thumbnail sheet "
+        "or somebody else's slide."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "queries": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "maxItems": IMAGE_MAX_QUERIES,
+                "description": "every picture the task needs, one query each; they are searched together",
+            },
+            "query": {"type": "string", "description": "one query, for a single search"},
+            "count": {"type": "integer", "description": "Results per query (1-10)", "minimum": 1, "maximum": 10},
+            "min_width": {
+                "type": "integer",
+                "minimum": 1,
+                "description": f"drop anything known to be narrower than this in pixels (default {IMAGE_MIN_WIDTH})",
+            },
+        },
+    }
+
+    def __init__(
+        self,
+        api_key: "str | Callable[[], str] | None" = None,
+        max_results: int = 5,
+        proxy: str | None = None,
+        provider: str = DEFAULT_SEARCH_PROVIDER,
+    ):
+        if provider not in IMAGE_SEARCH_VENDORS:
+            raise ValueError(f"unknown image_search provider {provider!r}; one of {sorted(IMAGE_SEARCH_VENDORS)}")
+        # A callable is the live form (a reader over the config file), as for web_search.
+        self._api_key_source = api_key if callable(api_key) else None
+        self._init_api_key = None if callable(api_key) else api_key
+        self.max_results = max_results
+        self.proxy = proxy
+        self.provider = provider
+
+    @property
+    def spec(self) -> SearchProviderSpec:
+        return SEARCH_PROVIDERS[self.provider]
+
+    @property
+    def api_key(self) -> str:
+        """The vendor's key, from the live reader or the boot value, else its environment variable."""
+        configured = self._api_key_source() if self._api_key_source is not None else self._init_api_key
+        return configured or os.environ.get(self.spec.env_var, "")
+
+    @classmethod
+    def is_configured(cls, config_key: str | None, provider: str = DEFAULT_SEARCH_PROVIDER) -> bool:
+        """Whether a key resolves for the vendor, from the config value or the environment."""
+        return bool(cls(api_key=config_key or None, provider=provider).api_key)
+
+    async def execute(
+        self,
+        queries: list[str] | None = None,
+        query: str | None = None,
+        count: int | None = None,
+        min_width: int | None = None,
+        **kwargs: Any,
+    ) -> str:
+        if not self.api_key:
+            from raven.config.loader import get_config_path
+
+            return (
+                f"Error: {self.spec.label} API key not configured. Set it in {get_config_path()} under "
+                f"{self.spec.config_path} (or export {self.spec.env_var}), then restart the gateway."
+            )
+        wanted = [said.strip() for said in (queries or ([query] if query else [])) if said and said.strip()]
+        if not wanted:
+            return "Error: pass queries=[...] with the pictures the task needs, or query='...' for one."
+        if len(wanted) > IMAGE_MAX_QUERIES:
+            return f"Error: {len(wanted)} queries in one call; {IMAGE_MAX_QUERIES} is the most. Split them."
+        per_query = min(max(count or self.max_results, 1), 10)
+        floor = max(min_width or IMAGE_MIN_WIDTH, 1)
+        gate = asyncio.Semaphore(IMAGE_SEARCH_CONCURRENCY)
+
+        async def one(said: str) -> str:
+            async with gate:
+                try:
+                    return await self._search_images(said, per_query, floor)
+                except httpx.HTTPStatusError as exc:
+                    # Status only: httpx puts the request in the message, and SerpApi
+                    # carries its key as a query parameter.
+                    return f"Image results for: {said}\n\n{self.spec.label} answered HTTP {exc.response.status_code}."
+                except Exception as exc:  # noqa: BLE001 -- one query's failure is not the batch's
+                    return f"Image results for: {said}\n\nThis search failed ({type(exc).__name__})."
+
+        found = await asyncio.gather(*(one(said) for said in wanted))
+        return found[0] if len(found) == 1 else ("\n\n" + "-" * 60 + "\n\n").join(found)
+
+    async def _search_images(self, query: str, count: int, min_width: int) -> str:
+        """The vendor's image surface, filtered to what a screen can use.
+
+        Dimensions and source page travel with every hit: the caller has two
+        judgements to make -- whether it holds up on screen, and whether its
+        origin can be cited -- and needs both. A vendor that reports no size
+        leaves the first judgement to the caller, and the line says so.
+        """
+        async with httpx.AsyncClient(proxy=self.proxy) as client:
+            response = await self._provider_request(client, query, max(count, 10))
+            response.raise_for_status()
+        hits = self.normalise_hits(response.json())
+        usable = [
+            hit
+            for hit in hits
+            if hit.image_url
+            and (hit.width is None or hit.width >= min_width)
+            # 16:9 is the shape of a screen; far taller than wide cannot fill a region uncropped.
+            and (hit.height is None or hit.height >= int(min_width * 9 / 16))
+        ]
+        if not usable:
+            return (
+                f"No images at least {min_width}px wide for: {query}\n"
+                "Try a more specific query, or lower min_width if a smaller image is genuinely enough."
+            )
+        lines = [f"Image results for: {query}\n"]
+        for index, hit in enumerate(usable[:count], 1):
+            lines.append(f"{index}. {hit.title}")
+            lines.append(f"   {hit.image_url}")
+            size = f"{hit.width}x{hit.height}px" if hit.width and hit.height else "size unknown -- check before use"
+            lines.append(f"   {size} - {hit.source or 'unknown source'}")
+            if hit.page:
+                lines.append(f"   from: {hit.page}")
+        if len(usable) > count:
+            lines.append(f"\n[{len(usable)} usable results, {count} shown.]")
+        lines.append(
+            "\nDownload one before use and look at it: it has to depict what was asked, from a source you can cite."
+        )
+        return "\n".join(lines)
+
+    async def _provider_request(self, client: httpx.AsyncClient, query: str, n: int) -> httpx.Response:
+        """One image search, built the way the vendor's image surface expects."""
+        auth_json = {"Accept": "application/json", "Content-Type": "application/json"}
+        if self.provider == "serper":
+            return await client.post(
+                "https://google.serper.dev/images",
+                json={"q": query, "num": n},
+                headers={**auth_json, "X-API-KEY": self.api_key},
+                timeout=15.0,
+            )
+        if self.provider == "serpapi":
+            return await client.get(
+                "https://serpapi.com/search.json",
+                params={"engine": "google_images", "q": query, "api_key": self.api_key},
+                headers={"Accept": "application/json"},
+                timeout=15.0,
+            )
+        if self.provider == "brave":
+            return await client.get(
+                "https://api.search.brave.com/res/v1/images/search",
+                params={"q": query, "count": n},
+                headers={"Accept": "application/json", "X-Subscription-Token": self.api_key},
+                timeout=15.0,
+            )
+        if self.provider == "tavily":
+            return await client.post(
+                "https://api.tavily.com/search",
+                json={"query": query, "max_results": n, "include_images": True, "include_image_descriptions": True},
+                headers={**auth_json, "Authorization": f"Bearer {self.api_key}"},
+                timeout=15.0,
+            )
+        return await client.post(
+            "https://api.firecrawl.dev/v2/search",
+            json={"query": query, "limit": n, "sources": [{"type": "images"}]},
+            headers={**auth_json, "Authorization": f"Bearer {self.api_key}"},
+            timeout=15.0,
+        )
+
+    def normalise_hits(self, data: Any) -> list[ImageHit]:
+        """A vendor payload as the one list the render path reads."""
+        if not isinstance(data, dict):
+            return []
+
+        def number(value: Any) -> int | None:
+            try:
+                return int(value) if value is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        def domain(url: str) -> str:
+            return urlparse(url).netloc if url else ""
+
+        hits: list[ImageHit] = []
+        if self.provider == "serper":
+            for item in data.get("images") or []:
+                hits.append(
+                    ImageHit(
+                        title=str(item.get("title") or ""),
+                        image_url=str(item.get("imageUrl") or ""),
+                        width=number(item.get("imageWidth")),
+                        height=number(item.get("imageHeight")),
+                        source=str(item.get("domain") or item.get("source") or ""),
+                        page=str(item.get("link") or ""),
+                    )
+                )
+        elif self.provider == "serpapi":
+            for item in data.get("images_results") or []:
+                hits.append(
+                    ImageHit(
+                        title=str(item.get("title") or ""),
+                        image_url=str(item.get("original") or ""),
+                        width=number(item.get("original_width")),
+                        height=number(item.get("original_height")),
+                        source=str(item.get("source") or domain(str(item.get("link") or ""))),
+                        page=str(item.get("link") or ""),
+                    )
+                )
+        elif self.provider == "brave":
+            for item in data.get("results") or []:
+                properties = item.get("properties") or {}
+                page = str(item.get("url") or "")
+                hits.append(
+                    ImageHit(
+                        title=str(item.get("title") or ""),
+                        image_url=str(properties.get("url") or ""),
+                        width=number(properties.get("width")),
+                        height=number(properties.get("height")),
+                        source=str(item.get("source") or domain(page)),
+                        page=page,
+                    )
+                )
+        elif self.provider == "tavily":
+            # Tavily names the picture and describes it; it reports no size and no page.
+            for item in data.get("images") or []:
+                if isinstance(item, str):
+                    item = {"url": item}
+                url = str(item.get("url") or "")
+                hits.append(
+                    ImageHit(
+                        title=str(item.get("description") or ""),
+                        image_url=url,
+                        width=None,
+                        height=None,
+                        source=domain(url),
+                        page="",
+                    )
+                )
+        else:
+            for item in (data.get("data") or {}).get("images") or []:
+                page = str(item.get("url") or "")
+                hits.append(
+                    ImageHit(
+                        title=str(item.get("title") or ""),
+                        image_url=str(item.get("imageUrl") or ""),
+                        width=number(item.get("imageWidth")),
+                        height=number(item.get("imageHeight")),
+                        source=domain(page),
+                        page=page,
+                    )
+                )
+        return hits
 
 
 def _rows(items: Any, *, url: str, snippet: str) -> list[dict[str, Any]]:

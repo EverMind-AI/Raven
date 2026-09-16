@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from raven.acp_client.asker import held_question
 from raven.agent.loop._shared import (
+    SEARCH_PROVIDERS,
     Any,
     AskUserTool,
     Callable,
@@ -19,6 +20,7 @@ from raven.agent.loop._shared import (
     FindTool,
     GrepTool,
     ImageGenerateTool,
+    ImageSearchTool,
     ListDirTool,
     LLMProvider,
     MessageTool,
@@ -33,6 +35,7 @@ from raven.agent.loop._shared import (
     WriteFileTool,
     active_binding,
     deep_research_mode,
+    image_search_vendor,
     logger,
     resolve_vendor_key,
     workdir,
@@ -169,6 +172,9 @@ class WiringMixin:
         # keyed Tavily search.
         if search is not None and search is gated.get(WebSearchTool.name) and not search.api_key:
             names.add(WebSearchTool.name)
+        pictures = self.tools.get(ImageSearchTool.name)
+        if pictures is not None and pictures is gated.get(ImageSearchTool.name) and not pictures.api_key:
+            names.add(ImageSearchTool.name)
         # A contributed tool that declared ``configured()`` at the door answers
         # for itself on this same lane (the paper is in
         # raven/contracts/plugin_surface.py): the built-ins above are judged by
@@ -310,29 +316,33 @@ class WiringMixin:
         return _OpenRouterMediaTool.has_key(self._live_media_config("image", self.media_config.image))
 
     def _lane_searches_images(self, target: str) -> bool:
-        """Whether ``target`` can search for pictures: its own Serper key, else the host's.
+        """Whether ``target`` can search for pictures: its vendor's key, its own or the host's.
 
-        Serper specifically, and not :meth:`_live_web_search_key`. That reader
-        answers for this loop's own ``web_search``, which is truthy on whichever
-        vendor the host selected; a lane's image search speaks to Serper's image
-        endpoint alone, so a host on another vendor holds nothing the lane can
-        spend and a Serper key the host did not select is still the lane's to
-        spend.
-
-        The bare ``SERPER_API_KEY`` closes the chain because the lane's own
-        tool ends there too, and a launched product inherits this environment:
-        stopping one link earlier would refuse a deployment whose only key is
-        exported, which the lane would have searched with.
+        The vendor is the target's own where the target holds the host tool out
+        and searches through its own plugin (:func:`product_picture_vendor`), else
+        the one ``image_search`` itself speaks to -- the selected search vendor
+        where that vendor has an image surface, Serper otherwise
+        (:func:`raven.agent.tools.web.image_search_vendor`) -- and the key is
+        resolved the way the lane resolves it: the product folder's own
+        ``<PRODUCT>_<VENDOR>_API_KEY`` first, then the host's slot for that vendor
+        (which the launcher copies into the lane's config), then the vendor's bare
+        environment variable, which a launched product inherits. Not
+        :meth:`_live_web_search_key`: that answers for ``web_search`` on a vendor
+        that may search pages only.
         """
         import os
 
-        from raven.agent.subagent.vendored_agents import product_secret
+        from raven.agent.subagent.vendored_agents import product_picture_vendor, product_secret
 
-        return bool(
-            product_secret(target, "SERPER_API_KEY")
-            or self._live_vendor_key("serper")
-            or os.environ.get("SERPER_API_KEY", "")
-        )
+        def key_for(vendor: str) -> str:
+            return (
+                product_secret(target, f"{vendor.upper()}_API_KEY")
+                or self._live_vendor_key(vendor)
+                or os.environ.get(SEARCH_PROVIDERS[vendor].env_var, "")
+            )
+
+        vendor = product_picture_vendor(target) or image_search_vendor(self.web_search_provider, key_for)
+        return bool(key_for(vendor))
 
     def _live_vendor_key(self, vendor: str) -> str:
         """One named web vendor's key the file holds now, whatever the host selected.
@@ -814,6 +824,17 @@ class WiringMixin:
         )
         self.tools.register(web_search)
         self._config_gated_tools[web_search.name] = web_search
+        # Pictures: the selected vendor's image surface where it has one, Serper's
+        # otherwise, on that vendor's key, gated and withheld the same way -- and
+        # only where `tools.web.search.images` asks for the tool at all, so a lane
+        # that never places a picture keeps the tool face it had.
+        if self.image_search:
+            picture_vendor = image_search_vendor(self.web_search_provider, self._web_key)
+            image_search = ImageSearchTool(
+                api_key=lambda: self._live_vendor_key(picture_vendor), proxy=self.web_proxy, provider=picture_vendor
+            )
+            self.tools.register(image_search)
+            self._config_gated_tools[image_search.name] = image_search
         # web_fetch registers the same way and is never withheld: Jina needs no
         # key, so a keyed backend selected without one is replaced by Jina
         # rather than left to fail.

@@ -814,12 +814,14 @@ def replace_picture(
         place(shape, box)
     # Read before the blip is swapped: what the frame held is the whole question.
     _check_cut_out(shape, image)
-    _, relationship = shape.part.get_or_add_image_part(str(image))
     fill = _blip_fill(shape)
     blip = fill.find(f"{{{_A}}}blip")
     if blip is None:
         raise ValueError("that shape has no image to replace")
-    blip.set(f"{{{_R}}}embed", relationship)
+    if shape.shape_type == MSO_SHAPE_TYPE.PICTURE or fit not in ("cover", "contain"):
+        # A filled shape on a cover fit gets its pixels cut below and embeds those instead.
+        _, relationship = shape.part.get_or_add_image_part(str(image))
+        blip.set(f"{{{_R}}}embed", relationship)
     if alpha is not None:
         _wash(blip, alpha)
     if fit not in ("cover", "contain"):
@@ -1078,32 +1080,57 @@ def _cover_crop(frame: float, size: tuple[int, int], anchor: str, trim, zoom: fl
 
 
 def _fill_crop(shape, fill, image: Path, anchor: str = "centre", trim=None, zoom: float = 1.0) -> None:
-    """Crop the fill's source to the shape's proportions, so nothing stretches.
+    """Cut the picture to the shape's proportions in pixels, and fill the shape with the cut.
 
-    The crop is stated against the frame, so any inset the template fitted its own
-    photograph with has to go with the image it was cut for. Left behind, the fill
-    states its fit twice and the two disagree: a live template photograph came out with
-    a 23.9% crop for the frame and a -32% `fillRect` for a box half again as wide, and
-    `figure_distortion` read the pair as a 1.64x stretch that no renderer put on the
-    page.
+    Stated as a `srcRect` on the fill, the crop is right in PowerPoint and ignored by
+    LibreOffice, which maps the whole source onto the shape: a 1600x600 picture put into
+    a 1.8:1 panel rendered with its circle squeezed to 0.67 of round -- and the render is
+    what the author and the second reader judge the page by, so the author saw a stretch
+    the file did not state and wrote its own PIL crop to get past it. Cutting the pixels
+    first leaves nothing for a renderer to interpret: the fill is a plain stretch of an
+    image that already has the shape's proportions, and any inset the template fitted
+    its own photograph with (`stretch/fillRect`) goes with the image it was cut for.
     """
     size = _picture_size(image)
     if size is None or not shape.width or not shape.height:
         return
     from lxml import etree
 
-    for stale in fill.findall(f"{{{_A}}}srcRect"):
+    left, right, top, bottom = _cover_crop(shape.width / shape.height, size, anchor, trim, zoom)
+    cut = _cut_pixels(image, size, left, right, top, bottom)
+    _, relationship = shape.part.get_or_add_image_part(io.BytesIO(cut) if cut is not None else str(image))
+    fill.find(f"{{{_A}}}blip").set(f"{{{_R}}}embed", relationship)
+    for stale in fill.findall(f"{{{_A}}}srcRect") + fill.findall(f"{{{_A}}}tile"):
         fill.remove(stale)
     stretch = fill.find(f"{{{_A}}}stretch")
-    if stretch is not None:
+    if stretch is None:
+        etree.SubElement(fill, f"{{{_A}}}stretch")
+    else:
         for stale in stretch.findall(f"{{{_A}}}fillRect"):
             stretch.remove(stale)
-    left, right, top, bottom = _cover_crop(shape.width / shape.height, size, anchor, trim, zoom)
-    rect = etree.SubElement(fill, f"{{{_A}}}srcRect")
-    for side, share in (("l", left), ("r", right), ("t", top), ("b", bottom)):
-        if share > 0:
-            rect.set(side, str(int(round(share * 100000))))
-    fill.insert(list(fill).index(fill.find(f"{{{_A}}}blip")) + 1, rect)
+
+
+def _cut_pixels(image: Path, size: tuple[int, int], left: float, right: float, top: float, bottom: float):
+    """The picture with the four shares cut off its edges, encoded; None when nothing is cut."""
+    if not any(share > 0 for share in (left, right, top, bottom)):
+        return None
+    from PIL import Image
+
+    width, height = size
+    box = (
+        int(round(width * left)),
+        int(round(height * top)),
+        max(int(round(width * left)) + 1, int(round(width * (1 - right)))),
+        max(int(round(height * top)) + 1, int(round(height * (1 - bottom)))),
+    )
+    out = io.BytesIO()
+    with Image.open(image) as opened:
+        kind = "JPEG" if (opened.format or "").upper() == "JPEG" else "PNG"
+        cropped = opened.crop(box)
+        if kind == "JPEG" and cropped.mode not in ("RGB", "L"):
+            cropped = cropped.convert("RGB")
+        cropped.save(out, format=kind, **({"quality": 92} if kind == "JPEG" else {}))
+    return out.getvalue()
 
 
 def _check_shape(shape, image: Path, how: str, trim=None) -> None:
@@ -1719,6 +1746,24 @@ def replace_text(target, text: str, new: str | None = None) -> None:
             _write(frame.paragraphs[-1], line)
     for extra in list(frame.paragraphs)[len(lines) :]:
         extra._p.getparent().remove(extra._p)
+    _unbake_autofit(shape)
+
+
+def _unbake_autofit(shape) -> None:
+    """Drop the scale a template baked into this shape's own `normAutofit`.
+
+    `fontScale` and `lnSpcReduction` are what PowerPoint computed for the copy the
+    template shipped with, and renderers apply them as written: a borrowed page carried
+    `fontScale="77500"` on its cards, and every line an author wrote into them came out
+    at 77% of the size it declared, on a page with room for the full size. Without the
+    attributes the frame still shrinks to fit -- recomputed for the words now in it.
+    """
+    properties = shape.text_frame._txBody.find(f"{{{_A}}}bodyPr")
+    autofit = properties.find(f"{{{_A}}}normAutofit") if properties is not None else None
+    if autofit is None:
+        return
+    for attribute in ("fontScale", "lnSpcReduction"):
+        autofit.attrib.pop(attribute, None)
 
 
 def _paragraphs_of(text):
