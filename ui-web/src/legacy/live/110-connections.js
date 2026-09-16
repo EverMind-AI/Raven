@@ -4,12 +4,12 @@
    channels.* over /rpc. Installing onto the seam replaces the fixture
    source before the first paint. */
 
+import { servesChannels } from '../../rpc/capabilities'
 import { show as toast } from '../../shell/toast'
 import { gateway } from '../../state/gateway'
 import { sources } from '../../state/sources'
 import { T } from '../demo/010-kernel.js'
 import { CHANNELS, chanName } from '../demo/030-fixtures.js'
-import { rpcHas } from './220-browser.js'
 
 async function loadChannels() {
   const r = await gateway().call('channels.status', {});
@@ -98,9 +98,7 @@ export function install() {
     /* One scan-code read; the island polls this while the dialog is open. Null
      when the gateway does not speak channels.*, which the island shows as the
      same waiting frame the old panel kept. */
-    qr: (c) => (typeof rpcHas === 'function' && !rpcHas('channels')
-      ? Promise.resolve(null)
-      : gateway().call('channels.qr', { name: c.id })),
+    qr: (c) => (servesChannels() ? gateway().call('channels.qr', { name: c.id }) : Promise.resolve(null)),
   };
 }
 

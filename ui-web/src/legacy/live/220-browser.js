@@ -2,23 +2,16 @@
    The renderer is the browser island (ui-web/src/features/browser/); this file
    owns what only the live layer can: the browser.* calls on the DataSource
    seam, and the screencast frames the gateway pushes -- decoded here and
-   forwarded through the source's onFrame hook the island subscribes to. */
-/* Absent, not merely unusable. `avail: false` means the server has the surface
-   and cannot use it right now (no chromium); this means the server does not
-   have it at all -- a -32601 from any call. The set is shared: the browser
-   island tracks its own surface, but the `subagent.*` source (230-tabs.js)
-   still reads these. */
+   forwarded through the source's onFrame hook the island subscribes to.
+
+   Whether the gateway HAS the surface at all -- a -32601 from any call, which
+   is not the same as `avail: false`, "there is no chromium right now" -- is
+   rpc/capabilities.ts's question now; it used to be a private set here that
+   three other parts had to import this file to read. */
 
 import { islands } from '../../islands'
 import { gateway } from '../../state/gateway'
 import { sources } from '../../state/sources'
-
-const RPC_ABSENT = new Set();
-const rpcGone = (name, e) => {
-  if (e && e.code === -32601) RPC_ABSENT.add(name);
-  return RPC_ABSENT.has(name);
-};
-const rpcHas = (name) => !RPC_ABSENT.has(name);
 
 const brB64Blob = (b64) => {
   const s = atob(b64);
@@ -68,4 +61,4 @@ export function install() {
   gateway().on('browser.frame', onFrameJson);
 }
 
-export { RPC_ABSENT, rpcGone, rpcHas, brB64Blob, onFrameBytes, onFrameJson }
+export { brB64Blob, onFrameBytes, onFrameJson }

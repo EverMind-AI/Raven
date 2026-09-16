@@ -350,12 +350,12 @@ describe('notifications', () => {
   it('fan out to every handler, and detach removes one', async () => {
     const { h, ws } = await connected()
     const got: unknown[] = []
-    const detach = h.transport.on('turn.delta', (p) => got.push(p))
-    h.transport.on('turn.delta', (p) => got.push(p))
+    const detach = h.transport.on('memory.health', (p) => got.push(p))
+    h.transport.on('memory.health', (p) => got.push(p))
 
-    ws.receive(JSON.stringify({ jsonrpc: '2.0', method: 'turn.delta', params: { text: 'x' } }))
+    ws.receive(JSON.stringify({ jsonrpc: '2.0', method: 'memory.health', params: { text: 'x' } }))
     detach()
-    ws.receive(JSON.stringify({ jsonrpc: '2.0', method: 'turn.delta' }))
+    ws.receive(JSON.stringify({ jsonrpc: '2.0', method: 'memory.health' }))
 
     expect(got).toEqual([{ text: 'x' }, { text: 'x' }, {}])
   })

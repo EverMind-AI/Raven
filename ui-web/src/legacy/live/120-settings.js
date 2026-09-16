@@ -15,6 +15,7 @@
 
 import { open as openModelPicker } from '../../features/model/store'
 import { islands } from '../../islands'
+import { hasUpdateFlag } from '../../rpc/capabilities'
 import { draw as drawBanner } from '../../shell/banner'
 import { draw as drawCtx } from '../../shell/ctxchip'
 import { draw as drawFoot } from '../../shell/foot'
@@ -456,7 +457,7 @@ export function install() {
          updates, and a person who just clicked it is asking about now. */
         const v = await gateway().call('system.version', { check: true });
         if (v.raven_version) appVersionSet(v.raven_version);
-        if (v.update_available) {
+        if (hasUpdateFlag(v)) {
           showUpNote('ver', v.latest_version);
           drawSettings();
           askUpgrade();

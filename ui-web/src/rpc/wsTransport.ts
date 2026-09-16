@@ -1,4 +1,5 @@
-import type { ParamsOf, ResultOf, RpcMethod } from './generated'
+import type { ParamsOf, ResultOf, RpcMethod, SystemHelloResult } from './generated'
+import type { PushMethod } from './notifications'
 import type {
   BinaryHandler,
   ConnectionState,
@@ -8,6 +9,7 @@ import type {
   StateListener,
 } from './transport'
 
+import { absorb, gone } from './capabilities'
 import { RpcError } from './transport'
 
 /* The live end of the DataSource seam: JSON-RPC 2.0 over one WebSocket to
@@ -59,6 +61,10 @@ export interface WsTransportOptions {
 }
 
 interface Pending {
+  /* Carried so a rejection can be recorded against the name that drew it:
+     -32601 is the gateway saying it has no such method, which is the one
+     refusal callers have to remember. */
+  method: string
   resolve: (value: unknown) => void
   reject: (error: unknown) => void
 }
@@ -200,7 +206,13 @@ export class WsTransport implements RpcTransport {
   }
 
   async call<M extends RpcMethod>(method: M, params: ParamsOf<M>): Promise<ResultOf<M>> {
-    return (await this.send(method, params)) as ResultOf<M>
+    const result = (await this.send(method, params)) as ResultOf<M>
+    /* The one answer that says what this gateway is. Absorbed here rather than
+       at the two callers, so a rejoin's handshake refreshes it as well. */
+    if (method === 'system.hello') {
+      absorb((result as SystemHelloResult).server_capabilities)
+    }
+    return result
   }
 
   /**
@@ -212,7 +224,7 @@ export class WsTransport implements RpcTransport {
     return this.send(method, params)
   }
 
-  on(method: string, handler: NotificationHandler): () => void {
+  on(method: PushMethod, handler: NotificationHandler): () => void {
     const set = this.handlers.get(method) ?? new Set<NotificationHandler>()
     set.add(handler)
     this.handlers.set(method, set)
@@ -256,7 +268,7 @@ export class WsTransport implements RpcTransport {
     const id = this.next++
     ws.send(JSON.stringify({ jsonrpc: '2.0', id, method, params: params ?? {} }))
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
+      this.pending.set(id, { method, resolve, reject })
     })
   }
 
@@ -297,8 +309,11 @@ export class WsTransport implements RpcTransport {
       const p = this.pending.get(id)
       if (p) {
         this.pending.delete(id)
-        if (frame.error) p.reject(rpcFailure(frame.error))
-        else p.resolve(frame.result)
+        if (frame.error) {
+          const failure = rpcFailure(frame.error)
+          gone(p.method, failure)
+          p.reject(failure)
+        } else p.resolve(frame.result)
         return
       }
     }
