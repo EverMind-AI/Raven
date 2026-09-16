@@ -333,6 +333,15 @@ _IMAGE_SOURCES_KEY = "_image_sources"
 #: on the way to the provider, so what it changes is only how readers of the
 #: transcript classify the line.
 _HOOK_INJECTED_KEY = "_hook_injected"
+#: A user message the runtime merged into a turn that was already running
+#: (``BusyPolicy.INJECT``). It is a real user message and persists as one; the
+#: mark says only that it arrived mid-turn, and the underscore key is dropped on
+#: the way to the provider like the others here. A turn that may be re-run is
+#: what needs the mark: the rerun starts again from the question and throws the
+#: failed attempt's work away, and without this it cannot tell a correction the
+#: reader typed -- which is the question now, and which the queue has already
+#: given up -- from the research it is entitled to discard.
+_MID_TURN_USER_KEY = "_mid_turn_user"
 
 
 @dataclass(frozen=True)
