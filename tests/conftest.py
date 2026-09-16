@@ -57,7 +57,7 @@ _runq_seen: list[int] = [0, 0]  # PROBE: [reports with a non-zero runqueue wait,
 #: waiting the second they meant to. Every production ladder this guards
 #: against is longer than three: the shortest constant the audit found was a
 #: three second grace, and the rest run 5, 15, 30 and 60.
-_DEFAULT_IDLE_CEILING_S = 3.0
+_DEFAULT_IDLE_CEILING_S = 1.5  # PROBE: enumerate every real wait, not only the ones over the gate
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
