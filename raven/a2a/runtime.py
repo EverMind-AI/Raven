@@ -276,11 +276,18 @@ async def _run_one_shot_turn(
         if hasattr(ask_tool, "set_broker"):
             ask_tool.set_broker(broker)
 
+    # The two are not symmetric, and assuming they are is what breaks the turn:
+    # `raven/spine/runner.py` declares Emit as returning an Awaitable and Drain
+    # as returning a plain list, and `turn_path.py` iterates the latter directly
+    # (`for inj in drain()`). An `async def drain` therefore hands the turn a
+    # coroutine and it dies on "'coroutine' object is not iterable". Nothing can
+    # inject into a one-shot A2A turn -- there is no mailbox behind it -- so the
+    # list is always empty, but it has to be a list.
     async def emit(*_args: Any, **_kwargs: Any) -> None:
         return None
 
-    async def drain(*_args: Any, **_kwargs: Any) -> None:
-        return None
+    def drain() -> list[TurnRequest]:
+        return []
 
     text_sink: dict[str, str] = {}
     await agent_loop.run_turn(req, emit, drain, stream=False, text_sink=text_sink)
