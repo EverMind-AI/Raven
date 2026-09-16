@@ -29,7 +29,7 @@ import { current as currentSession } from '../../shell/session'
 
 import type { DeskSeen, DeskTab } from './deskTypes'
 
-const EMPTY = (): DeskSeen => ({ diff: [], deliverables: [], agents: [] })
+const EMPTY = (): DeskSeen => ({ diff: [], deliverables: [], agents: [], browser: [] })
 
 const KEPT = slot<DeskSeen>('seen', 1)
 

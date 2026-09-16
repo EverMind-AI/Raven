@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { AgentList } from '../subagents/SubagentsPage'
+import * as browser from '../browser/store'
 import * as agents from '../subagents/store'
 import { t } from '../../shell/bridge'
 import { DeskIcon } from './DeskIcon'
@@ -36,9 +37,10 @@ import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent } from 'reac
 function DeskTabs({ value, onChange }: { value: DeskTab; onChange: (tab: DeskTab) => void }): JSX.Element {
   return (
     <div className="desk-tabs" role="tablist">
-      {(['deliverables', 'agents', 'diff'] as DeskTab[]).map((tab) => {
+      {(['deliverables', 'agents', 'diff', 'browser'] as DeskTab[]).map((tab) => {
         const label = tab === 'diff' ? 'Diff'
-          : tab === 'deliverables' ? t('gui.ws.deliverables') : t('gui.ws.agents')
+          : tab === 'deliverables' ? t('gui.ws.deliverables')
+            : tab === 'browser' ? t('gui.ws.browser') : t('gui.ws.agents')
         const fresh = desk.unseen(tab)
         /* The count goes in the button's OWN name. An explicit `aria-label`
            replaces the whole subtree as the accessible name, so a label on the
@@ -165,6 +167,34 @@ function DeliverableRow({ row, here }: { row: DeliveryRow; here: boolean }): JSX
       </span>
       {row.missing ? <i className="dlv-gone">{t('gui.arts.missing')}</i> : null}
     </button>
+  )
+}
+
+/* Where the shared browser is, and the door to the window that shows it. One
+   row because there is one page: the model and the reader drive the same
+   Chromium, so a list would be a list of one thing under every heading. */
+function BrowserNav(): JSX.Element {
+  const page = useSyncExternalStore(browser.subscribe, browser.getState)
+  if (!page.started || !page.url) {
+    return <DeskEmpty kind="browser" title={t('gui.br.idle')} hint={t('gui.br.idle_w')} />
+  }
+  return (
+    <div className="desk-list">
+      <button
+        className="desk-row"
+        title={page.url}
+        onClick={() => {
+          desk.readItem('browser', page.url)
+          desk.openDeskBrowser()
+        }}
+      >
+        <DeskIcon kind="browser" />
+        <span className="desk-name">
+          <b>{page.title || page.url}</b>
+          <s>{page.url}</s>
+        </span>
+      </button>
+    </div>
   )
 }
 
@@ -495,7 +525,9 @@ export function DeskPalette(): JSX.Element | null {
         <DeskTabs value={state.tab} onChange={(tab) => desk.update({ tab })} />
       </div>
       <div className="desk-body">
-        {state.tab === 'diff' ? <DiffNav /> : state.tab === 'deliverables' ? <DeliverablesNav /> : <AgentsNav />}
+        {state.tab === 'diff' ? <DiffNav />
+          : state.tab === 'deliverables' ? <DeliverablesNav />
+            : state.tab === 'browser' ? <BrowserNav /> : <AgentsNav />}
       </div>
       <div className="desk-resize" onPointerDown={resize} />
     </div>

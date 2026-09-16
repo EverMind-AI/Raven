@@ -3,7 +3,7 @@
 import type { AgentRow, InstanceRow } from '../subagents/types'
 import type { WsChange, WsFile } from './types'
 
-export type DeskTab = 'diff' | 'deliverables' | 'agents'
+export type DeskTab = 'diff' | 'deliverables' | 'agents' | 'browser'
 
 /* Which way a two-pane desk is cut. The counts above two have one layout each,
    so this says nothing there; at two it is the difference between a stack and a

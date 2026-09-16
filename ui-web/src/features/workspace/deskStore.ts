@@ -4,6 +4,7 @@ import { shell, t } from '../../shell/bridge'
 import { slot } from '../../shell/persist'
 import { current as currentSession } from '../../shell/session'
 import { show as toast } from '../../shell/toast'
+import * as browser from '../browser/store'
 import { instanceState } from '../subagents/history'
 import * as agents from '../subagents/store'
 import * as deliveries from './deliveries'
@@ -133,7 +134,7 @@ function remember(): void {
   })
 }
 
-const TABS: readonly DeskTab[] = ['deliverables', 'agents', 'diff']
+const TABS: readonly DeskTab[] = ['deliverables', 'agents', 'diff', 'browser']
 
 /* What each tab is counting, as the identity of every item in it -- read from
    the source that tab draws from, so "what is in it" and "what is new in it"
@@ -147,6 +148,13 @@ const TABS: readonly DeskTab[] = ['deliverables', 'agents', 'diff']
 export function idsOf(tab: DeskTab): string[] {
   if (tab === 'diff') return workspace.shared().changes.map((c) => `${c.key}:${c.turn}`)
   if (tab === 'deliverables') return deliveries.paths()
+  /* One page, so at most one id, and it is the url: the tab's news is "the
+     browser is somewhere you have not looked", which is what a reader who
+     asked the model to go and read something wants told. */
+  if (tab === 'browser') {
+    const page = browser.getState()
+    return page.started && page.url ? [page.url] : []
+  }
   return agents.instances().map((it) => `${it.agent}:${it.handle}`)
 }
 

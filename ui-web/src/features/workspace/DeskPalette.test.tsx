@@ -7,6 +7,7 @@ import {
   DESK_COLUMN_FLOOR, DESK_DEFAULT_HEIGHT, DESK_DEFAULT_WIDTH, DESK_DRAG_THRESHOLD,
   DESK_GEOMETRY_KEY, DESK_LAUNCHER_EDGE, DESK_TEXT_GAP,
 } from './deskGeometry'
+import * as browser from '../browser/store'
 import * as agents from '../subagents/store'
 import * as deliveries from './deliveries'
 import * as desk from './deskStore'
@@ -27,13 +28,15 @@ let agentRows: InstanceRow[] = []
 
 /* Which tab's bubble, by the tab's own label -- the strip is three buttons and
    an index would silently follow a reordering. */
-const tabButton = (tab: 'diff' | 'deliverables' | 'agents'): HTMLElement | undefined => {
-  const label = tab === 'diff' ? 'Diff' : tab === 'deliverables' ? 'gui.ws.deliverables' : 'gui.ws.agents'
+const tabButton = (tab: 'diff' | 'deliverables' | 'agents' | 'browser'): HTMLElement | undefined => {
+  const label = tab === 'diff' ? 'Diff'
+    : tab === 'deliverables' ? 'gui.ws.deliverables'
+      : tab === 'browser' ? 'gui.ws.browser' : 'gui.ws.agents'
   return [...document.querySelectorAll<HTMLElement>('.desk-tabs button')]
     .find((b) => (b.querySelector('.lb')?.textContent || '') === label)
 }
 
-const bubble = (tab: 'diff' | 'deliverables' | 'agents'): string | null =>
+const bubble = (tab: 'diff' | 'deliverables' | 'agents' | 'browser'): string | null =>
   tabButton(tab)?.querySelector('.desk-count')?.textContent ?? null
 
 /* What a screen reader is handed for that tab. */
@@ -102,6 +105,7 @@ afterEach(() => {
   cleanup()
   act(() => {
     desk._resetForTests()
+    browser._resetForTests()
     deliveries.restore([])
     workspace.restore({ changes: [], urls: [], file: null, turn: 0, unseen: 0, deliveries: [] })
   })
@@ -415,7 +419,7 @@ describe('the desk shelf', () => {
        it by this class -- the bubble being a sibling is what broke the
        positional rule it used to use. */
     expect([...document.querySelectorAll('.desk-tabs button .lb')].map((n) => n.textContent))
-      .toEqual(['gui.ws.deliverables', 'gui.ws.agents', 'Diff'])
+      .toEqual(['gui.ws.deliverables', 'gui.ws.agents', 'Diff', 'gui.ws.browser'])
 
     await act(async () => {
       desk.update({ tab: 'deliverables' })
@@ -869,6 +873,43 @@ describe('the panel drags by its handle', () => {
       tab('Diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
     expect(desk.getState().tab).toBe('diff')
+  })
+
+  it('gives the shared browser a tab, and its row opens the window', async () => {
+    /* The reader's door to the page the model is on: the legacy panel had a
+       Browser tab and the desk had none, so a page the agent opened was
+       reachable only by the window the transcript happened to open. */
+    render(<DeskPalette />)
+    await act(async () => {
+      desk.update({ paletteOpen: true, tab: 'browser' })
+    })
+    expect(screen.getByText('gui.br.idle')).toBeTruthy()
+
+    await act(async () => {
+      browser._setForTests({ started: true, url: 'https://example.com/a', title: 'Example' })
+    })
+
+    const row = document.querySelector('.desk-body .desk-row') as HTMLElement
+    expect(row.textContent).toContain('Example')
+    await act(async () => row.click())
+
+    expect(desk.getState().panes.map((pane) => pane.id)).toEqual(['browser'])
+  })
+
+  it('counts a page the reader has not looked at, and stops once they have', async () => {
+    render(<DeskPalette />)
+    await act(async () => {
+      desk.update({ paletteOpen: true, tab: 'diff' })
+      browser._setForTests({ started: true, url: 'https://example.com/a', title: 'Example' })
+    })
+
+    expect(bubble('browser')).toBe('1')
+
+    await act(async () => {
+      desk.update({ tab: 'browser' })
+    })
+
+    expect(bubble('browser')).toBeNull()
   })
 
   it('leaves a tab its click when the hand only shook', async () => {

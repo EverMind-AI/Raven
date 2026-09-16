@@ -510,6 +510,13 @@ export function installLinkTrap(): void {
   else hook()
 }
 
+/* Test seam only: the page another view asks about, without a server to ask.
+   The desk's Browser tab reads this store, so a test of that tab needs a page
+   in it and has no transport to get one through. */
+export function _setForTests(page: Partial<BrowserState>): void {
+  set(page)
+}
+
 /* Test seam only: module-level timers and flags survive between tests. */
 export function _resetForTests(): void {
   watching = false
