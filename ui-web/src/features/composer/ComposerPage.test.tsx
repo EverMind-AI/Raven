@@ -8,6 +8,8 @@ import * as turn from './turn'
 import * as attachmentCache from '../../shell/attachment-cache'
 import * as tail from '../transcript/tail'
 
+import { domSnapshot } from '../../test/domSnapshot'
+
 import type { ComposerSource, SlashCmd } from './types'
 import type { Shell } from '../../shell/bridge'
 
@@ -372,6 +374,13 @@ describe('the queue rows', () => {
     expect(store.queueSnapshot()).toEqual(['second'])
     expect(document.querySelectorAll('#queued .qrow').length).toBe(1)
   })
+
+  it('keeps its rendered shape', () => {
+    wire()
+    store.queueRestore(['first', 'second'])
+    mountQueue()
+    expect(domSnapshot(document.getElementById('queued')!)).toMatchSnapshot()
+  })
 })
 
 describe('the live turn row', () => {
@@ -597,6 +606,16 @@ describe('the attachment tray', () => {
     store.pickFiles(opened)
     expect(opened).not.toHaveBeenCalled()
     expect(calls.toasts).toEqual(['demo: pick a file here'])
+  })
+
+  it('keeps its rendered shape', async () => {
+    wire({ upload: async () => ({ path: 'uploads/notes.txt', size: 300 }) })
+    const box = mountTray()
+    await act(async () => {
+      store.addFiles([new File(['x'], 'notes.txt', { type: 'text/plain' })])
+      await flush()
+    })
+    expect(domSnapshot(box)).toMatchSnapshot()
   })
 })
 

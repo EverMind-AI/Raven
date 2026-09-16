@@ -1,0 +1,27 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`the attachment tray > keeps its rendered shape 1`] = `
+"div.att
+  span.nm
+  span.sz
+  button.rm"
+`;
+
+exports[`the queue rows > keeps its rendered shape 1`] = `
+"div.qrow
+  span.v
+  button.icb[data-tip=编辑]
+    svg
+      path
+  button.icb[data-tip=删掉]
+    svg
+      path
+div.qrow
+  span.v
+  button.icb[data-tip=编辑]
+    svg
+      path
+  button.icb[data-tip=删掉]
+    svg
+      path"
+`;

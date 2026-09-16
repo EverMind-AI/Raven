@@ -1,0 +1,85 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`subagents island, an instance detail > keeps its rendered shape 1`] = `
+"div.sahd
+  button.back
+    svg
+      path
+    span
+  div.trow
+    b
+    span.who
+div.satx
+  p"
+`;
+
+exports[`subagents island, the list > keeps its rendered shape 1`] = `
+"div.salist
+  div.sarow.inst
+    span.agent-mark
+      svg
+        rect
+        path
+    span.wkg.sw
+      i
+      i
+      i
+    div.bd
+      div.nm
+      div.st
+        span.who
+    button.mini.ghost
+    span.chev
+  div.sarow.inst
+    span.agent-mark
+      svg
+        rect
+        path
+    span.dot.que
+    div.bd
+      div.nm
+      div.st
+        span
+        span.who
+    button.mini.ghost
+    span.chev
+  div.sarow.inst
+    span.agent-mark
+      svg
+        rect
+        path
+    span.dot.bad
+    div.bd
+      div.nm
+      div.st
+        span
+        span.who
+    button.mini.ghost
+    span.chev
+  div.sarow.inst
+    span.agent-mark
+      svg
+        rect
+        path
+    span.dot.bad
+    div.bd
+      div.nm
+      div.st
+        span
+        span.who
+    button.mini.ghost
+    span.chev
+  div.sarow.inst
+    span.agent-mark
+      svg
+        rect
+        path
+    span.dot.ok
+    div.bd
+      div.nm
+      div.st
+        span
+        span.who
+    button.mini.ghost
+    span.chev"
+`;

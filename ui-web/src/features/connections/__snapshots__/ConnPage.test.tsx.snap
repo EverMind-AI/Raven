@@ -1,0 +1,69 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`connections island > keeps its rendered shape, dialog 1`] = `
+"div.sheet
+  div.suhead
+    span.pmtile.th0
+    div.meta
+      div.l1
+        b
+    button.mini.ghost.suclose
+      svg
+        path
+  div#connDlgBody.subody
+    div.sucreds
+      span.k
+        span.n
+      a.jump
+        svg
+          path
+    div.sugroup
+      div.sufields
+        div.sufield
+          label
+          input
+  div.sufoot
+    span.n
+    button.mini.key"
+`;
+
+exports[`connections island > keeps its rendered shape, list 1`] = `
+"div.pmhero
+  h3
+div.sustate
+  span.led
+  span
+div.sugrp
+  div.hd
+    b
+    span.n
+  div.sulist
+    div.surow
+      span.pmtile.th0
+      div.nm
+        span.led
+        b
+      div.suact
+        button.mini.ghost
+div.sugrp
+  div.hd
+    b
+    span.n
+  div.sulist
+    div.surow
+      span.pmtile.th1
+      div.nm
+        span.led.off
+        b
+        span.kd
+      div.suact
+        button.mini
+    div.surow
+      span.pmtile.th3
+      div.nm
+        span.led.off
+        b
+        span.kd
+      div.suact
+        button.mini"
+`;

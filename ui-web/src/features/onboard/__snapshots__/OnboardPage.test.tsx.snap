@@ -1,0 +1,102 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`the onboarding island > keeps its rendered shape, provider list 1`] = `
+"div.ob
+  div.ob-step
+    div.ob-t
+    div.ob-s
+    div.ob-list
+      div.ob-row.provider-choice-row
+        button.provider-choice-action
+        span.nm
+          img.provider-icon[data-provider=anthropic][data-tone=hybrid]
+          a.provider-link
+            span
+        span.bd.on
+        span.provider-status.on
+      div.ob-row.provider-choice-row
+        button.provider-choice-action
+        span.nm
+          img.provider-icon.mark-light[data-provider=openai]
+          img.provider-icon.mark-dark[data-provider=openai]
+          span
+        span.bd
+    button.ob-ghost
+    div.ob-dots
+      i.on
+      i
+      i"
+`;
+
+exports[`the onboarding model step > keeps its rendered shape, model step 1`] = `
+"div.ob
+  div.ob-step
+    div.ob-t
+    div.ob-s
+    div.ob-list
+      svg.model-tag-defs
+        defs
+          symbol#mtag-text
+            path
+            path
+          symbol#mtag-reasoning
+            path
+            path
+          symbol#mtag-function-call
+            path
+          symbol#mtag-structured-output
+            rect
+            path
+          symbol#mtag-image-recognition
+            rect
+            path
+            circle
+          symbol#mtag-audio-recognition
+            rect
+            path
+          symbol#mtag-video-recognition
+            rect
+            path
+          symbol#mtag-file-input
+            path
+            path
+          symbol#mtag-image-generation
+            rect
+            path
+            path
+          symbol#mtag-audio-generation
+            path
+            path
+          symbol#mtag-video-generation
+            rect
+            path
+            path
+          symbol#mtag-embedding
+            path
+            path
+            circle
+            circle
+          symbol#mtag-rerank
+            path
+            path
+          symbol#mtag-computer-use
+            rect
+            path
+      button.ob-row
+        span.nm
+        span.model-tags
+          svg.model-tag
+            title
+            use
+          svg.model-tag
+            title
+            use
+          span.model-window
+    button.ob-btn
+    div.ob-err
+    button.ob-ghost
+    div.ob-dots
+      i
+      i
+      i.on"
+`;

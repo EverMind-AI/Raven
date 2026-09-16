@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryApp } from './MemoryPage'
 import * as store from './store'
 
+import { domSnapshot } from '../../test/domSnapshot'
+
 import type { Shell } from '../../shell/bridge'
 import type { MemItem, MemStats, MemorySource } from './types'
 
@@ -219,5 +221,15 @@ describe('memory island', () => {
       screen.getByText('gui.mem.tab_case').click()
     })
     expect(asked).toContain('agent_case')
+  })
+
+  it('keeps its rendered shape', async () => {
+    install(
+      { list: async () => ({ items: [item(), item({ id: 'm2', subject: 'fixed the flake' })], total: 2 }) },
+      { episodes: 12, profiles: 1, agent_cases: 3, agent_skills: 4 },
+    )
+    await mount()
+    await screen.findByText('shipped the island')
+    expect(domSnapshot(document.getElementById('memBody')!)).toMatchSnapshot()
   })
 })

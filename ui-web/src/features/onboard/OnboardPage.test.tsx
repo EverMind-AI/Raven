@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { OnboardApp } from './OnboardPage'
 import * as store from './store'
 
+import { domSnapshot } from '../../test/domSnapshot'
+
 import type { Shell } from '../../shell/bridge'
 import type { OnboardProvider, OnboardSource } from './types'
 
@@ -323,6 +325,15 @@ describe('the onboarding island', () => {
     expect(document.querySelector('.ob-err')?.textContent).toBe('gui.onb.err_generic:offline')
     expect(button('gui.onb.start').disabled).toBe(false)
   })
+
+  it('keeps its rendered shape, provider list', async () => {
+    install()
+    mount()
+    await open()
+    await start()
+    expect(document.querySelectorAll('.ob-row .nm')).toHaveLength(2)
+    expect(domSnapshot(document.getElementById('onb')!)).toMatchSnapshot()
+  })
 })
 
 describe('the onboarding model step', () => {
@@ -354,5 +365,25 @@ describe('the onboarding model step', () => {
       '#mtag-function-call',
     ])
     expect(document.querySelector('.ob-row .model-window')?.textContent).toBe('400K')
+  })
+
+  it('keeps its rendered shape, model step', async () => {
+    const tagged: OnboardProvider = {
+      ...connected,
+      models: ['claude-opus-5'],
+      model_labels: {
+        'claude-opus-5': {
+          label: 'Claude Opus 5',
+          capabilities: ['reasoning', 'function-call'],
+          context_window: 400000,
+        },
+      },
+    }
+    install([tagged])
+    mount()
+    await open()
+    await start()
+    fireEvent.click(row('Anthropic'))
+    expect(domSnapshot(document.getElementById('onb')!)).toMatchSnapshot()
   })
 })

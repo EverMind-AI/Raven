@@ -6,6 +6,8 @@ import { WsApp } from './WorkspacePage'
 import * as deliveries from './deliveries'
 import * as store from './store'
 
+import { domSnapshot } from '../../test/domSnapshot'
+
 import type { Shell } from '../../shell/bridge'
 import type { WorkspaceSnapshot, WorkspaceSource, WsChange } from './types'
 
@@ -686,5 +688,18 @@ describe('workspace island', () => {
     }, { tab: 'file', open: true, picked: true })
     await mount()
     expect(await screen.findByText('gone for good')).toBeTruthy()
+  })
+
+  it('keeps its rendered shape', async () => {
+    install(emptyWs({
+      changes: [
+        change({ turn: 2, open: false }),
+        change({ key: '/repo/README.md', dir: '', name: 'README.md', kind: 'write', turn: 1, add: 5, del: 0 }),
+      ],
+      turn: 2,
+    }))
+    await mount()
+    await screen.findByText('app.py')
+    expect(domSnapshot(document.getElementById('wsBody')!)).toMatchSnapshot()
   })
 })

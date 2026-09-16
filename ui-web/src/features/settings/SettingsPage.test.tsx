@@ -7,6 +7,8 @@ import * as store from './store'
 import * as lookStore from '../../shell/look'
 import * as notifications from '../../shell/notifications'
 
+import { domSnapshot } from '../../test/domSnapshot'
+
 import type { Shell } from '../../shell/bridge'
 import type { SettingsSnapshot, SettingsSource } from './types'
 
@@ -1615,6 +1617,13 @@ describe('settings island', () => {
     expect(live[1]!.querySelector('.tkrow .nlmsg')).toBeNull()
     expect(live[0]!.querySelector('.nlmsg')).toBeNull()
   })
+
+  it('keeps its rendered shape', async () => {
+    install()
+    const view = await mount()
+    expect(screen.getByText('gui.set.nodata')).toBeTruthy()
+    expect(domSnapshot(view.container)).toMatchSnapshot()
+  })
 })
 
 /* The painting model sits with the other defaults now, not folded inside the
@@ -2616,5 +2625,11 @@ describe('the models pane', () => {
     expect(document.querySelector('#spanels .msplit')).toBeTruthy()
     expect(document.querySelector('#spanels .pickm')).toBeNull()
     return h
+  })
+
+  it('keeps its rendered shape', async () => {
+    await openModels()
+    expect(document.querySelector('.mpanel .mtitle')?.textContent).toContain('Anthropic')
+    expect(domSnapshot(document.getElementById('spanels')!)).toMatchSnapshot()
   })
 })

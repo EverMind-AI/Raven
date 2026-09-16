@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SkillsApp } from './SkillsPage'
 import * as store from './store'
 
+import { domSnapshot } from '../../test/domSnapshot'
+
 import type { Shell } from '../../shell/bridge'
 import type { HubItem, InstalledSkill, SkillsSource } from './types'
 
@@ -336,5 +338,24 @@ describe('skills island', () => {
     })
     expect(calls).toContain('remove')
     expect(document.getElementById('detail')!.dataset.open).toBe('false')
+  })
+
+  it('keeps its rendered shape, hub search', async () => {
+    install([hubItem(), hubItem({ id: 'sh-sql', name: 'sql-style', quality_score: 0.7 })])
+    await mount()
+    await screen.findByText('code-review-checklist')
+    expect(domSnapshot(document.getElementById('capsBody')!)).toMatchSnapshot()
+  })
+
+  it('keeps its rendered shape, installed list', async () => {
+    install([], {}, [
+      { id: 'sk1', name: 'house-style', one: 'the house voice', src: 'skillhub', hub: true, hubId: 'sh-hs' },
+    ])
+    await mount()
+    await act(async () => {
+      store.toggleView()
+    })
+    await screen.findByText('house-style')
+    expect(domSnapshot(document.getElementById('capsBody')!)).toMatchSnapshot()
   })
 })

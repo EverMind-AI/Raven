@@ -11,6 +11,8 @@ import {
   setCurrent,
 } from '../../shell/session'
 
+import { domSnapshot } from '../../test/domSnapshot'
+
 import type { Shell } from '../../shell/bridge'
 import type { MenuItem } from '../../shell/menu'
 import type { ToastAction } from '../../shell/toast'
@@ -758,5 +760,18 @@ describe('rail island', () => {
     expect(fold.textContent).toBe('gui.rail.collapse')
     act(() => fold.click())
     expect(host.querySelectorAll('.sess').length).toBe(15)
+  })
+
+  it('keeps its rendered shape', () => {
+    install({
+      rows: [
+        row(),
+        row({ id: 'p', title: 'pinned one', pin: true }),
+        row({ id: 'k', title: 'daily digest', from: 'cron' }),
+        row({ id: 'e', title: '🚀 Ship it' })
+      ]
+    })
+    const host = mount()
+    expect(domSnapshot(host)).toMatchSnapshot()
   })
 })

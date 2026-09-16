@@ -1,0 +1,97 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`the playbook library > keeps its rendered shape, graph 1`] = `
+"div.pbcrumb
+  button.mini.ghost
+div.pbhead
+  span.pmtile.th0
+  h1
+p.pbsum
+div.pbmeta
+  div
+    span.pblab
+    span.pbval.mono
+  div
+    span.pblab
+    span.pbval.mono
+  div
+    span.pblab
+    span.pbval.mono
+div.pbtabs
+  button.pbtab
+  button.pbtab
+div.pbwork
+  div.pbboard
+    div.pbstage
+      div.pbview
+        div.pbcanvas
+          svg.pbedges
+            g
+              path.pbwire
+              path.pbtip
+          button.pbnode[data-picked=true]
+            span.l1
+            span.l2
+              span.ag
+          button.pbnode
+            span.l1
+            span.l2
+              span.ag
+    div.pbzoom
+      button.pbzb
+      button.pbzpct
+      button.pbzb
+  div.pbpanel
+    div.pbphead
+      b
+      p
+    dl.kv.pbkv
+      dt
+      dd
+        span.who
+      dt
+      dd
+        span.gap
+      dt
+      dd
+        span.gap
+    div.pbpsec
+      span.cap
+      pre.pbprompt
+        span"
+`;
+
+exports[`the playbook library > keeps its rendered shape, library 1`] = `
+"div.pmhero
+  h3
+div.cbar
+  div.cfind
+    svg.ic
+      circle
+      path
+    input
+  span.pbcount
+div.pbgrid
+  div.pbcard
+    div.pbtop
+      span.pmtile.th0
+      span.pbnm
+    p.pbwhen
+    div.pbshape
+      svg.pbrib
+        g
+          path.pbedge
+          rect.pbcell
+          rect.pbcell
+  div.pbcard
+    div.pbtop
+      span.pmtile.th3
+      span.pbnm
+    p.pbwhen
+    div.pbshape
+      svg.pbrib
+        g
+          path.pbedge
+          rect.pbcell
+          rect.pbcell"
+`;
