@@ -91,19 +91,24 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
         subSession: {},
         transitionTurn: () => {},
       },
-      'live/120-settings.js': {
-        loadPermMode: () => {},
+      'src/features/model/source': {
         /* The re-read a refused model write ends with, which is the only place
            the generation the promotion began on becomes visible. */
         loadProviders: (id: string | null, gen: number) => { reReads.push([id, gen]) },
         openModelsForMissingProvider: () => false,
-        stagedPerm: () => (part.staged as Staged).perm,
         stagedTier: () => (part.staged as Staged).tier,
       },
-      'live/170-workspace.js': { wsSetRoot: (root: string) => log.push(`wsRoot:${root}`) },
+      'src/features/settings/source': {
+        loadPermMode: () => {},
+        stagedPerm: () => (part.staged as Staged).perm,
+      },
+      'src/features/workspace/source': { wsSetRoot: (root: string) => log.push(`wsRoot:${root}`) },
     },
     islands: { rail: { endRename: () => {} } },
   })
+  /* The view ticket is its own module now; taken from the instance loadPart's
+     reset just produced, not from a binding held across it. */
+  const { generation } = await import('../../state/session/generation')
 
   await fakeGateway(async (method: string, params: { key?: string } = {}) => {
     log.push(traffic(method, params))
@@ -133,7 +138,7 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
     openConversation: part.openConversation as (preview?: string, atPointer?: (id: string) => void) => Promise<string | null>,
     sendOnSession: part.sendOnSession as (text: string, failed: (e: unknown) => void) => void,
     isDraft: () => part.draft as boolean,
-    viewGen: () => part.viewGen as number,
+    viewGen: () => generation(),
     enterDraft,
     stage,
     onCreate: (fn: () => void) => { bumpOnCreate = fn },

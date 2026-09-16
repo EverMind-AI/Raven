@@ -85,7 +85,7 @@ async function harness({ rows, deferSubscribe } = {}) {
         parkTurn: () => calls.push(['parkTurn']),
         restoreTurn: () => calls.push(['restoreTurn']),
       },
-      'live/170-workspace.js': { wsSetRoot: (root) => calls.push(['wsSetRoot', root]) },
+      'src/features/workspace/source': { wsSetRoot: (root) => calls.push(['wsSetRoot', root]) },
     },
     islands: {
       /* The streaming buffer the turn state resets through. */

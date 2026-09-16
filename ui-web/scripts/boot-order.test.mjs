@@ -145,10 +145,14 @@ describe('the live boot guard', () => {
 describe('the permission chip mirrors every settings load', () => {
   /* The push lives outside loadSettings, so each caller must invoke it itself
      -- boot included, or a cold page shows the localStorage cache while the
-     gate enforces the server's mode. */
+     gate enforces the server's mode. Two of the three callers are the settings
+     source's own verbs now, so its text is read beside the layer's. */
+  const settingsSource = readFileSync(resolve(process.cwd(), 'src/features/settings/source.ts'), 'utf8')
+
   it('each loadSettings call site pushes the mode afterwards', () => {
-    const callers = [...live.matchAll(/(?<!function )loadSettings\(\)/g)].length
-    const pushes = [...live.matchAll(/pushPermMode\(\)|\.then\(pushPermMode\)/g)].length
+    const text = live + settingsSource
+    const callers = [...text.matchAll(/(?<!function )loadSettings\(\)/g)].length
+    const pushes = [...text.matchAll(/pushPermMode\(\)|\.then\(pushPermMode\)/g)].length
     expect(callers).toBeGreaterThanOrEqual(3)
     expect(pushes).toBe(callers)
   })
