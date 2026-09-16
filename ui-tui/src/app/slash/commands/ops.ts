@@ -703,7 +703,7 @@ export const opsCommands: SlashCommand[] = [
   },
 
   {
-    help: 'configure third-party sub-agents (presets, enable/disable, test)',
+    help: 'configure third-party subagents (presets, enable/disable, test)',
     name: 'subagents',
     run: (arg, ctx) => {
       const text = arg.trim()

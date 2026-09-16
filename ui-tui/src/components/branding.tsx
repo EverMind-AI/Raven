@@ -18,6 +18,7 @@ import {
   RAVEN_WORD_WIDTH,
   rowsWidth
 } from '../banner.js'
+import { t as uiText } from '../i18n/index.js'
 import { flat } from '../lib/text.js'
 import { DEFAULT_THEME, type Theme } from '../theme.js'
 
@@ -41,7 +42,9 @@ function InlineLoader({ label, t }: { label: string; t: Theme }) {
   )
 }
 
-const STARTUP_MESSAGES = ['summoning raven…', 'building agent loop…', 'loading tools & skills…']
+// Keys, not text: this array is built at import, which is before `setLocale`
+// runs, so holding the strings here would freeze the boot line in English.
+const STARTUP_KEYS = ['gui.panel.boot_summon', 'gui.panel.boot_loop', 'gui.panel.boot_tools']
 const STARTUP_LABEL_MS = 900
 
 // Placeholder shown in the intro row while the backend builds the agent loop,
@@ -57,7 +60,8 @@ export function StartupLoader({ t }: { t: Theme }) {
     return () => clearInterval(id)
   }, [])
 
-  const label = STARTUP_MESSAGES[Math.min(step, STARTUP_MESSAGES.length - 1)] ?? STARTUP_MESSAGES[0]
+  const key = STARTUP_KEYS[Math.min(step, STARTUP_KEYS.length - 1)] ?? STARTUP_KEYS[0]!
+  const label = uiText(key)
 
   return (
     <Box borderColor={t.color.border} borderStyle="round" marginBottom={1} paddingX={2} paddingY={1}>
@@ -269,7 +273,7 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
 
   const skillsBody = () => {
     if (info.lazy && skillEntries.length === 0) {
-      return <InlineLoader label="scanning skills" t={t} />
+      return <InlineLoader label={uiText('gui.panel.scanning_skills')} t={t} />
     }
 
     const shown = skillEntries.slice(0, SKILLS_MAX)
@@ -319,10 +323,10 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
           <Text color={t.color.muted}>: </Text>
           {s.connected ? (
             <Text color={t.color.text}>
-              {s.tools} tool{s.tools === 1 ? '' : 's'}
+              {s.tools === 1 ? uiText('gui.panel.tool_one') : uiText('gui.panel.tool_n', '', { n: s.tools })}
             </Text>
           ) : (
-            <Text color={t.color.error}>failed</Text>
+            <Text color={t.color.error}>{uiText('gui.panel.failed')}</Text>
           )}
         </Text>
       ))}
@@ -334,7 +338,7 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
 
   const systemBody = () => {
     if (sysPromptLen === 0) {
-      return <Text color={t.color.muted}>No system prompt loaded.</Text>
+      return <Text color={t.color.muted}>{uiText('gui.panel.no_system_prompt')}</Text>
     }
 
     return <Text color={t.color.muted}>{info.system_prompt}</Text>
@@ -383,7 +387,7 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
               onToggle={() => setToolsOpen(v => !v)}
               open={toolsOpen}
               t={t}
-              title="Available Tools"
+              title={uiText('gui.panel.tools')}
             />
             {toolsOpen && toolsBody()}
           </Box>
@@ -398,7 +402,7 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
                 skillsCatCount > 0 ? `in ${skillsCatCount} categor${skillsCatCount === 1 ? 'y' : 'ies'}` : undefined
               }
               t={t}
-              title="Available Skills"
+              title={uiText('gui.panel.skills')}
             />
             {skillsOpen && skillsBody()}
           </Box>
@@ -411,7 +415,7 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
                 open={systemOpen}
                 suffix={`— ${sysPromptLen.toLocaleString()} chars`}
                 t={t}
-                title="System Prompt"
+                title={uiText('gui.panel.system_prompt')}
               />
               {systemOpen && systemBody()}
             </Box>
@@ -426,7 +430,7 @@ export function SessionPanel({ info, maxCols, sid, t }: SessionPanelProps) {
                 open={mcpOpen}
                 suffix="connected"
                 t={t}
-                title="MCP Servers"
+                title={uiText('gui.panel.mcp_servers')}
               />
               {mcpOpen && mcpBody()}
             </Box>

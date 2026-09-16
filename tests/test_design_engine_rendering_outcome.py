@@ -281,6 +281,7 @@ def _browsers_from_the_real_home(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", cache)
 
 
+@pytest.mark.slow
 @pytest.mark.usefixtures("_browsers_from_the_real_home")
 def test_the_browser_reports_images_that_object_fit_crops() -> None:
     """A height attribute overriding a CSS aspect-ratio turned a 4:3 frame into a
@@ -341,6 +342,7 @@ def test_the_opening_visual_facts_become_one_detail_line() -> None:
     assert warnings[0]["details"] == ["opening visual: hero.png — 48% of viewport; headline overlap 0%"]
 
 
+@pytest.mark.slow
 @pytest.mark.usefixtures("_browsers_from_the_real_home")
 def test_the_browser_measures_where_the_headline_sits_on_the_opening_visual() -> None:
     """Text over a full-bleed image reads as overlap 100 with a uniform backdrop

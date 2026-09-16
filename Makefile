@@ -1,4 +1,4 @@
-.PHONY: help install install-deps lint lint-python lint-imports lint-deps lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui build-core check-commits check-pr-title check-large-files check-source-language check-core-wheel fetch-templates verify-templates beta ci clean coverage coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate docker-build docker-up docker-down
+.PHONY: help install install-deps lint lint-python lint-imports lint-deps lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui build-core check-commits check-pr-title check-large-files check-source-language check-core-wheel fetch-templates verify-templates beta ci clean coverage coverage-shard coverage-combine coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate docker-build docker-up docker-down
 
 PYTHON ?= python3
 PYTHON_VERSION ?= 3.12
@@ -11,6 +11,13 @@ COVERAGE_DIFF_THRESHOLD ?= 90
 COVERAGE_RATCHET_TOLERANCE ?= 0.05
 DOCKER_IMAGE ?= raven:local
 COVERAGE_REPORT_ARGS = --cov=raven --cov=raven_everos --cov-branch --cov-report=term-missing:skip-covered --cov-report=xml --cov-report=json --cov-report=html
+# One slice of the suite, K/N; the shard writes its .coverage data and no report.
+COVERAGE_SHARD ?= 1/1
+# Extra pytest flags for a shard; CI passes --idle-ceiling-strict, a local run stays warning-only.
+PYTEST_ARGS ?=
+COVERAGE_DATA_ARGS = --cov=raven --cov=raven_everos --cov-branch --cov-report=
+# Where the shards' .coverage.* files are gathered before they are combined.
+COVERAGE_DATA_DIR ?= coverage-data
 
 help:
 	@echo "Targets:"
@@ -22,6 +29,8 @@ help:
 	@echo "  lint-bridge    Bridge package build check"
 	@echo "  test           Run focused Python checks and TUI tests"
 	@echo "  coverage       Run the default Python suite with line and branch coverage"
+	@echo "  coverage-shard Run slice COVERAGE_SHARD (K/N) of the suite, writing .coverage data only"
+	@echo "  coverage-combine Combine the shards' .coverage.* files in COVERAGE_DATA_DIR (CI downloads them there) into coverage.json and coverage.xml"
 	@echo "  coverage-diff  Check changed executable lines against COVERAGE_BASE_REF"
 	@echo "  coverage-ratchet Check total line and branch coverage against the baseline"
 	@echo "  coverage-baseline-check Ensure a proposed baseline never lowers the target branch"
@@ -85,6 +94,14 @@ test-python:
 
 coverage:
 	TERM=dumb uv run --frozen --python $(PYTHON_VERSION) --all-extras pytest -q $(COVERAGE_REPORT_ARGS)
+
+coverage-shard:
+	TERM=dumb uv run --frozen --python $(PYTHON_VERSION) --all-extras pytest -q --shard $(COVERAGE_SHARD) --durations=25 $(PYTEST_ARGS) $(COVERAGE_DATA_ARGS)
+
+coverage-combine:
+	uv run --frozen --python $(PYTHON_VERSION) coverage combine --keep $(COVERAGE_DATA_DIR)
+	uv run --frozen --python $(PYTHON_VERSION) coverage json
+	uv run --frozen --python $(PYTHON_VERSION) coverage xml
 
 coverage-summary:
 	uv run --frozen --python $(PYTHON_VERSION) python scripts/coverage_gate.py summary

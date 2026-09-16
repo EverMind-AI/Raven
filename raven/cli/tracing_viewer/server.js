@@ -209,7 +209,11 @@ function normalizeSpan(span) {
     failureLabel: failure.failureLabel,
     attributes: attrs,
     events: span.events || [],
-    sessionId: attrs['session.id'] || null,
+    // A span with neither id nor key belongs to no session -- a timer tick, a
+    // plugin load. It gets the same derived per-day session the shard index
+    // gives it, so both readers agree. A span that has a key but no id is left
+    // alone: the identity election resolves that one.
+    sessionId: attrs['session.id'] || (attrs['session.key'] ? null : shardIndex.backgroundSessionId(span.startTime)),
     sessionKey: attrs['session.key'] || null,
     agentId: attrs['agent.id'] || null,
     workspaceDir: attrs['workspace.dir'] || null,
@@ -774,6 +778,7 @@ function assembleSession(sessionId, sessionSpans, sessionEvents) {
     surface,
     resumedFrom,
     resumedTo: null,
+    isBackground: shardIndex.isBackgroundSessionId(sessionId),
     startedAt: sessionSpans.map((span) => span.startTime).sort((a, b) => parseTime(a) - parseTime(b))[0] || null,
     updatedAt: sessionSpans.map((span) => span.endTime).sort((a, b) => parseTime(b) - parseTime(a))[0] || null,
     traceCount: traces.length,
@@ -848,6 +853,7 @@ function buildSessionList() {
       surface: shardIndex.preferredValue(row.counts.surface),
       resumedFrom: sessionStart?.event?.resumedFrom || null,
       resumedTo: null,
+      isBackground: shardIndex.isBackgroundSessionId(row.sessionId),
       startedAt: row.startedAt,
       updatedAt: row.updatedAt,
       // Exact, and the reason there is no traceCount here: see the note in
@@ -981,10 +987,17 @@ function scheduleSnapshotRebuild(res) {
 function findTraceOwner(traceId) {
   if (!traceId) return null;
   const merged = shardIndex.mergedIndex('spans');
+  // Earliest owner, not the first one iteration reaches. A session-bearing trace
+  // has one owner however this picks, but work that belongs to no session is
+  // grouped by the calendar day of each span, so a trace running across midnight
+  // is held by two rows. The jump from a subagent run to its parent turn has to
+  // land somewhere stable, and the half that started it is the one it wants.
+  let owner = null;
   for (const row of merged.sessions.values()) {
-    if (row.visibleTraceIds.has(traceId)) return row.sessionId;
+    if (!row.visibleTraceIds.has(traceId)) continue;
+    if (!owner || (row.startedAt || '') < (owner.startedAt || '')) owner = row;
   }
-  return null;
+  return owner?.sessionId || null;
 }
 
 const API_WINDOWS = { '1h': 3600e3, '24h': 86400e3, '7d': 604800e3 };
@@ -1018,9 +1031,10 @@ function buildLlmCalls(windowKey) {
       .filter(Boolean);
     for (const span of spans) {
       if (cutoff !== null && (parseTime(span.startTime) || 0) < cutoff) continue;
-      // A call the election could not attribute to a session is dropped, as the
-      // whole-corpus reader drops it: there is nowhere in a session-oriented view
-      // to show it, and on the measured store there are 34,644 of them.
+      // Narrower than it reads: a call with no session at all now carries a
+      // derived background session, so what is still dropped here is only a
+      // call whose session.key the election could not resolve to an id. The
+      // whole-corpus reader drops exactly the same one.
       if (!span.sessionId) continue;
       const row = sessionByPair.get(span.sessionId);
       calls.push({

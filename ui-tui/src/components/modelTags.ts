@@ -30,7 +30,7 @@ const TAGS: ReadonlyArray<readonly [string, string, string]> = [
   ['video-generation', '⧉', 'makes video'],
   ['embedding', '∷', 'embeddings'],
   ['rerank', '⇅', 'reranking'],
-  ['computer-use', '▭', 'computer use'],
+  ['computer-use', '▭', 'computer use']
 ]
 
 export interface ModelTagFacts {

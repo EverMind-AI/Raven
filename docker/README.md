@@ -121,3 +121,11 @@ docker compose run --rm raven status
   `ui-tui/`, which the image does not build.
 - **`sandbox`.** The extra is off by default: inside a container the container
   is the boundary. Turn it on with `RAVEN_EXTRAS` if you want boxlite as well.
+- **LibreOffice is in the image.** The page cannot draw a `.docx`, `.xlsx` or
+  `.pptx`, so the gateway converts those to PDF to show them; without it every
+  office file in a knowledge base, and every deck, answers the viewer with
+  "LibreOffice is not installed" -- a hosted image telling its user to install
+  something on it. It is the largest thing here, roughly 500 MB with the CJK
+  fonts it needs to render anything but Latin text. Build with
+  `--build-arg RAVEN_OFFICE=0`, or `RAVEN_OFFICE=0` in the environment Compose
+  reads, for a deployment that will never preview one.

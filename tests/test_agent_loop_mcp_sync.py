@@ -392,10 +392,12 @@ async def test_a_turn_does_not_wait_for_a_server_that_is_waiting_on_a_person(wor
         assert loop._mcp_connecting is True
 
         released.set()
-        for _ in range(200):
-            if loop.tools.has("mcp_parks_late"):
-                break
-            await asyncio.sleep(0.01)
+        # The task, not the registry: the handshake registers the tool before
+        # the manager takes its lock to commit, and the loop flips
+        # ``_mcp_connected`` only once the whole apply has returned. A poll on
+        # ``tools.has`` can wake between those two points and read the flag as
+        # still unset, which is how this test flaked on a loaded runner.
+        await asyncio.wait_for(loop._mcp_prewarm_task, timeout=5)
 
     # It finished on its own afterwards, so its tools are there for the next turn.
     assert loop.tools.has("mcp_parks_late")

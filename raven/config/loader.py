@@ -85,6 +85,8 @@ EXTENSION_KEYS = (
     # the engine on would fail base Config validation.
     "evalEngine",
     "eval_engine",
+    "translate",
+    "knowledge",
 )
 
 # Paths already warned about as malformed in this process; repeated

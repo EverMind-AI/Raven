@@ -159,6 +159,12 @@ describe('settings island', () => {
     expect(screen.getByText('gui.set.grp.me')).toBeTruthy()
     expect(screen.getByText('gui.set.grp.agent')).toBeTruthy()
     expect(screen.getByText('gui.set.grp.env')).toBeTruthy()
+    expect([...document.querySelectorAll('#snavList .grp')].map((group) => group.textContent)).toEqual([
+      'gui.set.grp.agent',
+      'gui.set.grp.env',
+      'gui.set.grp.me',
+    ])
+    expect(document.querySelector<HTMLButtonElement>('#snavList .sitem')?.textContent).toContain('gui.set.pg.model')
     const cur = document.querySelector('#snavList [aria-current="true"]')!
     expect(cur.textContent).toContain('gui.set.pg.usage')
     expect(document.getElementById('setTitle')!.textContent).toBe('gui.set.pg.usage')
@@ -283,7 +289,7 @@ describe('settings island', () => {
     })
     await mount()
     await act(async () => {
-      screen.getByText('gui.set.pg.model').click()
+      screen.getByText('gui.set.pg.defaults').click()
     })
     /* Queried through the default-model button rather than by text: the pane
        on the right lists the selected provider's models, so the same id is on
@@ -311,19 +317,26 @@ describe('settings island', () => {
       },
     })
     await mount()
-    await act(async () => {
-      screen.getByText('gui.set.pg.model').click()
-    })
     /* On the rail, so which provider holds the default is answerable without
-       selecting each one in turn. */
+       selecting each one in turn. The rail is the providers page and the pick
+       is the defaults page, so this crosses between them -- but never remounts,
+       which is the "without reopening" the name is about. */
     const badged = () =>
       [...document.querySelectorAll('.mrail .mrow')].find((row) => row.querySelector('.tagm'))
         ?.querySelector('.nm')
         ?.textContent
+    const go = async (page: string) => {
+      await act(async () => {
+        screen.getByText(page).click()
+      })
+    }
+    await go('gui.set.pg.model')
     expect(badged()).toBe('Anthropic')
+    await go('gui.set.pg.defaults')
     await act(async () => {
       document.querySelector<HTMLButtonElement>('.pickm')!.click()
     })
+    await go('gui.set.pg.model')
     expect(badged()).toBe('OpenAI')
   })
 
@@ -916,6 +929,74 @@ describe('settings island', () => {
       (row) => row.querySelector('.nm')?.textContent ?? '',
     )
 
+  /* Zhipu's two platforms, the second family the rail folds. Unlike MiniMax it
+     has no member row named after the company, which is what the group's own
+     `icon` is for. */
+  const withZhipu = (over: Partial<{ bigmodelOn: boolean }> = {}) =>
+    snap({
+      providers: [
+        { id: 'anthropic', name: 'Anthropic', models: [], on: true, kind: 'api_key' },
+        { id: 'zai', name: 'Z.ai', models: [], on: false, kind: 'api_key' },
+        { id: 'bigmodel', name: 'BigModel', models: [], on: !!over.bigmodelOn, kind: 'api_key' },
+        { id: 'openai', name: 'OpenAI', models: [], on: false, kind: 'api_key' },
+      ],
+      curProvider: 'anthropic',
+    })
+
+  it('folds the two Zhipu platforms into one rail row', async () => {
+    install(withZhipu())
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.model').click()
+    })
+    expect(railNames()).toEqual(['Anthropic', 'Zhipu', 'OpenAI'])
+
+    const head = document.querySelector<HTMLButtonElement>('.mrail .mrow.gh')!
+    expect(head.querySelector('.gc')?.textContent).toBe('2')
+    expect(head.getAttribute('aria-expanded')).toBe('false')
+
+    await act(async () => {
+      head.click()
+    })
+    expect([...document.querySelectorAll<HTMLElement>('.mgsub .mrow')].map(
+      (row) => row.querySelector('.nm')?.textContent,
+    )).toEqual(['Z.ai', 'BigModel'])
+  })
+
+  it("wears the company's mark, not the first platform's", async () => {
+    install(withZhipu())
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.model').click()
+    })
+    /* The heading says Zhipu, so it cannot wear Z.ai's logo -- that would put
+       one platform's brand on a row standing in for both. MiniMax needs no
+       such entry because its first member IS the company row. */
+    const head = document.querySelector<HTMLButtonElement>('.mrail .mrow.gh')!
+    expect(head.querySelector('img')?.getAttribute('src')).toBe('assets/providers/zhipu.svg')
+
+    await act(async () => {
+      head.click()
+    })
+    const members = [...document.querySelectorAll<HTMLElement>('.mgsub .mrow img:not(.mark-dark)')].map(
+      (img) => img.getAttribute('src'),
+    )
+    expect(members).toEqual(['assets/providers/zai.svg', 'assets/providers/zhipu.svg'])
+  })
+
+  it('lights the family dot when either platform is connected', async () => {
+    install(withZhipu({ bigmodelOn: true }))
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.model').click()
+    })
+    /* The rail answers "can I use Zhipu", and which platform holds the
+       credential is the pane's business. Connected families sort first. */
+    expect(railNames()).toEqual(['Anthropic', 'Zhipu', 'OpenAI'])
+    const head = document.querySelector<HTMLElement>('.mrail .mrow.gh')!
+    expect(head.querySelector('.provider-status')?.className).toBe('provider-status on')
+  })
+
   it('folds the MiniMax sections into one rail row that opens on demand', async () => {
     install(withMiniMax())
     await mount()
@@ -1000,6 +1081,254 @@ describe('settings island', () => {
     expect(document.querySelector('.mpanel .mtitle')?.textContent).toContain('MiniMax (CN)')
   })
 
+  /* The rail's search box and its filter. `t()` answers with the key here, so
+     these assert structure and which rows survive -- never the English copy,
+     which the catalogue owns. */
+  describe('narrowing the rail', () => {
+    const openModelPage = async (fixture = withMiniMax()) => {
+      install(fixture)
+      await mount()
+      await act(async () => {
+        screen.getByText('gui.set.pg.model').click()
+      })
+    }
+
+    const type = async (text: string) => {
+      const box = document.querySelector<HTMLInputElement>('.mrhead .mrsearch')!
+      await act(async () => {
+        fireEvent.change(box, { target: { value: text } })
+      })
+    }
+
+    /* `shell/menu` writes into a host element the page owns, so a test that
+       opens the menu has to provide one -- and exactly one. `show` finds it by
+       id, which answers with the first in the document, so a second host would
+       be the one queried and never the one written to. */
+    const menuHost = (): HTMLElement => {
+      const existing = document.getElementById('menu')
+      if (existing) return existing
+      const host = document.createElement('div')
+      host.id = 'menu'
+      document.body.appendChild(host)
+      return host
+    }
+
+    const chooseFilter = async (label: string) => {
+      const host = menuHost()
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>('.mrhead .mrfilter')!.click()
+      })
+      const item = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
+        b.textContent?.startsWith(label),
+      )!
+      await act(async () => {
+        item.click()
+      })
+      return host
+    }
+
+    it('keeps only the providers whose name carries what was typed', async () => {
+      await openModelPage()
+      expect(railNames()).toEqual(['Anthropic', 'MiniMax', 'OpenAI'])
+
+      /* Case-insensitive, and a substring rather than a prefix: "ai" sits at
+         the end of "OpenAI" and nowhere in the other two. */
+      await type('ai')
+      expect(railNames()).toEqual(['OpenAI'])
+
+      await type('THRO')
+      expect(railNames()).toEqual(['Anthropic'])
+    })
+
+    it('keeps a family for a hit on one member alone', async () => {
+      await openModelPage()
+      /* "Global" names two of the four MiniMax sections and no family, so the
+         group survives on its members and carries only those two. */
+      await type('global')
+      expect(railNames()).toEqual(['MiniMax'])
+      expect(document.querySelector('.mrail .mrow.gh .gc')?.textContent).toBe('2')
+      expect([...document.querySelectorAll<HTMLElement>('.mgsub .mrow')].map(
+        (row) => row.querySelector('.nm')?.textContent,
+      )).toEqual(['MiniMax (Global)', 'MiniMax Global (OAuth)'])
+    })
+
+    it('matches a family by its own heading, not just by its members', async () => {
+      await openModelPage()
+      await type('minimax')
+      expect(railNames()).toEqual(['MiniMax'])
+      /* All four members, because the family itself matched: filtering the
+         group by the same needle would have left one row and dissolved it. */
+      expect(document.querySelector('.mrail .mrow.gh .gc')?.textContent).toBe('4')
+    })
+
+    it('draws a narrowed rail open, so a match inside a family is visible', async () => {
+      await openModelPage()
+      expect(document.querySelector('.mrail .mrow.gh')!.getAttribute('aria-expanded')).toBe('false')
+
+      await type('CN')
+      const head = document.querySelector<HTMLButtonElement>('.mrail .mrow.gh')!
+      expect(head.getAttribute('aria-expanded')).toBe('true')
+      expect([...document.querySelectorAll<HTMLElement>('.mgsub .mrow')].map(
+        (row) => row.querySelector('.nm')?.textContent,
+      )).toEqual(['MiniMax (CN)', 'MiniMax CN (OAuth)'])
+
+      /* Clearing the box returns the reader's own folds rather than leaving
+         everything open. */
+      await type('')
+      expect(document.querySelector('.mrail .mrow.gh')!.getAttribute('aria-expanded')).toBe('false')
+    })
+
+    it('narrows to the enabled half and back', async () => {
+      await openModelPage(withMiniMax({ cnOn: true }))
+      await chooseFilter('gui.model.prov_filter.on')
+      /* MiniMax survives on one connected member out of four, and says so. */
+      expect(railNames()).toEqual(['Anthropic', 'MiniMax (CN)'])
+
+      await chooseFilter('gui.model.prov_filter.off')
+      expect(railNames()).toEqual(['MiniMax', 'OpenAI'])
+      expect(document.querySelector('.mrail .mrow.gh .gc')?.textContent).toBe('3')
+
+      await chooseFilter('gui.model.prov_filter.all')
+      expect(railNames()).toEqual(['Anthropic', 'MiniMax', 'OpenAI'])
+    })
+
+    it('dissolves a family the filter has left with one member', async () => {
+      await openModelPage(withMiniMax({ cnOn: true }))
+      await chooseFilter('gui.model.prov_filter.on')
+      /* A lone provider behind a fold costs a click and saves nothing, which is
+         the same rule `railEntries` applies to a family that never had two. */
+      expect(document.querySelector('.mrail .mrow.gh')).toBeNull()
+    })
+
+    it('applies the name and the filter together', async () => {
+      await openModelPage(withMiniMax({ cnOn: true }))
+      await chooseFilter('gui.model.prov_filter.on')
+      await type('anthropic')
+      expect(railNames()).toEqual(['Anthropic'])
+
+      await type('openai')
+      /* OpenAI matches the name and fails the filter, so nothing is left -- and
+         that is a different sentence from having nothing set up. */
+      expect(railNames()).toEqual([])
+      expect(document.querySelector('.mrail .pnote')?.textContent).toBe('gui.model.prov_no_match')
+    })
+
+    it('ticks the filter in force and flags the control that narrowed the rail', async () => {
+      await openModelPage()
+      const button = document.querySelector<HTMLButtonElement>('.mrhead .mrfilter')!
+      expect(button.getAttribute('data-narrowed')).toBe('false')
+
+      const host = await chooseFilter('gui.model.prov_filter.off')
+      expect(button.getAttribute('data-narrowed')).toBe('true')
+
+      await act(async () => {
+        button.click()
+      })
+      const labels = [...host.querySelectorAll('button')].map((b) => b.textContent)
+      expect(labels).toEqual([
+        'gui.model.prov_filter.all',
+        'gui.model.prov_filter.on',
+        'gui.model.prov_filter.off \u2713',
+      ])
+    })
+
+    it('leaves the pane on a provider the narrowing hid rather than blanking it', async () => {
+      await openModelPage()
+      expect(document.querySelector('.mpanel .mtitle')?.textContent).toContain('Anthropic')
+
+      await type('openai')
+      /* The selection moves to something the reader can see: a pane describing
+         a row that is no longer in the list has nothing pointing at it. */
+      expect(document.querySelector('.mpanel .mtitle')?.textContent).toContain('OpenAI')
+    })
+  })
+
+  /* A provider that sells the same models from several storefronts is asked
+     which one, because the key does not say and the accounts are separate. */
+  describe('a provider with platforms to choose between', () => {
+    const PLATFORMS = [
+      { label: 'www.DMXAPI.cn (CNY)', api_base: 'https://www.dmxapi.cn/v1', signup_url: 'https://www.dmxapi.cn/register' },
+      { label: 'www.DMXAPI.com (International)', api_base: 'https://www.dmxapi.com/v1', signup_url: 'https://www.dmxapi.com/register' },
+      { label: 'ssvip.DMXAPI.com (Enterprise)', api_base: 'https://ssvip.dmxapi.com/v1', signup_url: 'https://ssvip.dmxapi.com/register' },
+    ]
+
+    const withPlatforms = (over: Partial<{ apiBase: string }> = {}) =>
+      snap({
+        providers: [{
+          id: 'dmxapi',
+          name: 'DMXAPI',
+          homepage: 'https://www.dmxapi.cn/',
+          models: [],
+          on: false,
+          kind: 'api_key',
+          defaultApiBase: 'https://www.dmxapi.cn/v1',
+          platforms: PLATFORMS,
+          ...over,
+        }],
+        curProvider: 'dmxapi',
+      })
+
+    const openPane = async (fixture = withPlatforms()) => {
+      const harness = install(fixture)
+      await mount()
+      await act(async () => {
+        screen.getByText('gui.set.pg.model').click()
+      })
+      return harness
+    }
+
+    const rows = () => [...document.querySelectorAll<HTMLElement>('.mplatrow')]
+
+    it('offers the platforms instead of a host field', async () => {
+      await openPane()
+
+      expect(document.querySelector('[data-sec="platform"]')).not.toBeNull()
+      /* Nothing to type when the answer is one of three, and a free-text host
+         beside the list would be a second way to say the same thing. */
+      expect(document.querySelector('[data-sec="host"]')).toBeNull()
+      expect(rows().map((r) => r.querySelector('.nm')?.textContent)).toEqual(PLATFORMS.map((p) => p.label))
+    })
+
+    it('gives each platform its own signup, and drops the single one', async () => {
+      await openPane()
+
+      expect(rows().map((r) => r.querySelector('a')?.getAttribute('href'))).toEqual(
+        PLATFORMS.map((p) => p.signup_url),
+      )
+      /* A key from one storefront works on none of the others, so one link
+         beside the field would send some readers to the wrong signup. */
+      expect(document.querySelector('[data-sec="key"] .mdocs')).toBeNull()
+    })
+
+    it('starts on the platform the stored address belongs to', async () => {
+      await openPane(withPlatforms({ apiBase: 'https://ssvip.dmxapi.com/v1' }))
+
+      /* Matched, not remembered: the config holds an address and no choice, so
+         a section written by the CLI has to land on the right row here too. */
+      expect(rows().map((r) => r.querySelector('input')!.checked)).toEqual([false, false, true])
+    })
+
+    it('sends the chosen address even when it is the one shipped', async () => {
+      const { calls } = await openPane()
+      const field = document.querySelector<HTMLInputElement>('[data-sec="key"] input')!
+      await act(async () => {
+        fireEvent.input(field, { target: { value: 'sk-probe' } })
+      })
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>('[data-sec="key"] button.mini')!.click()
+      })
+
+      /* The host field is only sent when it differs from the default, because
+         several of those defaults are labels a save must not turn into an
+         override. A platform is not a label: picking the first row is still
+         picking, and the address has to be written for the key to reach it. */
+      expect(calls).toContainEqual(['provider', {
+        op: 'save_key',
+        params: { slug: 'dmxapi', api_key: 'sk-probe', api_base: 'https://www.dmxapi.cn/v1' },
+      }])
+    })
+  })
+
   it('puts provider branding first and connection state at the far edge', async () => {
     install()
     await mount()
@@ -1025,7 +1354,7 @@ describe('settings island', () => {
     const { calls } = install()
     await mount()
     await act(async () => {
-      screen.getByText('gui.set.pg.model').click()
+      screen.getByText('gui.set.pg.defaults').click()
     })
     await act(async () => {
       screen.getByText('gui.set.mdl.eff_high').click()
@@ -1264,11 +1593,135 @@ describe('settings island', () => {
   })
 })
 
+/* The painting model sits with the other defaults now, not folded inside the
+   image tool's row, so reaching it is the page click and nothing else. */
 async function openImageSettings() {
-  await act(async () => { screen.getByText('gui.set.pg.toolset').click() })
-  const row = screen.getByText('draw').closest('.trow')!
-  await act(async () => { row.querySelector<HTMLButtonElement>('.ctl .mini.ghost')!.click() })
+  await act(async () => { screen.getByText('gui.set.pg.defaults').click() })
 }
+
+describe('default model pins', () => {
+  /* One provider offering all three kinds, so a slot showing the wrong one is
+     a visible failure rather than an empty list that could mean anything. */
+  const pinsnap = (over: Partial<SettingsSnapshot> = {}) =>
+    snap({
+      providers: [
+        {
+          id: 'openai',
+          name: 'OpenAI',
+          models: ['gpt-5.5', 'text-embedding-3-large', 'gpt-image-2'],
+          configured: [],
+          on: true,
+          kind: 'api_key',
+          labels: {
+            'gpt-5.5': { capabilities: ['function-call'], output_modalities: ['text'] },
+            'text-embedding-3-large': { capabilities: ['embedding'] },
+            'gpt-image-2': { capabilities: ['image-generation'], output_modalities: ['image'] },
+          },
+        },
+        { id: 'anthropic', name: 'Anthropic', models: ['claude-opus-4-5'], on: false, kind: 'api_key' },
+      ],
+      ...over,
+    })
+
+  const openDefaults = async (over = pinsnap()) => {
+    const h = install(over)
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.defaults').click()
+    })
+    return h
+  }
+
+  const optionsOf = (label: string): string[] =>
+    [...screen.getByLabelText(label).querySelectorAll('option')].map((o) => o.textContent ?? '')
+
+  it('offers each slot only the models it can actually use', async () => {
+    await openDefaults()
+    /* The embedding slot is the sharp one: a text id chosen here is not a
+       degraded answer, it is a vector store that cannot be searched. */
+    expect(optionsOf('gui.set.dm.embed')).toEqual(['gui.set.dm.inherit', 'text-embedding-3-large'])
+    expect(optionsOf('gui.set.dm.quick')).toEqual(['gui.set.dm.inherit', 'gpt-5.5'])
+    expect(optionsOf('gui.set.dm.translate')).toEqual(['gui.set.dm.inherit', 'gpt-5.5'])
+  })
+
+  it('lays out default model copy on the left and controls on the right', async () => {
+    await openDefaults()
+    expect(document.querySelector('.pickm')?.closest('.scard')?.classList.contains('inline')).toBe(true)
+    for (const label of ['gui.set.dm.quick', 'gui.set.dm.translate', 'gui.caps.image_model', 'gui.set.dm.embed']) {
+      expect(screen.getByLabelText(label).closest('.scard')?.classList.contains('inline')).toBe(true)
+    }
+  })
+  it('writes both halves of a pin, model and provider', async () => {
+    const { calls } = await openDefaults()
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('gui.set.dm.embed'), {
+        target: { value: 'openai::text-embedding-3-large' },
+      })
+    })
+    /* Both, in that order. A model with no provider is a pin the backend reads
+       as unset, so a half-written pair is a control that silently did nothing. */
+    /* One call carrying both halves, not two carrying one each. The pair is
+       what the backend stores in a single transaction; a surface that sent two
+       writes could have the second refused and leave the first standing. */
+    expect(calls).toEqual([
+      [
+        'set',
+        {
+          key: 'knowledge',
+          value: { embeddingModel: 'text-embedding-3-large', embeddingProvider: 'openai' },
+        },
+      ],
+    ])
+  })
+
+  /* This replaces a rollback. The pair used to be two writes with the first
+     undone when the second failed, which could not hold: the undo travelled
+     the same connection that had just dropped, and two pickers saving at once
+     could interleave their writes into a pair neither chose with nothing
+     failing at all. A refused write now leaves the config untouched because
+     there was only ever one. */
+  it('leaves the stored pin untouched when the write is refused', async () => {
+    const data = pinsnap({ raw: { knowledge: { embeddingModel: 'openai/old', embeddingProvider: 'openai' } } })
+    const calls: Array<[string, unknown]> = []
+    install(data, {
+      set: async (key, value) => {
+        calls.push(['set', { key, value }])
+        throw { handled: true }
+      },
+    })
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.defaults').click()
+    })
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('gui.set.dm.embed'), {
+        target: { value: 'openai::text-embedding-3-large' },
+      })
+    })
+
+    // One attempt, and no repair write behind it: nothing to repair.
+    expect(calls).toEqual([
+      [
+        'set',
+        {
+          key: 'knowledge',
+          value: { embeddingModel: 'text-embedding-3-large', embeddingProvider: 'openai' },
+        },
+      ],
+    ])
+    // And the row does not claim the pick that was refused.
+    expect((screen.getByLabelText('gui.set.dm.embed') as HTMLSelectElement).value).not.toBe(
+      'openai::text-embedding-3-large',
+    )
+  })
+
+  it('offers nothing from a provider that is not connected', async () => {
+    await openDefaults()
+    /* Anthropic is off, so its model must not appear even though the slot's
+       kind would take it: picking it would fail on the next call, not here. */
+    expect(optionsOf('gui.set.dm.quick')).not.toContain('claude-opus-4-5')
+  })
+})
 
 describe('image model selection', () => {
   it('defaults to sunburst and saves one model/quality pair', async () => {
@@ -1753,7 +2206,11 @@ describe('the models pane', () => {
     /* Alibaba Cloud publishes flat ids, so there is no namespace to read and
        every row wore the same provider mark. The last one is Alibaba's own
        model and correctly keeps it. */
-    expect([...document.querySelectorAll('.mdrawer .mitem img')].map((i) => i.getAttribute('src'))).toEqual([
+    /* The light drawing of each: a mark that ships the vendor's dark one
+       renders both and the stylesheet shows one, so an unscoped `img` here
+       would count the pair twice. */
+    expect([...document.querySelectorAll('.mdrawer .mitem img:not(.mark-dark)')].map((i) =>
+      i.getAttribute('src'))).toEqual([
       'assets/providers/qwen.svg',
       'assets/providers/deepseek.svg',
       'assets/providers/zai.svg',
@@ -2115,11 +2572,25 @@ describe('the models pane', () => {
     expect(document.querySelector('[data-sec="models"] .mdocs')).toBeNull()
   })
 
-  it('keeps the default-model card above the split', async () => {
-    await openModels()
-    const card = document.querySelector('#spanels .scard')!
-    const split = document.querySelector('#spanels .msplit')!
-    expect(card.querySelector('.pickm')).toBeTruthy()
-    expect(card.compareDocumentPosition(split) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  /* The card and the split are two pages now. What used to be "above the
+     split" is "on the page before it": the agent model leads the defaults, and
+     the providers page is the split alone -- a stray `.pickm` left behind there
+     would mean the move half happened. */
+  it('leads the defaults page with the agent model, and leaves the split alone', async () => {
+    const h = install(snap())
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.defaults').click()
+    })
+    const first = document.querySelector('#spanels .scard')!
+    expect(first.querySelector('.pickm')).toBeTruthy()
+    expect(document.querySelector('#spanels .msplit')).toBeNull()
+
+    await act(async () => {
+      screen.getByText('gui.set.pg.model').click()
+    })
+    expect(document.querySelector('#spanels .msplit')).toBeTruthy()
+    expect(document.querySelector('#spanels .pickm')).toBeNull()
+    return h
   })
 })

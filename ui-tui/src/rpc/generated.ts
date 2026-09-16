@@ -914,6 +914,11 @@ export interface ModelOptionProvider {
   };
   total_models: number;
   needs_api_base: boolean;
+  platforms?: {
+    label: string;
+    api_base: string;
+    signup_url: string;
+  }[];
   warning: string;
   /**
    * Keyed by the model id as it appears in `models`.
@@ -1028,6 +1033,10 @@ export interface InstanceRow {
    * What the graph this instance belongs to was dispatched for. Absent, not empty, for an instance that came from no orchestration, so its presence is what says the row has a source.
    */
   runTitle?: string;
+  /**
+   * When the turn this instance is answering right now began. Absent when it is answering none, so presence is what says the instance is working and the number is what says for how long. Not updatedAtMs, which every registry write stamps: a binding commit and a graph-origin write move it too, so it dates the row and not the turn.
+   */
+  turnStartedAtMs?: number;
 }
 /**
  * One row of one instance's conversation. Preferred source is the instance's own log, which is written turn by turn and holds what the run did on the way; a conversation with no log falls back to its record directories, where a turn is a pair of files.
@@ -1802,6 +1811,12 @@ export interface KnowledgeBase {
   created_at: string;
   updated_at: string;
   documents: number;
+  top_k?: number;
+  smart_chunking?: boolean;
+  separator?: string;
+  chunk_size?: number;
+  chunk_overlap?: number;
+  file_processing?: string;
 }
 /**
  * One uploaded document and where its indexing got to.
@@ -1824,6 +1839,8 @@ export interface KnowledgeDocument {
   error: string;
   created_at: string;
   updated_at: string;
+  origin?: string;
+  origin_ref?: string;
 }
 /**
  * One search hit. ``score`` is a similarity, so higher is nearer -- the
@@ -1836,6 +1853,9 @@ export interface KnowledgeHit {
   score: number;
   document_id: string;
   text: string;
+  chunk_index?: number;
+  total_chunks?: number;
+  source?: string;
 }
 /**
  * Just enough of one step to draw the graph: which step it is, and what it
@@ -4124,6 +4144,9 @@ export interface PlaybooksListResult {
  * via the `definition` "PlaybooksGetParams".
  */
 export interface PlaybooksGetParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
   name: string;
 }
 /**
@@ -4138,6 +4161,9 @@ export interface PlaybooksGetResult {
  * via the `definition` "PlaybooksCredentialsGetParams".
  */
 export interface PlaybooksCredentialsGetParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
   name: string;
 }
 /**
@@ -4153,6 +4179,9 @@ export interface PlaybooksCredentialsGetResult {
  * via the `definition` "PlaybooksCredentialsSetParams".
  */
 export interface PlaybooksCredentialsSetParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
   name: string;
   param: string;
   value: string;
@@ -4162,6 +4191,9 @@ export interface PlaybooksCredentialsSetParams {
  * via the `definition` "PlaybooksCredentialsClearParams".
  */
 export interface PlaybooksCredentialsClearParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
   name: string;
   param: string;
 }
@@ -4170,6 +4202,9 @@ export interface PlaybooksCredentialsClearParams {
  * via the `definition` "PlaybooksOauthAuthorizeParams".
  */
 export interface PlaybooksOauthAuthorizeParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
   name: string;
   server: string;
 }
@@ -4188,8 +4223,181 @@ export interface PlaybooksOauthAuthorizeResult {
  * via the `definition` "PlaybooksOauthClearParams".
  */
 export interface PlaybooksOauthClearParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
   name: string;
   server: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksSetEnabledParams".
+ */
+export interface PlaybooksSetEnabledParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
+  name: string;
+  /**
+   * The state wanted. true takes the name off the deny list, false puts it on.
+   */
+  enabled: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksSetEnabledResult".
+ */
+export interface PlaybooksSetEnabledResult {
+  name: string;
+  /**
+   * The state now in force.
+   */
+  enabled: boolean;
+  /**
+   * False when it was already in that state, so a caller can tell 'you did that' from 'it was already so'.
+   */
+  changed: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksValidateParams".
+ */
+export interface PlaybooksValidateParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
+  name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksValidateResult".
+ */
+export interface PlaybooksValidateResult {
+  name: string;
+  /**
+   * True when errors is empty.
+   */
+  ok: boolean;
+  /**
+   * Every finding, in the order the validator reports them. Empty when the playbook is sound.
+   */
+  errors: string[];
+  /**
+   * The file the findings refer to.
+   */
+  path: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksDeleteParams".
+ */
+export interface PlaybooksDeleteParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
+  name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksDeleteResult".
+ */
+export interface PlaybooksDeleteResult {
+  name: string;
+  deleted: boolean;
+  /**
+   * True when a user playbook was shadowing a builtin of the same name, so the name is still in the library and now resolves to the builtin.
+   */
+  uncovered_builtin: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksRunParams".
+ */
+export interface PlaybooksRunParams {
+  /**
+   * A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it.
+   */
+  name: string;
+  /**
+   * The conversation this run reports to, as its own `channel:chat_id`. Required because a run's progress and completion announce are addressed to a conversation, and an RPC call is an origin nothing else sets one for.
+   */
+  session_key: string;
+  /**
+   * Values for the playbook's declared `params`. A parameter this machine holds as a stored secret is filled from there and must not be sent.
+   */
+  params?: {
+    [k: string]: JsonValue;
+  };
+  /**
+   * Node fields the author left blank, keyed by the node id written in the file. Only `subagent`, `nodeSummary` and `promptTemplate` may be filled; aimed at a field the author already wrote, the whole call is refused.
+   */
+  fills?: {
+    [k: string]: JsonValue;
+  };
+  /**
+   * The caller's statement that it already put this run to the user, so the graph-level gate does not ask a second time. Send it only when a person actually saw the run and agreed.
+   */
+  confirmed?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksRunResult".
+ */
+export interface PlaybooksRunResult {
+  name: string;
+  /**
+   * `dag`: dispatched, `reply` is the receipt. `guidance`: prompt-mode composition instructions. `gaps`: nothing was dispatched and `reply` names what is missing. `questions`: it cannot proceed and `reply` says why.
+   */
+  kind: 'dag' | 'guidance' | 'gaps' | 'questions';
+  /**
+   * The executor's own answer, verbatim. For a dispatched graph this is the receipt the run id is read out of.
+   */
+  reply: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksCreateParams".
+ */
+export interface PlaybooksCreateParams {
+  /**
+   * Short kebab-case name; becomes the library directory name. Must not already exist in either layer.
+   */
+  name: string;
+  /**
+   * The whole procedure in plain language: steps in order, what each produces and consumes, per-run parameters, trigger phrases, and any MCP server a step needs. The generator sees only this text.
+   */
+  workflow: string;
+  /**
+   * Skill names to pin to specific steps, when the caller named some.
+   */
+  skills?: string[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksCreateResult".
+ */
+export interface PlaybooksCreateResult {
+  name: string;
+  /**
+   * Whether a playbook now exists. False only when the generation failed, in which case `errors` says why.
+   */
+  created: boolean;
+  /**
+   * Where the file landed; empty when nothing was created.
+   */
+  path: string;
+  /**
+   * The composer's own open questions -- assumptions it made and gaps it could not close. Written into the file's prose for review and returned here so a client need not read the file back.
+   */
+  notes: string[];
+  /**
+   * Why the composer could not produce a valid playbook. Non-empty exactly when `created` is false.
+   */
+  errors: string[];
+  /**
+   * Whether the live library loaded the new file, so it is usable in this process without a restart.
+   */
+  adopted: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4800,6 +5008,7 @@ export interface KnowledgeStatusParams {}
 export interface KnowledgeStatusResult {
   configured: boolean;
   model: string;
+  extensions?: string[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4820,6 +5029,7 @@ export interface KnowledgeBasesListResult {
 export interface KnowledgeBasesCreateParams {
   name: string;
   description?: string;
+  embedding?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4842,6 +5052,26 @@ export interface KnowledgeBasesRenameParams {
  * via the `definition` "KnowledgeBasesRenameResult".
  */
 export interface KnowledgeBasesRenameResult {
+  base: KnowledgeBase;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeBasesSettingsParams".
+ */
+export interface KnowledgeBasesSettingsParams {
+  base_id: string;
+  top_k?: number;
+  smart_chunking?: boolean;
+  separator?: string;
+  chunk_size?: number;
+  chunk_overlap?: number;
+  file_processing?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeBasesSettingsResult".
+ */
+export interface KnowledgeBasesSettingsResult {
   base: KnowledgeBase;
 }
 /**
@@ -4892,6 +5122,53 @@ export interface KnowledgeDocumentsAddResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsAddNoteParams".
+ */
+export interface KnowledgeDocumentsAddNoteParams {
+  base_id: string;
+  title?: string;
+  text: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsAddNoteResult".
+ */
+export interface KnowledgeDocumentsAddNoteResult {
+  document: KnowledgeDocument;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsUpdateNoteParams".
+ */
+export interface KnowledgeDocumentsUpdateNoteParams {
+  document_id: string;
+  title?: string;
+  text: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsUpdateNoteResult".
+ */
+export interface KnowledgeDocumentsUpdateNoteResult {
+  document: KnowledgeDocument;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsAddUrlParams".
+ */
+export interface KnowledgeDocumentsAddUrlParams {
+  base_id: string;
+  url: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsAddUrlResult".
+ */
+export interface KnowledgeDocumentsAddUrlResult {
+  document: KnowledgeDocument;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "KnowledgeDocumentsIndexParams".
  */
 export interface KnowledgeDocumentsIndexParams {
@@ -4936,6 +5213,8 @@ export interface KnowledgeSearchParams {
  */
 export interface KnowledgeSearchResult {
   hits: KnowledgeHit[];
+  search_ms?: number;
+  embed_ms?: number;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

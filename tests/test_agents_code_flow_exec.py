@@ -129,7 +129,7 @@ def test_trunks_executor_preserves_output_on_timeout(tmp_path):
     from raven.sandbox.direct_executor import DirectExecutor
 
     command = "echo started; sleep 30"
-    result = _run(DirectExecutor().exec(command, timeout=1))
+    result = _run(DirectExecutor().exec(command, timeout=0.3))
     assert result.stdout == "started\n"
     assert "Timed out" in result.stderr
     assert result.exit_code == -1
@@ -137,7 +137,7 @@ def test_trunks_executor_preserves_output_on_timeout(tmp_path):
     # Both sides measured in one run, because the absence on its own is the
     # vacuous kind of assertion: it also holds for a fork that stopped marking
     # anything. The pair says the difference exists and which way round it is.
-    forked = str(_run(_tool(tmp_path).execute(command=command, timeout=1)))
+    forked = str(_run(_tool(tmp_path).execute(command=command, timeout=0.3)))
     assert TIMED_OUT_NOTE in forked, "the fork tells the model its output is a fragment"
     assert TIMED_OUT_NOTE not in result.as_text(), "trunk does not, and that is what is left"
 

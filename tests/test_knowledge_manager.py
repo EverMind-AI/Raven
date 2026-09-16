@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from raven.knowledge._embedding import EmbeddingConfig
-from raven.knowledge._manager import KnowledgeError, KnowledgeManager, StaleBaseError
+from raven.knowledge._manager import DuplicateBaseNameError, KnowledgeError, KnowledgeManager, StaleBaseError
 
 DIM = 8
 _VOCAB = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"]
@@ -47,6 +47,13 @@ class _StubClient:
             # undefined; a floor keeps every text somewhere on the sphere.
             vectors.append(counts if any(counts) else [0.01] * DIM)
         return vectors
+
+
+class _NoStore:
+    """Enough of a vector store to build a manager. Nothing here searches."""
+
+    async def delete_collection(self, collection: str) -> None:
+        return None
 
 
 @pytest.fixture
@@ -89,14 +96,14 @@ async def test_create_upload_index_search(manager) -> None:
     assert doc.status == "ready"
     assert doc.chunk_count == 2
 
-    hits = await manager.search([base.id], "alpha", top_k=1)
+    hits = (await manager.search([base.id], "alpha", top_k=1)).hits
     assert len(hits) == 1
     assert "first topic" in hits[0].chunk.text
 
 
 async def test_search_ranks_the_nearer_section_first(manager) -> None:
     base, _ = await _ready_base(manager)
-    hits = await manager.search([base.id], "beta", top_k=2)
+    hits = (await manager.search([base.id], "beta", top_k=2)).hits
     assert "second topic" in hits[0].chunk.text
 
 
@@ -104,7 +111,7 @@ async def test_headings_survive_into_the_indexed_chunks(manager) -> None:
     """The structured parser is what makes a hit citable. If the plain parser
     had claimed markdown, every chunk would carry an empty heading path."""
     base, _ = await _ready_base(manager)
-    hits = await manager.search([base.id], "alpha", top_k=1)
+    hits = (await manager.search([base.id], "alpha", top_k=1)).hits
     assert hits[0].chunk.metadata.get("heading_path") == ["Handbook", "Alpha section"]
 
 
@@ -134,7 +141,7 @@ async def test_reindexing_replaces_instead_of_duplicating(manager) -> None:
     base, doc = await _ready_base(manager)
     await manager.index_document(doc.id)
 
-    hits = await manager.search([base.id], "alpha", top_k=10)
+    hits = (await manager.search([base.id], "alpha", top_k=10)).hits
     assert len({h.chunk.text for h in hits}) == len(hits)
 
 
@@ -219,7 +226,7 @@ async def test_moving_the_endpoint_does_not_make_a_base_stale(manager) -> None:
         model=manager.stub.model, base_url="https://moved/v1", api_key="rotated", dimensions=DIM
     )
 
-    assert await manager.search([base.id], "alpha", top_k=1)
+    assert (await manager.search([base.id], "alpha", top_k=1)).hits
 
 
 async def test_indexing_into_a_stale_base_fails_the_document_not_the_queue(manager) -> None:
@@ -239,7 +246,7 @@ async def test_deleting_a_document_removes_its_vectors_and_its_bytes(manager) ->
 
     assert await manager.delete_document(doc.id) is True
     assert manager.read_document(doc.id) is None
-    assert await manager.search([base.id], "alpha") == []
+    assert (await manager.search([base.id], "alpha")).hits == []
 
 
 async def test_deleting_a_base_takes_the_collection_with_it(manager) -> None:
@@ -281,7 +288,7 @@ async def test_the_collection_is_named_for_the_id_not_the_name(manager) -> None:
     manager.rename_base(base.id, name="renamed")
 
     assert await manager._store.has_collection(base.id) is True
-    assert len(await manager.search([base.id], "alpha", top_k=1)) == 1
+    assert len((await manager.search([base.id], "alpha", top_k=1)).hits) == 1
 
 
 async def test_search_merges_and_reranks_across_bases(manager) -> None:
@@ -291,7 +298,7 @@ async def test_search_merges_and_reranks_across_bases(manager) -> None:
     manager.add_document(second.id, filename="b.txt", content=b"alpha")
     await manager.index_pending()
 
-    hits = await manager.search([first.id, second.id], "alpha alpha alpha", top_k=2)
+    hits = (await manager.search([first.id, second.id], "alpha alpha alpha", top_k=2)).hits
     assert len(hits) == 2
     assert hits[0].score >= hits[1].score
 
@@ -310,4 +317,195 @@ async def test_the_query_is_embedded_once_for_all_bases(manager) -> None:
 
 async def test_an_empty_query_searches_nothing(manager) -> None:
     base, _ = await _ready_base(manager)
-    assert await manager.search([base.id], "   ") == []
+    assert (await manager.search([base.id], "   ")).hits == []
+
+
+class TestABaseWithNoEmbeddingModel:
+    """A base that keeps its documents and is never searched by vector.
+
+    The case is real -- somewhere to put files the agent reads whole, or that a
+    person opens from the page -- and it has to reach no endpoint at all. It is
+    also not revisable: a collection's width is fixed when it is made, so a base
+    created without one is rebuilt rather than switched.
+    """
+
+    async def test_it_is_created_without_reaching_the_endpoint(self, manager) -> None:
+        base = await manager.create_base(name="files", embedding=False)
+
+        assert base.embedding_model == ""
+        assert base.dimensions == 0
+        # Nothing was embedded, so nothing was asked of the endpoint -- the
+        # width probe is the call this avoids.
+        assert manager.stub.calls == []
+
+    async def test_a_document_is_stored_and_not_indexed(self, manager) -> None:
+        """Ready, because the file is in the base and can be opened. Failed
+        would send a reader looking for a fault; pending would promise an
+        indexer that is never coming."""
+        base = await manager.create_base(name="files", embedding=False)
+        doc = manager.add_document(base.id, filename="notes.md", content=b"# hi\n")
+
+        indexed = await manager.index_document(doc.id)
+
+        assert indexed.status == "ready"
+        assert indexed.chunk_count == 0
+        assert manager.stub.calls == []
+        # And the bytes are still there to open.
+        assert manager.read_document(doc.id) == b"# hi\n"
+
+    async def test_it_is_skipped_rather_than_refused_by_a_search(self, manager) -> None:
+        """Asking a mixed set is ordinary, and a base with no vectors is not an
+        error in the others."""
+        plain = await manager.create_base(name="files", embedding=False)
+        vectored = await manager.create_base(name="handbook")
+        doc = manager.add_document(vectored.id, filename="handbook.md", content=b"onboarding is here\n")
+        await manager.index_document(doc.id)
+
+        hits = (await manager.search([plain.id, vectored.id], "onboarding")).hits
+
+        assert [h.chunk.source for h in hits] == ["handbook.md"]
+
+    async def test_searching_only_such_a_base_answers_nothing(self, manager) -> None:
+        plain = await manager.create_base(name="files", embedding=False)
+
+        assert (await manager.search([plain.id], "anything")).hits == []
+
+    async def test_the_question_has_one_answer(self, manager) -> None:
+        """Three readers skip these bases; three spellings of "is the model
+        empty" is how one of them ends up not skipping."""
+        plain = await manager.create_base(name="files", embedding=False)
+        vectored = await manager.create_base(name="handbook")
+
+        assert manager.embeds(plain) is False
+        assert manager.embeds(vectored) is True
+
+
+class TestTwoBasesCannotShareAName:
+    """The rail shows a base's name and nothing else.
+
+    Two rows reading "t3" leave a reader picking between them and finding out
+    which was which by opening both -- and a delete then asks them to be sure
+    about which of two identical rows they meant.
+    """
+
+    async def test_a_second_base_cannot_take_the_name(self, manager) -> None:
+        await manager.create_base(name="t3")
+
+        with pytest.raises(DuplicateBaseNameError):
+            await manager.create_base(name="t3")
+
+        assert [b.name for b in manager.list_bases()] == ["t3"]
+
+    @pytest.mark.parametrize("second", ["T3", "t3 ", " T3"])
+    async def test_case_and_spacing_do_not_make_it_a_different_name(self, manager, second: str) -> None:
+        """Two bases called "t3" and "T3 " are the same problem as two called
+        "t3": the reader cannot tell those apart either."""
+        await manager.create_base(name="t3")
+
+        with pytest.raises(DuplicateBaseNameError):
+            await manager.create_base(name=second)
+
+    async def test_what_was_typed_is_what_is_stored(self, manager) -> None:
+        """Compared casefolded, kept as written: the rule is about telling
+        bases apart, not about how a name may be spelled."""
+        base = await manager.create_base(name="Handbook")
+
+        assert base.name == "Handbook"
+
+    async def test_a_rename_cannot_take_a_name_either(self, manager) -> None:
+        """Or renaming is simply the way around the rule."""
+        await manager.create_base(name="t1")
+        second = await manager.create_base(name="t2")
+
+        with pytest.raises(DuplicateBaseNameError):
+            manager.rename_base(second.id, name="t1")
+
+        assert manager.get_base(second.id).name == "t2"
+
+    async def test_a_base_may_keep_its_own_name(self, manager) -> None:
+        """Without this, saving a rename that touched only the description
+        would fail against the base itself."""
+        base = await manager.create_base(name="t1")
+
+        renamed = manager.rename_base(base.id, name="t1", description="notes")
+
+        assert renamed.name == "t1"
+        assert renamed.description == "notes"
+
+    async def test_a_freed_name_can_be_taken_again(self, manager) -> None:
+        first = await manager.create_base(name="t3")
+        await manager.delete_base(first.id)
+
+        again = await manager.create_base(name="t3")
+
+        assert again.name == "t3"
+
+
+# ── rewriting a document in place ─────────────────────────────────
+
+
+async def test_rewriting_a_document_replaces_its_text_and_requeues_it(manager) -> None:
+    base, doc = await _ready_base(manager)
+
+    rewritten = await manager.replace_document(
+        doc.id,
+        filename="handbook v2.md",
+        content=b"# Handbook\n\n## Gamma section\n\ngamma gamma gamma on the third topic.\n",
+    )
+
+    assert (rewritten.source, rewritten.status, rewritten.chunk_count) == ("handbook v2.md", "pending", 0)
+    assert manager.read_document(doc.id) == (
+        b"# Handbook\n\n## Gamma section\n\ngamma gamma gamma on the third topic.\n"
+    )
+    indexed = await manager.index_document(doc.id)
+    assert indexed.status == "ready"
+    hits = (await manager.search([base.id], "gamma", top_k=5)).hits
+    assert "third topic" in hits[0].chunk.text
+
+
+async def test_the_old_text_stops_being_searchable_the_moment_it_is_rewritten(manager) -> None:
+    """Before the reindex, not after: chunks are what a search answers with,
+    and answering from a note the reader has already rewritten is worse than
+    answering with nothing. If the reindex then fails, they stay gone."""
+    base, doc = await _ready_base(manager)
+
+    await manager.replace_document(doc.id, filename="handbook.md", content=b"# Handbook\n\nquite different now.\n")
+
+    assert (await manager.search([base.id], "alpha")).hits == []
+
+
+async def test_rewriting_a_document_that_is_gone_answers_nothing(manager) -> None:
+    assert await manager.replace_document("nope", filename="x.md", content=b"x") is None
+
+
+async def test_a_document_remembers_which_kind_of_source_it_came_from(manager) -> None:
+    base = await manager.create_base(name="handbook")
+
+    note = manager.add_document(base.id, filename="plan.md", content=b"# Plan", origin="note")
+    page = manager.add_document(
+        base.id, filename="docs.md", content=b"# Docs", origin="url", origin_ref="https://example.com/docs"
+    )
+    uploaded = manager.add_document(base.id, filename="handbook.md", content=MARKDOWN)
+
+    assert (note.origin, note.origin_ref) == ("note", "")
+    assert (page.origin, page.origin_ref) == ("url", "https://example.com/docs")
+    # The default, so a registry written before the field existed still loads,
+    # and every document in one is what the default says it is.
+    assert (uploaded.origin, uploaded.origin_ref) == ("file", "")
+
+
+async def test_the_manager_builds_the_client_the_endpoint_calls_for(tmp_path) -> None:
+    """Which vendor is being spoken to is a fact about the base URL, so the
+    manager must not hardcode the plain client past it."""
+    from raven.knowledge._embedding import EmbeddingClient, SiliconFlowEmbeddingClient
+
+    def built(base_url: str, model: str):
+        mgr = KnowledgeManager(
+            tmp_path / base_url.replace("/", "_"),
+            store=_NoStore(),
+            embedding=EmbeddingConfig(model=model, base_url=base_url, api_key="k"),
+        )
+        return mgr._client()
+
+    assert isinstance(built("https://api.siliconflow.cn/v1", "BAAI/bge-large-zh-v1.5"), SiliconFlowEmbeddingClient)
+    assert type(built("https://api.openai.com/v1", "text-embedding-3-small")) is EmbeddingClient

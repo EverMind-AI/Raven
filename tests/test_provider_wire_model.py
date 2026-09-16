@@ -21,6 +21,12 @@ part of the delta is that claim quietly weakened:
   effect, which is why it was not in the first two reasons: it was found by
   diffing against `main`, not by predicting it.
 
+Regenerated once more when Poe stopped shipping a default model. One entry
+left the file, ``poe/anthropic/claude-opus-4.8``, and nothing else in any
+section moved: the corpus is built from each spec's own fields, so withdrawing
+a default withdraws the id it contributed. No wire form changed, which is the
+claim this file actually makes.
+
 So these tests are a snapshot, not a specification. They assert that today's
 answer for every provider and every shape of model id is byte-for-byte what it
 was before the refactor -- including the answers that are arguably wrong. A

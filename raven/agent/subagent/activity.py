@@ -99,6 +99,12 @@ class RunActivity:
     # one -- the transcript rows a transport publishes carry no clock of their
     # own, and the record's timestamps do not exist until the turn lands.
     started_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
+    # When this run became the turn an instance is answering, stamped by
+    # `watching_instance` as it takes the slot. Distinct from `started_at_ms`
+    # above, which is when collection opened: for a spawn those differ by the
+    # whole wait on `hold_handle`, and only this one is the turn. `None` until
+    # the slot is taken, and for a run that answers no instance at all.
+    turn_started_at_ms: int | None = None
     # When the run's backend last reported anything about it -- a tool call, a
     # step, console bytes, a usage report, a transcript republished mid-flight,
     # or a frame from the agent's process. Any report counts: for a lane whose
@@ -260,6 +266,16 @@ def watching_instance(activity: RunActivity, instance: tuple[str, str, str] | No
     owned = False
     if instance and _live_instances.get(instance) is None:
         _live_instances[instance] = activity
+        # When this instance's turn actually began, which is now and not when
+        # the activity was built. A spawn constructs its activity, then waits on
+        # `hold_handle`; only the lane that takes the lock gets here, so this is
+        # the first instant the run is the one the instance is answering. The
+        # manager states the same rule one line from its own acquisition -- it
+        # writes `running` "only now ... until the lock is held the run is still
+        # the pending spawn() reported" -- and a clock drawn from the build time
+        # would open at however long the spawn had queued behind the turn before
+        # it.
+        activity.turn_started_at_ms = int(time.time() * 1000)
         owned = True
     try:
         yield

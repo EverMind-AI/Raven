@@ -63,7 +63,7 @@ function install(over: Partial<ModelSource> = {}, providers = PROVIDERS): Harnes
     ...over,
   }
   const shell: Shell = {
-    T: (key) => key,
+    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
     confirmAsk: () => {},
     showPage: () => {},
   }
@@ -231,6 +231,62 @@ describe('the model picker', () => {
   })
 })
 
+describe('the model picker, where it lands', () => {
+  /* happy-dom measures every box as zero, so the three that decide the
+     placement are given the rects they have on the running page. Stubbed on the
+     prototype because the popover is created during the render that then
+     measures it -- there is no moment in between to reach the node. */
+  function measure(sizes: Map<string, [number, number]>): void {
+    const real = Element.prototype.getBoundingClientRect
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      for (const [selector, [top, height]] of sizes) {
+        if (this.matches(selector)) {
+          return { top, bottom: top + height, left: 40, right: 40, width: 0, height, x: 40, y: top } as DOMRect
+        }
+      }
+      return real.call(this)
+    })
+  }
+
+  /* The composer, as page.html nests it: the chip is on the card's bottom bar,
+     which is the whole reason the card and not the chip is what has to be
+     cleared. */
+  function onTheCard(): HTMLElement {
+    document.body.innerHTML = `
+      <div class="dock-in">
+        <div class="field"><textarea></textarea></div>
+        <div class="under"><button id="modelChip">chip</button></div>
+      </div>`
+    return document.getElementById('modelChip')!
+  }
+
+  it('opens above the composer card, not above the chip on it', () => {
+    install()
+    const chip = onTheCard()
+    measure(new Map([['.mpick', [0, 300]], ['.dock-in', [436, 126]], ['#modelChip', [518, 21]]]))
+    mount()
+    openIt(chip)
+    /* 436 - 300 - 8. Off the chip it was 210, which put three quarters of the
+       popover over the field the reader types in. */
+    expect(pick()!.style.top).toBe('128px')
+  })
+
+  it('drops below the whole card when there is no room above it', () => {
+    install()
+    const chip = onTheCard()
+    /* A card near the top of a tall window: nothing fits above it, so the
+       popover goes under -- under the CARD, or it would cover the bar the chip
+       itself sits on. */
+    Object.defineProperty(document.documentElement, 'clientHeight', { value: 900, configurable: true })
+    measure(new Map([['.mpick', [0, 300]], ['.dock-in', [60, 126]], ['#modelChip', [142, 21]]]))
+    mount()
+    openIt(chip)
+    /* 60 + 126 + 8, clear of the card's lower edge. Off the chip it was 171 --
+       eight pixels under the chip and straight over the bar beside it. */
+    expect(pick()!.style.top).toBe('194px')
+  })
+})
+
 describe('the model picker, choosing', () => {
   it('closes, sets locally, persists, and says what happened', async () => {
     const h = install()
@@ -245,7 +301,7 @@ describe('the model picker, choosing', () => {
     expect(h.persisted).toEqual(['minimax-m2'])
     expect(h.persistedProviders).toEqual(['minimax'])
     expect(h.persistedScopes).toEqual(['session'])
-    expect(h.toasts).toEqual(['已切换到 minimax-m2'])
+    expect(h.toasts).toEqual(['gui.model.pick_switched {"name":"minimax-m2"}'])
   })
 
   it('a switch from the settings default control is scoped to the default, not the session', async () => {
@@ -274,7 +330,7 @@ describe('the model picker, choosing', () => {
        config did not take. */
     expect(h.local).toEqual(['minimax-m2', 'minimax-m3'])
     expect(h.model()).toBe('minimax-m3')
-    expect(h.toasts).toEqual(['切换失败：no such model'])
+    expect(h.toasts).toEqual(['gui.op.switch_failed {"detail":"no such model"}'])
   })
 
   it('tells the caller after every local change, forward and back', async () => {
@@ -289,7 +345,7 @@ describe('the model picker, choosing', () => {
       rows('models')[1]!.click()
     })
     expect(h.after).toBe(2)
-    expect(h.toasts).toEqual(['切换失败：boom'])
+    expect(h.toasts).toEqual(['gui.op.switch_failed {"detail":"boom"}'])
   })
 
   it('says a staged pick is staged, not switched', async () => {
@@ -302,7 +358,7 @@ describe('the model picker, choosing', () => {
       rows('models')[1]!.click()
     })
     expect(store.current()).toBe('minimax-m2')
-    expect(h.toasts).toEqual(['已选择 minimax-m2，发送首条消息后生效'])
+    expect(h.toasts).toEqual(['gui.model.pick_staged {"name":"minimax-m2"}'])
   })
 
   it('a refused default switch commits nothing locally and does not roll back', async () => {
@@ -318,7 +374,7 @@ describe('the model picker, choosing', () => {
       rows('models')[1]!.click()
     })
     expect(h.after).toBe(0)
-    expect(h.toasts).toEqual(['切换失败：boom'])
+    expect(h.toasts).toEqual(['gui.op.switch_failed {"detail":"boom"}'])
   })
 
   it('takes the first hit on enter', async () => {
@@ -501,7 +557,7 @@ describe('the picker with nothing to offer', () => {
     openIt()
     expect(pick()).toBeNull()
     expect(h.providerSettings).toEqual(['anthropic'])
-    expect(h.toasts).toEqual(['gui.picker.no_models_for'])
+    expect(h.toasts).toEqual(['gui.picker.no_models_for {"name":"Anthropic"}'])
   })
 
   it('still says "no account" when nothing is connected at all', () => {

@@ -7023,6 +7023,7 @@ async def test_a_raising_reachability_predicate_fails_the_node_closed(tmp_path) 
     assert elapsed < 10
 
 
+@pytest.mark.production_timing
 async def test_an_unwired_reachability_predicate_still_suspends(tmp_path) -> None:
     """`None` means the host never wired it, which must keep meaning "assume reachable".
 

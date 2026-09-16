@@ -38,6 +38,7 @@ from raven.spine.scheduler import Scheduler, SchedulerDrainingError
 from raven.spine.turn import BusyPolicy
 
 if TYPE_CHECKING:
+    from raven.providers.binding import ModelBinding
     from raven.rpc.dispatcher import Dispatcher
     from raven.rpc.methods.session import AgentLoopFactory
 
@@ -254,6 +255,36 @@ async def _emit_start_then_error(
     )
 
 
+_quick_pin_warned = False
+
+
+def _quick_pin(agent_loop: Any, settings: Any) -> "ModelBinding | None":
+    """The quick model as a pair, or None to follow the conversation.
+
+    Named for the setting a reader sees rather than for the subsystem: one pin
+    serves the short off-path calls, and session naming is the first of them.
+
+    Reported once, not per turn: a session is named at most once, so a warning
+    per failure would still be one per new conversation for as long as the
+    config stays wrong.
+    """
+    global _quick_pin_warned
+    if not settings.model:
+        return None
+    pool = getattr(agent_loop, "provider_pool", None)
+    if pool is None:
+        return None
+    pin = pool.bind_pin(settings.model, settings.provider)
+    if pin is None and not _quick_pin_warned:
+        _quick_pin_warned = True
+        logger.warning(
+            "sessionTitle.model={!r} has no usable credentials of its own; "
+            "session naming follows the conversation's model instead",
+            settings.model,
+        )
+    return pin
+
+
 def _name_session(
     parsed: TurnSendParams,
     *,
@@ -291,14 +322,20 @@ def _name_session(
         raven_config = load_raven_config()
         config = raven_config.base
         settings = raven_config.session_title
+        # Both halves or neither. Sending the pinned id on the conversation's
+        # provider is the mis-pairing every other subsystem pin exists to
+        # avoid: `bind_pin` returns None when the pair cannot be built, and the
+        # namer then follows the conversation's model rather than posting one
+        # vendor's id to another's endpoint.
+        pin = _quick_pin(agent_loop, settings)
         task = name_session_alongside_turn(
             session_key=parsed.session_key,
             text=parsed.content or "",
             mgr=manager_for(agent_loop, config),
-            provider=getattr(agent_loop, "provider", None),
+            provider=pin.provider if pin is not None else getattr(agent_loop, "provider", None),
             emitter=emitter,
             enabled=settings.enabled,
-            model=settings.model,
+            model=pin.model if pin is not None else None,
             budget=settings.budget,
             min_input_width=settings.min_input_width,
             timeout_seconds=settings.timeout_seconds,

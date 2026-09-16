@@ -856,6 +856,10 @@ class TestRefusedSessionsAreNotRetained:
         from raven.memory_engine import store_pipeline
 
         monkeypatch.setattr(store_pipeline, "MAX_TOTAL_QUEUED", 4)
+        # Each refusal is an instrumented enqueue, and the span store opens its
+        # log file once per span: a thousand of them is five seconds of disk
+        # work that has nothing to do with the admission bound under test.
+        monkeypatch.setattr("raven.tracing.config.enabled", lambda: False)
 
         class _Wedged:
             async def store(self, session_id, messages, **kw):
@@ -897,6 +901,9 @@ class TestABurstOfNewSessionsInOneTickIsBounded:
         from raven.memory_engine import store_pipeline
 
         monkeypatch.setattr(store_pipeline, "MAX_TOTAL_QUEUED", 4)
+        # See test_a_thousand_refused_sessions_leave_nothing_behind: the span
+        # per refused enqueue is disk work, not the bound under test.
+        monkeypatch.setattr("raven.tracing.config.enabled", lambda: False)
 
         class _Wedged:
             async def store(self, session_id, messages, **kw):

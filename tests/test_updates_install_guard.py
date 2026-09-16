@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -72,6 +74,29 @@ class TestTheMarker:
         monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "not-created"))
         guard.write_marker()
         assert guard.read_marker() is not None
+
+    def test_writing_it_stays_inside_the_kernel(self) -> None:
+        """write_marker runs while uv is about to delete the environment the
+        process is executing from, and the real-uv fixture that models that
+        moment installs httpx, rich and typer only. Everything it imports must
+        therefore stop at raven.home: raven.config brings the settings stack,
+        and pydantic with it. An isolated subprocess, because other tests in
+        the session import both long before this one runs.
+
+        This pins the one call site the fixture tripped on. The closure of the
+        whole handoff is still proven only by
+        tests/integration/test_cli_upgrade_real_uv.py, which the default run
+        deselects.
+        """
+        script = (
+            "import sys\n"
+            "from raven.updates import install_guard\n"
+            "install_guard.write_marker(to_version='9.9.9')\n"
+            "print(sorted(name for name in ('pydantic', 'raven.config') if name in sys.modules))\n"
+        )
+        result = subprocess.run([sys.executable, "-I", "-c", script], capture_output=True, text=True, timeout=60)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "[]", result.stdout
 
 
 class TestWhetherTheUpgradeIsStillRunning:
@@ -199,3 +224,29 @@ class TestTheVerdict:
         fault = guard.inspect_install()
         assert fault is not None
         assert fault.reason == "upgrading"
+
+
+class TestTheMarkerPathReachesNoFurtherThanTheKernel:
+    """The handoff writes the marker from the environment it is replacing.
+
+    `_handoff_upgrade` calls `write_marker` while still running out of the old
+    uv tool environment, which carries only what that install depended on. A
+    marker path resolved through `raven.config` pulls pydantic in behind it and
+    the upgrade dies at the last step before the helper is even spawned.
+    """
+
+    def test_resolving_it_does_not_import_the_config_layer(self) -> None:
+        probe = (
+            "import sys\n"
+            "from raven.updates import install_guard\n"
+            "install_guard.marker_path()\n"
+            "leaked = sorted(m for m in sys.modules if m == 'pydantic' or m.startswith('raven.config'))\n"
+            "assert not leaked, leaked\n"
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert completed.returncode == 0, completed.stderr

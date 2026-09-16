@@ -120,7 +120,7 @@ export async function refresh(): Promise<void> {
     const snap = await source().load()
     set({ snap, epoch: state.epoch + 1 })
   } catch (e) {
-    toast(`加载失败：${(e as Error).message || String(e)}`)
+    toast(t('gui.op.load_failed', { detail: (e as Error).message || String(e) }))
   }
 }
 
@@ -429,4 +429,18 @@ export function reset(): void {
   usageBusy = false
   usageAt = 0
   delete window.sTab
+}
+
+/* One key, one write. A pin is only meaningful as a pair, so the backend takes
+   both halves under the block's own key and stores them in a single
+   atomic_update under the config lock.
+
+   Two writes and a rollback is what this replaced, and neither half of that
+   worked: a connection dropping between the writes left a new model paired
+   with the old provider, and the rollback had to travel the same dead
+   connection to undo it; two pickers saving at once could interleave their
+   per-key writes into a pair neither of them chose, with every write
+   succeeding. Refusals now happen before anything is written. */
+export async function writePin(pinKey: string, fields: Record<string, string>): Promise<WriteOutcome> {
+  return write(pinKey, fields)
 }

@@ -133,16 +133,138 @@ def _bound_workdir() -> str:
     return str(current_workdir() or "")
 
 
+#: How long a value may be before it is shortened rather than shown whole.
+_INLINE_ARG_LIMIT = 60
+
+#: How much of a shortened value survives, taken from both ends. Enough that a
+#: path, an id or a url is still recognisable as the one meant, and little
+#: enough that prose cannot push the other arguments off the line.
+_ELIDED_WIDTH = 32
+
+#: The whole line, after which the remaining arguments are counted rather than
+#: listed. A question a person cannot read to the end is one they answer out of
+#: habit.
+_ACTION_LINE_LIMIT = 160
+
+
+def _scalar_summary(text: str) -> str:
+    """One scalar, shortened from the middle so that both of its ends survive.
+
+    Length alone cannot tell a target from prose. A deeply nested workspace path
+    and a long generated id are as long as a paragraph and are the opposite kind
+    of thing: they say *what the call acts on*, and an approver who is handed a
+    character count instead cannot tell which file is about to be overwritten.
+    Naming every long value by its size hid exactly those.
+
+    Cutting from the middle keeps what identifies a value at both ends -- the
+    root and the filename of a path, the prefix and the suffix of an id -- and
+    bounds prose to a fixed window that cannot push the other arguments off the
+    line. The count is kept beside it, because how much material a call carries
+    is itself worth knowing, and because that is the part an elision hides.
+
+    The trade is deliberate and worth naming: a few dozen characters of a brief
+    now reach the prompt where none did a revision ago. That is a fingerprint
+    rather than the brief, it cannot crowd out the fields that decide the call,
+    and it buys back every long identifier -- including the ones with spaces in
+    them, which no shape test would have classified correctly.
+    """
+    if len(text) <= _INLINE_ARG_LIMIT:
+        return repr(text)
+    keep = _ELIDED_WIDTH // 2
+    elided = f"{text[:keep]}...{text[-keep:]}"
+    return f"{elided!r} ({len(text)} chars)"
+
+
+def _argument_summary(value: Any, budget: int) -> str:
+    """One argument, as short as it can be without hiding what it targets.
+
+    Two different things get shortened here and they need opposite treatment.
+    Prose -- a brief, a file body, a message -- is the material the call carries,
+    and pasting it into the question pushes out everything the reader needs, so a
+    long string is named by its size. A container is not prose: a list of paths,
+    a graph's nodes and the agents they name are what the call will *act on*, and
+    an approver who cannot see them cannot approve. So containers are opened
+    rather than counted, as far as the budget allows, and whatever did not fit is
+    counted beside what did -- a partial list plus a remainder still says what
+    kind of thing this call touches, where a bare count says nothing at all.
+
+    That the leaves stay short is what makes opening a container safe: a node
+    carrying an 800-character prompt renders as its id, its agent and a named
+    size, not as the prompt.
+    """
+    if isinstance(value, str):
+        return _scalar_summary(value)
+    if isinstance(value, (list, tuple)):
+        return _container_summary([_argument_summary(item, budget) for item in value], budget, "[", "]", "items")
+    if isinstance(value, dict):
+        pieces = [f"{k}={_argument_summary(v, budget)}" for k, v in value.items()]
+        return _container_summary(pieces, budget, "{", "}", "keys")
+    text = str(value)
+    # A number or a flag is its own spelling; only text is quoted, so a reader
+    # can tell `append=False` from a string that happens to read "False".
+    return text if len(text) <= _INLINE_ARG_LIMIT else _scalar_summary(text)
+
+
+def _container_summary(pieces: list[str], budget: int, open_: str, close: str, noun: str) -> str:
+    """As many rendered members as the budget holds, and a count of the rest."""
+    if not pieces:
+        return f"{open_}{close}"
+    shown: list[str] = []
+    room = budget - 2
+    for piece in pieces:
+        if room - len(piece) - 2 < 0:
+            break
+        shown.append(piece)
+        room -= len(piece) + 2
+    hidden = len(pieces) - len(shown)
+    if not shown:
+        # Nothing fit whole, so the first member is cut to what is left rather
+        # than the whole container being replaced by its size. A count alone is
+        # the one answer that tells an approver nothing about what is touched,
+        # and a container is reached only when something is.
+        head = pieces[0]
+        shown = [head if len(head) <= budget else head[: max(budget - 3, 8)] + "..."]
+        hidden = len(pieces) - 1
+    body = ", ".join(shown)
+    if hidden:
+        body += f", +{hidden} more"
+    return f"{open_}{body}{close}"
+
+
 def action_line(tool_name: str, params: dict[str, Any]) -> str:
-    """The action as a human should read it in an approval prompt."""
+    """The action as a human should read it in an approval prompt.
+
+    A summary, not the payload. This used to serialise the arguments and cut the
+    JSON at a fixed width, which read as a log line rather than a question: for a
+    tool whose brief is one of its arguments -- a sub-agent dispatch is the plain
+    case -- the prompt asking whether to allow the call was mostly the prompt
+    being sent, truncated mid-sentence, and the fields that actually decide it
+    were past the cut.
+
+    ``exec`` keeps its own rendering, which was always this: the command is the
+    action, and there is nothing to summarise.
+    """
     if tool_name == "exec" and isinstance(params.get("command"), str):
         if machine := _exec_machine(params):
             return f"{params['command']} (on {machine})"
         return params["command"]
-    compact = json.dumps(params, sort_keys=True, ensure_ascii=False, default=str)
-    if len(compact) > 200:
-        compact = compact[:200] + "..."
-    return f"{tool_name} {compact}"
+    shown: list[str] = []
+    room = _ACTION_LINE_LIMIT - len(tool_name)
+    for key in sorted(params):
+        # The budget handed down is what is left *after* this argument's name,
+        # so a value rendered to fit actually fits. Getting that wrong drops the
+        # whole argument rather than shortening it, which is the one outcome
+        # worse than a bare count: a delete whose paths did not fit would say
+        # nothing about what it deletes.
+        piece = f"{key}={_argument_summary(params[key], max(room - len(key) - 1, _INLINE_ARG_LIMIT))}"
+        if shown and room - len(piece) - 1 < 0:
+            break
+        shown.append(piece)
+        room -= len(piece) + 1
+    hidden = len(params) - len(shown)
+    if hidden > 0:
+        shown.append(f"(+{hidden} more)")
+    return " ".join([tool_name, *shown]) if shown else tool_name
 
 
 class BuiltinRulings:

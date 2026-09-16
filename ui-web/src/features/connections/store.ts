@@ -1,4 +1,4 @@
-import { ds, shell } from '../../shell/bridge'
+import { ds, shell, t } from '../../shell/bridge'
 import { show as toast } from '../../shell/toast'
 
 import type { ConnChannel, ConnSource } from './types'
@@ -47,7 +47,7 @@ export async function refresh(initial = false): Promise<void> {
     const rows = await source().rows(initial)
     set({ rows, loaded: true, host: source().hostRunning?.() })
   } catch (e) {
-    toast(`加载失败：${(e as Error).message || e}`)
+    toast(t('gui.op.load_failed', { detail: String((e as Error).message || e) }))
     set({ loaded: true })
   }
 }

@@ -5127,7 +5127,9 @@
           "name": "name",
           "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it."
           }
         }
       ],
@@ -5160,7 +5162,9 @@
           "name": "name",
           "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it."
           }
         }
       ],
@@ -5203,7 +5207,9 @@
           "name": "name",
           "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it."
           }
         },
         {
@@ -5241,7 +5247,9 @@
           "name": "name",
           "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it."
           }
         },
         {
@@ -5272,7 +5280,9 @@
           "name": "name",
           "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it."
           }
         },
         {
@@ -5328,7 +5338,9 @@
           "name": "name",
           "required": true,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it."
           }
         },
         {
@@ -5350,6 +5362,330 @@
           "$ref": "#/components/schemas/OkResult"
         }
       }
+    },
+    {
+      "name": "playbooks.set_enabled",
+      "summary": "Take one playbook off the deny list or put it on it. `enabled` is the state wanted, not a toggle, so two clients asking at once agree. Disabling removes it from what the model is offered and nothing else; it stays runnable by name from the CLI. Answers with the state in force and whether this call changed it.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it."
+          }
+        },
+        {
+          "name": "enabled",
+          "required": true,
+          "schema": {
+            "type": "boolean",
+            "description": "The state wanted. true takes the name off the deny list, false puts it on."
+          }
+        }
+      ],
+      "result": {
+        "name": "PlaybooksSetEnabledResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "enabled",
+            "changed"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean",
+              "description": "The state now in force."
+            },
+            "changed": {
+              "type": "boolean",
+              "description": "False when it was already in that state, so a caller can tell 'you did that' from 'it was already so'."
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
+    },
+    {
+      "name": "playbooks.validate",
+      "summary": "Check one playbook without running it: the spec's shape, then the field rules, then its steps against this machine's agent table. Answers findings rather than raising, because a playbook that does not validate is the ordinary reason to call this.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it."
+          }
+        }
+      ],
+      "result": {
+        "name": "PlaybooksValidateResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "ok",
+            "errors",
+            "path"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "ok": {
+              "type": "boolean",
+              "description": "True when errors is empty."
+            },
+            "errors": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Every finding, in the order the validator reports them. Empty when the playbook is sound."
+            },
+            "path": {
+              "type": "string",
+              "description": "The file the findings refer to."
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
+    },
+    {
+      "name": "playbooks.delete",
+      "summary": "Remove a user playbook's directory. Refused for a builtin, which ships with the package and would return on the next install -- disable those instead. The name comes off the deny list as it goes, so a later playbook reusing it starts enabled.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it."
+          }
+        }
+      ],
+      "result": {
+        "name": "PlaybooksDeleteResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "deleted",
+            "uncovered_builtin"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "deleted": {
+              "type": "boolean"
+            },
+            "uncovered_builtin": {
+              "type": "boolean",
+              "description": "True when a user playbook was shadowing a builtin of the same name, so the name is still in the library and now resolves to the builtin."
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
+    },
+    {
+      "name": "playbooks.run",
+      "summary": "Run one playbook, through the same entry the model's tool and `raven playbook run` use. A `dag` playbook dispatches in the background and the reply is the receipt carrying the run id; a `prompt` one answers composition guidance. `gaps` means nothing was dispatched and the reply names what is still needed. The call can block while the graph-level `confirm` gate puts the run to the conversation named by `session_key`, and a conversation still busy at that deadline is a \"not now\" -- the graph does not run unseen.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "A library name. Kebab-case: the name is joined to the library root to resolve a directory, so anything else could name a path outside it."
+          }
+        },
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "The conversation this run reports to, as its own `channel:chat_id`. Required because a run's progress and completion announce are addressed to a conversation, and an RPC call is an origin nothing else sets one for."
+          }
+        },
+        {
+          "name": "params",
+          "required": false,
+          "schema": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "Values for the playbook's declared `params`. A parameter this machine holds as a stored secret is filled from there and must not be sent."
+          }
+        },
+        {
+          "name": "fills",
+          "required": false,
+          "schema": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "Node fields the author left blank, keyed by the node id written in the file. Only `subagent`, `nodeSummary` and `promptTemplate` may be filled; aimed at a field the author already wrote, the whole call is refused."
+          }
+        },
+        {
+          "name": "confirmed",
+          "required": false,
+          "schema": {
+            "type": "boolean",
+            "description": "The caller's statement that it already put this run to the user, so the graph-level gate does not ask a second time. Send it only when a person actually saw the run and agreed."
+          }
+        }
+      ],
+      "result": {
+        "name": "PlaybooksRunResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "kind",
+            "reply"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "dag",
+                "guidance",
+                "gaps",
+                "questions"
+              ],
+              "description": "`dag`: dispatched, `reply` is the receipt. `guidance`: prompt-mode composition instructions. `gaps`: nothing was dispatched and `reply` names what is missing. `questions`: it cannot proceed and `reply` says why."
+            },
+            "reply": {
+              "type": "string",
+              "description": "The executor's own answer, verbatim. For a dispatched graph this is the receipt the run id is read out of."
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
+    },
+    {
+      "name": "playbooks.create",
+      "summary": "Generate a playbook from a description of the work and store it in the user layer. Takes a description, never a spec: generation, validation and repair stay inside the composer, which is what keeps a caller from writing an arbitrary graph into the library. A name that is not kebab-case, or one the library already holds, is refused before a generation is spent. A generation that fails answers `created: false` with the composer's reasons in `errors`, because those are a list and an error code carries one string.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "Short kebab-case name; becomes the library directory name. Must not already exist in either layer."
+          }
+        },
+        {
+          "name": "workflow",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "The whole procedure in plain language: steps in order, what each produces and consumes, per-run parameters, trigger phrases, and any MCP server a step needs. The generator sees only this text."
+          }
+        },
+        {
+          "name": "skills",
+          "required": false,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Skill names to pin to specific steps, when the caller named some."
+          }
+        }
+      ],
+      "result": {
+        "name": "PlaybooksCreateResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "created",
+            "path",
+            "notes",
+            "errors",
+            "adopted"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "created": {
+              "type": "boolean",
+              "description": "Whether a playbook now exists. False only when the generation failed, in which case `errors` says why."
+            },
+            "path": {
+              "type": "string",
+              "description": "Where the file landed; empty when nothing was created."
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The composer's own open questions -- assumptions it made and gaps it could not close. Written into the file's prose for review and returned here so a client need not read the file back."
+            },
+            "errors": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Why the composer could not produce a valid playbook. Non-empty exactly when `created` is false."
+            },
+            "adopted": {
+              "type": "boolean",
+              "description": "Whether the live library loaded the new file, so it is usable in this process without a restart."
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
     },
     {
       "name": "approval.respond",
@@ -6698,6 +7034,12 @@
             },
             "model": {
               "type": "string"
+            },
+            "extensions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           },
           "required": [
@@ -6748,6 +7090,13 @@
           "schema": {
             "type": "string"
           }
+        },
+        {
+          "name": "embedding",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
         }
       ],
       "result": {
@@ -6794,6 +7143,76 @@
       ],
       "result": {
         "name": "KnowledgeBasesRenameResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "base": {
+              "$ref": "#/components/schemas/KnowledgeBase"
+            }
+          },
+          "required": [
+            "base"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "knowledge.bases.settings",
+      "summary": "Write one base's settings. Fields left out are untouched.",
+      "params": [
+        {
+          "name": "base_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "top_k",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "smart_chunking",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "separator",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "chunk_size",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "chunk_overlap",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "file_processing",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeBasesSettingsResult",
         "schema": {
           "additionalProperties": false,
           "properties": {
@@ -6904,6 +7323,125 @@
       }
     },
     {
+      "name": "knowledge.documents.add_note",
+      "summary": "Take a typed note into a base as markdown; indexing is a separate call.",
+      "params": [
+        {
+          "name": "base_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "title",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "text",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeDocumentsAddNoteResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "document": {
+              "$ref": "#/components/schemas/KnowledgeDocument"
+            }
+          },
+          "required": [
+            "document"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "knowledge.documents.update_note",
+      "summary": "Rewrite one note and queue it for indexing again. Notes only.",
+      "params": [
+        {
+          "name": "document_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "title",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "text",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeDocumentsUpdateNoteResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "document": {
+              "$ref": "#/components/schemas/KnowledgeDocument"
+            }
+          },
+          "required": [
+            "document"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "knowledge.documents.add_url",
+      "summary": "Read one web page and take it into a base as markdown.",
+      "params": [
+        {
+          "name": "base_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "url",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeDocumentsAddUrlResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "document": {
+              "$ref": "#/components/schemas/KnowledgeDocument"
+            }
+          },
+          "required": [
+            "document"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
       "name": "knowledge.documents.index",
       "summary": "Embed one document's chunks and answer where that got to.",
       "params": [
@@ -6999,6 +7537,12 @@
                 "$ref": "#/components/schemas/KnowledgeHit"
               },
               "type": "array"
+            },
+            "search_ms": {
+              "type": "number"
+            },
+            "embed_ms": {
+              "type": "number"
             }
           },
           "required": [
@@ -9158,6 +9702,28 @@
           "needs_api_base": {
             "type": "boolean"
           },
+          "platforms": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "api_base": {
+                  "type": "string"
+                },
+                "signup_url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "api_base",
+                "label",
+                "signup_url"
+              ]
+            }
+          },
           "warning": {
             "type": "string"
           },
@@ -9361,6 +9927,10 @@
           "runTitle": {
             "type": "string",
             "description": "What the graph this instance belongs to was dispatched for. Absent, not empty, for an instance that came from no orchestration, so its presence is what says the row has a source."
+          },
+          "turnStartedAtMs": {
+            "type": "integer",
+            "description": "When the turn this instance is answering right now began. Absent when it is answering none, so presence is what says the instance is working and the number is what says for how long. Not updatedAtMs, which every registry write stamps: a binding commit and a graph-origin write move it too, so it dates the row and not the turn."
           }
         }
       },
@@ -11014,6 +11584,24 @@
           },
           "documents": {
             "type": "integer"
+          },
+          "top_k": {
+            "type": "integer"
+          },
+          "smart_chunking": {
+            "type": "boolean"
+          },
+          "separator": {
+            "type": "string"
+          },
+          "chunk_size": {
+            "type": "integer"
+          },
+          "chunk_overlap": {
+            "type": "integer"
+          },
+          "file_processing": {
+            "type": "string"
           }
         },
         "required": [
@@ -11060,6 +11648,12 @@
           },
           "updated_at": {
             "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "origin_ref": {
+            "type": "string"
           }
         },
         "required": [
@@ -11087,6 +11681,15 @@
             "type": "string"
           },
           "text": {
+            "type": "string"
+          },
+          "chunk_index": {
+            "type": "integer"
+          },
+          "total_chunks": {
+            "type": "integer"
+          },
+          "source": {
             "type": "string"
           }
         },

@@ -7,8 +7,14 @@ declaration.
 from __future__ import annotations
 
 import contextlib
+import fnmatch
+import functools
 import os
+import shutil
+import tempfile
+import time
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -21,6 +27,247 @@ import pytest
 # miss, and they failed on numbers nobody in this repo had touched.
 # `setdefault`, so a developer can still point a run at the live table.
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+# matplotlib builds its font list into its config dir the first time a process
+# typesets anything: every system font is opened, and on macOS the list comes
+# from a `system_profiler` call -- 8 to 12 s. The dir defaults to a path under
+# HOME, and `_no_real_raven_home` hands every test a fresh HOME, so the list was
+# rebuilt on every run and thrown away with the temp dir. A git-ignored dir in
+# the checkout keeps it warm across runs; `setdefault` respects a developer's own.
+_MPL_CACHE = Path(__file__).resolve().parent.parent / ".pytest_cache" / "matplotlib"
+if os.environ.setdefault("MPLCONFIGDIR", str(_MPL_CACHE)) == str(_MPL_CACHE):
+    _MPL_CACHE.mkdir(parents=True, exist_ok=True)
+
+
+_IDLE_EXEMPT_MARKERS = ("slow", "production_timing")
+_IDLE_CEILING_S = 0.0
+_IDLE_PROPERTY = "raven_idle_s"
+_WALL_PROPERTY = "raven_wall_s"
+_CLOCKS = pytest.StashKey[tuple[float, float]]()
+_idle_hits: list[tuple[float, float, str]] = []
+
+
+#: Three seconds rather than two, which is where this started. Measured across
+#: the suite: the honest waits cluster at one second (a test that sets a one
+#: second timeout and lets it expire), the highest unmarked one is 1.6 s, and
+#: nothing sits between that and the marked renders. A runner stretches those
+#: to about 2.2 s, so a two second line failed shards over tests that were
+#: waiting the second they meant to. Every production ladder this guards
+#: against is longer than three: the shortest constant the audit found was a
+#: three second grace, and the rest run 5, 15, 30 and 60.
+_DEFAULT_IDLE_CEILING_S = 3.0
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    group = parser.getgroup("raven")
+    group.addoption(
+        "--idle-ceiling",
+        type=float,
+        default=_DEFAULT_IDLE_CEILING_S,
+        help="seconds an unmarked test may spend waiting (wall clock minus CPU) before it is reported; 0 disables",
+    )
+    group.addoption(
+        "--idle-ceiling-strict",
+        action="store_true",
+        help="fail an otherwise green session when any unmarked test is over the idle ceiling",
+    )
+    group.addoption(
+        "--shard",
+        default=None,
+        metavar="K/N",
+        help="collect only the K-th of N slices of the test files (1-based); files are dealt round-robin in sorted order",
+    )
+
+
+_SHARD: tuple[int, int] | None = None
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    global _IDLE_CEILING_S, _SHARD
+    _IDLE_CEILING_S = float(config.getoption("--idle-ceiling"))
+    _idle_hits.clear()
+    _SHARD = None
+    spec = config.getoption("--shard")
+    if spec is not None:
+        try:
+            k, n = (int(part) for part in spec.split("/"))
+        except ValueError:
+            raise pytest.UsageError(f"--shard wants K/N, got {spec!r}") from None
+        if not 1 <= k <= n:
+            raise pytest.UsageError(f"--shard {spec}: K must be between 1 and N")
+        _SHARD = (k, n)
+    if config.getoption("--idle-ceiling-strict"):
+        _warm_the_heaviest_import()
+
+
+def _warm_the_heaviest_import() -> None:
+    """Pay litellm's import here rather than inside whichever test is first.
+
+    Opening its few thousand files costs about 1.7 s that no CPU accounts for,
+    so it lands as idle on one test, and which test that is depends on the
+    order the shard collected. A gate cannot be held to a moving target. Most
+    runs import it during collection anyway, from the twenty test modules that
+    name a provider at module level, and this is then a no-op.
+    """
+    # Under a temporary home for the length of the call. This runs before the
+    # autouse fixtures that redirect the home, and the import publishes the
+    # OAuth token directories, which creates them: warming it as-is put an
+    # `oauth` directory in the developer's own ~/.raven.
+    home = tempfile.mkdtemp(prefix="raven-warmup-")
+    pinned = {
+        "RAVEN_HOME": home,
+        "GITHUB_COPILOT_TOKEN_DIR": os.path.join(home, "oauth", "github_copilot"),
+        "CHATGPT_TOKEN_DIR": os.path.join(home, "oauth", "chatgpt"),
+    }
+    previous = {name: os.environ.get(name) for name in pinned}
+    os.environ.update(pinned)
+    try:
+        from raven.providers.litellm_setup import import_litellm
+
+        import_litellm()
+    except Exception as exc:  # noqa: BLE001 -- a missing extra is not this hook's business
+        print(f"idle ceiling: litellm did not warm up ({exc}); a first import may be charged to a test")
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def _no_recurse(pattern: str, directory: Path) -> bool:
+    """pytest's norecursedirs rule: a pattern with a slash matches the whole path."""
+    if "/" in pattern:
+        return fnmatch.fnmatch(str(directory), f"*/{pattern}")
+    return fnmatch.fnmatch(directory.name, pattern)
+
+
+@functools.cache
+def _test_file_index(
+    tests_root: Path, python_files: tuple[str, ...], norecursedirs: tuple[str, ...]
+) -> dict[Path, int]:
+    """Every test file pytest would collect under ``tests_root``, sorted.
+
+    Built from the ini values pytest itself collects by, so the index and the
+    collection agree: a file in a directory pytest never enters has no index,
+    and a file pytest would collect always has one. A collected file that had
+    no index would be run by every shard.
+    """
+    files = {
+        path
+        for pattern in python_files
+        for path in tests_root.rglob(pattern)
+        if "__pycache__" not in path.parts
+        and not any(
+            _no_recurse(rule, tests_root / parent)
+            for parent in path.relative_to(tests_root).parents
+            for rule in norecursedirs
+        )
+    }
+    return {path: index for index, path in enumerate(sorted(files))}
+
+
+def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool | None:
+    """Under ``--shard K/N``, leave the test files of the other shards alone.
+
+    Decided here, before the file is imported, so a shard pays collection for
+    its own modules only: importing all of them is two minutes of a CI runner.
+    Round-robin over the sorted list, so a slow family whose files sort together
+    (the ppt engine's) is spread over the shards rather than handed to one.
+    Answers True or None, never False: the hook is firstresult, and False would
+    stop pytest's own implementation, which is where --ignore and collect_ignore
+    are honoured.
+    """
+    if _SHARD is None or collection_path.suffix != ".py":
+        return None
+    python_files = tuple(config.getini("python_files"))
+    if not any(fnmatch.fnmatch(collection_path.name, pattern) for pattern in python_files):
+        return None
+    index = _test_file_index(config.rootpath / "tests", python_files, tuple(config.getini("norecursedirs"))).get(
+        collection_path
+    )
+    if index is None:
+        return None
+    k, n = _SHARD
+    return True if index % n != k - 1 else None
+
+
+def _clocks() -> tuple[float, float]:
+    """The wall clock, and every CPU second spent on this process's behalf.
+
+    ``os.times`` counts the CPU of children this process has reaped as well as
+    its own, and POSIX makes that recursive, so a subprocess doing real work --
+    a LibreOffice conversion, a browser, eight spawned workers -- lands on the
+    account of the test that waited for it.
+    """
+    spent = os.times()
+    return time.perf_counter(), spent.user + spent.system + spent.children_user + spent.children_system
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):
+    item.stash[_CLOCKS] = _clocks()
+    yield
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
+    """Write the test's idle time onto its teardown report.
+
+    Idle is the wall clock of setup, call and teardown minus the CPU anyone
+    spent on the test in that window. It is what the ceiling judges, rather
+    than wall clock, because the class it guards against is a test waiting:
+    on a production backoff, on a timeout it arranged, on a process that
+    answers nothing. A wait costs the same seconds on every machine, where
+    work costs two seconds on a laptop and seven on a CI runner and is not the
+    problem. The report carries the number so the xdist controller, which sees
+    only reports, can judge it.
+    """
+    outcome = yield
+    if call.when != "teardown":
+        return
+    started = item.stash.get(_CLOCKS, None)
+    if started is None:
+        return
+    now = _clocks()
+    wall = now[0] - started[0]
+    idle = wall - (now[1] - started[1])
+    report = outcome.get_result()
+    report.user_properties.append((_IDLE_PROPERTY, idle))
+    report.user_properties.append((_WALL_PROPERTY, wall))
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """Hold every unmarked test to the idle ceiling.
+
+    The suite's slow tail was production backoff waited out by tests with error
+    stubs, and nothing failed when one more was added. A test that waits for a
+    reason it can name carries ``slow`` or ``production_timing``.
+    """
+    if _IDLE_CEILING_S <= 0 or report.when != "teardown":
+        return
+    clocks = dict(report.user_properties)
+    idle = clocks.get(_IDLE_PROPERTY)
+    if idle is None or idle <= _IDLE_CEILING_S:
+        return
+    if any(marker in report.keywords for marker in _IDLE_EXEMPT_MARKERS):
+        return
+    _idle_hits.append((float(idle), float(clocks[_WALL_PROPERTY]), report.nodeid))
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus: int, config: pytest.Config) -> None:
+    if not _idle_hits:
+        return
+    strict = config.getoption("--idle-ceiling-strict")
+    verdict = "failing the session" if strict else "warning only; --idle-ceiling-strict fails it"
+    terminalreporter.write_sep(
+        "=",
+        f"{len(_idle_hits)} unmarked test(s) waited more than {_IDLE_CEILING_S:g}s (wall clock minus CPU) ({verdict})",
+    )
+    for idle, wall, nodeid in sorted(_idle_hits, reverse=True)[:50]:
+        terminalreporter.write_line(f"{idle:7.2f}s idle of {wall:6.2f}s  {nodeid}")
+    terminalreporter.write_line("mark it slow or production_timing with the reason, or take the wait out of the test")
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
@@ -46,7 +293,19 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    """Stash the real exit status so pytest_unconfigure can preserve it."""
+    """Stash the real exit status so pytest_unconfigure can preserve it.
+
+    The idle verdict is applied here, on the controller only: an xdist
+    worker's exit status is not the run's, and the hits it saw were forwarded.
+    """
+    if (
+        _idle_hits
+        and exitstatus == 0
+        and session.config.getoption("--idle-ceiling-strict")
+        and not hasattr(session.config, "workerinput")
+    ):
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+        exitstatus = int(session.exitstatus)
     session.config._raven_exitstatus = int(exitstatus)  # type: ignore[attr-defined]
 
 
@@ -164,7 +423,7 @@ def _restore_loguru_enabled_state():
 
 
 @pytest.fixture(autouse=True)
-def _no_real_raven_home(tmp_path_factory, monkeypatch):
+def _no_real_raven_home(tmp_path, monkeypatch):
     """Keep the suite out of the config file of whoever is running it.
 
     ``get_config_path()`` answers ``RAVEN_HOME/config.json``, and anything reading
@@ -192,8 +451,12 @@ def _no_real_raven_home(tmp_path_factory, monkeypatch):
     # Outside ``tmp_path`` rather than under it, and fresh per test. Tests use
     # ``tmp_path`` as a workspace root and enumerate it, so a directory this
     # fixture leaves in there shows up in their assertions; and a session-shared
-    # home would let one test read the config another one wrote.
-    home = tmp_path_factory.mktemp("default_home")
+    # home would let one test read the config another one wrote. A sibling of
+    # ``tmp_path`` rather than a second numbered directory: pytest picks the next
+    # number by scanning the whole base temp dir, and with 22k tests that scan
+    # cost 44 s per worker for the numbered dirs this fixture alone created.
+    home = tmp_path.with_name(f"{tmp_path.name}-home")
+    home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     # The suite's baseline permission mode is full access -- the behaviour the
     # whole suite was written against before the gate existed, and what a test
@@ -212,6 +475,47 @@ def _no_real_raven_home(tmp_path_factory, monkeypatch):
     monkeypatch.delenv("RAVEN_HOME", raising=False)
     monkeypatch.setattr("raven.home._current_config_path", None)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_production_waits(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Collapse the production retry and grace ladders to a millisecond for the suite.
+
+    A stub that answers every call with an error drives the code under test
+    into its backoff, and the backoff is tuned for a real outage: the loop's
+    LLM-error ladder is 105 s, the provider's 7 s per model, a memory store
+    retries for 52 s, a subagent steer waits 3 s for a hook, an ACP cancel is
+    given 5 s to settle, the gateway holds delivery 2 s at teardown. One
+    checkpoint test slept 133 s that way and proved nothing by it.
+
+    The lengths stay. ``len(ladder)`` is how both retry ladders count their
+    attempts, so an empty tuple would change behaviour rather than speed; the
+    seconds collapse to a millisecond. Not to zero: the store pipeline waits
+    its backoff out with ``wait_for(stopping.wait(), timeout=delay)``, and a
+    zero timeout cancels that wait before it runs, so the stop it listens for
+    could never be heard. The steer grace keeps one poll's worth so the loop
+    body it guards stays exercised. A test that proves a timing property, or
+    asserts a default's value, opts out with ``@pytest.mark.production_timing``
+    and sets what it needs itself.
+    """
+    if request.node.get_closest_marker("production_timing"):
+        return
+    from raven.acp_client import client as acp_client
+    from raven.agent.subagent import manager
+    from raven.config import schema
+    from raven.gateway import spine
+    from raven.memory_engine import store_pipeline
+    from raven.providers.base import LLMProvider
+
+    def shortened(delays):
+        return tuple(0.001 for _ in delays)
+
+    monkeypatch.setattr(LLMProvider, "_CHAT_RETRY_DELAYS", shortened(LLMProvider._CHAT_RETRY_DELAYS))
+    monkeypatch.setattr(schema, "LLM_ERROR_RETRY_DELAYS_DEFAULT", shortened(schema.LLM_ERROR_RETRY_DELAYS_DEFAULT))
+    monkeypatch.setattr(store_pipeline, "BACKOFF_S", shortened(store_pipeline.BACKOFF_S))
+    monkeypatch.setattr(manager, "_STEER_HOOK_GRACE_S", 0.05)
+    monkeypatch.setattr(acp_client, "_CANCEL_SETTLE_S", 0.05)
+    monkeypatch.setattr(spine, "_DELIVERY_GRACE", 0.05)
 
 
 @pytest.fixture(autouse=True)
@@ -304,6 +608,109 @@ def _no_openrouter_network(tmp_path):
         rates._fetch_openrouter_models = original_fetch
         model_catalog_cache._CACHE_PATH = original_path
         rates.reset_openrouter_cache()
+
+
+@pytest.fixture(autouse=True)
+def _no_provider_probe(monkeypatch):
+    """Keep the credential probe's socket off the network, and only the socket.
+
+    `model.options` asks every configured provider for `/v1/models` to learn
+    what it serves, and a test that writes an address gets a real connection
+    attempt to it. On a developer's machine an unroutable address is refused in
+    milliseconds; on a CI runner the packets go nowhere and it waits out the
+    two-second timeout instead -- twice per call of the picker, which is how
+    `[ovms]`, whose address is `10.0.0.5:8080`, came to wait nearly four
+    seconds for something it was never going to reach.
+
+    Fenced at `_probe_models_endpoint`, the one place every HTTP probe opens its
+    client, rather than at `test_provider`: the vocabulary a caller reads back
+    -- `unknown_provider`, `not_configured`, `no_probe_endpoint` -- is decided
+    above this line, and a test asking which of those a section earns is asking
+    about that code, not about the network. A probe that hands in its own
+    `transport` is mounting a fake server on purpose, and that is the injection
+    point the function documents, so those go through untouched.
+    """
+    from raven.config import update_providers
+
+    real = update_providers._probe_models_endpoint
+
+    def unreachable(url, headers, *, timeout_s, transport=None, extras=()):
+        if transport is not None:
+            return real(url, headers, timeout_s=timeout_s, transport=transport, extras=extras)
+        return {
+            "ok": False,
+            "status": "network_error",
+            "elapsed_ms": 0,
+            "http_status": None,
+            "models_count": None,
+            "model_ids": None,
+            "error": "no probe in tests",
+        }
+
+    monkeypatch.setattr(update_providers, "_probe_models_endpoint", unreachable)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _no_huggingface_lookup(monkeypatch):
+    """Keep LiteLLM's context-window lookup off huggingface.co.
+
+    `rates._try_litellm_context_window` asks `litellm.get_model_info`, and for a
+    model whose row carries no window LiteLLM fetches
+    `huggingface.co/<model>/raw/main/config.json` to read `max_position_embeddings`.
+    It is one request per process, cached afterwards, which is why it lands on
+    whichever test in a worker happens to ask first -- a different name on every
+    run, each charged one to four seconds of waiting it did not cause.
+
+    The sibling above keeps raven's own catalogue fetch off the wire for the same
+    reason; this one was missed because the request is made inside LiteLLM rather
+    than here. `None` is the answer that function already gives when the fetch
+    fails, so nothing downstream sees a shape it does not handle.
+    """
+    from litellm import utils as litellm_utils
+
+    monkeypatch.setattr(litellm_utils, "_get_max_position_embeddings", lambda model_name: None)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _no_ollama_model_info(monkeypatch):
+    """Keep the same lookup off the local Ollama daemon.
+
+    The third branch of `litellm.get_model_info` that leaves the process, and
+    the last one the picker reaches. A model the catalogue does not carry and
+    whose provider is `ollama` is not answered from the table at all: LiteLLM
+    POSTs `{api_base}/api/show` to ask the daemon itself, defaulting to
+    `localhost:11434`. Opening the model picker asks once per model, so a single
+    `model.options` makes a handful of them and a test module full of picker
+    tests makes a hundred.
+
+    Nothing listens on that port under test, and a refused connection is
+    cheap -- on a developer's machine. A CI runner with no IPv6 route spends
+    tens of milliseconds per attempt on the `::1` address `localhost` also
+    resolves to, and a hundred of those is the 3.5s of idle that failed shard
+    1/4. LiteLLM already catches the failure and answers with a zeroed row, so
+    that is what this hands back, minus the wait.
+    """
+    from litellm.llms.ollama.completion.transformation import OllamaConfig
+    from litellm.types.utils import ModelInfoBase
+
+    def unreachable(self, model: str, api_base: str | None = None) -> ModelInfoBase:
+        if model.startswith(("ollama/", "ollama_chat/")):
+            model = model.split("/", 1)[1]
+        return ModelInfoBase(
+            key=model,
+            litellm_provider="ollama",
+            mode="chat",
+            input_cost_per_token=0.0,
+            output_cost_per_token=0.0,
+            max_tokens=None,
+            max_input_tokens=None,
+            max_output_tokens=None,
+        )
+
+    monkeypatch.setattr(OllamaConfig, "get_model_info", unreachable)
+    yield
 
 
 @pytest.fixture(autouse=True)

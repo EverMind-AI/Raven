@@ -61,8 +61,8 @@ describe('the model capability badge', () => {
         'video-generation',
         'embedding',
         'rerank',
-        'computer-use',
-      ],
+        'computer-use'
+      ]
     })
 
     expect([...badge]).toHaveLength(13)
@@ -85,7 +85,7 @@ describe('the badge legend', () => {
     const legend = tagLegend([
       { capabilities: ['reasoning', 'function-call'] },
       { capabilities: ['function-call'] },
-      undefined,
+      undefined
     ])
 
     expect(legend).toBe('✦ reasoning  ƒ tools')

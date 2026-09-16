@@ -256,3 +256,20 @@ def test_extension_keys_with_unknown_field_rejected(stub_config_path: Path) -> N
     )
     with pytest.raises(ValidationError, match="totally_made_up_field"):
         ec_module.load_raven_config()
+
+
+def test_translate_and_knowledge_blocks_roundtrip(stub_config_path: Path) -> None:
+    _write_config(
+        stub_config_path,
+        {
+            "translate": {"model": "openai/gpt-5-mini", "provider": "openai"},
+            "knowledge": {"embeddingModel": "openai/text-embedding-3-small", "embeddingProvider": "openai"},
+        },
+    )
+
+    cfg = ec_module.load_raven_config()
+
+    assert cfg.translate.model == "openai/gpt-5-mini"
+    assert cfg.translate.provider == "openai"
+    assert cfg.knowledge.embedding_model == "openai/text-embedding-3-small"
+    assert cfg.knowledge.embedding_provider == "openai"

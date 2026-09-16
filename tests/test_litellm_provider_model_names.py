@@ -39,6 +39,37 @@ BARE_MODEL = {
     "lm_studio": "qwen3-8b",
     "ollama_chat": "llama3.2",
     "groq": "openai/gpt-oss-120b",
+    "xai": "grok-4.6",
+    "mistral": "mistral-large-latest",
+    "together_ai": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    "fireworks_ai": "accounts/fireworks/models/kimi-k2-instruct",
+    "perplexity": "sonar-pro",
+    "cerebras": "gpt-oss-120b",
+    "huggingface": "deepseek-ai/DeepSeek-V4-Pro",
+    "poe": "anthropic/claude-opus-4.8",
+    "xiaomi_mimo": "mimo-v2.5",
+    "baichuan": "Baichuan4-Turbo",
+    "baidu_cloud": "ernie-5.1",
+    "stepfun": "step-3.7-flash",
+    "longcat": "longcat-2.0",
+    "modelscope": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "qiniu": "deepseek-v3",
+    "ai302": "gpt-5.5",
+    "dmxapi": "claude-opus-4.8",
+    "burncloud": "gpt-5.5",
+    "ocoolai": "gpt-5.5",
+    "ppio": "deepseek/deepseek-v3",
+    "lanyun": "deepseek-v3",
+    "alayanew": "deepseek-v3",
+    "sophnet": "DeepSeek-V3",
+    "tokenhub": "deepseek-v3",
+    "xirang": "deepseek-v3",
+    "ph8": "gpt-5.5",
+    "aionly": "gpt-5.5",
+    "radeon_cloud": "deepseek-v3",
+    "gpustack": "qwen3-8b",
+    "ovms": "qwen3-8b",
+    "bigmodel": "glm-4.6",
 }
 
 # What `<section>/<bare>` must resolve to. The head is LiteLLM's route; whatever
@@ -70,6 +101,52 @@ QUALIFIED_RESOLUTION = {
     "lm_studio": "lm_studio/qwen3-8b",
     "ollama_chat": "ollama_chat/llama3.2",
     "groq": "groq/openai/gpt-oss-120b",
+    "xai": "xai/grok-4.6",
+    "mistral": "mistral/mistral-large-latest",
+    # LiteLLM routes these two on the underscored name, which is not the
+    # hyphenated spelling a picker offers -- both reach the same section.
+    "together_ai": "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    "fireworks_ai": "fireworks_ai/accounts/fireworks/models/kimi-k2-instruct",
+    "perplexity": "perplexity/sonar-pro",
+    "cerebras": "cerebras/gpt-oss-120b",
+    "huggingface": "huggingface/deepseek-ai/DeepSeek-V4-Pro",
+    "poe": "poe/anthropic/claude-opus-4.8",
+    "xiaomi_mimo": "xiaomi_mimo/mimo-v2.5",
+    # The six CN vendors LiteLLM has no driver for speak OpenAI's API, so the
+    # route is that driver's and the address in config is what distinguishes
+    # them -- the same shape SiliconFlow and AiHubMix resolve to above.
+    "baichuan": "openai/Baichuan4-Turbo",
+    "baidu_cloud": "openai/ernie-5.1",
+    "stepfun": "openai/step-3.7-flash",
+    "longcat": "openai/longcat-2.0",
+    "modelscope": "openai/Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "qiniu": "openai/deepseek-v3",
+    # Thirteen resale gateways, all reached through OpenAI's driver: the route
+    # is that driver's and the address in config is what tells them apart. The
+    # id after it is the shelf's own spelling of somebody else's model and is
+    # sent verbatim -- 302.AI's "gpt-5.5" is not OpenAI's, and is never treated
+    # as OpenAI's despite the prefix, because the api_base decides where it goes.
+    "ai302": "openai/gpt-5.5",
+    "dmxapi": "openai/claude-opus-4.8",
+    "burncloud": "openai/gpt-5.5",
+    "ocoolai": "openai/gpt-5.5",
+    "ppio": "openai/deepseek/deepseek-v3",
+    "lanyun": "openai/deepseek-v3",
+    "alayanew": "openai/deepseek-v3",
+    "sophnet": "openai/DeepSeek-V3",
+    "tokenhub": "openai/deepseek-v3",
+    "xirang": "openai/deepseek-v3",
+    "ph8": "openai/gpt-5.5",
+    "aionly": "openai/gpt-5.5",
+    "radeon_cloud": "openai/deepseek-v3",
+    # Two self-hosted servers with no LiteLLM driver, so the same borrowed
+    # route -- and the address, supplied per deployment, is the whole of what
+    # sends the call to a box on the LAN instead of to OpenAI.
+    "gpustack": "openai/qwen3-8b",
+    "ovms": "openai/qwen3-8b",
+    # Zhipu's CN platform rides the same driver as Z.ai, so the route is
+    # that vendor's and the address in config is what picks the platform.
+    "bigmodel": "zai/glm-4.6",
 }
 
 # What a bare name resolves to. Pinned so that adding the qualified-name path
@@ -102,6 +179,55 @@ BARE_RESOLUTION = {
     "lm_studio": "lm_studio/qwen3-8b",
     "ollama_chat": "ollama_chat/llama3.2",
     "groq": "openai/gpt-oss-120b",
+    "xai": "xai/grok-4.6",
+    "mistral": "mistral/mistral-large-latest",
+    # Together and Fireworks name their models with the weight vendor's path,
+    # so a bare id has a head that claims nobody and is sent as written. That
+    # is the safe outcome: prefixing it would hand the call to whichever vendor
+    # the path happens to name.
+    "together_ai": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    "fireworks_ai": "accounts/fireworks/models/kimi-k2-instruct",
+    "perplexity": "perplexity/sonar-pro",
+    # Like Groq's entry above: the id names OpenAI's open-weights model and
+    # nothing in it names Cerebras, so a bare spelling routes by that keyword.
+    "cerebras": "openai/gpt-oss-120b",
+    # The weight vendor's path again, claiming nobody, so it is sent as written.
+    "huggingface": "deepseek-ai/DeepSeek-V4-Pro",
+    # Poe is a gateway, and that is the whole point of the flag here: the id
+    # names Anthropic, and only the gateway rule keeps a Poe subscription from
+    # being billed as a call to Anthropic with Anthropic's key.
+    "poe": "poe/anthropic/claude-opus-4.8",
+    "xiaomi_mimo": "xiaomi_mimo/mimo-v2.5",
+    "baichuan": "openai/Baichuan4-Turbo",
+    "baidu_cloud": "openai/ernie-5.1",
+    # No keyword of StepFun's appears in its own model ids, so a bare one names
+    # nobody and is sent unprefixed rather than claimed by a vendor it does not
+    # belong to -- the same outcome as Together's and Hugging Face's above.
+    "stepfun": "step-3.7-flash",
+    "longcat": "openai/longcat-2.0",
+    "modelscope": "openai/Qwen/Qwen3-235B-A22B-Instruct-2507",
+    "qiniu": "openai/deepseek-v3",
+    # A gateway prefixes a bare id with its own route, so these answer the
+    # same either way -- which is the protection: the id names Anthropic or
+    # OpenAI, and neither one's key is what pays for it here.
+    "ai302": "openai/gpt-5.5",
+    "dmxapi": "openai/claude-opus-4.8",
+    "burncloud": "openai/gpt-5.5",
+    "ocoolai": "openai/gpt-5.5",
+    "ppio": "openai/deepseek/deepseek-v3",
+    "lanyun": "openai/deepseek-v3",
+    "alayanew": "openai/deepseek-v3",
+    "sophnet": "openai/DeepSeek-V3",
+    "tokenhub": "openai/deepseek-v3",
+    "xirang": "openai/deepseek-v3",
+    "ph8": "openai/gpt-5.5",
+    "aionly": "openai/gpt-5.5",
+    "radeon_cloud": "openai/deepseek-v3",
+    "gpustack": "openai/qwen3-8b",
+    "ovms": "openai/qwen3-8b",
+    # A GLM id names its vendor either way, so both spellings agree here --
+    # which is why the platform has to be chosen by address, not by id.
+    "bigmodel": "zai/glm-4.6",
 }
 
 SPEC_NAMES = [spec.name for spec in PROVIDERS]

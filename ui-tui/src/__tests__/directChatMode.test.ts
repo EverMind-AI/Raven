@@ -266,7 +266,7 @@ describe('/instance', () => {
   })
 
   it('says so when the session has no instances', () => {
-    expect(run('')).toContain('no sub-agent instances')
+    expect(run('')).toContain('no subagent instances')
   })
 })
 

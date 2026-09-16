@@ -100,8 +100,11 @@ export function Skeleton(): JSX.Element {
 }
 
 /* No window.confirm (the WKWebView shell has no JS-panel delegate): a
-   destructive button arms on first click and fires on the second. */
-function ArmRemove({ fn }: { fn: () => void }): JSX.Element {
+   destructive button arms on first click and fires on the second.
+
+   `inline` drops the top margin for the one caller that sits in a card's
+   footer row rather than under a drawer section's note. */
+function ArmRemove({ fn, inline }: { fn: () => void; inline?: boolean }): JSX.Element {
   const [armed, setArmed] = useState(false)
   useEffect(() => {
     if (!armed) return
@@ -111,7 +114,7 @@ function ArmRemove({ fn }: { fn: () => void }): JSX.Element {
   return (
     <button
       className={'mini ghost' + (armed ? ' bad' : '')}
-      style={{ marginTop: 8 }}
+      style={inline ? undefined : { marginTop: 8 }}
       onClick={(e) => {
         e.stopPropagation()
         if (!armed) {
@@ -262,6 +265,14 @@ function SkillInstalled(): JSX.Element {
               role="button"
               onClick={() => store.openDetail('inst', c.id)}
               onKeyDown={(e) => {
+                /* Only when the card itself has focus. A keypress on a button
+                   inside it reaches here first -- keydown bubbles, and the
+                   button's own click, which stops propagation, is synthesised
+                   after -- so without this the drawer opened before the button
+                   could act. The removal is two presses, and the first one
+                   navigating away meant it could never be finished from the
+                   keyboard at all. */
+                if (e.target !== e.currentTarget) return
                 if (e.key === 'Enter') store.openDetail('inst', c.id)
               }}
             >
@@ -280,6 +291,12 @@ function SkillInstalled(): JSX.Element {
               <div className="foot">
                 <span />
                 <div className="act">
+                  {/* Removal was reachable only by opening the drawer, and the
+                      card gave no sign it opened one -- the use button was the
+                      only thing on it that looked like an action, so a reader
+                      who wanted the skill gone went to the CLI. Same guard the
+                      drawer uses: a builtin has no bundle to delete. */}
+                  {c.hub ? <ArmRemove inline fn={() => store.removeInstalled(c)} /> : null}
                   <button
                     className="mini gold"
                     onClick={(e) => {
