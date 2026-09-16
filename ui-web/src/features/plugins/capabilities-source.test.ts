@@ -8,12 +8,12 @@ import { readFileSync } from 'node:fs'
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const demoSource = readFileSync('src/demo/120-capabilities.js', 'utf8')
-const chromeSource = readFileSync('src/demo/150-chrome.js', 'utf8')
-const fixturePluginsFile = readFileSync('src/demo/153-plugins.js', 'utf8')
-const liveSource = readFileSync('src/live/090-extensions.js', 'utf8')
-const liveSkillsSource = readFileSync('src/live/140-skills.js', 'utf8')
-const livePluginsSource = readFileSync('src/live/150-plugins.js', 'utf8')
+const demoSource = readFileSync('src/legacy/demo/120-capabilities.js', 'utf8')
+const chromeSource = readFileSync('src/legacy/demo/150-chrome.js', 'utf8')
+const fixturePluginsFile = readFileSync('src/legacy/demo/153-plugins.js', 'utf8')
+const liveSource = readFileSync('src/legacy/live/090-extensions.js', 'utf8')
+const liveSkillsSource = readFileSync('src/legacy/live/140-skills.js', 'utf8')
+const livePluginsSource = readFileSync('src/legacy/live/150-plugins.js', 'utf8')
 
 const demoOpen = demoSource.slice(
   demoSource.indexOf('DS.capabilities ??='),

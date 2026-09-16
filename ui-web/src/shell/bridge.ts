@@ -1,10 +1,10 @@
 /* The strangler seam between a migrated island and the legacy shell.
  *
  * The shell publishes late-bound closures on window.RavenShell (see
- * ui-web/src/demo/155-bridge.js): late-bound so the live layer's rebinds --
+ * ui-web/src/legacy/demo/155-bridge.js): late-bound so the live layer's rebinds --
  * toast, most notably -- win over the demo definitions the bridge was
  * evaluated with. window.DS is the DataSource seam object itself, published
- * by ui-web/src/seam/000-datasource.js.
+ * by ui-web/src/legacy/seam/000-datasource.js.
  *
  * Everything here throws loudly when the shell is absent: an island runs
  * inside the assembled page or inside a test that installed fakes, never
@@ -56,7 +56,7 @@ export interface Shell {
      nothing to repaint. */
   plugRedraw?(): void
   /* Settings-island verbs. Each optional for the same reason, and each
-     published by one guarded line in ui-web/src/demo/155-bridge.js. */
+     published by one guarded line in ui-web/src/legacy/demo/155-bridge.js. */
   openSet?(): void
   closeSet?(): void
   /* Whether the dialog is up. Closing it is legacy chrome flipping the veil,

@@ -6,13 +6,13 @@ Sources under ``src/``:
                      ``/*__STYLE__*/`` inside its ``<style>`` tag and
                      ``/*__DEMO__*/`` inside its ``<script>`` tag.
 - ``styles/page.css`` -- the stylesheet, injected at the style marker.
-- ``seam/*.js``   -- the DataSource seam, concatenated ahead of the demo
+- ``legacy/seam/*.js`` -- the DataSource seam, concatenated ahead of the demo
                      shell so both layers can register into it.
-- ``demo/*.js``   -- the demo shell (fixture data + renderers), concatenated
-                     in filename order and injected at the demo marker.
-                     Serves the design-review canvas on ``file://`` /
+- ``legacy/demo/*.js`` -- the demo shell (fixture data + renderers),
+                     concatenated in filename order and injected at the demo
+                     marker. Serves the design-review canvas on ``file://`` /
                      ``?stub=1``.
-- ``live/*.js``   -- live mode; swaps the canned replay for the /rpc
+- ``legacy/live/*.js`` -- live mode; swaps the canned replay for the /rpc
                      WebSocket when served over http. Concatenated in
                      filename order and appended after the demo shell,
                      inside the same script tag. The parts are fragments of
@@ -115,24 +115,27 @@ _LIVE_PARTS = [
 
 
 def _concat(subdir: str, manifest: list[str]) -> str:
-    found = {p.name for p in (ROOT / "src" / subdir).glob("*.js")}
+    # The layer names stay "seam" / "demo" / "live" for every caller, including
+    # the tests outside this directory; only where they live moved.
+    layer = ROOT / "src" / "legacy" / subdir
+    found = {p.name for p in layer.glob("*.js")}
     if found != set(manifest):
         extra = sorted(found - set(manifest))
         missing = sorted(set(manifest) - found)
         raise SystemExit(
-            f"src/{subdir} does not match its manifest in build.py"
+            f"src/legacy/{subdir} does not match its manifest in build.py"
             + (f"; not in manifest: {extra}" if extra else "")
             + (f"; missing: {missing}" if missing else "")
         )
-    texts = [(ROOT / "src" / subdir / name).read_text(encoding="utf-8") for name in manifest]
+    texts = [(layer / name).read_text(encoding="utf-8") for name in manifest]
     if subdir == "live":
         # The live parts are fragments of ONE IIFE: first part opens it,
         # last part closes it. This anchors the wrapper only -- everything
         # between is ordered by the manifest above, not by any brace math.
         if "(() => {" not in texts[0]:
-            raise SystemExit(f"src/live: first part {manifest[0]} does not open the IIFE")
+            raise SystemExit(f"src/legacy/live: first part {manifest[0]} does not open the IIFE")
         if not texts[-1].rstrip("\n").endswith("})();"):
-            raise SystemExit(f"src/live: last part {manifest[-1]} does not close the IIFE")
+            raise SystemExit(f"src/legacy/live: last part {manifest[-1]} does not close the IIFE")
     text = "".join(texts)
     return text[:-1] if text.endswith("\n") else text
 

@@ -100,18 +100,20 @@ const EXPECTED_HELD = 0
 const EXPECTED_VERBS = 18
 
 const src = join(fileURLToPath(new URL('..', import.meta.url)), 'src')
+// The concatenated layers live under src/legacy; shell/bridge.ts does not.
+const legacy = join(src, 'legacy')
 const read = (dir) =>
-  readdirSync(join(src, dir))
+  readdirSync(join(legacy, dir))
     .filter((f) => f.endsWith('.js'))
     .sort()
-    .map((f) => readFileSync(join(src, dir, f), 'utf8'))
+    .map((f) => readFileSync(join(legacy, dir, f), 'utf8'))
     .join('\n')
 
 const parts = (dir) =>
-  readdirSync(join(src, dir))
+  readdirSync(join(legacy, dir))
     .filter((f) => f.endsWith('.js'))
     .sort()
-    .map((f) => [f, readFileSync(join(src, dir, f), 'utf8')])
+    .map((f) => [f, readFileSync(join(legacy, dir, f), 'utf8')])
 
 const demo = read('demo')
 const liveParts = parts('live')

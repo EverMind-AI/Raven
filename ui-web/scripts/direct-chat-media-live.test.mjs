@@ -19,9 +19,9 @@ const manifest = build.match(/_LIVE_PARTS = \[(.*?)\n\]/s)
 if (!manifest) throw new Error('_LIVE_PARTS is absent from build.py')
 const parts = [...manifest[1].matchAll(/"([^"]+\.js)"/g)].map((m) => m[1])
 const live = parts
-  .map((name) => readFileSync(new URL(`../src/live/${name}`, import.meta.url), 'utf8'))
+  .map((name) => readFileSync(new URL(`../src/legacy/live/${name}`, import.meta.url), 'utf8'))
   .join('')
-const demo = readFileSync(new URL('../src/demo/060-conversation.js', import.meta.url), 'utf8')
+const demo = readFileSync(new URL('../src/legacy/demo/060-conversation.js', import.meta.url), 'utf8')
 
 /* From `mark` to the close of the brace it opens, plus the character after it. */
 function braced(source, mark, where) {

@@ -17,7 +17,7 @@ const build = readFileSync(new URL('../build.py', import.meta.url), 'utf8')
 const manifest = build.match(/_LIVE_PARTS = \[(.*?)\n\]/s)
 if (!manifest) throw new Error('_LIVE_PARTS is absent from build.py')
 const live = [...manifest[1].matchAll(/"([^"]+\.js)"/g)]
-  .map((m) => readFileSync(new URL(`../src/live/${m[1]}`, import.meta.url), 'utf8'))
+  .map((m) => readFileSync(new URL(`../src/legacy/live/${m[1]}`, import.meta.url), 'utf8'))
   .join('')
 
 /* From `mark` through the brace that closes it, plus any `)` and `;` that
