@@ -7,27 +7,13 @@
  * has been spent is dropped rather than painted, which is lossless because a
  * re-open reads the same transcript back off disk.
  *
- * A monotonic counter is the whole of it today, which is what the live layer's
- * `viewGen` was. It has a module of its own so the readers -- the provider
- * refresh, the permission-mode refresh and the default-model write-back, none
- * of which are in the file that spends the tickets -- name the thing rather
- * than an import from the page's override layer.
+ * The ticket is the registry's own switch count -- only a switch can spend one,
+ * and the registry is where a switch happens. This module is the reader's name
+ * for it, so the provider refresh, the permission-mode refresh and the
+ * default-model write-back name the thing rather than importing the switch.
  */
 
-let current = 0
+import { switchToken } from './registry'
 
 /** The ticket a refresh started under. */
-export function generation(): number {
-  return current
-}
-
-/** Spend a ticket. Every view switch does, and only a view switch does. */
-export function bumpGeneration(): number {
-  current += 1
-  return current
-}
-
-/** Back to a fresh page's counter. For tests. */
-export function resetGeneration(): void {
-  current = 0
-}
+export const generation = (): number => switchToken()

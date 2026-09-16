@@ -1,106 +1,12 @@
 /* ---- in-flight turns survive session switches ----------------------
-   Server-side subscriptions are additive and never torn down here, so a
-   background session's turn keeps streaming over the socket. Leaving a
-   session mid-turn parks its transcript DOM (detached nodes keep every
-   streamed token, which is persisted nowhere else until the turn ends) and
-   buffers the events that arrive while it is away; returning reattaches the
-   DOM and replays the buffer, so nothing is lost. */
-
-import { islands } from '../../islands'
-import { draw as drawBanner } from '../../shell/banner'
-import { current as sessionCurrent } from '../../shell/session'
-import { sources } from '../../state/sources'
-import { $ } from '../demo/010-kernel.js'
-import { down, queueRestore, queueSnapshot, sess, turn } from '../demo/040-state.js'
-import { sessionDraw } from '../demo/050-rail.js'
-import { drawMeter, goState } from '../demo/090-composer.js'
-import { drawWs, wsOpen, wsRestore, wsView } from '../demo/100-workspace.js'
-import { live, onEvent, paintSay, stopSayPaint } from './050-turn.js'
-import { drainQueue } from './080-overrides.js'
-
-const parkedTurns = new Map();  // session_key -> parked turn snapshot
-const subBySession = {};        // session_key -> subscription_id
-const subSession = {};          // subscription_id -> session_key
-const PARK_EVENT_CAP = 4000;
-/* turnOwner: the session the running turn belongs to. parkTurn must NOT key by
-   the current pointer: every rail click moves it before sessionOpen(s), so by
-   the time the old turn is parked it already names the TARGET session. Parking
-   under that would file the old transcript in the wrong drawer and immediately
-   hand it back as the new session's content.
-   lastAsk: the message a retry would re-send. Held here rather than read back
-   off the last `.ask` bubble, which is markup and may belong to another
-   session.
-   Both on an object because the turn and override layers write them. */
-const park = { turnOwner: null, lastAsk: '' };
-
-function parkTurn() {
-  if (!park.turnOwner || !turn.busy()) return;
-  stopSayPaint();
-  const s = sess(park.turnOwner);
-  if (s) s.status = 'run';
-  parkedTurns.set(park.turnOwner, {
-    nodes: [...$('#stage').childNodes],
-    turn: { st: live.st, steps: live.steps, say: live.say, open: new Map(live.open),
-      sawEpisode: live.sawEpisode, startedAt: live.startedAt, answerAt: live.answerAt },
-    phase: turn.snapshot(), queue: queueSnapshot(),
-    /* The live clock's anchor. It is the composer island's own state, and the
-       away session's idle turn-live paint zeroes it -- without carrying it
-       here, a turn ten minutes in read "2s" after a round trip through
-       another session. */
-    liveT0: islands.composer.liveAnchor(),
-    ws: islands.workspace.snapshot(),
-    /* Asked for, not read off the panel's own bindings: this layer parks the
-       pane state, it does not own it. */
-    pane: wsView(),
-    events: [], overflow: false,
-  });
-}
-
-function restoreTurn(pk) {
-  park.turnOwner = sessionCurrent();
-  const stage = $('#stage');
-  stage.innerHTML = '';
-  pk.nodes.forEach((n) => stage.appendChild(n));
-  Object.assign(live, pk.turn);
-  turn.restore(pk.phase); queueRestore(pk.queue);
-  /* Before drawMeter below: its turn-live paint keeps a non-zero anchor, so the
-     clock resumes from the turn's real start rather than from the switch. */
-  islands.composer.setLiveAnchor(pk.liveT0 || 0);
-  islands.workspace.restore(pk.ws);
-  wsRestore(pk.pane.tab, pk.pane.picked);
-  const s = sess(sessionCurrent());
-  if (s && s.status === 'run') s.status = null;
-  pk.events.forEach((ev) => { try { onEvent(ev); } catch { /* one bad frame must not eat the rest */ } });
-  paintSay();
-  drawMeter(); goState(); sessionDraw(); drawBanner();
-  if (typeof drawWs === 'function' && wsOpen) drawWs();
-  down();
-  if (!turn.busy()) drainQueue();
-}
-
-/* A request or cancel response can arrive after its conversation was parked.
-   Apply the same reducer to the visible phase or to the saved copy, never to
-   whichever conversation merely happens to be open when the frame lands. */
-function transitionTurn(owner, event) {
-  if (owner === park.turnOwner && owner === sessionCurrent()) {
-    turn.dispatch(event);
-    return;
-  }
-  const pk = parkedTurns.get(owner);
-  if (pk) pk.phase = turn.reduce(pk.phase, event);
-}
+   A conversation holds its own turn now, and the registry's residency rule
+   decides whether it keeps it while it is off screen
+   (ui-web/src/state/session/residency.ts). The detached lane host the
+   transcript island asks about is one of the things it keeps, so there is no
+   parked-turn map and nothing for this part to install. */
 
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  /* A parked node is detached but not finished with: the transcript island
-   releases a lane host once it leaves the page, and the only copy of a turn
-   still streaming lives in one of these arrays until restoreTurn puts it
-   back. */
-  sources.transcript.parked = (node) => {
-    for (const pk of parkedTurns.values()) if (pk.nodes.includes(node)) return true;
-    return false;
-  };
-}
 
-export { parkedTurns, subBySession, subSession, PARK_EVENT_CAP, park, parkTurn, restoreTurn, transitionTurn }
+}

@@ -34,10 +34,15 @@ async function harness({ rows = [] as Row[], current = 'tui:open' as string | nu
     sheets: [] as Sheet[],
     sent: [] as Array<[string, unknown]>,
   }
-  /* The part is loaded first and the seam imported after it, which is the
-     order that keeps one module graph: a mock consulted from inside another
-     mock's factory would hand a cycle-mate the unmocked module. */
-  await loadPart(() => import('../../legacy/live/070-notify.js'), {
+  /* The modules under test are imported deepest first and the part that wires
+     them last, which is the order that keeps one module graph: the fakes are
+     installed around the modules the first import reaches, and one it did not
+     is loaded afterwards without them. */
+  await loadPart(async () => {
+    await import('./runtime'); await import('./stages')
+    await import('./pipeline')
+    return import('../../legacy/live/070-notify.js')
+  }, {
     fakes: {
       'src/shell/session': { current: () => current },
       'src/shell/toast': { show: (text: string) => seen.toasts.push(text) },
@@ -53,27 +58,32 @@ async function harness({ rows = [] as Row[], current = 'tui:open' as string | nu
           seen.sheets.push({ kind: 'clarify', owner: null, answer }),
         sess: (id: string) => rows.find((r) => r.id === id),
       },
-      /* `notifyTurn` hands the event to the parked-turn reducer, which is what
-         the harness used to watch it for. */
-      'live/060-parked.js': {
-        transitionTurn: (owner: string, event: { type: string }) => seen.turns.push([owner, event.type]),
+      'demo/050-rail.js': {
+        sessionDraw: () => {}, sessionReplace: () => {}, sessionRows: () => rows,
       },
-      'live/030-sessions.js': { touchSession: (id: string) => seen.touched.push(id) },
-      'live/050-turn.js': {
-        refreshList: () => { seen.refreshes += 1 },
-        onEvent: (ev: unknown) => seen.events.push(ev),
+      'demo/090-composer.js': { drawMeter: () => {}, goState: () => {} },
+      /* The phase event goes to the conversation it names, whether or not that
+         conversation is on screen -- which is the residency rule. */
+      'src/state/session/residency': {
+        dispatchTo: (owner: string, event: { type: string }) => seen.turns.push([owner, event.type]),
       },
+      'src/features/rail/source': { touchSession: (id: string) => seen.touched.push(id) },
+      'src/state/session/stages': { dispatch: (ev: unknown) => seen.events.push(ev) },
     },
+    islands: { rail: { reconcile: (_cur: Row[], next: Row[]) => ({ rows: next, currentMissing: false }) } },
   })
   const pipeline = (await import('./pipeline')) as Pipeline
+  const registry = await import('./registry')
+  /* A re-read of the rail is a `session.list` and nothing else, so the count is
+     read off the transport rather than off a stand-in -- and kept out of the
+     traffic the cases below assert on. */
   const transport = await fakeGateway((method: string, params: unknown) => {
+    if (method === 'session.list') { seen.refreshes += 1; return Promise.resolve({ sessions: [] }) }
     seen.sent.push([method, params])
     return Promise.resolve({})
   })
   const { setSources } = await import('../sources')
   setSources({ composer: {}, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
-  const parked = await import('../../legacy/live/060-parked.js')
-  const turnState = await import('../../legacy/live/050-turn.js')
   const part = await import('../../legacy/live/070-notify.js')
   part.install()
   return {
@@ -81,9 +91,17 @@ async function harness({ rows = [] as Row[], current = 'tui:open' as string | nu
     transport,
     seen,
     rows,
-    live: turnState.live as { st: { hasQA?: boolean } | null },
-    parkedTurns: parked.parkedTurns as Map<string, { events: unknown[]; overflow: boolean }>,
-    subSession: parked.subSession as Record<string, string>,
+    /* The open step is the conversation on screen's, which is the whole of the
+       defect the last case pins. */
+    live: registry.viewRuntime() as unknown as { st: { hasQA?: boolean } | null; subId: string | null },
+    /* The frames a conversation holds while it is off screen, addressed the way
+       the parked-turn map used to be. */
+    parkedTurns: {
+      set: (key: string, pk: { events: unknown[] }) => { registry.ensure(key).events = pk.events },
+    },
+    subSession: new Proxy({} as Record<string, string>, {
+      set: (_t, id: string, key: string) => { registry.record(key, id); return true },
+    }),
     sheet: (kind: string) => seen.sheets.find((s) => s.kind === kind)!,
     tick: () => new Promise((r) => setTimeout(r, 0)),
   }
@@ -168,7 +186,7 @@ describe('the stream envelope', () => {
   it('hands the frame to the dispatcher when it names the visible subscription', async () => {
     const h = await harness()
     h.live.st = null
-    ;(h.live as unknown as { subId: string | null }).subId = 'sub:open'
+    h.subSession['sub:open'] = 'tui:open'
 
     h.pipeline.stream({ subscription_id: 'sub:open', event: { type: 'token.delta' } })
 
@@ -189,16 +207,15 @@ describe('the stream envelope', () => {
     expect(h.seen.events).toEqual([])
   })
 
-  it('stops buffering at four thousand frames and marks the overflow', async () => {
+  it('stops buffering at four thousand frames', async () => {
     const h = await harness()
     h.subSession['sub:away'] = 'away'
-    const pk = { events: Array.from({ length: 4000 }, () => ({ type: 'token.delta' })), overflow: false }
+    const pk = { events: Array.from({ length: 4000 }, () => ({ type: 'token.delta' })) }
     h.parkedTurns.set('away', pk)
 
     h.pipeline.stream({ subscription_id: 'sub:away', event: { type: 'token.delta' } })
 
     expect(pk.events).toHaveLength(4000)
-    expect(pk.overflow).toBe(true)
   })
 
   it('marks the row done or failed when a background turn ends', async () => {
@@ -212,7 +229,7 @@ describe('the stream envelope', () => {
     ] as Array<[Record<string, unknown>, string]>) {
       const h = await harness({ rows: [{ id: 'away' }] })
       h.subSession['sub:away'] = 'away'
-      h.parkedTurns.set('away', { events: [], overflow: false })
+      h.parkedTurns.set('away', { events: [] })
 
       h.pipeline.stream({ subscription_id: 'sub:away', event })
 

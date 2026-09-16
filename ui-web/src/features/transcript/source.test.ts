@@ -17,13 +17,19 @@ import type { Sources } from '../../state/sources'
 /* `sources.transcript.openDagRun` is installed by live/050-turn.js onto the source
    object live/040-history.js built, so the seam is where it is read back. */
 async function opener(calls: unknown[][], run: unknown) {
-  const part = await loadPart(() => import('../../legacy/live/050-turn.js'), {
+  /* This feature's source is imported first and the part that wires it after,
+     which is the order that keeps one module graph: the fakes are installed
+     around the module under test. */
+  const part = await loadPart(async () => {
+    await import('./source')
+    return import('../../legacy/live/050-turn.js')
+  }, {
     fakes: {
       'src/shell/session': { current: () => 'a' },
       'demo/010-kernel.js': { $: looseQuery() },
       'demo/040-state.js': { sheetSession: () => 'a' },
       'demo/100-workspace.js': { setWs: (...args: unknown[]) => calls.push(['fallback', ...args]) },
-      'live/240-external-agents.js': {
+      'src/features/dag/open': {
         dagOpenNode: (runId: string, node: { id: string }) => calls.push(['node', runId, node.id]),
       },
     },
@@ -60,7 +66,10 @@ interface SpawnRow { kind: string; agent: string; label: string }
 
 async function nodeHarness({ rows = [{ kind: 'spawn', agent: 'raven', label: 'qc' }] as SpawnRow[] } = {}) {
   const calls: unknown[][] = []
-  const part = await loadPart(() => import('../../legacy/live/240-external-agents.js'), {
+  const part = await loadPart(async () => {
+    await import('./source')
+    return import('../../legacy/live/240-external-agents.js')
+  }, {
     fakes: {
       'src/shell/session': { current: () => 's1' },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
@@ -73,7 +82,6 @@ async function nodeHarness({ rows = [{ kind: 'spawn', agent: 'raven', label: 'qc
       /* The last part of the live manifest queues the first paint; nothing
          here is that paint. */
       'demo/160-boot.js': { bootPage: () => {} },
-      'live/050-turn.js': { onEvent: () => {} },
     },
     islands: {
       subagents: {

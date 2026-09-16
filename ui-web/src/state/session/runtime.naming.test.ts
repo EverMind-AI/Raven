@@ -4,7 +4,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { fakeGateway, loadPart, looseQuery, partTexts } from '../../../scripts/legacy-part.mjs'
+import { fakeGateway, loadPart, looseQuery, moduleText } from '../../../scripts/legacy-part.mjs'
 
 type Runtime = typeof import('./runtime')
 
@@ -20,10 +20,9 @@ async function harness({ rows, current, titleCall }: {
   document.body.innerHTML = '<h1 id="title"></h1>'
   const heading = document.getElementById('title') as HTMLElement
   const draws: string[] = []
-  /* The part is loaded first and the seam imported after it, which is the
-     order that keeps one module graph: a mock consulted from inside another
-     mock's factory would hand a cycle-mate the unmocked module. */
-  await loadPart(() => import('../../legacy/live/050-turn.js'), {
+  /* The module under test is what the fakes are installed around: a module
+     the first import did not reach is loaded afterwards without them. */
+  await loadPart(() => import('./runtime'), {
     fakes: {
       'src/shell/session': { current: () => current },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
@@ -207,11 +206,16 @@ describe('a server that declines to name', () => {
 })
 
 /* The rules below are about the source rather than about a behaviour a harness
-   can drive: which call sites carry a branch, and which branch a dispatcher
-   reaches. Read per part, in the order src/legacy/index.js installs them. */
-const live = partTexts('live') as Array<[string, string]>
-const liveText = live.map(([, text]) => text).join('')
-const turnText = live.find(([name]) => name === '050-turn.js')![1]!
+   can drive: which call sites carry a branch, and which branch the dispatcher
+   reaches. Read from the modules that hold them: the runtime for the sends and
+   the timer, the stage table for the two events. */
+const read = (rel: string): string => moduleText(rel) as string
+const turnText = read('state/session/runtime.ts')
+const stageText = read('state/session/stages.ts')
+/* Every `turn.send` the page makes: the conversation's two, and the sub-agent
+   instance lane's one, which names no session and is expected to carry no
+   naming branch. */
+const liveText = turnText + read('features/subagents/source.ts')
 
 describe('the wiring between turn.send and the placeholder', () => {
   /* The functions above can all be right while nothing calls them -- this
@@ -257,11 +261,11 @@ describe('the naming_ended event', () => {
        it -- a branch that dropped the reason would settle every ending onto the
        opening line, which is the bug this pair of tests exists for. What the
        handler then does is covered behaviourally below, not here. */
-    const at = turnText.indexOf("ev.type === 'session.naming_ended'")
+    const at = stageText.indexOf("'session.naming_ended'")
     expect(at).toBeGreaterThan(-1)
     /* Wide enough to clear the branch's comment: a window that stops inside it
        fails on prose length rather than on the code. */
-    const branch = turnText.slice(at, at + 900)
+    const branch = stageText.slice(at, at + 900)
     expect(branch).toContain('namingEnded(')
     expect(branch).toMatch(/namingEnded\(\s*p\.session_id\s*,\s*p\.reason\s*\)/)
   })
@@ -270,9 +274,9 @@ describe('the naming_ended event', () => {
     /* Exactly one of the two follows a namer that started; dropping the titled
        branch while adding this one would settle every session onto its opening
        line and never show a generated name at all. */
-    expect(turnText).toContain("ev.type === 'session.titled'")
-    const titled = turnText.indexOf("ev.type === 'session.titled'")
-    expect(turnText.slice(titled, titled + 260)).toContain('settleNaming')
+    expect(stageText).toContain("'session.titled'")
+    const titled = stageText.indexOf("'session.titled'")
+    expect(stageText.slice(titled, titled + 260)).toContain('settleNaming')
   })
 
   it('still keeps the timer as a backstop', () => {
