@@ -1,0 +1,6 @@
+div#splash
+  div.sp-in
+    img.sp-rv
+    div.sp-wl
+    div.sp-bar
+      i

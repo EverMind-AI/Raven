@@ -1,0 +1,4 @@
+button#railShow.ghost-ic.tipdn[data-i18n-aria=gui.expand_rail][data-i18n-tip=gui.expand_rail]
+  svg
+    rect
+    path

@@ -1,0 +1,5 @@
+section#cronPage.page[data-i18n-aria=gui.page.cron][data-open=false]
+  header
+    h2[data-i18n=gui.page.cron]
+  div.work
+    div#cronBody.wrap
