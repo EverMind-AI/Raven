@@ -29,8 +29,8 @@ def build_agent_card(config: A2aConfig, *, base_url: str) -> AgentCard:
     return AgentCard(
         name="Raven",
         description=(
-            "A general-purpose assistant that can research, write, and run tasks on its host, "
-            "and orchestrate its own sub-agents to do so."
+            "Raven is a host agent that manages and orchestrates all sub-agents on this device "
+            "to perform complex tasks."
         ),
         # This agent's own version, not the protocol's -- they are adjacent fields
         # here and a literal "1.0" in both read as one repeated value.
