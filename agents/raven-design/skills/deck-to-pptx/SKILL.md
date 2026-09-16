@@ -114,17 +114,10 @@ which of the four were defaults.
 11. After generating, rebuild the page and look at the render. Only the composed page counts.
 12. Read the deck's own render before delivering. Every page, at 90 dpi or more; fix what it
     showed and render again.
-13. Every component is full. A card carries a label and the two or three lines that earn
-    it; a column carries its whole argument; a figure carries its caption and its source. A
-    component with one phrase in it is a component the page did not need.
-14. Components stand in a hierarchy. One thing on the page is largest and read first; the rest
-    step down in size, weight and tint, and the groups are told apart by the space between
-    them being wider than the space inside them. Equal boxes in an equal row are for equal
-    things only.
-15. The page is composed to its edges. Content reaches the footer; a run that comes up short
-    is centred with `page().holding(...)`, given its picture or diagram, or merged into the
-    next page. Copy is measured before it is drawn (`fits`, `text_size`); what would overflow
-    gets a bigger box, a split page or fewer words, never smaller type.
+13. Every component is full: what it holds earns its place on the page.
+14. Components stand in a hierarchy: one thing read first, the rest stepping down, groups told
+    apart by the space between them.
+15. The layout uses the whole page. A page that comes up short is recomposed, not left.
 
 ## Technical decks
 
