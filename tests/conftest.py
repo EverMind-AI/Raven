@@ -43,8 +43,10 @@ _IDLE_EXEMPT_MARKERS = ("slow", "production_timing")
 _IDLE_CEILING_S = 0.0
 _IDLE_PROPERTY = "raven_idle_s"
 _WALL_PROPERTY = "raven_wall_s"
+_RUNQ_PROPERTY = "raven_runq_s"
 _CLOCKS = pytest.StashKey[tuple[float, float]]()
-_idle_hits: list[tuple[float, float, str]] = []
+_idle_hits: list[tuple[float, float, float, str]] = []
+_runq_seen: list[int] = [0, 0]  # PROBE: [reports with a non-zero runqueue wait, reports seen]
 
 
 #: Three seconds rather than two, which is where this started. Measured across
@@ -193,8 +195,26 @@ def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool 
     return True if index % n != k - 1 else None
 
 
-def _clocks() -> tuple[float, float]:
-    """The wall clock, and every CPU second spent on this process's behalf.
+def _runqueue_wait_s() -> float:
+    """Seconds this task was runnable but not scheduled.
+
+    PROBE, not yet judged: wall-minus-CPU cannot tell a deliberate wait from
+    the scheduler simply not running us, and with four xdist workers on a
+    four-core runner the second happens constantly. Linux counts it for us in
+    field 2 of ``/proc/<pid>/schedstat`` (nanoseconds on the runqueue), which
+    is exactly the part of "idle" that is not the test's doing. Zero where the
+    file is absent (macOS) or the kernel was built without CONFIG_SCHEDSTATS,
+    which is why this lands as a measurement first.
+    """
+    try:
+        with open("/proc/self/schedstat") as handle:
+            return int(handle.read().split()[1]) / 1e9
+    except (OSError, IndexError, ValueError):
+        return 0.0
+
+
+def _clocks() -> tuple[float, float, float]:
+    """The wall clock, every CPU second spent on this process's behalf, and the runqueue wait.
 
     ``os.times`` counts the CPU of children this process has reaped as well as
     its own, and POSIX makes that recursive, so a subprocess doing real work --
@@ -202,7 +222,8 @@ def _clocks() -> tuple[float, float]:
     account of the test that waited for it.
     """
     spent = os.times()
-    return time.perf_counter(), spent.user + spent.system + spent.children_user + spent.children_system
+    cpu = spent.user + spent.system + spent.children_user + spent.children_system
+    return time.perf_counter(), cpu, _runqueue_wait_s()
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -236,6 +257,7 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
     report = outcome.get_result()
     report.user_properties.append((_IDLE_PROPERTY, idle))
     report.user_properties.append((_WALL_PROPERTY, wall))
+    report.user_properties.append((_RUNQ_PROPERTY, now[2] - started[2]))
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
@@ -248,15 +270,26 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
     if _IDLE_CEILING_S <= 0 or report.when != "teardown":
         return
     clocks = dict(report.user_properties)
+    if _RUNQ_PROPERTY in clocks:
+        _runq_seen[1] += 1
+        _runq_seen[0] += clocks[_RUNQ_PROPERTY] > 0
     idle = clocks.get(_IDLE_PROPERTY)
     if idle is None or idle <= _IDLE_CEILING_S:
         return
     if any(marker in report.keywords for marker in _IDLE_EXEMPT_MARKERS):
         return
-    _idle_hits.append((float(idle), float(clocks[_WALL_PROPERTY]), report.nodeid))
+    _idle_hits.append(
+        (float(idle), float(clocks[_WALL_PROPERTY]), float(clocks.get(_RUNQ_PROPERTY, 0.0)), report.nodeid)
+    )
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus: int, config: pytest.Config) -> None:
+    # PROBE receipt: a schedstat that never reads means every runqueue number
+    # below is a zero from the except arm, and the measurement proves nothing.
+    # Printed unconditionally so a green run cannot hide it.
+    terminalreporter.write_line(
+        f"[idle probe] runqueue wait readable on {_runq_seen[0]} of {_runq_seen[1]} teardown reports"
+    )
     if not _idle_hits:
         return
     strict = config.getoption("--idle-ceiling-strict")
@@ -265,8 +298,10 @@ def pytest_terminal_summary(terminalreporter, exitstatus: int, config: pytest.Co
         "=",
         f"{len(_idle_hits)} unmarked test(s) waited more than {_IDLE_CEILING_S:g}s (wall clock minus CPU) ({verdict})",
     )
-    for idle, wall, nodeid in sorted(_idle_hits, reverse=True)[:50]:
-        terminalreporter.write_line(f"{idle:7.2f}s idle of {wall:6.2f}s  {nodeid}")
+    for idle, wall, runq, nodeid in sorted(_idle_hits, reverse=True)[:50]:
+        terminalreporter.write_line(
+            f"{idle:7.2f}s idle of {wall:6.2f}s  (runqueue {runq:6.2f}s -> {idle - runq:6.2f}s unexplained)  {nodeid}"
+        )
     terminalreporter.write_line("mark it slow or production_timing with the reason, or take the wait out of the test")
 
 
