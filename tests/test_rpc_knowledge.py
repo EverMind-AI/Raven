@@ -43,11 +43,17 @@ class _FakeManager:
     def get_base(self, base_id: str):
         return next((b for b in self._bases if b.id == base_id), None)
 
-    async def create_base(self, *, name: str, description: str = ""):
+    async def create_base(self, *, name: str, description: str = "", embedding: bool = True):
         if self.create_raises is not None:
             raise self.create_raises
         made = _FakeBase(f"b{len(self._bases) + 1}", name)
         made.description = description
+        # An empty model is how a base with no vectors is recorded, which is
+        # what every reader tests for.
+        if not embedding:
+            made.embedding_model = ""
+            made.dimensions = 0
+        self.created_with_embedding = embedding
         self._bases.append(made)
         return made
 
@@ -82,7 +88,12 @@ async def test_status_reports_the_model_when_embedding_is_configured(monkeypatch
 
     monkeypatch.setattr("raven.knowledge.load_embedding_config", lambda: _Config())
 
-    assert await kb.knowledge_status({}) == {"configured": True, "model": "bge-m3"}
+    out = await kb.knowledge_status({})
+
+    assert (out["configured"], out["model"]) == (True, "bge-m3")
+    # Reported so a surface walking a folder can filter by what this build can
+    # actually index, rather than by a list written down beside it.
+    assert ".md" in out["extensions"]
 
 
 async def test_status_says_unconfigured_rather_than_failing(monkeypatch) -> None:
@@ -90,7 +101,12 @@ async def test_status_says_unconfigured_rather_than_failing(monkeypatch) -> None
     has to open and say "configure this first", not fail to load."""
     monkeypatch.setattr("raven.knowledge.load_embedding_config", lambda: None)
 
-    assert await kb.knowledge_status({}) == {"configured": False, "model": ""}
+    out = await kb.knowledge_status({})
+
+    assert (out["configured"], out["model"]) == (False, "")
+    # Still reported: what can be parsed does not depend on an embedding
+    # endpoint, and a base made without one still takes documents.
+    assert ".md" in out["extensions"]
 
 
 async def test_bases_carry_their_document_count(monkeypatch) -> None:
@@ -168,6 +184,12 @@ async def test_creating_a_base_answers_the_row_the_list_would_show() -> None:
         "created_at",
         "updated_at",
         "documents",
+        "top_k",
+        "smart_chunking",
+        "separator",
+        "chunk_size",
+        "chunk_overlap",
+        "file_processing",
     }
 
 
@@ -252,10 +274,18 @@ async def test_listing_documents_of_an_unknown_base_says_so() -> None:
 
 
 class _FakeDoc:
-    def __init__(self, doc_id: str = "d1", status: str = "pending") -> None:
+    def __init__(
+        self,
+        doc_id: str = "d1",
+        status: str = "pending",
+        *,
+        source: str = "handbook.md",
+        origin: str = "file",
+        origin_ref: str = "",
+    ) -> None:
         self.id = doc_id
         self.base_id = "b1"
-        self.source = "handbook.md"
+        self.source = source
         self.media_type = "text/markdown"
         self.size = 5
         self.status = status
@@ -263,6 +293,8 @@ class _FakeDoc:
         self.error = ""
         self.created_at = "2026-08-24T00:00:00"
         self.updated_at = "2026-08-24T00:00:00"
+        self.origin = origin
+        self.origin_ref = origin_ref
 
 
 def _fence(monkeypatch, tmp_path: Path, *, restrict: bool = True) -> None:
@@ -441,8 +473,13 @@ async def test_indexing_an_unknown_document_says_so() -> None:
 
 
 async def test_search_projects_the_hit_to_score_document_and_text() -> None:
+    from raven.knowledge import SearchOutcome
+
     class _Chunk:
         text = "the answer"
+        chunk_index = 8
+        total_chunks = 12
+        source = "handbook.md"
 
     class _Hit:
         score = 0.87
@@ -454,7 +491,7 @@ async def test_search_projects_the_hit_to_score_document_and_text() -> None:
 
     async def _search(base_ids, query, top_k=5):
         asked.append((base_ids, query, top_k))
-        return [_Hit()]
+        return SearchOutcome(hits=[_Hit()], embed_ms=182.44, search_ms=6.02)
 
     manager.search = _search  # type: ignore[assignment]
     kb._set_manager_for_tests(manager)
@@ -462,7 +499,49 @@ async def test_search_projects_the_hit_to_score_document_and_text() -> None:
     out = await kb.knowledge_search({"base_ids": ["b1"], "query": "what", "top_k": 3})
 
     assert asked == [(["b1"], "what", 3)]
-    assert out["hits"] == [{"score": 0.87, "document_id": "d1", "text": "the answer"}]
+    assert out["hits"] == [
+        {
+            "score": 0.87,
+            "document_id": "d1",
+            "text": "the answer",
+            # Where in its document the chunk sat, which is the first thing
+            # anyone testing recall asks of a retrieved fragment.
+            "chunk_index": 8,
+            "total_chunks": 12,
+            "source": "handbook.md",
+        }
+    ]
+    # Reported apart: embedding is a round trip to the configured endpoint and
+    # runs to hundreds of milliseconds, and calling that "the search time"
+    # would describe the provider rather than the index.
+    assert (out["search_ms"], out["embed_ms"]) == (6.0, 182.4)
+
+
+async def test_a_hit_survives_a_chunk_that_carries_none_of_its_place() -> None:
+    """Chunks written before the fields existed, and any parser that leaves
+    them unset, still have to render as a row rather than fail the search."""
+    from raven.knowledge import SearchOutcome
+
+    class _Bare:
+        text = "still readable"
+
+    class _Hit:
+        score = 0.5
+        document_id = "d1"
+        chunk = _Bare()
+
+    manager = _FakeManager([], {})
+
+    async def _search(base_ids, query, top_k=5):
+        return SearchOutcome(hits=[_Hit()])
+
+    manager.search = _search  # type: ignore[assignment]
+    kb._set_manager_for_tests(manager)
+
+    out = await kb.knowledge_search({"base_ids": ["b1"], "query": "what"})
+
+    assert out["hits"][0]["chunk_index"] == 0
+    assert out["hits"][0]["source"] == ""
 
 
 async def test_search_without_a_base_or_a_query_is_refused() -> None:
@@ -472,3 +551,443 @@ async def test_search_without_a_base_or_a_query_is_refused() -> None:
         await kb.knowledge_search({"base_ids": [], "query": "what"})
     with pytest.raises(ConfigValidationError):
         await kb.knowledge_search({"base_ids": ["b1"], "query": "   "})
+
+
+async def test_a_duplicate_name_is_the_callers_mistake_not_the_gateways(monkeypatch) -> None:
+    """Reported as a validation error so the page shows the sentence.
+
+    Through InternalError it arrived as "could not create the base: ..." with
+    the reason buried inside a message that reads like a fault in the gateway,
+    which is the wrong thing to tell someone who typed a name twice.
+    """
+    from raven.knowledge import DuplicateBaseNameError
+
+    manager = _FakeManager([], {})
+    manager.create_raises = DuplicateBaseNameError("a knowledge base called 't3' already exists")
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: manager)
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await kb.knowledge_bases_create({"name": "t3"})
+
+    assert "already exists" in str(caught.value)
+
+
+# ── notes and pages ───────────────────────────────────────────────
+
+
+def _taking_manager() -> tuple[_FakeManager, list[dict[str, Any]]]:
+    """A manager that records what ``add_document`` was handed."""
+    took: list[dict[str, Any]] = []
+    manager = _FakeManager([_FakeBase("b1", "handbook")], {})
+
+    def _add(base_id, *, filename, content, origin="file", origin_ref=""):
+        took.append(
+            {
+                "base_id": base_id,
+                "filename": filename,
+                "content": content,
+                "origin": origin,
+                "origin_ref": origin_ref,
+            }
+        )
+        return _FakeDoc(source=filename, origin=origin, origin_ref=origin_ref)
+
+    manager.add_document = _add  # type: ignore[assignment]
+    return manager, took
+
+
+async def test_a_note_is_stored_as_the_markdown_it_was_written_in() -> None:
+    manager, took = _taking_manager()
+    kb._set_manager_for_tests(manager)
+
+    out = await kb.knowledge_documents_add_note({"base_id": "b1", "title": "Release plan", "text": "# Ship it"})
+
+    assert (took[0]["filename"], took[0]["content"]) == ("Release plan.md", b"# Ship it")
+    # Markdown, not plain text: the page's preview renders it and the chunker
+    # splits it on its headings, both of which a .txt would lose.
+    assert took[0]["origin"] == "note"
+    assert out["document"]["origin"] == "note"
+
+
+async def test_an_untitled_note_is_named_from_its_first_line() -> None:
+    """Asking for a title before the text would put a required field in front
+    of the thing the reader came to write."""
+    manager, took = _taking_manager()
+    kb._set_manager_for_tests(manager)
+
+    await kb.knowledge_documents_add_note({"base_id": "b1", "text": "Standup notes\n\nshipped the picker"})
+
+    assert took[0]["filename"] == "Standup notes.md"
+
+
+async def test_an_empty_note_is_refused_rather_than_stored() -> None:
+    manager, took = _taking_manager()
+    kb._set_manager_for_tests(manager)
+
+    with pytest.raises(ConfigValidationError):
+        await kb.knowledge_documents_add_note({"base_id": "b1", "title": "Later", "text": "   "})
+
+    assert took == []
+
+
+async def test_a_note_for_a_base_that_is_gone_says_so() -> None:
+    manager, took = _taking_manager()
+    kb._set_manager_for_tests(manager)
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await kb.knowledge_documents_add_note({"base_id": "nope", "text": "hi"})
+
+    assert "no such base" in str(caught.value)
+    assert took == []
+
+
+async def test_editing_a_note_rewrites_it_and_sends_it_back_to_the_queue() -> None:
+    rewrote: list[tuple[str, str, bytes]] = []
+    manager = _FakeManager([_FakeBase("b1", "handbook")], {})
+    manager.get_document = lambda doc_id: _FakeDoc(doc_id, origin="note")  # type: ignore[assignment]
+
+    async def _replace(document_id, *, filename, content):
+        rewrote.append((document_id, filename, content))
+        return _FakeDoc(document_id, source=filename, origin="note")
+
+    manager.replace_document = _replace  # type: ignore[assignment]
+    kb._set_manager_for_tests(manager)
+
+    out = await kb.knowledge_documents_update_note({"document_id": "d7", "title": "Plan v2", "text": "# Ship it twice"})
+
+    assert rewrote == [("d7", "Plan v2.md", b"# Ship it twice")]
+    assert out["document"]["source"] == "Plan v2.md"
+
+
+async def test_only_a_note_can_be_edited_in_place() -> None:
+    """Every other origin is a copy of something the reader holds elsewhere;
+    editing it here would make this base the only place the change exists."""
+    manager = _FakeManager([_FakeBase("b1", "handbook")], {})
+    manager.get_document = lambda doc_id: _FakeDoc(doc_id, origin="file")  # type: ignore[assignment]
+    manager.replace_document = lambda *a, **k: pytest.fail("must not rewrite an uploaded file")  # type: ignore[assignment]
+    kb._set_manager_for_tests(manager)
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await kb.knowledge_documents_update_note({"document_id": "d7", "text": "no"})
+
+    assert "only a note" in str(caught.value)
+
+
+async def test_a_page_is_fetched_and_kept_with_the_url_it_came_from(monkeypatch) -> None:
+    from raven.knowledge import _sources
+
+    manager, took = _taking_manager()
+    kb._set_manager_for_tests(manager)
+
+    async def _fetch(url: str, *, api_key: str = ""):
+        return _sources.FetchedPage(title="Raven Docs", markdown="# Raven\n\nhello")
+
+    monkeypatch.setattr(_sources, "fetch_page", _fetch)
+
+    out = await kb.knowledge_documents_add_url({"base_id": "b1", "url": "https://example.com/docs"})
+
+    assert took[0]["filename"] == "Raven Docs.md"
+    assert took[0]["content"] == b"# Raven\n\nhello"
+    # Kept on the record rather than written into the text: the page shows
+    # where a row came from, and a header inside the markdown would be
+    # indexed and searched as if the reader had written it.
+    assert took[0]["origin_ref"] == "https://example.com/docs"
+    assert out["document"]["origin"] == "url"
+
+
+async def test_a_page_that_cannot_be_read_says_why_and_stores_nothing(monkeypatch) -> None:
+    from raven.knowledge import _sources
+
+    manager, took = _taking_manager()
+    kb._set_manager_for_tests(manager)
+
+    async def _fetch(url: str, *, api_key: str = ""):
+        raise _sources.SourceFetchError("the reader answered HTTP 404 for https://example.com/gone")
+
+    monkeypatch.setattr(_sources, "fetch_page", _fetch)
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await kb.knowledge_documents_add_url({"base_id": "b1", "url": "https://example.com/gone"})
+
+    assert "404" in str(caught.value)
+    assert took == []
+
+
+async def test_a_url_document_needs_a_url() -> None:
+    manager, took = _taking_manager()
+    kb._set_manager_for_tests(manager)
+
+    with pytest.raises(ConfigValidationError):
+        await kb.knowledge_documents_add_url({"base_id": "b1", "url": "  "})
+
+    assert took == []
+
+
+async def test_a_configured_reader_key_is_sent_with_the_fetch(monkeypatch) -> None:
+    """Jina reads anonymously at a lower rate limit, so the key is optional --
+    but a deployment that has set one should not be rate-limited as if it had
+    not."""
+    from raven.knowledge import _sources
+
+    manager, _ = _taking_manager()
+    kb._set_manager_for_tests(manager)
+    monkeypatch.setattr(kb, "_jina_key", lambda: "k-1")
+    keys: list[str] = []
+
+    async def _fetch(url: str, *, api_key: str = ""):
+        keys.append(api_key)
+        return _sources.FetchedPage(title="Docs", markdown="# Docs")
+
+    monkeypatch.setattr(_sources, "fetch_page", _fetch)
+
+    await kb.knowledge_documents_add_url({"base_id": "b1", "url": "https://example.com"})
+
+    assert keys == ["k-1"]
+
+
+async def test_an_unreadable_config_does_not_stop_a_fetch(monkeypatch) -> None:
+    """The key is an optimisation, not a requirement; refusing to read a page
+    because the config could not be parsed helps nobody."""
+
+    def _boom(**kwargs):
+        raise RuntimeError("no config here")
+
+    monkeypatch.setattr("raven.config.update_tools.get_jina_api_key", _boom)
+
+    assert kb._jina_key() == ""
+
+
+async def test_editing_a_note_that_is_gone_says_so() -> None:
+    manager = _FakeManager([_FakeBase("b1", "handbook")], {})
+    manager.get_document = lambda doc_id: None  # type: ignore[assignment]
+    kb._set_manager_for_tests(manager)
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await kb.knowledge_documents_update_note({"document_id": "gone", "text": "hi"})
+
+    assert "no such document" in str(caught.value)
+
+
+async def test_a_note_edit_needs_a_document_and_some_text() -> None:
+    manager = _FakeManager([_FakeBase("b1", "handbook")], {})
+    manager.get_document = lambda doc_id: _FakeDoc(doc_id, origin="note")  # type: ignore[assignment]
+    kb._set_manager_for_tests(manager)
+
+    with pytest.raises(ConfigValidationError):
+        await kb.knowledge_documents_update_note({"text": "hi"})
+    with pytest.raises(ConfigValidationError):
+        await kb.knowledge_documents_update_note({"document_id": "d1", "text": "  "})
+
+
+async def test_a_note_needs_a_base_id_at_all() -> None:
+    manager, _ = _taking_manager()
+    kb._set_manager_for_tests(manager)
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await kb.knowledge_documents_add_note({"text": "hi"})
+
+    assert "base_id is required" in str(caught.value)
+
+
+async def test_a_base_that_refuses_a_note_is_reported_rather_than_raised_raw() -> None:
+    manager = _FakeManager([_FakeBase("b1", "handbook")], {})
+
+    def _boom(*a, **k):
+        raise RuntimeError("the store is gone")
+
+    manager.add_document = _boom  # type: ignore[assignment]
+    kb._set_manager_for_tests(manager)
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await kb.knowledge_documents_add_note({"base_id": "b1", "text": "hi"})
+
+    assert "the store is gone" in str(caught.value)
+
+
+async def test_a_base_that_refuses_a_page_is_reported_rather_than_raised_raw(monkeypatch) -> None:
+    from raven.knowledge import _sources
+
+    manager = _FakeManager([_FakeBase("b1", "handbook")], {})
+
+    def _boom(*a, **k):
+        raise RuntimeError("the store is gone")
+
+    manager.add_document = _boom  # type: ignore[assignment]
+    kb._set_manager_for_tests(manager)
+
+    async def _fetch(url: str, *, api_key: str = ""):
+        return _sources.FetchedPage(title="Docs", markdown="# Docs")
+
+    monkeypatch.setattr(_sources, "fetch_page", _fetch)
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await kb.knowledge_documents_add_url({"base_id": "b1", "url": "https://example.com"})
+
+    assert "the store is gone" in str(caught.value)
+
+
+async def test_a_rewrite_that_vanishes_mid_flight_says_so() -> None:
+    """Between the read and the write the row can be deleted from another
+    surface; answering with a document that is not there is worse than saying
+    it is gone."""
+    manager = _FakeManager([_FakeBase("b1", "handbook")], {})
+    manager.get_document = lambda doc_id: _FakeDoc(doc_id, origin="note")  # type: ignore[assignment]
+
+    async def _replace(*a, **k):
+        return None
+
+    manager.replace_document = _replace  # type: ignore[assignment]
+    kb._set_manager_for_tests(manager)
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await kb.knowledge_documents_update_note({"document_id": "d1", "text": "hi"})
+
+    assert "no such document" in str(caught.value)
+
+
+# ── settings ──────────────────────────────────────────────────────
+
+
+def _settings_manager():
+    """A manager whose bases carry settings and record what was written."""
+    base = _FakeBase("b1", "handbook")
+    base.top_k = 5
+    base.smart_chunking = True
+    base.separator = "\n\n"
+    base.chunk_size = 512
+    base.chunk_overlap = 50
+    base.file_processing = ""
+    manager = _FakeManager([base], {})
+    wrote: list[dict[str, Any]] = []
+
+    def _configure(base_id, **settings):
+        wrote.append(settings)
+        for key, value in settings.items():
+            setattr(base, key, value)
+        return base
+
+    manager.configure_base = _configure  # type: ignore[assignment]
+    return manager, wrote, base
+
+
+async def test_settings_write_only_the_fields_that_were_sent() -> None:
+    """A panel saving one slider should not have to send the rest back, and a
+    field this build does not know about must not be blanked by one that
+    does."""
+    manager, wrote, _ = _settings_manager()
+    kb._set_manager_for_tests(manager)
+
+    out = await kb.knowledge_bases_settings({"base_id": "b1", "top_k": 12})
+
+    assert wrote == [{"top_k": 12}]
+    assert out["base"]["top_k"] == 12
+    assert out["base"]["chunk_size"] == 512
+
+
+async def test_every_setting_can_be_written_at_once() -> None:
+    manager, wrote, _ = _settings_manager()
+    kb._set_manager_for_tests(manager)
+
+    await kb.knowledge_bases_settings(
+        {
+            "base_id": "b1",
+            "top_k": 6,
+            "smart_chunking": False,
+            "separator": "\n",
+            "chunk_size": 1024,
+            "chunk_overlap": 200,
+            "file_processing": "",
+        }
+    )
+
+    assert wrote == [
+        {
+            "top_k": 6,
+            "chunk_size": 1024,
+            "chunk_overlap": 200,
+            "smart_chunking": False,
+            "separator": "\n",
+            "file_processing": "",
+        }
+    ]
+
+
+@pytest.mark.parametrize("value", [0, 51, -1])
+async def test_a_top_k_outside_the_slider_is_refused_not_clamped(value) -> None:
+    """Clamping answers a request the caller did not make and reports success,
+    which on a slider is invisible."""
+    manager, wrote, _ = _settings_manager()
+    kb._set_manager_for_tests(manager)
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await kb.knowledge_bases_settings({"base_id": "b1", "top_k": value})
+
+    assert "between 1 and 50" in str(caught.value)
+    assert wrote == []
+
+
+async def test_a_top_k_that_is_not_a_whole_number_is_refused() -> None:
+    manager, wrote, _ = _settings_manager()
+    kb._set_manager_for_tests(manager)
+
+    for value in ("6", 6.5, True):
+        with pytest.raises(ConfigValidationError):
+            await kb.knowledge_bases_settings({"base_id": "b1", "top_k": value})
+    assert wrote == []
+
+
+async def test_an_overlap_as_big_as_the_chunk_is_refused() -> None:
+    """Every chunk would contain the whole of the one before it."""
+    manager, wrote, _ = _settings_manager()
+    kb._set_manager_for_tests(manager)
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await kb.knowledge_bases_settings({"base_id": "b1", "chunk_size": 256, "chunk_overlap": 256})
+
+    assert "smaller than chunk_size" in str(caught.value)
+    assert wrote == []
+
+
+async def test_the_overlap_is_judged_against_what_the_base_will_hold() -> None:
+    """A call that moves only the overlap has to be checked against the chunk
+    size already recorded, not against one it did not send."""
+    manager, wrote, base = _settings_manager()
+    base.chunk_size = 256
+    kb._set_manager_for_tests(manager)
+
+    with pytest.raises(ConfigValidationError):
+        await kb.knowledge_bases_settings({"base_id": "b1", "chunk_overlap": 300})
+
+    await kb.knowledge_bases_settings({"base_id": "b1", "chunk_overlap": 100})
+    assert wrote == [{"chunk_overlap": 100}]
+
+
+async def test_settings_for_a_base_that_is_gone_say_so() -> None:
+    manager, wrote, _ = _settings_manager()
+    kb._set_manager_for_tests(manager)
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await kb.knowledge_bases_settings({"base_id": "nope", "top_k": 6})
+
+    assert "no such base" in str(caught.value)
+    assert wrote == []
+
+
+async def test_a_search_with_no_top_k_leaves_the_number_to_the_engine() -> None:
+    """So the base's own setting decides, rather than a default written twice."""
+    from raven.knowledge import SearchOutcome
+
+    asked: list[Any] = []
+    manager = _FakeManager([], {})
+
+    async def _search(base_ids, query, top_k=None):
+        asked.append(top_k)
+        return SearchOutcome(hits=[])
+
+    manager.search = _search  # type: ignore[assignment]
+    kb._set_manager_for_tests(manager)
+
+    await kb.knowledge_search({"base_ids": ["b1"], "query": "what"})
+    await kb.knowledge_search({"base_ids": ["b1"], "query": "what", "top_k": 3})
+
+    assert asked == [None, 3]

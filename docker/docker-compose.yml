@@ -24,6 +24,9 @@ services:
       args:
         RAVEN_EXTRAS: ${RAVEN_EXTRAS:-channels,tools}
         RAVEN_PLUGINS: ${RAVEN_PLUGINS:-everos-memory}
+        # LibreOffice, for previewing office files and rendering decks. Set 0
+        # for a much smaller image that cannot show either.
+        RAVEN_OFFICE: ${RAVEN_OFFICE:-1}
     restart: unless-stopped
 
     # Bind the local auto-login page to loopback. Port 18793 deliberately stays
