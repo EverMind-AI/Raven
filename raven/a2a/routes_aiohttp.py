@@ -16,6 +16,7 @@ import json
 from typing import Any
 
 from a2a.utils.errors import JSON_RPC_ERROR_CODE_MAP
+from a2a.utils.proto_utils import to_stream_response
 from aiohttp import web
 from google.protobuf.json_format import MessageToDict
 from google.protobuf.message import Message as ProtoMessage
@@ -81,6 +82,25 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
+def _as_stream_response(event: Any) -> Any:
+    """The wire envelope for one streamed event.
+
+    `RequestHandler.on_message_send_stream` yields a bare `Event` -- a `Task`,
+    `Message`, `TaskStatusUpdateEvent` or `TaskArtifactUpdateEvent` -- but the
+    JSON-RPC binding carries a `StreamResponse`, whose oneof is what names which
+    of the four arrived. A conformant client parses `result` as that envelope, so
+    a bare event makes every frame unparseable: the SDK's own client rejects it
+    with "StreamResponse has no field named ...", before any of the content is
+    read. The SDK owns that mapping, and taking its helper instead of rewriting
+    the four cases is the rule ERROR_CODES above already follows.
+
+    The isinstance guard is the one `_to_jsonable` uses, and for the same reason:
+    the opaque double in tests/test_a2a_routes.py yields plain dicts, which have
+    no envelope to be put into.
+    """
+    return to_stream_response(event) if isinstance(event, ProtoMessage) else event
+
+
 async def _serve_stream(
     request: web.Request, handler: Any, method_name: str, params: Any, request_id: Any
 ) -> web.StreamResponse:
@@ -92,7 +112,7 @@ async def _serve_stream(
     await response.prepare(request)
     try:
         async for event in getattr(handler, method_name)(params, None):
-            payload = {"jsonrpc": "2.0", "id": request_id, "result": _to_jsonable(event)}
+            payload = {"jsonrpc": "2.0", "id": request_id, "result": _to_jsonable(_as_stream_response(event))}
             await response.write(f"data: {json.dumps(payload)}\n\n".encode())
     except Exception as exc:
         error = error_response(_error_name_for(exc), request_id)
