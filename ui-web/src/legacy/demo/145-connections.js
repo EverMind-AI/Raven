@@ -5,14 +5,10 @@
 
    The renderer is the connections island (ui-web/src/features/connections/);
    what remains here is its shell face -- the names the Esc handler and the
-   live layer's redrawAll still call -- and the fixture source. The More
-   flyout opens the page by importing the island (shell/navfly.ts); it does
-   not come through here. */
+   live layer's redrawAll still call. The More flyout opens the page by
+   importing the island (shell/navfly.ts); it does not come through here. */
 
-import { CHANNELS } from '../../features/connections/catalogue'
 import { islands } from '../../islands'
-import { sources } from '../../state/sources'
-import { nlSay } from './130-settings.js'
 
 function closeConn() { islands.connections.close(); }
 function drawConn() {
@@ -26,20 +22,6 @@ function connCloseDialog() { islands.connections.closeDialog(); }
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  /* The fixture source: the demo's canned channels behind the same interface
-   the rpc source implements. Rows are the CHANNELS objects themselves,
-   mutated in place, which is what makes demo edits stick across a redraw.
-   Writes refuse politely, as the offline demo always did. */
-  sources.conn ??= {
-    rows: async () => CHANNELS,
-    /* The demo's world has a host in it -- one of its channels is receiving --
-     so it answers yes. Left unanswered, the page would tell the reader nothing
-     is running it over a row that is. */
-    hostRunning: () => true,
-    toggle: async (c, on) => { c.on = on; },
-    apply: async () => { nlSay(null); },
-    qr: async () => null,
-  };
 }
 
 export { closeConn, drawConn, connCloseDialog }

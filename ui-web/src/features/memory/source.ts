@@ -1,8 +1,8 @@
 /* -- data & memory: the rpc source ------------------------------------
    The page renderer is the memory island (ui-web/src/features/memory/); this
-   module only knows how to speak memory.* over /rpc. The live layer installs
-   it onto the seam, which replaces the fixture source before the first
-   paint. */
+   module only knows how to speak memory.* over /rpc. It is the seam's one
+   memory source: a page with no engine behind it reads the same calls off the
+   fixture transport (ui-web/src/rpc/fixtures/memory.ts). */
 
 import type { MemorySource } from './types'
 import type { ParamsOf } from '../../rpc/generated'

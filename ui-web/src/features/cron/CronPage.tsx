@@ -12,9 +12,9 @@ import * as store from './store'
 import type { CronDraft, CronJob, CronRun } from './types'
 import type { JSX } from 'react'
 
-/* Mirrors the FREQ/DELIVER tables in ui-web/src/legacy/demo/030-fixtures.js: that copy
-   feeds the fixture source's prose, this one feeds the form. The demo copy
-   dies with the fixtures at the end of the migration. */
+/* The frequencies and the delivery routes the editor offers. Page data, not
+   wire data: a job's own kind and expression come from `cron.list`, and these
+   are the choices the form can express them as. */
 const FREQ: Array<{ id: CronJob['freq']; label: string }> = [
   { id: 'hour', label: 'gui.freq.hour' },
   { id: 'day', label: 'gui.freq.day' },

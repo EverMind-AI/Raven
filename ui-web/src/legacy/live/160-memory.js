@@ -1,6 +1,6 @@
 /* -- data & memory: the seam ------------------------------------------
    The source is ui-web/src/features/memory/source.ts; installing it here
-   replaces the fixture source before the first paint. */
+   is what makes it the page's one memory source in every mode. */
 
 import { memorySource } from '../../features/memory/source'
 import { sources } from '../../state/sources'

@@ -3,8 +3,8 @@
    the install grouping and the write path all live server-side, so this module
    only maps a row into what the page draws and sends the mutation back. The
    xa island (ui-web/src/features/xa/) owns the renderer and every flag it
-   reads; installing onto the seam replaces the fixture source before the first
-   paint.
+   reads. It is the seam's one roster source: a page with no gateway behind it
+   reads the same calls off the fixture transport.
 
    The list is re-fetched after every mutation rather than patched locally: the
    handler recomputes `group`, `enabled` and the probe verdict together, and a

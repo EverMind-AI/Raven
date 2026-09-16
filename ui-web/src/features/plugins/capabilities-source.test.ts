@@ -143,23 +143,6 @@ describe('manual plugin add', () => {
     expect(drawCaps).toHaveBeenCalledOnce()
     expect(drawCapsBadge).toHaveBeenCalledOnce()
   })
-
-  it('keeps fixture additions inside the fixture source', async () => {
-    const part = await loadPart(() => import('../../legacy/demo/153-plugins.js'), {
-      fakes: {
-        'demo/010-kernel.js': { $: looseQuery() },
-        'src/shell/toast': { show: vi.fn() },
-      },
-      islands: { plugins: { event: vi.fn() } },
-    })
-    part.install()
-    const { plugins } = await seam()
-
-    const before = plugins.rows().map((row) => row.name)
-    await plugins.manual('CRM', 'https://mcp.example.test')
-
-    expect(plugins.rows().map((row) => row.name)).toEqual([...before, 'CRM'])
-  })
 })
 
 describe('the live extension source', () => {

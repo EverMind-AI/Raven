@@ -30,10 +30,9 @@ import * as panes from './shell/panes'
 import * as scrollbars from './shell/scrollbars'
 import * as session from './shell/session'
 import { plugHost, skillsHost, skillsSkeletonHost } from './islands'
-import { liveMode } from './legacy/live/010-boot-guard.js'
 import { installLegacy } from './legacy/index.js'
-import { WsTransport } from './rpc/wsTransport'
 import { setGateway } from './state/gateway'
+import { chooseTransport } from './state/transport'
 
 /* The island bundle: the React roots the page mounts, the chrome that wires
  * itself over the static markup, and the one transport. Nothing is published
@@ -117,12 +116,11 @@ if (xaHost) createRoot(xaHost).render(<XaApp />)
 const setHost = document.getElementById('spanels')
 if (setHost) createRoot(setHost).render(<SettingsApp />)
 
-/* The one data entry point, installed before anything can ask for it. Only in
-   live mode: the demo shell answers from its fixtures, and the live layer --
-   the only caller of gateway() -- is not installed at all in stub mode
-   (legacy/index.js), so a page opened from disk or with ?stub=1 gets no
-   transport and needs none. */
-if (liveMode()) setGateway(new WsTransport())
+/* The one data entry point, installed before anything can ask for it. Every
+   mode has one now: a page served by a raven gets the socket, and a page opened
+   from disk or with ?stub=1 gets the offline fixture library, which answers the
+   same contract (state/transport.ts). */
+setGateway(chooseTransport())
 
 /* The legacy page script, which used to be a third inline <script> after this
    bundle. Last on purpose and for the same reason it was last then: its

@@ -81,7 +81,7 @@ export type PluginsEvent =
   | { kind: 'authDone'; server: string; ok: boolean; error?: string }
   | { kind: 'rows' }
 
-/* The DS.plugins contract both the fixture source (demo shell) and the rpc
+/* The DS.plugins contract both the offline fixture library and the rpc
    source (live layer) implement. The island only ever talks to this. */
 export interface PluginsSource {
   search(q: string, category: string): Promise<{ items: MarketItem[]; categories: string[] }>

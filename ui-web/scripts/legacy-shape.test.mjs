@@ -38,7 +38,7 @@ const FILES = ['demo', 'live'].flatMap((layer) =>
 /* What the conversion to modules let a top-level initialiser read. Not trusted
    here: the gate derives the real condition from the import graph and checks
    that every one of these is outside every cycle. */
-const CONVERSION_LEAVES = new Set(['demo/010-kernel.js', 'demo/020-prose.js', 'demo/030-fixtures.js'])
+const CONVERSION_LEAVES = new Set(['demo/010-kernel.js'])
 
 const texts = new Map(FILES.map((rel) => [rel, readFileSync(url(`src/legacy/${rel}`), 'utf8')]))
 const trees = new Map(
@@ -173,17 +173,24 @@ describe('the conversion leaf list', () => {
     expect(inside).toEqual([])
   })
 
-  it('finds the one cycle the layers are known to have', () => {
-    /* 14 in demo/. The live knot was 13 while every part that speaks to the
-       gateway imported the rpc client from live/020-rpc.js; those parts reach
-       the transport through state/gateway.ts now, which is outside the layer,
-       so six of them left the cycle -- live/120-settings left it as well once
-       the settings and model sources moved into features/, and the last six
-       members left when the session runtime, the registry and the pipeline took
-       the turn: the parts that held it read each other, and the parts that are
-       left only install what src/state/session/ exports. */
+  it('finds the cycles the layers are known to have', () => {
+    /* Two knots in demo/, both of them chrome reading chrome: the workspace
+       panel with its sub-agent hooks and the shortcut table, and the
+       capabilities page with its skills tab.
+
+       It was one knot of 14 while the offline data lived in the layer. The
+       live knot was 13 while every part that speaks to the gateway imported
+       the rpc client from live/020-rpc.js; those parts reach the transport
+       through state/gateway.ts now, which is outside the layer, so six of them
+       left the cycle -- live/120-settings left it as well once the settings
+       and model sources moved into features/, and the last six members left
+       when the session runtime, the registry and the pipeline took the turn.
+       The demo knot broke the same way: the fixtures are responders behind the
+       transport now (src/rpc/fixtures/), so the parts that held it -- the
+       session rail, the conversation, the replay and the composer -- no longer
+       read each other's data. */
     const sizes = [...new Set([...sccOf.values()].filter((c) => c.length > 1))].map((c) => c.length).sort((a, b) => b - a)
-    expect(sizes).toEqual([14])
+    expect(sizes).toEqual([3, 2])
   })
 })
 

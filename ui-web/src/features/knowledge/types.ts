@@ -70,7 +70,7 @@ export interface KbStatus {
   extensions?: string[]
 }
 
-/* The DS.knowledge contract both the fixture source (demo shell) and the rpc
+/* The DS.knowledge contract both the offline fixture library and the rpc
    source (live layer) implement. The island only ever talks to this, which is
    what lets the page be developed and tested with no engine behind it. */
 export interface KnowledgeSource {

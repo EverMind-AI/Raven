@@ -3,22 +3,14 @@
    send/stop button, the queued rows, the attachment tray, the slash palette
    and the live turn row that rides the tail of the transcript. What remains
    here is the island's shell face -- the names the rest of the page still
-   calls, the fixture half of sources.composer, and the demo replay's own send. */
+   calls, and the palette's half of sources.composer. */
 
 /* The field itself stays a name: the skills panel drops a prompt into it and
    the draft store reads it back. */
 
-import { plainTitle } from '../../features/rail/title'
 import { islands } from '../../islands'
-import { current as sessionCurrent } from '../../shell/session'
-import { show as toast } from '../../shell/toast'
 import { sources } from '../../state/sources'
-import { $, T, slashHelp, slashName } from './010-kernel.js'
-import { RUNS } from './030-fixtures.js'
-import { confirmAsk, queuePush, runState, sess, stop_, turn } from './040-state.js'
-import { sessionDraw } from './050-rail.js'
-import { ask, noteRow, pitch } from './060-conversation.js'
-import { replay } from './080-replay.js'
+import { $, slashHelp, slashName } from './010-kernel.js'
 
 let ta;
 
@@ -37,57 +29,29 @@ function dockLift() { islands.composer.dockLift(); }
    a button -- send/stop, the model chip, the answer footer, the rail -- and a
    second entry point for the same action is one more thing to keep in sync.
    What is left is what has no button: acting on the session as a whole. */
+/* Both bodies are the session runtime's -- `installSlashActions` replaces them
+   on these very rows -- so what belongs here is the pair of ids the palette
+   renders, in the order it renders them. */
 const SLASH = [
   { id: 'gui.compress', fn: () => {} },
-  { id: 'gui.clear', fn: () => confirmAsk(T('gui.clear_title'), T('gui.clear_body'), T('gui.clear_yes'), () => {
-      const s = sess(sessionCurrent());
-      $('#stage').innerHTML = ''; pitch();
-      if (s) { s.run = null; s.last = T('gui.sess.not_started'); }
-      runState.use = null; drawMeter(); sessionDraw();
-    }) }
+  { id: 'gui.clear', fn: () => {} }
 ];
-
-const pickRun = (s) => /超时|timeout|登录|bug|修|fix|报错|定位|回调/.test(s) ? RUNS.fix : RUNS.gtm;
-
-function send(text) {
-  if (turn.busy()) { queuePush(text); toast('已排队，本轮结束后发出'); return; }
-  ask(text);
-  turn.dispatch({ type: 'send' }); runState.use = null;
-  drawMeter(); goState(); sessionDraw();
-  const run = pickRun(text);
-  const s = sess(sessionCurrent());
-  if (s && !s.run) {
-    s.run = run.key; s.status = null;
-    if (s.title === '新任务') { s.title = run.title; $('#title').textContent = plainTitle(s.title); }
-    sessionDraw();
-  }
-  replay(run, false);
-}
-
-function halt() {
-  stop_(); turn.dispatch({ type: 'idle' });
-  noteRow('已中断 · 上面的步骤保留', '', { quiet: true, host: $('#stage') });
-  drawMeter(); goState(); sessionDraw();
-}
 
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
   ta = $('#ta');
 
-  /* The fixture half of sources.composer. Turn state belongs to the composer island;
-   live mode installs its own meter wording and upload transport over this. */
-  sources.composer ??= {
-    meter: () => (turn.busy() ? T('gui.meter.running')
-      : runState.use ? T('gui.meter.usage', { calls: runState.use.calls, in: (runState.use.in / 1000).toFixed(1), out: (runState.use.out / 1000).toFixed(1) })
-      : ''),
+  /* The palette's half of sources.composer, which is the half no transport
+   answers: which commands the dock offers and what each is called. The rest is
+   installed over it -- the meter's wording, the two actions, the upload -- by
+   the parts that own those (live/050-turn.js, the session runtime,
+   live/180-attachments.js). */
+  sources.composer = {
     slash: SLASH,
     slashName: (id) => slashName(id),
     slashHelp: (id) => slashHelp(id),
-    pickHint: 'demo：正式版在这里选文件或直接拖进来',
-    send: (text) => send(text),
-    stop: () => halt(),
   };
 }
 
-export { ta, goState, drawMeter, taFit, dockLift, SLASH, pickRun, send, halt }
+export { ta, goState, drawMeter, taFit, dockLift, SLASH }

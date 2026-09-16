@@ -1,13 +1,11 @@
 /* ══ module 1a: session rail ══════════════════════════════════════
-   The renderer is the rail island (ui-web/src/features/rail/). The fixture source
-   owns its rows; live mode replaces the whole source with live-owned storage. */
+   The renderer is the rail island (ui-web/src/features/rail/). What is left
+   here is the shell face -- the five names the rest of the page reaches the
+   session source by; the source itself is installed by the boot guard and
+   answers `session.list` (ui-web/src/rpc/fixtures/sessions.ts offline). */
 
 import { islands } from '../../islands'
-import { current as sessionCurrent } from '../../shell/session'
 import { sources } from '../../state/sources'
-import { SESSION_FIXTURES } from './030-fixtures.js'
-import { turn } from './040-state.js'
-import { openDemoSession } from './060-conversation.js'
 
 function markNewCurrent() { islands.rail.markNew(); }
 /* inline rename in the top bar, from the title bar's own button; the list
@@ -24,20 +22,7 @@ const sessionOpen = (s) => sessionSource().open(s);
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  /* remove, renamed and pin are deliberately absent: with no server to tell,
-   the island's own optimistic behaviour IS the demo -- a row that leaves the
-   list with an undo, a pin that just moves, a title that is only ever local.
-   deleteAll is the exception and is installed by demo/130-settings.js, next to
-   the rest of that page's writes, because wiping the list here means clearing
-   page state only this layer can reach. */
-  sources.sessions ??= (() => {
-    let rows = SESSION_FIXTURES;
-    return {
-      snapshot: () => ({ rows, cur: sessionCurrent(), busy: turn.busy() }),
-      replace: (next) => { rows = next; },
-      open: (s) => openDemoSession(s),
-    };
-  })();
+
 }
 
 export { markNewCurrent, renameTitle, sessionSource, sessionRows, sessionReplace, sessionDraw, sessionOpen }
