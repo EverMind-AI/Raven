@@ -5,6 +5,30 @@
    the gateway is away this long is almost always an upgrade, and the two should
    not disagree about when to stop hoping. The 8s cap keeps a page left open
    overnight from hammering a machine that is simply off. */
+/* What a rejected call carries.
+
+   The gateway sends two different things: `message` is a machine code the
+   client matches on -- `config_validation_error`, `session_not_found` -- and
+   `data.detail` is the sentence a person is meant to read. Rejecting with the
+   frame as it stands meant every `toast(e.message)` on the page showed the
+   code, so naming a knowledge base that already existed reported
+   "config_validation_error" and nothing about the name.
+
+   So the rejection is an Error whose message is the sentence when there is
+   one, with the code and the original frame kept on it: two callers match on
+   `e.code` for a method the gateway does not have, and they must go on
+   working. */
+function rpcFailure(frame) {
+  const detail =
+    frame && frame.data && typeof frame.data.detail === 'string' && frame.data.detail.trim()
+      ? frame.data.detail.trim()
+      : '';
+  const err = new Error(detail || (frame && frame.message) || 'rpc error');
+  if (frame && frame.code != null) err.code = frame.code;
+  err.rpc = frame;
+  return err;
+}
+
 const REJOIN_CEILING_MS = 1200000;
 const REJOIN_MAX_WAIT_MS = 8000;
 const rpc = {
@@ -22,7 +46,7 @@ const rpc = {
         let f; try { f = JSON.parse(m.data); } catch { return; }
         if (f.id != null && this.pending.has(f.id)) {
           const p = this.pending.get(f.id); this.pending.delete(f.id);
-          f.error ? p.reject(f.error) : p.resolve(f.result);
+          f.error ? p.reject(rpcFailure(f.error)) : p.resolve(f.result);
         } else if (f.method && this.notify[f.method]) {
           this.notify[f.method](f.params || {});
         }

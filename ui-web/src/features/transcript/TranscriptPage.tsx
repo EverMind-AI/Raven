@@ -11,6 +11,7 @@ import { getVersion as deliveriesVersion, humanSize, subscribe as deliveriesSubs
 import {
   fileKind, fileURL, openDelivery as wsOpenDelivery, openPath as wsOpenPath,
 } from '../workspace/store'
+import { useTick } from '../../shell/tick'
 import { releaseUpward } from './overscroll'
 import * as store from './store'
 import * as tail from './tail'
@@ -491,19 +492,6 @@ const CallRow = memo(function CallRow({ lane, seg, c }: { lane: Lane; seg: StepD
 })
 
 /* One elapsed clock per running card, self-stopping. */
-function useTick(on: boolean, t0: number): number {
-  const [, setN] = useState(0)
-  useEffect(() => {
-    if (!on) return
-    const tick = setInterval(() => {
-      setN((n) => n + 1)
-      if (Date.now() - t0 > 3600e3) clearInterval(tick)
-    }, 1000)
-    return () => clearInterval(tick)
-  }, [on, t0])
-  return on ? Date.now() - t0 : 0
-}
-
 function DelegState({ state, err, extra }: { state: string; err?: string; extra?: string }): ReactElement {
   const word = t(state === 'run' ? 'gui.deleg.st_run' : state === 'ok' ? 'gui.deleg.st_ok' : 'gui.deleg.st_bad')
   return (

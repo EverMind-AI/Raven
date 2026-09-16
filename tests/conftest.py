@@ -674,6 +674,46 @@ def _no_huggingface_lookup(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_ollama_model_info(monkeypatch):
+    """Keep the same lookup off the local Ollama daemon.
+
+    The third branch of `litellm.get_model_info` that leaves the process, and
+    the last one the picker reaches. A model the catalogue does not carry and
+    whose provider is `ollama` is not answered from the table at all: LiteLLM
+    POSTs `{api_base}/api/show` to ask the daemon itself, defaulting to
+    `localhost:11434`. Opening the model picker asks once per model, so a single
+    `model.options` makes a handful of them and a test module full of picker
+    tests makes a hundred.
+
+    Nothing listens on that port under test, and a refused connection is
+    cheap -- on a developer's machine. A CI runner with no IPv6 route spends
+    tens of milliseconds per attempt on the `::1` address `localhost` also
+    resolves to, and a hundred of those is the 3.5s of idle that failed shard
+    1/4. LiteLLM already catches the failure and answers with a zeroed row, so
+    that is what this hands back, minus the wait.
+    """
+    from litellm.llms.ollama.completion.transformation import OllamaConfig
+    from litellm.types.utils import ModelInfoBase
+
+    def unreachable(self, model: str, api_base: str | None = None) -> ModelInfoBase:
+        if model.startswith(("ollama/", "ollama_chat/")):
+            model = model.split("/", 1)[1]
+        return ModelInfoBase(
+            key=model,
+            litellm_provider="ollama",
+            mode="chat",
+            input_cost_per_token=0.0,
+            output_cost_per_token=0.0,
+            max_tokens=None,
+            max_input_tokens=None,
+            max_output_tokens=None,
+        )
+
+    monkeypatch.setattr(OllamaConfig, "get_model_info", unreachable)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_real_acp_journal(tmp_path, monkeypatch):
     """Keep ACP wire journals out of the real home.
 

@@ -230,6 +230,16 @@ class InstanceRow(_Strict):
             "instance that came from no orchestration, so its presence is what says the row has a source."
         ),
     )
+    turn_started_at_ms: int | None = Field(
+        default=None,
+        alias="turnStartedAtMs",
+        description=(
+            "When the turn this instance is answering right now began. Absent when it is answering "
+            "none, so presence is what says the instance is working and the number is what says "
+            "for how long. Not `updatedAtMs`, which every registry write stamps -- a binding "
+            "commit and a graph-origin write move it too, so it dates the row and not the turn."
+        ),
+    )
 
 
 class TranscriptToolCall(_Strict):
@@ -3556,6 +3566,11 @@ class KnowledgeStatusResult(_Strict):
 
     configured: bool
     model: str
+    #: Filename extensions some registered parser can index, each with its
+    #: leading dot. What a surface that walks a folder filters by; it moves
+    #: with the optional extras installed, so it is reported rather than
+    #: written down twice.
+    extensions: list[str] = Field(default_factory=list)
 
 
 class KnowledgeBase(_Strict):
@@ -3574,6 +3589,21 @@ class KnowledgeBase(_Strict):
     created_at: str
     updated_at: str
     documents: int
+    #: At most this many chunks come back from one search of this base. A
+    #: property of the base rather than of each call: how much context this
+    #: material is worth is a fact about the material.
+    top_k: int = 6
+    #: Split on the structure a parser found -- headings, slides, pages --
+    #: rather than on length alone.
+    smart_chunking: bool = True
+    #: Where a plain split may cut, when smart chunking is off.
+    separator: str = "\n\n"
+    #: What a chunk is aimed at, and how much of the previous one each carries.
+    chunk_size: int = 2048
+    chunk_overlap: int = 215
+    #: Which pre-processing a file goes through on the way in. Empty is
+    #: "don't use", the only setting there is so far.
+    file_processing: str = ""
 
 
 class KnowledgeBasesListParams(_Strict):
@@ -3601,11 +3631,22 @@ class KnowledgeDocument(_Strict):
     error: str
     created_at: str
     updated_at: str
+    #: Which kind of data source this arrived through: ``file``, ``note`` or
+    #: ``url``. A folder is not one of them -- the browser walks it and sends
+    #: the files, so each lands here as a file.
+    origin: str = "file"
+    #: What the origin points back at: a url document's page. Empty otherwise.
+    origin_ref: str = ""
 
 
 class KnowledgeBasesCreateParams(_Strict):
     name: str
     description: str | None = None
+    #: Whether the base is searched by vector. False is a base that keeps its
+    #: documents and is never embedded -- the choice a surface offers as
+    #: "Disabled", and one that cannot be changed afterwards, because a
+    #: collection's width is fixed when it is made.
+    embedding: bool = True
 
 
 class KnowledgeBasesCreateResult(_Strict):
@@ -3621,6 +3662,26 @@ class KnowledgeBasesRenameParams(_Strict):
 
 
 class KnowledgeBasesRenameResult(_Strict):
+    base: KnowledgeBase
+
+
+class KnowledgeBasesSettingsParams(_Strict):
+    """Every field is optional; the ones left out are untouched.
+
+    The embedding model is deliberately not among them: the collection is
+    sized to its width, so changing it is a rebuild of every vector in the
+    base rather than a setting."""
+
+    base_id: str
+    top_k: int | None = None
+    smart_chunking: bool | None = None
+    separator: str | None = None
+    chunk_size: int | None = None
+    chunk_overlap: int | None = None
+    file_processing: str | None = None
+
+
+class KnowledgeBasesSettingsResult(_Strict):
     base: KnowledgeBase
 
 
@@ -3650,6 +3711,13 @@ class KnowledgeHit(_Strict):
     score: float
     document_id: str
     text: str
+    #: Which piece of its document this was, and of how many. A chunk read on
+    #: its own says nothing about where in the document it came from.
+    chunk_index: int = 0
+    total_chunks: int = 0
+    #: What the chunk was parsed from, so a hit can be read without the
+    #: document list beside it.
+    source: str = ""
 
 
 class KnowledgeDocumentsAddParams(_Strict):
@@ -3662,6 +3730,43 @@ class KnowledgeDocumentsAddParams(_Strict):
 
 
 class KnowledgeDocumentsAddResult(_Strict):
+    document: KnowledgeDocument
+
+
+class KnowledgeDocumentsAddNoteParams(_Strict):
+    """``title`` may be empty; the note is then named from its first line."""
+
+    base_id: str
+    title: str | None = None
+    text: str
+
+
+class KnowledgeDocumentsAddNoteResult(_Strict):
+    document: KnowledgeDocument
+
+
+class KnowledgeDocumentsUpdateNoteParams(_Strict):
+    """Only a note can be rewritten: every other origin is a copy of something
+    the reader holds elsewhere."""
+
+    document_id: str
+    title: str | None = None
+    text: str
+
+
+class KnowledgeDocumentsUpdateNoteResult(_Strict):
+    document: KnowledgeDocument
+
+
+class KnowledgeDocumentsAddUrlParams(_Strict):
+    """The gateway reads the page; a browser cannot fetch a third-party site on
+    the reader's behalf, and the bytes have to reach this process anyway."""
+
+    base_id: str
+    url: str
+
+
+class KnowledgeDocumentsAddUrlResult(_Strict):
     document: KnowledgeDocument
 
 
@@ -3692,7 +3797,15 @@ class KnowledgeSearchParams(_Strict):
 
 
 class KnowledgeSearchResult(_Strict):
+    """The hits, and what each half of the search cost.
+
+    Timed apart because they answer different questions: embedding is a round
+    trip to the configured endpoint, and ``search_ms`` is the index doing its
+    job. A surface reporting one number as the search time wants the second."""
+
     hits: list[KnowledgeHit]
+    search_ms: float = 0.0
+    embed_ms: float = 0.0
 
 
 # ── playbooks.* — the stored library, read-only ────────────────────────────
@@ -3945,6 +4058,48 @@ class PlaybooksDeleteResult(_Strict):
     )
 
 
+class PlaybooksCreateParams(_Strict):
+    name: str
+    workflow: str = Field(
+        ...,
+        description=(
+            "The whole procedure in plain language: steps in order, what each produces and "
+            "consumes, per-run parameters, trigger phrases, and any MCP server a step needs. "
+            "The generator sees only this text."
+        ),
+    )
+    skills: list[str] | None = None
+
+
+class PlaybooksCreateResult(_Strict):
+    name: str
+    created: bool = Field(
+        ...,
+        description=(
+            "Whether a playbook now exists. False only when the generation failed, in which case `errors` says why."
+        ),
+    )
+    path: str = Field(..., description="Where the file landed; empty when nothing was created.")
+    notes: list[str] = Field(
+        ...,
+        description=(
+            "The composer's own open questions -- assumptions it made and gaps it could not "
+            "close. Written into the file's prose for review and returned here so a client need "
+            "not read the file back."
+        ),
+    )
+    errors: list[str] = Field(
+        ...,
+        description=("Why the composer could not produce a valid playbook. Non-empty exactly when `created` is false."),
+    )
+    adopted: bool = Field(
+        ...,
+        description=(
+            "Whether the live library loaded the new file, so it is usable in this process without a restart."
+        ),
+    )
+
+
 class PlaybooksRunParams(_Strict):
     name: str
     session_key: str = Field(
@@ -4128,9 +4283,16 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "knowledge.bases.list": (KnowledgeBasesListParams, KnowledgeBasesListResult),
     "knowledge.bases.create": (KnowledgeBasesCreateParams, KnowledgeBasesCreateResult),
     "knowledge.bases.rename": (KnowledgeBasesRenameParams, KnowledgeBasesRenameResult),
+    "knowledge.bases.settings": (KnowledgeBasesSettingsParams, KnowledgeBasesSettingsResult),
     "knowledge.bases.delete": (KnowledgeBasesDeleteParams, KnowledgeBasesDeleteResult),
     "knowledge.documents.list": (KnowledgeDocumentsListParams, KnowledgeDocumentsListResult),
     "knowledge.documents.add": (KnowledgeDocumentsAddParams, KnowledgeDocumentsAddResult),
+    "knowledge.documents.add_note": (KnowledgeDocumentsAddNoteParams, KnowledgeDocumentsAddNoteResult),
+    "knowledge.documents.update_note": (
+        KnowledgeDocumentsUpdateNoteParams,
+        KnowledgeDocumentsUpdateNoteResult,
+    ),
+    "knowledge.documents.add_url": (KnowledgeDocumentsAddUrlParams, KnowledgeDocumentsAddUrlResult),
     "knowledge.documents.index": (KnowledgeDocumentsIndexParams, KnowledgeDocumentsIndexResult),
     "knowledge.documents.delete": (KnowledgeDocumentsDeleteParams, KnowledgeDocumentsDeleteResult),
     "knowledge.search": (KnowledgeSearchParams, KnowledgeSearchResult),
@@ -4146,6 +4308,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "playbooks.validate": (PlaybooksValidateParams, PlaybooksValidateResult),
     "playbooks.delete": (PlaybooksDeleteParams, PlaybooksDeleteResult),
     "playbooks.run": (PlaybooksRunParams, PlaybooksRunResult),
+    "playbooks.create": (PlaybooksCreateParams, PlaybooksCreateResult),
     # plughub.* / plug.* / skillhub.* — the market
     "plughub.search": (PlughubSearchParams, PlughubSearchResult),
     "plughub.detail": (PlughubDetailParams, PlughubDetailResult),

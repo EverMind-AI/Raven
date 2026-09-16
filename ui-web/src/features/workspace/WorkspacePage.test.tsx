@@ -237,6 +237,29 @@ describe('workspace island', () => {
     expect(frame.getAttribute('sandbox')).toBe('')
   })
 
+  /* A page drawn on a canvas arrives as a rectangle of its own background
+     colour, which reads as a broken file rather than a withheld capability --
+     so the viewer says which it is, beside the frame that cannot say it. */
+  it('says why an HTML preview may look empty', async () => {
+    install(emptyWs({
+      file: { path: '/repo/game.html', kind: 'html', raw: false, text: null, err: null, size: 9, loading: false },
+    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    const note = document.querySelector('.fview .vnote')
+    expect(note).not.toBeNull()
+    expect(note?.textContent || '').toContain('gui.ws.html_no_scripts')
+  })
+
+  /* The PDF frame runs its viewer's own scripts, so there is nothing withheld
+     to explain and a note there would be noise. */
+  it('says nothing of the sort beside a PDF', async () => {
+    install(emptyWs({
+      file: { path: '/repo/deck.pdf', kind: 'pdf', raw: false, text: null, err: null, size: 9, loading: false },
+    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    expect(document.querySelector('.fview .vnote')).toBeNull()
+  })
+
   /* A deck is its own kind: the page cannot draw one, but the gateway can
      render it as a PDF, and that is what the viewer frames. */
   it('classifies a deck as its own kind and asks the file route for its PDF', () => {
