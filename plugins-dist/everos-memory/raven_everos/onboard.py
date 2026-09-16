@@ -820,12 +820,16 @@ def _everos_pick_creds_and_model(
             choices.append(choice)
             if prov["name"] == default_provider:
                 default_choice = choice.value
-        choices.append(
-            questionary.Choice(
-                _UI.t("Other (custom OpenAI-compatible endpoint)"),
-                value=("custom",),
+        if section != "embedding":
+            # Embedding is stored as a pin naming a provider, so a typed-in
+            # address has nowhere to go. The listed vendors are the ones this
+            # screen can record.
+            choices.append(
+                questionary.Choice(
+                    _UI.t("Other (custom OpenAI-compatible endpoint)"),
+                    value=("custom",),
+                )
             )
-        )
         choices.append(questionary.Separator())
         choices.append(questionary.Choice(_UI.t("Back"), value=_UI.back))
 
@@ -911,8 +915,14 @@ def _everos_pick_creds_and_model(
             continue
 
         result: dict[str, Any] = {"model": model, "api_key": api_key, "base_url": base_url}
+        # Which provider was picked, for a role whose endpoint raven holds: it
+        # stores the pair rather than the address and key, so the name has to
+        # travel with them. ``rerank`` already used this key for its own
+        # service-path choice and keeps it.
         if rerank_provider:
             result["provider"] = rerank_provider
+        elif chosen_provider:
+            result["provider"] = chosen_provider
         return result
 
 
@@ -1100,18 +1110,14 @@ def _config_everos_role(
             # endpoint, and writing it into everos.toml left the host's empty,
             # so every other reader fell back and said so on each use.
             #
-            # Which leaves this screen collecting a value it does not own, for
-            # a consumer it knows nothing about. That asymmetry is recorded as
-            # a debt on the host's own EmbeddingConfig, not a licence to grow
-            # more of it here: a second role that turns out to be raven's
-            # belongs behind another lent handle, never written direct.
-            _UI.set_embedding_endpoint(
-                {
-                    "model": result.get("model"),
-                    "baseUrl": result.get("base_url"),
-                    "apiKey": result.get("api_key"),
-                }
-            )
+            # The pair only -- model and provider. The address and key stay
+            # with the provider, so this screen hands over a choice rather than
+            # a copy of somebody's credential. Which means the key has to be on
+            # file under that provider first: a pin naming a provider the host
+            # holds nothing for resolves to nothing, and the wizard would have
+            # reported success over a service still running keyword-only.
+            _UI.keep_provider_credentials(result["provider"], api_key=result["api_key"], base_url=result["base_url"])
+            _UI.set_embedding_endpoint({"model": result["model"], "provider": result["provider"]})
         else:
             set_everos_section(section, result)
         _UI.console.print(_UI.t("  [green]✓ {label} configured.[/green]", label=label))

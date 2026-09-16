@@ -1670,26 +1670,30 @@ def test_giving_up_says_what_is_lost_in_both_languages(
 def test_memory_enable_writes_everos_sections(
     tmp_env: Path, everos_isolated: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Enabling memory + LLM (custom source) + embedding (custom, same endpoint)
+    """Enabling memory + LLM (custom source) + embedding (a listed provider)
     writes the EverOS toml; rerank/multimodal skipped."""
     import tomllib
 
     import questionary
 
+    from raven_everos.onboard import _EVEROS_PROVIDERS
+
     _seed_provider("openrouter", "sk-or", "openrouter/anthropic/claude-sonnet-4-5")
+    openrouter = next(p for p in _EVEROS_PROVIDERS if p["name"] == "openrouter")
 
     # _step4_memory select() calls, in order:
     #   1. LLM source picker            -> ("custom",)
     #   2. embedding "Configure it?"    -> "redo"   (optional since it degrades
     #                                               rather than breaks memory)
-    #   3. embedding source picker      -> ("custom",)
+    #   3. embedding source picker      -> openrouter, whose key is already on
+    #      file, so this role asks for no endpoint of its own
     #   4. rerank "Configure it?"       -> "skip"
     #   5. multimodal "Configure it?"   -> "skip"
-    select_answers = iter(["managed", ("custom",), "redo", ("custom",), "skip", "skip"])
-    # text(): LLM base_url, LLM model, embed base_url, embed model.
-    text_answers = iter(["https://llm/v1", "mem-llm", "https://llm/v1", "mem-embed"])
-    # password(): LLM api key, embed api key.
-    password_answers = iter(["k-llm", "k-embed"])
+    select_answers = iter(["managed", ("custom",), "redo", ("provider", openrouter), "skip", "skip"])
+    # text(): LLM base_url, LLM model, embed model.
+    text_answers = iter(["https://llm/v1", "mem-llm", "mem-embed"])
+    # password(): LLM api key.
+    password_answers = iter(["k-llm"])
 
     class _FQ:
         def __init__(self, a):
@@ -1735,11 +1739,9 @@ def test_memory_enable_writes_everos_sections(
     # knowledge base reads the same endpoint and never speaks to the memory
     # service, so writing it here left every other reader falling back.
     assert everos["embedding"]["model"] != "mem-embed", "the wizard should not write this file's embedding"
-    assert data["embedding"] == {
-        "model": "mem-embed",
-        "baseUrl": "https://llm/v1",
-        "apiKey": "k-embed",
-    }
+    # The pair, and only the pair: the address and the key stay with the
+    # provider, so this block names a choice rather than copying a credential.
+    assert data["embedding"] == {"model": "mem-embed", "provider": "openrouter"}
     # Skipped roles keep whatever the shipped template holds, which is a model
     # name with no credentials -- so they must read as unconfigured rather than
     # be absent outright.
@@ -1757,10 +1759,13 @@ def test_the_memory_step_reaches_the_capability_report(
     gets as far as reporting what the server can do."""
     import questionary
 
+    from raven_everos.onboard import _EVEROS_PROVIDERS
+
     _seed_provider("openrouter", "sk-or", "openrouter/anthropic/claude-sonnet-4-5")
-    select_answers = iter(["managed", ("custom",), "redo", ("custom",), "skip", "skip"])
-    text_answers = iter(["https://llm/v1", "mem-llm", "https://llm/v1", "mem-embed"])
-    password_answers = iter(["k-llm", "k-embed"])
+    openrouter = next(p for p in _EVEROS_PROVIDERS if p["name"] == "openrouter")
+    select_answers = iter(["managed", ("custom",), "redo", ("provider", openrouter), "skip", "skip"])
+    text_answers = iter(["https://llm/v1", "mem-llm", "mem-embed"])
+    password_answers = iter(["k-llm"])
 
     class _FQ:
         def __init__(self, a):
@@ -5363,9 +5368,11 @@ def test_picking_another_configured_provider_does_not_ask_for_its_key(
     import json
 
     block = json.loads(tmp_env.read_text(encoding="utf-8"))["embedding"]
-    assert block["apiKey"] == "sk-sf"
-    assert block["baseUrl"] == "https://api.siliconflow.cn/v1"
     assert block["model"] == "Qwen/Qwen3-Embedding-4B"
+    assert block["provider"] == "siliconflow"
+    # The key the wizard borrowed to talk to the provider is not copied into
+    # the block: it stays the provider's, so rotating it is one edit there.
+    assert "apiKey" not in block and "baseUrl" not in block
 
 
 def test_a_configured_embedding_reaches_the_service_the_wizard_launches(
@@ -5410,6 +5417,8 @@ def test_a_configured_embedding_reaches_the_service_the_wizard_launches(
     )
 
     env = _child_env()
+    # Resolved through the provider named in the pin: the block stores the pair,
+    # and the address and key come from the provider raven already has.
     assert env["EVEROS_EMBEDDING__MODEL"] == "Qwen/Qwen3-Embedding-4B"
     assert env["EVEROS_EMBEDDING__BASE_URL"] == "https://api.siliconflow.cn/v1"
     assert env["EVEROS_EMBEDDING__API_KEY"] == "sk-sf"
@@ -5433,13 +5442,10 @@ def test_keeping_the_stored_endpoint_still_reaches_the_service(
 
     for name in ("MODEL", "BASE_URL", "API_KEY", "DIMENSIONS"):
         monkeypatch.delenv(f"EVEROS_EMBEDDING__{name}", raising=False)
-    set_embedding_endpoint(
-        {
-            "model": "Qwen/Qwen3-Embedding-4B",
-            "baseUrl": "https://api.siliconflow.cn/v1",
-            "apiKey": "sk-sf",
-        }
-    )
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("siliconflow", {"api_key": "sk-sf"})
+    set_embedding_endpoint({"model": "Qwen/Qwen3-Embedding-4B", "provider": "siliconflow"})
 
     class _FQ:
         def ask(self) -> str:
@@ -5462,6 +5468,8 @@ def test_keeping_the_stored_endpoint_still_reaches_the_service(
 
     assert any("Already configured" in m for m in asked), "the stored endpoint must offer Keep current"
     env = _child_env()
+    # Resolved through the provider named in the pin: the block stores the pair,
+    # and the address and key come from the provider raven already has.
     assert env["EVEROS_EMBEDDING__MODEL"] == "Qwen/Qwen3-Embedding-4B"
     assert env["EVEROS_EMBEDDING__BASE_URL"] == "https://api.siliconflow.cn/v1"
     assert env["EVEROS_EMBEDDING__API_KEY"] == "sk-sf"
@@ -7862,20 +7870,29 @@ def test_the_lent_writer_records_the_endpoint_in_ravens_own_config(tmp_env: Path
 
     ui = onboard_commands._onboard_ui()
 
-    ui.set_embedding_endpoint({"model": "m-1", "baseUrl": "https://e.test/v1", "apiKey": "sk-1"})
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("siliconflow", {"api_key": "sk-sf"})
+
+    ui.set_embedding_endpoint({"model": "m-1", "provider": "siliconflow"})
 
     block = json.loads(tmp_env.read_text(encoding="utf-8"))["embedding"]
-    assert block == {"model": "m-1", "baseUrl": "https://e.test/v1", "apiKey": "sk-1"}
+    # The pair only: the address and key belong to the provider, so the block
+    # never holds a secret and rotating one is an edit somewhere else.
+    assert block == {"model": "m-1", "provider": "siliconflow"}
 
 
 def test_the_lent_writer_merges_rather_than_replaces(tmp_env: Path) -> None:
-    """A run that configures only the model keeps the key already recorded."""
+    """A run that configures only the model keeps the provider already recorded."""
     import json
 
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields("siliconflow", {"api_key": "sk-sf"})
     ui = onboard_commands._onboard_ui()
-    ui.set_embedding_endpoint({"model": "m-1", "baseUrl": "https://e.test/v1", "apiKey": "sk-1"})
+    ui.set_embedding_endpoint({"model": "m-1", "provider": "siliconflow"})
 
     ui.set_embedding_endpoint({"model": "m-2"})
 
     block = json.loads(tmp_env.read_text(encoding="utf-8"))["embedding"]
-    assert block["model"] == "m-2" and block["apiKey"] == "sk-1"
+    assert block["model"] == "m-2" and block["provider"] == "siliconflow"

@@ -1854,6 +1854,23 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
 # ---------------------------------------------------------------------------
 
 
+def _keep_provider_credentials(provider: str, *, api_key: str, base_url: str | None = None) -> None:
+    """Store a key the wizard collected under the provider it was given for.
+
+    Only what is missing: a section that already holds a key keeps it, since
+    the one on file is the one every other feature is already using and a
+    screen configuring one model does not get to replace it.
+    """
+    from raven.config.update_providers import resolve_provider_credentials, set_provider_fields
+
+    if not api_key or resolve_provider_credentials(provider) is not None:
+        return
+    fields: dict[str, Any] = {"api_key": api_key}
+    if base_url:
+        fields["api_base"] = base_url
+    set_provider_fields(provider, fields)
+
+
 def _onboard_ui() -> "OnboardUI":
     """The wizard shell a plugin's screen borrows for the length of one run."""
     from raven.cli._styles import RAVEN_STYLE
@@ -1873,6 +1890,7 @@ def _onboard_ui() -> "OnboardUI":
         prompt_api_key=_prompt_api_key,
         style=RAVEN_STYLE,
         lend_provider_credentials=lend_provider_credentials,
+        keep_provider_credentials=_keep_provider_credentials,
         resolve_main_model=resolve_main_model,
         set_embedding_endpoint=lambda fields: set_embedding_endpoint(fields),
     )

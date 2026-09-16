@@ -44,6 +44,13 @@ class OnboardUI:
     prompt_api_key: Callable[..., Any]
     style: Any
     lend_provider_credentials: Callable[[str], dict[str, str]]
+    keep_provider_credentials: Callable[..., None]
+    """The mirror of ``lend_provider_credentials``: put a key on file.
+
+    A screen that collects a credential for a shared setting has to leave it
+    where the host looks, or the setting it then records points at a provider
+    the host cannot reach. Lent rather than done by the plugin because where
+    credentials live is the host's business."""
     resolve_main_model: Callable[[str], dict[str, Any]]
     set_embedding_endpoint: Callable[[dict[str, Any]], None]
     """Record an embedding endpoint in the host's own config.
