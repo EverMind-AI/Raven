@@ -95,8 +95,19 @@ test-python:
 coverage:
 	TERM=dumb uv run --frozen --python $(PYTHON_VERSION) --all-extras pytest -q $(COVERAGE_REPORT_ARGS)
 
+# One worker per core of the runner a shard lands on. The -n 4 in addopts was
+# measured on the whole suite running on one runner; the shards then split that
+# work four ways, so four CPU-bound workers on a two-core runner are pure
+# oversubscription. That matters beyond wall clock now: the idle ceiling reads
+# wall minus CPU, and a process queueing for a core spends that difference the
+# same way a process waiting on a socket does -- which is why tests/test_rpc_model.py
+# trips the ceiling on CI and never locally, charging a different case each run.
+# Measured on tests/test_rpc_model.py: -n 0 and -n 2 report no test over 0.05s
+# idle, -n 4 reports four, -n 16 reports seventy-seven.
+COVERAGE_SHARD_WORKERS ?= 2
+
 coverage-shard:
-	TERM=dumb uv run --frozen --python $(PYTHON_VERSION) --all-extras pytest -q --shard $(COVERAGE_SHARD) --durations=25 $(PYTEST_ARGS) $(COVERAGE_DATA_ARGS)
+	TERM=dumb uv run --frozen --python $(PYTHON_VERSION) --all-extras pytest -q --shard $(COVERAGE_SHARD) -n $(COVERAGE_SHARD_WORKERS) --durations=25 $(PYTEST_ARGS) $(COVERAGE_DATA_ARGS)
 
 coverage-combine:
 	uv run --frozen --python $(PYTHON_VERSION) coverage combine --keep $(COVERAGE_DATA_DIR)
