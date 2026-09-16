@@ -665,6 +665,35 @@ class TestAPinCanNameAnyProviderThisConfigHolds:
             await rpc_console.settings_set({"key": "embedding", "value": {"model": "m", "provider": "deepinfr"}})
 
 
+class TestClearingTheEmbeddingPin:
+    """The picker's "inherit" option sends both halves empty.
+
+    Dropping empty values before the write made that a no-op the caller was
+    told had applied: the picker snapped back to the old pair on the next load,
+    and editing the file by hand was the only way to unset it.
+    """
+
+    async def test_both_halves_empty_removes_the_block(self, cfg):
+        from raven.config.update_providers import set_provider_fields
+
+        set_provider_fields("openai", {"api_key": "sk-openai"})
+        await rpc_console.settings_set(
+            {"key": "embedding", "value": {"model": "text-embedding-3-small", "provider": "openai"}}
+        )
+
+        r = await rpc_console.settings_set({"key": "embedding", "value": {"model": "", "provider": ""}})
+
+        assert r["applied"] is True
+        assert "embedding" not in _read(cfg)
+        assert r["previous"] == {"model": "text-embedding-3-small", "provider": "openai"}
+
+    async def test_clearing_what_was_never_set_is_not_an_error(self, cfg):
+        r = await rpc_console.settings_set({"key": "embedding", "value": {"model": "", "provider": ""}})
+
+        assert r["applied"] is True
+        assert "embedding" not in _read(cfg)
+
+
 class TestTheEmbeddingPinHasOneWayIn:
     """Two writers for one block is one writer that checks and one that does
     not. The settings page's pin row wrote raw -- no provider check, and no
