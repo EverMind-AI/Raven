@@ -1,10 +1,18 @@
-"""A real A2A client against a real raven A2A server, over a real socket.
+"""Raven's A2A server over a real socket, driven by hand-built requests.
 
-The SDK's own client is the closest thing to a second implementation available,
-so conformance is asserted against it rather than against our own encoder. The
-handler under test is the real ``DefaultRequestHandler`` assembled by
-``raven.a2a.runtime.build_request_handler`` -- not a fake -- so a pass here is
-proof about the SDK integration, not just about this repo's own encoding.
+The handler under test is the real ``DefaultRequestHandler`` assembled by
+``raven.a2a.runtime.build_request_handler``, so a pass here is proof about the
+SDK integration on the *server* side.
+
+It is not proof of conformance, and the difference matters: the requests here
+are written by hand and the frames read back with the same assumptions that
+wrote them, so this file agrees with whatever raven happens to encode. Three
+wire-level disagreements passed through it -- a missing required field, a
+missing response envelope, and a reply read from the wrong arm of a oneof --
+because the streaming test counts ``data:`` frames without parsing any of them.
+``tests/test_a2a_interop.py`` is the one that points raven's own client at
+raven's own server, and it lives in the default pytest scope because
+``norecursedirs`` keeps this directory out of it.
 """
 
 import asyncio
