@@ -3,6 +3,15 @@
    the start of the run. later() measures from the moment it is called, so
    anything scheduled from *inside* a fired callback must use a plain delay
    — passing the cumulative offset there would defer it by the whole run. */
+
+import { eventsFor } from './030-fixtures.js'
+import { later, queueShift, runState, sess, turn } from './040-state.js'
+import { sessionDraw } from './050-rail.js'
+import { collapseTurn, dagFlowFeed, foldSilentRuns, newStep } from './070-transcript.js'
+import { drawMeter, goState, send } from './090-composer.js'
+import { WS } from './100-workspace.js'
+import { wsOnTool, wsOnToolDone } from './110-subagents.js'
+
 function replay(run, instant) {
   /* Same bookkeeping the live turn machine does at turn start: the workspace
      record files a change under the turn it happened in, and until this the
@@ -78,3 +87,12 @@ function replay(run, instant) {
     }, 300);
   });
 }
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
+
+}
+
+export { replay }

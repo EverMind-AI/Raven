@@ -1,12 +1,28 @@
 /* ══ module 1a: session rail ══════════════════════════════════════
    The renderer is the rail island (ui-web/src/features/rail/). The fixture source
    owns its rows; live mode replaces the whole source with live-owned storage. */
+
+import { DS } from '../seam/000-datasource.js'
+import { SESSION_FIXTURES } from './030-fixtures.js'
+import { turn } from './040-state.js'
+import { openDemoSession } from './060-conversation.js'
+
 function markNewCurrent() { RavenIslands.rail.markNew(); }
 /* inline rename in the top bar, from the title bar's own button; the list
    follows. Kept as a local name because #renameBtn's handler still calls it --
    the live layer no longer replaces it, which is the part that mattered. */
 function renameTitle() { RavenIslands.rail.rename(); }
 
+const sessionSource = () => DS.sessions;
+const sessionRows = () => sessionSource().snapshot().rows;
+const sessionReplace = (rows) => sessionSource().replace(rows);
+const sessionDraw = () => RavenIslands.rail.draw();
+const sessionOpen = (s) => sessionSource().open(s);
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
 /* remove, renamed and pin are deliberately absent: with no server to tell,
    the island's own optimistic behaviour IS the demo -- a row that leaves the
    list with an undo, a pin that just moves, a title that is only ever local.
@@ -21,9 +37,6 @@ DS.sessions ??= (() => {
     open: (s) => openDemoSession(s),
   };
 })();
+}
 
-const sessionSource = () => DS.sessions;
-const sessionRows = () => sessionSource().snapshot().rows;
-const sessionReplace = (rows) => sessionSource().replace(rows);
-const sessionDraw = () => RavenIslands.rail.draw();
-const sessionOpen = (s) => sessionSource().open(s);
+export { markNewCurrent, renameTitle, sessionSource, sessionRows, sessionReplace, sessionDraw, sessionOpen }

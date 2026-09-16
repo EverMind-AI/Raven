@@ -10,7 +10,11 @@
    no delegated runs and the demo never invents any -- which is why the members
    this source leaves out are the ones a run would have needed: the watch that
    keeps the list fresh, the per-run record, and the painter that draws one. */
-DS.agents ??= { list: async () => [] };
+
+import { DS } from '../seam/000-datasource.js'
+import { $, T } from './010-kernel.js'
+import { WS, bumpWs, drawWs, hunkFromEdit, hunkFromUnified, hunkFromWrite, setWs, setWsFull, wsArgs, wsOpen, wsPick, wsRecordChange, wsShowsTurn, wsTab, wsWide } from './100-workspace.js'
+import { composing } from './150-chrome.js'
 
 /* ── tool-event hooks ──────────────────────────────────────────────────
    Fed the FULL argument object, because that is where the diff lives. */
@@ -54,6 +58,12 @@ function wsOnToolDone(name, args, ok, preview, ms, diff) {
   bumpWs();
 }
 
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
+DS.agents ??= { list: async () => [] };
+
 $('#wsBtn').onclick = () => RavenIslands.workspace.toggleDesk();
 $('#wsClose').onclick = () => setWs(false);
 /* Widening by hand is the seam's job now, so this button does the thing dragging
@@ -73,3 +83,6 @@ $('#ws').addEventListener('keydown', (e) => {
   e.preventDefault();
   wsPick(pick);
 });
+}
+
+export { wsOnTool, wsOnToolDone }

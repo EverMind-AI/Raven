@@ -4,6 +4,11 @@
    an answer makes clickable. Installing onto the seam replaces the fixture
    source before the first paint. */
 
+import { DS } from '../seam/000-datasource.js'
+import { HOST_PLATFORM } from '../demo/010-kernel.js'
+import { wsShortPath } from '../demo/100-workspace.js'
+import { rpc } from './020-rpc.js'
+
 function relToWorkspace(p) {
   const s = String(p || '');
   const m = s.match(/(?:^|\/)(?:\.raven\/)?workspace\/(.+)$/);
@@ -65,6 +70,10 @@ const liveLinkTargetOf = (u) => {
    remote serve they would drive somebody else's machine. */
 const hostIsLocal = () => /^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname);
 
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
 /* Assigned, not ??=: the fixture source (demo/020-prose.js) is already on the
    seam by the time this runs, and replacing it before the first paint is the
    whole point. */
@@ -96,3 +105,6 @@ DS.workspace = {
   hostIsLocal,
   shortPath: (p) => relToWsRoot(p) || relToWorkspace(p) || String(p).replace(/^\/Users\/[^/]+\//, '~/'),
 };
+}
+
+export { relToWorkspace, wsRoot, wsSetRoot, relToWsRoot, livePathOf, liveLinkTargetOf, hostIsLocal }

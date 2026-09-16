@@ -1,6 +1,5 @@
 // @vitest-environment happy-dom
-// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
-import { readFileSync } from 'node:fs'
+import { sandboxSource } from '../../../scripts/legacy-source.mjs'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -14,7 +13,7 @@ interface ParkedHarness {
   setOwner(owner: string): void
 }
 
-const source = readFileSync('src/legacy/live/060-parked.js', 'utf8')
+const source = sandboxSource('src/legacy/live/060-parked.js')
 
 function harness(): {
   api: ParkedHarness

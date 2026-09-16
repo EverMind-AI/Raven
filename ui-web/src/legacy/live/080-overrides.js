@@ -1,4 +1,24 @@
 /* ---- overrides ----------------------------------------------------- */
+
+import { DS } from '../seam/000-datasource.js'
+import { $, T } from '../demo/010-kernel.js'
+import { claimDraft, confirmAsk, dropDraft, loadDraft, parkDraft, queueClear, queuePush, queueShift, sess, sheetsForget, stop_, turn } from '../demo/040-state.js'
+import { markNewCurrent, sessionDraw, sessionOpen, sessionReplace, sessionRows } from '../demo/050-rail.js'
+import { ask, noteRow, pitch, splitAtts, unpitch } from '../demo/060-conversation.js'
+import { killStatus, showStatus } from '../demo/070-transcript.js'
+import { drawMeter, goState, ta } from '../demo/090-composer.js'
+import { setWs, wsOnHistory, wsReset } from '../demo/100-workspace.js'
+import { drawCapsBadge, showPage } from '../demo/120-capabilities.js'
+import { drawCaps } from '../demo/152-skills.js'
+import { SURFACE, rpc } from './020-rpc.js'
+import { rowPreview, touchSession } from './030-sessions.js'
+import { renderHistory } from './040-history.js'
+import { beginNaming, live, namingDeclined, resetTurnState, turnDur } from './050-turn.js'
+import { park, parkTurn, parkedTurns, restoreTurn, subBySession, subSession, transitionTurn } from './060-parked.js'
+import { loadExt } from './090-extensions.js'
+import { loadPermMode, loadProviders, openModelsForMissingProvider, stagedPerm, stagedTier } from './120-settings.js'
+import { wsSetRoot } from './170-workspace.js'
+
 async function subscribe(sessionKey) {
   // One subscription per session per socket: re-opening a session reuses its
   // stream, so a parked turn's events and the visible ones never double up.
@@ -24,71 +44,6 @@ function claimStream(sessionKey) {
   live.subId = subBySession[sessionKey] || null;
 }
 
-rpc.onReconnect = async () => {
-  await rpc.call('system.hello', { client_version: '0.1.0', surface: SURFACE }).catch(() => {});
-  killStatus();
-  // A fresh socket voids every server-side subscription, and the events a
-  // parked turn missed while the socket was down are unrecoverable — drop
-  // the parked copies and let re-opens rebuild from disk.
-  parkedTurns.clear();
-  for (const k of Object.keys(subBySession)) delete subBySession[k];
-  for (const k of Object.keys(subSession)) delete subSession[k];
-  live.subId = null;
-  sessionRows().forEach((s) => { if (s.status === 'run') s.status = null; });
-  /* Re-subscribing is not enough: events emitted while the socket was down
-     are gone, and if the turn ENDED in that gap the client would keep its
-     busy spinner forever. Reload the whole session from disk instead -- the
-     transcript is persisted server-side, so a full re-open is lossless, and
-     a turn that is genuinely still running keeps streaming into the fresh
-     subscription that sessionOpen sets up. */
-  const current = sessionCurrent();
-  if (current && !draft) {
-    turn.dispatch({ type: 'idle' });
-    /* End the editor before reading anything it can change. The teardown
-       inside openLiveSession is too late for THIS caller: it is the only one
-       that builds a detached { id, title } instead of handing over the live
-       row, so a title read here and committed there gets painted stale over
-       the heading the commit had just restored. Every other caller passes the
-       row itself and is immune by construction.
-
-       And the row is what carries the title; the heading is only where it is
-       drawn. Reading the heading FIRST died here with an editor open --
-       h1#title does not exist while the input stands in its place, so the
-       handler threw on this line and the conversation was never reloaded,
-       never re-subscribed and never told the reader it was back. It is the
-       wrong first source twice over besides: it holds the plain form with any
-       leading icon stripped, and it holds nothing at all while a name is being
-       generated. It stays as the last resort for the one thing the row cannot
-       answer -- a current conversation that is not in the list. */
-    RavenIslands.rail.endRename();
-    const open = sess(current);
-    const heading = $('#title');
-    const title = (open && open.title) || (heading && heading.textContent) || '';
-    await sessionOpen({ id: current, title });
-    showStatus(T('gui.reconnected'));
-    setTimeout(killStatus, 2500);
-  } else if (current) {
-    subscribe(current);
-  }
-  /* The installed skills, plugins and tools are read once at boot into
-     module state and served from there, so a socket that was down when boot
-     ran leaves all three empty for the life of the tab -- an empty page
-     rather than a failed one. Re-read them here: the session reload above
-     already treats a reconnect as "refetch what the gap invalidated", and
-     these are the only surfaces whose data never asks again on its own. */
-  /* Repainted, not just re-read: the island renders on its own `set`, which
-     refilling the module state does not call, so the extensions page would
-     keep showing the offline note after the reconnect it tells the reader to
-     wait for. `drawCaps` is the entry for both tabs (153-plugins.js wraps
-     it), guarded the way `redrawAll` guards it -- the page may not be up. */
-  loadExt()
-    .then(() => {
-      drawCapsBadge();
-      try { drawCaps(); } catch { /* extensions page not built yet */ }
-    })
-    .catch(() => {});
-};
-
 /* A pending new task is a draft, not a session: nothing is written to disk
    until the reader does something that needs a conversation, so the rail does
    not fill with empty sessions. That was the first message and only the first
@@ -106,14 +61,6 @@ let draft = false;
    and reset on exactly the same two paths, which is why the three share one
    object; the settings layer in 120 assigns all three. */
 const staged = { model: null, tier: null, perm: null };
-/* The working directory picked while still a draft. Not a fourth staged write:
-   the engine takes it on `session.create` itself, so `promote` hands it over
-   with the mint rather than writing it afterwards. Reset on the same two paths
-   as the others, and pushed to the chip on each so the chip reads draft (live)
-   or conversation (fixed). Cleared only once the create has taken it: a create
-   the gateway refuses (a folder inside raven's own data) leaves the draft
-   standing with its pick still on the chip, which is where the reader changes it. */
-let pendingWorkdir = null;
 
 /* Apply a staged draft pick to the session the first message just minted.
    Awaited before that turn is sent, so the turn runs on the chosen model rather
@@ -222,7 +169,6 @@ function startDraft() {
      rather than waiting to be spent by whichever conversation is sent next. */
   staged.tier = null; void loadTier();
   staged.perm = null; void loadPermMode(null, gen);
-  pendingWorkdir = null; setDraftWorkdir();
   $('#title').textContent = T('gui.new_task');
   pitch(); sessionDraw(); ta.focus();
 }
@@ -261,7 +207,6 @@ async function openLiveSession(s) {
      conversation is the open one, so the row has done its job and a badge left
      behind would outlive the sheet it was pointing at. */
   if (row && (row.status === 'done' || row.status === 'ask')) row.status = null;
-  pendingWorkdir = null; setSessionWorkdir((row && row.workdir) || s.workdir || null);
   markNewCurrent();
   resetView();
   $('#title').textContent = plainTitle(s.title);
@@ -427,13 +372,10 @@ async function promote(preview, atPointer) {
      reads the view as it stood when the promotion began rather than whatever
      the reader has opened since. */
   const gen = viewGen;
-  const workdir = pendingWorkdir;
-  const r = await rpc.call('session.create', workdir ? { workdir } : {});
-  pendingWorkdir = null;
+  const r = await rpc.call('session.create', {});
   wsSetRoot(r.info && r.info.cwd);
   const s = { id: r.session_id, title: T('gui.new_task'), last: preview || T('gui.sess.not_started'),
-    when: T('gui.sess.just_now'), at: Math.floor(Date.now() / 1000), run: null, live: true, persisted: false,
-    workdir: workdir || null };
+    when: T('gui.sess.just_now'), at: Math.floor(Date.now() / 1000), run: null, live: true, persisted: false };
   sessionRows().unshift(s); sessionSet(s.id); draft = false;
   /* The pointer has moved, and a caller with something to file under the new
      conversation files it HERE rather than after the round trips below: the
@@ -444,8 +386,6 @@ async function promote(preview, atPointer) {
   // The composer was owned by 'new' until this point; keep later keystrokes
   // filed under the session that just came into being.
   claimDraft(sessionCurrent());
-  // The chip stops taking presses: the folder is the conversation's now.
-  setSessionWorkdir(workdir || null);
   await applyStagedModel(s.id, gen);
   await applyStagedTier(s.id);
   await applyStagedPerm(s.id);
@@ -526,7 +466,7 @@ function liveSend(text) {
     const sent = await rpc.call('turn.send', { session_key: sessionCurrent(), content: text, ...mediaOf(text) });
     if (sent && sent.naming === false) namingDeclined(id);
   })().catch(failed);
-};
+}
 
 /* A stop is not a failure: everything already streamed stays on the stage, and
    the only new line is the note that a person asked for the stop. Shared by
@@ -558,40 +498,6 @@ function drainQueue() {
   const nx = queueShift();
   if (nx !== undefined) liveSend(nx);
 }
-
-/* The two actions, installed on the source the composer already asks. `stop`
-   is the go button's other half and the Escape key's; `send` is what the island
-   hands a folded message to. */
-DS.composer.send = liveSend;
-/* The one way anything outside the dock can get a conversation to work in. The
-   composer has always made one on its first send; this is the same promotion
-   offered by name, for a caller that needs the conversation and has no message
-   to start it with. */
-DS.composer.startConversation = () => openConversation();
-/* The folder chip's two doors (shell/workdir.ts), on the composer seam beside
-   the promotion they feed: the draft's pick, held for the create above, and
-   the gateway's directory walk behind "Open folder...". */
-DS.composer.stageWorkdir = (dir) => { pendingWorkdir = dir || null; };
-DS.composer.browseDirs = (path) => rpc.call('fs.dirs', path ? { path } : {});
-DS.composer.stop = function () {
-  /* A runtime turn (a delegated result re-entering) is NOT cancellable:
-     turn.cancel resolves only handles turn.send registered, and the stop
-     button claiming the UI here would reset the stage while the delegated
-     deltas are still streaming into it. The reader's stop does nothing until
-     the turn is one they can stop. */
-  if (!turn.cancellable()) return;
-  const owner = sessionCurrent();
-  turn.dispatch({ type: 'cancel' });
-  rpc.call('turn.cancel', { session_key: owner })
-    .then(() => {
-      transitionTurn(owner, { type: 'idle' });
-      if (sessionCurrent() === owner) { drawMeter(); goState(); sessionDraw(); drainQueue(); }
-    }, () => {
-      transitionTurn(owner, { type: 'idle' });
-      if (sessionCurrent() === owner) { drawMeter(); goState(); sessionDraw(); }
-    });
-  softStop(true);
-};
 
 /* Deleting for real. Installed on the session source rather than replacing the
    rail's local name: the island asks the source whether there is anywhere to
@@ -635,6 +541,110 @@ async function leaveArchivedSession(sessionId) {
   $('#ta').value = '';
   startDraft();
 }
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
+rpc.onReconnect = async () => {
+  await rpc.call('system.hello', { client_version: '0.1.0', surface: SURFACE }).catch(() => {});
+  killStatus();
+  // A fresh socket voids every server-side subscription, and the events a
+  // parked turn missed while the socket was down are unrecoverable — drop
+  // the parked copies and let re-opens rebuild from disk.
+  parkedTurns.clear();
+  for (const k of Object.keys(subBySession)) delete subBySession[k];
+  for (const k of Object.keys(subSession)) delete subSession[k];
+  live.subId = null;
+  sessionRows().forEach((s) => { if (s.status === 'run') s.status = null; });
+  /* Re-subscribing is not enough: events emitted while the socket was down
+     are gone, and if the turn ENDED in that gap the client would keep its
+     busy spinner forever. Reload the whole session from disk instead -- the
+     transcript is persisted server-side, so a full re-open is lossless, and
+     a turn that is genuinely still running keeps streaming into the fresh
+     subscription that sessionOpen sets up. */
+  const current = sessionCurrent();
+  if (current && !draft) {
+    turn.dispatch({ type: 'idle' });
+    /* End the editor before reading anything it can change. The teardown
+       inside openLiveSession is too late for THIS caller: it is the only one
+       that builds a detached { id, title } instead of handing over the live
+       row, so a title read here and committed there gets painted stale over
+       the heading the commit had just restored. Every other caller passes the
+       row itself and is immune by construction.
+
+       And the row is what carries the title; the heading is only where it is
+       drawn. Reading the heading FIRST died here with an editor open --
+       h1#title does not exist while the input stands in its place, so the
+       handler threw on this line and the conversation was never reloaded,
+       never re-subscribed and never told the reader it was back. It is the
+       wrong first source twice over besides: it holds the plain form with any
+       leading icon stripped, and it holds nothing at all while a name is being
+       generated. It stays as the last resort for the one thing the row cannot
+       answer -- a current conversation that is not in the list. */
+    RavenIslands.rail.endRename();
+    const open = sess(current);
+    const heading = $('#title');
+    const title = (open && open.title) || (heading && heading.textContent) || '';
+    await sessionOpen({ id: current, title });
+    showStatus(T('gui.reconnected'));
+    setTimeout(killStatus, 2500);
+  } else if (current) {
+    subscribe(current);
+  }
+  /* The installed skills, plugins and tools are read once at boot into
+     module state and served from there, so a socket that was down when boot
+     ran leaves all three empty for the life of the tab -- an empty page
+     rather than a failed one. Re-read them here: the session reload above
+     already treats a reconnect as "refetch what the gap invalidated", and
+     these are the only surfaces whose data never asks again on its own. */
+  /* Repainted, not just re-read: the island renders on its own `set`, which
+     refilling the module state does not call, so the extensions page would
+     keep showing the offline note after the reconnect it tells the reader to
+     wait for. `drawCaps` is the entry for both tabs (153-plugins.js wraps
+     it), guarded the way `redrawAll` guards it -- the page may not be up. */
+  loadExt()
+    .then(() => {
+      drawCapsBadge();
+      try { drawCaps(); } catch { /* extensions page not built yet */ }
+    })
+    .catch(() => {});
+};
+;
+
+/* The two actions, installed on the source the composer already asks. `stop`
+   is the go button's other half and the Escape key's; `send` is what the island
+   hands a folded message to. */
+DS.composer.send = liveSend;
+/* The one way anything outside the dock can get a conversation to work in. The
+   composer has always made one on its first send; this is the same promotion
+   offered by name, for a caller that needs the conversation and has no message
+   to start it with. */
+DS.composer.startConversation = () => openConversation();
+/* The folder chip's two doors (shell/workdir.ts), on the composer seam beside
+   the promotion they feed: the draft's pick, held for the create above, and
+   the gateway's directory walk behind "Open folder...". */
+DS.composer.stageWorkdir = (dir) => { pendingWorkdir = dir || null; };
+DS.composer.browseDirs = (path) => rpc.call('fs.dirs', path ? { path } : {});
+DS.composer.stop = function () {
+  /* A runtime turn (a delegated result re-entering) is NOT cancellable:
+     turn.cancel resolves only handles turn.send registered, and the stop
+     button claiming the UI here would reset the stage while the delegated
+     deltas are still streaming into it. The reader's stop does nothing until
+     the turn is one they can stop. */
+  if (!turn.cancellable()) return;
+  const owner = sessionCurrent();
+  turn.dispatch({ type: 'cancel' });
+  rpc.call('turn.cancel', { session_key: owner })
+    .then(() => {
+      transitionTurn(owner, { type: 'idle' });
+      if (sessionCurrent() === owner) { drawMeter(); goState(); sessionDraw(); drainQueue(); }
+    }, () => {
+      transitionTurn(owner, { type: 'idle' });
+      if (sessionCurrent() === owner) { drawMeter(); goState(); sessionDraw(); }
+    });
+  softStop(true);
+};
 
 DS.sessions.remove = function (s) {
   confirmAsk(T('gui.sess.delete_title'), T('gui.sess.delete_body', { title: s.title }), T('gui.sess.delete'), async () => {
@@ -709,3 +719,6 @@ DS.sessions.renamed = (id, title, previous) => {
     toast(T('gui.sess.rename_failed', { detail: (e && (e.message || e.detail)) || String(e) }));
   });
 };
+}
+
+export { subscribe, claimStream, draft, staged, applyStagedModel, applyStagedTier, applyStagedPerm, viewGen, resetView, startDraft, openLiveSession, mediaOf, promoting, openConversation, promote, sendOnSession, dispatchSend, liveSend, softStop, drainQueue, forgetSubscription, leaveDeletedSession, leaveArchivedSession }

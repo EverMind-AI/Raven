@@ -1,5 +1,8 @@
 /* ══ app state ════════════════════════════════════════════════════ */
-sessionSet('a');
+
+import { $, T, mk } from './010-kernel.js'
+import { sessionRows } from './050-rail.js'
+
 let timers = [];
 /* The running turn's usage totals. On an object because the conversation,
    replay and composer layers all write it. */
@@ -23,9 +26,6 @@ function confirmAsk(title, body, label, fn) {
   $('#veil').dataset.open = 'true';
   $('#cfNo').focus();
 }
-$('#cfNo').onclick = () => { $('#veil').dataset.open = 'false'; cfFn = null; };
-$('#cfYes').onclick = () => { $('#veil').dataset.open = 'false'; if (cfFn) cfFn(); cfFn = null; };
-$('#veil').onclick = (e) => { if (e.target === $('#veil')) $('#cfNo').click(); };
 
 /* ══ session-scoped sheets ════════════════════════════════
    The rack that holds everything docking above the composer -- a clarify
@@ -37,20 +37,11 @@ $('#veil').onclick = (e) => { if (e.target === $('#veil')) $('#cfNo').click(); }
    One destructure, at this layer's top level so both layers see it: the live
    parts are an IIFE nested in this script, and the four of them that raise or
    retire a sheet keep calling these by name. */
-const { sheetSession, sheetAdd, sheetRemove, sheetDropClass, sheetsSync, sheetsForget,
-  approveSheet, approvalSheet, approvalClose, clarifySheet, clarifyClose,
-  drawQueue: queueDraw, queuePush, queueShift,
-  queueClear, queueSnapshot, queueRestore, parkDraft, loadDraft, dropDraft,
-  claimDraft, turn } = RavenIslands.composer;
-const { current: modelCurrent, setCurrent: modelSet } = RavenIslands.model;
+let sheetSession, sheetAdd, sheetRemove, sheetDropClass, sheetsSync, sheetsForget, approveSheet, approvalSheet, approvalClose, clarifySheet, clarifyClose, queueDraw, queuePush, queueShift, queueClear, queueSnapshot, queueRestore, parkDraft, loadDraft, dropDraft, claimDraft, turn;
+let modelCurrent, modelSet;
 /* Bound at the shared top level because the live parts run in the IIFE nested
    below it. The writers themselves stay in the modern bundle. */
-const { failureBar, bootError, upShade } = RavenIslands.chrome;
-
-
-/* Preview without an engine: __approve('rm -rf build/'). */
-window.__approve = (p) => approveSheet(p || 'rm -rf build/',
-  () => toast(T('gui.confirm.allow')), () => toast(T('gui.confirm.deny')));
+let failureBar, bootError, upShade;
 
 /* ══ context menu ═════════════════════════════════════════════════
    One rule for right-click everywhere in the window, because the old answer was
@@ -86,31 +77,11 @@ function nativeCtxOk(t) {
   return sel.containsNode(t, true) || (t.contains(sel.anchorNode) && t.contains(sel.focusNode));
 }
 
-document.addEventListener('contextmenu', (e) => {
-  if (nativeCtxOk(e.target)) return;
-  e.preventDefault();
-  for (let n = e.target; n && n !== document; n = n.parentElement) {
-    if (!n._ctx) continue;
-    const items = n._ctx();
-    if (items && items.length) menuAt(e.clientX, e.clientY, items);
-    return;
-  }
-});
-
-/* The 更多 group is rail navigation, not a popover: it folds on its own
-   toggle only, never on an outside click. */
-document.addEventListener('pointerdown', (e) => {
-  if (!e.target.closest('#permPop') && !e.target.closest('#permChip')) closePermPop();
-  if (!e.target.closest('#tierPop') && !e.target.closest('#tierChip')) closeTierPop();
-  if (!e.target.closest('#wdPop') && !e.target.closest('#wdChip')) closeWorkdirPop();
-}, true);
-
 /* ── the hover pill ────────────────────────────────────────────────────
    The one .tipp element, driven from here. Placement prefers above (below for
    .tipdn), flips when the preferred side leaves the window, and clamps to the
    viewport either way. */
-const tipEl = mk('div', 'tipp');
-document.body.appendChild(tipEl);
+let tipEl;
 let tipFor = null;
 
 function tipPlace() {
@@ -130,17 +101,6 @@ function tipPlace() {
 }
 function tipHide() { tipFor = null; tipEl.dataset.on = 'false'; }
 
-document.addEventListener('pointerover', (e) => {
-  const t = e.target.closest ? e.target.closest('[data-tip]') : null;
-  if (t === tipFor) return;
-  if (t) { tipFor = t; tipPlace(); } else tipHide();
-});
-/* A control that rewrites its own label while hovered (copy's "已复制" flash)
-   keeps the visible pill in step. */
-new MutationObserver(() => { if (tipFor) tipPlace(); })
-  .observe(document.body, { subtree: true, attributes: true, attributeFilter: ['data-tip'] });
-document.addEventListener('scroll', tipHide, true);
-
 /* Shell window drag: the OS title bar is hidden, so the header band has to do
    its job. WebKit's implicit background-drag heuristic proved fragile (it
    silently stopped once the band gained positioned content), so the shell is
@@ -150,14 +110,6 @@ const dragBand = (e) => {
   if (!e.target.closest('.railtop, .top, .ws-top')) return false;
   return !e.target.closest('button, a, input, textarea, select, [role="link"], .grip');
 };
-document.addEventListener('mousedown', (e) => {
-  if (!dragBand(e)) return;
-  try { window.webkit.messageHandlers.raven.postMessage({ type: 'drag' }); } catch { /* browser */ }
-});
-document.addEventListener('dblclick', (e) => {
-  if (!dragBand(e)) return;
-  try { window.webkit.messageHandlers.raven.postMessage({ type: 'zoom' }); } catch { /* browser */ }
-});
 
 /* Selecting a whole line in the transcript -- a paragraph select, or a word
    select on the last line -- used to run past the end of the transcript and
@@ -180,6 +132,66 @@ const lastTextNodeIn = (root) => {
   for (let n = walk.nextNode(); n; n = walk.nextNode()) last = n;
   return last;
 };
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
+sessionSet('a');
+$('#cfNo').onclick = () => { $('#veil').dataset.open = 'false'; cfFn = null; };
+$('#cfYes').onclick = () => { $('#veil').dataset.open = 'false'; if (cfFn) cfFn(); cfFn = null; };
+$('#veil').onclick = (e) => { if (e.target === $('#veil')) $('#cfNo').click(); };
+({ sheetSession, sheetAdd, sheetRemove, sheetDropClass, sheetsSync, sheetsForget,
+  approveSheet, approvalSheet, approvalClose, clarifySheet, clarifyClose,
+  drawQueue: queueDraw, queuePush, queueShift,
+  queueClear, queueSnapshot, queueRestore, parkDraft, loadDraft, dropDraft,
+  claimDraft, turn } = RavenIslands.composer);
+({ current: modelCurrent, setCurrent: modelSet } = RavenIslands.model);
+({ failureBar, bootError, upShade } = RavenIslands.chrome);
+
+/* Preview without an engine: __approve('rm -rf build/'). */
+window.__approve = (p) => approveSheet(p || 'rm -rf build/',
+  () => toast(T('gui.confirm.allow')), () => toast(T('gui.confirm.deny')));
+
+document.addEventListener('contextmenu', (e) => {
+  if (nativeCtxOk(e.target)) return;
+  e.preventDefault();
+  for (let n = e.target; n && n !== document; n = n.parentElement) {
+    if (!n._ctx) continue;
+    const items = n._ctx();
+    if (items && items.length) menuAt(e.clientX, e.clientY, items);
+    return;
+  }
+});
+
+/* The 更多 group is rail navigation, not a popover: it folds on its own
+   toggle only, never on an outside click. */
+document.addEventListener('pointerdown', (e) => {
+  if (!e.target.closest('#permPop') && !e.target.closest('#permChip')) closePermPop();
+  if (!e.target.closest('#tierPop') && !e.target.closest('#tierChip')) closeTierPop();
+  if (!e.target.closest('#wdPop') && !e.target.closest('#wdChip')) closeWorkdirPop();
+}, true);
+tipEl = mk('div', 'tipp');
+document.body.appendChild(tipEl);
+
+document.addEventListener('pointerover', (e) => {
+  const t = e.target.closest ? e.target.closest('[data-tip]') : null;
+  if (t === tipFor) return;
+  if (t) { tipFor = t; tipPlace(); } else tipHide();
+});
+/* A control that rewrites its own label while hovered (copy's "已复制" flash)
+   keeps the visible pill in step. */
+new MutationObserver(() => { if (tipFor) tipPlace(); })
+  .observe(document.body, { subtree: true, attributes: true, attributeFilter: ['data-tip'] });
+document.addEventListener('scroll', tipHide, true);
+document.addEventListener('mousedown', (e) => {
+  if (!dragBand(e)) return;
+  try { window.webkit.messageHandlers.raven.postMessage({ type: 'drag' }); } catch { /* browser */ }
+});
+document.addEventListener('dblclick', (e) => {
+  if (!dragBand(e)) return;
+  try { window.webkit.messageHandlers.raven.postMessage({ type: 'zoom' }); } catch { /* browser */ }
+});
 document.addEventListener('selectionchange', () => {
   const scroll = $('#scroll');
   const sel = document.getSelection();
@@ -193,3 +205,6 @@ document.addEventListener('selectionchange', () => {
   sel.removeAllRanges();
   sel.addRange(clamped);
 });
+}
+
+export { timers, runState, rt, undoBin, stop_, later, down, sess, cfFn, confirmAsk, sheetSession, sheetAdd, sheetRemove, sheetDropClass, sheetsSync, sheetsForget, approveSheet, approvalSheet, approvalClose, clarifySheet, clarifyClose, queueDraw, queuePush, queueShift, queueClear, queueSnapshot, queueRestore, parkDraft, loadDraft, dropDraft, claimDraft, turn, modelCurrent, modelSet, failureBar, bootError, upShade, ctxMenu, copyToClip, nativeCtxOk, tipEl, tipFor, tipPlace, tipHide, dragBand, lastTextNodeIn }

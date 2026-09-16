@@ -5,6 +5,12 @@
    fresh, and forwards gateway events into the island. Installing onto the
    seam replaces the fixture source before the first paint. */
 
+import { DS } from '../seam/000-datasource.js'
+import { LANG, T } from '../demo/010-kernel.js'
+import { rpc } from './020-rpc.js'
+import { extLoaded, loadExt, pluginsLive } from './090-extensions.js'
+import { showUpNote } from './210-update-notice.js'
+
 const pmText = (v) => (v && typeof v === 'object' ? v[LANG] || v.en || '' : String(v || ''));
 const pmErrText = (e) => (e && e.data && e.data.detail) || (e && e.message) || String(e);
 
@@ -23,6 +29,12 @@ function pmNormEntry(entry) {
   };
 }
 
+let pmExtSoon = null;
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
 DS.plugins = {
   // A search failure is rendered in the page (market_down + retry), not
   // toasted -- the island owns that surface.
@@ -86,8 +98,6 @@ rpc.notify['system.update_available'] = (p) => {
 rpc.notify['memory.health'] = (p) => {
   setMemFault(p && p.ok === false ? (p.error || T('gui.mem.down')) : null);
 };
-
-let pmExtSoon = null;
 rpc.notify['mcp.status'] = (p) => {
   const row = pluginsLive.find((x) => x.m && x.m.name === p.name);
   if (row) Object.assign(row.m, p);
@@ -115,3 +125,6 @@ rpc.notify['oauth.pending'] = (p) => {
 rpc.notify['oauth.done'] = (p) => {
   RavenIslands.plugins.event({ kind: 'authDone', server: p.server, ok: !!p.ok, error: p.error });
 };
+}
+
+export { pmText, pmErrText, pmNormEntry, pmExtSoon }

@@ -8,6 +8,10 @@
    "Built in" does not mean "safe" -- exec ships with Raven and rewrites
    your disk -- so the badge is what answers "where does my data go".   */
 /* ── 工具: built in, fixed list, on/off only ───────────────────────── */
+
+import { DS } from '../seam/000-datasource.js'
+import { T } from './010-kernel.js'
+
 const TOOL_GROUPS = [
   { id:'file', label:'gui.toolgrp.file', hint:'gui.toolgrp.file_hint' },
   { id:'run',  label:'gui.toolgrp.run' },
@@ -127,42 +131,8 @@ const cronFailing = () => CRONS.filter((j) => j.on && j.runs[0] && !j.runs[0].ok
    follow the real schemas, so the demo drawer is the drawer. */
 const creds = (...pairs) => pairs.map(([key, label, secret]) => ({ key, label, required:true, secret:!!secret, set:false }));
 const filled = (fs) => fs.map((f) => ({ ...f, set:true }));
-const CH_FIELDS = {
-  feishu:   creds(['app_id','应用 App ID'], ['app_secret','应用 App Secret', true]),
-  wecom:    creds(['corp_id','企业 CorpID'], ['secret','应用 Secret', true]),
-  slack:    creds(['bot_token','机器人 Bot Token', true], ['app_token','应用 App Token', true]),
-  dingtalk: creds(['client_id','应用 ClientID'], ['client_secret','应用 ClientSecret', true]),
-  qq:       creds(['app_id','App ID'], ['app_secret','App Secret', true]),
-  telegram: creds(['token','机器人 Token', true]),
-  discord:  creds(['bot_token','机器人 Bot Token', true]),
-  matrix:   creds(['homeserver','主服务器地址'], ['access_token','访问令牌', true]),
-  mochat:   creds(['claw_token','Claw Token', true]),
-  email:    creds(['imap_host','收件服务器（IMAP 地址）'], ['imap_username','邮箱账号'],
-                  ['imap_password','邮箱密码或授权码', true], ['smtp_host','发件服务器（SMTP 地址）'],
-                  ['smtp_username','发件账号'], ['smtp_password','发件密码或授权码', true]),
-  /* Two entrances sign in instead: no form, a code on the phone. */
-  weixin:   [],
-  whatsapp: []
-};
-const CHANNELS = [
-  { id:'feishu',   key:'gui.chan.feishu',   on:true,  who:'EverMind', running:true },
-  { id:'wecom',    key:'gui.chan.wecom',    on:false },
-  { id:'weixin',   key:'gui.chan.weixin',   on:false, qrLogin:true },
-  { id:'slack',    name:'Slack',    on:false },
-  { id:'dingtalk', key:'gui.chan.dingtalk', on:false },
-  { id:'qq',       name:'QQ',       on:false },
-  { id:'telegram', name:'Telegram', on:false },
-  { id:'discord',  name:'Discord',  on:false },
-  { id:'whatsapp', name:'WhatsApp', on:false, qrLogin:true },
-  { id:'email',    key:'gui.chan.email',    on:true,  who:'weixiang@evermind.ai', running:true },
-  { id:'matrix',   name:'Matrix',   on:false },
-  { id:'mochat',   key:'gui.chan.mochat',   on:false }
-].map((c) => {
-  const fs = CH_FIELDS[c.id] || [];
-  /* An entrance in service has its credentials in place; one that is not is
-     missing all of them, which is what its row counts down. */
-  return { ...c, fields:c.on ? filled(fs) : fs, missing:c.on ? [] : fs.map((f) => f.key) };
-});
+let CH_FIELDS;
+let CHANNELS;
 // One accessor so a renderer never has to know which of the two it is.
 const chanName = (c) => (c.key ? T(c.key) : c.name);
 
@@ -275,7 +245,73 @@ const DAG_GTM = {
   background: true,
 };
 
-const RUNS = {
+let RUNS;
+const eventsFor = (run) => (run.key === 'gtm' && capOn('websearch') && run.evOk) ? run.evOk : run.ev;
+
+/* ══ module 1 data: sessions ══════════════════════════════════════ */
+/* Live mode persists a pin through this hook (session.pin); the demo has no
+   server, so it stays null and pins live in page memory only. */
+const SESSION_FIXTURES = [
+  { id:'a', title:'GTM agent 市场调研', last:'抓取了三家代表产品的官网，出了对比表', when:'11:24', run:'gtm', pin:false },
+  { id:'b', title:'修复登录偶发超时',   last:'3 runs, 0 failures · 已改连接池隔离',   when:'09:02', run:'fix', pin:true },
+  { id:'g', title:'重构支付回调',       last:'出错：找不到模块 stripe',              when:'08:41', run:null, status:'err' },
+  { id:'c', title:'整理本周迭代进度',   last:'还没开始',                            when:'昨天', run:null },
+  { id:'h', title:'扫一遍依赖安全告警', last:'运行中 · 已查 12 个包',               when:'昨天', run:null, status:'run' },
+  { id:'d', title:'把 CSV 导入 Notion', last:'还没开始',                            when:'周三', run:null },
+  { id:'f', title:'给 README 加安装说明', last:'已导出 Markdown',                   when:'上周四', run:null },
+  // Sessions a schedule produced. They get their own group because they
+  // arrive while you are away -- mixed into 今天 they read as things you did.
+  // Title is the job; the time badge tells the runs apart, so repeating it
+  // in the title would just eat the width the title needs.
+  { id:'k1', title:'昨日错误日志汇总', last:'3 类错误 · 支付回调占 68%',
+    when:'08:00', run:null, from:'cron', job:'j1' },
+  { id:'k2', title:'竞品动态', last:'网页搜索未配置，只抓到 1 家',
+    when:'昨天 19:00', run:null, from:'cron', job:'j3', status:'err' },
+  { id:'k3', title:'昨日错误日志汇总', last:'2 类错误',
+    when:'昨天 08:00', run:null, from:'cron', job:'j1' }
+];
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
+CH_FIELDS = {
+  feishu:   creds(['app_id','应用 App ID'], ['app_secret','应用 App Secret', true]),
+  wecom:    creds(['corp_id','企业 CorpID'], ['secret','应用 Secret', true]),
+  slack:    creds(['bot_token','机器人 Bot Token', true], ['app_token','应用 App Token', true]),
+  dingtalk: creds(['client_id','应用 ClientID'], ['client_secret','应用 ClientSecret', true]),
+  qq:       creds(['app_id','App ID'], ['app_secret','App Secret', true]),
+  telegram: creds(['token','机器人 Token', true]),
+  discord:  creds(['bot_token','机器人 Bot Token', true]),
+  matrix:   creds(['homeserver','主服务器地址'], ['access_token','访问令牌', true]),
+  mochat:   creds(['claw_token','Claw Token', true]),
+  email:    creds(['imap_host','收件服务器（IMAP 地址）'], ['imap_username','邮箱账号'],
+                  ['imap_password','邮箱密码或授权码', true], ['smtp_host','发件服务器（SMTP 地址）'],
+                  ['smtp_username','发件账号'], ['smtp_password','发件密码或授权码', true]),
+  /* Two entrances sign in instead: no form, a code on the phone. */
+  weixin:   [],
+  whatsapp: []
+};
+CHANNELS = [
+  { id:'feishu',   key:'gui.chan.feishu',   on:true,  who:'EverMind', running:true },
+  { id:'wecom',    key:'gui.chan.wecom',    on:false },
+  { id:'weixin',   key:'gui.chan.weixin',   on:false, qrLogin:true },
+  { id:'slack',    name:'Slack',    on:false },
+  { id:'dingtalk', key:'gui.chan.dingtalk', on:false },
+  { id:'qq',       name:'QQ',       on:false },
+  { id:'telegram', name:'Telegram', on:false },
+  { id:'discord',  name:'Discord',  on:false },
+  { id:'whatsapp', name:'WhatsApp', on:false, qrLogin:true },
+  { id:'email',    key:'gui.chan.email',    on:true,  who:'weixiang@evermind.ai', running:true },
+  { id:'matrix',   name:'Matrix',   on:false },
+  { id:'mochat',   key:'gui.chan.mochat',   on:false }
+].map((c) => {
+  const fs = CH_FIELDS[c.id] || [];
+  /* An entrance in service has its credentials in place; one that is not is
+     missing all of them, which is what its row counts down. */
+  return { ...c, fields:c.on ? filled(fs) : fs, missing:c.on ? [] : fs.map((f) => f.key) };
+});
+RUNS = {
   gtm: {
     key: 'gtm', title: 'GTM agent 市场调研',
     ask: '调研一下市场上做 GTM agent 的产品',
@@ -433,27 +469,6 @@ go test ./internal/... -run TestLogin -count=3   →  3 runs, 0 failures
     ]
   }
 };
-const eventsFor = (run) => (run.key === 'gtm' && capOn('websearch') && run.evOk) ? run.evOk : run.ev;
+}
 
-/* ══ module 1 data: sessions ══════════════════════════════════════ */
-/* Live mode persists a pin through this hook (session.pin); the demo has no
-   server, so it stays null and pins live in page memory only. */
-const SESSION_FIXTURES = [
-  { id:'a', title:'GTM agent 市场调研', last:'抓取了三家代表产品的官网，出了对比表', when:'11:24', run:'gtm', pin:false },
-  { id:'b', title:'修复登录偶发超时',   last:'3 runs, 0 failures · 已改连接池隔离',   when:'09:02', run:'fix', pin:true },
-  { id:'g', title:'重构支付回调',       last:'出错：找不到模块 stripe',              when:'08:41', run:null, status:'err' },
-  { id:'c', title:'整理本周迭代进度',   last:'还没开始',                            when:'昨天', run:null },
-  { id:'h', title:'扫一遍依赖安全告警', last:'运行中 · 已查 12 个包',               when:'昨天', run:null, status:'run' },
-  { id:'d', title:'把 CSV 导入 Notion', last:'还没开始',                            when:'周三', run:null },
-  { id:'f', title:'给 README 加安装说明', last:'已导出 Markdown',                   when:'上周四', run:null },
-  // Sessions a schedule produced. They get their own group because they
-  // arrive while you are away -- mixed into 今天 they read as things you did.
-  // Title is the job; the time badge tells the runs apart, so repeating it
-  // in the title would just eat the width the title needs.
-  { id:'k1', title:'昨日错误日志汇总', last:'3 类错误 · 支付回调占 68%',
-    when:'08:00', run:null, from:'cron', job:'j1' },
-  { id:'k2', title:'竞品动态', last:'网页搜索未配置，只抓到 1 家',
-    when:'昨天 19:00', run:null, from:'cron', job:'j3', status:'err' },
-  { id:'k3', title:'昨日错误日志汇总', last:'2 类错误',
-    when:'昨天 08:00', run:null, from:'cron', job:'j1' }
-];
+export { TOOL_GROUPS, TOOLS, SKILLS, PLUGINS, FREQ, CRONS, DELIVER, cronFailing, creds, filled, CH_FIELDS, CHANNELS, chanName, INSTALLABLE, cap, capOn, tool, needsAttn, attnCount, STATE_TXT, stateText, NOKEY, GTM_DOC, GTM_DELIVERY_FILES, FIX_DELIVERY_FILES, GTM_FILE_EVENTS, ANSWER_GTM, DAG_RUN, DAG_GTM, RUNS, eventsFor, SESSION_FIXTURES }

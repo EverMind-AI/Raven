@@ -4,8 +4,59 @@
    swallow the text the reader was in the middle of writing. Every Enter
    handler over a text field asks this first. keyCode 229 is the older spelling
    some IMEs still send instead of isComposing. */
+
+import { DS } from '../seam/000-datasource.js'
+import { $, T } from './010-kernel.js'
+import { modelCurrent, modelSet, turn } from './040-state.js'
+import { renameTitle, sessionDraw, sessionOpen, sessionRows } from './050-rail.js'
+import { ta } from './090-composer.js'
+import { setWs, wsOpen } from './100-workspace.js'
+import { capFilter, closeCaps, closeDetail, closeSet, closeXa, drawCapsBadge, openPlugins, openSet, openSkills, setIsOpen, showPage } from './120-capabilities.js'
+import { PROVIDERS, drawSettings, isMac } from './130-settings.js'
+import { closeCron, closeKb, closeMem, openKb, openMem } from './140-schedule.js'
+import { closeConn, connCloseDialog } from './145-connections.js'
+import { drawCaps } from './152-skills.js'
+import { closePb, openPb } from './154-playbooks.js'
+
 const composing = (e) => !!(e.isComposing || e.keyCode === 229);
 
+/* ---- the search row ------------------------------------------------
+   Owned by ui-web/src/shell/find.ts, which holds the term and publishes
+   toggleFind(). The Cmd+F handler above stays here because showing the rail
+   first is a chrome decision, and it is the only caller from this side. */
+
+const setRail = (on) => {
+  const app = document.querySelector('.app');
+  app.dataset.rail = on ? 'on' : 'off';
+  document.documentElement.dataset.rail = on ? 'on' : 'off';
+  $('#railShow').hidden = on;
+};
+// Shrinking past the split point must not leave the conversation hidden.
+let tooNarrowToSplit;
+
+/* ---- the foot row --------------------------------------------------
+   One door to settings. What the row says -- the running build and this
+   platform's shortcut for that door -- is written by the foot module
+   (ui-web/src/shell/foot.ts), which publishes drawFoot(); the door itself is
+   here, because the dialog behind it is. */
+
+/* The one door to settings. The island's source owns the refresh that must
+   happen before drawing, so both modes use the same opener. */
+const openSettings = async () => { await RavenIslands.settings.open(); };
+
+/* ── the 更多 flyout ──────────────────────────────────────────────────
+   Sub-agents / entrances / schedules live here. The renderer is the nav flyout module
+   (ui-web/src/shell/navfly.ts), which also owns the button that opens the group;
+   what remains here is the one name the live layer still calls. */
+function drawMoreFly() {
+  /* A language flip re-runs the MORE_ROWS.forEach that names the rows. */
+  RavenIslands.nav.draw();
+}
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
 /* Code blocks come and go with every answer, so the click is caught once here
    rather than bound per block. The text comes from the DOM the reader sees. */
 document.addEventListener('click', (e) => {
@@ -63,35 +114,12 @@ $('#newBtn').onclick = () => {
   sessionRows().unshift(s); sessionSet(s.id); sessionDraw(); sessionOpen(s); ta.focus();
 };
 $('#renameBtn').onclick = () => renameTitle();
-
-/* ---- the search row ------------------------------------------------
-   Owned by ui-web/src/shell/find.ts, which holds the term and publishes
-   toggleFind(). The Cmd+F handler above stays here because showing the rail
-   first is a chrome decision, and it is the only caller from this side. */
-
-const setRail = (on) => {
-  const app = document.querySelector('.app');
-  app.dataset.rail = on ? 'on' : 'off';
-  document.documentElement.dataset.rail = on ? 'on' : 'off';
-  $('#railShow').hidden = on;
-};
 // Collapsing the rail is the user's call, never the window's: it holds the
 // session list, and having it vanish on resize loses your place.
 $('#railBtn').onclick = () => setRail(false);
 $('#railShow').onclick = () => setRail(true);
-// Shrinking past the split point must not leave the conversation hidden.
-const tooNarrowToSplit = matchMedia('(max-width: 1040px)');
+tooNarrowToSplit = matchMedia('(max-width: 1040px)');
 tooNarrowToSplit.addEventListener('change', (e) => { if (e.matches && wsOpen) setWs(false); });
-
-/* ---- the foot row --------------------------------------------------
-   One door to settings. What the row says -- the running build and this
-   platform's shortcut for that door -- is written by the foot module
-   (ui-web/src/shell/foot.ts), which publishes drawFoot(); the door itself is
-   here, because the dialog behind it is. */
-
-/* The one door to settings. The island's source owns the refresh that must
-   happen before drawing, so both modes use the same opener. */
-const openSettings = async () => { await RavenIslands.settings.open(); };
 
 $('#meBtn').onclick = () => openSettings();
 
@@ -103,7 +131,7 @@ $('#modelChip').onclick = () => {
     // No toast: the chip right there already shows the new model.
     fn: () => { modelSet(m); $('#modelName').textContent = m; }
   })));
-  items.push('-', { label: T('gui.slash.manage_models'), fn: () => { sTab = 'model'; drawSettings(); openSet(); } });
+  items.push('-', { label: T('gui.slash.manage_models'), fn: () => { window.sTab = 'model'; drawSettings(); openSet(); } });
   menuAt(r.left, r.bottom + 6, items);
 };
 
@@ -119,15 +147,6 @@ $('#plugBtn').onclick = () => openPlugins();
 $('#memBtn').onclick = () => openMem();
 $('#pbBtn').onclick = () => openPb();
 $('#kbBtn').onclick = () => openKb();
-
-/* ── the 更多 flyout ──────────────────────────────────────────────────
-   Sub-agents / entrances / schedules live here. The renderer is the nav flyout module
-   (ui-web/src/shell/navfly.ts), which also owns the button that opens the group;
-   what remains here is the one name the live layer still calls. */
-function drawMoreFly() {
-  /* A language flip re-runs the MORE_ROWS.forEach that names the rows. */
-  RavenIslands.nav.draw();
-}
 /* The platform's own shortcut, same door as the foot row. */
 document.addEventListener('keydown', (e) => {
   if (e.key !== ',' || !(isMac() ? e.metaKey : e.ctrlKey)) return;
@@ -156,3 +175,6 @@ $('#mAdd').onclick = async () => {
   $('#mName').value = ''; $('#mAddr').value = '';
   drawCaps(); drawCapsBadge(); toast(T('gui.adv.added_x', { name: n }));
 };
+}
+
+export { composing, setRail, tooNarrowToSplit, openSettings, drawMoreFly }

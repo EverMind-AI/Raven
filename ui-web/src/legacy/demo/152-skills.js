@@ -9,6 +9,12 @@
 /* Start a task with the capability already named: a fresh session whose
    composer opens pre-filled, cursor at the end, ready to complete.
    Shared verb: the plugin layer and the skills island both call it. */
+
+import { DS } from '../seam/000-datasource.js'
+import { $, T, applyDecorators, mk } from './010-kernel.js'
+import { SKILLS } from './030-fixtures.js'
+import { closeDetail, decorateCloseDetail, decorateExtSet, decorateShowPage, drawCapsBadge, extTab } from './120-capabilities.js'
+
 function useInTask(promptKey, name) {
   closeDetail();
   $('#newBtn').click();
@@ -24,16 +30,7 @@ let skView = 'market';
 
 /* The installed entry point rides in the filter bar, exactly like the
    plugin tab's -- created once, shown only on the skill market. */
-const skInstBtn = (() => {
-  const b = mk('button', 'pminstbtn');
-  b.onclick = () => RavenIslands.skills.toggleView();
-  $('.cbar').appendChild(b);
-  return { sync() {
-    b.hidden = extTab !== 'skill' || RavenIslands.skills.view() === 'installed';
-    b.innerHTML = '';
-    b.append(mk('span', null, T('gui.plug.installed_n', { n: DS.skills.installed().length })));
-  } };
-})();
+let skInstBtn;
 
 /* The skill tab's face on #capsBody: the island owns everything inside the
    box, and the chrome above it is still the page's, set here on every draw.
@@ -60,43 +57,6 @@ function drawCapsBase() {
   if ($('#capsPage').dataset.open === 'true') RavenIslands.skills.ensureSearch();
   skInstBtn.sync();
   drawCapsBadge();
-}
-
-{
-  const prevInput = $('#cq').oninput;
-  $('#cq').oninput = () => {
-    if (extTab === 'skill') { RavenIslands.skills.setQuery($('#cq').value.trim()); return; }
-    if (prevInput) prevInput();
-  };
-  $('#cq').onkeydown = (e) => {
-    if (e.isComposing || e.keyCode === 229) return;
-    if (e.key !== 'Enter' || extTab !== 'skill') return;
-    e.preventDefault();
-    RavenIslands.skills.searchNow($('#cq').value.trim());
-  };
-
-  decorateExtSet((prev) => (tab) => {
-    const was = extTab;
-    prev(tab);
-    if (extTab !== was) RavenIslands.skills.reset();
-  });
-
-  decorateShowPage((prev) => (id) => {
-    prev(id);
-    if (id !== 'capsPage') RavenIslands.skills.dropDrawer();
-  });
-
-  decorateCloseDetail((prev) => () => { RavenIslands.skills.dropDrawer(); prev(); });
-  $('#dClose').onclick = () => closeDetail();
-
-  /* The island owns the view; the chrome follows it from out here. A view
-     flip redraws the whole tab (title, bar, hero) through drawCaps; any
-     other change only needs the installed count refreshed. */
-  RavenIslands.skills.subscribe(() => {
-    const v = RavenIslands.skills.view();
-    if (v !== skView) { skView = v; if (extTab === 'skill') drawCaps(); return; }
-    skInstBtn.sync();
-  });
 }
 
 /* The fixture source: a small canned hub, so the market is explorable
@@ -136,6 +96,58 @@ const HUB_FIXTURE = [
     description: '按 STRIDE 给新功能画威胁模型' },
 ];
 
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
+skInstBtn = (() => {
+  const b = mk('button', 'pminstbtn');
+  b.onclick = () => RavenIslands.skills.toggleView();
+  $('.cbar').appendChild(b);
+  return { sync() {
+    b.hidden = extTab !== 'skill' || RavenIslands.skills.view() === 'installed';
+    b.innerHTML = '';
+    b.append(mk('span', null, T('gui.plug.installed_n', { n: DS.skills.installed().length })));
+  } };
+})();
+
+{
+  const prevInput = $('#cq').oninput;
+  $('#cq').oninput = () => {
+    if (extTab === 'skill') { RavenIslands.skills.setQuery($('#cq').value.trim()); return; }
+    if (prevInput) prevInput();
+  };
+  $('#cq').onkeydown = (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key !== 'Enter' || extTab !== 'skill') return;
+    e.preventDefault();
+    RavenIslands.skills.searchNow($('#cq').value.trim());
+  };
+
+  decorateExtSet((prev) => (tab) => {
+    const was = extTab;
+    prev(tab);
+    if (extTab !== was) RavenIslands.skills.reset();
+  });
+
+  decorateShowPage((prev) => (id) => {
+    prev(id);
+    if (id !== 'capsPage') RavenIslands.skills.dropDrawer();
+  });
+
+  decorateCloseDetail((prev) => () => { RavenIslands.skills.dropDrawer(); prev(); });
+  $('#dClose').onclick = () => closeDetail();
+
+  /* The island owns the view; the chrome follows it from out here. A view
+     flip redraws the whole tab (title, bar, hero) through drawCaps; any
+     other change only needs the installed count refreshed. */
+  RavenIslands.skills.subscribe(() => {
+    const v = RavenIslands.skills.view();
+    if (v !== skView) { skView = v; if (extTab === 'skill') drawCaps(); return; }
+    skInstBtn.sync();
+  });
+}
+
 DS.skills ??= {
   search: async ({ query, category, page, limit }) => {
     const q = (query || '').toLowerCase();
@@ -169,3 +181,6 @@ DS.skills ??= {
   },
   installed: () => SKILLS,
 };
+}
+
+export { useInTask, skView, skInstBtn, drawCapsDecorators, drawCaps, decorateDrawCaps, drawCapsBase, HUB_FIXTURE }

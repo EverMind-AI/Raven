@@ -3,6 +3,13 @@
    (ui-web/src/features/connections/) owns the drawing; this file only speaks
    channels.* over /rpc. Installing onto the seam replaces the fixture
    source before the first paint. */
+
+import { DS } from '../seam/000-datasource.js'
+import { T } from '../demo/010-kernel.js'
+import { CHANNELS, chanName } from '../demo/030-fixtures.js'
+import { rpc } from './020-rpc.js'
+import { rpcHas } from './220-browser.js'
+
 async function loadChannels() {
   const r = await rpc.call('channels.status', {});
   const byName = Object.fromEntries(r.channels.map((c) => [c.name, c]));
@@ -31,6 +38,10 @@ async function loadChannels() {
 }
 let gatewayRunningLive = false;
 
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
 DS.conn = {
   /* `initial` is the page-open fetch: only that one toasts a failed load or
      warns about a gateway that is not receiving -- a background reload (the
@@ -91,3 +102,6 @@ DS.conn = {
     ? Promise.resolve(null)
     : rpc.call('channels.qr', { name: c.id })),
 };
+}
+
+export { loadChannels, gatewayRunningLive }

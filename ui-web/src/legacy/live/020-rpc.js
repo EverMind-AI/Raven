@@ -18,6 +18,14 @@
    one, with the code and the original frame kept on it: two callers match on
    `e.code` for a method the gateway does not have, and they must go on
    working. */
+
+import { T } from '../demo/010-kernel.js'
+import { failureBar, upShade } from '../demo/040-state.js'
+import { showStatus } from '../demo/070-transcript.js'
+import { hideSplash } from '../demo/160-boot.js'
+import { shellReady } from './010-boot-guard.js'
+import { distMoved, upKind, upMarkClear } from './210-update-notice.js'
+
 function rpcFailure(frame) {
   const detail =
     frame && frame.data && typeof frame.data.detail === 'string' && frame.data.detail.trim()
@@ -219,7 +227,7 @@ function uploadRefusal(name, b64) {
   return uploadRefusalBySize(name, Math.max(0, (text.length / 4) * 3 - pad));
 }
 
-const SHELL = /RavenShell/.test(navigator.userAgent);
+let SHELL;
 
 /* What this connection calls itself in system.hello, so a trace can tell the
    GUI shell from the browser page on one gateway. Identity only — both still
@@ -287,3 +295,12 @@ function bootFail(e) {
   RavenIslands.rail.release();
   if (window.console) console.error('[live boot]', e);
 }
+
+/* Everything this part used to do while the concatenated page script ran, in
+   the same order. src/legacy/index.js is the only caller. The body keeps the
+   statements' original column: the sandbox harnesses slice them out by text. */
+export function install() {
+SHELL = /RavenShell/.test(navigator.userAgent);
+}
+
+export { rpcFailure, REJOIN_CEILING_MS, REJOIN_MAX_WAIT_MS, rpc, UPLOAD_MAX_BYTES, uploadRefusalBySize, uploadRefusal, SHELL, SURFACE, reauthTries, askShellReauth, authFail, bootFail }
