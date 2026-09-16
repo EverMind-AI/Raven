@@ -4,12 +4,12 @@ import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'
 
-const demo = readFileSync(new URL('../src/demo/160-boot.js', import.meta.url), 'utf8')
+const demo = readFileSync(new URL('../src/legacy/demo/160-boot.js', import.meta.url), 'utf8')
 const build = readFileSync(new URL('../build.py', import.meta.url), 'utf8')
 const manifest = build.match(/_LIVE_PARTS = \[(.*?)\n\]/s)
 if (!manifest) throw new Error('_LIVE_PARTS is absent from build.py')
 const live = [...manifest[1].matchAll(/"([^"]+\.js)"/g)]
-  .map((m) => readFileSync(new URL(`../src/live/${m[1]}`, import.meta.url), 'utf8'))
+  .map((m) => readFileSync(new URL(`../src/legacy/live/${m[1]}`, import.meta.url), 'utf8'))
   .join('')
 
 const STEPS = [
@@ -97,7 +97,7 @@ describe('first-run model setup', () => {
    pointer again. Watching before either of those wrote `a` into the note and
    then deleted it, so a reload never had a conversation to come back to. */
 describe('the live boot guard', () => {
-  const guard = readFileSync(new URL('../src/live/010-boot-guard.js', import.meta.url), 'utf8')
+  const guard = readFileSync(new URL('../src/legacy/live/010-boot-guard.js', import.meta.url), 'utf8')
 
   it('starts the view watch, and only after it has cleared the pointer', () => {
     const clear = guard.indexOf('sessionSet(null)')

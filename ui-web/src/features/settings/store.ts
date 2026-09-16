@@ -17,7 +17,7 @@ import type {
  *
  * The open tab is NOT here: the chrome jumps the dialog to a section by
  * writing the bare `sTab` global before calling drawSettings(), so that slot
- * stays on window (ui-web/src/demo/130-settings.js declares it) and the store
+ * stays on window (ui-web/src/legacy/demo/130-settings.js declares it) and the store
  * syncs from it on every draw.
  */
 

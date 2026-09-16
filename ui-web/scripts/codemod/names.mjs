@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 
 const UIWEB = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
-const SRC = join(UIWEB, 'src')
+const SRC = join(UIWEB, 'src', 'legacy')
 const py = readFileSync(join(UIWEB, 'build.py'), 'utf8')
 const manifest = (n) => [...py.match(new RegExp(`_${n}_PARTS = \\[([\\s\\S]*?)\\]`))[1].matchAll(/"([^"]+)"/g)].map((x) => x[1])
 const files = [...manifest('SEAM').map((p) => ['seam', p]), ...manifest('DEMO').map((p) => ['demo', p]), ...manifest('LIVE').map((p) => ['live', p])]

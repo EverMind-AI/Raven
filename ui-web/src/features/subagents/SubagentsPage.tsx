@@ -14,7 +14,7 @@ import type { Attachment, ComposerSource } from '../composer/types'
 import type { JSX } from 'react'
 
 /* Mirrors the glyph the legacy renderer drew with (ICO.up in
-   ui-web/src/demo/100-workspace.js, through its ico() helper). */
+   ui-web/src/legacy/demo/100-workspace.js, through its ico() helper). */
 function IcoUp(): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">

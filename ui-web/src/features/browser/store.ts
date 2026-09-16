@@ -8,7 +8,7 @@ import type { BrowserReply, BrowserSource, BrowserTabRow, ChromiumSource, FrameH
  * the transport, the transcript's link trap opens pages), so the state lives
  * in a plain store the shims can call, and the component subscribes.
  *
- * This is the legacy BR object (ui-web/src/live/220-browser.js before the
+ * This is the legacy BR object (ui-web/src/legacy/live/220-browser.js before the
  * migration) ported field for field; the paint/watch/poll machinery keeps
  * its shape so the two can be diffed.
  */

@@ -14,7 +14,7 @@ const build = readFileSync(resolve(process.cwd(), 'build.py'), 'utf8')
 const manifest = build.match(/_LIVE_PARTS = \[(.*?)\n\]/s)
 if (!manifest) throw new Error('_LIVE_PARTS is absent from build.py')
 const live = [...manifest[1].matchAll(/"([^"]+\.js)"/g)]
-  .map((m) => readFileSync(resolve(process.cwd(), 'src/live', m[1]), 'utf8'))
+  .map((m) => readFileSync(resolve(process.cwd(), 'src/legacy/live', m[1]), 'utf8'))
   .join('')
 
 /* The object literal the sheet is started with, lifted out and evaluated

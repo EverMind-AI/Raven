@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'
 
-const demo = readFileSync(new URL('../src/demo/154-playbooks.js', import.meta.url), 'utf8')
+const demo = readFileSync(new URL('../src/legacy/demo/154-playbooks.js', import.meta.url), 'utf8')
 const contract = JSON.parse(readFileSync(new URL('../../rpc-schema/openrpc.json', import.meta.url), 'utf8'))
 
 function required(schema) {

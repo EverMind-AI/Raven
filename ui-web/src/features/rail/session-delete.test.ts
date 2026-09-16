@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs'
 
 import { describe, expect, it, vi } from 'vitest'
 
-const source = readFileSync('src/live/080-overrides.js', 'utf8')
+const source = readFileSync('src/legacy/live/080-overrides.js', 'utf8')
 
 /* Just the one assignment, not the file: the rest of this layer reaches for
    dozens of globals that have nothing to do with the decision under test. */
@@ -98,7 +98,7 @@ describe('deleting a session from the rail', () => {
 })
 
 const bulkSource = (() => {
-  const src = readFileSync('src/live/130-writes.js', 'utf8')
+  const src = readFileSync('src/legacy/live/130-writes.js', 'utf8')
   const begin = src.indexOf('DS.sessions.deleteAll = async () => {')
   return src.slice(begin, src.indexOf('\n};', begin) + 3)
 })()

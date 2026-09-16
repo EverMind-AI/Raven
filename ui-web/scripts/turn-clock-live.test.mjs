@@ -9,7 +9,7 @@ const manifest = build.match(/_LIVE_PARTS = \[(.*?)\n\]/s)
 if (!manifest) throw new Error('_LIVE_PARTS is absent from build.py')
 const parts = [...manifest[1].matchAll(/"([^"]+\.js)"/g)].map((m) => m[1])
 const live = parts
-  .map((name) => readFileSync(new URL(`../src/live/${name}`, import.meta.url), 'utf8'))
+  .map((name) => readFileSync(new URL(`../src/legacy/live/${name}`, import.meta.url), 'utf8'))
   .join('')
 
 /* The clock, lifted out of the assembled layer and run against a `live` we

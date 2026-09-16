@@ -14,7 +14,7 @@ interface ParkedHarness {
   setOwner(owner: string): void
 }
 
-const source = readFileSync('src/live/060-parked.js', 'utf8')
+const source = readFileSync('src/legacy/live/060-parked.js', 'utf8')
 
 function harness(): {
   api: ParkedHarness

@@ -12,7 +12,7 @@ import * as store from './store'
 import type { CronDraft, CronJob, CronRun } from './types'
 import type { JSX } from 'react'
 
-/* Mirrors the FREQ/DELIVER tables in ui-web/src/demo/030-fixtures.js: that copy
+/* Mirrors the FREQ/DELIVER tables in ui-web/src/legacy/demo/030-fixtures.js: that copy
    feeds the fixture source's prose, this one feeds the form. The demo copy
    dies with the fixtures at the end of the migration. */
 const FREQ: Array<{ id: CronJob['freq']; label: string }> = [
