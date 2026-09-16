@@ -1164,35 +1164,38 @@ class MemoryConfig(_Base):
 
 
 class EmbeddingConfig(_Base):
-    """The OpenAI-compatible embedding endpoint raven itself uses.
+    """The embedding endpoint this install uses, for everything that embeds.
 
-    Raven's own, not the memory backend's. A knowledge base indexes and
-    answers from inside the gateway process and never speaks to the memory
-    service, yet it used to read this endpoint out of EverOS's config file --
-    so selecting a different memory backend, or none, left the knowledge base
-    with no vectors and no way to say why.
+    One pair, not one per subsystem: a knowledge base and the memory backend
+    both turn text into vectors, and two endpoints would mean two vector
+    spaces that cannot be compared and two places to change when the model
+    moves. Raven holds it; the memory backend is handed it at ``start()``
+    rather than keeping its own copy, which is the same direction the host
+    already sends its data root in.
 
-    The memory backend is handed these values at ``start()`` rather than
-    keeping its own copy, which is the same direction the host already sends
-    its data root in.
+    ``model`` names what to call and ``provider`` names who serves it -- the
+    same pair every other pin in this file states, and for the same reason: an
+    id does not name a credential. The address and key come from the provider,
+    so rotating a key is one edit in one place and this block never holds a
+    secret.
 
-    Known debt: only where this is *stored* moved. It is still collected in one
-    place alone -- the memory plugin's onboarding screen, through the
-    ``set_embedding_endpoint`` handle the wizard lends it -- so an install with
-    no memory plugin has no interactive way to fill it in, and a knowledge base
-    is left to ``config.json`` by hand or to ``raven doctor --fix`` when an
-    older EverOS config happens to still be on disk. Closing it means the host
-    asking for an endpoint itself, which is another screen in a wizard that is
-    already seven steps long; the two questions have to be reconciled into one
-    before either is worth adding.
+    Changing ``model`` invalidates every vector already stored under the old
+    one. Nothing here prevents that -- the stores each record what they were
+    built with and refuse or degrade on their own -- but a surface offering the
+    change has to say so first.
     """
 
     model: str = ""
-    """Model id as the endpoint names it, e.g. ``"Qwen/Qwen3-Embedding-4B"``."""
-    base_url: str = ""
-    """Base URL of an OpenAI-compatible ``/embeddings`` endpoint."""
-    api_key: str = ""
-    """Bearer token for that endpoint."""
+    """Model id as the provider names it, e.g. ``"Qwen/Qwen3-Embedding-4B"``.
+
+    A ``provider/model`` spelling is accepted and the leading segment dropped
+    on the wire: the provider half is stated separately, so carrying it twice
+    would let the two disagree."""
+
+    provider: str = ""
+    """Which configured provider serves ``model``. Its address and key are what
+    the embedding call goes out on."""
+
     dimensions: int | None = None
     """Vector width, when the operator pinned one. ``None`` means ask the
     model, and a pinned value is checked against it rather than trusted --
@@ -1375,25 +1378,18 @@ class TranslateConfig(_Base):
 
 
 class KnowledgeConfig(_Base):
-    """What a knowledge base embeds with.
+    """Knowledge-base settings that are not the embedding endpoint.
 
-    Set here, this pair is what the knowledge base uses; left unset, the
-    endpoint EverOS already recorded is used instead, which is what every
-    install had before this block existed. See ``knowledge/_embedding.py``.
+    The endpoint moved to the top-level ``embedding`` block, which the memory
+    backend reads too: a knowledge base and a memory store that embed with
+    different models cannot be compared, and two places to change it is one
+    place to forget. The two keys that used to live here are migrated there.
 
-    Changing it is not a setting change like the others. Collection width is
-    fixed at creation from the model's own width, so a base built under one
-    model cannot be searched with another -- the manager refuses rather than
-    returning neighbours that mean nothing. A surface offering this has to say
-    so and offer the rebuild.
+    Which model a given base was built with is not configuration at all -- it
+    is recorded on the base, checked on every search, and the manager refuses
+    rather than returning neighbours that mean nothing. See
+    ``raven.knowledge._records``.
     """
-
-    embedding_model: str | None = None
-    """Model the knowledge base embeds and searches with."""
-
-    embedding_provider: str | None = None
-    """Which configured provider serves ``embedding_model``. Its address and
-    key are what the embedding call is made against."""
 
 
 class SessionTitleConfig(_Base):

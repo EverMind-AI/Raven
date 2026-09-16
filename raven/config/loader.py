@@ -961,6 +961,36 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version
                     "Migrated: agents.defaults.everosSkillLight -> skillForge.extraction",
                 )
 
+    # ``knowledge.embedding{Model,Provider}`` -> the top-level ``embedding``
+    # block. One endpoint, because a knowledge base and the memory store that
+    # embed with different models cannot be compared, and two places to change
+    # it is one place to forget. Moved rather than read through an alias:
+    # ``KnowledgeConfig`` forbids extras, so a config still carrying the pair
+    # would fail to load at all.
+    for know_key in ("knowledge", "knowledge_config"):
+        know = data.get(know_key) if isinstance(data, dict) else None
+        if not isinstance(know, dict):
+            continue
+        moved = {}
+        for old, new_name in (
+            ("embeddingModel", "model"),
+            ("embedding_model", "model"),
+            ("embeddingProvider", "provider"),
+            ("embedding_provider", "provider"),
+        ):
+            value = know.pop(old, None)
+            if value is not None and new_name not in moved:
+                moved[new_name] = value
+        if not moved:
+            continue
+        block = data.setdefault("embedding", {})
+        if not isinstance(block, dict):
+            _log.info("Migrated: dropped %s.embedding* (an embedding block was already set)", know_key)
+            continue
+        for key, value in moved.items():
+            block.setdefault(key, value)
+        _log.info("Migrated: %s.embedding* -> embedding.%s", know_key, "/".join(sorted(moved)))
+
     # ``skillForge.everos`` -> ``skillForge.extraction``. The block configures
     # the local pipeline that distils skills out of finished turns; it calls no
     # service and needs no plugin, and the old name said the opposite. Renamed

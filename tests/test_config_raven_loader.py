@@ -271,8 +271,11 @@ def test_translate_and_knowledge_blocks_roundtrip(stub_config_path: Path) -> Non
 
     assert cfg.translate.model == "openai/gpt-5-mini"
     assert cfg.translate.provider == "openai"
-    assert cfg.knowledge.embedding_model == "openai/text-embedding-3-small"
-    assert cfg.knowledge.embedding_provider == "openai"
+    # The knowledge pin became the top-level endpoint: one pair, because a
+    # knowledge base and a memory store that embed with different models cannot
+    # be compared. A config written before that move is migrated, not rejected.
+    assert cfg.embedding.model == "openai/text-embedding-3-small"
+    assert cfg.embedding.provider == "openai"
 
 
 def test_the_old_everos_spelling_is_migrated_not_merely_tolerated(stub_config_path: Path) -> None:

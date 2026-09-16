@@ -135,25 +135,41 @@ def _raven_config_raw() -> dict[str, Any]:
 
 
 def host_embedding_section() -> dict[str, str]:
-    """raven's ``embedding`` block, in this module's spelling.
+    """raven's embedding endpoint, resolved, in this module's spelling.
 
-    Raven's config writes camelCase; everos.toml and the rest of this module
-    speak snake_case, so the two names each value can have are resolved here
-    once rather than at every reader.
+    The block names a model and a provider; the address and key belong to the
+    provider, so they are resolved here rather than stored. Read through
+    raven's own config API rather than the raw file, because the raw file does
+    not hold a credential any more.
 
-    Empty when the block is absent or incomplete -- all three values are what
-    :func:`configure_embedding_env` needs before it binds anything, so anything
-    less is not an endpoint.
+    Empty when the pair is incomplete or the provider has no usable
+    credential -- all three values are what :func:`configure_embedding_env`
+    needs before it binds anything, so anything less is not an endpoint.
     """
-    block = _raven_config_raw().get("embedding")
-    if not isinstance(block, dict):
+    try:
+        from raven.config.raven import load_raven_config
+        from raven.config.update_providers import resolve_provider_credentials
+    except Exception:  # noqa: BLE001 - nothing to resolve against
         return {}
-    got = {
-        "model": str(block.get("model") or ""),
-        "base_url": str(block.get("baseUrl") or block.get("base_url") or ""),
-        "api_key": str(block.get("apiKey") or block.get("api_key") or ""),
-    }
-    return got if all(got.values()) else {}
+    try:
+        pin = load_raven_config().embedding
+    except Exception as exc:  # noqa: BLE001 - an unreadable config is not this module's to report
+        logger.warning("everos: cannot read raven's embedding endpoint: %s", exc)
+        return {}
+    model, provider = str(pin.model or ""), str(pin.provider or "")
+    if not model or not provider:
+        return {}
+    try:
+        resolved = resolve_provider_credentials(provider)
+    except Exception:  # noqa: BLE001 - an unknown provider is not an endpoint
+        return {}
+    if resolved is None:
+        return {}
+    base_url, api_key = resolved
+    # The provider half already named whose credential this is, so a stored
+    # ``provider/model`` spelling has served its purpose on the wire.
+    wire_model = model.split("/", 1)[1] if "/" in model else model
+    return {"model": wire_model, "base_url": base_url, "api_key": api_key}
 
 
 def _recorded_slice() -> dict[str, Any]:
