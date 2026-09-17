@@ -219,16 +219,23 @@ def is_configured(cap: Capability, config: "Config") -> bool:
 
 
 def is_disabled(cap: Capability, config: "Config") -> bool:
-    """Whether the deployment has switched this tool off by name.
+    """Whether the deployment has switched this tool off.
 
     A separate state from unconfigured, and reported as one: a switched-off
     tool usually has its credential set, and calling it unconfigured would send
     the deployer to set a key that is already there.
 
-    ``tools.disabledTools`` is applied after registration
-    (``AgentLoop._apply_disabled_tools``), so this is the only thing standing
-    between a satisfied credential gate and a tool the agent actually holds.
+    Two switches, because the loop reads two. ``tools.disabledTools`` is
+    applied after registration (``AgentLoop._apply_disabled_tools``) and covers
+    any tool by name. ``tools.web.search.images`` decides whether
+    ``image_search`` is registered at all (``wiring.py``), and a deployment
+    holding a Serper key with that switch off is precisely the case this
+    function exists to report as off rather than as missing a credential.
     """
+    from raven.agent.tools.web import ImageSearchTool
+
+    if cap.tool == ImageSearchTool.name and not config.tools.web.search.images:
+        return True
     return cap.tool in (config.tools.disabled_tools or [])
 
 
