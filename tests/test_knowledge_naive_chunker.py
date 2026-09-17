@@ -70,7 +70,7 @@ def test_the_default_carries_both_scripts() -> None:
     """A Chinese full stop ends a sentence as much as a full stop does, and a
     chunker that only knew the latin marks would cut a Chinese document
     nowhere."""
-    assert "。" in parse_delimiters(DEFAULT_DELIMITER)
+    assert "\u3002" in parse_delimiters(DEFAULT_DELIMITER), "the full-width full stop"
     assert "!" in parse_delimiters(DEFAULT_DELIMITER)
 
 
@@ -78,7 +78,7 @@ def test_tokens_are_counted_by_the_tokenizer() -> None:
     """Not bytes over four, which reads a CJK character as three quarters of a
     token when it costs about one."""
     assert count_tokens("hello world") == 2
-    assert count_tokens("延迟在第二") > 5 * 0.75
+    assert count_tokens("\u5ef6\u8fdf\u5728\u7b2c\u4e8c") > 5 * 0.75
 
 
 # -- splitting and merging -----------------------------------------
