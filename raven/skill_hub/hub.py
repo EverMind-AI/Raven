@@ -28,7 +28,8 @@ import httpx
 from loguru import logger
 
 from raven.config.loader import load_config
-from raven.skill_hub.client import ALLOWED_SUFFIXES, MAX_ZIP_ENTRY_BYTES, MAX_ZIP_TOTAL_BYTES
+from raven.skill_hub.audit import INSTALL_META
+from raven.skill_hub.client import ALLOWED_SUFFIXES, MAX_ZIP_ENTRY_BYTES, MAX_ZIP_TOTAL_BYTES, SkillHubClient
 
 
 class SkillHubError(Exception):
@@ -624,18 +625,58 @@ async def install(skill_id: str, *, agent_loop_factory=None, if_absent: bool = F
     }
 
 
+def _bundle_for(root: Path, name: str) -> Path | None:
+    """The ``<root>/hub/<slug>@<version>`` bundle whose skill is ``name``, or None.
+
+    The market reaches the workspace by two installers with two layouts. The
+    one this module drives puts a skill at ``<root>/<name>/`` under ``MARKER``.
+    The one the context engine and the ``use_skill`` tool drive caches a whole
+    bundle at ``<root>/hub/<slug>@<version>/`` and stamps ``INSTALL_META`` in
+    the skill directory inside it -- usually the bundle's lone wrapper folder,
+    which ``SkillHubClient._bundle_root`` collapses the same way here as at
+    install time, so the name compared is the one the catalogue lists.
+
+    Only a stamped directory counts. A folder someone placed under ``hub/`` by
+    hand carries no stamp and is left alone, which is the rule ``MARKER``
+    already enforces on the other layout.
+    """
+    hub_root = root / "hub"
+    try:
+        bundles = [d for d in hub_root.iterdir() if d.is_dir() and "@" in d.name]
+    except OSError:
+        return None
+    for bundle in bundles:
+        skill_dir = SkillHubClient._bundle_root(bundle)
+        if skill_dir.name == name and (skill_dir / INSTALL_META).is_file():
+            return bundle
+    return None
+
+
 async def remove(skill_name: str, *, agent_loop_factory=None) -> dict:
+    """Delete one hub-installed skill, whichever installer put it there.
+
+    A bundle is removed whole, not just its skill directory: the bundle *is*
+    the install unit (one zip, one ``<slug>@<version>`` folder, one skill
+    inside), and the CLI's ``skill remove`` deletes the same folder. Removal
+    does not stop the context engine re-installing the skill on its next
+    catalogue hit; that is what ``skill block`` is for, on either surface.
+    """
     name = _safe_name(skill_name)
     root = _skills_dir().resolve()
     target = (root / name).resolve()
-    if target.parent != root or not target.is_dir():
+    if target.parent == root and target.is_dir():
+        if not (target / MARKER).is_file():
+            raise SkillHubRequestError(
+                "that skill was not installed from the hub, so it is not removed here",
+                data={"name": name},
+            )
+        await asyncio.to_thread(shutil.rmtree, target)
+        await asyncio.to_thread(_refresh_pool, agent_loop_factory)
+        return {"removed": True, "name": name}
+    bundle = _bundle_for(root, name)
+    if bundle is None:
         raise SkillHubRequestError("no such installed skill", data={"name": skill_name})
-    if not (target / MARKER).is_file():
-        raise SkillHubRequestError(
-            "that skill was not installed from the hub, so it is not removed here",
-            data={"name": name},
-        )
-    await asyncio.to_thread(shutil.rmtree, target)
+    await asyncio.to_thread(shutil.rmtree, bundle)
     await asyncio.to_thread(_refresh_pool, agent_loop_factory)
     return {"removed": True, "name": name}
 

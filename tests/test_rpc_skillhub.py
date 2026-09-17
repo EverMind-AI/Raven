@@ -172,6 +172,40 @@ async def test_remove_only_touches_hub_installs(workspace, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_remove_reaches_a_bundle_the_other_installer_cached(workspace, monkeypatch):
+    """The context engine and ``use_skill`` do not install a skill at
+    ``<skills>/<name>``; they cache a bundle at ``<skills>/hub/<slug>@<version>``
+    and stamp ``.install-meta.json`` inside it. Most hub skills on a machine
+    arrive that way, so a remove that knew only the market module's own layout
+    refused nearly everything the page listed as installed.
+
+    The bundle goes whole, as the CLI's ``skill remove`` deletes it: one zip,
+    one folder, one skill. And a folder someone placed under ``hub/`` by hand
+    carries no stamp, so it is not this handler's to delete -- the same rule
+    ``MARKER`` enforces on the other layout.
+    """
+    monkeypatch.setattr(hub, "_refresh_pool", lambda _factory: None)
+    bundle = workspace / "hub" / "acme_tool@v0"
+    skill = bundle / "tool"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("# tool")
+    (skill / hub.INSTALL_META).write_text(json.dumps({"slug": "acme_tool", "version": "v0", "source": "hub"}))
+    handmade = workspace / "hub" / "hand@v0" / "hand"
+    handmade.mkdir(parents=True)
+    (handmade / "SKILL.md").write_text("# hand")
+
+    with pytest.raises(ConfigValidationError):
+        await skillhub.skillhub_remove({"name": "hand"})
+    assert handmade.is_dir(), "an unstamped folder is not the hub's to remove"
+
+    out = await skillhub.skillhub_remove({"name": "tool"})
+
+    assert out == {"removed": True, "name": "tool"}
+    assert not bundle.exists(), "the bundle is the install unit, so the bundle is what goes"
+    assert handmade.is_dir(), "removing one bundle leaves the next one alone"
+
+
+@pytest.mark.asyncio
 async def test_install_refuses_to_overwrite_a_local_skill(workspace, monkeypatch):
     _stub_hub(monkeypatch, zip_bytes=_zip({"demo-skill/SKILL.md": "# demo"}))
     (workspace / "demo-skill").mkdir(parents=True)
