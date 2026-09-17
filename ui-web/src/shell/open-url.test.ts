@@ -1,8 +1,12 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { mountPageRoot } from '../test/pageRoot'
 import { open } from './open-url'
 import { resetShell, setShell } from './bridge'
+
+/* The notice renders from src/App.tsx into the standing #toasts host. */
+mountPageRoot()
 
 afterEach(() => {
   vi.restoreAllMocks()

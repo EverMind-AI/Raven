@@ -8,9 +8,14 @@ import * as store from './store'
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
 import { setShell } from '../../shell/bridge'
+import { mountPageRoot } from '../../test/pageRoot'
 
 import type { PlaybookDetail, PlaybookNode, PlaybookRow, PlaybooksSource } from './types'
 import type { Shell } from '../../shell/bridge'
+
+/* The notices render from src/App.tsx into the standing #toasts host, so the
+   page's own root has to be standing for any of them to appear. */
+mountPageRoot()
 
 function node(over: Partial<PlaybookNode> & { id: string }): PlaybookNode {
   return {

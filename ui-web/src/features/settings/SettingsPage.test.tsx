@@ -10,10 +10,15 @@ import * as notifications from '../../shell/notifications'
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
 import { setShell, shell } from '../../shell/bridge'
+import { mountPageRoot } from '../../test/pageRoot'
 
 import type { Shell } from '../../shell/bridge'
 import type { RailSource } from '../rail/types'
 import type { SettingsSnapshot, SettingsSource } from './types'
+
+/* The rail filter's menu rows render from src/App.tsx into the shared #menu
+   host, so the page's own root has to be standing for them to appear. */
+mountPageRoot()
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -24,9 +29,19 @@ const connOpens = vi.hoisted(() => ({ n: 0 }))
 vi.mock('../connections/nav', () => ({ open: () => { connOpens.n += 1 } }))
 
 const toastWriter = vi.hoisted(() => ({ calls: [] as Array<[string, unknown]> }))
-vi.mock('../../shell/toast', () => ({
-  show: (text: string) => { toastWriter.calls.push(['toast', text]) },
-}))
+vi.mock('../../shell/toast', () => {
+  /* The page's own root renders the notices out of this module's store, so a
+     fake standing in for it has to answer the store's half as well -- with
+     nothing, because what this file asserts is the call and not the node. One
+     array, not a fresh one per read: useSyncExternalStore compares snapshots
+     by identity and a new one every time is an endless re-render. */
+  const none: never[] = []
+  return {
+    show: (text: string) => { toastWriter.calls.push(['toast', text]) },
+    subscribe: () => () => {},
+    get: () => none,
+  }
+})
 
 function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
   return {

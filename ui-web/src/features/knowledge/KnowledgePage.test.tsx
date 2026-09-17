@@ -9,10 +9,15 @@ import { domSnapshot } from '../../test/domSnapshot'
 import { settingsTab } from '../../state/settingsTab'
 import { resetSources, setSources, sources } from '../../state/sources'
 import { setShell } from '../../shell/bridge'
+import { mountPageRoot } from '../../test/pageRoot'
 
 import type { KbBase, KbDoc, KbSearch, KnowledgeSource } from './types'
 import type { Shell } from '../../shell/bridge'
 import type { SettingsSource } from '../settings/types'
+
+/* The notices render from src/App.tsx into the standing #toasts host, so the
+   page's own root has to be standing for any of them to appear. */
+mountPageRoot()
 
 function base(over: Partial<KbBase> & { id: string }): KbBase {
   return {

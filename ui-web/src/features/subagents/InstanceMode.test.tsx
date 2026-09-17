@@ -12,9 +12,14 @@ import * as tier from '../../shell/tier'
 import { InstanceMode } from './InstanceMode'
 import { resetSources, setSources } from '../../state/sources'
 import { resetShell, setShell } from '../../shell/bridge'
+import { mountPageRoot } from '../../test/pageRoot'
 
 import type { Shell } from '../../shell/bridge'
 import type { AgentsSource, InstanceModeReply, InstanceRow } from './types'
+
+/* The chip's menu rows render from src/App.tsx into the shared #menu host, so
+   the page's own root has to be standing for them to appear. */
+mountPageRoot()
 
 const ROW: InstanceRow = { sessionKey: 's1', agent: 'raven-research', handle: 'h1', kind: 'cli' }
 

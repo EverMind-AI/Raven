@@ -16,6 +16,8 @@
  * you look at the layout again.
  */
 
+import * as portals from '../state/portals'
+
 export const SB_HIDE = 900
 export const SB_MIN = 26
 export const SB_PAD = 2
@@ -41,18 +43,13 @@ const dragWired = new WeakSet<HTMLElement>()
    wider -- still has to have its thumb put back where the box now is. */
 const live = new Set<HTMLElement>()
 
-let sbLayer: HTMLElement | null = null
-
-function layer(): HTMLElement {
-  /* The isConnected half is for a test that replaced the body under us; in
-     the page the layer is appended once and never removed. */
-  if (!sbLayer || !sbLayer.isConnected) {
-    sbLayer = document.createElement('div')
-    sbLayer.className = 'sbars'
-    document.body.appendChild(sbLayer)
-  }
-  return sbLayer
-}
+/* The fixed layer the thumbs are parked in. Handed out by state/portals.ts,
+   which is where the order of everything standing at the body is declared:
+   this layer shares its `--z` step with nothing, but the two below it do, and
+   one module appending its own layer whenever it liked is how such an order
+   goes wrong. Still made on the first ask, which is what keeps it in the boot
+   goldens where it is. */
+const layer = (): HTMLElement => portals.host('sbars')
 
 /* The scroll event from the document, the documentElement and the window all
    mean the same scroller. */

@@ -3,7 +3,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { mountPageRoot } from '../test/pageRoot'
 import { copy } from './clipboard'
+
+/* The notice renders from src/App.tsx into the standing #toasts host. */
+mountPageRoot()
 
 function install(writeText?: (text: string) => Promise<void>): void {
   Object.defineProperty(navigator, 'clipboard', {

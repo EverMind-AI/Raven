@@ -38,7 +38,9 @@ const deleteAllSessions = (): void => {
 
 /* The dialog's contents, transcribed from the legacy drawSettings pages:
    same class names, same DOM shape, ui-web/src/styles/page.css untouched. The
-   dialog frame (#setVeil / #setModal, open and close) stays legacy chrome. */
+   dialog frame is the page's own root (src/App.tsx) over the static #setVeil,
+   and whether it is up is src/state/settingsDialog.ts's; the island reaches
+   both through the shell bridge, as it always has. */
 
 /* Settings is grouped, not one flat strip: the groups answer "what am I
    changing" -- myself, the agent, or the machine it runs on. */
