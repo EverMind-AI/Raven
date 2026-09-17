@@ -19,9 +19,12 @@ async function turnPart(
     fakes: {
       'src/features/rail/store': { draw: () => {} },
       'src/state/session/rows': { sess: () => null },
-      'src/features/composer/mount': { queueShift: () => undefined, turn: { dispatch: () => {} } },
+      'src/features/composer/mount': {
+        queueShift: () => undefined,
+        turn: { dispatch: () => {} },
         drawMeter: () => {},
         goPaint: () => {},
+      },
       'src/i18n/t': { T: (k: string) => k },
       'src/shell/duration': { formatDuration: (ms: number) => `${ms}ms` },
       'src/shell/dom': { $: looseQuery() },
