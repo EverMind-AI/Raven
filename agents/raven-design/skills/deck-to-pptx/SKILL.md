@@ -136,6 +136,10 @@ which of the four were defaults.
 Body under **14.0pt** is reported and under **10.8pt** is refused; footers may go to 8.0pt.
 If it does not fit at these sizes, split the page or cut it -- never shrink the type.
 
+Colour carries the hierarchy that size does: ink for the body, muted for what supports it,
+the accent for what the page is saying -- the word in the title that matters, the figure, the
+row or the node that answers and so on.
+
 ## Mechanics that bite here
 
 For what is drawn with python-pptx directly; the helper modules handle these themselves.

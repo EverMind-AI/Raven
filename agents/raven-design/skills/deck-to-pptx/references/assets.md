@@ -22,8 +22,10 @@ needs as `queries=[...]` in one call; the results come back grouped by query. Ea
 carries the direct image URL, its pixel size, the domain and the page it came from, and
 anything under 640px wide or 360px tall is already dropped.
 Keep the page link beside what you took: it is what the page's source note credits. When
-`image_search` is not in your tool list, this deployment has no image search: say so, and
-generate or go without.
+`image_search` is not in your tool list the pictures may still be findable: `web_search` for the
+page that carries one -- the project site, the paper, the vendor, the museum -- and `web_fetch`
+it. Where the text it returns keeps the image links, download one in the build script. Some
+fetch backends strip them; then the page goes without.
 
 Look at what you fetched before placing it. A hit that is the right size can still be a
 thumbnail sheet, a watermarked stock frame, or somebody else's slide about the subject.
