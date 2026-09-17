@@ -12,6 +12,8 @@ import type { DomainManifest } from '../manifests'
    from the root it would land after #noJs instead of between the two shells. */
 export const manifest: DomainManifest = {
   domain: 'onboard',
+  /* `ob*` on 13 of its 15 own classes. */
+  cssPrefix: 'ob',
   sources: ['onboard'],
   root: OnboardApp,
   host: 'onb',

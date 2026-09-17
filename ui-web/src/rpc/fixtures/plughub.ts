@@ -94,7 +94,7 @@ export function createPlughub(_env: FixtureEnv, ext: ExtFixture): PlughubFixture
     }
   }
   const find = (id: string): Entry | undefined => market.find((x) => x.id === id)
-  const entryOf = (it: Entry): Record<string, unknown> => ({
+  const entryOf = (it: Entry): ResultOf<'plughub.detail'>['item'] => ({
     id: it.id, name: it.name, version: it.version, summary: it.summary,
     description: it.description, homepage: it.homepage,
     publisher: { name: it.publisher, verified: it.verified },
@@ -118,7 +118,7 @@ export function createPlughub(_env: FixtureEnv, ext: ExtFixture): PlughubFixture
       'plughub.detail': (p) => {
         const it = find(p.id)
         if (!it) throw new Error(`no plugin ${p.id}`)
-        return { item: entryOf(it), installed: !!serverOf(it.id) } as ResultOf<'plughub.detail'>
+        return { item: entryOf(it), installed: !!serverOf(it.id) }
       },
       'plug.install': (p) => {
         const it = find(p.id)

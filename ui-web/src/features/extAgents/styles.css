@@ -1,0 +1,19 @@
+/* This domain's own stylesheet.
+ *
+ * Every class this domain introduces carries the domain's prefix
+ * (`extAgents-`), and the file is imported by the domain's App -- see
+ * ExtAgentsPage.tsx -- so nothing outside features/extAgents/ has to know it
+ * exists. Vite collects the imported stylesheets of every domain into one
+ * asset, which ui-web/build.py inlines into the page's single <style> block
+ * after styles/page.css, in domain order.
+ *
+ * styles/page.css stays the page's own sheet: the frame, the --z ladder and the
+ * shared vocabulary scripts/check-class-namespace.mjs calls SHARED. A rule that
+ * styles one domain's markup belongs here, not there. Nothing has moved:
+ * page.css's rules are where they were, and the gate's LEGACY_SHARED and
+ * LEGACY_LOCAL tables are what carry the debt down.
+ *
+ * Empty on purpose. This domain's rules are still in page.css and moving them
+ * would change bytes the boot goldens and the region goldens are taken from;
+ * what this file establishes is the mechanism the next domain uses.
+ */

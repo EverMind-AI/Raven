@@ -115,7 +115,7 @@ and the model picker are overlays, not module pages.
 `features/<domain>/manifest.ts` -- what one domain declares about itself: its
 name, the module page it owns, the seam keys it answers, and the root
 `src/main.tsx` mounts for it. `features/manifests.ts` is the assembly point that
-reads all nineteen; no domain may read it back.
+reads all twenty; no domain may read it back.
 `scripts/gates/domain-shape.test.mjs` holds the files a domain has and
 `domain-registration.test.mjs` holds the manifest against the page table and the
 seam.
@@ -215,7 +215,7 @@ typed into one lives in `src/state/sheetDrafts.ts` rather than in the input.
 **Global listeners**:
 `src/state/globalListeners.ts` -- every listener the page holds on the document
 or the window, in one function, in the order it registers them. The order is a
-contract (three are capture-phase, and inside one phase the first registered
+contract (five are capture-phase, and inside one phase the first registered
 runs first), so it is one place and `src/state/globalListeners.test.ts` asserts
 it call for call. A control's own handler is not here: that belongs with the
 control.

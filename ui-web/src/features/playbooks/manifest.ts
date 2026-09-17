@@ -10,6 +10,8 @@ import type { DomainManifest } from '../manifests'
 
 export const manifest: DomainManifest = {
   domain: 'playbooks',
+  /* `pb*` on 43 of its 57 own classes, the board and the editor both. */
+  cssPrefix: 'pb',
   page: 'playbooksPage',
   sources: ['playbooks'],
   root: PlaybooksApp,

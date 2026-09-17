@@ -97,6 +97,139 @@ async function library() {
   return transport
 }
 
+/* Which optional properties the contract declares, and which of them an answer
+   actually carries. Optional is where the two halves of the contract stop
+   agreeing: tsc holds a responder to the required fields and says nothing about
+   an optional one nobody ever sends, so the offline page draws the branch that
+   has the field and the live page draws the branch that does not -- or the
+   other way round, which is how the demo ends up being the only page anyone
+   ever sees a row on.
+
+   A null counts as not sent, for the same reason the walk above skips it: on an
+   optional field null is the wire saying nothing. */
+function optionals(schema, value, path, declared, sent) {
+  const s = deref(schema)
+  if (s.anyOf || s.oneOf) {
+    const branch = (s.anyOf || s.oneOf).find((b) => { const errs = []; check(b, value, path, errs); return !errs.length })
+    if (branch) optionals(branch, value, path, declared, sent)
+    return
+  }
+  if (Array.isArray(value) && s.items) {
+    for (const item of value) optionals(s.items, item, `${path}[]`, declared, sent)
+    return
+  }
+  if (!s.properties || !kinds.object(value)) return
+  const required = new Set(s.required || [])
+  for (const [key, sub] of Object.entries(s.properties)) {
+    const at = `${path}.${key}`
+    if (!required.has(key)) declared.add(at)
+    if (value[key] === undefined || value[key] === null) continue
+    if (!required.has(key)) sent.add(at)
+    optionals(sub, value[key], at, declared, sent)
+  }
+}
+
+/* Every optional property the library never sends, as the tree stands, grouped
+   by the method that would send it. Down or gone: a fixture that starts sending
+   one takes its line off, and a line that cannot be measured any more (a
+   contract field gone, a responder gone) comes off with it. A NEW entry is a
+   responder that stopped sending a field, or a contract that grew one nobody
+   answered -- both of which are the offline page quietly diverging from the
+   live one, which is what this library exists to prevent.
+
+   Reading the list: most of it is one state this canvas is deliberately in.
+   Nine browser answers omit the same seven because no page is open on the
+   offline canvas; four model answers omit the same nine, and model.options
+   eight of them, because the provider table here is slugs and names rather
+   than a full endpoint description; all three session answers omit the same
+   five `info` fields, which are what a gateway says about ITSELF. The
+   ones worth a second look are the fields a row on the page draws and this
+   library has never exercised: `dag.get`'s node_summary and terminal_outputs,
+   `session.resume`'s diff / delegated / notice / origin, `subagents.list`'s
+   stateful and upgrade_to, `ext.list`'s tools[].needs. */
+const UNSENT = new Set([
+  // browser.close: 7
+  'browser.close.can_back', 'browser.close.can_forward', 'browser.close.error', 'browser.close.headful', 'browser.close.loading', 'browser.close.title', 'browser.close.url',
+  // browser.frame: 8
+  'browser.frame.can_back', 'browser.frame.can_forward', 'browser.frame.error', 'browser.frame.headful', 'browser.frame.jpeg', 'browser.frame.loading', 'browser.frame.title', 'browser.frame.url',
+  // browser.input: 7
+  'browser.input.can_back', 'browser.input.can_forward', 'browser.input.error', 'browser.input.headful', 'browser.input.loading', 'browser.input.title', 'browser.input.url',
+  // browser.mode: 7
+  'browser.mode.can_back', 'browser.mode.can_forward', 'browser.mode.error', 'browser.mode.headful', 'browser.mode.loading', 'browser.mode.title', 'browser.mode.url',
+  // browser.open: 7
+  'browser.open.can_back', 'browser.open.can_forward', 'browser.open.error', 'browser.open.headful', 'browser.open.loading', 'browser.open.title', 'browser.open.url',
+  // browser.read: 8
+  'browser.read.can_back', 'browser.read.can_forward', 'browser.read.console', 'browser.read.error', 'browser.read.headful', 'browser.read.loading', 'browser.read.title', 'browser.read.url',
+  // browser.state: 7
+  'browser.state.can_back', 'browser.state.can_forward', 'browser.state.error', 'browser.state.headful', 'browser.state.loading', 'browser.state.title', 'browser.state.url',
+  // browser.tabs: 7
+  'browser.tabs.can_back', 'browser.tabs.can_forward', 'browser.tabs.error', 'browser.tabs.headful', 'browser.tabs.loading', 'browser.tabs.title', 'browser.tabs.url',
+  // browser.watch: 10
+  'browser.watch.can_back', 'browser.watch.can_forward', 'browser.watch.error', 'browser.watch.headful', 'browser.watch.loading', 'browser.watch.title', 'browser.watch.url', 'browser.watch.vh', 'browser.watch.vw', 'browser.watch.watching',
+  // channels.qr: 2
+  'channels.qr.qr', 'channels.qr.qr_text',
+  // config.set: 4
+  'config.set.applies_to_session', 'config.set.scope', 'config.set.session_id', 'config.set.value',
+  // cron.list: 4
+  'cron.list.jobs[].at_ms', 'cron.list.jobs[].every_ms', 'cron.list.jobs[].last_error', 'cron.list.jobs[].tz',
+  // cron.save: 4
+  'cron.save.job.at_ms', 'cron.save.job.every_ms', 'cron.save.job.last_error', 'cron.save.job.tz',
+  // dag.get: 10
+  'dag.get.run.files[].error', 'dag.get.run.files[].instance', 'dag.get.run.files[].node_summary', 'dag.get.run.files[].output_file', 'dag.get.run.files[].prompt_file', 'dag.get.run.summary.cancelled', 'dag.get.run.summary.failed', 'dag.get.run.summary.skipped', 'dag.get.run.task_summary', 'dag.get.run.terminal_outputs',
+  // dag.node: 6
+  'dag.node.node.error', 'dag.node.node.messages', 'dag.node.node.output', 'dag.node.node.output_file', 'dag.node.node.prompt', 'dag.node.node.prompt_file',
+  // deliverables.list: 1
+  'deliverables.list.files[].description',
+  // ext.list: 3
+  'ext.list.mcp[].auth_url', 'ext.list.tools[].mcp_server', 'ext.list.tools[].needs',
+  // fs.open: 1
+  'fs.open.app',
+  // knowledge.search: 2
+  'knowledge.search.embed_ms', 'knowledge.search.search_ms',
+  // knowledge.status: 1
+  'knowledge.status.extensions',
+  // model.add_model: 9
+  'model.add_model.provider.accepts_api_key', 'model.add_model.provider.api_base', 'model.add_model.provider.default_api_base', 'model.add_model.provider.docs', 'model.add_model.provider.key_env', 'model.add_model.provider.model_labels', 'model.add_model.provider.platforms', 'model.add_model.provider.protocol_overrides', 'model.add_model.provider.protocols',
+  // model.fetch_models: 7
+  'model.fetch_models.error', 'model.fetch_models.models[].capabilities', 'model.fetch_models.models[].context_window', 'model.fetch_models.models[].description', 'model.fetch_models.models[].input_modalities', 'model.fetch_models.models[].output_modalities', 'model.fetch_models.models[].source',
+  // model.options: 8
+  'model.options.providers[].accepts_api_key', 'model.options.providers[].api_base', 'model.options.providers[].docs', 'model.options.providers[].key_env', 'model.options.providers[].model_labels', 'model.options.providers[].platforms', 'model.options.providers[].protocol_overrides', 'model.options.providers[].protocols',
+  // model.remove_model: 9
+  'model.remove_model.provider.accepts_api_key', 'model.remove_model.provider.api_base', 'model.remove_model.provider.default_api_base', 'model.remove_model.provider.docs', 'model.remove_model.provider.key_env', 'model.remove_model.provider.model_labels', 'model.remove_model.provider.platforms', 'model.remove_model.provider.protocol_overrides', 'model.remove_model.provider.protocols',
+  // model.save_key: 9
+  'model.save_key.provider.accepts_api_key', 'model.save_key.provider.api_base', 'model.save_key.provider.default_api_base', 'model.save_key.provider.docs', 'model.save_key.provider.key_env', 'model.save_key.provider.model_labels', 'model.save_key.provider.platforms', 'model.save_key.provider.protocol_overrides', 'model.save_key.provider.protocols',
+  // model.set_protocol: 9
+  'model.set_protocol.provider.accepts_api_key', 'model.set_protocol.provider.api_base', 'model.set_protocol.provider.default_api_base', 'model.set_protocol.provider.docs', 'model.set_protocol.provider.key_env', 'model.set_protocol.provider.model_labels', 'model.set_protocol.provider.platforms', 'model.set_protocol.provider.protocol_overrides', 'model.set_protocol.provider.protocols',
+  // playbooks.get: 1
+  'playbooks.get.playbook.mcp_servers',
+  // playbooks.oauth.authorize: 1
+  'playbooks.oauth.authorize.error',
+  // plug.auth: 1
+  'plug.auth.mcp',
+  // plug.install: 2
+  'plug.install.mcp.auth_url', 'plug.install.mcp.error',
+  // plug.toggle: 1
+  'plug.toggle.mcp.auth_url',
+  // session.compress: 9
+  'session.compress.info.config_notices', 'session.compress.info.endpoint', 'session.compress.info.update_available', 'session.compress.info.update_command', 'session.compress.info.usage.context_estimated', 'session.compress.messages', 'session.compress.summary.note', 'session.compress.summary.token_line', 'session.compress.usage',
+  // session.create: 5
+  'session.create.info.config_notices', 'session.create.info.endpoint', 'session.create.info.update_available', 'session.create.info.update_command', 'session.create.info.usage.context_estimated',
+  // session.resume: 14
+  'session.resume.info.config_notices', 'session.resume.info.endpoint', 'session.resume.info.update_available', 'session.resume.info.update_command', 'session.resume.info.usage.context_estimated', 'session.resume.messages[].context', 'session.resume.messages[].dag_run_id', 'session.resume.messages[].delegated', 'session.resume.messages[].diff', 'session.resume.messages[].notice', 'session.resume.messages[].origin', 'session.resume.messages[].reasoning_ms', 'session.resume.messages[].spawn_task_id', 'session.resume.messages[].turn_ended',
+  // settings.everos: 1
+  'settings.everos.note',
+  // settings.usage: 5
+  'settings.usage.llm.total.input_missing_calls', 'settings.usage.llm.total.output_missing_calls', 'settings.usage.session_key', 'settings.usage.session_titles', 'settings.usage.sessions',
+  // subagents.list: 3
+  'subagents.list.rows[].building', 'subagents.list.rows[].stateful', 'subagents.list.rows[].upgrade_to',
+  // subagents.probe: 2
+  'subagents.probe.rows[].stateful', 'subagents.probe.rows[].upgrade_to',
+  // subagents.test: 2
+  'subagents.test.cancelled', 'subagents.test.reply',
+  // system.hello: 1
+  'system.hello.platform',
+])
+
 describe('the offline fixture library', () => {
   it('answers every method the contract declares it for', async () => {
     const transport = await library()
@@ -115,6 +248,32 @@ describe('the offline fixture library', () => {
       failures.push(...errs)
     }
     expect(failures).toEqual([])
+  })
+
+  it('leaves no optional property unsent but the ones pinned', async () => {
+    const transport = await library()
+    const declared = new Set()
+    const sent = new Set()
+    const walk = async (method, params) => {
+      let answer
+      try { answer = await transport.call(method, params) } catch { return }
+      optionals(resultOf.get(method), answer, method, declared, sent)
+    }
+    for (const method of Object.keys(transport.fixtures)) {
+      if (resultOf.has(method)) await walk(method, PARAMS[method] ?? {})
+    }
+    /* The rows one call answers differently per argument, so a field sent for
+       the second playbook or the second conversation counts as sent. */
+    for (const session_id of ['a', 'b', 'g']) await walk('session.resume', { session_id })
+    for (const name of PLAYBOOKS) {
+      await walk('playbooks.get', { name })
+      await walk('playbooks.credentials.get', { name })
+    }
+    const unsent = [...declared].filter((at) => !sent.has(at)).sort()
+    expect(unsent.filter((at) => !UNSENT.has(at)), 'send the field, or add it to UNSENT under its method')
+      .toEqual([])
+    expect([...UNSENT].filter((at) => !unsent.includes(at)), 'the library sends these now, or they are gone: take them off UNSENT')
+      .toEqual([])
   })
 
   /* Each playbook in turn, not just the first: the library answers `get` from

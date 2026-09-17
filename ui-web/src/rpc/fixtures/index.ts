@@ -8,6 +8,15 @@
  * requires and a fixture omits is a compile error here, and a page that draws
  * the wrong thing offline is drawing the wrong thing live.
  *
+ * That first claim was false for seven of these responders, which built their
+ * answers behind an `as` -- and an assertion switches off the whole check, not
+ * the one field it was reached for. They are annotated now, and what an
+ * offline answer is held to is `Wire<ResultOf<M>>` (../fixtureTransport.ts):
+ * the contract exactly, but with the nulls a gateway really sends where the
+ * contract leaves a field optional. The two halves of "optional" that tsc
+ * cannot see -- a field the contract declares and nothing here ever sends --
+ * are pinned in scripts/gates/fixture-shape.test.mjs.
+ *
  * Every time value comes from the injected clock, so two passes over the
  * library answer byte-identically
  * (ui-web/scripts/gates/fixture-now.test.mjs), and the scripted conversations

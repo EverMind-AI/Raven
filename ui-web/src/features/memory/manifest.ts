@@ -10,6 +10,8 @@ import type { DomainManifest } from '../manifests'
 
 export const manifest: DomainManifest = {
   domain: 'memory',
+  /* `mem*` on 7 of its 13 own classes. */
+  cssPrefix: 'mem',
   page: 'memoryPage',
   sources: ['memory'],
   root: MemoryApp,

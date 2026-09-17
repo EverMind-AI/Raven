@@ -25,13 +25,13 @@ interface Fixture {
   name: string
   enabled: boolean
   message: string
-  kind: string
+  kind: Job['kind']
   expr: string
   /** Last fire, in ms before now. */
   last?: number
   /** Next fire, in ms after now. */
   next?: number
-  status?: string
+  status?: Job['last_status']
   runs: Array<{ ago: number; ok: boolean; note: string }>
 }
 
@@ -67,10 +67,16 @@ export function createCron(env: FixtureEnv): CronFixture {
   const wire = (j: Fixture): Job => ({
     id: j.id, name: j.name, enabled: j.enabled, message: j.message,
     kind: j.kind, expr: j.expr,
-    next_run_at_ms: j.enabled && j.next ? env.now() + j.next : null,
-    last_run_at_ms: j.last ? env.now() - j.last : null,
+    /* Omitted rather than null when there is no such instant. A live gateway
+       sends null here (raven/rpc/methods/console.py) and the contract declares
+       neither the null nor a nullable type, which is why this used to be built
+       behind a cast; both readings are "nothing to show" to every reader of the
+       field (features/cron/source.ts tests it for truth, and fmtStamp takes
+       null and undefined alike). */
+    next_run_at_ms: j.enabled && j.next ? env.now() + j.next : undefined,
+    last_run_at_ms: j.last ? env.now() - j.last : undefined,
     last_status: j.status,
-  }) as Job
+  })
 
   const find = (id: string | undefined): Fixture | undefined => jobs.find((j) => j.id === id)
 
@@ -78,9 +84,9 @@ export function createCron(env: FixtureEnv): CronFixture {
     fixtures: {
       'cron.list': () => ({ jobs: jobs.map(wire) }),
       'cron.runs': (p) => ({
-        runs: (find(p.id) || { runs: [] }).runs.map((r) => ({
+        runs: (find(p.id) || { runs: [] }).runs.map((r): Run => ({
           at_ms: env.now() - r.ago, ok: r.ok, preview: r.note,
-        })) as Run[],
+        })),
         session_id: `cron:${p.id}`,
       }),
       'cron.set_enabled': (p) => {
@@ -94,19 +100,18 @@ export function createCron(env: FixtureEnv): CronFixture {
         return { deleted: true }
       },
       'cron.save': (p) => {
-        const params = p as { id?: string; name?: string; message?: string; kind?: string; expr?: string }
-        const existing = find(params.id)
+        const existing = find(p.id)
         if (existing) {
-          existing.name = params.name || existing.name
-          existing.message = params.message || existing.message
-          existing.kind = params.kind || existing.kind
-          existing.expr = params.expr || existing.expr
+          existing.name = p.name || existing.name
+          existing.message = p.message || existing.message
+          existing.kind = p.kind || existing.kind
+          existing.expr = p.expr || existing.expr
           return { job: wire(existing) }
         }
         minted += 1
         const fresh: Fixture = {
-          id: `j${100 + minted}`, name: params.name || '', enabled: true,
-          message: params.message || '', kind: params.kind || 'cron', expr: params.expr || '0 8 * * *',
+          id: `j${100 + minted}`, name: p.name || '', enabled: true,
+          message: p.message || '', kind: p.kind || 'cron', expr: p.expr || '0 8 * * *',
           next: 12 * HOUR, runs: [],
         }
         jobs.push(fresh)

@@ -1,9 +1,18 @@
 // @vitest-environment happy-dom
-/* The page defers its first data-driven paint until every source is installed. */
-
-import { readFileSync } from 'node:fs'
-/* Off cwd, not off `import.meta.url`: under happy-dom that is an http URL. */
-import { resolve } from 'node:path'
+/* The page defers its first data-driven paint until every source is installed.
+ *
+ * One concern per gate: the first-run model redirect and the permission chip
+ * used to ride along in here, over a concatenation of eight modules, and are
+ * their own gates now (first-run-model-setup.test.mjs, permission-chip.test.mjs)
+ * over the modules that actually carry them. What is left is the sequence: the
+ * order boot() runs its steps in, the order bootPage() paints in, and the two
+ * facts about the claim on the first frame that no rendered tree can show.
+ *
+ * Driven rather than read where a run can show it. `boot()`'s three steps used
+ * to be read off its body with a regex anchored to two-space indentation, which
+ * made a reformat a failure and a reordering inside a nested block invisible;
+ * the steps are recorded through fakes now, the way the paint below always was.
+ */
 
 import { describe, expect, it } from 'vitest'
 
@@ -11,14 +20,6 @@ import { loadPart, moduleText } from '../module-harness.mjs'
 
 const bootText = moduleText('app/boot.ts')
 const installText = moduleText('app/install.ts')
-/* The page's own half, as one text: the claim on the first frame, the wiring,
-   the gateway sequence and the settings seam were the whole of the live layer
-   and are six modules now, and every rule below is about the whole of it rather
-   than about which of them a line sits in. */
-const wiring = bootText + installText + moduleText('app/connection.ts')
-  + moduleText('app/updates.ts') + moduleText('state/lang/pick.ts')
-  + moduleText('state/lang/effects.ts') + moduleText('features/settings/wire.ts')
-  + moduleText('features/model/chip.ts')
 
 /* One step fewer than the concatenated boot had: `drawCapsBadge` was an empty
    function -- the rail's module rows carry no counters -- and it went with the
@@ -31,7 +32,15 @@ const STEPS = [
 
 /* The boot module with every step of its own list replaced: what this is about
    is the order of the list and when it runs, neither of which any step's own
-   work decides. */
+   work decides.
+ *
+ * The three fakes beyond the paint's own -- the page's install, the rail's hold
+ * and the socket -- are what make `boot()` drivable: its three steps are module
+ * -private functions, and each one's first visible act is a call into one of
+ * them (claimFirstFrame holds the rail, sequence asks the socket to connect).
+ * `connect` returns a promise nothing resolves, so the sequence parks at its
+ * first await and the rest of it cannot interleave with what is being measured.
+ */
 async function harness(rows = []) {
   const calls = []
   const step = (name) => (...args) => calls.push([name, ...args])
@@ -51,11 +60,20 @@ async function harness(rows = []) {
       'src/state/session/rows': { open: step('sessionOpen'), rows: () => rows },
       'src/state/caps': { draw: step('drawCaps') },
       'src/state/ws': { bump: step('bumpWs') },
+      'src/state/session/resume': { watch: step('watchNote'), landing: () => null },
+      'src/app/install': { installPage: step('installPage') },
+      'src/rpc/gateway': {
+        gateway: () => ({
+          connect: () => { calls.push(['connect']); return new Promise(() => {}) },
+        }),
+      },
       'src/features/onboard/store': {
         open: () => {},
       },
       'src/features/rail/store': {
         draw: step('sessionDraw'),
+        hold: step('holdRail'),
+        release: step('releaseRail'),
       },
       'src/features/settings/store': {
         redraw: step('drawSettings'),
@@ -89,22 +107,37 @@ describe('the page boot order', () => {
     expect(calls.map(([name]) => name)).toEqual(STEPS.filter((name) => name !== 'sessionOpen'))
   })
 
-  /* "Before" is not a position in one concatenated text any more: it is the
-     order `boot()` calls its three steps in, and the queue being the last of
-     them. */
-  it('queues the first paint only after every synchronous source installer', () => {
+  /* "Before" is the order boot() runs its three steps in, and the queue being
+     the last of them: the seam has to answer before the rail is held (the hold
+     paints), every source has to be installed before the first data-driven
+     paint is queued, and the paint is queued rather than called for exactly
+     that reason. */
+  it('claims the frame, installs the page and opens the socket, then queues the paint', async () => {
+    const { part, calls } = await harness()
+
+    part.boot()
+
+    /* The three steps, in order -- and not one step of the paint, because it
+       was queued rather than run. */
+    expect(calls.map(([name]) => name)).toEqual(['holdRail', 'watchNote', 'installPage', 'connect'])
+
+    /* The microtask boot() queued runs before this one, which is the whole of
+       "queued after every synchronous installer". */
+    await Promise.resolve()
+
+    expect(calls.map(([name]) => name))
+      .toEqual(['holdRail', 'watchNote', 'installPage', 'connect', ...STEPS.filter((n) => n !== 'sessionOpen')])
+  })
+
+  /* And the queue is written in one place. Two modules could each queue a
+     paint, and the page would draw twice from a seam that was whole only once.
+   */
+  it('queues the first paint from the boot module alone', () => {
     const carriers = [
       ['app/boot.ts', bootText],
       ['app/install.ts', installText],
     ].filter(([, text]) => text.includes('queueMicrotask(bootPage)'))
     expect(carriers.map(([name]) => name)).toEqual(['app/boot.ts'])
-
-    const opened = bootText.indexOf('export function boot(): void {')
-    const body = bootText.slice(opened, bootText.indexOf('\n}\n', opened))
-    /* The three steps in order, and the queue after all of them. */
-    expect([...body.matchAll(/^ {2}(?:void )?(\w+)\(/gm)].map((m) => m[1]))
-      .toEqual(['claimFirstFrame', 'installPage', 'sequence', 'queueMicrotask'])
-    expect(body.trimEnd().endsWith('queueMicrotask(bootPage)')).toBe(true)
 
     const installs = [...installText.matchAll(/^\s*sources\.[A-Za-z0-9_.]+\s*=/gm)]
     expect(installs.length).toBeGreaterThan(10)
@@ -135,20 +168,6 @@ describe('the page boot order', () => {
     expect(at('installComposerPalette()')).toBeLessThan(at('langEffects.install()'))
     expect(at('langEffects.install()')).toBeLessThan(at('settingsChrome.install()'))
     expect(at('settingsChrome.install()')).toBeLessThan(at('boot()'))
-
-    expect(wiring).not.toContain('CRONS.length = 0')
-  })
-})
-
-describe('first-run model setup', () => {
-  it('records missing-provider state without opening onboarding automatically', () => {
-    expect(wiring).toContain('setupState.providerConfigured = setup.provider_configured !== false')
-    expect(wiring).not.toMatch(/setup\.provider_configured === false\s*\|\|/)
-  })
-
-  it('guards New Task, Send, and the model selector with the same redirect', () => {
-    expect(wiring).toContain('.beforeSend = openModelsForMissingProvider')
-    expect(wiring.match(/if \(openModelsForMissingProvider\(\)\) return/g)).toHaveLength(2)
   })
 })
 
@@ -171,21 +190,5 @@ describe('the claim on the first frame', () => {
     const install = bootText.indexOf('sources.rail = sessionsSource')
     expect(install).toBeGreaterThan(-1)
     expect(bootText.indexOf('holdRail()')).toBeGreaterThan(install)
-  })
-})
-
-describe('the permission chip mirrors every settings load', () => {
-  /* The push lives outside loadSettings, so each caller must invoke it itself
-     -- boot included, or a cold page shows the localStorage cache while the
-     gate enforces the server's mode. Two of the three callers are the settings
-     source's own verbs now, so its text is read beside the layer's. */
-  const settingsSource = readFileSync(resolve(process.cwd(), 'src/features/settings/source.ts'), 'utf8')
-
-  it('each loadSettings call site pushes the mode afterwards', () => {
-    const text = wiring + settingsSource
-    const callers = [...text.matchAll(/(?<!function )loadSettings\(\)/g)].length
-    const pushes = [...text.matchAll(/pushPermMode\(\)|\.then\(pushPermMode\)/g)].length
-    expect(callers).toBeGreaterThanOrEqual(3)
-    expect(pushes).toBe(callers)
   })
 })

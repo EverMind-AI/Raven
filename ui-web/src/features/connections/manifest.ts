@@ -10,6 +10,8 @@ import type { DomainManifest } from '../manifests'
 
 export const manifest: DomainManifest = {
   domain: 'connections',
+  /* `su*` -- the setup wizard, 9 of its 14 own classes. */
+  cssPrefix: 'su',
   page: 'connectionsPage',
   sources: ['connections'],
   root: ConnectionsApp,

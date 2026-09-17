@@ -13,6 +13,8 @@ import type { ExtAgentRow } from './types'
 import type { JSX } from 'react'
 import { ask as confirmAsk } from '../../state/confirm'
 
+import './styles.css'
+
 /* Connect the agents this machine can hand work to. One row per agent; the rows
    are whatever `DS.extAgents` answers -- the fixture source with no gateway
    behind the page, the `subagents.*` source in the live layer.

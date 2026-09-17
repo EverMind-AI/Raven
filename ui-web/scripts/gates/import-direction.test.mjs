@@ -468,8 +468,12 @@ describe('which way the imports point', () => {
       for (const match of text.matchAll(SPECIFIER)) {
         const spec = match[2] ?? match[3]
         if (!spec.startsWith('.')) continue
-        /* The catalogue is the one relative specifier outside src/. */
-        if (spec.endsWith('.json')) continue
+        /* Two relative specifiers name something that is not a module and so
+           cannot be an edge in this graph: the message catalogue, which is
+           outside src/ altogether, and a domain's own stylesheet, which Vite
+           collects into one CSS asset (features/extAgents/styles.css says how)
+           rather than into the module graph. */
+        if (spec.endsWith('.json') || spec.endsWith('.css')) continue
         if (!target(rel, spec)) lost.push(`${rel}: ${spec}`)
       }
     }

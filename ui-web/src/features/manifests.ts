@@ -66,6 +66,13 @@ export interface DomainManifest {
   readonly root?: () => JSX.Element | null
   /** The box that root goes into, when it is not the page's own body. */
   readonly host?: string
+  /** The prefix this domain's class names carry, when it is not the domain's
+   *  own name. Six domains named their classes before there was a rule and
+   *  named them consistently; declaring the prefix they already use is what
+   *  makes scripts/check-class-namespace.mjs able to hold the rest of the tree
+   *  to it. A domain adding classes today uses its own name and declares
+   *  nothing. */
+  readonly cssPrefix?: string
 }
 
 /** The twenty, alphabetically: nothing reads them in an order. */

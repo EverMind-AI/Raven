@@ -127,7 +127,21 @@ const ANSWER_GTM = `## GTM Agent 赛道速览
    nothing would draw a card the real tool would have rejected. */
 const DAG_RUN = '20260821T004119Z-4c1d8ea2';
 
-const DAG_GTM: { nodes: Array<Record<string, unknown>>; background: boolean } = {
+/* One node as the dispatching call carries it, keyed by `id`. The snapshot
+   `dag.get` answers calls the same field `node` and forbids anything it does
+   not declare (rpc-schema/openrpc.json's DagSnapshotNode), so the two are
+   mapped rather than spread -- the spread this replaced sent `id` alongside
+   `node`, a property the contract does not allow and nothing reads
+   (features/dag/nodes.ts reads `node`). */
+interface DagNode {
+  id: string
+  subagent: string
+  depends_on: string[]
+  prompt_template: string
+  inputs: NonNullable<ResultOf<'dag.get'>['run']['files'][number]['inputs']>
+}
+
+const DAG_GTM: { nodes: DagNode[]; background: boolean } = {
   nodes: [
     { id: 'read_clay', subagent: 'Raven-X', depends_on: [],
       prompt_template: '\u7ec6\u8bfb {{ inputs.page }}\uff0c\u6309\u300c\u5b9a\u4f4d / \u6838\u5fc3\u80fd\u529b / \u5b9a\u4ef7 / \u96c6\u6210\u300d\u56db\u6817\u51fa\u7ed3\u6784\u5316\u6458\u8981\uff0c\u6bcf\u6817\u4e24\u4e09\u53e5\uff0c\u5e26\u539f\u6587\u51fa\u5904\u3002',
@@ -552,9 +566,11 @@ export function createTurn(env: FixtureEnv, host: TurnHost, websearchOn: () => b
         run: {
           run_id: p.run_id, dir: `~/work/raven/.raven/dag/${p.run_id}`, finalized: true,
           files: DAG_GTM.nodes.map((n) => ({
-            ...n, node: n.id as string, status: 'completed',
+            node: n.id, subagent: n.subagent, depends_on: n.depends_on,
+            prompt_template: n.prompt_template, inputs: n.inputs,
+            status: 'completed' as const,
             started_at: env.now() - 40000, ended_at: env.now() - 30000,
-          })) as ResultOf<'dag.get'>['run']['files'],
+          })),
           summary: { total: DAG_GTM.nodes.length, completed: DAG_GTM.nodes.length },
         },
       }),

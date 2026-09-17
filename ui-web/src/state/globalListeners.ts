@@ -3,7 +3,7 @@
  * They used to be spread over ten modules, each registering its own from its
  * own install(), and the order they ended up in was an accident of which file
  * main.tsx called first. That order is a
- * contract, not an accident: three of them are capture-phase and run before the
+ * contract, not an accident: five of them are capture-phase and run before the
  * element the reader clicked ever sees the event, and inside one phase the
  * first handler registered runs first. So the popover arbitration closes the
  * two composer popovers only after the menu writer has closed the menu, the

@@ -12,5 +12,8 @@ import type { DomainManifest } from '../manifests'
    re-attaches on every draw (features/hosts.ts). */
 export const manifest: DomainManifest = {
   domain: 'plugins',
+  /* `pm*` -- the plugin-manager rows, 11 of its 14 own classes; the rest of
+   that family is shared with skills and sits in the gate's LEGACY_SHARED. */
+  cssPrefix: 'pm',
   sources: ['plugins'],
 }
