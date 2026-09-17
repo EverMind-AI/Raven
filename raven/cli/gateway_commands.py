@@ -1004,7 +1004,10 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
             control_token = secrets.token_urlsafe(24)
 
             try:
-                control = ControlPlaneServer(await _control_plane_port(), auth_token=control_token)
+                # Not unit-reachable: 520 lines into `run()`, past the whole
+                # gateway bring-up. The call site is pinned instead by
+                # test_the_gateway_takes_its_control_port_from_the_fallback.
+                control = ControlPlaneServer(await _control_plane_port(), auth_token=control_token)  # pragma: no cover
                 control.bind(control_dispatcher)
                 bound_host, bound_port = await control.start()
                 publish_control_endpoint(bound_host, bound_port, control_token)
