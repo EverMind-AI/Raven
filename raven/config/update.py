@@ -549,6 +549,14 @@ def _refuse_a_pin_that_cannot_embed(clean: dict[str, Any], *, path: "Path") -> N
         )
 
 
+_EMBEDDING_MODEL_CHANGED = (
+    "Embedding model changed from {was} to {now}. Anything already indexed was built with the "
+    "old one and cannot be searched with the new one: rebuild each knowledge base, and re-index "
+    "whatever the memory backend has stored."
+)
+"""The one wording, as a catalogue key. Surfaces ask for it rather than rewording."""
+
+
 def embedding_model_change(previous: dict[str, Any], fields: dict[str, Any]) -> str:
     """One sentence when the model moved, empty when it did not.
 
@@ -565,11 +573,12 @@ def embedding_model_change(previous: dict[str, Any], fields: dict[str, Any]) -> 
     now = str(fields.get("model") or "")
     if not was or not now or was == now:
         return ""
-    return (
-        f"Embedding model changed from {was} to {now}. Anything already indexed was built with the "
-        "old one and cannot be searched with the new one: rebuild each knowledge base, and "
-        "re-index whatever the memory backend has stored."
-    )
+    from raven.i18n import t
+
+    # Through the catalogue, like every other sentence a person reads. Built by
+    # interpolating the two names into a finished string instead, it was the one
+    # English paragraph on an otherwise translated screen.
+    return t(_EMBEDDING_MODEL_CHANGED, was=was, now=now)
 
 
 __all__ = [
