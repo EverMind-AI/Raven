@@ -113,7 +113,7 @@ export function closeSheet(): void {
 }
 
 /* A language flip changes nothing in this state, but every visible string
-   comes from T(), so a re-render is the whole redraw. */
+   comes from t(), so a re-render is the whole redraw. */
 export function redraw(): void {
   set({})
 }

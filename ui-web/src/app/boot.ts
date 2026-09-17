@@ -43,7 +43,7 @@ import { authFail, bootFail, shellReady, surface } from './connection'
 import { setRuntime } from '../state/envChip'
 import { gateway } from '../rpc/gateway'
 import { installPage } from './install'
-import { load as loadLang, restore as langRestore } from '../state/lang/pick'
+import { load as loadLang } from '../state/lang/pick'
 import { set as setRail } from '../state/rail'
 import { open as sessionOpen, rows as sessionRows, sess } from '../state/session/rows'
 import { switchTo, switchToDraft } from '../state/session/registry'
@@ -88,13 +88,13 @@ function claimFirstFrame(): void {
   watchSessionNote()
 }
 
-/* Everything a first frame needs from the gateway, in the order it needs it. */
+/* Everything a first frame needs from the gateway, in the order it needs it.
+ *
+ * The language is not a step here any more: the store resolves it as it loads,
+ * from the remembered pick and otherwise from what the document declares
+ * (state/lang/store.ts), so the notice that explains a page which cannot
+ * connect is already in the reader's language before this runs. */
 async function sequence(): Promise<void> {
-  /* Ahead of the connect, because the failure path below never reaches
-     `loadLang`: the notice that explains a page which cannot connect has to
-     be in the reader's language, and the only copy available offline is the
-     one the last successful boot remembered. */
-  langRestore()
   /* The first connect is the one place where a socket that never opened really
      does mean the session is not welcome: nothing has been served to this page
      yet that could have come from a gateway which then went away. The rejoin

@@ -355,29 +355,26 @@ describe('a popover reparented out of the card', () => {
 })
 
 /* Last in the file on purpose: applying a language is module state for
-   everything after it. Same agreement as the rail's -- the pass state/lang/store.ts
-   makes over the document's data-i18n attributes, and the component rendering
-   the same key through lang.text -- so the dock cannot come back in the served
-   language once a flip has moved it. */
+   everything after it. The claim is that every keyed word here is the
+   catalogue's rather than the literal the markup was served with -- the
+   stand-in translator answers `t:<key>`, so a served word on screen would be
+   visible at once -- and that a pick and a remount both leave it that way. */
 describe('the dock once a language is applied', () => {
-  it('renders the applied words when the band is mounted again', () => {
+  it('renders the keyed words from the catalogue, before and after a pick', () => {
     const KEYED = ['#slashPop .lab', '#permPop .lab', '#permPop .note']
     const words = (): string[] => KEYED.map((sel) => document.querySelector(sel)?.textContent ?? '')
     const hint = (): string => ta().placeholder
+    const asked = ['t:gui.session_commands', 't:gui.perm.title', 't:gui.perm.note']
     render()
-    const served = words()
-    const servedHint = hint()
-    act(() => { lang.set('en') })
-    const applied = words()
-    expect(applied).not.toEqual(served)
-    expect(hint()).not.toBe(servedHint)
-    const appliedHint = hint()
-    /* A remount over fresh markup, which is what the pass over the document
-       cannot help with: the band renders its own literals unless it reads the
-       catalogue itself. */
+    expect(words()).toEqual(asked)
+    expect(hint()).toBe('t:gui.composer_ph')
+    act(() => { lang.set('zh') })
+    expect(words()).toEqual(asked)
+    /* A remount over fresh markup: the band would render its own literals again
+       if it did not read the catalogue itself. */
     render()
-    expect(words()).toEqual(applied)
-    expect(hint()).toBe(appliedHint)
+    expect(words()).toEqual(asked)
+    expect(hint()).toBe('t:gui.composer_ph')
   })
 
   /* The four chips carry no key: each is owned by whoever fills it afterwards,

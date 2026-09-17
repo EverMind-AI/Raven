@@ -15,7 +15,9 @@ import { describe, expect, it } from 'vitest'
 
 import { loadPart } from '../../../scripts/module-harness.mjs'
 
-/** The nineteen, in redrawAll's order, minus the empty one. */
+/* What is left of the nineteen, in redrawAll's order. Six island steps went
+   with the subscription each `<Domain>App` now holds on the language store:
+   they were a bare `set({})`, which is what a re-render is. */
 const ORDER = [
   'sessionDraw',
   'drawFoot',
@@ -24,12 +26,6 @@ const ORDER = [
   'drawCtx',
   'settings.redraw',
   'caps.draw',
-  'connections.redraw',
-  'cron.redraw',
-  'xa.redraw',
-  'memory.redraw',
-  'knowledge.redraw',
-  'playbooks.redraw',
   'nav.draw',
   'detail.close',
   'transcript.redraw',
@@ -37,17 +33,11 @@ const ORDER = [
   'sessionOpen',
 ]
 
-/* The eight islands whose `redraw()` is a repaint in place, plus the two verbs:
-   the step's name in ORDER above, the module the repaint really lives in, and
-   the export it is called by. */
+/* The three steps that are not a re-render, as the step's name in ORDER above,
+   the module it really lives in, and the export it is called by: the settings
+   dialog's epoch, the flyout's marks, the transcript's per-lane version bump. */
 const ISLAND_STEPS: Array<[string, string, string]> = [
   ['settings.redraw', 'src/features/settings/store', 'redraw'],
-  ['connections.redraw', 'src/features/connections/store', 'redraw'],
-  ['cron.redraw', 'src/features/cron/store', 'langRedraw'],
-  ['xa.redraw', 'src/features/xa/store', 'redraw'],
-  ['memory.redraw', 'src/features/memory/store', 'redraw'],
-  ['knowledge.redraw', 'src/features/knowledge/store', 'redraw'],
-  ['playbooks.redraw', 'src/features/playbooks/store', 'redraw'],
   ['nav.draw', 'src/state/navfly', 'draw'],
   ['transcript.redraw', 'src/features/transcript/mount', 'redraw'],
 ]
@@ -104,13 +94,13 @@ describe('the language repaint', () => {
     expect(h.order).toEqual(ORDER)
   })
 
-  /* Each module page, not just the open one: a hidden page keeps its old DOM,
-     so it would still be in the previous language when reopened. An island that
-     has not loaded throws instead, and the redraw carries on. */
+  /* A page whose island has not loaded throws instead of drawing, and the
+     redraw carries on: the capabilities page is the one step still guarded
+     that way, because its two tabs register their renderers on first open. */
   it('carries on past a page whose island has not loaded', async () => {
-    const h = await harness({ throwing: ['cron.redraw', 'memory.redraw', 'playbooks.redraw'] })
+    const h = await harness({ throwing: ['caps.draw'] })
     h.repaint()
-    expect(h.order).toEqual(ORDER.filter((name) => !/^(cron|memory|playbooks)\./.test(name)))
+    expect(h.order).toEqual(ORDER.filter((name) => name !== 'caps.draw'))
   })
 
   /* The reload rebuilds the conversation from disk, which would cut a streaming
@@ -129,7 +119,6 @@ describe('the language repaint', () => {
     const h = await harness()
     const lang = await import('./store')
     h.install()
-    lang.setQuiet('zh')
     expect(h.order).toEqual([])
     lang.set('en')
     expect(h.order).toEqual(ORDER)

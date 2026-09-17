@@ -6,6 +6,7 @@ import * as agents from '../subagents/store'
 import { DeskPalette } from './DeskPalette'
 import { DeskFollowToggle, DeskSurface } from './DeskSurface'
 import * as workspace from './store'
+import * as lang from '../../state/lang'
 
 import type { JSX } from 'react'
 
@@ -68,6 +69,9 @@ const AGENTS_POLL_MS = 8000
 
 export function DeskApp(): JSX.Element {
   useSyncExternalStore(workspace.subscribe, workspace.get)
+  /* The language the page resolved, so a pick repaints this island: every word
+     below is a t(key) read at render time (state/lang/store.ts). */
+  useSyncExternalStore(lang.subscribe, lang.get)
   useEffect(() => {
     document.documentElement.classList.add('desk-ready')
     return () => document.documentElement.classList.remove('desk-ready')

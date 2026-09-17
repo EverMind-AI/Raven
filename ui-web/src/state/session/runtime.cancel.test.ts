@@ -74,7 +74,7 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
         claimDraft: () => {},
       },
       'src/lib/duration': { formatDuration: (ms: number) => `${ms}ms` },
-      'src/i18n/t': { T: (key: string) => key },
+      'src/i18n/t': { t: (key: string) => key },
       'src/lib/dom': { $: looseQuery() },
       'src/lib/session': { current: () => 's1', setCurrent: (id: string | null) => log.push(['pointer', id]) },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },

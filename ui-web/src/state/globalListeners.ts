@@ -31,7 +31,7 @@ import { trap as linkTrap } from '../features/browser/store'
 import { fitField, parkDraftNow } from '../features/composer/mount'
 import { composing } from '../features/composer/store'
 import { open as openSettings } from '../features/settings/store'
-import { T } from '../i18n/t'
+import { t } from '../i18n/t'
 import { isMac } from '../lib/platform'
 import { onContextMenu } from './contextMenu'
 import { toggle as toggleFind } from './find'
@@ -68,12 +68,12 @@ function copyCodeBlock(event: MouseEvent): void {
   if (!pre) return
   if (navigator.clipboard) navigator.clipboard.writeText(pre.textContent ?? '')
   button.classList.add('ok')
-  button.title = T('gui.code.copied')
-  button.setAttribute('aria-label', T('gui.code.copied'))
+  button.title = t('gui.code.copied')
+  button.setAttribute('aria-label', t('gui.code.copied'))
   setTimeout(() => {
     button.classList.remove('ok')
-    button.title = T('gui.code.copy')
-    button.setAttribute('aria-label', T('gui.code.copy'))
+    button.title = t('gui.code.copy')
+    button.setAttribute('aria-label', t('gui.code.copy'))
   }, 1500)
 }
 

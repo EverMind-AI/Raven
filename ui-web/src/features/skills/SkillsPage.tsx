@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 
 import { CardSkeleton } from '../../components/Skeleton'
 import { t } from '../../i18n/t'
+import * as lang from '../../state/lang'
 import { text as reachText } from '../../lib/reach'
 import * as detail from '../../state/detail'
 import * as store from './store'
@@ -466,6 +467,9 @@ function SkillDetail({ s, drawer }: { s: SkillsState; drawer: NonNullable<Skills
 
 export function SkillsApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The language the page resolved, so a pick repaints this island: every word
+     below is a t(key) read at render time (state/lang/store.ts). */
+  useSyncExternalStore(lang.subscribe, lang.get)
   return (
     <>
       {s.view === 'installed' ? <SkillInstalled /> : <SkillMarket s={s} />}

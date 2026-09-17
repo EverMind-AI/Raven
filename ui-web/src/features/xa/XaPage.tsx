@@ -4,6 +4,7 @@ import { useSyncExternalStore } from 'react'
 
 import { AgentMark, isOwnAgent } from '../../components/AgentMark'
 import { t } from '../../i18n/t'
+import * as lang from '../../state/lang'
 import { KeyInput } from '../../components/KeyInput'
 import { SetupGroup, SetupRow } from '../../components/SetupRow'
 import * as store from './store'
@@ -548,6 +549,9 @@ function AgentCard({ row, testing }: { row: XaRow; testing: boolean }): JSX.Elem
 
 export function XaApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The language the page resolved, so a pick repaints this island: every word
+     below is a t(key) read at render time (state/lang/store.ts). */
+  useSyncExternalStore(lang.subscribe, lang.get)
   /* One pass, in the order the groups are drawn in, so a row can only be in
      one of them and a group nobody is in cannot be drawn. The last is the
      catalogue, and the only one that folds. */

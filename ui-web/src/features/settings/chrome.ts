@@ -14,7 +14,7 @@
 import { setChipPainter } from '../model/source'
 import * as chip from '../model/chip'
 import { checkVersion, savePermMode, setSettingsChrome } from './source'
-import { T } from '../../i18n/t'
+import { t } from '../../i18n/t'
 import { hasUpdateFlag } from '../../rpc/capabilities'
 import { setPermPersister } from '../../state/perm'
 import { current as sessionCurrent } from '../../lib/session'
@@ -28,7 +28,7 @@ import { redraw as redrawSettings } from './store'
    backend: system.version carries the answer. */
 export async function checkUpdate(btn: HTMLButtonElement): Promise<void> {
   const was = btn.textContent
-  btn.textContent = T('gui.set.checking'); btn.disabled = true
+  btn.textContent = t('gui.set.checking'); btn.disabled = true
   try {
     /* check:true = fetch now, not the daily cache: the button says check for
        updates, and a person who just clicked it is asking about now. */
@@ -44,11 +44,11 @@ export async function checkUpdate(btn: HTMLButtonElement): Promise<void> {
        console, and "nothing happened" is indistinguishable from a broken
        check. */
     btn.disabled = false
-    btn.textContent = T('gui.set.abt.latest')
+    btn.textContent = t('gui.set.abt.latest')
     setTimeout(() => { btn.textContent = was }, 2200)
     return
   } catch (e) {
-    btn.textContent = T('gui.set.abt.check_fail')
+    btn.textContent = t('gui.set.abt.check_fail')
     setTimeout(() => { btn.textContent = was }, 2600)
     if (window.console) console.error('[update check]', e)
   }
@@ -79,10 +79,10 @@ export function install(): void {
     return savePermMode(m, sid)
       .then((applied) => {
         if (applied) return true
-        toast(T('gui.perm.save_failed'))
+        toast(t('gui.perm.save_failed'))
         return false
       })
-      .catch(() => { toast(T('gui.perm.save_failed')); return false })
+      .catch(() => { toast(t('gui.perm.save_failed')); return false })
   })
 
   chip.install()

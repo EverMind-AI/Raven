@@ -3,6 +3,7 @@ import { useSyncExternalStore } from 'react'
 
 import { AgentMark, isOwnAgent } from '../../components/AgentMark'
 import { t } from '../../i18n/t'
+import * as lang from '../../state/lang'
 import { ds } from '../../state/sources'
 import { SendGlyph } from '../../components/Ico'
 import { composing, fmtSize } from '../composer/store'
@@ -694,6 +695,9 @@ function InstanceDetail(
 
 export function SubagentsApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The language the page resolved, so a pick repaints this island: every word
+     below is a t(key) read at render time (state/lang/store.ts). */
+  useSyncExternalStore(lang.subscribe, lang.get)
   if (s.open && s.open.kind === 'dag') {
     return <DagDetail key={`d${s.epoch}:${s.open.run_id}:${s.open.node}`} open={s.open} />
   }

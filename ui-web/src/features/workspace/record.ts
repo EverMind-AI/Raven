@@ -14,7 +14,7 @@
 
 import * as hunks from './hunks'
 import { shared as workspaceShared } from './store'
-import { T } from '../../i18n/t'
+import { t } from '../../i18n/t'
 import { shortPath } from './source'
 import { panel } from '../../state/wsPanel'
 
@@ -70,9 +70,9 @@ export function wsOnTool(name: string, args: unknown, _silent?: boolean): void {
   } else if (name === 'write_file' && path) {
     hit = wsRecordChange(path, 'write', hunks.fromWrite(a.content as string))
   } else if (name === 'web_fetch' && a.url) {
-    WS.urls.unshift({ url: String(a.url), kind: 'fetch', at: T('gui.sess.just_now') })
+    WS.urls.unshift({ url: String(a.url), kind: 'fetch', at: t('gui.sess.just_now') })
   } else if (name === 'web_search' && a.query) {
-    WS.urls.unshift({ url: String(a.query), kind: 'search', at: T('gui.sess.just_now') })
+    WS.urls.unshift({ url: String(a.query), kind: 'search', at: t('gui.sess.just_now') })
   } else return
 
   const shown = panel().view()
@@ -153,7 +153,7 @@ export function wsOnHistory(messages: StoredMessage[] | null | undefined): void 
   })
   /* Restored rows have no completion event coming, and nothing counts as
      unread because none of it arrived while the reader was away. */
-  WS.urls.forEach((u) => { u.at = T('gui.ws.turn_earlier') })
+  WS.urls.forEach((u) => { u.at = t('gui.ws.turn_earlier') })
   WS.changes.forEach((c) => { c.seen = true })
   WS.unseen = 0
   panel().bump()

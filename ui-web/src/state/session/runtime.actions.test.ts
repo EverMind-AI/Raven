@@ -62,7 +62,7 @@ async function harness({ rows }: { rows: Row[] }) {
       },
       'src/i18n/t': {
         /* Enough of the real thing to see WHICH conversation a message names. */
-        T: (key: string, vars?: unknown) => (vars ? `${key}:${JSON.stringify(vars)}` : key),
+        t: (key: string, vars?: unknown) => (vars ? `${key}:${JSON.stringify(vars)}` : key),
       },
       'src/lib/dom': {
         $: looseQuery(),
@@ -315,7 +315,7 @@ async function railHarness(
         },
       },
       'src/i18n/t': {
-        T: label,
+        t: label,
       },
       'src/lib/dom': {
         $: looseQuery(),
@@ -490,7 +490,7 @@ async function bulkHarness(answers: Record<string, Answer | Error>) {
         dropDraft: () => {},
       },
       'src/i18n/t': {
-        T: label,
+        t: label,
       },
       'src/lib/dom': {
         $: looseQuery(),

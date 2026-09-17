@@ -16,7 +16,7 @@
 import { current as sessionCurrent } from '../../lib/session'
 import { show as toast } from '../toast'
 import { gateway } from '../../rpc/gateway'
-import { T } from '../../i18n/t'
+import { t } from '../../i18n/t'
 import { closeApproval as approvalClose, open as approveSheet, openApproval as approvalSheet } from '../../features/composer/approve'
 import { close as clarifyClose, open as clarifySheet } from '../../features/composer/clarify'
 import { drawMeter, goPaint as goState } from '../../features/composer/mount'
@@ -151,7 +151,7 @@ export function approvalClosed(frame: unknown): void {
    Not scoped to the conversation on screen: a request that lapsed in another
    one stalled that run just as completely, and the reader is the only person
    who can unstick either. */
-  if (p.reason === 'timeout' || p.reason === 'error') toast(T('gui.confirm.lapsed'))
+  if (p.reason === 'timeout' || p.reason === 'error') toast(t('gui.confirm.lapsed'))
 }
 
 /* The question the agent asks mid-turn. The sheet is the island's

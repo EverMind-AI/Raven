@@ -254,7 +254,7 @@ describe('forgetting a conversation subscription', () => {
     const asked: Array<[string, unknown]> = []
     await loadPart(async () => { await import('./runtime'); return import('./registry') }, {
       fakes: {
-        'src/i18n/t': { T: (key: string) => key },
+        'src/i18n/t': { t: (key: string) => key },
         'src/lib/dom': { $: looseQuery() },
         'src/lib/session': { current: () => 'a' },
       },
@@ -289,7 +289,7 @@ describe('forgetting a conversation subscription', () => {
     const asked: Array<[string, unknown]> = []
     await loadPart(async () => { await import('./runtime'); return import('./registry') }, {
       fakes: {
-        'src/i18n/t': { T: (key: string) => key },
+        'src/i18n/t': { t: (key: string) => key },
         'src/lib/dom': { $: looseQuery() },
         'src/lib/session': { current: () => 'a' },
       },

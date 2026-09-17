@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { SetupGroup, SetupRow, Tile } from '../../components/SetupRow'
 import { Field, SheetHead, StateLine } from '../../components/SetupSheet'
 import { t } from '../../i18n/t'
+import * as lang from '../../state/lang'
 import * as store from './store'
 
 import type { ConnChannel, ConnField } from './types'
@@ -103,6 +104,9 @@ const APPLY: Record<string, string> = {
 
 export function ConnApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The language the page resolved, so a pick repaints this island: every word
+     below is a t(key) read at render time (state/lang/store.ts). */
+  useSyncExternalStore(lang.subscribe, lang.get)
   const dialog = s.dialogId ? s.rows.find((c) => c.id === s.dialogId) : undefined
   return (
     <>

@@ -26,7 +26,7 @@ import { hasToolOk } from '../../rpc/capabilities'
 import { current as sessionCurrent } from '../../lib/session'
 import { show as toast } from '../toast'
 import { ds } from '../sources'
-import { T } from '../../i18n/t'
+import { t } from '../../i18n/t'
 import { drawMeter, goPaint as goState, turn } from '../../features/composer/mount'
 import { draw as sessionDraw } from '../../features/rail/store'
 import { session as sheetSession } from '../sheetRack'
@@ -135,12 +135,12 @@ export const STAGES: readonly Stage[] = [
        above stays where it was said. */
     if (rt.st) { rt.st.seal(); rt.st = null }
     flushSay(rt)
-    noteRow(T('gui.notice.' + (p.kind || ''), null, p.kind || ''), p.detail || '', { quiet: true })
+    noteRow(t('gui.notice.' + (p.kind || ''), null, p.kind || ''), p.detail || '', { quiet: true })
   }),
 
   /* The smart-mode reviewer runs inside the tool dispatch; name the pause. */
   arm('permission.review', (_rt, p) => {
-    if (p.phase === 'started') transcript.status(T('gui.perm.reviewing'))
+    if (p.phase === 'started') transcript.status(t('gui.perm.reviewing'))
     else transcript.killStatus()
   }),
 
@@ -211,12 +211,12 @@ export const STAGES: readonly Stage[] = [
     goState(); drawMeter(); sessionDraw()
   }),
 
-  arm('cron.delivered', (_rt, p) => { toast(T('gui.cron.new_output', { name: p.name })) }),
+  arm('cron.delivered', (_rt, p) => { toast(t('gui.cron.new_output', { name: p.name })) }),
 
   /* One-shot reminders whose time passed while the backend was down. Queued
      at bring-up and flushed to the first subscription, so this arrives once
      per restart rather than per job -- the count is the payload's own. */
-  arm('cron.missed', (_rt, p) => { toast(T('gui.cron.missed_x', { count: p.count })) }),
+  arm('cron.missed', (_rt, p) => { toast(t('gui.cron.missed_x', { count: p.count })) }),
 
   /* The run's own lifecycle, which is not the spawn tool call's: the tool
      returns when the work is dispatched. This is what tells the card who it

@@ -150,31 +150,39 @@ than from what was true when the surface was drawn.
 
 **Language store**:
 `src/state/lang/store.ts` -- the page's language, the catalogue behind it, and
-the one notification a pick sends. Two groups hear it: `subscribe` is what a
-component reads through `useSyncExternalStore`, so every region re-renders its
-own words, and `onApplied` is for everything that is drawn rather than
-rendered. `text(key, literal)` and `attr(key)` answer the served literal (and
-`undefined`) until a language has actually been picked, which is what lets the
-served markup stand as the first frame.
+the one notification a pick sends. The language is resolved as the module loads
+-- the reader's remembered pick, otherwise what `<html lang>` declares -- so
+`get().lang` is never null and the first frame is one language rather than the
+served markup with words from another drawn over it. Two groups hear a pick:
+`subscribe` is what a component reads through `useSyncExternalStore`, so every
+region and every island re-renders its own words, and `onApplied` is for
+everything that is drawn rather than rendered. `get().picked` says whether a
+language was chosen rather than inherited from the document, and it decides one
+thing: `attr(key)` answers `undefined` until a pick lands, because an attribute
+the served markup does not carry is one applyI18n would not have written
+either.
 
 **Language repaint**:
-`src/state/lang/effects.ts` -- the eighteen steps a pick asks of everything
-that draws itself rather than rendering: nine island redraws, the rail's own
-draw and the capabilities page's, three stores whose draw commits a field their
-component renders (the permission chip, the rail foot, the context ring), the
-model label -- the one step left that writes an element by id -- the composer's
-queue, the shared drawer and one conversation reload. Subscribed once, from
-`src/main.tsx`, through `lang.onApplied`, so it runs after the rendered half
-has committed. The order is pinned by `src/state/lang/effects.test.ts`; the
-reload is last because it rebuilds the conversation from disk.
+`src/state/lang/effects.ts` -- the twelve steps a pick asks of everything that
+draws itself rather than rendering: the rail's own draw and the capabilities
+page's, three stores whose draw commits a field their component renders (the
+permission chip, the rail foot, the context ring), the model label -- the one
+step left that writes an element by id -- the settings dialog's epoch, the nav
+flyout's marks, the transcript's per-lane version bump, the composer's queue,
+the shared drawer and one conversation reload. An island that only needs to
+re-render is not in it: each `<Domain>App` subscribes to the language itself
+(`scripts/gates/island-lang.test.mjs`). Subscribed once, from `src/main.tsx`,
+through `lang.onApplied`, so it runs after the rendered half has committed. The
+order is pinned by `src/state/lang/effects.test.ts`; the reload is last because
+it rebuilds the conversation from disk.
 
 **Inert marker**:
 A `data-i18n`, `data-i18n-ph`, `data-i18n-tip`, `data-i18n-aria` or
 `data-i18n-title` attribute on rendered markup. Nothing reads them any more --
-each element's own `lang.text` / `lang.attr` is what fills it -- and they stay
-because the CSS namespace gate and the region goldens record them, and because
-they say which literal belongs to which key at the point a reader edits the
-JSX.
+each element's own `t(key)` (or `lang.attr(key)` for the attributes the served
+markup did not carry) is what fills it -- and they stay because the CSS
+namespace gate and the region goldens record them, and because they say which
+phrase belongs to which key at the point a reader edits the JSX.
 
 **Sheet rack**:
 `src/state/sheetRack.ts` plus `src/chrome/SheetRack.tsx` -- what docks above the

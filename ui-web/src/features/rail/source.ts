@@ -15,7 +15,7 @@ import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/s
 import { switchTo } from '../../state/session/registry'
 import { show as toast } from '../../state/toast'
 import { gateway } from '../../rpc/gateway'
-import { T } from '../../i18n/t'
+import { t } from '../../i18n/t'
 import { $ } from '../../lib/dom'
 import { replace as sessionReplace, rows as sessionRows, sess } from '../../state/session/rows'
 import { draw as sessionDraw } from './store'
@@ -36,15 +36,15 @@ export function whenLabel(epochS: number): string {
   const d = new Date(epochS * 1000)
   const now = new Date()
   const day0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-  const t = d.getTime()
+  const at = d.getTime()
   const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
   const parts = { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() }
   const dated = d.getFullYear() === now.getFullYear()
-    ? T('gui.time.md', parts)
-    : T('gui.time.ymd', parts)
-  if (t >= day0) return hm
-  if (t >= day0 - DAY) return T('gui.time.yest')
-  if (t >= day0 - 2 * DAY) return T('gui.time.dbyest')
+    ? t('gui.time.md', parts)
+    : t('gui.time.ymd', parts)
+  if (at >= day0) return hm
+  if (at >= day0 - DAY) return t('gui.time.yest')
+  if (at >= day0 - 2 * DAY) return t('gui.time.dbyest')
   return dated
 }
 
@@ -91,10 +91,10 @@ export function rowFrom(it: ListedSession): SessRow {
   return {
     id: it.id,
     title: (cron && jobId ? cronNames[jobId] : '') || it.title || prev.slice(0, 24)
-      || T('gui.sess.fallback_title', { id: String(it.id).split(':').pop()!.slice(0, 15) }),
+      || t('gui.sess.fallback_title', { id: String(it.id).split(':').pop()!.slice(0, 15) }),
     last: (it.last_message_preview || it.preview)
       ? (it.last_message_preview || it.preview)!.slice(0, 60)
-      : T('gui.sess.n_messages', { n: it.message_count }),
+      : t('gui.sess.n_messages', { n: it.message_count }),
     when, at, run: null, live: true, from: cron ? 'cron' : undefined,
     pin: !!it.pinned, persisted: true,
   }
@@ -142,7 +142,7 @@ export const pin = (id: string, pinned: boolean): Promise<void> =>
     .catch((e) => {
       const s = sess(id)
       if (s) { s.pin = !pinned; sessionDraw() }
-      toast(T('gui.sess.pin_failed', { detail: detailOf(e) }))
+      toast(t('gui.sess.pin_failed', { detail: detailOf(e) }))
     })
 
 /** Delete one conversation. What the answer means is ./leave.ts's decision. */
@@ -170,7 +170,7 @@ export function renamed(id: string, title: string, previous: string): void {
       const h = $('#title')
       if (h) h.textContent = plainTitle(previous)
     }
-    toast(T('gui.sess.rename_failed', { detail: detailOf(e) }))
+    toast(t('gui.sess.rename_failed', { detail: detailOf(e) }))
   })
 }
 

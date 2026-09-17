@@ -88,7 +88,7 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
           restore: () => {}, reduce: (phase: unknown) => phase,
         },
       },
-      'src/i18n/t': { T: (key: string) => key },
+      'src/i18n/t': { t: (key: string) => key },
       'src/lib/dom': { $ },
       'src/lib/session': { current: () => current, setCurrent: (id: string | null) => { current = id; calls.push(['sessionSet', id]) } },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },

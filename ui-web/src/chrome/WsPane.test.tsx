@@ -227,13 +227,12 @@ describe('the keyboard shortcuts on the pane', () => {
 })
 
 /* Last in the file on purpose: applying a language is module state for
-   everything after it. Same agreement as the rail's -- the pass state/lang/store.ts
-   makes over the document's data-i18n attributes, and the component rendering
-   the same key through lang.text -- so the strip cannot come back in the served
-   language once a flip has moved it. A re-render alone would not show it: React
-   diffs against the props it rendered last, so a literal it never changes is a
-   literal it never writes again, and only a remount asks the component what the
-   text is. */
+   everything after it. Same claim as the rail's: every word here is the
+   catalogue's, read at render time, so the strip cannot come back in the
+   language before the flip. A re-render alone would not show it: React diffs
+   against the props it rendered last, so a value it never changes is a value it
+   never writes again, and only a remount asks the component what the text
+   is. */
 describe('the pane once a language is applied', () => {
   it('renders the applied words when the column is mounted again', () => {
     const words = (): (string | null)[] => [...pane().querySelectorAll('.lb')].map((n) => n.textContent)

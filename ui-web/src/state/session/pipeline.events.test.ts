@@ -80,7 +80,7 @@ async function harness({
       },
       'src/lib/duration': { formatDuration: (ms: number) => `${ms}ms` },
       'src/i18n/t': {
-        T: (key: string, vars?: unknown) => (vars ? `${key}:${JSON.stringify(vars)}` : key),
+        t: (key: string, vars?: unknown) => (vars ? `${key}:${JSON.stringify(vars)}` : key),
       },
       'src/lib/dom': { $: looseQuery() },
       'src/lib/session': { current: () => current },

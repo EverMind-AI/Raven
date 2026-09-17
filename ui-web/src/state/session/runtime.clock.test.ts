@@ -25,7 +25,7 @@ async function turnPart(
         drawMeter: () => {},
         goPaint: () => {},
       },
-      'src/i18n/t': { T: (k: string) => k },
+      'src/i18n/t': { t: (k: string) => k },
       'src/lib/duration': { formatDuration: (ms: number) => `${ms}ms` },
       'src/lib/dom': { $: looseQuery() },
       'src/lib/session': { current: () => 's1' },

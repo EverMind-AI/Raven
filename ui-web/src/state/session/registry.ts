@@ -30,7 +30,7 @@ import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/s
 import { load as loadTier } from '../tier'
 import { show as toast } from '../toast'
 import { gateway } from '../../rpc/gateway'
-import { T } from '../../i18n/t'
+import { t } from '../../i18n/t'
 import { $ } from '../../lib/dom'
 import { drawMeter, goPaint as goState, loadDraft, parkDraft, queueClear, turn } from '../../features/composer/mount'
 import { draw as sessionDraw, endRename, markNew as markNewCurrent, reconcileRows } from '../../features/rail/store'
@@ -132,7 +132,7 @@ export async function subscribe(sessionKey: string): Promise<void> {
     const r = await gateway().call('turn.subscribe', { session_key: sessionKey })
     record(sessionKey, r.subscription_id)
   } catch (e) {
-    toast(T('gui.op.subscribe_failed', { detail: (e as Error).message || e }))
+    toast(t('gui.op.subscribe_failed', { detail: (e as Error).message || e }))
   }
 }
 
@@ -225,7 +225,7 @@ export function switchToDraft(): void {
   void loadProviders(null, gen)
   void loadTier()
   void loadPermMode(null, gen)
-  $('#title')!.textContent = T('gui.new_task')
+  $('#title')!.textContent = t('gui.new_task')
   pitch(); sessionDraw(); $('#ta')!.focus()
 }
 
@@ -350,7 +350,7 @@ export async function switchTo(s: SessRow): Promise<void> {
        empty their stage, and must not raise a toast about a page nobody is on. */
     if (gen !== switches) return
     pitch()
-    toast(T('gui.op.open_failed', { detail: (e as Error).message || e }))
+    toast(t('gui.op.open_failed', { detail: (e as Error).message || e }))
   }
 }
 
@@ -396,7 +396,7 @@ export async function reconnect(): Promise<void> {
     const heading = $('#title')
     const title = (open && open.title) || (heading && heading.textContent) || ''
     await sessionOpen({ id: current, title })
-    transcriptStatus(T('gui.reconnected'))
+    transcriptStatus(t('gui.reconnected'))
     setTimeout(() => killStatus(), 2500)
   } else if (current) {
     void subscribe(current)

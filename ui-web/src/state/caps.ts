@@ -23,7 +23,7 @@
  * boot takes its snapshot in the same task.
  */
 
-import { T } from '../i18n/t'
+import { t } from '../i18n/t'
 import * as detail from './detail'
 import * as page from './page'
 import { ds } from './sources'
@@ -264,17 +264,17 @@ export async function manualAdd(): Promise<void> {
   const n = name.value.trim()
   const a = address.value.trim()
   if (!n || !a) {
-    toast(T('gui.adv.need_fields'))
+    toast(t('gui.adv.need_fields'))
     return
   }
   try {
     await ds('plugins').manual(n, a)
   } catch (e) {
-    toast(T('gui.plug.op_failed', { err: (e as Error).message || String(e) }))
+    toast(t('gui.plug.op_failed', { err: (e as Error).message || String(e) }))
     return
   }
   name.value = ''
   address.value = ''
   draw()
-  toast(T('gui.adv.added_x', { name: n }))
+  toast(t('gui.adv.added_x', { name: n }))
 }

@@ -108,21 +108,20 @@ describe('the settings dialog', () => {
 })
 
 /* Last in the file on purpose: applying a language is module state for
-   everything after it. Same agreement as the confirm sheet's -- the pass over
-   the document's data-i18n attributes and the component rendering that key
-   through lang.text have to land on one value. */
+   everything after it. The claim is that the wordmark is the catalogue's rather
+   than the literal the markup was served with -- the stand-in translator here
+   answers the key, so the served word being off screen is what says so -- and
+   that a pick and a remount both leave it that way. */
 describe('the settings dialog once a language is applied', () => {
-  it('renders the applied wordmark when the frame is mounted again', () => {
+  it('renders the wordmark from the catalogue, before and after a pick', () => {
     const wm = (): string => document.querySelector('.wm')!.textContent ?? ''
     render()
-    const served = wm()
-    lang.set('en')
-    const applied = wm()
-    expect(applied).not.toBe(served)
-    /* A remount over fresh markup, which is what the pass over the document
-       cannot help with: the frame renders its own literal unless it reads the
-       catalogue itself. */
+    expect(wm()).toBe('gui.page.set')
+    lang.set('zh')
+    expect(wm()).toBe('gui.page.set')
+    /* A remount over fresh markup: the frame would render the served literal
+       again if it did not read the catalogue itself. */
     render()
-    expect(wm()).toBe(applied)
+    expect(wm()).toBe('gui.page.set')
   })
 })

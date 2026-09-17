@@ -80,10 +80,10 @@ function ArmedDelete({ onFire, style }: { onFire: () => void; style?: CSSPropert
 
 export function MemoryApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
-  /* Subscribed, not read: memWhen above reads the language at render time, and
-     this is what brings the page back for a flip. The legacy whole-page redraw
-     also repaints this island, so the subscription adds nothing a reader can
-     see -- it is what carries the repaint once that redraw is gone. */
+  /* The language the page resolved, so a pick repaints this island: memWhen
+     above and every word below read it at render time (state/lang/store.ts).
+     This subscription is what carries the repaint -- the whole-page redraw no
+     longer lists this island. */
   useSyncExternalStore(langSubscribe, langTag)
   return (
     <>

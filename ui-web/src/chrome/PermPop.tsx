@@ -22,15 +22,15 @@
  * tick on the tier that was in force when they were built. Both are reproduced
  * by rendering the list the open took.
  *
- * The heading and the note carry keys, so each takes its literal through
- * lang.text: the lang store rewrites the two by hand over the document, and a
- * component rendering the same key has to agree with it in both directions.
+ * The heading and the note carry keys, so each reads the catalogue as it
+ * renders (t(key)), in whichever language the page resolved.
  */
 
 import { useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
 import { place } from '../lib/popover'
+import { t } from '../i18n/t'
 import * as lang from '../state/lang'
 import * as perm from '../state/perm'
 
@@ -65,7 +65,7 @@ export function PermPop(): JSX.Element {
       aria-label={lang.attr('gui.perm.title')}
       ref={box}
     >
-      <div className="hd"><span className="lab" data-i18n="gui.perm.title">{lang.text('gui.perm.title', '权限模式')}</span></div>
+      <div className="hd"><span className="lab" data-i18n="gui.perm.title">{t('gui.perm.title')}</span></div>
       <div id="permList" />
       {s.listed && list
         ? createPortal(
@@ -91,7 +91,7 @@ export function PermPop(): JSX.Element {
           list
         )
         : null}
-      <div className="note" data-i18n="gui.perm.note">{lang.text('gui.perm.note', '下一个工具调用起生效。')}</div>
+      <div className="note" data-i18n="gui.perm.note">{t('gui.perm.note')}</div>
     </div>
   )
 }

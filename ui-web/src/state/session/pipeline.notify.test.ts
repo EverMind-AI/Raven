@@ -67,7 +67,7 @@ async function harness({ rows = [] as Row[], current = 'tui:open' as string | nu
         open: (_prompt: string, yes: () => void, no: () => void, owner: string | null) =>
           seen.sheets.push({ kind: 'confirm', owner, answer: (ok?: unknown) => (ok ? yes() : no()) }),
       },
-      'src/i18n/t': { T: (key: string) => key },
+      'src/i18n/t': { t: (key: string) => key },
       'src/lib/session': { current: () => current },
       'src/state/toast': { show: (text: string) => seen.toasts.push(text) },
       /* The phase event goes to the conversation it names, whether or not that

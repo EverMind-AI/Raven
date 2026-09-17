@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
+import * as lang from '../../state/lang'
 import { show as menuAt } from '../../state/menu'
 import { show as toast } from '../../state/toast'
 import {
@@ -54,6 +55,9 @@ const ctxRef = (items: () => MenuItem[]) => (el: HTMLElement | null): void => {
 
 export function WsApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The language the page resolved, so a pick repaints this island: every word
+     below is a t(key) read at render time (state/lang/store.ts). */
+  useSyncExternalStore(lang.subscribe, lang.get)
   const ws = store.shared()
   if (s.route === 'launch') return <Launch />
   if (s.route === 'file') return <FileView ws={ws} />

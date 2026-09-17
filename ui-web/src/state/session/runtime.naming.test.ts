@@ -31,7 +31,7 @@ async function harness({ rows, current, titleCall }: {
         sess: (id: string) => rows.find((r) => r.id === id),
       },
       'src/i18n/t': {
-        T: (key: string) => key,
+        t: (key: string) => key,
       },
       'src/lib/dom': {
         $: looseQuery(),

@@ -11,7 +11,7 @@
  * plugin tab too so that it does not linger there.
  */
 
-import { T } from '../../i18n/t'
+import { t } from '../../i18n/t'
 import * as caps from '../../state/caps'
 import * as page from '../../state/page'
 import { ds } from '../../state/sources'
@@ -25,12 +25,12 @@ export let view = 'market'
 export function drawSkillTab(): void {
   const box = document.getElementById('capsBody') as HTMLElement
   box.innerHTML = ''
-  const title = T('gui.tab.skills')
+  const title = t('gui.tab.skills')
   const installed = skills.view() === 'installed'
   caps.chrome({
-    title: installed ? T('gui.plug.installed_title') : title,
+    title: installed ? t('gui.plug.installed_title') : title,
     label: title,
-    search: T('gui.hub.search_ph'),
+    search: t('gui.hub.search_ph'),
     pillsHidden: true,
     advHidden: true,
     bar: installed ? 'none' : '',
@@ -46,7 +46,7 @@ export function drawSkillTab(): void {
 export function syncInstalledButton(): void {
   caps.installedButton('skill', {
     hidden: caps.get().tab !== 'skill' || skills.view() === 'installed',
-    label: T('gui.plug.installed_n', { n: ds('skills').installed().length }),
+    label: t('gui.plug.installed_n', { n: ds('skills').installed().length }),
     badge: null,
   })
 }

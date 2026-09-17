@@ -16,7 +16,7 @@
 
 import { release as releaseRail } from '../features/rail/store'
 import { status as transcriptStatus } from '../features/transcript/mount'
-import { T } from '../i18n/t'
+import { t } from '../i18n/t'
 import { gateway } from '../rpc/gateway'
 import { show as failureBar } from '../state/failureBar'
 import { open as upShade } from '../state/upgradeShade'
@@ -78,10 +78,10 @@ export function authFail(): void {
   hideSplash(0)
   shellReady()
   if (askShellReauth()) {
-    failureBar(T('gui.auth.retry'))
+    failureBar(t('gui.auth.retry'))
     return
   }
-  const bar = failureBar(T(isShell() ? 'gui.auth.dead_app' : 'gui.auth.checking'))
+  const bar = failureBar(t(isShell() ? 'gui.auth.dead_app' : 'gui.auth.checking'))
   if (isShell()) return
   /* "Not authenticated OR the service stopped" made the reader guess between
      two causes with opposite fixes -- and a restarted `serve` mints a fresh
@@ -90,8 +90,8 @@ export function authFail(): void {
      replies to a browser holding a cookie the gateway has already forgotten. */
   fetch('/health', { cache: 'no-store' })
     .then((r) => r.ok && r.json())
-    .then((j: { service?: unknown } | false) => { bar.say(T(j && j.service ? 'gui.auth.stale' : 'gui.auth.dead')) })
-    .catch(() => { bar.say(T('gui.auth.dead')) })
+    .then((j: { service?: unknown } | false) => { bar.say(t(j && j.service ? 'gui.auth.stale' : 'gui.auth.dead')) })
+    .catch(() => { bar.say(t('gui.auth.dead')) })
 }
 
 /* Anything that breaks after the socket is up is NOT an auth failure. Blaming
@@ -104,7 +104,7 @@ export function bootFail(e: unknown): void {
   const err = e as { data?: { detail?: string; reason?: string }; message?: string } | null
   const detail = (err && err.data && (err.data.detail || err.data.reason)) || ''
   const msg = [(err && err.message) || String(e), detail].filter(Boolean).join(' - ')
-  failureBar(T('gui.boot_fail', { where: 'live boot', err: msg }))
+  failureBar(t('gui.boot_fail', { where: 'live boot', err: msg }))
   // A dead boot must not leave the rail shimmering forever under the banner.
   releaseRail()
   if (window.console) console.error('[live boot]', e)
@@ -140,7 +140,7 @@ export async function onConnectionState(state: ConnectionState, info?: StateInfo
   if (state === 'reconnecting' && attempt === 0) {
     // In the DOM, not a toast: a silent drop mid-turn reads as the model
     // hanging forever, which is exactly the bug report this line answers.
-    try { transcriptStatus(T('gui.reconnecting')) } catch { /* pre-boot */ }
+    try { transcriptStatus(t('gui.reconnecting')) } catch { /* pre-boot */ }
     return
   }
   if (state === 'reconnecting') {
@@ -165,7 +165,7 @@ export async function onConnectionState(state: ConnectionState, info?: StateInfo
        the close drives the socket into this rejoin. */
     if (!shade && !document.querySelector('.upshade') && upgradeKind() === 'ver') {
       shade = upShade()
-      shade.say(T('gui.upg.working'))
+      shade.say(t('gui.upg.working'))
     }
     return
   }

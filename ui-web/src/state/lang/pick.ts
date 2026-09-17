@@ -8,7 +8,7 @@
  * language the agent replies in.
  */
 
-import { code as LANG, T } from '../../i18n/t'
+import { t } from '../../i18n/t'
 import { gateway } from '../../rpc/gateway'
 import { show as toast } from '../toast'
 import * as lang from './store'
@@ -17,24 +17,14 @@ import * as lang from './store'
    it can still read it. `load` runs only after the connect succeeds, so on a
    failed connect nothing would set the language at all -- and the sign-in
    notice, the one message that explains the empty page, would arrive in English
-   on a Chinese install. Wrapped like the look settings, because private mode
-   throws on access rather than answering null. */
+   on a Chinese install. The store reads this key back as it loads, which is how
+   a remembered pick is in force before the first frame; what is here is the
+   write. Wrapped like the look settings, because private mode throws on access
+   rather than answering null. */
 const LANG_KEY = 'raven.gui.lang'
 
 export function remember(v: string): void {
   try { localStorage.setItem(LANG_KEY, v) } catch { /* private mode */ }
-}
-
-/* Applied before the socket is up. Whatever `load` resolves afterwards wins, so
-   a language changed elsewhere still lands on this boot. The quiet setter
-   because this runs ahead of the first data-driven paint: there is nothing
-   drawn from JavaScript to redraw yet, and this is the one language call site
-   that has never asked for one. */
-export function restore(): void {
-  try {
-    const v = localStorage.getItem(LANG_KEY)
-    if (v === 'en' || v === 'zh') lang.setQuiet(v)
-  } catch { /* private mode */ }
 }
 
 export async function load(): Promise<void> {
@@ -49,13 +39,12 @@ export async function load(): Promise<void> {
    the catalogue together and notifies its subscribers; what is added here is
    the persist and the rollback.
 
-   The comparison is against the catalogue's column rather than against the
-   store's `applied`, which is null until the first pick: a page nobody has
-   picked for renders English text over Chinese markup, and asking for English
-   on it has never been a flip. */
+   A pick for the language already in force is not a flip and repaints nothing:
+   the page resolved one before its first frame (state/lang/store.ts), so the
+   two answers cannot differ any more than they agree. */
 export async function pick(next: lang.Lang, { persist }: { persist?: boolean } = {}): Promise<void> {
-  if (next === LANG) return
-  const prev = LANG
+  if (next === lang.get().lang) return
+  const prev = lang.get().lang
   lang.set(next)
   if (!persist) return
   try {
@@ -66,6 +55,6 @@ export async function pick(next: lang.Lang, { persist }: { persist?: boolean } =
        not agree with -- the same key drives the TUI and the agent's replies. */
     lang.set(prev)
     const err = e as { data?: { detail?: string }; message?: string }
-    toast(T('gui.op.lang_failed', { detail: (err.data && err.data.detail) || err.message || String(e) }))
+    toast(t('gui.op.lang_failed', { detail: (err.data && err.data.detail) || err.message || String(e) }))
   }
 }

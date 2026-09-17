@@ -81,7 +81,7 @@ async function harness({ rows = [] as Row[] } = {}) {
         openApproval: (_o: unknown, _answer: unknown, owner: string | null) => log.push(['sheet', owner]),
       },
       'src/lib/duration': { formatDuration: (ms: number) => `${ms}ms` },
-      'src/i18n/t': { T: (key: string) => key },
+      'src/i18n/t': { t: (key: string) => key },
       'src/lib/dom': { $: looseQuery() },
       'src/lib/session': {
         current: () => current,

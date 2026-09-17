@@ -6,6 +6,7 @@ import { KeyInput } from '../../components/KeyInput'
 import { ModelTagDefs, ModelTags } from '../../components/ModelTags'
 import { ProviderIcon, ProviderLink, ProviderStatus } from '../../components/ProviderMark'
 import { t } from '../../i18n/t'
+import * as lang from '../../state/lang'
 import * as store from './store'
 
 import type { OnboardProvider, OnboardSource } from './types'
@@ -70,6 +71,9 @@ function CopyCommand({ provider }: { provider: OnboardProvider }): JSX.Element {
 
 export function OnboardApp(): JSX.Element | null {
   const opening = useSyncExternalStore(store.subscribe, store.get)
+  /* The language the page resolved, so a pick repaints this island: every word
+     below is a t(key) read at render time (state/lang/store.ts). */
+  useSyncExternalStore(lang.subscribe, lang.get)
   if (!opening.source) return null
   return <Flow key={opening.epoch} source={opening.source} />
 }

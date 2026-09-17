@@ -76,7 +76,7 @@ div.app[data-rail=on]
               path
               path
           span.spacer
-          button#wsBtn.ghost-ic.wstog.tipdn[data-i18n-aria=gui.expand_ws][data-i18n-tip=gui.expand_ws][data-tip=Expand workspace]
+          button#wsBtn.ghost-ic.wstog.tipdn[data-i18n-aria=gui.expand_ws][data-i18n-tip=gui.expand_ws][data-tip=展开工作区]
             svg
               rect
               path
@@ -169,7 +169,7 @@ div.app[data-rail=on]
               span.lb[data-i18n=gui.ws.agents]
               span#wsAgentRun.rundot
           div.ws-acts
-            button#wsWide.ghost-ic.wsfull.tipdn[data-i18n-aria=gui.ws.expand_panel][data-i18n-tip=gui.ws.expand_panel][data-tip=Expand to full window]
+            button#wsWide.ghost-ic.wsfull.tipdn[data-i18n-aria=gui.ws.expand_panel][data-i18n-tip=gui.ws.expand_panel][data-tip=展开全屏]
               svg.ex
                 path
               svg.in

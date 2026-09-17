@@ -42,10 +42,11 @@ import * as lang from '../state/lang'
 
 import type { JSX } from 'react'
 
-/* The session header. Its two buttons say their words through data-i18n-tip /
-   -aria, which state/lang/store.ts writes onto the attributes, so there is no literal
-   here to take through lang.text -- and #title has no key at all, because its
-   text is a conversation's name rather than a phrase from the catalogue. */
+/* The session header. Its two buttons say their words in a tooltip and a label
+   rather than in text, so each takes its key through lang.attr -- which is
+   absent until a pick lands, the way the served markup carried neither -- and
+   #title has no key at all, because its text is a conversation's name rather
+   than a phrase from the catalogue. */
 function Header(): JSX.Element {
   return (
     <>

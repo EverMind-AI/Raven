@@ -11,7 +11,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { plugHost, skillsHost } from '../features/hosts'
-import { T } from '../i18n/t'
+import { t } from '../i18n/t'
 import { mountPageRoot } from '../test/pageRoot'
 
 /* Every case starts from the served page: the tab, the two buttons and the
@@ -236,23 +236,23 @@ describe('the two draws the dispatch reaches', () => {
     /* What the other tab left in the box, which a draw clears wholesale. */
     el('capsBody').appendChild(document.createElement('i'))
     drawSkillTab()
-    expect(caps.get().title).toBe(T('gui.tab.skills'))
-    expect(caps.get().search).toBe(T('gui.hub.search_ph'))
+    expect(caps.get().title).toBe(t('gui.tab.skills'))
+    expect(caps.get().search).toBe(t('gui.hub.search_ph'))
     expect(caps.get().pillsHidden).toBe(true)
-    expect(el('capsPage').getAttribute('aria-label')).toBe(T('gui.tab.skills'))
+    expect(el('capsPage').getAttribute('aria-label')).toBe(t('gui.tab.skills'))
     expect(el('advAdd').hidden).toBe(true)
     expect(bar().style.display).toBe('')
     /* The island's host, under a box this cleared first. */
     expect(el('capsBody').children).toHaveLength(1)
     expect(el('capsBody').firstElementChild).toBe(skillsHost)
-    expect(caps.get().skill).toEqual({ hidden: false, label: T('gui.plug.installed_n', { n: 2 }), badge: null })
+    expect(caps.get().skill).toEqual({ hidden: false, label: t('gui.plug.installed_n', { n: 2 }), badge: null })
   })
 
   it('renames the skill tab and takes the bar down on its installed view', async () => {
     const { drawSkillTab } = await import('../features/skills/tab')
     views.skill = 'installed'
     drawSkillTab()
-    expect(caps.get().title).toBe(T('gui.plug.installed_title'))
+    expect(caps.get().title).toBe(t('gui.plug.installed_title'))
     expect(bar().style.display).toBe('none')
     expect(caps.get().pillsHidden).toBe(true)
     expect(el('advAdd').hidden).toBe(true)
@@ -263,15 +263,15 @@ describe('the two draws the dispatch reaches', () => {
     const { drawPlugTab } = await import('../features/plugins/tab')
     caps.extSet('plugin')
     drawPlugTab()
-    expect(caps.get().title).toBe(T('gui.tab.plugins'))
-    expect(caps.get().search).toBe(T('gui.plug.search_ph'))
+    expect(caps.get().title).toBe(t('gui.tab.plugins'))
+    expect(caps.get().search).toBe(t('gui.plug.search_ph'))
     expect(caps.get().pillsHidden).toBe(true)
-    expect(el('capsPage').getAttribute('aria-label')).toBe(T('gui.tab.plugins'))
+    expect(el('capsPage').getAttribute('aria-label')).toBe(t('gui.tab.plugins'))
     expect(el('advAdd').hidden).toBe(false)
     expect(bar().style.display).toBe('')
     expect(el('capsBody').firstElementChild).toBe(plugHost)
     /* The badge counts the rows that need the reader, which skills never do. */
-    expect(caps.get().plugin).toEqual({ hidden: false, label: T('gui.plug.installed_n', { n: 3 }), badge: '1' })
+    expect(caps.get().plugin).toEqual({ hidden: false, label: t('gui.plug.installed_n', { n: 3 }), badge: '1' })
   })
 
   it('hides the manual add on the plugin tab installed view', async () => {
@@ -279,7 +279,7 @@ describe('the two draws the dispatch reaches', () => {
     caps.extSet('plugin')
     views.plugin = 'installed'
     drawPlugTab()
-    expect(caps.get().title).toBe(T('gui.plug.installed_title'))
+    expect(caps.get().title).toBe(t('gui.plug.installed_title'))
     expect(el('advAdd').hidden).toBe(true)
     expect(bar().style.display).toBe('none')
     expect(caps.get().plugin?.hidden).toBe(true)
@@ -293,10 +293,10 @@ describe('the two draws the dispatch reaches', () => {
     caps.onDraw({ skill: drawSkillTab, plugin: plugins.drawPlugTab })
     plugins.install()
     caps.draw()
-    expect(el('pageHero').innerHTML).toBe(`<h3>${T('gui.hub.hero')}</h3>`)
+    expect(el('pageHero').innerHTML).toBe(`<h3>${t('gui.hub.hero')}</h3>`)
     caps.extSet('plugin')
     caps.draw()
-    expect(el('pageHero').innerHTML).toBe(`<h3>${T('gui.plug.hero')}</h3>`)
+    expect(el('pageHero').innerHTML).toBe(`<h3>${t('gui.plug.hero')}</h3>`)
     views.plugin = 'installed'
     caps.draw()
     expect(el('pageHero').hidden).toBe(true)

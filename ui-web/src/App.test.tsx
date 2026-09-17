@@ -17,7 +17,7 @@ import { flushSync } from 'react-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from './App'
-import { T, setTranslator } from './i18n/t'
+import { t, setTranslator } from './i18n/t'
 import * as confirmStore from './state/confirm'
 import * as detail from './state/detail'
 import * as lang from './state/lang'
@@ -198,15 +198,15 @@ describe('the page root once a language is applied', () => {
     act(() => {
       lang.set('en')
     })
-    expect(document.querySelector('#xaPage h2')!.textContent).toBe(T('gui.page.agents'))
-    expect(document.getElementById('xaPage')!.getAttribute('aria-label')).toBe(T('gui.page.agents'))
-    expect(document.getElementById('railShow')!.dataset.tip).toBe(T('gui.expand_rail'))
-    expect(document.getElementById('railShow')!.getAttribute('aria-label')).toBe(T('gui.expand_rail'))
-    expect(document.getElementById('wsGrip')!.getAttribute('title')).toBe(T('gui.resize_ws'))
-    expect(document.getElementById('detail')!.getAttribute('aria-label')).toBe(T('gui.cap_detail'))
-    expect(document.getElementById('setModal')!.getAttribute('aria-label')).toBe(T('gui.page.set'))
-    expect((document.getElementById('sfind') as HTMLInputElement).placeholder).toBe(T('gui.search_sessions'))
-    expect(document.getElementById('cfNo')!.textContent).toBe(T('gui.cancel'))
+    expect(document.querySelector('#xaPage h2')!.textContent).toBe(t('gui.page.agents'))
+    expect(document.getElementById('xaPage')!.getAttribute('aria-label')).toBe(t('gui.page.agents'))
+    expect(document.getElementById('railShow')!.dataset.tip).toBe(t('gui.expand_rail'))
+    expect(document.getElementById('railShow')!.getAttribute('aria-label')).toBe(t('gui.expand_rail'))
+    expect(document.getElementById('wsGrip')!.getAttribute('title')).toBe(t('gui.resize_ws'))
+    expect(document.getElementById('detail')!.getAttribute('aria-label')).toBe(t('gui.cap_detail'))
+    expect(document.getElementById('setModal')!.getAttribute('aria-label')).toBe(t('gui.page.set'))
+    expect((document.getElementById('sfind') as HTMLInputElement).placeholder).toBe(t('gui.search_sessions'))
+    expect(document.getElementById('cfNo')!.textContent).toBe(t('gui.cancel'))
   })
 
   /* The flags another store writes on a region this root renders. A pick

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
+import * as lang from '../../state/lang'
 import { copy } from '../../lib/clipboard'
 import { language } from '../../lib/platform'
 import * as store from './store'
@@ -37,6 +38,9 @@ function Ico({ d, cls, style }: { d: string; cls?: string; style?: CSSProperties
 
 export function BrowserApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The language the page resolved, so a pick repaints this island: every word
+     below is a t(key) read at render time (state/lang/store.ts). */
+  useSyncExternalStore(lang.subscribe, lang.get)
   const src = store.source()
   if (!src.embedded) return <LinkList src={src} />
   return <Chromium s={s} />

@@ -33,7 +33,7 @@
 import { notifyDesk, openDeskTab, reset as resetDesk } from '../features/workspace/deskStore'
 import { reset as resetSubagents } from '../features/subagents/store'
 import * as workspace from '../features/workspace/store'
-import { T } from '../i18n/t'
+import { t } from '../i18n/t'
 
 import type { DeskTab } from '../features/workspace/deskTypes'
 import type { WsPanelView } from './wsPanel'
@@ -66,8 +66,8 @@ export function setFull(on: boolean): void {
   const b = el('wsWide')
   b.classList.toggle('on', wide)
   const k = wide ? 'gui.ws.restore_panel' : 'gui.ws.expand_panel'
-  b.dataset.tip = T(k)
-  b.setAttribute('aria-label', T(k))
+  b.dataset.tip = t(k)
+  b.setAttribute('aria-label', t(k))
   b.setAttribute('aria-pressed', String(wide))
 }
 
@@ -117,8 +117,8 @@ export function setOpen(next: boolean, view?: string): void {
   const b = el('wsBtn')
   b.setAttribute('aria-expanded', String(next))
   const k = next ? 'gui.collapse_ws' : 'gui.expand_ws'
-  b.dataset.tip = T(k)
-  b.setAttribute('aria-label', T(k))
+  b.dataset.tip = t(k)
+  b.setAttribute('aria-label', t(k))
   if (next) draw()
   bump()
 }

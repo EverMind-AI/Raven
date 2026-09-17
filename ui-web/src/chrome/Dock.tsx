@@ -11,7 +11,7 @@
  * ResizeObserver and a MutationObserver on it (features/composer/mount.tsx), and
  * a node rebuilt per render would lose both.
  *
- * Literals go through lang.text(key, literal) where the markup carries a key;
+ * Words go through t(key) where the markup carries a key;
  * the four that carry none (#permName, #envName, #tierName, #modelName) carry
  * none because each is the property of whoever fills it. Two of the four are
  * their owner's store now (./PermChip.tsx, ./TierChip.tsx, each falling back to
@@ -62,6 +62,7 @@ import { PermChip } from './PermChip'
 import { PermPop } from './PermPop'
 import { TierChip } from './TierChip'
 import { TierPop } from './TierPop'
+import { t } from '../i18n/t'
 import * as lang from '../state/lang'
 
 import type { JSX } from 'react'
@@ -74,7 +75,7 @@ function DockIn(): JSX.Element {
     <div className="dock-in">
       <div className="queued" id="queued" />
       <div className="field">
-        <textarea id="ta" rows={1} data-i18n-ph="gui.composer_ph" placeholder={lang.text('gui.composer_ph', 'Do anything')} />
+        <textarea id="ta" rows={1} data-i18n-ph="gui.composer_ph" placeholder={t('gui.composer_ph')} />
       </div>
       {/* One bar under a clean writing line: actions and identity on
            the left, session state and the send button on the right --
@@ -102,7 +103,7 @@ function DockIn(): JSX.Element {
       </div>
 
       <div className="pop slash" id="slashPop" data-open="false" role="listbox" data-i18n-aria="gui.commands" aria-label={lang.attr('gui.commands')}>
-        <div className="hd"><span className="lab" data-i18n="gui.session_commands">{lang.text('gui.session_commands', '会话命令')}</span></div>
+        <div className="hd"><span className="lab" data-i18n="gui.session_commands">{t('gui.session_commands')}</span></div>
         <div id="slashList" />
       </div>
 

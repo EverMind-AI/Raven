@@ -19,13 +19,13 @@
  * during install; state/portals.ts is where that body-level order is declared,
  * because two steps of the `--z` ladder are ties decided by it alone.
  *
- * Language. Each region renders its words through lang.text(key, literal) and
- * its keyed attributes through lang.attr(key), which is applyI18n's five passes
- * read from the other end: the literal the page was served with until a pick
- * lands, the catalogue's text afterwards. The data-i18n* keys stay on the
- * elements -- they are what says which phrase a line of chrome speaks, and the
- * region goldens record them -- but nothing reads them any more (see
- * state/lang/store.ts). The literals with no key (#cfTitle, #cfYes, #setTitle,
+ * Language. Each region renders its words through t(key), which reads the
+ * language the page resolved before its first frame, and its keyed attributes
+ * through lang.attr(key), which is absent until a pick lands -- applyI18n wrote
+ * those and it ran only on a pick, so a page nobody has picked for carries none
+ * of them (state/lang/store.ts). The data-i18n* keys stay on the elements --
+ * they are what says which phrase a line of chrome speaks, and the region
+ * goldens record them -- but nothing reads them any more. The literals with no key (#cfTitle, #cfYes, #setTitle,
  * #title) have nothing to look up: each is owned by whoever writes it
  * afterwards, and a re-render cannot undo that, because React diffs against the
  * props it rendered last rather than against the document.
@@ -63,6 +63,7 @@ import { UpgradeShade } from './chrome/UpgradeShade'
 import { WsPane } from './chrome/WsPane'
 import * as confirm from './state/confirm'
 import * as detail from './state/detail'
+import { t } from './i18n/t'
 import * as lang from './state/lang'
 import * as menu from './state/menu'
 import * as rail from './state/rail'
@@ -106,7 +107,7 @@ function ConfirmSheet(): JSX.Element {
         <header id="cfTitle">{s.title ?? '确认'}</header>
         <div className="body" id="cfBody">{s.body}</div>
         <footer>
-          <button className="btn" id="cfNo" data-i18n="gui.cancel" onClick={cancel}>{lang.text('gui.cancel', '取消')}</button>
+          <button className="btn" id="cfNo" data-i18n="gui.cancel" onClick={cancel}>{t('gui.cancel')}</button>
           <button className="btn bad" id="cfYes" onClick={() => confirm.answer(true)}>{s.label ?? '确认'}</button>
         </footer>
       </div>
@@ -139,7 +140,7 @@ function DetailPanel(): JSX.Element {
       <div className="dpanel">
         <header>
           <b id="dTitle">{s.title ?? '—'}</b>
-          <button className="dx" id="dClose" data-i18n-aria="gui.close" aria-label={lang.text('gui.close', '关闭')} onClick={() => detail.close()}>
+          <button className="dx" id="dClose" data-i18n-aria="gui.close" aria-label={t('gui.close')} onClick={() => detail.close()}>
             <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </header>
@@ -173,7 +174,7 @@ function SettingsModal(): JSX.Element {
               grid parent (.snav .brandrow, src/styles/page.css:3667). */}
           <div className="brandrow">
             {' '}
-            <span className="wm" data-i18n="gui.page.set">{lang.text('gui.page.set', '设置')}</span>{' '}
+            <span className="wm" data-i18n="gui.page.set">{t('gui.page.set')}</span>{' '}
           </div>
           <div className="snavlist" id="snavList" />
         </nav>
@@ -292,7 +293,7 @@ function ModulePage({ id, aria, head, literal, body }: {
   return (
     <section className="page" id={id} data-open="false" data-i18n-aria={aria} aria-label={lang.attr(aria)}>
       <header>
-        <h2 data-i18n={head}>{lang.text(head, literal)}</h2>
+        <h2 data-i18n={head}>{t(head)}</h2>
       </header>
       <div className="work">
         <div className="wrap" id={body} />

@@ -52,7 +52,7 @@ import { clarifyRequest, dispatch, installPipeline } from '../state/session/pipe
 import { installComposerActions, installSlashActions } from '../state/session/runtime'
 import { ds, sources } from '../state/sources'
 import { showUpNote } from './updates'
-import { T } from '../i18n/t'
+import { t } from '../i18n/t'
 import { $ } from '../lib/dom'
 import { hostPlatform } from '../lib/platform'
 import * as caps from '../state/caps'
@@ -212,7 +212,7 @@ function onUpdateAvailable(frame: unknown): void {
    conversation's turn. */
 function onMemoryHealth(frame: unknown): void {
   const p = frame as MemoryHealthParams
-  setMemFault(p && p.ok === false ? (p.error || T('gui.mem.down')) : null)
+  setMemFault(p && p.ok === false ? (p.error || t('gui.mem.down')) : null)
 }
 
 let pmExtSoon: ReturnType<typeof setTimeout> | undefined
@@ -338,7 +338,7 @@ export function installDevHooks(): void {
   /* The approval sheet only appears when an engine asks for one, which is too
      long a loop to design a sheet in (window.__approve('rm -rf build/')). */
   hooks.__approve = (p: unknown) => approveSheet((p as string) || 'rm -rf build/',
-    () => toast(T('gui.confirm.allow')), () => toast(T('gui.confirm.deny')))
+    () => toast(t('gui.confirm.allow')), () => toast(t('gui.confirm.deny')))
 
   // The graph is only reachable by configuring third-party sub-agents and
   // spending a multi-agent run, which is too long a loop to design a layout in.

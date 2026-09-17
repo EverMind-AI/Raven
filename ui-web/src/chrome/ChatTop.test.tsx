@@ -53,7 +53,7 @@ const source = (rel: string): string => readFileSync(`src/${rel}`, 'utf8') as st
    answer, so a case reached with English already applied would pass for a
    component that draws its text from the catalogue too. */
 const flip = (): void => {
-  const next = lang.get() === 'en' ? 'zh' : 'en'
+  const next = lang.get().lang === 'en' ? 'zh' : 'en'
   act(() => {
     lang.set(next)
   })

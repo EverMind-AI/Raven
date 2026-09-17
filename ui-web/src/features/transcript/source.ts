@@ -18,7 +18,7 @@ import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/s
 import { show as toast } from '../../state/toast'
 import { gateway } from '../../rpc/gateway'
 import { dagOpenNode } from '../dag/open'
-import { T } from '../../i18n/t'
+import { t } from '../../i18n/t'
 import { draw as sessionDraw } from '../rail/store'
 import { session as sheetSession } from '../../state/sheetRack'
 import { unpitch } from '../../state/session/conversation'
@@ -155,14 +155,14 @@ export function openSpawn(agent: string, label: string): void {
 export function branch(): void {
   gateway().call('session.branch', { session_id: openKey() })
     .then((r) => {
-      if (!r.session_id) { toast(T('gui.sess.branch_empty')); return }
+      if (!r.session_id) { toast(t('gui.sess.branch_empty')); return }
       const s: SessRow = {
-        id: r.session_id, title: r.title || T('gui.sess.branch_title'),
-        last: T('gui.sess.branched'), when: T('gui.sess.just_now'),
+        id: r.session_id, title: r.title || t('gui.sess.branch_title'),
+        last: t('gui.sess.branched'), when: t('gui.sess.just_now'),
         at: Math.floor(Date.now() / 1000), run: null, live: true,
       }
       sessionRows().unshift(s); sessionSet(s.id); sessionDraw(); sessionOpen(s)
-      toast(T('gui.sess.branched_n', { n: r.message_count || 0 }))
+      toast(t('gui.sess.branched_n', { n: r.message_count || 0 }))
     })
-    .catch((e) => toast(T('gui.op.branch_failed', { detail: (e as Error).message || e })))
+    .catch((e) => toast(t('gui.op.branch_failed', { detail: (e as Error).message || e })))
 }

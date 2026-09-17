@@ -80,7 +80,7 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
         turn: { dispatch: () => {}, busy: () => false, snapshot: () => ({}), restore: () => {} },
         claimDraft: (id: string | null) => log.push(`claimDraft:${String(id)}`),
       },
-      'src/i18n/t': { T: (key: string) => key },
+      'src/i18n/t': { t: (key: string) => key },
       'src/lib/dom': { $: looseQuery() },
       'src/state/banner': { draw: () => {} },
       'src/state/tier': { load: () => {} },

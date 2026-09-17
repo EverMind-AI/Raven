@@ -7,14 +7,14 @@
  * with either island.
  */
 
-import { T } from '../../i18n/t'
+import { t } from '../../i18n/t'
 import * as detail from '../../state/detail'
 
 export function useInTask(promptKey: string, name: string): void {
   detail.close()
   ;(document.getElementById('newBtn') as HTMLElement).click()
   const ta = document.getElementById('ta') as HTMLTextAreaElement
-  ta.value = T(promptKey, { name })
+  ta.value = t(promptKey, { name })
   ta.dispatchEvent(new Event('input', { bubbles: true }))
   ta.focus()
   ta.setSelectionRange(ta.value.length, ta.value.length)

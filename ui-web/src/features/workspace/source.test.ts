@@ -185,7 +185,7 @@ async function panel() {
         sources: { workspace: { shortPath: (p: string) => p } },
       },
       'src/i18n/t': {
-        T: (key: string) => key,
+        t: (key: string) => key,
       },
       'src/features/workspace/store': { shared: () => shared },
       /* Three tellable hunks: which builder a replayed call reached for, and

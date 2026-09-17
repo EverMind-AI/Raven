@@ -1,14 +1,18 @@
 /* The whole-page redraw a language pick asks for.
  *
- * A hand-written list of nineteen calls (`redrawAll`) is what this was.
- * Everything the catalogue reaches that is DRAWN rather than rendered is
- * in it: the regions src/App.tsx renders read the catalogue themselves and
- * redraw on the same notification, so what is left here is nine island
- * redraws, the rail's own draw and the capabilities page's, the three stores
- * whose draw commits a field their component renders (the permission chip, the
- * rail foot, the context ring), the model label -- the one step left that
- * writes an element by id -- the composer's queue, the shared drawer and the
- * one reload.
+ * A hand-written list of nineteen calls (`redrawAll`) is what this was, and
+ * what is left is only what is DRAWN rather than rendered: every component on
+ * the page reads the catalogue itself and re-renders on the same notification,
+ * islands included (each `<Domain>App` subscribes, which is what
+ * scripts/gates/island-lang.test.mjs holds it to), so six steps that were a
+ * bare `set({})` for an island went with that subscription.
+ *
+ * What cannot be a re-render is here: the rail's own draw and the capabilities
+ * page's, the three stores whose draw commits a field their component renders
+ * (the permission chip, the rail foot, the context ring), the model label --
+ * the one step left that writes an element by id -- the settings dialog's
+ * epoch, the nav flyout's marks, the transcript's per-lane version bump, the
+ * composer's queue, the shared drawer and the one reload.
  *
  * One subscriber rather than a call beside each `lang.set`: the rollback path in
  * state/lang/pick.ts would otherwise have to remember to redraw a second time,
@@ -24,14 +28,8 @@
  * last, and the guard in front of it is what keeps it off a streaming turn.
  */
 
-import * as connections from '../../features/connections/store'
-import * as cron from '../../features/cron/store'
-import * as knowledge from '../../features/knowledge/store'
-import * as memory from '../../features/memory/store'
-import * as playbooks from '../../features/playbooks/store'
 import { redraw as redrawSettings } from '../../features/settings/store'
 import { redraw as redrawTranscript } from '../../features/transcript/mount'
-import * as xa from '../../features/xa/store'
 import { draw as drawNavRows } from '../navfly'
 import { drawQueue as queueDraw, turn } from '../../features/composer/mount'
 import { label as modelLabel } from '../../features/model/chip'
@@ -52,16 +50,11 @@ export function repaint(): void {
   modelLabel()
   drawPerm()
   drawCtx()
-  /* Every module page, not just the open one: a hidden page keeps its old DOM,
-     so it would still be in the previous language when reopened. */
+  /* The settings dialog's own epoch, which is more than a re-render: the panes
+     are keyed on it, so a flip rebuilds each one rather than diffing a tree
+     whose words all moved. */
   redrawSettings()
   try { caps.draw() } catch { /* extensions not loaded yet */ }
-  try { connections.redraw() } catch { /* channels not loaded yet */ }
-  try { cron.langRedraw() } catch { /* schedules not loaded yet */ }
-  try { xa.redraw() } catch { /* agents not loaded yet */ }
-  try { memory.redraw() } catch { /* memory not loaded yet */ }
-  try { knowledge.redraw() } catch { /* knowledge not loaded yet */ }
-  try { playbooks.redraw() } catch { /* playbooks not loaded yet */ }
   /* The rows' own words follow the catalogue on their own (chrome/MoreFly.tsx);
      what this asks for is the mark on each of them, which is written from
      outside React and is the one thing a re-render leaves alone. */

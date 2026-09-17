@@ -12,7 +12,7 @@
  */
 
 import { view as skillView } from '../skills/tab'
-import { T } from '../../i18n/t'
+import { t } from '../../i18n/t'
 import { plugHost } from '../hosts'
 import * as plugins from './store'
 import * as caps from '../../state/caps'
@@ -35,12 +35,12 @@ export function drawPlugTab(): void {
   const box = document.getElementById('capsBody') as HTMLElement
   box.innerHTML = ''
   box.appendChild(plugHost)
-  const title = T('gui.tab.plugins')
+  const title = t('gui.tab.plugins')
   const view = plugins.view()
   caps.chrome({
-    title: view === 'installed' ? T('gui.plug.installed_title') : title,
+    title: view === 'installed' ? t('gui.plug.installed_title') : title,
     label: title,
-    search: T('gui.plug.search_ph'),
+    search: t('gui.plug.search_ph'),
     pillsHidden: true,
     advHidden: view !== 'market',
     bar: view === 'installed' ? 'none' : '',
@@ -56,7 +56,7 @@ export function syncInstalledButton(): void {
   const attn = attnCount()
   caps.installedButton('plugin', {
     hidden: caps.get().tab !== 'plugin' || plugins.view() === 'installed',
-    label: T('gui.plug.installed_n', { n: plugins.installedCount() }),
+    label: t('gui.plug.installed_n', { n: plugins.installedCount() }),
     badge: attn ? String(attn) : null,
   })
 }
@@ -65,8 +65,8 @@ export function syncInstalledButton(): void {
    covers both tabs, which is why it is the last step of either draw. */
 export function syncHero(): void {
   let title = ''
-  if (caps.get().tab === 'plugin' && plugins.view() === 'market') title = T('gui.plug.hero')
-  else if (caps.get().tab === 'skill' && skillView === 'market') title = T('gui.hub.hero')
+  if (caps.get().tab === 'plugin' && plugins.view() === 'market') title = t('gui.plug.hero')
+  else if (caps.get().tab === 'skill' && skillView === 'market') title = t('gui.hub.hero')
   caps.hero(title)
 }
 

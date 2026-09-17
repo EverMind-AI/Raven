@@ -10,7 +10,7 @@
  * Names only. These three rows are places the reader already knows by name; a
  * sentence under each turned a three-item group into a panel.
  *
- * Words through t() rather than lang.text(key, literal): these rows carry no
+ * Words through t(), like every other line of chrome: these rows carry no
  * served literal to fall back to, because nothing draws them until a reader
  * unfolds the group.
  *

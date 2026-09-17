@@ -39,7 +39,7 @@ async function harness({ rows = [] as Row[], cur = null as string | null } = {})
         rows: () => rows,
       },
       'src/i18n/t': {
-        T: label,
+        t: label,
       },
       'src/lib/dom': {
         $: looseQuery(),
@@ -219,7 +219,7 @@ async function refreshHarness({
         rows: () => rows,
       },
       'src/i18n/t': {
-        T: label,
+        t: label,
       },
       'src/lib/dom': {
         $: looseQuery(),

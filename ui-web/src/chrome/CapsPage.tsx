@@ -39,6 +39,7 @@ import { composing } from '../features/composer/store'
 import * as plugins from '../features/plugins/store'
 import * as skills from '../features/skills/store'
 import * as caps from '../state/caps'
+import { t } from '../i18n/t'
 import * as lang from '../state/lang'
 
 import type { JSX } from 'react'
@@ -59,7 +60,7 @@ const PILLS = [
 function Title(): JSX.Element {
   const s = useSyncExternalStore(caps.subscribe, caps.get)
   useSyncExternalStore(lang.subscribe, lang.get)
-  return <h2 id="capsTitle" data-i18n="gui.tab.skills">{s.title ?? lang.text('gui.tab.skills', '技能')}</h2>
+  return <h2 id="capsTitle" data-i18n="gui.tab.skills">{s.title ?? t('gui.tab.skills')}</h2>
 }
 
 /* The search field. The placeholder is the only word on this page with no key
@@ -150,7 +151,7 @@ function FilterBar(): JSX.Element {
             data-i18n={pill.key}
             onClick={() => caps.pick(pill.k)}
           >
-            {lang.text(pill.key, pill.literal)}
+            {t(pill.key)}
           </button>
         ))}
       </div>
@@ -167,14 +168,14 @@ function ManualAdd(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
     <>
-      <summary data-i18n="gui.adv_add">{lang.text('gui.adv_add', '高级 · 手动添加')}</summary>
+      <summary data-i18n="gui.adv_add">{t('gui.adv_add')}</summary>
       <p style={{ color: 'var(--muted)', fontSize: '12.5px', margin: '10px 0 0' }} data-i18n="gui.adv_hint">
-        {lang.text('gui.adv_hint', '知道要接什么就直接填地址或启动命令，Raven 会握手取回它提供的动作。')}
+        {t('gui.adv_hint')}
       </p>
       <div className="row">
-        <input id="mName" data-i18n-ph="gui.adv_name_ph" placeholder={lang.text('gui.adv_name_ph', '名称，例如 内部 CRM')} />
-        <input id="mAddr" data-i18n-ph="gui.adv_addr_ph" placeholder={lang.text('gui.adv_addr_ph', '地址或命令，例如 npx -y @acme/crm-mcp')} />
-        <button className="mini" id="mAdd" data-i18n="gui.add" onClick={() => void caps.manualAdd()}>{lang.text('gui.add', '添加')}</button>
+        <input id="mName" data-i18n-ph="gui.adv_name_ph" placeholder={t('gui.adv_name_ph')} />
+        <input id="mAddr" data-i18n-ph="gui.adv_addr_ph" placeholder={t('gui.adv_addr_ph')} />
+        <button className="mini" id="mAdd" data-i18n="gui.add" onClick={() => void caps.manualAdd()}>{t('gui.add')}</button>
       </div>
     </>
   )

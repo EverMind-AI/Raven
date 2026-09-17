@@ -2,6 +2,7 @@ import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'rea
 import { createPortal } from 'react-dom'
 
 import { t } from '../../i18n/t'
+import * as lang from '../../state/lang'
 import { show as toast } from '../../state/toast'
 import { CardSkeleton } from '../../components/Skeleton'
 import * as detail from '../../state/detail'
@@ -32,7 +33,7 @@ const Vfd = (): JSX.Element => (
 )
 
 /* The category catalogue covers the known ids; an unknown one keeps its raw
-   name -- the same fallback the legacy T(key, null, cat) call expressed. */
+   name -- the same fallback the lookup's third argument expresses. */
 function catLabel(cat: string): string {
   const key = 'gui.plug.cat_' + cat
   const label = t(key)
@@ -91,6 +92,9 @@ function ArmButton({
 
 export function PlugApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The language the page resolved, so a pick repaints this island: every word
+     below is a t(key) read at render time (state/lang/store.ts). */
+  useSyncExternalStore(lang.subscribe, lang.get)
   return (
     <>
       {s.view === 'installed' ? <Installed s={s} /> : <Market s={s} />}

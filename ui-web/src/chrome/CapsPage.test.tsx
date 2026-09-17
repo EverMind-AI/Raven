@@ -353,20 +353,19 @@ describe('the capabilities page chrome', () => {
 })
 
 /* Last in the file on purpose: applying a language is module state for
-   everything after it. Same agreement as the rail's and the two dialogs' --
-   the pass state/lang/store.ts makes over the document's data-i18n attributes, and
-   the component rendering the same key through lang.text -- so the page cannot
-   come back in the served language once a flip has moved it. */
+   everything after it. Same claim as the rail's and the two dialogs': every
+   word here is the catalogue's, read at render time, so the page cannot come
+   back in the language before the flip. */
 describe('the capabilities page chrome once a language is applied', () => {
   it('renders the applied words when the page is mounted again', () => {
     const KEYED = ['#capsTitle', '#cKind .pill:nth-child(1)', '#cKind .pill:nth-child(2)', '#cKind .pill:nth-child(3)', '#cKind .pill:nth-child(4)', '#advAdd summary', '#advAdd p', '#mAdd']
     const words = (): string[] => KEYED.map((sel) => document.querySelector(sel)?.textContent ?? '')
-    /* The two fields' hints carry keys too, so the pass writes them as well. */
+    /* The two fields' hints carry keys too, and are read the same way. */
     const hints = (): string[] => ['mName', 'mAddr'].map((id) => (el(id) as HTMLInputElement).placeholder)
     render()
     const served = words()
     const servedHints = hints()
-    lang.set('en')
+    lang.set('zh')
     const applied = words()
     const appliedHints = hints()
     expect(applied).not.toEqual(served)

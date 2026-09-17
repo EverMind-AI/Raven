@@ -11,10 +11,9 @@
  * The column itself is here too now: src/App.tsx renders it as one of the two
  * children of #split.
  *
- * Literals go through lang.text(key, literal): the served markup carries
- * data-i18n* keys and state/lang/store.ts applies a language by walking the document
- * and rewriting them, so a component rendering one of those keyed literals has
- * two writers and has to read the same catalogue to agree with the other one.
+ * Words go through t(key), which reads the language the page resolved before
+ * its first frame (state/lang/store.ts); the data-i18n* keys beside them say
+ * which phrase each line speaks and nothing reads them.
  *
  * What this does NOT own, though it renders the elements:
  *   - #wsBody's children. It is shared ground for three islands: the workspace
@@ -39,6 +38,7 @@
 import { useEffect, useSyncExternalStore } from 'react'
 import { composing } from '../features/composer/store'
 import { toggleDesk } from '../features/workspace/deskStore'
+import { t } from '../i18n/t'
 import * as lang from '../state/lang'
 import * as ws from '../state/ws'
 
@@ -89,20 +89,20 @@ function WsTabs(): JSX.Element {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <rect x="4" y="4" width="16" height="16" rx="3" /><path d="M12 8.5v7M8.5 12h7" />
         </svg>
-        <span className="lb" data-i18n="gui.ws.changes">{lang.text('gui.ws.changes', 'Diff')}</span>
+        <span className="lb" data-i18n="gui.ws.changes">{t('gui.ws.changes')}</span>
         <span className="bdg" id="wsUnseen" hidden />
       </button>
       <button role="tab" data-w="browser" aria-selected="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <circle cx="12" cy="12" r="8" /><path d="M4.5 12h15M12 4.5c-4.5 4.5-4.5 10.5 0 15M12 4.5c4.5 4.5 4.5 10.5 0 15" />
         </svg>
-        <span className="lb" data-i18n="gui.ws.browser">{lang.text('gui.ws.browser', '浏览器')}</span>
+        <span className="lb" data-i18n="gui.ws.browser">{t('gui.ws.browser')}</span>
       </button>
       <button role="tab" data-w="agents" aria-selected="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <rect x="4" y="8" width="16" height="11" rx="3" /><path d="M12 4.5V8M8.5 13h.01M15.5 13h.01" />
         </svg>
-        <span className="lb" data-i18n="gui.ws.agents">{lang.text('gui.ws.agents', '子智能体')}</span>
+        <span className="lb" data-i18n="gui.ws.agents">{t('gui.ws.agents')}</span>
         <span className="rundot" id="wsAgentRun" hidden />
       </button>
     </div>

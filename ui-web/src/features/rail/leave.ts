@@ -14,7 +14,7 @@ import { forget as forgetSubscription, switchToDraft } from '../../state/session
 import { sources } from '../../state/sources'
 import { forget as forgetDagRuns } from '../dag/mount'
 import { redraw as redrawSettings } from '../settings/store'
-import { T } from '../../i18n/t'
+import { t } from '../../i18n/t'
 import { $ } from '../../lib/dom'
 import { dropDraft } from '../composer/mount'
 import { ask as confirmAsk } from '../../state/confirm'
@@ -67,7 +67,7 @@ const detailOf = (e: unknown): string => {
 }
 
 export function remove(s: SessRow): void {
-  confirmAsk(T('gui.sess.delete_title'), T('gui.sess.delete_body', { title: s.title }), T('gui.sess.delete'), async () => {
+  confirmAsk(t('gui.sess.delete_title'), t('gui.sess.delete_body', { title: s.title }), t('gui.sess.delete'), async () => {
     try {
       const r = await deleteSession(s.id)
       /* A null `deleted` is two answers and only one of them may drop the row.
@@ -81,12 +81,12 @@ export function remove(s: SessRow): void {
        there" -- reading it as the second would drop a row whose file may
        have survived. */
       const removed = hasStillOnDisk(r) && r.still_on_disk === false
-      if (r.deleted !== s.id && !removed) throw new Error(T('gui.sess.delete_kept'))
+      if (r.deleted !== s.id && !removed) throw new Error(t('gui.sess.delete_kept'))
       await leaveDeletedSession(s.id)
       toast(r.deleted === s.id
-        ? T('gui.sess.deleted_x', { title: s.title })
-        : T('gui.sess.delete_absent', { title: s.title }))
-    } catch (e) { toast(T('gui.sess.delete_failed', { title: s.title, err: (e as Error).message || e })) }
+        ? t('gui.sess.deleted_x', { title: s.title })
+        : t('gui.sess.delete_absent', { title: s.title }))
+    } catch (e) { toast(t('gui.sess.delete_failed', { title: s.title, err: (e as Error).message || e })) }
   })
 }
 
@@ -96,8 +96,8 @@ export async function archive(s: SessRow): Promise<void> {
     const result = await setArchived(s.id, true)
     if (!result.archived || result.session_key !== s.id) throw new Error(`session ${s.id} was not archived`)
     await leaveArchivedSession(s.id)
-    toast(T('gui.sess.archived', { title: s.title }), {
-      label: T('gui.undo'),
+    toast(t('gui.sess.archived', { title: s.title }), {
+      label: t('gui.undo'),
       fn: async () => {
         try {
           const restored = await setArchived(s.id, false)
@@ -109,12 +109,12 @@ export async function archive(s: SessRow): Promise<void> {
           }
           sessionDraw()
         } catch (e) {
-          toast(T('gui.sess.restore_failed', { detail: detailOf(e) }))
+          toast(t('gui.sess.restore_failed', { detail: detailOf(e) }))
         }
       },
     })
   } catch (e) {
-    toast(T('gui.sess.archive_failed', { detail: detailOf(e) }))
+    toast(t('gui.sess.archive_failed', { detail: detailOf(e) }))
   }
 }
 
@@ -144,8 +144,8 @@ export async function deleteAll(): Promise<void> {
   switchToDraft()
   redrawSettings()
   toast(sessionRows().length
-    ? T('gui.set.dat.del_partial', { n: gone.length, left: sessionRows().length })
-    : T('gui.set.dat.del_done', { n: gone.length }))
+    ? t('gui.set.dat.del_partial', { n: gone.length, left: sessionRows().length })
+    : t('gui.set.dat.del_done', { n: gone.length }))
 }
 
 /* The three writes that also move the reader somewhere else. Assigned onto the

@@ -1,21 +1,26 @@
-/* The page's language, and the only place that applies one.
+/* The page's language, resolved before the first frame, and the only place that
+ * applies one.
  *
- * Two facts, not one. `applied` is which language has been applied to THIS
- * page, and it is null until something applies one -- which is the state every
- * page boots in: src/page.html declares lang="zh-CN", the regions src/App.tsx
- * renders carry the literals that markup was served with, and nothing moves
- * them until a pick arrives from the settings dialog, from localStorage or from
- * config.language. The catalogue's own column (src/i18n/t.ts's `code`) starts
- * at English regardless, which is why an untouched page shows Chinese text
- * beside English text drawn from JavaScript. Reproduced here, not fixed: this
- * is the state the reader sees today, and moving the language out of the legacy
- * kernel may not change a pixel of it.
+ * Two facts in one value, because both decide what a region renders and both
+ * have to move it when they change.
  *
- * `text(key, literal)` and `attr(key)` are what that buys the components: the
- * served literal while nothing has been applied, the catalogue afterwards --
- * and, for an attribute the served markup did not carry at all, nothing at all
- * until a pick lands. Between them they are applyI18n's five passes: a
- * component renders the value the pass would have written over it.
+ * `lang` is the language the page is in, and it is never null. It is resolved as
+ * this module loads: the pick the reader is remembered by if there is one
+ * (localStorage, under the key state/lang/pick.ts owns), and otherwise what
+ * <html lang> declares -- which for the served page is zh-CN. The gateway's own
+ * answer arrives a moment later and wins, the way any pick does
+ * (`config.language` through state/lang/pick.ts's `load`). So a region renders
+ * one language from its first paint, rather than the served Chinese markup with
+ * English words drawn over it by whatever ran from JavaScript.
+ *
+ * `picked` is whether a language was chosen rather than inherited from the
+ * document, and it decides exactly one thing: an attribute the served markup
+ * does not carry at all. applyI18n's five passes wrote those, and it ran only on
+ * a pick, so a page nobody has picked for carries no aria-label, title or
+ * data-tip it was not served with -- which is what both boot goldens record.
+ * `attr(key)` is that rule and is the whole reason the second fact is here; a
+ * text node has no such rule, because the markup carried a literal for every
+ * one of them.
  *
  * Which is why there is no pass any more. It walked the document on every pick
  * and rewrote data-i18n / -ph / -title / -aria / -tip wherever it found them,
@@ -25,29 +30,55 @@
  * they say which phrase a line of chrome speaks -- but nothing reads them any
  * more.
  *
- * This module is the only writer of <html lang>, and it never writes it on
- * load: a page nobody has picked a language for keeps the declaration it was
- * served with.
+ * This module is the only writer of <html lang>, and it writes it only for a
+ * language the document does not already declare.
  */
 
-import { type Lang, setCode, T } from '../../i18n/t'
+import { type Lang, setCode, t } from '../../i18n/t'
 import { makeStore } from '../store'
 
 export type { Lang }
 
-const store = makeStore<Lang | null>(null)
+/** The key a pick is remembered under (state/lang/pick.ts persists it). */
+const REMEMBERED = 'raven.gui.lang'
+
+/** What the document was served declaring, as one of the two languages. */
+const declared = (): Lang => (/^zh/i.test(document.documentElement.lang) ? 'zh' : 'en')
+
+/* Read through a guard, because private mode throws on access rather than
+   answering null -- the same guard the persist side uses. */
+function remembered(): Lang | null {
+  try {
+    const kept = localStorage.getItem(REMEMBERED)
+    return kept === 'en' || kept === 'zh' ? kept : null
+  } catch {
+    return null
+  }
+}
+
+const tagOf = (v: Lang): string => (v === 'zh' ? 'zh-CN' : 'en')
+
+/** The language the page is in, and whether a reader picked it. */
+export interface LangState {
+  readonly lang: Lang
+  readonly picked: boolean
+}
+
+const kept = remembered()
+const store = makeStore<LangState>({ lang: kept ?? declared(), picked: kept !== null })
 const afterwards = new Set<() => void>()
 
-/** Which language has been applied to the page, or null while none has. */
-export const { get, subscribe, _resetForTests } = store
+/** The two facts. Resolved at load, so the language is never null. */
+export const { get, subscribe } = store
 
-/* What <html lang> says: what `set` wrote, or -- while nothing has been
-   applied -- the declaration the document was served with. The three modules
-   that used to read the attribute read this instead, so each keeps the answer
-   it gets today in both load modes: the served page declares zh-CN, and a test
-   document that declares nothing still answers nothing. */
+/* Applied as this module loads, before anything reads a word: the catalogue's
+   column is the language, and the declaration follows a remembered pick. */
+setCode(get().lang)
+if (get().picked) document.documentElement.lang = tagOf(get().lang)
+
+/** What <html lang> says, which is the language this module resolved. */
 export function tag(): string {
-  return get() === null ? document.documentElement.lang : get() === 'zh' ? 'zh-CN' : 'en'
+  return tagOf(get().lang)
 }
 
 /* The other kind of subscriber: not a component, and it has to run after the
@@ -62,17 +93,12 @@ export function onApplied(fn: () => void): () => void {
   }
 }
 
-/** A key's text, or the literal the markup carries while no pick has landed. */
-export function text(key: string, literal: string): string {
-  return get() === null ? literal : T(key)
-}
-
 /* A key's text for an attribute the served markup does not carry: absent until
    a pick lands, which is exactly what the page shows today -- applyI18n was the
    only writer of these, and it ran only on a pick. `undefined` is what tells
    React to leave the attribute off. */
 export function attr(key: string): string | undefined {
-  return get() === null ? undefined : T(key)
+  return get().picked ? t(key) : undefined
 }
 
 /* The regions are committed with the write, synchronously, because applyI18n
@@ -84,8 +110,10 @@ export function attr(key: string): string | undefined {
    write commits read both while they render. */
 function apply(v: Lang): void {
   setCode(v)
-  document.documentElement.lang = v === 'zh' ? 'zh-CN' : 'en'
-  store.set(v)
+  document.documentElement.lang = tagOf(v)
+  /* A new value even for the language already in force: `picked` moved, and a
+     pick the reader made has to reach the attributes that wait for one. */
+  store.set({ lang: v, picked: true })
 }
 
 /** A pick: apply it, then tell everything that draws itself to draw again. */
@@ -94,12 +122,8 @@ export function set(v: Lang): void {
   for (const fn of [...afterwards]) fn()
 }
 
-/* The same move without the whole-page redraw, for the one caller that has
-   never wanted it: `restore` applies the remembered language ahead of the
-   socket, before anything drawn from JavaScript exists, and is the one language
-   call site that does not repaint any of it (see state/lang/pick.ts). The markup
-   still moves -- that half was applyI18n, which every call site ran -- so the
-   regions are committed here too; what is skipped is state/lang/effects.ts. */
-export function setQuiet(v: Lang): void {
-  apply(v)
+/* Test seam: back to the language this module resolved, with no pick applied. */
+export function _resetForTests(): void {
+  store._resetForTests()
+  setCode(get().lang)
 }

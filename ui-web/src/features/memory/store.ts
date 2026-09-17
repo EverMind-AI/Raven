@@ -167,8 +167,9 @@ export function remove(it: MemItem): void {
     })
 }
 
-/* A language flip changes nothing in this state, but every visible string
-   comes from T(), so a re-render is the whole redraw. */
+/* A language flip changes nothing in this state, and every visible string comes
+   from t() -- so the island's own subscription to the language store is the
+   whole redraw, and this verb is what a caller outside React asks for one by. */
 export function redraw(): void {
   set({})
 }

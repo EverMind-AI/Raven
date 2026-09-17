@@ -34,7 +34,7 @@ import { load as loadTier } from '../tier'
 import { show as toast } from '../toast'
 import { gateway } from '../../rpc/gateway'
 import { ds, sources } from '../sources'
-import { T } from '../../i18n/t'
+import { t } from '../../i18n/t'
 import { $ } from '../../lib/dom'
 import { drawMeter, goPaint as goState, queuePush, queueShift, turn } from '../../features/composer/mount'
 import { draw as sessionDraw } from '../../features/rail/store'
@@ -196,7 +196,7 @@ export function finishTurn(payload: unknown, rt: SessionRuntime = viewRuntime())
   touchSession(sessionCurrent(), rt.say)
   // OS notification when the answer lands while the window is in the
   // background; ntfPush itself checks focus and the user's preference.
-  ntfPush(T('gui.set.ntf.done'), (s && s.title) || rt.say.trim().slice(0, 80))
+  ntfPush(t('gui.set.ntf.done'), (s && s.title) || rt.say.trim().slice(0, 80))
   reset(rt)
   drawMeter(); goState(); sessionDraw(); scrollTranscriptDown()
   const nx = queueShift()
@@ -232,7 +232,7 @@ export function send(text: string): void {
     const err = e as { message?: string }
     transcript.killStatus()
     turn.dispatch({ type: 'idle' })
-    noteRow(T('gui.err.send'), err.message === 'not connected' ? T('gui.err.disconnected') : (err.message || String(e)),
+    noteRow(t('gui.err.send'), err.message === 'not connected' ? t('gui.err.disconnected') : (err.message || String(e)),
       { retry: () => send(text) })
     goState(); drawMeter()
   }
@@ -324,7 +324,7 @@ export function softStop(keepCancelling?: boolean, rt: SessionRuntime = viewRunt
   transcript.finishTurn(rt.st, rt.steps, duration(undefined, rt))
   if (!keepCancelling) turn.dispatch({ type: 'idle' })
   /* Only promise the output was kept when there is output above to keep. */
-  noteRow(T(transcript.turnKept() ? 'gui.halted' : 'gui.halted_bare'), '',
+  noteRow(t(transcript.turnKept() ? 'gui.halted' : 'gui.halted_bare'), '',
     { quiet: true, host: $('#stage') })
   /* A stopped turn still produced what it produced. */
   transcript.artifacts(wsCurrentTurn())
@@ -399,8 +399,8 @@ export async function promote(preview?: string, atPointer?: (id: string) => void
   const r = await gateway().call('session.create', {})
   setWsRoot(draftRt, r.info && r.info.cwd)
   const s: SessRow = {
-    id: r.session_id, title: T('gui.new_task'), last: preview || T('gui.sess.not_started'),
-    when: T('gui.sess.just_now'), at: Math.floor(Date.now() / 1000), run: null, live: true, persisted: false,
+    id: r.session_id, title: t('gui.new_task'), last: preview || t('gui.sess.not_started'),
+    when: t('gui.sess.just_now'), at: Math.floor(Date.now() / 1000), run: null, live: true, persisted: false,
   }
   sessionRows().unshift(s); sessionSet(s.id)
   /* The draft IS the conversation now: everything it was holding -- the staged
@@ -453,7 +453,7 @@ export async function applyStagedModel(rt: SessionRuntime, sessionId: string, ge
   } catch (e) {
     // Said out loud, not just reversed: the pick was announced as staged, so a
     // silent chip flip back would be an unexplained contradiction.
-    toast(T('gui.op.switch_failed', { detail: detailOf(e) }))
+    toast(t('gui.op.switch_failed', { detail: detailOf(e) }))
     void loadProviders(sessionId, gen)
   }
 }
@@ -472,7 +472,7 @@ export async function applyStagedTier(_rt: SessionRuntime, sessionId: string): P
   try {
     await gateway().call('session.set_mode', { session_key: sessionId, mode })
   } catch (e) {
-    toast(`${T('gui.tier.title')}: ${detailOf(e)}`)
+    toast(`${t('gui.tier.title')}: ${detailOf(e)}`)
   }
   void loadTier()
 }
@@ -486,7 +486,7 @@ export async function applyStagedPerm(_rt: SessionRuntime, sessionId: string): P
   try {
     await gateway().call('config.set', { key: 'permissions.mode', value: mode, scope: 'session', session_id: sessionId })
   } catch (e) {
-    toast(`${T('gui.perm.title')}: ${detailOf(e)}`)
+    toast(`${t('gui.perm.title')}: ${detailOf(e)}`)
   }
   void loadPermMode(sessionId)
 }
@@ -532,7 +532,7 @@ export function titlePlaceholder(on: boolean): void {
   bar.className = 'sk'
   bar.style.width = '180px'
   bar.style.height = '14px'
-  bar.setAttribute('aria-label', T('gui.sess.naming'))
+  bar.setAttribute('aria-label', t('gui.sess.naming'))
   h.appendChild(bar)
 }
 
@@ -617,7 +617,7 @@ export function namingEnded(id: string, reason: string): void | Promise<void> {
 
 export function beginNaming(text: string): void {
   const s = sess(sessionCurrent())
-  if (!s || (s.title && s.title !== '新任务' && s.title !== T('gui.new_task'))) return
+  if (!s || (s.title && s.title !== '新任务' && s.title !== t('gui.new_task'))) return
   if (!String(text || '').trim()) return
   const id = s.id
   /* Not capped here: how a title fits a row is the front end's own business and
@@ -643,12 +643,12 @@ export const clear = (): void => ds('composer').slash.find((x) => x.id === 'gui.
 export async function compressNow(): Promise<void> {
   const key = sessionCurrent()
   if (!key || registryIsDraft()) return
-  const line = noteRow(T('gui.compress.running'), '', { quiet: true, host: $('#stage') })
+  const line = noteRow(t('gui.compress.running'), '', { quiet: true, host: $('#stage') })
   try {
     const r = await gateway().call('session.compress', { session_id: key })
     noteSay(line, r.removed
-      ? T('gui.compress.done', { n: r.removed, before: fmtTok(r.before_tokens), after: fmtTok(r.after_tokens) })
-      : T('gui.compress.noop'), '')
+      ? t('gui.compress.done', { n: r.removed, before: fmtTok(r.before_tokens), after: fmtTok(r.after_tokens) })
+      : t('gui.compress.noop'), '')
   } catch (e) {
     line.remove()
     /* Same rule as the clear handler, and here it is the failure path that
@@ -659,10 +659,10 @@ export async function compressNow(): Promise<void> {
     const detail = detailOf(e)
     if (key !== sessionCurrent()) {
       const s = sess(key)
-      toast(T('gui.sess.compress_failed', { title: plainTitle((s && s.title) || key), detail }))
+      toast(t('gui.sess.compress_failed', { title: plainTitle((s && s.title) || key), detail }))
       return
     }
-    noteRow(T('gui.compress.fail', { err: '' }).replace(/[:：]\s*$/, ''), detail)
+    noteRow(t('gui.compress.fail', { err: '' }).replace(/[:：]\s*$/, ''), detail)
   }
   /* The tail this scrolls is the open conversation's. */
   if (key !== sessionCurrent()) return
@@ -674,7 +674,7 @@ export const compress = (): Promise<void> => compressNow()
 
 /* The slash palette's `/clear`. */
 export function clearConversation(): void {
-  confirmAsk(T('gui.clear_title'), T('gui.clear_body'), T('gui.clear_yes'), () => {
+  confirmAsk(t('gui.clear_title'), t('gui.clear_body'), t('gui.clear_yes'), () => {
     /* Which conversation was cleared, read once. The reply used to ask for the
      pointer again, and by then it can name a different one: clearing A and
      clicking B mid-flight wiped B's stage, gave B the new-task layout, and
@@ -685,7 +685,7 @@ export function clearConversation(): void {
         /* The row belongs to the conversation that was cleared, wherever the
          reader is now -- it really is empty, and a list that says otherwise
          is wrong until the next reload. */
-        const s = sess(key); if (s) s.last = T('gui.sess.cleared')
+        const s = sess(key); if (s) s.last = t('gui.sess.cleared')
         sessionDraw()
         /* The stage and the meter are the open conversation's, so they are
          only this reply's to touch while it IS the open one. */
@@ -706,10 +706,10 @@ export function clearConversation(): void {
         const detail = detailOf(e)
         if (key !== sessionCurrent()) {
           const s = sess(key)
-          toast(T('gui.sess.clear_failed', { title: plainTitle((s && s.title) || key), detail }))
+          toast(t('gui.sess.clear_failed', { title: plainTitle((s && s.title) || key), detail }))
           return
         }
-        noteRow(T('gui.clear_title'), detail)
+        noteRow(t('gui.clear_title'), detail)
       })
   })
 }

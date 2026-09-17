@@ -2851,6 +2851,9 @@ function Drawers({ s }: { s: SettingsState }): JSX.Element | null {
 
 export function SettingsApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The language the page resolved, so a pick repaints this island: every word
+     below is a t(key) read at render time (state/lang/store.ts). */
+  useSyncExternalStore(langSubscribe, langTag)
   /* The header is static markup the legacy drawSettings wrote into; the
      island keeps doing exactly that. */
   useEffect(() => {

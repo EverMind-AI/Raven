@@ -19,7 +19,7 @@
 import type { UpgradeShade } from '../state/upgradeShade'
 
 import { turn } from '../features/composer/mount'
-import { T } from '../i18n/t'
+import { t } from '../i18n/t'
 import { gateway } from '../rpc/gateway'
 import { ask as confirmAsk } from '../state/confirm'
 import { open as upShade } from '../state/upgradeShade'
@@ -52,14 +52,14 @@ export function showUpNote(kind: UpKind, latest?: string | null): void {
   if (upKind === 'ver' && kind === 'ui') return
   upKind = kind
   if (latest) upLatest = latest
-  const t = note.querySelector('.t') as HTMLElement
+  const line = note.querySelector('.t') as HTMLElement
   const rl = note.querySelector('.rl') as HTMLElement
   if (kind === 'ver') {
-    t.textContent = upLatest ? T('gui.upg.note', { v: `v${upLatest}` }) : T('gui.upg.note_bare')
-    rl.textContent = T('gui.upg.go')
+    line.textContent = upLatest ? t('gui.upg.note', { v: `v${upLatest}` }) : t('gui.upg.note_bare')
+    rl.textContent = t('gui.upg.go')
   } else {
-    t.textContent = T('gui.update.note')
-    rl.textContent = T('gui.update.reload')
+    line.textContent = t('gui.update.note')
+    rl.textContent = t('gui.update.reload')
   }
   note.hidden = false
 }
@@ -99,12 +99,12 @@ export function askUpgrade(): void {
   const running = upMarkRead()
   if (running) { watchUpgrade(upShade(), running.t0); return }
   if (turn.busy()) {
-    confirmAsk(T('gui.upg.title'), T('gui.upg.body_busy'), T('gui.upg.close'), () => {})
+    confirmAsk(t('gui.upg.title'), t('gui.upg.body_busy'), t('gui.upg.close'), () => {})
     return
   }
-  confirmAsk(T('gui.upg.title'),
-    T('gui.upg.body', { from: `v${APP_VERSION() || '?'}`, to: `v${upLatest || '?'}` }),
-    T('gui.upg.go'), runUpgrade)
+  confirmAsk(t('gui.upg.title'),
+    t('gui.upg.body', { from: `v${APP_VERSION() || '?'}`, to: `v${upLatest || '?'}` }),
+    t('gui.upg.go'), runUpgrade)
 }
 
 /* Called at boot: a page that loads while an install is in flight re-attaches
@@ -121,7 +121,7 @@ export function resumeUpgrade(): void {
    session token. */
 export async function runUpgrade(): Promise<void> {
   const shade = upShade()
-  shade.say(T('gui.upg.working'))
+  shade.say(t('gui.upg.working'))
   try {
     await gateway().call('system.upgrade', {})
   } catch (e) {
@@ -134,7 +134,7 @@ export async function runUpgrade(): Promise<void> {
       return
     }
     upMarkClear()
-    shade.fail(T('gui.upg.failed'), (err.data && err.data.detail) || err.message || String(e))
+    shade.fail(t('gui.upg.failed'), (err.data && err.data.detail) || err.message || String(e))
     return
   }
   upMark(upLatest)
@@ -149,11 +149,11 @@ export async function runUpgrade(): Promise<void> {
    which is what taught the reader to click upgrade a second time. */
 export function watchUpgrade(shade: UpgradeShade, since?: number): void {
   const t0 = since || Date.now()
-  shade.say(T('gui.upg.working'))
+  shade.say(t('gui.upg.working'))
   const tick = async (): Promise<void> => {
     if (Date.now() - t0 > UPG_CEILING_MS) {
       upMarkClear()
-      shade.fail(T('gui.upg.failed'), T('gui.upg.gave_up'))
+      shade.fail(t('gui.upg.failed'), t('gui.upg.gave_up'))
       return
     }
     let r: Response
@@ -163,7 +163,7 @@ export function watchUpgrade(shade: UpgradeShade, since?: number): void {
       setTimeout(tick, 1500)
       return
     }
-    if (r.status === 401 || r.status === 403) { upMarkClear(); shade.fail(T('gui.upg.reauth'), ''); return }
+    if (r.status === 401 || r.status === 403) { upMarkClear(); shade.fail(t('gui.upg.reauth'), ''); return }
     if (!r.ok) { setTimeout(tick, 1500); return }
     upMarkClear()
     window.location.reload()
