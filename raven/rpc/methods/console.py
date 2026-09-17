@@ -58,6 +58,23 @@ def _hub_marker_name() -> str | None:
     return MARKER
 
 
+def _install_meta_name() -> str | None:
+    """The other installer's stamp, or ``None`` on the same terms as above.
+
+    The context engine and the ``use_skill`` tool install a bundle rather than
+    a skill, and stamp it with a different file than the market module's
+    ``MARKER``. Both mean "the hub put this here", so a skill list that asked
+    about one and not the other called most installed skills local -- and the
+    page, which gates removal on this flag, offered it for the few and hid it
+    for the many. Read from the writer so the spelling cannot drift.
+    """
+    try:
+        from raven.skill_hub.audit import INSTALL_META
+    except ImportError:
+        return None
+    return INSTALL_META
+
+
 # ---------------------------------------------------------------------------
 # ext.list
 # ---------------------------------------------------------------------------
@@ -93,23 +110,29 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
         # hub=false. Kept out of the loop's try so a missing market costs the
         # two hub fields, never the skill list itself.
         marker_name = _hub_marker_name()
+        meta_name = _install_meta_name()
         try:
             for m in catalog.gather_all_skills():
                 path = getattr(m, "path", None)
                 hub_id = ""
                 marker = path.parent / marker_name if (path and marker_name) else None
-                if marker is not None and marker.is_file():
+                from_market = marker is not None and marker.is_file()
+                if from_market:
                     try:
                         hub_id = str(json.loads(marker.read_text()).get("id") or "")
                     except Exception:
                         hub_id = ""
+                # The bundle installer's stamp names a slug, not a market id, so
+                # a skill it placed is hub-installed with no ``hub_id`` to offer:
+                # the page fetches market detail only when one is present.
+                from_bundle = bool(path and meta_name) and (path.parent / meta_name).is_file()
                 skills.append(
                     {
                         "name": m.name,
                         "description": (m.description or "")[:200],
                         "source": str(m.source),
                         "always": bool(getattr(m, "always", False)),
-                        "hub": marker is not None and marker.is_file(),
+                        "hub": from_market or from_bundle,
                         "hub_id": hub_id,
                     }
                 )
