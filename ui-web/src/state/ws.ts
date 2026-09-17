@@ -35,13 +35,7 @@ import { islands } from '../islands'
 
 import { resetTranslator, setTranslator } from '../i18n/t'
 import type { DeskTab } from '../features/workspace/deskTypes'
-
-/** What the pane's chrome currently shows, for a caller that has to ask. */
-export interface WsPanelView {
-  tab: string
-  open: boolean
-  picked: boolean
-}
+import type { WsPanelView } from './wsPanel'
 
 /** Which view the pane shows: diff, file, browser or agents. */
 let tab = 'diff'

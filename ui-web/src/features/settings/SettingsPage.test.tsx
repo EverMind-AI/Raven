@@ -14,7 +14,7 @@ import { mountPageRoot } from '../../test/pageRoot'
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
-import * as settingsDialogStore from '../../state/settingsDialog'
+import * as settingsDialogStore from '../../state/settings'
 import type { RailSource } from '../rail/types'
 import type { SettingsSnapshot, SettingsSource } from './types'
 

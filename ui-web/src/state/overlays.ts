@@ -18,7 +18,7 @@
  * same test -- the attribute for the twelve, because that is what the chain
  * read and what the four islands and three stores that raise them write, and
  * the module's own answer for the settings dialog, which has been a flag in
- * state/settingsDialog.ts since C4, and for the running turn.
+ * state/settings.ts since C4, and for the running turn.
  *
  * The three capture-phase handlers each open sheet registers run before this
  * table and two of them act on Escape without stopping propagation, so one
@@ -31,7 +31,7 @@ import { islands } from '../islands'
 import * as caps from './caps'
 import * as detail from './detail'
 import { close as closeImage, isOpen as imageOpen } from './lightbox'
-import * as settingsDialog from './settingsDialog'
+import * as settingsDialog from './settings'
 import { sources } from './sources'
 
 export type Overlay = {

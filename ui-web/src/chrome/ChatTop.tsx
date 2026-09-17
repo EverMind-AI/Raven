@@ -43,7 +43,7 @@ import * as lang from '../state/lang'
 import type { JSX } from 'react'
 
 /* The session header. Its two buttons say their words through data-i18n-tip /
-   -aria, which state/lang.ts writes onto the attributes, so there is no literal
+   -aria, which state/lang/store.ts writes onto the attributes, so there is no literal
    here to take through lang.text -- and #title has no key at all, because its
    text is a conversation's name rather than a phrase from the catalogue. */
 function Header(): JSX.Element {

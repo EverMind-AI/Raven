@@ -356,7 +356,7 @@ describe('the capabilities page chrome', () => {
 
 /* Last in the file on purpose: applying a language is module state for
    everything after it. Same agreement as the rail's and the two dialogs' --
-   the pass state/lang.ts makes over the document's data-i18n attributes, and
+   the pass state/lang/store.ts makes over the document's data-i18n attributes, and
    the component rendering the same key through lang.text -- so the page cannot
    come back in the served language once a flip has moved it. */
 describe('the capabilities page chrome once a language is applied', () => {

@@ -7,32 +7,32 @@
  * the four chrome writers, the shared drawer and the one reload.
  *
  * One subscriber rather than a call beside each `lang.set`: the rollback path in
- * state/langPick.ts would otherwise have to remember to redraw a second time,
+ * state/lang/pick.ts would otherwise have to remember to redraw a second time,
  * and a pick that fails to persist has to leave the page in exactly the state
  * the pick before it did.
  *
  * It runs after the rendered half has committed, which is the order applyI18n
  * had -- the markup was rewritten and only then was everything drawn from
- * JavaScript redrawn. `lang.onApplied` is what that ordering is (state/lang.ts).
+ * JavaScript redrawn. `lang.onApplied` is what that ordering is (state/lang/store.ts).
  *
  * The list is in redrawAll's order, and the order is load-bearing in one place:
  * the reload at the end reopens the conversation from disk, so it has to be
  * last, and the guard in front of it is what keeps it off a streaming turn.
  */
 
-import { islands } from '../islands'
-import { drawQueue as queueDraw, turn } from '../features/composer/mount'
-import { label as modelLabel } from '../features/model/chip'
-import { draw as sessionDraw } from '../features/rail/store'
-import { draw as drawCtx } from './ctxChip'
-import { draw as drawFoot } from './foot'
-import { draw as drawPerm } from './perm'
-import { current as sessionCurrent } from '../lib/session'
-import * as caps from './caps'
-import * as detail from './detail'
-import * as lang from './lang'
-import { isDraft } from './session/registry'
-import { open as sessionOpen, sess } from './session/rows'
+import { islands } from '../../islands'
+import { drawQueue as queueDraw, turn } from '../../features/composer/mount'
+import { label as modelLabel } from '../../features/model/chip'
+import { draw as sessionDraw } from '../../features/rail/store'
+import { draw as drawCtx } from '../ctxChip'
+import { draw as drawFoot } from '../foot'
+import { draw as drawPerm } from '../perm'
+import { current as sessionCurrent } from '../../lib/session'
+import * as caps from '../caps'
+import * as detail from '../detail'
+import * as lang from './store'
+import { isDraft } from '../session/registry'
+import { open as sessionOpen, sess } from '../session/rows'
 
 export function repaint(): void {
   sessionDraw()

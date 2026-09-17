@@ -12,7 +12,7 @@
  * children of #split.
  *
  * Literals go through lang.text(key, literal): the served markup carries
- * data-i18n* keys and state/lang.ts applies a language by walking the document
+ * data-i18n* keys and state/lang/store.ts applies a language by walking the document
  * and rewriting them, so a component rendering one of those keyed literals has
  * two writers and has to read the same catalogue to agree with the other one.
  *

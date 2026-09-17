@@ -12,7 +12,7 @@ import * as store from './store'
 import type { CronDraft, CronJob, CronRun } from './types'
 import type { JSX } from 'react'
 import { ask as confirmAsk } from '../../state/confirm'
-import * as settingsDialog from '../../state/settingsDialog'
+import * as settingsDialog from '../../state/settings'
 
 /* The frequencies and the delivery routes the editor offers. Page data, not
    wire data: a job's own kind and expression come from `cron.list`, and these

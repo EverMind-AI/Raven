@@ -22,7 +22,7 @@ import { resetSources, setSources, sources } from '../../state/sources'
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
-import { installWsPanel } from '../../test/wsPanel'
+import { installWsPanel } from '../../test/wsPanelHarness'
 import type { AgentsSource, InstanceRow } from '../subagents/types'
 import type { WorkspaceSource, WsChange } from './types'
 

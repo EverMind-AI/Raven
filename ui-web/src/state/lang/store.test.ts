@@ -11,7 +11,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import catalog from '../../../i18n/messages.json'
+import catalog from '../../../../i18n/messages.json'
 
 /* The zh copy read from the catalogue rather than written out here: the repo's
    source is English, and a value quoted in a test would be a second copy of
@@ -20,9 +20,9 @@ const ZH_NEW_TASK = catalog.ui['gui.new_task'].zh
 
 /* Fresh module state per case. `applied` only moves forwards, so a case that
    applied a language must not be visible to one asserting that none has. */
-async function fresh(): Promise<typeof import('./lang')> {
+async function fresh(): Promise<typeof import('./store')> {
   vi.resetModules()
-  return import('./lang')
+  return import('./store')
 }
 
 beforeEach(() => {

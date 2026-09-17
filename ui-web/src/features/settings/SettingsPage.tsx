@@ -25,7 +25,7 @@ import type { RailSource } from '../rail/types'
 import type { EverosSection, ProviderRow, ToolGroup, ToolRow } from './types'
 import type { JSX, ReactNode, RefObject } from 'react'
 import { ask as confirmAsk } from '../../state/confirm'
-import * as settingsDialog from '../../state/settingsDialog'
+import * as settingsDialog from '../../state/settings'
 
 /* The session list, reached through the seam. `deleteAll` is wrapped because
    a source that has none is the shape a demo shell can be in, and an
@@ -42,7 +42,7 @@ const deleteAllSessions = (): void => {
 /* The dialog's contents, transcribed from the legacy drawSettings pages:
    same class names, same DOM shape, ui-web/src/styles/page.css untouched. The
    dialog frame is the page's own root (src/App.tsx) over the static #setVeil,
-   and whether it is up is src/state/settingsDialog.ts's; the island reaches
+   and whether it is up is src/state/settings.ts's; the island reaches
    both through the shell bridge, as it always has. */
 
 /* Settings is grouped, not one flat strip: the groups answer "what am I

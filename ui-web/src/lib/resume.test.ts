@@ -15,7 +15,7 @@ import { reset as agentsLeave, _resetForTests as agentsReset, getState as agents
 import { resetSources, setSources } from '../state/sources'
 
 import { resetTranslator, setTranslator } from '../i18n/t'
-import { installWsPanel } from '../test/wsPanel'
+import { installWsPanel } from '../test/wsPanelHarness'
 import type { DagRun } from '../features/dag/types'
 import type { InstanceRow } from '../features/subagents/types'
 import type { TranscriptSource } from '../features/transcript/types'

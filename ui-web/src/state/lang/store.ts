@@ -32,7 +32,7 @@
 
 import { flushSync } from 'react-dom'
 
-import { type Lang, setCode, T } from '../i18n/t'
+import { type Lang, setCode, T } from '../../i18n/t'
 
 export type { Lang }
 
@@ -64,7 +64,7 @@ export function subscribe(fn: () => void): () => void {
 
 /* The other kind of subscriber: not a component, and it has to run after the
    markup has moved. applyI18n rewrote the document and only then did the
-   whole-page redraw run over what is drawn from JavaScript (state/langEffects.ts
+   whole-page redraw run over what is drawn from JavaScript (state/lang/effects.ts
    is that redraw); the markup is rendered now, so the commit below is forced
    before this group is called. One subscriber, which is that redraw. */
 export function onApplied(fn: () => void): () => void {
@@ -95,7 +95,7 @@ function apply(v: Lang): void {
 
 /* The regions, drawn again. Synchronously, because applyI18n was synchronous: a
    pick rewrote the markup before it returned, and every caller -- the rollback
-   in state/langPick.ts most of all -- reads the page straight afterwards. A
+   in state/lang/pick.ts most of all -- reads the page straight afterwards. A
    plain notification would leave the commit to React's scheduler and a later
    task, which is a frame in the old language. */
 function commit(): void {
@@ -114,9 +114,9 @@ export function set(v: Lang): void {
 /* The same move without the whole-page redraw, for the one caller that has
    never wanted it: `restore` applies the remembered language ahead of the
    socket, before anything drawn from JavaScript exists, and is the one language
-   call site that does not repaint any of it (see state/langPick.ts). The markup
+   call site that does not repaint any of it (see state/lang/pick.ts). The markup
    still moves -- that half was applyI18n, which every call site ran -- so the
-   regions are committed here too; what is skipped is state/langEffects.ts. */
+   regions are committed here too; what is skipped is state/lang/effects.ts. */
 export function setQuiet(v: Lang): void {
   apply(v)
   commit()

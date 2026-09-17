@@ -13,7 +13,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 
-import { loadPart } from '../../scripts/module-harness.mjs'
+import { loadPart } from '../../../scripts/module-harness.mjs'
 
 /** The nineteen, in redrawAll's order, minus the empty one. */
 const ORDER = [
@@ -62,7 +62,7 @@ interface Harness {
 async function harness({ busy = false, draft = false, session = 'cli:one' as string | null } = {}): Promise<Harness> {
   const order: string[] = []
   const step = (name: string) => () => { order.push(name) }
-  const part = await loadPart(() => import('./langEffects'), {
+  const part = await loadPart(() => import('./effects'), {
     fakes: {
       'src/features/rail/store': {
         draw: step('sessionDraw'),
@@ -102,7 +102,7 @@ describe('the language repaint', () => {
      has not loaded throws instead, and the redraw carries on. */
   it('carries on past a page whose island has not loaded', async () => {
     const h = await harness()
-    const { islands } = await import('../islands')
+    const { islands } = await import('../../islands')
     for (const name of ['cron', 'memory', 'playbooks'] as const) {
       vi.spyOn(islands[name], 'redraw').mockImplementation(() => { throw new Error('not loaded') })
     }
@@ -122,10 +122,10 @@ describe('the language repaint', () => {
   })
 
   /* One subscriber rather than a call beside each pick, and on the group that
-     runs after the regions have committed (state/lang.ts). */
+     runs after the regions have committed (state/lang/store.ts). */
   it('subscribes once, to the group that runs after the markup', async () => {
     const h = await harness()
-    const lang = await import('./lang')
+    const lang = await import('./store')
     h.install()
     lang.setQuiet('zh')
     expect(h.order).toEqual([])

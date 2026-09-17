@@ -17,7 +17,7 @@
  * applied, the catalogue's text afterwards. That pair is what applyI18n's
  * passes over the document used to do, read from the other end -- the data-i18n*
  * keys stay on the elements as the record of which phrase each line speaks, and
- * nothing walks them any more (state/lang.ts).
+ * nothing walks them any more (state/lang/store.ts).
  *
  * What this does NOT own, though it renders the elements:
  *   - #newBtn's click. Its action belongs to the session rather than to the

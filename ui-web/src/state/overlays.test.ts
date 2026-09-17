@@ -28,7 +28,7 @@ import { _resetForTests as sessionReset, setCurrent } from '../lib/session'
 import * as find from './find'
 import { installEscapeChain } from './globalListeners'
 import * as overlays from './overlays'
-import * as settingsDialog from './settingsDialog'
+import * as settingsDialog from './settings'
 import * as sheets from './sheetRack'
 import { resetSources, sources } from './sources'
 

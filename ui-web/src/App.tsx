@@ -25,7 +25,7 @@
  * lands, the catalogue's text afterwards. The data-i18n* keys stay on the
  * elements -- they are what says which phrase a line of chrome speaks, and the
  * region goldens record them -- but nothing reads them any more (see
- * state/lang.ts). The literals with no key (#cfTitle, #cfYes, #setTitle,
+ * state/lang/store.ts). The literals with no key (#cfTitle, #cfYes, #setTitle,
  * #title) have nothing to look up: each is owned by whoever writes it
  * afterwards, and a re-render cannot undo that, because React diffs against the
  * props it rendered last rather than against the document.
@@ -63,7 +63,7 @@ import * as detail from './state/detail'
 import * as lang from './state/lang'
 import * as menu from './state/menu'
 import * as rail from './state/rail'
-import * as settings from './state/settingsDialog'
+import * as settings from './state/settings'
 import * as toast from './state/toast'
 
 import type { JSX } from 'react'

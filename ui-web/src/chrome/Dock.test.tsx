@@ -312,7 +312,7 @@ describe('a popover reparented out of the card', () => {
 })
 
 /* Last in the file on purpose: applying a language is module state for
-   everything after it. Same agreement as the rail's -- the pass state/lang.ts
+   everything after it. Same agreement as the rail's -- the pass state/lang/store.ts
    makes over the document's data-i18n attributes, and the component rendering
    the same key through lang.text -- so the dock cannot come back in the served
    language once a flip has moved it. */

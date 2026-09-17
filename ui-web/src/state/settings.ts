@@ -1,4 +1,9 @@
-/* Whether the settings dialog is up.
+/* The settings dialog's page-wide state: whether it is up, and the section it
+ * opens on.
+ *
+ * Two slots rather than one module each, because they have the same two sides:
+ * a page-wide writer sets the section and THEN opens the dialog, and the
+ * island reads both on every draw.
  *
  * Settings is a dialog, not a place: it layers over whatever you were reading
  * rather than replacing it, which is why the rail still marks the row you came
@@ -11,13 +16,24 @@
  * dialog from it, and the Escape chain asks this module rather than the
  * element -- but the answer to "is it open" is the flag here, so there is one
  * place that knows and one place that writes.
- *
- * Not the section it opens on: that is src/state/settingsTab.ts, written by
- * whoever asks for a section before opening the dialog, and the island reads it
- * on every draw. openSet never touched it.
  */
 
 import { markNew as markNewCurrent } from '../features/rail/store'
+
+/* Which section the settings dialog opens on.
+ *
+ * Not in the settings island's own store, because the two writers are not the
+ * island: a caller sets it and THEN opens the dialog (the slash command's
+ * "manage models"), and the page serves it seeded. The island reads it on every
+ * draw and writes it when a reader picks a section, so the slot has to be
+ * somewhere both sides can reach -- which used to mean window.sTab.
+ *
+ * `usage` is the section the page is served on, as the legacy shell's install
+ * seeded it. `null` is "nothing has asked for a section", which is what a reset
+ * test starts from; the island then shows the tab its own state holds. `open`
+ * below never touches it.
+ */
+export const settingsTab: { id: string | null } = { id: 'usage' }
 
 let up = false
 

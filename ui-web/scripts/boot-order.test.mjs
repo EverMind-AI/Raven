@@ -16,8 +16,8 @@ const installText = moduleText('app/install.ts')
    and are six modules now, and every rule below is about the whole of it rather
    than about which of them a line sits in. */
 const wiring = bootText + installText + moduleText('app/connection.ts')
-  + moduleText('app/updates.ts') + moduleText('state/langPick.ts')
-  + moduleText('state/langEffects.ts') + moduleText('features/settings/chrome.ts')
+  + moduleText('app/updates.ts') + moduleText('state/lang/pick.ts')
+  + moduleText('state/lang/effects.ts') + moduleText('features/settings/chrome.ts')
   + moduleText('features/model/chip.ts')
 
 /* One step fewer than the concatenated boot had: `drawCapsBadge` was an empty

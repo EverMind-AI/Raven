@@ -7,7 +7,7 @@
  * Two text slots inside a button the shell owns the click of, so this stays a
  * writer rather than a component: a React root cannot hold two spans out of
  * someone else's markup, and the label beside them is translated in place by
- * the lang store (src/state/lang.ts) over the static attributes.
+ * the lang store (src/state/lang/store.ts) over the static attributes.
  */
 
 import { isMac, modKey } from '../lib/platform'

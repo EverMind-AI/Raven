@@ -1,17 +1,17 @@
 /* Picking the page's language: the persist behind a pick, and the two reads
  * that apply one at boot.
  *
- * state/lang.ts moves the language and the catalogue together and tells
+ * state/lang/store.ts moves the language and the catalogue together and tells
  * everything that draws itself to draw again; what
  * is here is the half that talks to the gateway -- one key, both front ends,
  * because `config.language` also drives the TUI (which polls it) and the
  * language the agent replies in.
  */
 
-import { code as LANG, T } from '../i18n/t'
-import { gateway } from '../rpc/gateway'
-import * as lang from './lang'
-import { show as toast } from './toast'
+import { code as LANG, T } from '../../i18n/t'
+import { gateway } from '../../rpc/gateway'
+import { show as toast } from '../toast'
+import * as lang from './store'
 
 /* The language the gateway last agreed to, kept where a page that cannot reach
    it can still read it. `load` runs only after the connect succeeds, so on a

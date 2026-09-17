@@ -178,7 +178,7 @@ describe('the rail', () => {
 
 /* Last in the file on purpose: applying a language is module state for
    everything after it. Same agreement as the two dialogs' -- the pass
-   state/lang.ts makes over the document's data-i18n attributes, and the
+   state/lang/store.ts makes over the document's data-i18n attributes, and the
    component rendering the same key through lang.text -- so the rail cannot come
    back in the served language once a flip has moved it. A re-render alone would
    not show it: React diffs against the props it rendered last, so a literal it

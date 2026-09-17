@@ -18,10 +18,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from '../App'
 import * as lang from './lang'
-import * as settings from './settingsDialog'
+import * as settings from './settings'
 import { resetTranslator, setTranslator } from '../i18n/t'
-import * as pageStore from '../state/page'
-import * as confirmStore from '../state/confirm'
+import * as pageStore from './page'
+import * as confirmStore from './confirm'
 
 
 const marks: string[] = []
