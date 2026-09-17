@@ -25,6 +25,12 @@ Raven 是 **The Harness of Harnesses**，一个为自主协作与开放共创而
 
 > Raven 目前处于 pre-alpha 阶段，接口和配置可能快速变化。
 
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/e333694a-0f4c-4f27-8bfe-8120ff5339a0"><img src="https://github.com/user-attachments/assets/e333694a-0f4c-4f27-8bfe-8120ff5339a0" alt="Multi-Agent Orchestration Benchmark: Node F1, Edge F1, Partial Order Accuracy, and Exact Match Rate" width="70%"></a>
+</p>
+
+<p align="center"><em>Raven 在多 Agent 编排基准测试上的表现</em></p>
+
 ## ❯❯ Raven 自有 Agent
 
 Raven 通过模块化架构构建了四个专业 Agent。每个 Agent 都由可复用的 harness 组件组装而成，并搭配适合其领域的工具、技能和工作流。Raven 既可以将单项任务交给一个 Agent，也可以在同一工作流中协调多个 Agent 协作。

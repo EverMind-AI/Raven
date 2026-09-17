@@ -25,6 +25,12 @@ Powered by the [EverOS](https://github.com/EverMind-AI/EverOS) memory system, Ra
 
 > Raven is pre-alpha. Interfaces and configuration may change quickly.
 
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/e333694a-0f4c-4f27-8bfe-8120ff5339a0"><img src="https://github.com/user-attachments/assets/e333694a-0f4c-4f27-8bfe-8120ff5339a0" alt="Multi-Agent Orchestration Benchmark: Node F1, Edge F1, Partial Order Accuracy, and Exact Match Rate" width="70%"></a>
+</p>
+
+<p align="center"><em>Raven on the Multi-Agent Orchestration Benchmark</em></p>
+
 ## ❯❯ Raven Agents
 
 Raven's modular architecture powers four specialized agents, each assembled from reusable harness components with tools, skills, and workflows tailored to its domain. It can delegate a focused task to one agent or coordinate several agents in a shared workflow.
