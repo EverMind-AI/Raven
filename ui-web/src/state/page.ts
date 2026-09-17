@@ -22,7 +22,8 @@
 
 import { islands } from '../islands'
 import { markNewCurrent } from '../legacy/demo/050-rail.js'
-import { NAV_OF, closeDetail } from '../legacy/demo/120-capabilities.js'
+import { NAV_OF } from '../legacy/demo/120-capabilities.js'
+import * as detail from './detail'
 
 /** The seven module pages, keyed as their <section> ids. */
 export type PageId = 'capsPage' | 'xaPage' | 'connPage' | 'memPage' | 'pbPage' | 'kbPage' | 'cronPage'
@@ -62,7 +63,7 @@ export function show(id: PageId | null): void {
   ;(document.querySelector('.app') as HTMLElement).dataset.page = id ? 'on' : 'off'
   markNewCurrent()
   /* caps and memory both use the shared detail drawer */
-  if (id !== 'capsPage' && id !== 'memPage') closeDetail()
+  if (id !== 'capsPage' && id !== 'memPage') detail.close()
   /* Same rule for the overlays a single page owns: the channel drawer and the
      new-job sheet used to survive the switch and sit over whatever came next,
      still showing the entry the reader had left behind. */

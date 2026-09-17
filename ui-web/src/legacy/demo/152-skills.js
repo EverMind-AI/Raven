@@ -14,7 +14,7 @@ import { islands } from '../../islands'
 import * as page from '../../state/page'
 import { sources } from '../../state/sources'
 import { $, T, applyDecorators, mk } from './010-kernel.js'
-import { closeDetail, decorateCloseDetail, decorateExtSet, drawCapsBadge, extTab } from './120-capabilities.js'
+import { closeDetail, decorateExtSet, drawCapsBadge, extTab } from './120-capabilities.js'
 
 function useInTask(promptKey, name) {
   closeDetail();
@@ -96,9 +96,6 @@ export function install() {
     page.subscribe(() => {
       if (page.get() !== 'capsPage') islands.skills.dropDrawer();
     });
-
-    decorateCloseDetail((prev) => () => { islands.skills.dropDrawer(); prev(); });
-    $('#dClose').onclick = () => closeDetail();
 
     /* The island owns the view; the chrome follows it from out here. A view
      flip redraws the whole tab (title, bar, hero) through drawCaps; any

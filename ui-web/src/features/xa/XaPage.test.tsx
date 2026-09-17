@@ -6,6 +6,7 @@ import { XaApp } from './XaPage'
 import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
+import * as detail from '../../state/detail'
 import { resetSources, setSources, sources } from '../../state/sources'
 import { setShell } from '../../shell/bridge'
 
@@ -77,10 +78,6 @@ function install(rows: XaRow[], over: Partial<XaSource> = {}) {
       fn()
     },
     showPage: () => {},
-    closeDetail: () => {
-      const d = document.getElementById('detail')
-      if (d) d.dataset.open = 'false'
-    },
   }
   setShell(fakeShell)
   setSources({ xa: source })
@@ -914,8 +911,9 @@ describe('xa island', () => {
       expect(document.querySelector('#dBody .sukey')).toBeNull()
     })
 
-    /* Legacy chrome owns the drawer's closers and they only flip #detail's
-       data-open, so the island has to follow the flag. */
+    /* The drawer's closers are the shared store's (Esc, the close button, a
+       click outside, a page switch), and this island hears about a close
+       through the handler it registered there. */
     /* Dropped after the drawer has finished fading, not in the tick the flag
        flipped: the panel takes a fifth of a second to leave, and unmounting the
        card at the start of that made an empty strip the thing that faded. */
@@ -926,7 +924,7 @@ describe('xa island', () => {
         await mount()
         await openCard('claude_code')
         await act(async () => {
-          document.getElementById('detail')!.dataset.open = 'false'
+          detail.close()
         })
         expect(document.querySelector('#dBody .pmdhead')).toBeTruthy()
         await act(async () => {
@@ -948,7 +946,7 @@ describe('xa island', () => {
         await mount()
         await openCard('claude_code')
         await act(async () => {
-          document.getElementById('detail')!.dataset.open = 'false'
+          detail.close()
         })
         await act(async () => {
           await vi.advanceTimersByTimeAsync(100)
@@ -971,7 +969,7 @@ describe('xa island', () => {
         await mount()
         await openCard('claude_code')
         await act(async () => {
-          document.getElementById('detail')!.dataset.open = 'false'
+          detail.close()
         })
         await openCard('hermes')
         await act(async () => {

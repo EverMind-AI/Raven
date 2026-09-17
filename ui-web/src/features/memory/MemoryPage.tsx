@@ -85,18 +85,6 @@ export function MemoryApp(): JSX.Element {
      also repaints this island, so the subscription adds nothing a reader can
      see -- it is what carries the repaint once that redraw is gone. */
   useSyncExternalStore(langSubscribe, langTag)
-  /* Legacy chrome owns the drawer's closers (Esc, #dClose, click-outside)
-     and they only flip #detail's data-open, so the island follows the flag
-     to unmount its portal before another page's opener wipes #dBody. */
-  useEffect(() => {
-    const el = document.getElementById('detail')
-    if (!el) return
-    const ob = new MutationObserver(() => {
-      if (el.dataset.open !== 'true') store.detailDismissed()
-    })
-    ob.observe(el, { attributes: true, attributeFilter: ['data-open'] })
-    return () => ob.disconnect()
-  }, [])
   return (
     <>
       <div className="pmhero">
@@ -289,16 +277,10 @@ function Section({ label, text }: { label: string; text: string }): JSX.Element 
 }
 
 /* The detail drawer's content, rendered into the shared #detail dialog the
-   plugin and skill pages also use; the dialog chrome itself (title bar,
-   close button, click-outside) stays legacy. */
+   plugin and skill pages also use. The dialog itself -- its flags, its host and
+   its closers -- is src/state/detail.ts and App.tsx's DetailPanel. */
 function MemDetail({ it }: { it: MemItem }): JSX.Element | null {
   const host = store.detailHost()
-  useEffect(() => {
-    const title = document.getElementById('dTitle')
-    if (title) title.textContent = ''
-    const drawer = document.getElementById('detail')
-    if (drawer) drawer.dataset.open = 'true'
-  }, [it])
   const kindDef = MEM_KINDS.find((k) => k.kind === it.kind) ?? MEM_KINDS[0]!
   const name = it.subject || t(kindDef.tab)
   const metaRows: Array<[string, string]> = []
