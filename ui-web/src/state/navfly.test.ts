@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { markNew as railMarkNew } from '../features/rail/store'
-import { MORE_ROWS, draw, mark, reset, toggle } from './navfly'
+import { MORE_ROWS, _resetForTests, draw, mark, toggle } from './navfly'
 import { resetSources, setSources } from './sources'
 import { mountPageRoot } from '../test/pageRoot'
 
@@ -84,7 +84,7 @@ function openPage(id: string | null): void {
 let unmount = (): void => {}
 
 beforeEach(() => {
-  reset()
+  _resetForTests()
   document.body.innerHTML = ''
   unmount = mountPageRoot()
 })

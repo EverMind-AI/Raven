@@ -5,13 +5,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { _resetForTests as sheetReset } from '../state/sheetRack'
 import { run as dagOpen, start as dagStart, _resetForTests as dagReset } from '../features/dag/mount'
-import { openDeskAgent, openDeskAgentRecord, openDeskFile, openDeskTab, getState as deskState, reset as deskLeave, saved as deskSaved, setActive, toggleSolo, updateSplits, _resetForTests as deskReset } from '../features/workspace/deskStore'
+import { openDeskAgent, openDeskAgentRecord, openDeskFile, openDeskTab, get as deskState, reset as deskLeave, saved as deskSaved, setActive, toggleSolo, updateSplits, _resetForTests as deskReset } from '../features/workspace/deskStore'
 /* The wiring main.tsx gets from this import: the subagents panel's pane
    openers are handed to it here, so replaying an open lands in a real pane. */
 import '../features/registry'
 import { landing, refreshDag, resume, watch } from './resume'
 import { _resetForTests as sessionReset, setCurrent } from './session'
-import { reset as agentsLeave, _resetForTests as agentsReset, getState as agentsState } from '../features/subagents/store'
+import { reset as agentsLeave, _resetForTests as agentsReset, get as agentsState } from '../features/subagents/store'
 import { resetSources, setSources } from '../state/sources'
 
 import { resetTranslator, setTranslator } from '../i18n/t'

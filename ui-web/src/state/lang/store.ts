@@ -30,20 +30,16 @@
  * served with.
  */
 
-import { flushSync } from 'react-dom'
-
 import { type Lang, setCode, T } from '../../i18n/t'
+import { makeStore } from '../store'
 
 export type { Lang }
 
-let applied: Lang | null = null
-const listeners = new Set<() => void>()
+const store = makeStore<Lang | null>(null)
 const afterwards = new Set<() => void>()
 
 /** Which language has been applied to the page, or null while none has. */
-export function get(): Lang | null {
-  return applied
-}
+export const { get, subscribe, _resetForTests } = store
 
 /* What <html lang> says: what `set` wrote, or -- while nothing has been
    applied -- the declaration the document was served with. The three modules
@@ -51,15 +47,7 @@ export function get(): Lang | null {
    it gets today in both load modes: the served page declares zh-CN, and a test
    document that declares nothing still answers nothing. */
 export function tag(): string {
-  return applied === null ? document.documentElement.lang : applied === 'zh' ? 'zh-CN' : 'en'
-}
-
-/** For useSyncExternalStore: called on every applied pick. */
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => {
-    listeners.delete(fn)
-  }
+  return get() === null ? document.documentElement.lang : get() === 'zh' ? 'zh-CN' : 'en'
 }
 
 /* The other kind of subscriber: not a component, and it has to run after the
@@ -76,7 +64,7 @@ export function onApplied(fn: () => void): () => void {
 
 /** A key's text, or the literal the markup carries while no pick has landed. */
 export function text(key: string, literal: string): string {
-  return applied === null ? literal : T(key)
+  return get() === null ? literal : T(key)
 }
 
 /* A key's text for an attribute the served markup does not carry: absent until
@@ -84,30 +72,25 @@ export function text(key: string, literal: string): string {
    only writer of these, and it ran only on a pick. `undefined` is what tells
    React to leave the attribute off. */
 export function attr(key: string): string | undefined {
-  return applied === null ? undefined : T(key)
+  return get() === null ? undefined : T(key)
 }
 
+/* The regions are committed with the write, synchronously, because applyI18n
+   was synchronous: a pick rewrote the markup before it returned, and every
+   caller -- the rollback in state/lang/pick.ts most of all -- reads the page
+   straight afterwards. A plain notification would leave the commit to React's
+   scheduler and a later task, which is a frame in the old language. The
+   translator and <html lang> are set BEFORE the write, because the regions the
+   write commits read both while they render. */
 function apply(v: Lang): void {
-  applied = v
   setCode(v)
   document.documentElement.lang = v === 'zh' ? 'zh-CN' : 'en'
-}
-
-/* The regions, drawn again. Synchronously, because applyI18n was synchronous: a
-   pick rewrote the markup before it returned, and every caller -- the rollback
-   in state/lang/pick.ts most of all -- reads the page straight afterwards. A
-   plain notification would leave the commit to React's scheduler and a later
-   task, which is a frame in the old language. */
-function commit(): void {
-  flushSync(() => {
-    for (const fn of [...listeners]) fn()
-  })
+  store.set(v)
 }
 
 /** A pick: apply it, then tell everything that draws itself to draw again. */
 export function set(v: Lang): void {
   apply(v)
-  commit()
   for (const fn of [...afterwards]) fn()
 }
 
@@ -119,5 +102,4 @@ export function set(v: Lang): void {
    regions are committed here too; what is skipped is state/lang/effects.ts. */
 export function setQuiet(v: Lang): void {
   apply(v)
-  commit()
 }

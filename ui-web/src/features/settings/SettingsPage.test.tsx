@@ -162,7 +162,7 @@ const change = async (input: HTMLInputElement, value: string) => {
 
 afterEach(() => {
   cleanup()
-  store.reset()
+  store._resetForTests()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   localStorage.clear()
@@ -214,8 +214,8 @@ describe('settings island', () => {
       await store.openProviderModels('openai')
     })
 
-    expect(store.getState().provOpen).toBe('openai')
-    expect(store.getState().modelNudge).toBe('openai')
+    expect(store.get().provOpen).toBe('openai')
+    expect(store.get().modelNudge).toBe('openai')
     expect(document.querySelector('.mpanel .mini.nudge')?.textContent).toBe('gui.model.get_list')
   })
 
@@ -674,7 +674,7 @@ describe('settings island', () => {
     /* The pane's own emptiness check would hide the mark either way. Asserted
        on the store too, so a rule that raised it for every save would fail
        here rather than survive behind that guard. */
-    expect(store.getState().modelNudge).toBeNull()
+    expect(store.get().modelNudge).toBeNull()
   })
 
   it('drops the mark once the catalogue drawer is opened', async () => {

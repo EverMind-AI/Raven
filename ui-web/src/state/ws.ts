@@ -209,3 +209,13 @@ export function watchNarrow(): MediaQueryList {
 }
 
 export { open, tab, wide, picked, epoch }
+
+/* Test seam only: which tab the panel shows, whether it stands open and how
+   wide are all the module's. */
+export function _resetForTests(): void {
+  tab = 'diff'
+  open = false
+  wide = false
+  picked = false
+  epoch = 0
+}

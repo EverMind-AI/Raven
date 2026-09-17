@@ -4,6 +4,7 @@ import { show as toast } from '../../state/toast'
 import * as detail from '../../state/detail'
 
 import type { HubDetail, HubItem, InstalledSkill, SkillsSource } from './types'
+import { makeStore } from '../../state/store'
 
 /* Page state, outside React on purpose: the legacy shell drives this page
  * imperatively (the skill tab's drawCaps redraws it, a tab switch resets
@@ -44,8 +45,7 @@ const initial = (): SkillsState => ({
   details: {},
 })
 
-let state = initial()
-const listeners = new Set<() => void>()
+const store = makeStore<SkillsState>(initial())
 
 /* The hub search round-trip takes seconds, so page/category flips are
    cached for the session and served instantly; only a genuinely new
@@ -56,20 +56,15 @@ const cache = new Map<string, { items: HubItem[]; total: number }>()
 let seqNo = 0
 let debounce: ReturnType<typeof setTimeout> | undefined
 
-export const getState = (): SkillsState => state
+export const { get, subscribe } = store
 
-export function subscribe(l: () => void): () => void {
-  listeners.add(l)
-  return () => listeners.delete(l)
-}
-
-function set(patch: Partial<SkillsState>): void {
-  state = { ...state, ...patch }
-  for (const l of listeners) l()
+/** A patch, merged into the page's state. */
+export function set(patch: Partial<SkillsState>): void {
+  store.set((prev) => ({ ...prev, ...patch }))
 }
 
 export const source = (): SkillsSource => ds<SkillsSource>('skills')
-export const view = (): SkillsState['view'] => state.view
+export const view = (): SkillsState['view'] => get().view
 export const installedRows = (): InstalledSkill[] => source().installed()
 
 /* True unless the source says its one read never landed. Defaulting to true
@@ -91,7 +86,7 @@ const ignoreHandled = (e: unknown): void => {
 }
 
 export function search(page = 1): void {
-  const key = `${state.query}\u0000${state.cat}\u0000${page}`
+  const key = `${get().query}\u0000${get().cat}\u0000${page}`
   const hit = cache.get(key)
   if (hit) {
     set({ page, items: hit.items, total: hit.total, hub: 'done', err: '' })
@@ -100,7 +95,7 @@ export function search(page = 1): void {
   const seq = ++seqNo
   set({ page, hub: 'loading', err: '' })
   source()
-    .search({ query: state.query, category: state.cat, page, limit: HUB_PAGE })
+    .search({ query: get().query, category: get().cat, page, limit: HUB_PAGE })
     .then((r) => {
       if (seq !== seqNo) return
       const items = r.items || []
@@ -120,32 +115,31 @@ export function search(page = 1): void {
 
 /* The first reveal of the market fetches; every later draw just renders. */
 export function ensureSearch(): void {
-  if (state.hub === 'idle' && state.view === 'market') search(1)
+  if (get().hub === 'idle' && get().view === 'market') search(1)
 }
 
-/* Typing changes no state anyone re-renders on -- the search field is the
-   legacy chrome's -- so the query lands without a notify and the fetch is
-   debounced behind it. */
+/* The field is uncontrolled, so a commit here rewrites nothing the reader is
+   typing into; the fetch behind it is debounced. */
 export function setQuery(q: string): void {
-  state = { ...state, query: q }
+  set({ query: q })
   clearTimeout(debounce)
   debounce = setTimeout(() => search(1), 320)
 }
 
 export function searchNow(q: string): void {
   clearTimeout(debounce)
-  state = { ...state, query: q }
+  set({ query: q })
   search(1)
 }
 
 export function setCat(cat: string): void {
-  if (cat === state.cat) return
-  state = { ...state, cat }
+  if (cat === get().cat) return
+  set({ cat })
   search(1)
 }
 
 export function toggleView(): void {
-  set({ view: state.view === 'installed' ? 'market' : 'installed', drawer: null })
+  set({ view: get().view === 'installed' ? 'market' : 'installed', drawer: null })
   detail.close()
 }
 
@@ -161,11 +155,11 @@ export function openDetail(kind: 'market' | 'inst', id: string): void {
    finished fading, or the card is gone from inside a panel that is still on
    screen. */
 export function dropDrawer(): void {
-  const was = state.drawer
+  const was = get().drawer
   if (!was) return
   detail.dropAfterFade(
     () => set({ drawer: null }),
-    () => state.drawer !== was,
+    () => get().drawer !== was,
   )
 }
 detail.onClose('skills', dropDrawer)
@@ -179,7 +173,7 @@ export function closeDrawer(): void {
 export function fetchDetail(hubId: string): void {
   source()
     .detail(hubId)
-    .then((d) => set({ details: { ...state.details, [hubId]: d } }))
+    .then((d) => set({ details: { ...get().details, [hubId]: d } }))
     .catch((e: unknown) => toast(t('gui.hub.err', { err: errText(e) })))
 }
 
@@ -216,7 +210,7 @@ export function removeInstalled(c: InstalledSkill): void {
   source()
     .remove(c.name)
     .then(() => {
-      const it = state.items.find((x) => x.name === c.name || x.installed_name === c.name)
+      const it = get().items.find((x) => x.name === c.name || x.installed_name === c.name)
       if (it) {
         it.installed = false
         it.installed_name = ''
@@ -242,11 +236,12 @@ export function redraw(): void {
   set({})
 }
 
-/* Tests only: back to a cold store, session cache included. */
-export function wipe(): void {
+/* Tests only: back to a cold store, session cache included. A fresh initial()
+   rather than the store's own, because this get() nests objects and a shared one
+   would carry a case's writes into the next. */
+export function _resetForTests(): void {
   clearTimeout(debounce)
   cache.clear()
   seqNo++
-  state = initial()
-  for (const l of listeners) l()
+  store.set(initial())
 }

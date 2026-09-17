@@ -102,7 +102,7 @@ const APPLY: Record<string, string> = {
 }
 
 export function ConnApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
   const dialog = s.dialogId ? s.rows.find((c) => c.id === s.dialogId) : undefined
   return (
     <>
@@ -153,7 +153,7 @@ function reasonOf(c: ConnChannel): string | null {
   const live = connState(c)
   if (live === 'live' || live === 'unpaired' || live === 'off') return null
   if (live === 'down') return 'tag_down'
-  return store.getState().host === false ? 'tag_nohost' : 'tag_unknown'
+  return store.get().host === false ? 'tag_nohost' : 'tag_unknown'
 }
 
 /* The row's one badge. A reason where there is one, and otherwise what it costs
@@ -183,7 +183,7 @@ function RowBadge({ c }: { c: ConnChannel }): JSX.Element | null {
  * further along. What the middle group was for -- why this one is not in service
  * yet -- is the row's badge, which needs no group of its own. */
 function ConnList({ rows }: { rows: ConnChannel[] }): JSX.Element {
-  const s = store.getState()
+  const s = store.get()
   const on = rows.filter((c) => connState(c) === 'live')
   const off = rows.filter((c) => connState(c) !== 'live').sort((a, b) => costOf(a) - costOf(b))
   const list = (items: ConnChannel[]): JSX.Element => (
@@ -544,7 +544,7 @@ function ScanWizard({ c }: { c: ConnChannel }): JSX.Element {
    * know nothing is running: pressing connect with no host mints no code, so a
    * card that waits for the press to mention that spends the reader's press to
    * tell them something it knew all along. */
-  const host = store.getState().host
+  const host = store.get().host
   const stalled = c.running !== true && (!!c.on || host === false)
   const s1 = c.on ? 'done' : 'idle'
   const s2 = paired ? 'done' : up ? 'now' : 'idle'

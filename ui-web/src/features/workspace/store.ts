@@ -13,6 +13,7 @@ import type { WorkspaceSnapshot, WorkspaceSource, WsFile, WsShared } from './typ
 import type { ReactElement } from 'react'
 import type { Root } from 'react-dom/client'
 import { panel } from '../../state/wsPanel'
+import { makeStore } from '../../state/store'
 
 /* Page state, outside React on purpose: the legacy shell drives this panel
  * imperatively (the tab bar, the open/close buttons and the tool hooks all
@@ -28,8 +29,7 @@ export interface WsIslandState {
   route: WsRoute
 }
 
-let state: WsIslandState = { route: 'launch' }
-const listeners = new Set<() => void>()
+const store = makeStore<WsIslandState>({ route: 'launch' })
 
 const workspace: WsShared = { changes: [], urls: [], file: null, turn: 0, unseen: 0 }
 
@@ -67,16 +67,11 @@ function resetShared(): void {
   restore({ changes: [], urls: [], file: null, turn: 0, unseen: 0, deliveries: [] })
 }
 
-export const getState = (): WsIslandState => state
+export const { get, subscribe } = store
 
-export function subscribe(l: () => void): () => void {
-  listeners.add(l)
-  return () => listeners.delete(l)
-}
-
-function set(patch: Partial<WsIslandState>): void {
-  state = { ...state, ...patch }
-  for (const l of listeners) l()
+/** A patch, merged into the page's state. */
+export function set(patch: Partial<WsIslandState>): void {
+  store.set((prev) => ({ ...prev, ...patch }))
 }
 
 export const source = (): WorkspaceSource => ds<WorkspaceSource>('workspace')
@@ -153,7 +148,7 @@ export function draw(): void {
   }
   browser.hidden()
   sync()
-  if (state.route === 'file' && source().canBrowse) host.dataset.view = 'file'
+  if (get().route === 'file' && source().canBrowse) host.dataset.view = 'file'
   else delete host.dataset.view
   if (!root && renderEl) {
     host.innerHTML = ''
@@ -206,7 +201,7 @@ export const RENDERED: Record<string, 1> = { md: 1, img: 1, svg: 1, pdf: 1, html
 
 /* ── which application gets a file the page cannot render ──────────────
    Per EXTENSION, not one global default, because that is the shape of the
-   want: code in an editor, a deck in a presentation app. Front-end state
+   want: code in an editor, a deck in a presentation app. Front-end get()
    mirrored to localStorage -- the gateway is told the name on each call
    rather than holding the map, so nothing about this preference has to be
    valid on another machine.
@@ -280,7 +275,10 @@ export function openInApp(path: string, app?: string | null): Promise<unknown> {
   return src.openIn(path, app || undefined)
 }
 
-export function _resetAppsForTests(): void {
+/* Test seam only: the island roots this module made, and the state behind
+   them, both outlive a case's DOM. */
+export function _resetForTests(): void {
+  store._resetForTests()
   apps = null
 }
 

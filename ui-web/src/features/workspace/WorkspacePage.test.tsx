@@ -101,7 +101,7 @@ afterEach(() => {
     store.reset()
   })
   localStorage.clear()
-  store._resetAppsForTests()
+  store._resetForTests()
   cleanup()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
@@ -636,11 +636,11 @@ describe('workspace island', () => {
      else, or somebody editing the key by hand, must not reach a command line. */
   it('refuses a stored application name that is not one', async () => {
     localStorage.setItem('raven.openWith', JSON.stringify({ pptx: '/bin/sh', xlsx: 'Numbers' }))
-    store._resetAppsForTests()
+    store._resetForTests()
     expect(store.appFor('/x/a.pptx')).toBeNull()
     expect(store.appFor('/x/a.xlsx')).toBe('Numbers')
     localStorage.setItem('raven.openWith', 'not json at all')
-    store._resetAppsForTests()
+    store._resetForTests()
     expect(store.appFor('/x/a.xlsx')).toBeNull()
   })
 

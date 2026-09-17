@@ -15,6 +15,7 @@ import { show as toast } from '../../state/toast'
 
 import type { PlaybookDetail, PlaybookRow, PlaybooksCredentialsGetResult, PlaybooksSource } from './types'
 import * as page from '../../state/page'
+import { makeStore } from '../../state/store'
 
 export interface PlaybooksState {
   /* null = the list has not been read yet, which is not the same as an empty
@@ -59,21 +60,15 @@ const EMPTY: PlaybooksState = {
   ...NO_CREDS
 }
 
-let state = EMPTY
-const listeners = new Set<() => void>()
+const store = makeStore<PlaybooksState>(EMPTY)
 /* Details are keyed by name and dropped whenever the list is re-read. */
 const details = new Map<string, PlaybookDetail>()
 
-export const getState = (): PlaybooksState => state
+export const { get, subscribe } = store
 
-export function subscribe(l: () => void): () => void {
-  listeners.add(l)
-  return () => listeners.delete(l)
-}
-
-function set(patch: Partial<PlaybooksState>): void {
-  state = { ...state, ...patch }
-  for (const l of listeners) l()
+/** A patch, merged into the page's state. */
+export function set(patch: Partial<PlaybooksState>): void {
+  store.set((prev) => ({ ...prev, ...patch }))
 }
 
 const source = (): PlaybooksSource => ds<PlaybooksSource>('playbooks')
@@ -91,18 +86,19 @@ export async function load(): Promise<void> {
   } catch (e) {
     set({ rows: [], err: (e as Error)?.message || String(e) })
   }
-  const stillOpen = state.openName
+  const stillOpen = get().openName
   if (!stillOpen) return
   /* open() applies the card-open defaults, which are wrong for a refresh: the
      reader did not click this playbook, they were already reading it. Put their
      tab and step back afterwards -- the step only if the edit left it standing,
      since a node can go away between two reads. */
-  const tab = state.tab
-  const picked = state.pickedNode
+  const tab = get().tab
+  const picked = get().pickedNode
   await open(stillOpen)
-  if (state.openName !== stillOpen || !state.detail) return
-  const stillThere = state.detail.nodes.some(n => n.id === picked)
-  set({ tab, pickedNode: stillThere ? picked : state.pickedNode })
+  const detail = get().detail
+  if (get().openName !== stillOpen || !detail) return
+  const stillThere = detail.nodes.some(n => n.id === picked)
+  set({ tab, pickedNode: stillThere ? picked : get().pickedNode })
 }
 
 /* The first node of the graph, so opening a playbook shows a step's panel
@@ -131,10 +127,10 @@ export async function open(name: string): Promise<void> {
     details.set(name, detail)
     /* The reader may have gone back or opened another one while this was in
        flight; a late answer must not repaint the page it no longer belongs to. */
-    if (state.openName !== name) return
+    if (get().openName !== name) return
     set({ detail, loading: false, pickedNode: firstNode(detail) })
   } catch (e) {
-    if (state.openName !== name) return
+    if (get().openName !== name) return
     /* The file can be edited or removed between the listing and this read.
        Leaving the selection set strands the reader on the reading placeholder,
        which carries no way back and survives closing the page, so hand them the
@@ -157,7 +153,7 @@ export function showTab(tab: DetailTab): void {
    surface leaves `creds` null and the tab says so; a failed read toasts and
    leaves the previous reading in place. */
 export async function loadCredentials(): Promise<void> {
-  const name = state.openName
+  const name = get().openName
   const src = source()
   if (!name || !src.credentials) {
     set({ creds: null, credsLoading: false })
@@ -166,21 +162,21 @@ export async function loadCredentials(): Promise<void> {
   set({ credsLoading: true })
   try {
     const creds = await src.credentials(name)
-    if (state.openName !== name) return
+    if (get().openName !== name) return
     set({ creds, credsLoading: false })
   } catch (e) {
-    if (state.openName !== name) return
+    if (get().openName !== name) return
     set({ credsLoading: false })
     toast((e as Error)?.message || String(e))
   }
 }
 
 function mark(key: string, on: boolean): void {
-  set({ busy: { ...state.busy, [key]: on } })
+  set({ busy: { ...get().busy, [key]: on } })
 }
 
 export async function saveSecret(param: string, value: string): Promise<void> {
-  const name = state.openName
+  const name = get().openName
   const src = source()
   if (!name || !src.setSecret || !value) return
   mark('p:' + param, true)
@@ -196,7 +192,7 @@ export async function saveSecret(param: string, value: string): Promise<void> {
 }
 
 export async function clearSecret(param: string): Promise<void> {
-  const name = state.openName
+  const name = get().openName
   const src = source()
   if (!name || !src.clearSecret) return
   mark('p:' + param, true)
@@ -216,14 +212,14 @@ export async function clearSecret(param: string): Promise<void> {
    on behind it, so the tab re-reads the credentials on a short cadence until
    the server reads as authorized or the reader leaves the tab. */
 export async function authorize(server: string): Promise<void> {
-  const name = state.openName
+  const name = get().openName
   const src = source()
   if (!name || !src.authorize) return
   mark('s:' + server, true)
   try {
     const res = await src.authorize(name, server)
-    if (state.openName !== name) return
-    const authUrls = { ...state.authUrls }
+    if (get().openName !== name) return
+    const authUrls = { ...get().authUrls }
     if (res.auth_url) authUrls[server] = res.auth_url
     else delete authUrls[server]
     set({ authUrls })
@@ -242,11 +238,11 @@ const POLL_MAX = 200
 function pollUntilAuthorized(name: string, server: string, left: number = POLL_MAX): void {
   if (left <= 0) return
   setTimeout(async () => {
-    if (state.openName !== name || state.tab !== 'credentials') return
+    if (get().openName !== name || get().tab !== 'credentials') return
     await loadCredentials()
-    const row = state.creds?.servers.find((s) => s.name === server)
+    const row = get().creds?.servers.find((s) => s.name === server)
     if (row?.authorized) {
-      const authUrls = { ...state.authUrls }
+      const authUrls = { ...get().authUrls }
       delete authUrls[server]
       set({ authUrls })
       return
@@ -256,7 +252,7 @@ function pollUntilAuthorized(name: string, server: string, left: number = POLL_M
 }
 
 export async function clearOauth(server: string): Promise<void> {
-  const name = state.openName
+  const name = get().openName
   const src = source()
   if (!name || !src.clearOauth) return
   mark('s:' + server, true)
@@ -282,8 +278,8 @@ export function search(query: string): void {
 /* Rows the list shows: name and description searched together, because a reader
    who types "issue" means either. */
 export function visible(): PlaybookRow[] {
-  const rows = state.rows || []
-  const q = state.query.trim().toLowerCase()
+  const rows = get().rows || []
+  const q = get().query.trim().toLowerCase()
   if (!q) return rows
   return rows.filter(r => `${r.name} ${r.description}`.toLowerCase().includes(q))
 }
@@ -304,7 +300,6 @@ export function redraw(): void {
 }
 
 export function _resetForTests(): void {
-  state = EMPTY
+  store._resetForTests()
   details.clear()
-  listeners.clear()
 }

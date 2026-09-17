@@ -224,3 +224,13 @@ export function stagedTier(): string | null {
   s.tier = null
   return mode
 }
+
+/* Test seam only: what the gateway last said, and the chip painter the page
+   registered, are both the module's. */
+export function _resetForTests(): void {
+  providersLive = []
+  defaultModelLive = ''
+  defaultProviderLive = ''
+  paintChip = () => {}
+  tierMenu = []
+}

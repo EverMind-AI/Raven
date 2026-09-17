@@ -32,7 +32,7 @@ let liveHost: HTMLElement | null = null
 function syncLiveHost(): void {
   const host = liveHost
   if (!host) return
-  if (!store.getState().live) {
+  if (!store.get().live) {
     host.remove()
     return
   }

@@ -122,3 +122,11 @@ export const workspaceSource: WorkspaceSource = {
   hostIsLocal,
   shortPath: (p) => relToWsRoot(p) || relToWorkspace(p) || String(p).replace(/^\/Users\/[^/]+\//, '~/'),
 }
+
+/* Test seam only: the workspace root and the two injected helpers are the
+   module's. */
+export function _resetForTests(): void {
+  wsRoot = ''
+  shorten = (p) => p
+  hostPlatformLive = () => ''
+}

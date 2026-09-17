@@ -547,7 +547,7 @@ function AgentCard({ row, testing }: { row: XaRow; testing: boolean }): JSX.Elem
 }
 
 export function XaApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
   /* One pass, in the order the groups are drawn in, so a row can only be in
      one of them and a group nobody is in cannot be drawn. The last is the
      catalogue, and the only one that folds. */

@@ -160,7 +160,7 @@ function Card({ row }: { row: PlaybookRow }): JSX.Element {
 }
 
 function Library(): JSX.Element {
-  const s = store.getState()
+  const s = store.get()
   const rows = store.visible()
   if (s.rows === null) {
     return (
@@ -846,7 +846,7 @@ function CarriedServers({ servers }: { servers: NonNullable<PlaybookDetail['mcp_
 }
 
 function Detail({ detail }: { detail: PlaybookDetail }): JSX.Element {
-  const s = store.getState()
+  const s = store.get()
   const node = detail.nodes.find((n) => n.id === s.pickedNode) || null
   const onGraph = s.tab === 'graph'
   const onCreds = s.tab === 'credentials'
@@ -1073,7 +1073,7 @@ function OauthRow({
 }
 
 export function PlaybooksApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
   /* Arrow keys walk the graph once a step is picked: a canvas a reader has to
      aim at with a mouse is a canvas they stop exploring. */
   useEffect(() => {

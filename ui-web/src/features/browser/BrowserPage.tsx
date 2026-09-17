@@ -36,7 +36,7 @@ function Ico({ d, cls, style }: { d: string; cls?: string; style?: CSSProperties
 }
 
 export function BrowserApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
   const src = store.source()
   if (!src.embedded) return <LinkList src={src} />
   return <Chromium s={s} />
@@ -82,7 +82,7 @@ function LinkRow({ u, src }: { u: UrlRow; src: LinksSource }): JSX.Element {
 
 function Chromium({ s }: { s: BrowserState }): JSX.Element {
   useEffect(() => {
-    if (store.getState().avail === null) void store.poll(true)
+    if (store.get().avail === null) void store.poll(true)
   }, [])
   const gate = s.absent || s.avail === false
   const strip = !gate && s.started && !s.headful
@@ -136,7 +136,7 @@ function BBar({ s, strip }: { s: BrowserState; strip: boolean }): JSX.Element {
   const urlKey = (e: ReactKeyboardEvent<HTMLInputElement>): void => {
     const el = e.currentTarget
     if (e.key === 'Escape') {
-      el.value = store.getState().url
+      el.value = store.get().url
       el.blur()
       return
     }
@@ -372,7 +372,7 @@ function Idle({ s }: { s: BrowserState }): JSX.Element {
    resize and the restream, when the frame is letterboxed inside the stage. */
 function toPage(stage: HTMLElement, e: { clientX: number; clientY: number }): { x: number; y: number } {
   const r = stage.getBoundingClientRect()
-  const vp = store.getState().vp
+  const vp = store.get().vp
   const vw = vp[0] || r.width || 1
   const vh = vp[1] || r.height || 1
   const sc = Math.min(r.width / vw, r.height / vh) || 1
@@ -410,7 +410,7 @@ function Stage({ s }: { s: BrowserState }): JSX.Element {
         : new ResizeObserver(() => {
             clearTimeout(rsz)
             rsz = window.setTimeout(() => {
-              if (store.showing() && store.getState().started) void store.watch(true)
+              if (store.showing() && store.get().started) void store.watch(true)
             }, 250)
           })
     ro?.observe(stage)
@@ -422,7 +422,7 @@ function Stage({ s }: { s: BrowserState }): JSX.Element {
       e.preventDefault()
       store.input({ kind: 'wheel', dx: e.deltaX, dy: e.deltaY })
       const cv = store.canvas()
-      const vp = store.getState().vp
+      const vp = store.get().vp
       if (!cv || !cv.width || !vp[1]) return
       const d = Math.max(-cv.height, Math.min(cv.height, Math.round(e.deltaY * (cv.height / vp[1]))))
       if (!d) return
@@ -495,7 +495,7 @@ function Stage({ s }: { s: BrowserState }): JSX.Element {
       }
       if (k === 'r') {
         e.preventDefault()
-        void store.go(store.getState().loading ? 'stop' : 'reload')
+        void store.go(store.get().loading ? 'stop' : 'reload')
         return
       }
       if (k === 't') {
@@ -505,7 +505,7 @@ function Stage({ s }: { s: BrowserState }): JSX.Element {
       }
       if (k === 'w') {
         e.preventDefault()
-        const act = store.getState().tabs.find((x) => x.active)
+        const act = store.get().tabs.find((x) => x.active)
         if (act) void store.tabsAct('close', { index: act.index })
         return
       }

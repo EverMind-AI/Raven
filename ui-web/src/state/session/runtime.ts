@@ -746,3 +746,9 @@ export function installSlashActions(): void {
     if (x.id === 'gui.compress') x.fn = compressNow
   })
 }
+
+/* Test seam only: the promotion in flight is the module's, and a case that left
+   one pending would hand it to the next. */
+export function _resetForTests(): void {
+  promoting = null
+}

@@ -181,7 +181,7 @@ describe('the knowledge page', () => {
       gates[0]!({ hits: [{ score: 0.4, document_id: 'd1', text: 'the stale answer' }], search_ms: 9, embed_ms: 90 })
       await first
     })
-    const texts = (store.getState().hits ?? []).map((h) => h.text)
+    const texts = (store.get().hits ?? []).map((h) => h.text)
     expect(texts).toEqual(['the newest answer'])
   })
 
@@ -212,7 +212,7 @@ describe('the knowledge page', () => {
       await store.searchNow('quarterly')
     })
     expect(calls).toBe(1)
-    expect((store.getState().hits ?? []).map((h) => h.text)).toEqual(['the answer'])
+    expect((store.get().hits ?? []).map((h) => h.text)).toEqual(['the answer'])
 
     await act(async () => {
       await store.searchNow('   ')
@@ -220,7 +220,7 @@ describe('the knowledge page', () => {
     /* Null, not empty: "asked and found nothing" and "not asked" are different
        states, and only the first one has a count to report. */
     expect(calls).toBe(1)
-    expect(store.getState().hits).toBeNull()
+    expect(store.get().hits).toBeNull()
   })
 
 
@@ -724,7 +724,7 @@ describe('documents and search', () => {
     /* An empty array, not null. The distinction is the whole test: asked and
        found nothing is a result, and not having asked is not one -- and only
        the second means the panel should be showing documents. */
-    expect(store.getState().hits).toEqual([])
+    expect(store.get().hits).toEqual([])
   })
 
   it('drops a search that answers after the reader left the base', async () => {
@@ -1244,7 +1244,7 @@ describe('adding a data source', () => {
       await store.uploadAll([file('a.md'), file('bad.md'), file('c.md')])
     })
 
-    expect(store.getState().docs.map((d) => d.source)).toEqual(['a.md', 'c.md'])
+    expect(store.get().docs.map((d) => d.source)).toEqual(['a.md', 'c.md'])
     expect(toasts()).toEqual(['nope'])
   })
 
@@ -1500,13 +1500,13 @@ describe('adding a data source', () => {
     })
 
     expect(document.getElementById('kburl')).toBeNull()
-    expect(store.getState().docs.map((d) => d.status)).toEqual(['pending'])
+    expect(store.get().docs.map((d) => d.status)).toEqual(['pending'])
 
     await act(async () => {
       finishIndex(doc({ id: 'u1', source: 'Docs.md', origin: 'url', status: 'ready' }))
       await Promise.resolve()
     })
-    expect(store.getState().docs.map((d) => d.status)).toEqual(['ready'])
+    expect(store.get().docs.map((d) => d.status)).toEqual(['ready'])
   })
 
   it('leaves the url dialog open when the page could not be read', async () => {
@@ -1963,7 +1963,7 @@ describe('the knowledge base settings', () => {
     /* Closed and the row updated: the base in the list is what the panel
        behind this dialog is drawn from. */
     expect(document.querySelector('.kbsets')).toBeNull()
-    expect(store.getState().bases[0]!.top_k).toBe(7)
+    expect(store.get().bases[0]!.top_k).toBe(7)
   })
 
   it('shows a base that predates these settings as the defaults it behaves as', async () => {
@@ -2203,7 +2203,7 @@ describe('picking several files at once', () => {
     expect(most).toBe(1)
     /* One failing does not stop the rest, and the toast names it. */
     expect(toasts()).toEqual(['endpoint said 429'])
-    const byId = Object.fromEntries(store.getState().docs.map((d) => [d.id, d.status]))
+    const byId = Object.fromEntries(store.get().docs.map((d) => [d.id, d.status]))
     /* d3 was failed and is now ready, which is what a reindex is for. d2's
        row goes back to what it was rather than keeping the optimistic
        `indexing` this started with -- the same thing one row's retry does,
@@ -2234,7 +2234,7 @@ describe('picking several files at once', () => {
     expect(confirms).toEqual(['gui.kb.docs_delete_body {"count":2}'])
     expect(removed.sort()).toEqual(['d1', 'd2'])
     /* Off the list, and un-ticked with them. */
-    expect(store.getState().picked).toEqual([])
+    expect(store.get().picked).toEqual([])
     expect(screen.queryByText('deck.pptx')).toBeNull()
     expect(screen.getByText('notes.md')).toBeTruthy()
   })
@@ -2251,24 +2251,24 @@ describe('picking several files at once', () => {
     await act(async () => {
       fireEvent.click(headTick())
     })
-    expect(store.getState().picked.length).toBe(3)
+    expect(store.get().picked.length).toBe(3)
 
     listed = [THREE[2]!]
     await act(async () => {
       await store.open_('b1')
     })
-    expect(store.getState().picked).toEqual([])
+    expect(store.get().picked).toEqual([])
   })
 
   it('forgets the selection when another base is opened', async () => {
     await openWith()
     await tick(0)
-    expect(store.getState().picked).toEqual(['d1'])
+    expect(store.get().picked).toEqual(['d1'])
 
     await act(async () => {
       store.back()
     })
-    expect(store.getState().picked).toEqual([])
+    expect(store.get().picked).toEqual([])
   })
 })
 
@@ -2309,7 +2309,7 @@ describe('renaming and deleting a base', () => {
       ;(document.querySelector('.kbrail .kbopenb') as HTMLButtonElement).click()
     })
 
-    expect(store.getState().openId).toBe('b1')
+    expect(store.get().openId).toBe('b1')
   })
 
   it('renames a base and keeps the row it renamed', async () => {
@@ -2338,7 +2338,7 @@ describe('renaming and deleting a base', () => {
     })
 
     expect(asked).toEqual([['b1', 'staff handbook']])
-    expect(store.getState().bases[0]!.name).toBe('staff handbook')
+    expect(store.get().bases[0]!.name).toBe('staff handbook')
     expect(document.getElementById('kbrename')).toBeNull()
   })
 
@@ -2418,7 +2418,7 @@ describe('renaming and deleting a base', () => {
     await act(async () => {
       await store.open_('b1')
     })
-    expect(store.getState().openId).toBe('b1')
+    expect(store.get().openId).toBe('b1')
 
     await openBaseMenu()
     await act(async () => {
@@ -2427,6 +2427,6 @@ describe('renaming and deleting a base', () => {
       await Promise.resolve()
     })
 
-    expect(store.getState().openId).toBeNull()
+    expect(store.get().openId).toBeNull()
   })
 })

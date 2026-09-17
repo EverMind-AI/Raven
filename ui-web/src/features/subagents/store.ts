@@ -71,7 +71,7 @@ const initial: AgentsState = {
 let state: AgentsState = { ...initial }
 const listeners = new Set<() => void>()
 
-export const getState = (): AgentsState => state
+export const get = (): AgentsState => state
 
 export function subscribe(l: () => void): () => void {
   listeners.add(l)

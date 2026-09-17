@@ -23,6 +23,8 @@
  * not something this contract should rest on.
  */
 
+import { makeStore } from './store'
+
 /** The four islands that share the drawer. */
 export type DetailOwner = 'memory' | 'plugins' | 'skills' | 'xa'
 
@@ -44,23 +46,12 @@ const CLOSE_ORDER: readonly DetailOwner[] = ['plugins', 'skills', 'memory', 'xa'
    rather than in the middle of it. */
 const FADE_MS = 260
 
-let state: DetailState = { owner: null, open: false, fill: false, title: null, gen: 0 }
-const listeners = new Set<() => void>()
+const store = makeStore<DetailState>({ owner: null, open: false, fill: false, title: null, gen: 0 })
 const closers = new Map<DetailOwner, () => void>()
 const hosts = new Map<DetailOwner, HTMLDivElement>()
 
-/** Which card the drawer holds. */
-export function get(): DetailState {
-  return state
-}
-
-/** For useSyncExternalStore: called after every open, close and drop. */
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => {
-    listeners.delete(fn)
-  }
-}
+/** Which card the drawer holds; `set` is every open, close and drop. */
+export const { get, set, subscribe, _resetForTests } = store
 
 /** What an owner runs when the drawer closes: drop its card, after the fade. */
 export function onClose(owner: DetailOwner, fn: () => void): void {
@@ -105,8 +96,8 @@ export function host(owner: DetailOwner): HTMLDivElement {
 function paint(): void {
   const el = document.getElementById('detail')
   if (!el) return
-  el.dataset.open = String(state.open)
-  if (state.fill) el.dataset.fill = 'true'
+  el.dataset.open = String(get().open)
+  if (get().fill) el.dataset.fill = 'true'
   else delete el.dataset.fill
 }
 
@@ -121,44 +112,38 @@ function adopt(owner: DetailOwner): void {
   body.appendChild(el)
 }
 
-function notify(): void {
-  for (const fn of [...listeners]) fn()
-}
-
 /* A different card in a drawer already open for this owner is not a new open:
    `gen` answers "has the reader opened something since", which is the question
    a pending drop asks, and reopening inside the fade is the case it exists
    for. */
 export function open(owner: DetailOwner, card: { title?: string; fill?: boolean } = {}): void {
-  const reopened = !state.open || state.owner !== owner
-  state = {
+  const was = get()
+  const reopened = !was.open || was.owner !== owner
+  set({
     owner,
     open: true,
     fill: card.fill ?? false,
     title: card.title ?? '',
-    gen: reopened ? state.gen + 1 : state.gen,
-  }
+    gen: reopened ? was.gen + 1 : was.gen,
+  })
   adopt(owner)
   paint()
-  notify()
 }
 
 /** Every close path: the close button, the scrim, Escape, a page switch, a
     language flip, an island's own button. */
 export function close(): void {
   for (const owner of CLOSE_ORDER) closers.get(owner)?.()
-  const had = state.owner
-  state = { ...state, open: false }
+  const had = get().owner
+  set({ ...get(), open: false })
   paint()
-  notify()
   if (!had) return
-  const gen = state.gen
+  const gen = get().gen
   dropAfterFade(
     () => {
-      state = { ...state, owner: null, fill: false }
+      set({ ...get(), owner: null, fill: false })
       paint()
-      notify()
     },
-    () => state.gen !== gen,
+    () => get().gen !== gen,
   )
 }

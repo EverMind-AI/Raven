@@ -88,7 +88,7 @@ async function mount() {
    component -- the standalone panel draws one flat list of instances and has no
    agent headings for a button to sit beside. */
 function Grouped({ onOpen }: { onOpen?: (row: InstanceRow) => void }): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
   return <AgentList s={s} onOpen={onOpen} compact />
 }
 
@@ -127,7 +127,7 @@ describe('subagents island, the list', () => {
     expect(openAgent).toHaveBeenCalledWith(row, null)
     /* And records WHAT it opened. Leaving `open` on the node it was promoted
        from is what made the promotion below fire again on every heartbeat. */
-    expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'resume-me' })
+    expect(store.get().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'resume-me' })
   })
 
   it('routes a legacy run detail into a workspace record pane', () => {
@@ -330,7 +330,7 @@ describe('subagents island, the list', () => {
     })
     await mountGrouped()
     await screen.findByText('hermes')
-    expect(store.getState().instances.map((r) => r.handle)).toEqual(['one', 'two'])
+    expect(store.get().instances.map((r) => r.handle)).toEqual(['one', 'two'])
     const button = retireIn('hermes')!
     /* The warning the standalone row already carries, not a second wording:
        this drops an ACP agent's own session too, and the reader is owed that
@@ -343,8 +343,8 @@ describe('subagents island, the list', () => {
     expect(forgotten).toEqual([['hermes', 'one']])
     /* Gone from the list, and the row did NOT open -- dismissing a row must not
        also be a click on it. */
-    expect(store.getState().instances.map((r) => r.handle)).toEqual(['two'])
-    expect(store.getState().open).toBeNull()
+    expect(store.get().instances.map((r) => r.handle)).toEqual(['two'])
+    expect(store.get().open).toBeNull()
   })
 
   it('lets the keyboard reach the retire control instead of opening the row', async () => {
@@ -361,12 +361,12 @@ describe('subagents island, the list', () => {
        exactly what takes the button's activation away. */
     const survived = fireEvent.keyDown(button, { key: 'Enter' })
     expect(survived).toBe(true)
-    expect(store.getState().open).toBeNull()
+    expect(store.get().open).toBeNull()
     /* The positive half, or the case above is satisfied by a row that responds
        to no keys at all: the ROW's own Enter still opens it. */
     const row = button.closest('.sarow') as HTMLElement
     expect(fireEvent.keyDown(row, { key: 'Enter' })).toBe(false)
-    expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'one' })
+    expect(store.get().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'one' })
   })
 
   it('lets the keyboard reach the standalone row Remove button too', async () => {
@@ -379,10 +379,10 @@ describe('subagents island, the list', () => {
     await screen.findByText('one')
     const button = document.querySelector<HTMLButtonElement>('.sarow .mini.ghost')!
     expect(fireEvent.keyDown(button, { key: 'Enter' })).toBe(true)
-    expect(store.getState().open).toBeNull()
+    expect(store.get().open).toBeNull()
     const row = button.closest('.sarow') as HTMLElement
     expect(fireEvent.keyDown(row, { key: 'Enter' })).toBe(false)
-    expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'one' })
+    expect(store.get().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'one' })
   })
 
   it('offers a new instance only for an agent that can hold a direct chat', async () => {
@@ -427,9 +427,9 @@ describe('subagents island, the list', () => {
     expect(made).toEqual(['made-1'])
     expect(asked).toEqual([['hermes', 'made-1']])
     /* And the reader is inside it, which is the other half of the ask. */
-    expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'fresh' })
-    expect(store.getState().instances.map((r) => r.handle)).toContain('fresh')
-    expect(store.getState().starting).toBeNull()
+    expect(store.get().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'fresh' })
+    expect(store.get().instances.map((r) => r.handle)).toContain('fresh')
+    expect(store.get().starting).toBeNull()
   })
 
   it('keeps the conversation it is already in rather than starting another', async () => {
@@ -481,13 +481,13 @@ describe('subagents island, the list', () => {
     await act(async () => {
       await Promise.resolve()
     })
-    expect(store.getState().startFail).toEqual({
+    expect(store.get().startFail).toEqual({
       agent: 'hermes', why: 'the gateway refused a new session',
     })
     expect(asked).toEqual([])
     /* And the button comes back, rather than being held by a request that is
        over. */
-    expect(store.getState().starting).toBeNull()
+    expect(store.get().starting).toBeNull()
   })
 
   it('offers no button at all where no conversation can be started', async () => {
@@ -538,13 +538,13 @@ describe('subagents island, the list', () => {
     expect(asked).toEqual([['hermes', 's1']])
     /* Both, which is the whole ask: the panel is inside the new instance, and
        the instance is on the list waiting when `back()` leaves it. */
-    expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'fresh' })
-    expect(store.getState().instances.map((r) => r.handle)).toContain('fresh')
+    expect(store.get().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'fresh' })
+    expect(store.get().instances.map((r) => r.handle)).toContain('fresh')
     act(() => {
       store.back()
     })
-    expect(store.getState().open).toBeNull()
-    expect(store.getState().instances.map((r) => r.handle)).toContain('fresh')
+    expect(store.get().open).toBeNull()
+    expect(store.get().instances.map((r) => r.handle)).toContain('fresh')
   })
 
   it('does not open one conversation\'s new instance in another', async () => {
@@ -575,12 +575,12 @@ describe('subagents island, the list', () => {
       await Promise.resolve()
     })
     /* Nothing opened, and nothing was written into the new conversation. */
-    expect(store.getState().open).toBeNull()
-    expect(store.getState().startFail).toBeNull()
-    expect(store.getState().instances.map((r) => r.handle)).not.toContain('fresh')
+    expect(store.get().open).toBeNull()
+    expect(store.get().startFail).toBeNull()
+    expect(store.get().instances.map((r) => r.handle)).not.toContain('fresh')
     /* And the button in the new conversation is usable: a `starting` left set by
        the conversation that has gone would disable it for good. */
-    expect(store.getState().starting).toBeNull()
+    expect(store.get().starting).toBeNull()
   })
 
   it('does not let a settled request release a newer one\'s button', async () => {
@@ -597,7 +597,7 @@ describe('subagents island, the list', () => {
     await act(async () => {
       plusFor('hermes')!.click()
     })
-    expect(store.getState().starting).toBe('hermes')
+    expect(store.get().starting).toBe('hermes')
 
     act(() => {
       store.reset()
@@ -614,7 +614,7 @@ describe('subagents island, the list', () => {
     await act(async () => {
       plusFor('hermes')!.click()
     })
-    expect(store.getState().starting).toBe('hermes')
+    expect(store.get().starting).toBe('hermes')
 
     /* Now the one from the conversation the reader left comes back. */
     await act(async () => {
@@ -622,14 +622,14 @@ describe('subagents island, the list', () => {
       await Promise.resolve()
     })
     /* Still held: the s2 request has not answered. */
-    expect(store.getState().starting).toBe('hermes')
+    expect(store.get().starting).toBe('hermes')
 
     /* And when the successor does answer, it releases its own. */
     await act(async () => {
       gates[1]!(inst({ sessionKey: 's2', handle: 'fresh' }))
       await Promise.resolve()
     })
-    expect(store.getState().starting).toBeNull()
+    expect(store.get().starting).toBeNull()
   })
 
   it('does not carry a refusal into the conversation the reader moved to', async () => {
@@ -653,8 +653,8 @@ describe('subagents island, the list', () => {
       refuse!(new Error('hermes is disabled'))
       await Promise.resolve()
     })
-    expect(store.getState().startFail).toBeNull()
-    expect(store.getState().starting).toBeNull()
+    expect(store.get().startFail).toBeNull()
+    expect(store.get().starting).toBeNull()
   })
 
   it('does not blame the creation for a failure after it', async () => {
@@ -674,10 +674,10 @@ describe('subagents island, the list', () => {
     await act(async () => {
       await Promise.resolve()
     })
-    expect(store.getState().startFail).toBeNull()
-    expect(store.getState().instances.map((r) => r.handle)).toContain('fresh')
+    expect(store.get().startFail).toBeNull()
+    expect(store.get().instances.map((r) => r.handle)).toContain('fresh')
     /* And it is released either way, so the button can be pressed again. */
-    expect(store.getState().starting).toBeNull()
+    expect(store.get().starting).toBeNull()
 
     /* The call still RESOLVES, and resolves true: the start happened. Asserted on
        the promise because the button discards it, and an opener that throws with
@@ -741,9 +741,9 @@ describe('subagents island, the list', () => {
       await Promise.resolve()
     })
     expect(document.querySelector('.agent-newfail')?.textContent).toContain('hermes is stateless')
-    expect(store.getState().open).toBeNull()
+    expect(store.get().open).toBeNull()
     /* Released, not stuck: the button has to take a second try. */
-    expect(store.getState().starting).toBeNull()
+    expect(store.get().starting).toBeNull()
     expect(plusFor('hermes')!.disabled).toBe(false)
   })
 
@@ -1975,7 +1975,7 @@ describe('subagents island, what a spawned run opens as', () => {
 
     store.openRow(run({ instance: 'survey-9ab2c6' }))
 
-    expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'survey-9ab2c6' })
+    expect(store.get().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'survey-9ab2c6' })
   })
 
   it('opens the record when the run committed under no handle', async () => {
@@ -1986,7 +1986,7 @@ describe('subagents island, what a spawned run opens as', () => {
 
     store.openRow(run())
 
-    expect(store.getState().open).toEqual({ kind: 'spawn', id: 'call-1' })
+    expect(store.get().open).toEqual({ kind: 'spawn', id: 'call-1' })
   })
 
   it('opens the record when the handle names no row, and swaps when one arrives', async () => {
@@ -1997,13 +1997,13 @@ describe('subagents island, what a spawned run opens as', () => {
 
     store.openRow(run({ instance: 'survey-9ab2c6' }))
     await act(async () => { await Promise.resolve() })
-    expect(store.getState().open).toEqual({ kind: 'spawn', id: 'call-1' })
+    expect(store.get().open).toEqual({ kind: 'spawn', id: 'call-1' })
 
     rows = [inst({ handle: 'survey-9ab2c6', resumable: true })]
     await act(async () => { store.refreshInstances(true); await Promise.resolve() })
     await act(async () => { await Promise.resolve() })
 
-    expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'survey-9ab2c6' })
+    expect(store.get().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'survey-9ab2c6' })
   })
 
   it('does not take a handle of the same name under another agent', async () => {
@@ -2014,7 +2014,7 @@ describe('subagents island, what a spawned run opens as', () => {
 
     store.openRow(run({ instance: 'survey-9ab2c6' }))
 
-    expect(store.getState().open).toEqual({ kind: 'spawn', id: 'call-1' })
+    expect(store.get().open).toEqual({ kind: 'spawn', id: 'call-1' })
   })
 
   it("does not take another agent's handle when the list arrives later either", async () => {
@@ -2031,7 +2031,7 @@ describe('subagents island, what a spawned run opens as', () => {
     await act(async () => { store.refreshInstances(true); await Promise.resolve() })
     await act(async () => { await Promise.resolve() })
 
-    expect(store.getState().open).toEqual({ kind: 'spawn', id: 'call-1' })
+    expect(store.get().open).toEqual({ kind: 'spawn', id: 'call-1' })
   })
 
   it('a handle-less spawn stays on its record even after an instance list arrives', async () => {
@@ -2043,12 +2043,12 @@ describe('subagents island, what a spawned run opens as', () => {
       { instanceHistory: async () => ({ turns: [] }) })
 
     store.openRow(run())
-    expect(store.getState().open).toEqual({ kind: 'spawn', id: 'call-1' })
+    expect(store.get().open).toEqual({ kind: 'spawn', id: 'call-1' })
 
     await act(async () => { store.refreshInstances(true); await Promise.resolve() })
     await act(async () => { await Promise.resolve() })
 
-    expect(store.getState().open).toEqual({ kind: 'spawn', id: 'call-1' })
+    expect(store.get().open).toEqual({ kind: 'spawn', id: 'call-1' })
   })
 })
 
@@ -2075,7 +2075,7 @@ describe('the list reads', () => {
     await second
 
     expect(asks).toBe(1)
-    expect(store.getState().instances.map((row) => row.handle)).toEqual(['h7'])
+    expect(store.get().instances.map((row) => row.handle)).toEqual(['h7'])
   })
 
   it('hand a second caller the run list the first is waiting for', async () => {
@@ -2094,7 +2094,7 @@ describe('the list reads', () => {
     await second
 
     expect(asks).toBe(1)
-    expect(store.getState().rows.map((row) => row.id)).toEqual(['call-1'])
+    expect(store.get().rows.map((row) => row.id)).toEqual(['call-1'])
   })
 
   it('are shared only while they are in flight', async () => {
@@ -2144,7 +2144,7 @@ describe('the list reads', () => {
     await store.refreshInstances(true)
 
     expect(asked).toEqual(['s1', 's2'])
-    expect(store.getState().instances.map((row) => row.handle)).toEqual(['for-s2'])
+    expect(store.get().instances.map((row) => row.handle)).toEqual(['for-s2'])
   })
 
   it('drop the run read when the conversation changes under it', async () => {
@@ -2163,7 +2163,7 @@ describe('the list reads', () => {
     await store.refresh(true)
 
     expect(asked).toEqual(['s1', 's2'])
-    expect(store.getState().rows.map((row) => row.id)).toEqual(['call-s2'])
+    expect(store.get().rows.map((row) => row.id)).toEqual(['call-s2'])
   })
 })
 
@@ -2180,7 +2180,7 @@ describe('the compact roster', () => {
     const { roster: names, instances: live } = roster()
     wire({ list: async () => [] })
     render(
-      <AgentList s={{ ...store.getState(), roster: names, instances: live }} compact />,
+      <AgentList s={{ ...store.get(), roster: names, instances: live }} compact />,
       { container: document.getElementById('wsBody')! },
     )
   }
@@ -2220,7 +2220,7 @@ describe('the compact roster', () => {
     render(
       <AgentList
         s={{
-          ...store.getState(),
+          ...store.get(),
           roster: [
             { name: 'my-claude', preset: 'claude_code' },
             { name: 'claude_code' },
@@ -2247,7 +2247,7 @@ describe('the compact roster', () => {
     render(
       <AgentList
         s={{
-          ...store.getState(),
+          ...store.get(),
           roster: [
             { name: 'raven', builtin: true },
             { name: 'Raven-Code', vendored: true },

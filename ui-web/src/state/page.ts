@@ -70,6 +70,11 @@ export function subscribe(fn: () => void): () => void {
   }
 }
 
+/* Test seam only: which page stands open is the module's. */
+export function _resetForTests(): void {
+  current = null
+}
+
 export function show(id: PageId | null): void {
   current = id
   for (const p of Object.keys(NAV_OF)) {

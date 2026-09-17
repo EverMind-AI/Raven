@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readdirSync, readFileSync } from 'node:fs'
 
-import { _resetForTests, add, dropClass, forget, remove, session, sheets, sync } from './sheetRack'
+import { _resetForTests, add, dropClass, forget, remove, session, get, sync } from './sheetRack'
 import { _resetForTests as sessionReset, setCurrent } from '../lib/session'
 import { resetTranslator, setTranslator } from '../i18n/t'
 import * as pageStore from '../state/page'
@@ -18,7 +18,7 @@ function wire(): void {
   /* `.chat` and `.dock` because dockLift measures them; without both it returns
      early, which would make every assertion below pass for the wrong reason. */
   document.body.innerHTML =
-    '<div class="chat"><div class="dock"><div class="sheets" id="sheetRack"></div>'
+    '<div class="chat"><div class="dock"><div class="get" id="sheetRack"></div>'
     + '<div class="dock-in"></div></div></div>'
 }
 
@@ -173,27 +173,27 @@ describe('the sheet rack', () => {
   /* What <SheetRack/> subscribes to. The same array has to come back while
      nothing has moved, or useSyncExternalStore re-renders on every read. */
   it('hands out the same list of interiors until one changes', () => {
-    const first = sheets()
+    const first = get()
     add(sheet())
     /* A sheet with no interior of its own -- the graph's kind -- is not in it. */
-    expect(sheets()).toBe(first)
+    expect(get()).toBe(first)
 
     const withView = sheet()
     add(withView, undefined, undefined, 'an interior')
-    const second = sheets()
+    const second = get()
     expect(second.map((s) => s.view)).toEqual(['an interior'])
-    expect(sheets()).toBe(second)
+    expect(get()).toBe(second)
 
     /* Parked with another conversation, its interior is not rendered. */
     setCurrent('b')
     sync()
-    expect(sheets()).toEqual([])
+    expect(get()).toEqual([])
     setCurrent('a')
     sync()
-    expect(sheets().map((s) => s.el)).toEqual([withView])
+    expect(get().map((s) => s.el)).toEqual([withView])
 
     remove(withView)
-    expect(sheets()).toEqual([])
+    expect(get()).toEqual([])
   })
 
   /* The one claim the cases above cannot see. "Every mutation here ends in
@@ -325,7 +325,7 @@ describe('who counts as asking', () => {
 
   it('is every module that docks into the rack, and no other', () => {
     const docking = sources()
-      .filter(([, text]) => /\bsheetAdd\(|\bsheets\.add\b/.test(text))
+      .filter(([, text]) => /\bsheetAdd\(|\bget\.add\b/.test(text))
       .map(([rel]) => rel)
     expect(docking.sort()).toEqual(Object.keys(DOCKS).sort())
   })

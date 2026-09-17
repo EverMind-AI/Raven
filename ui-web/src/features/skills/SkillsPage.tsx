@@ -465,7 +465,7 @@ function SkillDetail({ s, drawer }: { s: SkillsState; drawer: NonNullable<Skills
 }
 
 export function SkillsApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
   return (
     <>
       {s.view === 'installed' ? <SkillInstalled /> : <SkillMarket s={s} />}

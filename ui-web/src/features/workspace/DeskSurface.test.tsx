@@ -212,7 +212,7 @@ describe('dragging a pane by its header', () => {
     })
   }
 
-  const ids = (): string[] => desk.getState().panes.map((pane) => pane.id)
+  const ids = (): string[] => desk.get().panes.map((pane) => pane.id)
 
   it('turns the stack sideways when a pane is dropped at the left edge', async () => {
     await twoPanes()
@@ -231,7 +231,7 @@ describe('dragging a pane by its header', () => {
     })
 
     expect(ids()).toEqual(['file:/workspace/b.ts', 'file:/workspace/a.ts'])
-    expect(desk.getState().duo).toBe('cols')
+    expect(desk.get().duo).toBe('cols')
     const grid = document.querySelector('.desk-grid') as HTMLElement
     expect(grid.getAttribute('data-duo')).toBe('cols')
     expect(grid.getAttribute('data-dragging')).toBeNull()
@@ -253,7 +253,7 @@ describe('dragging a pane by its header', () => {
     })
 
     expect(ids()).toEqual(['file:/workspace/b.ts', 'file:/workspace/a.ts'])
-    expect(desk.getState().duo).toBe('rows')
+    expect(desk.get().duo).toBe('rows')
   })
 
   it('keeps a short header press as a click', async () => {
@@ -299,7 +299,7 @@ describe('dragging a pane by its header', () => {
 
     expect(grid.getAttribute('data-dragging')).toBeNull()
     expect(ids()).toEqual(['file:/workspace/a.ts', 'file:/workspace/b.ts'])
-    expect(desk.getState().duo).toBe('rows')
+    expect(desk.get().duo).toBe('rows')
   })
 
   it('does not let the last drop\'s cleanup strip the lift off a re-grabbed pane', async () => {
@@ -351,7 +351,7 @@ describe('dragging a pane by its header', () => {
     })
 
     expect(ids()).toEqual(['file:/workspace/a.ts', 'file:/workspace/b.ts'])
-    expect(desk.getState().duo).toBe('rows')
+    expect(desk.get().duo).toBe('rows')
     expect(document.querySelector('.desk-grid')!.getAttribute('data-dragging')).toBeNull()
   })
 })
@@ -394,7 +394,7 @@ describe('the collapsed launcher', () => {
       /* Down because the reader put it down. An unstated down with content
          on the desk is what the open fallback lifts, and the launcher only
          exists while the desk is down. */
-      desk.update({ paletteOpen: true })
+      desk.set({ paletteOpen: true })
       desk.toggleDesk()
     })
 
@@ -412,7 +412,7 @@ describe('the collapsed launcher', () => {
       /* Down because the reader put it down. An unstated down with content
          on the desk is what the open fallback lifts, and the launcher only
          exists while the desk is down. */
-      desk.update({ paletteOpen: true, tab: 'deliverables' })
+      desk.set({ paletteOpen: true, tab: 'deliverables' })
       desk.toggleDesk()
     })
 
@@ -431,7 +431,7 @@ describe('the collapsed launcher', () => {
       /* Down because the reader put it down. An unstated down with content
          on the desk is what the open fallback lifts, and the launcher only
          exists while the desk is down. */
-      desk.update({ paletteOpen: true, tab: 'diff' })
+      desk.set({ paletteOpen: true, tab: 'diff' })
       desk.toggleDesk()
     })
 
@@ -452,7 +452,7 @@ describe('the collapsed launcher', () => {
       /* Down because the reader put it down. An unstated down with content
          on the desk is what the open fallback lifts, and the launcher only
          exists while the desk is down. */
-      desk.update({ paletteOpen: true, tab: 'agents' })
+      desk.set({ paletteOpen: true, tab: 'agents' })
       desk.toggleDesk()
     })
 
@@ -476,7 +476,7 @@ describe('the collapsed launcher', () => {
       /* Down because the reader put it down. An unstated down with content
          on the desk is what the open fallback lifts, and the launcher only
          exists while the desk is down. */
-      desk.update({ paletteOpen: true, tab: 'diff' })
+      desk.set({ paletteOpen: true, tab: 'diff' })
       desk.toggleDesk()
     })
 
@@ -496,7 +496,7 @@ describe('the collapsed launcher', () => {
      rather than one sum on the button that puts them away. */
   it('leaves the counting to the tabs while the palette is up, and keeps the motion', async () => {
     render(<DeskFollowToggle />)
-    await act(async () => { desk.update({ paletteOpen: true, tab: 'diff' }) })
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
     await deliver('/w/a.md')
     agentRows = [{ sessionKey: 's1', agent: 'hermes', handle: 'h1', kind: 'cli', status: 'running' }]
     await act(async () => { await agents.refreshInstances(true) })
@@ -509,7 +509,7 @@ describe('the collapsed launcher', () => {
       /* Down because the reader put it down. An unstated down with content
          on the desk is what the open fallback lifts, and the launcher only
          exists while the desk is down. */
-      desk.update({ paletteOpen: true })
+      desk.set({ paletteOpen: true })
       desk.toggleDesk()
     })
     expect(count()).toBe('2')

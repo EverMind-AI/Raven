@@ -262,3 +262,14 @@ export const capabilitiesSource: CapabilitiesSource = {
   loaded: () => extLoaded,
   load: async () => { await loadExt(); return true },
 }
+
+/* Test seam only: the one ext.list read that fills three pages is cached here,
+   so a case that primed it must not answer the next one from that cache. */
+export function _resetForTests(): void {
+  disabledToolsLive = []
+  pluginsDisabledLive = []
+  toolsLive = []
+  skillsLive = []
+  pluginsLive = []
+  extLoaded = false
+}

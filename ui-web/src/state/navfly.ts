@@ -30,12 +30,11 @@
  * reader clicks rather than while the bundle evaluates.
  */
 
-import { flushSync } from 'react-dom'
-
 import { open as openConn } from '../features/connections/nav'
 import { open as openCron } from '../features/cron/store'
 import { markNew } from '../features/rail/store'
 import { open as openXa } from '../features/xa/store'
+import { makeStore } from './store'
 
 export interface NavRow {
   page: string
@@ -72,31 +71,19 @@ export interface NavFlyState {
    are drawn on the way open. Once drawn they stay -- folding the group is a
    flag, not a teardown. */
 const NONE: readonly NavRow[] = []
-let state: NavFlyState = { open: false, rows: NONE }
-const listeners = new Set<() => void>()
+const store = makeStore<NavFlyState>({ open: false, rows: NONE })
 
 /** The group's state, for <MoreFly/> and for the fold's own button. */
-export function get(): NavFlyState {
-  return state
-}
+export const { get, subscribe } = store
 
 /** For useSyncExternalStore: called whenever the fold or the rows change. */
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => {
-    listeners.delete(fn)
-  }
-}
-
 /* Committed synchronously: draw() marks the rows straight afterwards, and the
    rows have to be in the document by then. */
-function put(next: Partial<NavFlyState>): void {
-  const merged = { ...state, ...next }
-  if (merged.open === state.open && merged.rows === state.rows) return
-  state = merged
-  flushSync(() => {
-    for (const fn of [...listeners]) fn()
-  })
+export function set(next: Partial<NavFlyState>): void {
+  const now = get()
+  const merged = { ...now, ...next }
+  if (merged.open === now.open && merged.rows === now.rows) return
+  store.set(merged)
 }
 
 const fly = (): HTMLElement | null => document.getElementById('moreFly')
@@ -117,7 +104,7 @@ function paint(): void {
 }
 
 export function draw(): void {
-  put({ rows: MORE_ROWS })
+  set({ rows: MORE_ROWS })
   paint()
 }
 
@@ -147,7 +134,7 @@ export function toggle(force?: boolean): void {
   const open = force != null ? force : box.dataset.open !== 'true'
   if (open) draw()
   box.dataset.open = String(open)
-  put({ open })
+  set({ open })
   markNew()
 }
 
@@ -155,6 +142,6 @@ export function toggle(force?: boolean): void {
    test, the way state/sources.ts's resetSources() is -- the rows outlive a
    remount, so a case that drew them must not hand them to the next one. The
    page never calls this. */
-export function reset(): void {
-  put({ open: false, rows: NONE })
+export function _resetForTests(): void {
+  set({ open: false, rows: NONE })
 }

@@ -162,3 +162,8 @@ export function renamedSession(id: string, title: string, previous: string): voi
     toast(T('gui.sess.rename_failed', { detail: detailOf(e) }))
   })
 }
+
+/* Test seam only: the job names read once at boot are the module's. */
+export function _resetForTests(): void {
+  cronNames = {}
+}

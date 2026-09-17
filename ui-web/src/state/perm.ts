@@ -21,9 +21,8 @@
  * nobody listening.
  */
 
-import { flushSync } from 'react-dom'
-
 import { t } from '../i18n/t'
+import { makeStore } from './store'
 
 export interface Tier {
   id: string
@@ -97,21 +96,10 @@ export interface PermPanel {
 }
 
 const shut: PermPanel = { open: false, listed: null, opened: 0, paint: null }
-let panel: PermPanel = shut
-const listeners = new Set<() => void>()
+const store = makeStore<PermPanel>(shut)
 
 /** The panel's state, for <PermPop/> and <PermChip/>. */
-export function get(): PermPanel {
-  return panel
-}
-
-/** For useSyncExternalStore: called whenever the panel changes. */
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => {
-    listeners.delete(fn)
-  }
-}
+export const { get, subscribe } = store
 
 /* Field by field, not by reference: `draw` builds a fresh paint on every call,
    and comparing the two objects would make each call a change -- while a paint
@@ -127,13 +115,11 @@ const samePaint = (a: PermPaint | null, b: PermPaint | null): boolean => {
    panel it has just filled, and a caller that opens and then reads the DOM --
    the chip's own toggle, the pointerdown that closes it, every case in
    perm.test.ts -- has to see it. */
-function put(next: PermPanel): void {
-  if (next.open === panel.open && next.listed === panel.listed && next.opened === panel.opened
-    && samePaint(next.paint, panel.paint)) return
-  panel = next
-  flushSync(() => {
-    for (const fn of [...listeners]) fn()
-  })
+export function set(next: PermPanel): void {
+  const now = get()
+  if (next.open === now.open && next.listed === now.listed && next.opened === now.opened
+    && samePaint(next.paint, now.paint)) return
+  store.set(next)
 }
 
 /* Read once, and validated: a stored id from an older build that no longer
@@ -151,7 +137,7 @@ function read(): string {
   return TIERS.some((p) => p.id === stored) ? stored : 'ask'
 }
 
-function commit(value: string): void {
+function remember(value: string): void {
   mode = value
   /* Private mode throws on write. Losing the paint cache is the whole cost,
      and it is not worth taking the commit down with it. */
@@ -176,7 +162,7 @@ export function setPermPersister(fn: (mode: string) => Promise<boolean> | boolea
 
 export function setFromConfig(value: string): void {
   if (!TIERS.some((p) => p.id === value) || value === mode) return
-  commit(value)
+  remember(value)
 }
 
 export const current = (): string => mode
@@ -199,8 +185,8 @@ const el = <T extends HTMLElement>(id: string): T | null => document.getElementB
    this one carried was dead there too. It did not come across. */
 export function draw(): void {
   const cur = TIERS.find((p) => p.id === mode) || TIERS[0]!
-  put({
-    ...panel,
+  set({
+    ...get(),
     paint: {
       label: t(cur.label),
       risk: !!cur.risk,
@@ -232,14 +218,14 @@ export function open(): void {
      Before the rows and the flag, because the placement <PermPop/> makes in
      its layout effect measures the panel where it now stands. */
   if (pop.parentElement !== document.body) document.body.appendChild(pop)
-  put({ ...panel, open: true, listed: rows(), opened: panel.opened + 1 })
+  set({ ...get(), open: true, listed: rows(), opened: get().opened + 1 })
 }
 
 export function close(): void {
-  put({ ...panel, open: false })
+  set({ ...get(), open: false })
 }
 
-export const isOpen = (): boolean => panel.open
+export const isOpen = (): boolean => get().open
 
 /* The chip toggles rather than opens: it is the only way back out of the panel
    with the pointer, since the panel has no close button of its own. */
@@ -259,11 +245,11 @@ export function toggle(): void {
 export function pick(id: string): void {
   close()
   if (!persist) {
-    commit(id)
+    remember(id)
     return
   }
   Promise.resolve(persist(id)).then(
-    (ok) => { if (ok) commit(id) },
+    (ok) => { if (ok) remember(id) },
     () => {},
   )
 }
@@ -274,5 +260,5 @@ export function pick(id: string): void {
 export function _resetForTests(): void {
   mode = read()
   persist = null
-  put(shut)
+  set(shut)
 }

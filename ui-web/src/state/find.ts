@@ -27,9 +27,8 @@
  * live-boot hold decides whether that means rows or skeletons.
  */
 
-import { flushSync } from 'react-dom'
-
 import { composing } from '../features/composer/store'
+import { makeStore } from './store'
 
 export interface FindState {
   /** Whether the row is showing. Served closed: page.html hides the box. */
@@ -38,8 +37,7 @@ export interface FindState {
   readonly query: string
 }
 
-let state: FindState = { open: false, query: '' }
-const listeners = new Set<() => void>()
+const store = makeStore<FindState>({ open: false, query: '' })
 let redraw = (): void => {}
 
 export function onChange(fn: () => void): void {
@@ -47,22 +45,13 @@ export function onChange(fn: () => void): void {
 }
 
 /** The row's state, for <FindRow/>. */
-export function get(): FindState {
-  return state
-}
+export const { get, subscribe, _resetForTests } = store
 
 /** For useSyncExternalStore: called whenever the row or the term changes. */
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => {
-    listeners.delete(fn)
-  }
-}
-
 /* What the rail filters by. Lowercased and trimmed at write time, so every
    reader compares against the same shape. */
 export function term(): string {
-  return state.query
+  return get().query
 }
 
 const el = <T extends HTMLElement>(id: string): T | null => document.getElementById(id) as T | null
@@ -71,13 +60,11 @@ const field = (): HTMLInputElement | null => el<HTMLInputElement>('sfind')
 /* Committed synchronously, the way the three writes by id were: the row is
    shown and only then focused -- a hidden field takes no focus -- and the clear
    button has to appear on the keystroke that gave it something to clear. */
-function put(next: Partial<FindState>): void {
-  const merged = { ...state, ...next }
-  if (merged.open === state.open && merged.query === state.query) return
-  state = merged
-  flushSync(() => {
-    for (const fn of [...listeners]) fn()
-  })
+export function set(next: Partial<FindState>): void {
+  const now = get()
+  const merged = { ...now, ...next }
+  if (merged.open === now.open && merged.query === now.query) return
+  store.set(merged)
 }
 
 /* Clearing is three facts, not one: the field, the term, and the clear button
@@ -91,24 +78,24 @@ function wipe(): void {
 /* Search is a chore, so it hides until asked for; leaving it empty and
    clicking away puts the row back. */
 export function toggle(force?: boolean): void {
-  const open = force != null ? force : !state.open
+  const open = force != null ? force : !get().open
   if (open) {
-    put({ open: true })
+    set({ open: true })
     field()?.focus()
     return
   }
   /* Closing on an empty field changes nothing, so it must not cost a redraw:
      the blur handler below closes the row on every click away. */
-  const had = state.query
+  const had = get().query
   if (had) wipe()
-  put({ open: false, query: '' })
+  set({ open: false, query: '' })
   if (had) redraw()
 }
 
 /** The clear button's click: the term goes, the caret stays in the field. */
 export function clear(): void {
   wipe()
-  put({ query: '' })
+  set({ query: '' })
   redraw()
   field()?.focus()
 }
@@ -117,7 +104,7 @@ export function install(): void {
   const f = field()
   if (!f) return
   f.oninput = () => {
-    put({ query: f.value.trim().toLowerCase() })
+    set({ query: f.value.trim().toLowerCase() })
     redraw()
   }
   f.onkeydown = (e) => {
@@ -130,6 +117,6 @@ export function install(): void {
     }
   }
   f.onblur = () => {
-    if (!state.query) toggle(false)
+    if (!get().query) toggle(false)
   }
 }

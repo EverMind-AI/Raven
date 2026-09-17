@@ -55,7 +55,7 @@ const initial: BrowserState = {
 let state: BrowserState = { ...initial }
 const listeners = new Set<() => void>()
 
-export const getState = (): BrowserState => state
+export const get = (): BrowserState => state
 
 export function subscribe(l: () => void): () => void {
   listeners.add(l)

@@ -3,6 +3,7 @@ import * as detail from '../../state/detail'
 
 import type { MemItem, MemKind, MemStats, MemorySource } from './types'
 import * as page from '../../state/page'
+import { makeStore } from '../../state/store'
 
 /* Page state, outside React on purpose: the legacy shell drives this page
  * imperatively (nav opens it, Esc closes it, a language flip redraws it),
@@ -34,7 +35,7 @@ export interface MemoryState {
   detail: MemItem | null
 }
 
-let state: MemoryState = {
+const store = makeStore<MemoryState>({
   kind: 'episode',
   page: 1,
   q: '',
@@ -45,21 +46,15 @@ let state: MemoryState = {
   note: '',
   err: '',
   detail: null,
-}
-const listeners = new Set<() => void>()
+})
 let debounce: ReturnType<typeof setTimeout> | undefined
 let busy = false
 
-export const getState = (): MemoryState => state
+export const { get, subscribe, _resetForTests } = store
 
-export function subscribe(l: () => void): () => void {
-  listeners.add(l)
-  return () => listeners.delete(l)
-}
-
-function set(patch: Partial<MemoryState>): void {
-  state = { ...state, ...patch }
-  for (const l of listeners) l()
+/** A patch, merged into the page's state. */
+export function set(patch: Partial<MemoryState>): void {
+  store.set((prev) => ({ ...prev, ...patch }))
 }
 
 export const source = (): MemorySource => ds<MemorySource>('memory')
@@ -75,7 +70,7 @@ export async function load(): Promise<void> {
      installing the plugin the page would keep saying it is missing. */
   set({ phase: 'loading', err: '', note: '' })
   try {
-    const r = await source().list({ kind: state.kind, page: state.page, page_size: MEM_PAGE_SIZE, q: state.q || null })
+    const r = await source().list({ kind: get().kind, page: get().page, page_size: MEM_PAGE_SIZE, q: get().q || null })
     set({ items: r.items || [], total: r.total || 0, note: r.note || '', phase: 'ready' })
   } catch (e) {
     if ((e as { down?: boolean }).down) set({ phase: 'down' })
@@ -86,7 +81,7 @@ export async function load(): Promise<void> {
 export function refreshStats(): Promise<void> {
   return source()
     .stats()
-    .then((stats) => set({ stats, note: (stats && stats.note) || state.note }))
+    .then((stats) => set({ stats, note: (stats && stats.note) || get().note }))
     .catch(() => set({ stats: null }))
 }
 
@@ -101,7 +96,7 @@ export function close(): void {
 }
 
 export function setKind(kind: MemKind): void {
-  if (state.kind === kind) return
+  if (get().kind === kind) return
   clearTimeout(debounce)
   closeDetail()
   set({ kind, page: 1, q: '', items: [] })
@@ -111,16 +106,16 @@ export function setKind(kind: MemKind): void {
 /* A keystroke changes no pixels until the reload lands, so the query is
    stored without notifying -- the debounced reload is the only redraw. */
 export function search(q: string): void {
-  state = { ...state, q }
+  set({ q })
   clearTimeout(debounce)
   debounce = setTimeout(() => {
-    state = { ...state, page: 1 }
+    set({ page: 1 })
     void load()
   }, 350)
 }
 
 export function pageBy(delta: number): void {
-  set({ page: state.page + delta })
+  set({ page: get().page + delta })
   void load()
 }
 
@@ -144,7 +139,7 @@ export function closeDetail(): void {
    is still on screen. `gen` is which open the drop belongs to: the item cannot
    answer that, because reopening the same row hands back the same object. */
 export function detailDismissed(): void {
-  if (!state.detail) return
+  if (!get().detail) return
   const gen = detail.get().gen
   detail.dropAfterFade(
     () => set({ detail: null }),

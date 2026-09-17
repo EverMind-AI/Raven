@@ -429,3 +429,12 @@ export function parked(key: string): SessionRuntime | undefined {
    own (./hosts) so that the island's renderer can ask it without importing the
    session layer behind it. */
 export { holdsHost } from './hosts'
+
+/* Test seam only: the draft runtime, the active pointer and the switch counter
+   are the module's. The runtimes themselves are dropped with them: a case's
+   conversation must not be the next case's active one. */
+export function _resetForTests(): void {
+  draftRt = null
+  activeRt = null
+  switches = 0
+}

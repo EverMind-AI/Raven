@@ -301,7 +301,7 @@ function Group({
 }
 
 export function RailApp(): JSX.Element | null {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
   if (s.skel) {
     /* The live boot's skeleton rows, exactly the shapes the boot guard drew. */
     return (

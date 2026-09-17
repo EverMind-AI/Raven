@@ -23,12 +23,11 @@
  * boot takes its snapshot in the same task.
  */
 
-import { flushSync } from 'react-dom'
-
 import { T } from '../i18n/t'
 import * as detail from './detail'
 import * as page from './page'
 import { sources } from './sources'
+import { makeStore } from './store'
 import { show as toast } from './toast'
 
 /** The two modules the one section serves. */
@@ -114,30 +113,17 @@ const served = (): CapsState => ({
   hero: null,
 })
 
-let state: CapsState = served()
+const store = makeStore<CapsState>(served())
 
-const listeners = new Set<() => void>()
 const switched = new Set<() => void>()
 const hooks: Partial<DrawHooks> = {}
 
 /** The page's state, for <CapsPage/>. */
-export function get(): CapsState {
-  return state
-}
+export const { get, subscribe } = store
 
-/** For useSyncExternalStore: called whenever anything the component renders moves. */
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => {
-    listeners.delete(fn)
-  }
-}
-
-function put(next: Partial<CapsState>): void {
-  state = { ...state, ...next }
-  flushSync(() => {
-    for (const fn of [...listeners]) fn()
-  })
+/** A patch, merged into the page's state. */
+export function set(next: Partial<CapsState>): void {
+  store.set((prev) => ({ ...prev, ...next }))
 }
 
 const field = (): HTMLInputElement | null => document.getElementById('cq') as HTMLInputElement | null
@@ -156,10 +142,10 @@ export function onTab(fn: () => void): void {
    field the reader is typing into -- and guarded because a harness may drive a
    flip against a page that has no filter bar. */
 export function extSet(tab: Tab | null | undefined): void {
-  if (!tab || tab === state.tab) return
+  if (!tab || tab === get().tab) return
   const el = field()
   if (el) el.value = ''
-  put({ tab, kind: 'all', query: '' })
+  set({ tab, kind: 'all', query: '' })
   /* caps and memory share the detail drawer, so the sheet a card left open
      would sit over the other tab's grid. */
   detail.close()
@@ -178,7 +164,7 @@ export function close(): void {
    pills are hidden by every draw, so this is only reachable before the first
    one -- reproduced rather than fixed, like the rest of the bar. */
 export function pick(kind: string): void {
-  put({ kind })
+  set({ kind })
   draw()
 }
 
@@ -186,7 +172,7 @@ export function pick(kind: string): void {
    island, so this is the innermost layer of the old #cq chain -- the one the
    two above it fall through to, which no reachable tab does. */
 export function setQuery(query: string): void {
-  put({ query })
+  set({ query })
   draw()
 }
 
@@ -201,7 +187,7 @@ export function onDraw(part: Partial<DrawHooks>): void {
    skill tab the plugin layer's button and the shared hero followed the skill
    draw. */
 export function draw(): void {
-  if (state.tab === 'plugin') {
+  if (get().tab === 'plugin') {
     hooks.skillButton?.()
     hooks.plugin?.()
     hooks.hero?.()
@@ -217,13 +203,13 @@ export function draw(): void {
    The island asks for this rather than calling `draw` itself, because "is my
    page the one on screen" is the page's answer and not the island's. */
 export function drawIfOpenOnPlugins(): void {
-  if (page.get() === 'capsPage' && state.tab === 'plugin') draw()
+  if (page.get() === 'capsPage' && get().tab === 'plugin') draw()
 }
 
 /* The chrome a draw decides, in one commit: the six values are what the two
    renderers wrote on six elements, and the component draws all six. */
 export function chrome(next: Chrome): void {
-  put({
+  set({
     label: next.label,
     advHidden: next.advHidden,
     bar: next.bar,
@@ -236,14 +222,14 @@ export function chrome(next: Chrome): void {
 /* .cbar's display on its own. The installed view hides the bar and every other
    path puts it back, which is why three call sites outside a draw write it. */
 export function bar(display: string): void {
-  put({ bar: display })
+  set({ bar: display })
 }
 
 /* One tab's "installed" button. The first call is what puts it in the bar --
    created once, by the part that owns the count it shows -- and every later one
    is its sync. */
 export function installedButton(tab: Tab, next: Installed): void {
-  put(tab === 'skill' ? { skill: next } : { plugin: next })
+  set(tab === 'skill' ? { skill: next } : { plugin: next })
 }
 
 /* The page hero, first child of .wrap and so above the bar and outside
@@ -253,14 +239,14 @@ export function installedButton(tab: Tab, next: Installed): void {
    what makes "the element appears with the first draw" a state rather than an
    insertion. */
 export function hero(title: string): void {
-  put({ hero: title })
+  set({ hero: title })
 }
 
 /* Tests only: back to the state the page is served in, the two tabs' renderers
    included. What a case flips here is module state, and the component renders
    it, so the next case must not see it. */
-export function wipe(): void {
-  state = served()
+export function _resetForTests(): void {
+  store._resetForTests()
   switched.clear()
   for (const key of Object.keys(hooks)) delete hooks[key as keyof DrawHooks]
 }

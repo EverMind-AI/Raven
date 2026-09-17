@@ -74,7 +74,7 @@ function DeskEmpty({ kind, title, hint, sends }: {
       <b>{title}</b>
       <span>{hint}</span>
       {sends ? (
-        <button type="button" className="desk-empty-to" onClick={() => desk.update({ tab: sends.to })}>
+        <button type="button" className="desk-empty-to" onClick={() => desk.set({ tab: sends.to })}>
           {sends.label}
         </button>
       ) : null}
@@ -213,7 +213,7 @@ function DeliverablesNav(): JSX.Element {
 }
 
 function AgentsNav(): JSX.Element {
-  const state = useSyncExternalStore(agents.subscribe, agents.getState)
+  const state = useSyncExternalStore(agents.subscribe, agents.get)
   useEffect(() => {
     agents.refreshInstances()
     agents.refreshRoster()
@@ -281,7 +281,7 @@ function storedGeometry(): DeskGeometry {
 }
 
 export function DeskPalette(): JSX.Element | null {
-  const state = useSyncExternalStore(desk.subscribe, desk.getState)
+  const state = useSyncExternalStore(desk.subscribe, desk.get)
   /* Not `state.paletteOpen`: a fullscreen pane is the whole window and the desk
      is not on it (deskStore.showing). Everything below reads this one answer,
      the marks included -- a tab marked seen behind a fullscreen pane is news
@@ -294,7 +294,7 @@ export function DeskPalette(): JSX.Element | null {
      -- something landing while the reader is on another tab. (The workspace's
      own changes arrive through `DeskApp`, which subscribes to that store.) */
   useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
-  useSyncExternalStore(agents.subscribe, agents.getState)
+  useSyncExternalStore(agents.subscribe, agents.get)
   /* Looking at a tab is what makes its contents no longer new -- including what
      lands while the reader is sitting on it, which is why this runs on every
      render rather than only on a switch. */
@@ -492,7 +492,7 @@ export function DeskPalette(): JSX.Element | null {
           clicked.stopPropagation()
         }}
       >
-        <DeskTabs value={state.tab} onChange={(tab) => desk.update({ tab })} />
+        <DeskTabs value={state.tab} onChange={(tab) => desk.set({ tab })} />
       </div>
       <div className="desk-body">
         {state.tab === 'diff' ? <DiffNav /> : state.tab === 'deliverables' ? <DeliverablesNav /> : <AgentsNav />}

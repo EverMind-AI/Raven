@@ -64,3 +64,10 @@ export function close(): void {
   paint()
   markNewCurrent()
 }
+
+/* Test seam only: whether the dialog stands open, and which pane it opened on,
+   are the module's. */
+export function _resetForTests(): void {
+  up = false
+  settingsTab.id = 'usage'
+}

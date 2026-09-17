@@ -80,7 +80,7 @@ export function reset(): void {
   draftSeen = EMPTY()
 }
 
-export function _clearForTests(): void {
+export function _resetForTests(): void {
   draftSeen = EMPTY()
   KEPT.clear()
 }

@@ -47,7 +47,7 @@ interface PaneProps {
 }
 
 function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
-  const state = useSyncExternalStore(desk.subscribe, desk.getState)
+  const state = useSyncExternalStore(desk.subscribe, desk.get)
   /* The instance as the list has it NOW, not as it was when the pane opened.
      `pane.row` is the snapshot the desk stored on the way in, and an instance
      the reader started themselves has no name until its first message lands --
@@ -56,7 +56,7 @@ function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
      had already started addressing it by name: two names for one instance on one
      screen. The pane falls back to its snapshot for a row the list has since
      dropped, so a forgotten instance's window keeps its heading. */
-  const live = useSyncExternalStore(agents.subscribe, agents.getState)
+  const live = useSyncExternalStore(agents.subscribe, agents.get)
   const row = pane.kind === 'agent'
     ? live.instances.find((it) => it.agent === pane.row.agent && it.handle === pane.row.handle) || pane.row
     : null
@@ -191,7 +191,7 @@ function slotOf(next: DeskArrangement, id: string, splits: { column: number; lef
 }
 
 export function DeskSurface(): JSX.Element | null {
-  const state = useSyncExternalStore(desk.subscribe, desk.getState)
+  const state = useSyncExternalStore(desk.subscribe, desk.get)
   const previousColumns = useRef<0 | 1 | 2>(0)
   const gridRef = useRef<HTMLDivElement | null>(null)
   const paneEls = useRef(new Map<string, HTMLElement>())
@@ -248,7 +248,7 @@ export function DeskSurface(): JSX.Element | null {
   const grab = (id: string, event: ReactPointerEvent<HTMLElement>): void => {
     if (event.button !== 0 || dragRef.current) return
     if ((event.target as HTMLElement).closest('button')) return
-    const held = desk.getState()
+    const held = desk.get()
     if (held.solo || held.panes.length < 2) return
     if (!twoShowing(paneEls.current.values())) return
     const grid = gridRef.current
@@ -265,14 +265,14 @@ export function DeskSurface(): JSX.Element | null {
     try { header.setPointerCapture(event.pointerId) } catch { /* header torn down mid-gesture */ }
 
     const arrangementNow = (): DeskArrangement => {
-      const now = desk.getState()
+      const now = desk.get()
       return { order: now.panes.map((pane) => pane.id), duo: now.duo }
     }
     /* The indicator always shows where the pane would LAND -- under the standing
        proposal, or back in its own slot when there is none, which is also what a
        drop right now would mean. */
     const indicate = (next: DeskArrangement | null): void => {
-      setDrop(slotOf(next ?? arrangementNow(), id, desk.getState().splits,
+      setDrop(slotOf(next ?? arrangementNow(), id, desk.get().splits,
         run.gridRect.width, run.gridRect.height, run.halfGap))
     }
 
@@ -308,7 +308,7 @@ export function DeskSurface(): JSX.Element | null {
       /* Hit rects from the same arithmetic the indicator draws with, not from
          the DOM: the lifted pane is mid-transform and the others never move
          during a drag, so the settled slots ARE the geometry in play. */
-      const slots = slotRects(current.order.length, current.duo, desk.getState().splits,
+      const slots = slotRects(current.order.length, current.duo, desk.get().splits,
         run.gridRect.width, run.gridRect.height, run.halfGap)
       const rects = new Map<string, SlotRect>()
       current.order.forEach((paneId, index) => {
@@ -423,13 +423,13 @@ export function DeskSurface(): JSX.Element | null {
 }
 
 export function DeskFollowToggle(): JSX.Element | null {
-  const state = useSyncExternalStore(desk.subscribe, desk.getState)
+  const state = useSyncExternalStore(desk.subscribe, desk.get)
   /* The launcher speaks for all three tabs while they are down, so it reads
      what all three read. Without these it drew the count it happened to be
      mounted with, which is zero for the whole of the case it exists for.
      (The workspace's own changes arrive through `DeskApp`.) */
   useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
-  useSyncExternalStore(agents.subscribe, agents.getState)
+  useSyncExternalStore(agents.subscribe, agents.get)
   /* Only while the strip is down. With the palette up the three tabs each say
      their own number an inch below this, and a sum repeating them there is a
      second voice for one fact -- on the button whose job at that moment is to

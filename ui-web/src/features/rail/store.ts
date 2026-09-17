@@ -8,6 +8,7 @@ import { plainTitle } from './title'
 import type { RailSnapshot, RailSource, SessRow } from './types'
 import { t } from '../../i18n/t'
 import { navState } from '../../state/page'
+import { makeStore } from '../../state/store'
 
 /* Rail state, outside React on purpose: the page layers redraw the list after
  * mutating the active session source, the live boot holds it on skeletons,
@@ -21,20 +22,14 @@ export interface RailState {
   skel: boolean
 }
 
-let state: RailState = { snap: null, skel: false }
+const store = makeStore<RailState>({ snap: null, skel: false })
 let held = false
-const listeners = new Set<() => void>()
 
-export const getState = (): RailState => state
+export const { get, subscribe, _resetForTests } = store
 
-export function subscribe(l: () => void): () => void {
-  listeners.add(l)
-  return () => listeners.delete(l)
-}
-
-function set(patch: Partial<RailState>): void {
-  state = { ...state, ...patch }
-  for (const l of listeners) l()
+/** A patch, merged into the page's state. */
+export function set(patch: Partial<RailState>): void {
+  store.set((prev) => ({ ...prev, ...patch }))
 }
 
 export const source = (): RailSource => ds<RailSource>('sessions')
@@ -119,7 +114,7 @@ export function flipOpen(gid: string): void {
    on screen rather than blanking the rail. */
 export function draw(): void {
   if (held) {
-    if (!state.skel) set({ skel: true })
+    if (!get().skel) set({ skel: true })
     return
   }
   let snap: RailSnapshot
@@ -157,7 +152,7 @@ export function count(): number {
    selected rows impossible.
 
    The new-task row stands for a draft -- a draft has no session id, so an
-   empty `cur` is its state -- but only while nothing covers it. Imperative
+   empty `cur` is its get() -- but only while nothing covers it. Imperative
    on purpose: every element it marks lives outside the island's root. */
 export function markNew(): void {
   const nav = navState()
@@ -181,7 +176,7 @@ export function markNew(): void {
      tab stands open, so a set built from navState() would leave a stale mark on
      whichever of the two it could not see. The list is therefore something a new
      page has to be added to, and rail-nav-registry.test.mjs is what makes
-     forgetting it a failing test rather than a page with no selected state. */
+     forgetting it a failing test rather than a page with no selected get(). */
   for (const id of ['newBtn', 'skillBtn', 'plugBtn', 'pbBtn', 'kbBtn', 'memBtn', 'moreBtn']) {
     const b = el(id)
     if (b) b.setAttribute('aria-current', String(id === top))
@@ -252,7 +247,7 @@ export function archive(s: SessRow): void {
 }
 
 /* Deleting a session. A source that can delete one does it -- the live page
-   has a confirmation to ask and a pile of per-session state to forget, none of
+   has a confirmation to ask and a pile of per-session get() to forget, none of
    which belongs to the rail. Without one, this is the whole behaviour: splice
    the source-owned rows in place, and offer it back. */
 let undoBin: { s: SessRow; at: number } | null = null

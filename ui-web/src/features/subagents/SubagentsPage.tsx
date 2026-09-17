@@ -593,7 +593,7 @@ export function InstanceComposer(
 }
 
 export function InstanceConversation({ row }: { row: InstanceRow }): JSX.Element {
-  const state = useSyncExternalStore(store.subscribe, store.getState)
+  const state = useSyncExternalStore(store.subscribe, store.get)
   const [poll, setPoll] = useState(0)
   const box = useRef<HTMLDivElement>(null)
   const current = state.instances.find((it) => it.agent === row.agent && it.handle === row.handle) || row
@@ -628,7 +628,7 @@ export function InstanceConversation({ row }: { row: InstanceRow }): JSX.Element
 }
 
 export function AgentRecordConversation({ row }: { row: AgentRow }): JSX.Element {
-  const state = useSyncExternalStore(store.subscribe, store.getState)
+  const state = useSyncExternalStore(store.subscribe, store.get)
   const [poll, setPoll] = useState(0)
   const box = useRef<HTMLDivElement>(null)
   const current = state.rows.find((item) => row.kind === 'dag'
@@ -693,7 +693,7 @@ function InstanceDetail(
 }
 
 export function SubagentsApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
   if (s.open && s.open.kind === 'dag') {
     return <DagDetail key={`d${s.epoch}:${s.open.run_id}:${s.open.node}`} open={s.open} />
   }

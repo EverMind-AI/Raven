@@ -166,7 +166,7 @@ describe('the playbook library', () => {
     fireEvent.click(screen.getByText('issue-triage'))
     await act(async () => {})
     expect(screen.queryByText('gui.pb.reading')).toBeNull()
-    expect(store.getState().openName).toBeNull()
+    expect(store.get().openName).toBeNull()
     expect(host.textContent).toContain('playbook.md: no such file')
     /* And the library is what is showing, so another card is one click away. */
     expect(screen.getByText('issue-triage')).toBeTruthy()
@@ -206,7 +206,7 @@ describe('the playbook library', () => {
     })
     fireEvent.click(screen.getByText('issue-triage'))
     await act(async () => {})
-    expect(store.getState().detail?.task_summary).toBe('the second version')
+    expect(store.get().detail?.task_summary).toBe('the second version')
   })
 
   it('re-reads the playbook still on screen when the page is opened again', async () => {
@@ -223,15 +223,15 @@ describe('the playbook library', () => {
     await mount()
     fireEvent.click(screen.getByText('issue-triage'))
     await act(async () => {})
-    expect(store.getState().detail?.task_summary).toBe('the first version')
+    expect(store.get().detail?.task_summary).toBe('the first version')
     store.closePage()
     summary = 'the second version'
     store.openPage()
     await act(async () => {
       await new Promise(r => setTimeout(r, 0))
     })
-    expect(store.getState().openName).toBe('issue-triage')
-    expect(store.getState().detail?.task_summary).toBe('the second version')
+    expect(store.get().openName).toBe('issue-triage')
+    expect(store.get().detail?.task_summary).toBe('the second version')
     expect(reads).toBe(2)
   })
 
@@ -248,8 +248,8 @@ describe('the playbook library', () => {
     await act(async () => {
       await new Promise(r => setTimeout(r, 0))
     })
-    expect(store.getState().tab).toBe('contract')
-    expect(store.getState().pickedNode).toBe('b')
+    expect(store.get().tab).toBe('contract')
+    expect(store.get().pickedNode).toBe('b')
 
     /* And when the edit took that step away, fall back rather than point at a
        node the graph no longer has. */
@@ -259,8 +259,8 @@ describe('the playbook library', () => {
     await act(async () => {
       await new Promise(r => setTimeout(r, 0))
     })
-    expect(store.getState().tab).toBe('contract')
-    expect(store.getState().pickedNode).toBe('a')
+    expect(store.get().tab).toBe('contract')
+    expect(store.get().pickedNode).toBe('a')
   })
 
   it('opens the graph with a step already picked', async () => {

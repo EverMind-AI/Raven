@@ -127,3 +127,10 @@ export const agentsSource: AgentsSource = {
 export function startAgentHeartbeat(): void {
   setInterval(() => { if (agentsWatch) agentsWatch() }, 2000)
 }
+
+/* Test seam only: the heartbeat's unsubscribe is the module's, and a case that
+   started one must not leave it running into the next. */
+export function _resetForTests(): void {
+  agentsWatch?.()
+  agentsWatch = null
+}

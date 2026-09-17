@@ -5,6 +5,7 @@ import * as detail from '../../state/detail'
 
 import type { XaActArgs, XaOp, XaRow, XaSource } from './types'
 import * as page from '../../state/page'
+import { makeStore } from '../../state/store'
 
 /* Page state, outside React on purpose: the legacy shell drives this page
  * imperatively (the More row opens it, Esc closes it, a language flip
@@ -30,19 +31,13 @@ export interface XaState {
   testing: string[]
 }
 
-let state: XaState = { rows: [], sheet: null, epoch: 0, testing: [] }
-const listeners = new Set<() => void>()
+const store = makeStore<XaState>({ rows: [], sheet: null, epoch: 0, testing: [] })
 
-export const getState = (): XaState => state
+export const { get, subscribe, _resetForTests } = store
 
-export function subscribe(l: () => void): () => void {
-  listeners.add(l)
-  return () => listeners.delete(l)
-}
-
-function set(patch: Partial<XaState>): void {
-  state = { ...state, ...patch }
-  for (const l of listeners) l()
+/** A patch, merged into the page's state. */
+export function set(patch: Partial<XaState>): void {
+  store.set((prev) => ({ ...prev, ...patch }))
 }
 
 export const source = (): XaSource => ds<XaSource>('xa')
@@ -64,7 +59,7 @@ export function open(): void {
   page.show('xaPage')
   void source()
     .load(true)
-    .then((rows) => set({ rows, epoch: state.epoch + 1 }))
+    .then((rows) => set({ rows, epoch: get().epoch + 1 }))
     /* Through `failure` like every other rejection here: the rpc client rejects
        with the error frame verbatim, and `String()` on that object is
        "[object Object]" -- not a hard-to-read reason but no reason at all. */
@@ -78,7 +73,7 @@ export function close(): void {
 /* Every write goes through here: one place that toasts the failure and repaints
    from whatever the source answered, so no caller has to remember either. */
 export async function run(op: XaOp, row?: XaRow, args?: XaActArgs): Promise<void> {
-  let rows = state.rows
+  let rows = get().rows
   /* A rename moves the open sheet, but only once the rows that carry the new
      name are here: the sheet is resolved by looking the name up in rows, so
      moving it any earlier resolves to nothing, and the shared drawer -- which
@@ -92,10 +87,10 @@ export async function run(op: XaOp, row?: XaRow, args?: XaActArgs): Promise<void
   } catch (e) {
     toast(t('gui.agent.failed', { detail: failure(e) }))
   }
-  const landed: Partial<XaState> = { rows, epoch: state.epoch + 1 }
-  if (renamed && state.sheet === row?.name) landed.sheet = renamed
+  const landed: Partial<XaState> = { rows, epoch: get().epoch + 1 }
+  if (renamed && get().sheet === row?.name) landed.sheet = renamed
   set(landed)
-  if (state.sheet && !rows.some((x) => x.name === state.sheet)) closeSheet()
+  if (get().sheet && !rows.some((x) => x.name === get().sheet)) closeSheet()
   watchBuilds(rows)
 }
 
@@ -108,8 +103,8 @@ export async function run(op: XaOp, row?: XaRow, args?: XaActArgs): Promise<void
    the server refuses it, but its refusal is a normal result, so the toast-free
    path would repaint the card as though the running test had answered. */
 export async function runTest(row: XaRow): Promise<void> {
-  if (state.testing.includes(row.name)) return
-  set({ testing: [...state.testing, row.name] })
+  if (get().testing.includes(row.name)) return
+  set({ testing: [...get().testing, row.name] })
   /* `finally` rather than a line after the await: `run` turns every rejection
      into a toast, so nothing throws through here today -- and a flag cleared
      only on the path that returned would leave the button disabled for the
@@ -117,7 +112,7 @@ export async function runTest(row: XaRow): Promise<void> {
   try {
     await run('test', row)
   } finally {
-    set({ testing: state.testing.filter((name) => name !== row.name) })
+    set({ testing: get().testing.filter((name) => name !== row.name) })
   }
 }
 
@@ -154,7 +149,7 @@ function watchBuilds(rows: XaRow[]): void {
       .then(async (next) => {
         const done = !next.some((r) => r.building)
         const rows = done ? await source().load(true) : next
-        set({ rows, epoch: state.epoch + 1 })
+        set({ rows, epoch: get().epoch + 1 })
         watchBuilds(rows)
       })
       .catch(() => {
@@ -173,7 +168,7 @@ export function detailHost(): HTMLDivElement {
 
 export function sheetOpen(row: XaRow): void {
   detail.open('xa')
-  set({ sheet: row.name, epoch: state.epoch + 1 })
+  set({ sheet: row.name, epoch: get().epoch + 1 })
 }
 
 export function closeSheet(): void {
@@ -185,7 +180,7 @@ export function closeSheet(): void {
    the drawer has finished fading, or the card is gone from inside a panel that
    is still on screen. */
 export function sheetDismissed(): void {
-  if (!state.sheet) return
+  if (!get().sheet) return
   /* Which open this close belongs to. The name cannot answer that: closing a
      card and pressing the same row again inside the fade writes the same string
      back, so the pending drop read it as "still mine" and cleared the card that

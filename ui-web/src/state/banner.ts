@@ -17,9 +17,8 @@
  * reads the page after.
  */
 
-import { flushSync } from 'react-dom'
-
 import { ds } from './sources'
+import { makeStore } from './store'
 
 export interface BannerSource {
   /* Whether the websearch capability is installed but not yet configured.
@@ -42,21 +41,11 @@ const NOTHING: BannerState = { kind: null, detail: null }
 /* A standing memory fault, or null. Set from the `memory.health` event: three
    consecutive failed writes mean the backend is not coming back on its own. */
 let fault: string | null = null
-let state: BannerState = NOTHING
-const listeners = new Set<() => void>()
+
+const store = makeStore<BannerState>(NOTHING)
 
 /** The notice standing right now. */
-export function get(): BannerState {
-  return state
-}
-
-/** For useSyncExternalStore: called whenever which notice stands changes. */
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => {
-    listeners.delete(fn)
-  }
-}
+export const { get, subscribe } = store
 
 /* Stores AND draws. It used to only store, so that the redraw would go out
    through the published drawBanner name and pick up the live layer's override
@@ -76,25 +65,30 @@ export function draw(): void {
      decision would need -- quiet. */
   if (!document.getElementById('bannerHost')) return
   if (fault) {
-    commit({ kind: 'fault', detail: fault })
+    set({ kind: 'fault', detail: fault })
     return
   }
-  commit(source().websearchNeeds() ? { kind: 'websearch', detail: null } : NOTHING)
+  set(source().websearchNeeds() ? { kind: 'websearch', detail: null } : NOTHING)
 }
 
 /* The reader waving the suggestion away. Forgotten rather than remembered: the
    next draw offers it again, which is what happened when the notice was rebuilt
    by every draw. */
 export function dismiss(): void {
-  commit(NOTHING)
+  set(NOTHING)
 }
 
-function commit(next: BannerState): void {
-  if (next.kind === state.kind && next.detail === state.detail) return
-  state = next
-  flushSync(() => {
-    for (const fn of [...listeners]) fn()
-  })
+/* The same notice is not a write. */
+export function set(next: BannerState): void {
+  const now = get()
+  if (next.kind === now.kind && next.detail === now.detail) return
+  store.set(next)
+}
+
+/** Test seam only: the standing fault is the module's. */
+export function _resetForTests(): void {
+  store._resetForTests()
+  fault = null
 }
 
 const source = (): BannerSource => ds<BannerSource>('banner')

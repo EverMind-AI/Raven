@@ -11,9 +11,8 @@
  * writing into a node that is no longer on screen.
  */
 
-import { flushSync } from 'react-dom'
-
 import { t } from '../i18n/t'
+import { makeStore } from './store'
 
 export interface UpgradeShade {
   say(text: string): void
@@ -38,25 +37,17 @@ export interface Card {
 
 export const COMMAND = 'raven upgrade'
 
-let card: Card | null = null
+const store = makeStore<Card | null>(null)
+
+/** The card on screen, and the verb that puts it there. */
+export const { get, set, subscribe } = store
+
 let seq = 0
-const listeners = new Set<() => void>()
-
-export const get = (): Card | null => card
-
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => { listeners.delete(fn) }
-}
-
-function commit(next: Card | null): void {
-  card = next
-  flushSync(() => { for (const fn of [...listeners]) fn() })
-}
 
 /** The card's own close button, which closes that card and no later one. */
 export function dismiss(id: number): void {
-  if (card && card.id === id) commit(null)
+  const card = get()
+  if (card && card.id === id) set(null)
 }
 
 export function copyCommand(): void {
@@ -64,22 +55,22 @@ export function copyCommand(): void {
 }
 
 export function open(): UpgradeShade {
-  commit(null)
+  set(null)
   /* A card this module did not draw -- the page can be showing one from before
      a reload -- is taken down the same way the writer took every `.upshade`
      down before building its own. */
   document.querySelectorAll('.upshade').forEach((node) => node.remove())
   const id = ++seq
-  commit({ id, text: '' })
-  const mine = (): boolean => !!card && card.id === id
+  set({ id, text: '' })
+  const mine = (): boolean => get()?.id === id
   return {
     say(text: string): void {
-      if (mine()) commit({ ...card!, text })
+      if (mine()) set({ ...get()!, text })
     },
     fail(text: string, detail?: string): void {
       if (!mine()) return
-      commit({
-        ...card!,
+      set({
+        ...get()!,
         text,
         failure: {
           sub: detail ? `${detail}\n${t('gui.upg.manual')}` : t('gui.upg.manual'),
@@ -96,5 +87,5 @@ export function open(): UpgradeShade {
 
 /** Test seam only: the card outlives a test. */
 export function _resetForTests(): void {
-  commit(null)
+  set(null)
 }

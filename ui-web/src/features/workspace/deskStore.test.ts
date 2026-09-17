@@ -84,12 +84,12 @@ describe('desk store', () => {
     desk.openDeskAgent(agentRow('b'))
     split().dataset.open = 'true'
     desk.toggleSolo('agent:hermes:a')
-    const panesBefore = desk.getState().panes
+    const panesBefore = desk.get().panes
     panelCalls.length = 0
 
     desk.openDeskAgent(agentRow('a'))
 
-    const after = desk.getState()
+    const after = desk.get()
     expect(after.panes).toBe(panesBefore)
     expect(after.panes[0]).toBe(panesBefore[0])
     expect(after.solo).toBe('agent:hermes:a')
@@ -106,8 +106,8 @@ describe('desk store', () => {
 
     desk.openDeskAgent(agentRow('b'))
 
-    expect(desk.getState().active).toBe('agent:hermes:b')
-    expect(desk.getState().solo).toBeNull()
+    expect(desk.get().active).toBe('agent:hermes:b')
+    expect(desk.get().solo).toBeNull()
   })
 
   it('still replaces a file pane, because that is how it re-reads', () => {
@@ -116,11 +116,11 @@ describe('desk store', () => {
        (keyed on `seq`, fetching only while `text` is null) read the file again
        after the agent rewrote it. Keeping the old object silently froze both. */
     desk.openDeskFile('/workspace/a.ts')
-    const before = desk.getState().panes[0]
+    const before = desk.get().panes[0]
 
     desk.openDeskFile('/workspace/a.ts')
 
-    const after = desk.getState().panes[0]!
+    const after = desk.get().panes[0]!
     expect(after).not.toBe(before)
   })
 
@@ -140,7 +140,7 @@ describe('desk store', () => {
   it('promotes a graph node record into the pane it already occupies', () => {
     desk.openDeskAgentRecord({ kind: 'dag', run_id: 'r1', node: 'brief', agent: 'raven', label: 'brief' })
     desk.openDeskFile('/workspace/a.ts')
-    expect(desk.getState().panes.map((pane) => pane.id))
+    expect(desk.get().panes.map((pane) => pane.id))
       .toEqual(['agent-record:r1:brief', 'file:/workspace/a.ts'])
 
     /* The instance the node ran on is the SAME work reached a second way: it
@@ -150,9 +150,9 @@ describe('desk store', () => {
       runId: 'r1', nodeId: 'brief', resumable: true,
     })
 
-    expect(desk.getState().panes.map((pane) => pane.id))
+    expect(desk.get().panes.map((pane) => pane.id))
       .toEqual(['agent:raven:brief-9f', 'file:/workspace/a.ts'])
-    expect(desk.getState().active).toBe('agent:raven:brief-9f')
+    expect(desk.get().active).toBe('agent:raven:brief-9f')
   })
 
   it('promotes a spawn record into the pane it already occupies', () => {
@@ -164,16 +164,16 @@ describe('desk store', () => {
     desk.openDeskAgentRecord(
       { kind: 'spawn', id: '20260825T101500Z-ab12cd34', agent: 'hermes', label: 'quick survey' })
     desk.openDeskFile('/workspace/a.ts')
-    expect(desk.getState().panes.map((pane) => pane.id))
+    expect(desk.get().panes.map((pane) => pane.id))
       .toEqual(['agent-record:20260825T101500Z-ab12cd34', 'file:/workspace/a.ts'])
 
     desk.openDeskAgent(
       { sessionKey: 's', agent: 'hermes', handle: 'survey-9ab2c6', kind: 'cli', resumable: true },
       '20260825T101500Z-ab12cd34')
 
-    expect(desk.getState().panes.map((pane) => pane.id))
+    expect(desk.get().panes.map((pane) => pane.id))
       .toEqual(['agent:hermes:survey-9ab2c6', 'file:/workspace/a.ts'])
-    expect(desk.getState().active).toBe('agent:hermes:survey-9ab2c6')
+    expect(desk.get().active).toBe('agent:hermes:survey-9ab2c6')
   })
 
   it('keeps fullscreen through that promotion and drops it for a different pane', () => {
@@ -184,10 +184,10 @@ describe('desk store', () => {
       sessionKey: 's', agent: 'raven', handle: 'brief-9f', kind: 'dag',
       runId: 'r1', nodeId: 'brief', resumable: true,
     })
-    expect(desk.getState().solo).toBe('agent:raven:brief-9f')
+    expect(desk.get().solo).toBe('agent:raven:brief-9f')
 
     desk.openDeskFile('/workspace/a.ts')
-    expect(desk.getState().solo).toBeNull()
+    expect(desk.get().solo).toBeNull()
   })
 
   /* The desk cannot show itself: the panel it sits in belongs to the legacy
@@ -203,7 +203,7 @@ describe('desk store', () => {
     expect(panelCalls).not.toContain(false)
 
     desk.closePane('file:/workspace/a.ts')
-    expect(desk.getState().panes).toHaveLength(0)
+    expect(desk.get().panes).toHaveLength(0)
     expect(panelCalls).toContain(false)
   })
 
@@ -215,7 +215,7 @@ describe('desk store', () => {
     desk.reset()
 
     expect(updates).toBe(1)
-    expect(desk.getState().panes).toEqual([])
+    expect(desk.get().panes).toEqual([])
     desk.openDeskFile('/workspace/b.ts')
     expect(updates).toBe(2)
     unsubscribe()
@@ -233,9 +233,9 @@ describe('arranging the desk', () => {
 
     desk.arrange(['file:/workspace/b.ts', 'file:/workspace/a.ts'], 'cols')
 
-    expect(desk.getState().panes.map((pane) => pane.id))
+    expect(desk.get().panes.map((pane) => pane.id))
       .toEqual(['file:/workspace/b.ts', 'file:/workspace/a.ts'])
-    expect(desk.getState().duo).toBe('cols')
+    expect(desk.get().duo).toBe('cols')
     const kept = desk.saved('s1')!
     expect(kept.open.map((intent) => (intent as { path: string }).path))
       .toEqual(['/workspace/b.ts', '/workspace/a.ts'])
@@ -255,9 +255,9 @@ describe('arranging the desk', () => {
        in a list of three. */
     desk.arrange(['file:/workspace/a.ts', 'file:/workspace/b.ts', 'file:/workspace/b.ts'], 'cols')
 
-    expect(desk.getState().panes.map((pane) => pane.id))
+    expect(desk.get().panes.map((pane) => pane.id))
       .toEqual(['file:/workspace/a.ts', 'file:/workspace/b.ts'])
-    expect(desk.getState().duo).toBe('rows')
+    expect(desk.get().duo).toBe('rows')
   })
 })
 
@@ -343,7 +343,7 @@ describe('what a reload finds on the desk', () => {
 
     desk.reset()
 
-    expect(desk.getState().panes).toEqual([])
+    expect(desk.get().panes).toEqual([])
     expect(desk.saved('s1')!.open).toEqual([{ k: 'file', path: '/workspace/a.ts' }])
   })
 
@@ -376,7 +376,7 @@ describe('what a reload finds on the desk', () => {
       splits: { column: 50, left: 50, right: 50 },
     })
 
-    expect(desk.getState().tab).toBe('deliverables')
+    expect(desk.get().tab).toBe('deliverables')
   })
 
   it('records nothing for a draft', () => {
@@ -396,8 +396,8 @@ describe('what a reload finds on the desk', () => {
 
     desk.applyLayout(kept)
 
-    expect(desk.getState().active).toBe('file:/workspace/a.ts')
-    expect(desk.getState().solo).toBe('file:/workspace/a.ts')
+    expect(desk.get().active).toBe('file:/workspace/a.ts')
+    expect(desk.get().solo).toBe('file:/workspace/a.ts')
   })
 
   it('refuses a fullscreen on a pane that did not come back', () => {
@@ -408,8 +408,8 @@ describe('what a reload finds on the desk', () => {
 
     desk.applyLayout(kept)
 
-    expect(desk.getState().solo).toBeNull()
-    expect(desk.getState().active).toBe('file:/workspace/a.ts')
+    expect(desk.get().solo).toBeNull()
+    expect(desk.get().active).toBe('file:/workspace/a.ts')
   })
 
   describe('the palette a conversation is opened with', () => {
@@ -418,11 +418,11 @@ describe('what a reload finds on the desk', () => {
     it('waits for the desk to have something before it opens', () => {
       setCurrent('s-empty')
       desk.sync()
-      expect(desk.getState().paletteOpen).toBe(false)
+      expect(desk.get().paletteOpen).toBe(false)
 
       delivered()
 
-      expect(desk.getState().paletteOpen).toBe(true)
+      expect(desk.get().paletteOpen).toBe(true)
     })
 
     it('comes up when the desk stops being empty, and only upward', () => {
@@ -432,20 +432,20 @@ describe('what a reload finds on the desk', () => {
          news, or not at all. */
       setCurrent('s-empty')
       desk.sync()
-      expect(desk.getState().paletteOpen).toBe(false)
+      expect(desk.get().paletteOpen).toBe(false)
 
       deliveries.record(deliveries.SESSION, 1,
         { raven_delivery: { files: [{ path: '/w/late.md', name: 'late.md' }] } })
       desk.notifyDesk()
 
-      expect(desk.getState().paletteOpen).toBe(true)
+      expect(desk.get().paletteOpen).toBe(true)
 
       /* One direction: the desk emptying is not a reason to take it away from a
          reader who is looking at it. */
       deliveries.restore([])
       desk.notifyDesk()
 
-      expect(desk.getState().paletteOpen).toBe(true)
+      expect(desk.get().paletteOpen).toBe(true)
     })
 
     it('does not pull the desk back over a window when news arrives', () => {
@@ -454,15 +454,15 @@ describe('what a reload finds on the desk', () => {
          the desk over it -- so the fallback's path asks the contents, not the
          answer. */
       delivered()
-      expect(desk.getState().paletteOpen).toBe(true)
+      expect(desk.get().paletteOpen).toBe(true)
       desk.openDeskFile('/workspace/a.ts')
-      expect(desk.getState().paletteOpen).toBe(false)
+      expect(desk.get().paletteOpen).toBe(false)
 
       deliveries.record(deliveries.SESSION, 3,
         { raven_delivery: { files: [{ path: '/w/x.md', name: 'x.md' }] } })
       desk.notifyDesk()
 
-      expect(desk.getState().paletteOpen).toBe(false)
+      expect(desk.get().paletteOpen).toBe(false)
     })
 
     it('comes up for a delegated row too, which arrives on its own timer', async () => {
@@ -475,45 +475,45 @@ describe('what a reload finds on the desk', () => {
          way. */
       setCurrent('s-empty')
       desk.sync()
-      expect(desk.getState().paletteOpen).toBe(false)
+      expect(desk.get().paletteOpen).toBe(false)
 
       agentRows = [{ sessionKey: 's-empty', agent: 'Raven', handle: 'h1', kind: 'cli' }]
       await agents.refreshInstances(true)
 
       expect(agents.instances()).toHaveLength(1)
-      expect(desk.getState().paletteOpen).toBe(true)
+      expect(desk.get().paletteOpen).toBe(true)
     })
 
     it('leaves a stated answer alone when news arrives', () => {
       delivered()
       desk.toggleDesk()
-      expect(desk.getState().paletteOpen).toBe(false)
+      expect(desk.get().paletteOpen).toBe(false)
 
       deliveries.record(deliveries.SESSION, 2,
         { raven_delivery: { files: [{ path: '/w/more.md', name: 'more.md' }] } })
       desk.notifyDesk()
 
-      expect(desk.getState().paletteOpen).toBe(false)
+      expect(desk.get().paletteOpen).toBe(false)
     })
 
     /* And it is a fallback, never an override: a reader who shut the desk on a
        conversation that has plenty in it keeps it shut. */
     it('lets the reader outrank what is on the desk, either way', () => {
       delivered()
-      expect(desk.getState().paletteOpen).toBe(true)
+      expect(desk.get().paletteOpen).toBe(true)
       desk.toggleDesk()
       desk.sync()
-      expect(desk.getState().paletteOpen).toBe(false)
+      expect(desk.get().paletteOpen).toBe(false)
 
       /* Emptied by hand: the registry is not keyed by conversation here, where
          the page clears it on a switch. */
       deliveries.restore([])
       setCurrent('s-empty')
       desk.sync()
-      expect(desk.getState().paletteOpen).toBe(false)
+      expect(desk.get().paletteOpen).toBe(false)
       desk.toggleDesk()
       desk.sync()
-      expect(desk.getState().paletteOpen).toBe(true)
+      expect(desk.get().paletteOpen).toBe(true)
     })
 
     /* The default is the screen, not the last thing the reader did somewhere
@@ -522,30 +522,30 @@ describe('what a reload finds on the desk', () => {
       delivered()
       setCurrent(null)
       desk.sync()
-      expect(desk.getState().paletteOpen).toBe(false)
+      expect(desk.get().paletteOpen).toBe(false)
 
       setCurrent('s2')
       desk.sync()
-      expect(desk.getState().paletteOpen).toBe(true)
+      expect(desk.get().paletteOpen).toBe(true)
     })
 
     it('comes back collapsed to the conversation it was collapsed in', () => {
       delivered()
       desk.sync()
       desk.toggleDesk()
-      expect(desk.getState().paletteOpen).toBe(false)
+      expect(desk.get().paletteOpen).toBe(false)
 
       /* Away and back the way the page does it: the desk is torn down on the
          way out and the pointer moves after. */
       desk.reset()
       setCurrent('s2')
       desk.sync()
-      expect(desk.getState().paletteOpen).toBe(true)
+      expect(desk.get().paletteOpen).toBe(true)
 
       desk.reset()
       setCurrent('s1')
       desk.sync()
-      expect(desk.getState().paletteOpen).toBe(false)
+      expect(desk.get().paletteOpen).toBe(false)
     })
 
     /* A reset runs on the way OUT, while `session.resume` is still in flight,
@@ -555,11 +555,11 @@ describe('what a reload finds on the desk', () => {
     it('leaves the palette where it is until the pointer moves', () => {
       delivered()
       desk.sync()
-      expect(desk.getState().paletteOpen).toBe(true)
+      expect(desk.get().paletteOpen).toBe(true)
 
       desk.reset()
 
-      expect(desk.getState().paletteOpen).toBe(true)
+      expect(desk.get().paletteOpen).toBe(true)
     })
 
     /* The first message turns a draft into a session in place -- same screen,
@@ -571,14 +571,14 @@ describe('what a reload finds on the desk', () => {
       setCurrent(null)
       desk.sync()
       desk.toggleDesk()
-      expect(desk.getState().paletteOpen).toBe(true)
+      expect(desk.get().paletteOpen).toBe(true)
       desk.toggleDesk()
 
       setCurrent('s9')
       desk.sync()
       desk.claimDraft('s9')
 
-      expect(desk.getState().paletteOpen).toBe(false)
+      expect(desk.get().paletteOpen).toBe(false)
     })
 
     /* `#newBtn` is unconditional, so pressing New task while already on the
@@ -599,7 +599,7 @@ describe('what a reload finds on the desk', () => {
       desk.sync()
       desk.claimDraft('s9')
 
-      expect(desk.getState().paletteOpen).toBe(false)
+      expect(desk.get().paletteOpen).toBe(false)
     })
 
     /* An answer given on the new-task screen is about the new-task screen. The
@@ -615,13 +615,13 @@ describe('what a reload finds on the desk', () => {
          if it were carried somewhere it does not belong. */
       desk.toggleDesk()
       desk.toggleDesk()
-      expect(desk.getState().paletteOpen).toBe(false)
+      expect(desk.get().paletteOpen).toBe(false)
 
       desk.reset()
       setCurrent('s9')
       desk.sync()
 
-      expect(desk.getState().paletteOpen).toBe(true)
+      expect(desk.get().paletteOpen).toBe(true)
     })
 
     /* The answer is about the new-task screen, not about one draft, so the next
@@ -633,7 +633,7 @@ describe('what a reload finds on the desk', () => {
       setCurrent(null)
       desk.sync()
       desk.toggleDesk()
-      expect(desk.getState().paletteOpen).toBe(true)
+      expect(desk.get().paletteOpen).toBe(true)
 
       /* Away to a conversation and back to a new task, the long way round. */
       desk.reset()
@@ -643,7 +643,7 @@ describe('what a reload finds on the desk', () => {
       setCurrent(null)
       desk.sync()
 
-      expect(desk.getState().paletteOpen).toBe(true)
+      expect(desk.get().paletteOpen).toBe(true)
     })
 
     /* The other half of the same rule, and the one with a conversation in it: an
@@ -660,7 +660,7 @@ describe('what a reload finds on the desk', () => {
       setCurrent('a')
       desk.sync()
       /* Not this one: the reader opened it, they did not start it here. */
-      expect(desk.getState().paletteOpen).toBe(true)
+      expect(desk.get().paletteOpen).toBe(true)
 
       desk.reset()
       setCurrent(null)
@@ -669,7 +669,7 @@ describe('what a reload finds on the desk', () => {
       desk.sync()
       desk.claimDraft('b')
 
-      expect(desk.getState().paletteOpen).toBe(false)
+      expect(desk.get().paletteOpen).toBe(false)
     })
 
     /* Forking a conversation and opening a cron run both move the pointer to a
@@ -687,7 +687,7 @@ describe('what a reload finds on the desk', () => {
       desk.sync()
       desk.reset()
 
-      expect(desk.getState().paletteOpen).toBe(true)
+      expect(desk.get().paletteOpen).toBe(true)
     })
 
     /* Asking for a view of the desk is asking for the desk. */
@@ -703,7 +703,7 @@ describe('what a reload finds on the desk', () => {
       setCurrent('s1')
       desk.sync()
 
-      expect(desk.getState().paletteOpen).toBe(true)
+      expect(desk.get().paletteOpen).toBe(true)
     })
   })
 
@@ -724,7 +724,7 @@ describe('what a reload finds on the desk', () => {
       expect(desk.showing()).toBe(false)
       /* The reader did not put the palette away, so it is still open -- and
          comes back as it was when the pane does. */
-      expect(desk.getState().paletteOpen).toBe(true)
+      expect(desk.get().paletteOpen).toBe(true)
 
       desk.toggleSolo('file:/workspace/a.ts')
       expect(desk.showing()).toBe(true)
@@ -747,7 +747,7 @@ describe('what a reload finds on the desk', () => {
 
     desk.applyLayout(kept)
 
-    expect(desk.getState().splits).toEqual({ column: 50, left: 50, right: 70 })
+    expect(desk.get().splits).toEqual({ column: 50, left: 50, right: 70 })
   })
 
   it('reads the pair orientation back, and a note from before the field as a stack', () => {
@@ -756,13 +756,13 @@ describe('what a reload finds on the desk', () => {
     const kept = desk.saved('s1')!
 
     desk.applyLayout({ ...kept, duo: 'cols' })
-    expect(desk.getState().duo).toBe('cols')
+    expect(desk.get().duo).toBe('cols')
 
     /* A stored note that predates the field, and one carrying a value no
        version ever wrote: both are the stack every desk was until then. */
     const { duo: _omitted, ...before } = kept
     desk.applyLayout(before as typeof kept)
-    expect(desk.getState().duo).toBe('rows')
+    expect(desk.get().duo).toBe('rows')
   })
 })
 
@@ -794,7 +794,7 @@ describe('what is new', () => {
      the desk is the case the open fallback exists to correct, so news arriving
      would lift it back up mid-test. */
   beforeEach(() => {
-    desk.update({ paletteOpen: true })
+    desk.set({ paletteOpen: true })
     desk.toggleDesk()
   })
 
@@ -874,9 +874,9 @@ describe('what is new', () => {
      bubble -- which stopped being true the moment the launcher drew one, and
      took with it the one tab a reader is most likely to have left in front. */
   it('counts what lands on the tab the collapsed desk was left on', () => {
-    desk.update({ paletteOpen: true, tab: 'deliverables' })
+    desk.set({ paletteOpen: true, tab: 'deliverables' })
     desk.seeTab('deliverables')
-    desk.update({ paletteOpen: false })
+    desk.set({ paletteOpen: false })
 
     deliver('/w/a.md')
 
@@ -885,7 +885,7 @@ describe('what is new', () => {
   })
 
   it('says nothing about the tab the reader is actually looking at', () => {
-    desk.update({ paletteOpen: true, tab: 'deliverables' })
+    desk.set({ paletteOpen: true, tab: 'deliverables' })
     deliver('/w/a.md')
     expect(desk.unseen('deliverables')).toBe(0)
   })
@@ -910,7 +910,7 @@ describe('choosing a tab on the way up', () => {
          make these cases depend on the order they were called in. */
       urls: [], file: null, turn: 1, unseen: 0, deliveries: deliveries.snapshot(),
     })
-  const open = (): string => { desk.toggleDesk(); return desk.getState().tab }
+  const open = (): string => { desk.toggleDesk(); return desk.get().tab }
   const shut = (): void => { desk.toggleDesk() }
 
   /* Down because the READER put it down, which is what these blocks are about.
@@ -918,7 +918,7 @@ describe('choosing a tab on the way up', () => {
      the desk is the case the open fallback exists to correct, so news arriving
      would lift it back up mid-test. */
   beforeEach(() => {
-    desk.update({ paletteOpen: true })
+    desk.set({ paletteOpen: true })
     desk.toggleDesk()
   })
 
@@ -944,7 +944,7 @@ describe('choosing a tab on the way up', () => {
      is the fallback. A rule that never fires looks exactly like one that always
      does, so this asserts the rung and not the destination. */
   it('takes the shelf rung, not the fallback, when the shelf has news', () => {
-    desk.update({ tab: 'deliverables' })
+    desk.set({ tab: 'deliverables' })
     deliver('/w/a.md')
     expect(desk.pickTab()).toBe('deliverables')
     /* The proof it was rung one: with the shelf read, the same state falls
@@ -956,9 +956,9 @@ describe('choosing a tab on the way up', () => {
 
   it('opens on the delegated work when the shelf is read and a run is new', async () => {
     deliver('/w/a.md')
-    desk.update({ paletteOpen: true, tab: 'deliverables' })
+    desk.set({ paletteOpen: true, tab: 'deliverables' })
     desk.seeTab('deliverables')
-    desk.update({ paletteOpen: false })
+    desk.set({ paletteOpen: false })
     changed('/w/b.ts')
     agentRows = [{ sessionKey: 's1', agent: 'hermes', handle: 'h1', kind: 'cli' } as InstanceRow]
     await agents.refreshInstances(true)
@@ -970,9 +970,9 @@ describe('choosing a tab on the way up', () => {
   it('lets a change past a run that has already been seen', async () => {
     agentRows = [{ sessionKey: 's1', agent: 'hermes', handle: 'h1', kind: 'cli' } as InstanceRow]
     await agents.refreshInstances(true)
-    desk.update({ paletteOpen: true, tab: 'agents' })
+    desk.set({ paletteOpen: true, tab: 'agents' })
     desk.seeTab('agents')
-    desk.update({ paletteOpen: false })
+    desk.set({ paletteOpen: false })
     changed('/w/b.ts')
     expect(open()).toBe('diff')
   })
@@ -992,7 +992,7 @@ describe('choosing a tab on the way up', () => {
     changed('/w/b.ts')
     expect(open()).toBe('diff')
     shut()
-    expect(desk.getState().tab).toBe('diff')
+    expect(desk.get().tab).toBe('diff')
   })
 
   /* Naming a tab beats guessing one: this is the legacy shell asking for a
@@ -1000,7 +1000,7 @@ describe('choosing a tab on the way up', () => {
   it('does not overrule a caller that named the tab', () => {
     deliver('/w/a.md')
     desk.openDeskTab('diff')
-    expect(desk.getState().tab).toBe('diff')
+    expect(desk.get().tab).toBe('diff')
   })
 })
 
@@ -1009,20 +1009,20 @@ describe('the desk standing down for a window', () => {
      these start from unless they say otherwise. */
   it('puts the desk down when a window opens and hands it back with the last one', () => {
     delivered()
-    expect(desk.getState().paletteOpen).toBe(true)
+    expect(desk.get().paletteOpen).toBe(true)
 
     desk.openDeskFile('/workspace/a.ts')
-    expect(desk.getState().paletteOpen).toBe(false)
+    expect(desk.get().paletteOpen).toBe(false)
 
     desk.openDeskFile('/workspace/b.ts')
-    expect(desk.getState().paletteOpen).toBe(false)
+    expect(desk.get().paletteOpen).toBe(false)
 
     /* Not the last one: there is still something to stand down for. */
     desk.closePane('file:/workspace/b.ts')
-    expect(desk.getState().paletteOpen).toBe(false)
+    expect(desk.get().paletteOpen).toBe(false)
 
     desk.closePane('file:/workspace/a.ts')
-    expect(desk.getState().paletteOpen).toBe(true)
+    expect(desk.get().paletteOpen).toBe(true)
   })
 
   /* The suspension is not a decision, so it must not be filed as one. If
@@ -1031,7 +1031,7 @@ describe('the desk standing down for a window', () => {
   it('does not record standing down as the reader collapsing the desk', () => {
     delivered()
     desk.openDeskFile('/workspace/a.ts')
-    expect(desk.getState().paletteOpen).toBe(false)
+    expect(desk.get().paletteOpen).toBe(false)
 
     /* `reset` + `sync`, which is the session-switch path and re-reads the
        palette note. NOT `_resetForTests`: that clears the note as well, so it
@@ -1040,7 +1040,7 @@ describe('the desk standing down for a window', () => {
     desk.reset()
     setCurrent('s1')
     desk.sync()
-    expect(desk.getState().paletteOpen).toBe(true)
+    expect(desk.get().paletteOpen).toBe(true)
   })
 
   /* And the counterpart: a collapse the reader DID make is theirs to keep. The
@@ -1049,11 +1049,11 @@ describe('the desk standing down for a window', () => {
   it('hands back a collapsed desk still collapsed', () => {
     delivered()
     desk.toggleDesk()
-    expect(desk.getState().paletteOpen).toBe(false)
+    expect(desk.get().paletteOpen).toBe(false)
 
     desk.openDeskFile('/workspace/a.ts')
     desk.closePane('file:/workspace/a.ts')
-    expect(desk.getState().paletteOpen).toBe(false)
+    expect(desk.get().paletteOpen).toBe(false)
   })
 
   /* Edge-triggered, not a predicate over panes.length: reaching for the desk
@@ -1061,33 +1061,33 @@ describe('the desk standing down for a window', () => {
      and a predicate would take it straight back off them. */
   it('lets the reader open the desk over a window and leaves it open', () => {
     desk.openDeskFile('/workspace/a.ts')
-    expect(desk.getState().paletteOpen).toBe(false)
+    expect(desk.get().paletteOpen).toBe(false)
     desk.toggleDesk()
-    expect(desk.getState().paletteOpen).toBe(true)
+    expect(desk.get().paletteOpen).toBe(true)
     /* `showing`, not just the flag: making this a predicate over `panes.length`
        anywhere in the chain is the way this design gets undone, and the flag
        alone would not notice. */
     expect(desk.showing()).toBe(true)
-    expect(desk.getState().panes).toHaveLength(1)
+    expect(desk.get().panes).toHaveLength(1)
   })
 
   /* ...and the next window they open from it puts it down again. */
   it('stands down again for the next window opened from it', () => {
     desk.openDeskFile('/workspace/a.ts')
-    expect(desk.getState().paletteOpen).toBe(false)
+    expect(desk.get().paletteOpen).toBe(false)
     desk.toggleDesk()
     desk.openDeskFile('/workspace/b.ts')
-    expect(desk.getState().paletteOpen).toBe(false)
+    expect(desk.get().paletteOpen).toBe(false)
   })
 
   /* Opening the desk over a window IS the reader's answer for this
      conversation, so the last window closing leaves it where they put it. */
   it('hands back a desk the reader opened over a window', () => {
     desk.openDeskFile('/workspace/a.ts')
-    expect(desk.getState().paletteOpen).toBe(false)
+    expect(desk.get().paletteOpen).toBe(false)
     desk.toggleDesk()
     desk.closePane('file:/workspace/a.ts')
-    expect(desk.getState().paletteOpen).toBe(true)
+    expect(desk.get().paletteOpen).toBe(true)
   })
 })
 
@@ -1118,14 +1118,14 @@ describe('when storage refuses the reader answer', () => {
     delivered()
     refusing(() => {
       desk.toggleDesk()
-      expect(desk.getState().paletteOpen).toBe(false)
+      expect(desk.get().paletteOpen).toBe(false)
       /* Nothing was kept, which is what makes this the failure path rather
          than the ordinary one. */
       expect(localStorage.getItem('raven.gui.desk.open')).toBeNull()
 
       desk.openDeskFile('/workspace/a.ts')
       desk.closePane('file:/workspace/a.ts')
-      expect(desk.getState().paletteOpen).toBe(false)
+      expect(desk.get().paletteOpen).toBe(false)
     })
   })
 
@@ -1139,12 +1139,12 @@ describe('when storage refuses the reader answer', () => {
       desk.reset()
       setCurrent('s2')
       desk.sync()
-      expect(desk.getState().paletteOpen).toBe(true)
+      expect(desk.get().paletteOpen).toBe(true)
 
       desk.reset()
       setCurrent('s1')
       desk.sync()
-      expect(desk.getState().paletteOpen).toBe(false)
+      expect(desk.get().paletteOpen).toBe(false)
     })
   })
 })

@@ -10,6 +10,7 @@ import * as tail from '../transcript/tail'
 import * as turn from './turn'
 
 import type { Attachment, ComposerSource, SlashCmd } from './types'
+import { makeStore } from '../../state/store'
 
 /* Plain external store, same shape as the other islands: the dock is driven
  * imperatively by the legacy page (the turn machine advances phase, the queue
@@ -45,19 +46,13 @@ const initial: ComposerState = {
   live: false, tick: 0, v: 0,
 }
 
-let state: ComposerState = { ...initial }
-const listeners = new Set<() => void>()
+const store = makeStore<ComposerState>({ ...initial })
 
-export const getState = (): ComposerState => state
+export const { get, subscribe } = store
 
-export function subscribe(l: () => void): () => void {
-  listeners.add(l)
-  return () => listeners.delete(l)
-}
-
-function set(p: Partial<ComposerState>): void {
-  state = { ...state, ...p, v: state.v + 1 }
-  for (const l of listeners) l()
+/** A patch, merged into the page's state, with the version bumped. */
+export function set(p: Partial<ComposerState>): void {
+  store.set((prev) => ({ ...prev, ...p, v: prev.v + 1 }))
 }
 
 export const source = (): ComposerSource => ds<ComposerSource>('composer')
@@ -146,7 +141,7 @@ export function dropOwnedDraft(): void {
 
 /* A file on its own is a message -- "look at this" is what dropping it already
    said -- so an empty field with something attached must still be sendable. */
-export const hasAtts = (): boolean => state.atts.length > 0
+export const hasAtts = (): boolean => get().atts.length > 0
 
 /* From the shared constants, not from its own copy of them: a sub-agent's
    composer renders the same arrow through `SendGlyph`, and the two drifted into
@@ -158,7 +153,7 @@ const ICON_STOP = '<svg width="11" height="11" viewBox="0 0 24 24" fill="current
 
 /* The send/stop button. Written imperatively rather than rendered: it is one
    static element in page.html that half the page reaches by id, and the whole
-   of its state is four attributes. */
+   of its get() is four attributes. */
 export function goPaint(): void {
   const b = el<HTMLButtonElement>('go')
   if (!b) return
@@ -254,15 +249,15 @@ export function wheeled(up: boolean): void {
 
 /* ── the queue ────────────────────────────────────────────────────────── */
 
-export const queue = (): string[] => state.queue
+export const queue = (): string[] => get().queue
 
 export function queuePush(text: string): void {
-  set({ queue: [...state.queue, text], editing: null })
+  set({ queue: [...get().queue, text], editing: null })
 }
 
 export function queueShift(): string | undefined {
-  if (!state.queue.length) return undefined
-  const [first, ...rest] = state.queue
+  if (!get().queue.length) return undefined
+  const [first, ...rest] = get().queue
   set({ queue: rest, editing: null })
   return first
 }
@@ -271,7 +266,7 @@ export function queueClear(): void {
   set({ queue: [], editing: null })
 }
 
-export const queueSnapshot = (): string[] => [...state.queue]
+export const queueSnapshot = (): string[] => [...get().queue]
 
 export function queueRestore(items: string[]): void {
   set({ queue: [...items], editing: null })
@@ -286,7 +281,7 @@ export function editRow(i: number): void {
 }
 
 export function commitRow(i: number, text: string): void {
-  const next = [...state.queue]
+  const next = [...get().queue]
   if (text.trim()) next[i] = text.trim()
   set({ queue: next, editing: null })
 }
@@ -296,7 +291,7 @@ export function cancelRow(): void {
 }
 
 export function removeRow(i: number): void {
-  set({ queue: state.queue.filter((_, n) => n !== i), editing: null })
+  set({ queue: get().queue.filter((_, n) => n !== i), editing: null })
 }
 
 /* ── the meter and the live turn row ──────────────────────────────────── */
@@ -336,19 +331,19 @@ export function drawTurnLive(): void {
       liveTick = null
     }
     liveT0 = 0
-    if (state.live) set({ live: false })
+    if (get().live) set({ live: false })
     return
   }
   if (!liveT0) liveT0 = Date.now()
-  if (!state.live) set({ live: true })
-  else set({ tick: state.tick + 1 })
+  if (!get().live) set({ live: true })
+  else set({ tick: get().tick + 1 })
   if (liveTick) return
   liveTick = setInterval(() => {
     if (!turn.busy()) {
       drawTurnLive()
       return
     }
-    set({ tick: state.tick + 1 })
+    set({ tick: get().tick + 1 })
   }, 250)
 }
 
@@ -366,7 +361,7 @@ function trayPaint(atts: Attachment[]): void {
 }
 
 export function removeAtt(i: number): void {
-  const atts = state.atts.slice()
+  const atts = get().atts.slice()
   atts.splice(i, 1)
   trayPaint(atts)
   goPaint()
@@ -374,12 +369,12 @@ export function removeAtt(i: number): void {
 
 /* How many staged files are still on their way up. A message must not leave
    carrying a path the server has not written yet. */
-export const attsPending = (): number => state.atts.filter((a) => a.uploading).length
+export const attsPending = (): number => get().atts.filter((a) => a.uploading).length
 
 /* Hand the staged paths to whoever is sending, and clear the tray: the message
    itself is the record of what was handed over from here on. */
 export function takeAtts(): string[] {
-  const paths = state.atts.map((a) => String(a.path || '')).filter(Boolean)
+  const paths = get().atts.map((a) => String(a.path || '')).filter(Boolean)
   trayPaint([])
   goPaint()
   return paths
@@ -408,10 +403,10 @@ export function addFiles(files: ArrayLike<File>): void {
   if (!up) return
   Array.from(files).forEach((file) => {
     const entry: Attachment = { name: file.name, size: file.size, uploading: true, path: null, url: null }
-    trayPaint(state.atts.concat([entry]))
+    trayPaint(get().atts.concat([entry]))
     goPaint()
     const drop = (): void => {
-      const rest = state.atts.filter((a) => a !== entry)
+      const rest = get().atts.filter((a) => a !== entry)
       trayPaint(rest)
       goPaint()
     }
@@ -428,7 +423,7 @@ export function addFiles(files: ArrayLike<File>): void {
           entry.size = r.size
           entry.uploading = false
           if (entry.url) attachmentCache.set(r.path, entry.url)
-          trayPaint(state.atts.slice())
+          trayPaint(get().atts.slice())
           goPaint()
         })
         .catch((e: unknown) => {
@@ -451,7 +446,7 @@ function popOpen(on: boolean): void {
   if (pop) pop.dataset.open = String(on)
 }
 
-export const slashIsOpen = (): boolean => state.slashOpen
+export const slashIsOpen = (): boolean => get().slashOpen
 
 export function drawSlash(term: string): void {
   const q = term.slice(1).toLowerCase()
@@ -468,13 +463,13 @@ export function drawSlash(term: string): void {
 
 export function closeSlash(): void {
   popOpen(false)
-  if (state.slashOpen || state.slashRows.length) set({ slashOpen: false, slashRows: [] })
+  if (get().slashOpen || get().slashRows.length) set({ slashOpen: false, slashRows: [] })
 }
 
 export function moveSlash(d: number): void {
-  const n = state.slashRows.length
+  const n = get().slashRows.length
   if (!n) return
-  set({ slashSel: (state.slashSel + d + n) % n })
+  set({ slashSel: (get().slashSel + d + n) % n })
 }
 
 export function runSlash(x: SlashCmd | undefined): void {
@@ -488,7 +483,7 @@ export function runSlash(x: SlashCmd | undefined): void {
   x.fn()
 }
 
-export const slashSelected = (): SlashCmd | undefined => state.slashRows[state.slashSel]
+export const slashSelected = (): SlashCmd | undefined => get().slashRows[get().slashSel]
 
 /* ── sending ──────────────────────────────────────────────────────────── */
 
@@ -578,7 +573,7 @@ export function fieldKeydown(e: KeyboardEvent): void {
   /* the whole handler, not just Enter: arrows and Tab drive the candidate list
      while an IME is composing */
   if (composing(e)) return
-  if (state.slashOpen) {
+  if (get().slashOpen) {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       moveSlash(1)
@@ -617,6 +612,5 @@ export function _resetForTests(): void {
   liveT0 = 0
   draftOwner = null
   draftTick = null
-  state = { ...initial }
-  listeners.clear()
+  store.set({ ...initial })
 }

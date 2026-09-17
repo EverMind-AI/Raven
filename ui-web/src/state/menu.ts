@@ -20,7 +20,7 @@
  * closing the new one instead would leave those rows on screen.
  */
 
-import { flushSync } from 'react-dom'
+import { makeStore } from './store'
 
 export interface MenuItem {
   label: string
@@ -36,21 +36,10 @@ export interface MenuState {
 
 const host = (): HTMLElement | null => document.getElementById('menu')
 
-let state: MenuState = { host: null, items: [] }
-const listeners = new Set<() => void>()
+const store = makeStore<MenuState>({ host: null, items: [] })
 
-/** The rows to render, and where. */
-export function get(): MenuState {
-  return state
-}
-
-/** For useSyncExternalStore: called whenever the rows change. */
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => {
-    listeners.delete(fn)
-  }
-}
+/** The rows to render, and where; `set` is what raises them. */
+export const { get, set, subscribe, _resetForTests } = store
 
 export function close(): void {
   const menu = host()
@@ -60,10 +49,7 @@ export function close(): void {
 export function show(x: number, y: number, items: Array<MenuItem | '-'>): void {
   const menu = host()
   if (!menu) return
-  state = { host: menu, items }
-  flushSync(() => {
-    for (const fn of [...listeners]) fn()
-  })
+  set({ host: menu, items })
   menu.dataset.open = 'true'
   const rect = menu.getBoundingClientRect()
   menu.style.left = `${Math.min(x, window.innerWidth - rect.width - 8)}px`
@@ -74,7 +60,8 @@ export function show(x: number, y: number, items: Array<MenuItem | '-'>): void {
    The rows are left in the markup, the way the old handler left them -- the
    next menu replaces them, and nothing reads them while the flag is false. */
 export function pick(item: MenuItem): void {
-  if (state.host) state.host.dataset.open = 'false'
+  const raised = get().host
+  if (raised) raised.dataset.open = 'false'
   item.fn()
 }
 

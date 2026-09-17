@@ -152,3 +152,8 @@ export const xaSource: XaSource = {
     return xaFetch(false)
   },
 }
+
+/* Test seam only: the rows carried across a refetch are the module's. */
+export function _resetForTests(): void {
+  xaSeen = new Map()
+}

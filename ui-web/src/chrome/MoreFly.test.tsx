@@ -31,7 +31,7 @@ const names = (): Array<string | null> => rows().map((b) => b.querySelector('.nm
 let unmount = (): void => {}
 
 beforeEach(() => {
-  navfly.reset()
+  navfly._resetForTests()
   document.body.innerHTML = ''
   unmount = mountPageRoot()
 })

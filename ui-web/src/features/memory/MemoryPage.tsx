@@ -79,7 +79,7 @@ function ArmedDelete({ onFire, style }: { onFire: () => void; style?: CSSPropert
 }
 
 export function MemoryApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
   /* Subscribed, not read: memWhen above reads the language at render time, and
      this is what brings the page back for a flip. The legacy whole-page redraw
      also repaints this island, so the subscription adds nothing a reader can

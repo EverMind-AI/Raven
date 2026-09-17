@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import * as palette from './palette'
 
 afterEach(() => {
-  palette._clearForTests()
+  palette._resetForTests()
   localStorage.clear()
 })
 

@@ -870,7 +870,7 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
    Its own panel rather than a box over the file list: a recall test is a thing
    a reader does deliberately, reads, and leaves, and the list of files is not
    what they are looking at while they do it. */
-function RecallDialog({ s }: { s: ReturnType<typeof store.getState> }): JSX.Element {
+function RecallDialog({ s }: { s: ReturnType<typeof store.get> }): JSX.Element {
   const [text, setText] = useState(s.query)
   const [past, setPast] = useState(false)
   const field = useRef<HTMLInputElement>(null)
@@ -1213,7 +1213,7 @@ function DocViewer({ doc }: { doc: KbDoc }): JSX.Element {
   )
 }
 
-function BasePanel({ base, s }: { base: KbBase; s: ReturnType<typeof store.getState> }): JSX.Element {
+function BasePanel({ base, s }: { base: KbBase; s: ReturnType<typeof store.get> }): JSX.Element {
   /* The file takes the whole panel rather than opening beside the table: a
      document is what the reader came to look at, and half a page of it is not
      worth keeping a list they can get back to with one button. */
@@ -1367,7 +1367,7 @@ async function droppedFiles(transfer: DataTransfer): Promise<File[]> {
 }
 
 export function KnowledgeApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
   const [creating, setCreating] = useState(false)
 
   if (s.failed) {

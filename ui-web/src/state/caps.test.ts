@@ -31,7 +31,7 @@ beforeEach(async () => {
   unmount()
   document.body.innerHTML = ''
   caps = await import('./caps')
-  caps.wipe()
+  caps._resetForTests()
   unmount = mountPageRoot()
   /* Two cases below are about a tab flip closing a card that is open, and the
      served drawer is shut. */

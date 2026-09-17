@@ -11,10 +11,9 @@
  * like every other word in the column.
  */
 
-import { flushSync } from 'react-dom'
-
 import { isMac, modKey } from '../lib/platform'
 import { ds } from './sources'
+import { makeStore } from './store'
 
 import type { SettingsSource } from '../features/settings/types'
 
@@ -27,31 +26,17 @@ export interface FootState {
 
 /* Served empty: page.html handed both spans over with nothing in them, and
    drawFoot() is a boot step rather than a first-paint value. */
-let state: FootState = { sub: '', kbd: '' }
-const listeners = new Set<() => void>()
+const store = makeStore<FootState>({ sub: '', kbd: '' })
 
 /** The two slots, for <RailFoot/>. */
-export function get(): FootState {
-  return state
-}
+export const { get, subscribe, _resetForTests } = store
 
-/** For useSyncExternalStore: called whenever either slot changes. */
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => {
-    listeners.delete(fn)
-  }
-}
-
-/* Committed synchronously, the way the two writes by id were: this is a boot
-   step and a step of the language repaint, and both read the page straight
-   afterwards. */
-function put(next: FootState): void {
-  if (next.sub === state.sub && next.kbd === state.kbd) return
-  state = next
-  flushSync(() => {
-    for (const fn of [...listeners]) fn()
-  })
+/* The same two strings are not a write: this is a boot step and a step of the
+   language repaint, and both read the page straight afterwards. */
+export function set(next: FootState): void {
+  const now = get()
+  if (next.sub === now.sub && next.kbd === now.kbd) return
+  store.set(next)
 }
 
 export function draw(): void {
@@ -60,5 +45,5 @@ export function draw(): void {
      every other platform needs the gap. */
   const mod = modKey()
   const mac = isMac()
-  put({ sub: `Raven ${version ? 'v' + version : '--'}`, kbd: `${mod}${mac ? '' : ' '},` })
+  set({ sub: `Raven ${version ? 'v' + version : '--'}`, kbd: `${mod}${mac ? '' : ' '},` })
 }

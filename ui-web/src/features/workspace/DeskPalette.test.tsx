@@ -88,7 +88,7 @@ const manifest = (files: Array<Record<string, unknown>>): unknown => ({ raven_de
 async function shelf() {
   const view = render(<DeskPalette />)
   await act(async () => {
-    desk.update({ paletteOpen: true, tab: 'deliverables' })
+    desk.set({ paletteOpen: true, tab: 'deliverables' })
   })
   return view
 }
@@ -132,10 +132,10 @@ describe('opening and shutting the desk', () => {
     vi.useFakeTimers()
     try {
       render(<DeskPalette />)
-      await act(async () => { desk.update({ paletteOpen: true }) })
+      await act(async () => { desk.set({ paletteOpen: true }) })
       expect(phase()).toBe('in')
 
-      await act(async () => { desk.update({ paletteOpen: false }) })
+      await act(async () => { desk.set({ paletteOpen: false }) })
       /* Still there, because a leaving element has to be on screen to leave --
          and inert, because a tab clicked on the way out would act on a desk the
          reader has already dismissed. */
@@ -155,9 +155,9 @@ describe('opening and shutting the desk', () => {
     vi.useFakeTimers()
     try {
       render(<DeskPalette />)
-      await act(async () => { desk.update({ paletteOpen: true }) })
-      await act(async () => { desk.update({ paletteOpen: false }) })
-      await act(async () => { desk.update({ paletteOpen: true }) })
+      await act(async () => { desk.set({ paletteOpen: true }) })
+      await act(async () => { desk.set({ paletteOpen: false }) })
+      await act(async () => { desk.set({ paletteOpen: true }) })
 
       await act(async () => { vi.advanceTimersByTime(200) })
 
@@ -177,7 +177,7 @@ describe('opening and shutting the desk', () => {
         /* The file first: opening a window stands the desk down, so the
            palette this test is about has to be put back up after it. */
         desk.openDeskFile('/w/a.md')
-        desk.update({ paletteOpen: true })
+        desk.set({ paletteOpen: true })
       })
       await act(async () => { desk.toggleSolo('file:/w/a.md') })
       await act(async () => { vi.advanceTimersByTime(200) })
@@ -199,7 +199,7 @@ describe('opening and shutting the desk', () => {
     render(<DeskPalette />)
     await act(async () => {
       desk.openDeskFile('/w/a.md')
-      desk.update({ paletteOpen: true, tab: 'deliverables' })
+      desk.set({ paletteOpen: true, tab: 'deliverables' })
     })
     await act(async () => { desk.toggleSolo('file:/w/a.md') })
 
@@ -222,13 +222,13 @@ describe('a tab with nothing in it', () => {
      nothing. */
   it('says the same kind of nothing whichever tab it is', async () => {
     render(<DeskPalette />)
-    await act(async () => { desk.update({ paletteOpen: true, tab: 'diff' }) })
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
     expect(emptyOf()).toEqual({ title: 'gui.ws.no_changes', hint: 'gui.ws.no_changes_sub', icon: true })
 
-    await act(async () => { desk.update({ tab: 'deliverables' }) })
+    await act(async () => { desk.set({ tab: 'deliverables' }) })
     expect(emptyOf()).toEqual({ title: 'gui.ws.dlv_none', hint: 'gui.ws.dlv_none_sub', icon: true })
 
-    await act(async () => { desk.update({ tab: 'agents' }) })
+    await act(async () => { desk.set({ tab: 'agents' }) })
     expect(emptyOf()).toEqual({ title: 'gui.ws.agents_none', hint: 'gui.ws.agents_none_sub', icon: true })
     /* And one class, so there is one stylesheet rule to keep them aligned. */
     expect(document.querySelector('.desk-dlv-empty')).toBeNull()
@@ -237,7 +237,7 @@ describe('a tab with nothing in it', () => {
   it('says so in the same shape when the server does not report the work', async () => {
     setSources({ agents: { list: async () => [], instances: async () => [], absent: () => true } as unknown as AgentsSource })
     render(<DeskPalette />)
-    await act(async () => { desk.update({ paletteOpen: true, tab: 'agents' }) })
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'agents' }) })
     await act(async () => { await agents.refreshInstances(true) })
 
     expect(emptyOf()).toEqual({ title: 'gui.ws.agents_none', hint: 'gui.ws.agents_absent', icon: true })
@@ -325,7 +325,7 @@ describe('the desk shelf', () => {
       (document.querySelector('.desk-dlv-row') as HTMLElement).click()
     })
 
-    const panes = desk.getState().panes
+    const panes = desk.get().panes
     expect(panes.map((pane) => pane.id)).toEqual(['file:/w/a.md'])
   })
 
@@ -340,7 +340,7 @@ describe('the desk shelf', () => {
     })
 
     expect(opens).toEqual(['/w/a.md'])
-    expect(desk.getState().panes).toEqual([])
+    expect(desk.get().panes).toEqual([])
   })
 
   it('marks a file that is gone, and still lets it be opened to say so', async () => {
@@ -370,7 +370,7 @@ describe('the desk shelf', () => {
   it('shows what is new while another tab is the one on screen', async () => {
     render(<DeskPalette />)
     await act(async () => {
-      desk.update({ paletteOpen: true, tab: 'diff' })
+      desk.set({ paletteOpen: true, tab: 'diff' })
     })
     expect(document.querySelector('.desk-count')).toBeNull()
 
@@ -392,7 +392,7 @@ describe('the desk shelf', () => {
   it('counts what is new in the tabs the reader is not on, and drops it when they look', async () => {
     render(<DeskPalette />)
     await act(async () => {
-      desk.update({ paletteOpen: true, tab: 'diff' })
+      desk.set({ paletteOpen: true, tab: 'diff' })
     })
 
     await act(async () => {
@@ -417,7 +417,7 @@ describe('the desk shelf', () => {
       .toEqual(['gui.ws.deliverables', 'gui.ws.agents', 'Diff'])
 
     await act(async () => {
-      desk.update({ tab: 'deliverables' })
+      desk.set({ tab: 'deliverables' })
     })
     expect(bubble('deliverables')).toBeNull()
     /* Only the tab that was looked at. */
@@ -427,7 +427,7 @@ describe('the desk shelf', () => {
   it('counts a change written while the reader is on another tab', async () => {
     render(<DeskPalette />)
     await act(async () => {
-      desk.update({ paletteOpen: true, tab: 'deliverables' })
+      desk.set({ paletteOpen: true, tab: 'deliverables' })
     })
 
     await act(async () => {
@@ -448,12 +448,12 @@ describe('the desk shelf', () => {
     ]))
     /* Straight at the store, with the marks still at zero: this is the state
        the first render of a freshly opened palette sees. */
-    desk.update({ paletteOpen: true, tab: 'deliverables' })
+    desk.set({ paletteOpen: true, tab: 'deliverables' })
 
     expect(desk.unseen('deliverables')).toBe(0)
     expect(desk.unseen('diff')).toBe(0)
 
-    desk.update({ tab: 'diff' })
+    desk.set({ tab: 'diff' })
     expect(desk.unseen('deliverables')).toBe(2)
   })
 
@@ -467,7 +467,7 @@ describe('the desk shelf', () => {
   it('leaves the desk note alone when a mark moves during a replay', async () => {
     render(<DeskPalette />)
     await act(async () => {
-      desk.update({ paletteOpen: true, tab: 'diff' })
+      desk.set({ paletteOpen: true, tab: 'diff' })
       desk.openDeskFile('/w/open-before.ts')
     })
     expect(desk.saved('s1')?.open).toEqual([{ k: 'file', path: '/w/open-before.ts' }])
@@ -480,7 +480,7 @@ describe('the desk shelf', () => {
       desk.reset()
     })
     await act(async () => {
-      desk.update({ paletteOpen: true, tab: 'diff' })
+      desk.set({ paletteOpen: true, tab: 'diff' })
     })
     await act(async () => {
       workspace.shared().changes.push(change('/w/one.py'), change('/w/two.py'))
@@ -500,14 +500,14 @@ describe('the desk shelf', () => {
   it('does not re-report a conversation rebuilt from disk rather than parked', async () => {
     render(<DeskPalette />)
     await act(async () => {
-      desk.update({ paletteOpen: true, tab: 'diff' })
+      desk.set({ paletteOpen: true, tab: 'diff' })
       deliveries.record(deliveries.SESSION, 1, manifest([
         { path: '/w/a.md', name: 'a.md' },
         { path: '/w/b.md', name: 'b.md' },
       ]))
     })
-    await act(async () => { desk.update({ tab: 'deliverables' }) })
-    await act(async () => { desk.update({ tab: 'diff' }) })
+    await act(async () => { desk.set({ tab: 'deliverables' }) })
+    await act(async () => { desk.set({ tab: 'diff' }) })
     /* Away, and back the long way: everything cleared, the pointer moved and
        moved back, the transcript replayed and the registry seeded again.
        Nothing carries the marks across -- they are filed under the key. */
@@ -522,7 +522,7 @@ describe('the desk shelf', () => {
         { path: '/w/a.md', name: 'a.md' },
         { path: '/w/b.md', name: 'b.md' },
       ]))
-      desk.update({ paletteOpen: true, tab: 'diff' })
+      desk.set({ paletteOpen: true, tab: 'diff' })
     })
 
     expect(bubble('deliverables')).toBeNull()
@@ -534,15 +534,15 @@ describe('the desk shelf', () => {
   it('does not re-report a conversation as new after a round trip through another', async () => {
     render(<DeskPalette />)
     await act(async () => {
-      desk.update({ paletteOpen: true, tab: 'diff' })
+      desk.set({ paletteOpen: true, tab: 'diff' })
       deliveries.record(deliveries.SESSION, 1, manifest([
         { path: '/w/a.md', name: 'a.md' },
         { path: '/w/b.md', name: 'b.md' },
       ]))
     })
     /* Looked at, so nothing in it is new any more. */
-    await act(async () => { desk.update({ tab: 'deliverables' }) })
-    await act(async () => { desk.update({ tab: 'diff' }) })
+    await act(async () => { desk.set({ tab: 'deliverables' }) })
+    await act(async () => { desk.set({ tab: 'diff' }) })
     expect(bubble('deliverables')).toBeNull()
 
     /* Away to another conversation... */
@@ -554,7 +554,7 @@ describe('the desk shelf', () => {
     /* ...and back. */
     await act(async () => {
       workspace.restore(parked)
-      desk.update({ paletteOpen: true, tab: 'diff' })
+      desk.set({ paletteOpen: true, tab: 'diff' })
     })
 
     expect(bubble('deliverables')).toBeNull()
@@ -565,7 +565,7 @@ describe('the desk shelf', () => {
   it('says nothing is new after the sources empty under it', async () => {
     render(<DeskPalette />)
     await act(async () => {
-      desk.update({ paletteOpen: true, tab: 'diff' })
+      desk.set({ paletteOpen: true, tab: 'diff' })
       deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/a.md', name: 'a.md' }]))
     })
     expect(bubble('deliverables')).toBe('1')
@@ -595,7 +595,7 @@ describe('the desk shelf', () => {
       desk.openDeskTab('file' as 'diff')
     })
 
-    expect(desk.getState().tab).toBe('deliverables')
+    expect(desk.get().tab).toBe('deliverables')
     expect(rowNames()).toEqual(['Comparison'])
   })
 })
@@ -656,7 +656,7 @@ describe('the reserve the palette publishes', () => {
   it('sets it on the root while the desk is anchored over the chat', async () => {
     chatIs(want + DESK_COLUMN_FLOOR + 40)
     render(<DeskPalette />)
-    await act(async () => { desk.update({ paletteOpen: true }) })
+    await act(async () => { desk.set({ paletteOpen: true }) })
 
     expect(reserve()).toBe(`${want}px`)
   })
@@ -667,8 +667,8 @@ describe('the reserve the palette publishes', () => {
        also takes. */
     chatIs(want + DESK_COLUMN_FLOOR + 40)
     render(<DeskPalette />)
-    await act(async () => { desk.update({ paletteOpen: true }) })
-    await act(async () => { desk.update({ paletteOpen: false }) })
+    await act(async () => { desk.set({ paletteOpen: true }) })
+    await act(async () => { desk.set({ paletteOpen: false }) })
 
     expect(reserve()).toBe('')
   })
@@ -681,7 +681,7 @@ describe('the reserve the palette publishes', () => {
        explain it. */
     chatIs(want + DESK_COLUMN_FLOOR + 40)
     const view = render(<DeskPalette />)
-    await act(async () => { desk.update({ paletteOpen: true }) })
+    await act(async () => { desk.set({ paletteOpen: true }) })
     expect(reserve()).toBe(`${want}px`)
 
     await act(async () => { view.unmount() })
@@ -695,7 +695,7 @@ describe('the reserve the palette publishes', () => {
        column keeps its width, which is today's behaviour. */
     chatIs(want + DESK_COLUMN_FLOOR - 1)
     render(<DeskPalette />)
-    await act(async () => { desk.update({ paletteOpen: true }) })
+    await act(async () => { desk.set({ paletteOpen: true }) })
 
     expect(reserve()).toBe('')
   })
@@ -706,7 +706,7 @@ describe('the reserve the palette publishes', () => {
        keeps the answer true rather than merely true at mount. */
     const chat = chatIs(want + DESK_COLUMN_FLOOR + 40)
     render(<DeskPalette />)
-    await act(async () => { desk.update({ paletteOpen: true }) })
+    await act(async () => { desk.set({ paletteOpen: true }) })
     expect(reserve()).toBe(`${want}px`)
 
     chat.getBoundingClientRect = (() => ({
@@ -760,21 +760,21 @@ describe('an empty tab points at the other one', () => {
 
     await act(async () => { (document.querySelector('.desk-empty-to') as HTMLElement).click() })
 
-    expect(desk.getState().tab).toBe('diff')
+    expect(desk.get().tab).toBe('diff')
   })
 
   it('answers the other way round too, from an empty Diff', async () => {
     /* The same confusion runs backwards: "No changes yet" beside a bubble on
        the shelf's icon. One mechanism, both directions. */
     render(<DeskPalette />)
-    await act(async () => { desk.update({ paletteOpen: true, tab: 'diff' }) })
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
     await act(async () => {
       deliveries.record('', 1, manifest([{ path: 'out/report.md', bytes: 12 }]))
     })
 
     expect(screen.getByText('gui.ws.no_changes_dlv')).toBeTruthy()
     await act(async () => { (document.querySelector('.desk-empty-to') as HTMLElement).click() })
-    expect(desk.getState().tab).toBe('deliverables')
+    expect(desk.get().tab).toBe('deliverables')
   })
 
   it('offers no way out when the other tab is empty as well', async () => {
@@ -837,7 +837,7 @@ describe('the panel drags by its handle', () => {
 
   it('starts a drag from a tab, which is most of the handle', async () => {
     render(<DeskPalette />)
-    await act(async () => { desk.update({ paletteOpen: true }) })
+    await act(async () => { desk.set({ paletteOpen: true }) })
 
     await press(tab('Diff'), 500, 500)
     await to(500 + DESK_DRAG_THRESHOLD + 20, 520)
@@ -858,7 +858,7 @@ describe('the panel drags by its handle', () => {
        case asserts the handle did NOT capture, which is the condition that
        lets a real click land, and then lets the click run its own course. */
     render(<DeskPalette />)
-    await act(async () => { desk.update({ paletteOpen: true, tab: 'deliverables' }) })
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'deliverables' }) })
 
     await press(tab('Diff'), 500, 500)
     await release(500, 501)
@@ -867,7 +867,7 @@ describe('the panel drags by its handle', () => {
     await act(async () => {
       tab('Diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
-    expect(desk.getState().tab).toBe('diff')
+    expect(desk.get().tab).toBe('diff')
   })
 
   it('leaves a tab its click when the hand only shook', async () => {
@@ -875,7 +875,7 @@ describe('the panel drags by its handle', () => {
        pointermove at all never reaches the comparison, so it passes whether the
        threshold is there or not. */
     render(<DeskPalette />)
-    await act(async () => { desk.update({ paletteOpen: true, tab: 'deliverables' }) })
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'deliverables' }) })
 
     await press(tab('Diff'), 500, 500)
     await to(501, 501)
@@ -885,7 +885,7 @@ describe('the panel drags by its handle', () => {
     await act(async () => {
       tab('Diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
-    expect(desk.getState().tab).toBe('diff')
+    expect(desk.get().tab).toBe('diff')
     expect(panel().dataset.anchored).toBe('true')
   })
 
@@ -893,7 +893,7 @@ describe('the panel drags by its handle', () => {
     /* The gesture ends on a button whose click is about to fire. A panel that
        moved and changed what it shows did two things for one gesture. */
     render(<DeskPalette />)
-    await act(async () => { desk.update({ paletteOpen: true, tab: 'deliverables' }) })
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'deliverables' }) })
 
     await press(tab('Diff'), 500, 500)
     /* A drag DOES capture, which is what keeps the pointer with the handle
@@ -907,7 +907,7 @@ describe('the panel drags by its handle', () => {
     await act(async () => {
       tab('Diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
-    expect(desk.getState().tab).toBe('deliverables')
+    expect(desk.get().tab).toBe('deliverables')
   })
 
   it('keeps the press from an ancestor that would act on it too', async () => {
@@ -924,7 +924,7 @@ describe('the panel drags by its handle', () => {
        This pins the half that is actually in reach. */
     const seen: string[] = []
     render(<div onPointerDown={() => seen.push('ancestor')}><DeskPalette /></div>)
-    await act(async () => { desk.update({ paletteOpen: true }) })
+    await act(async () => { desk.set({ paletteOpen: true }) })
 
     await press(handle(), 500, 500)
 

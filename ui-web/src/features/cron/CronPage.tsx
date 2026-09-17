@@ -71,7 +71,7 @@ function removeThenList(j: CronJob): void {
 }
 
 export function CronApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
   const job = s.viewId ? s.rows.find((x) => x.id === s.viewId) : undefined
   useEffect(() => {
     if (s.viewId && !job) store.backToList()

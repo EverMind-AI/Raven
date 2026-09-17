@@ -66,7 +66,7 @@ async function mount() {
 
 afterEach(() => {
   act(() => {
-    store.wipe()
+    store._resetForTests()
   })
   cleanup()
   vi.restoreAllMocks()

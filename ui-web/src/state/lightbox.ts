@@ -14,9 +14,8 @@
  * back in would only add a way for it to be missing.
  */
 
-import { flushSync } from 'react-dom'
-
 import { t } from '../i18n/t'
+import { makeStore } from './store'
 
 export interface Shot {
   readonly src: string
@@ -30,23 +29,13 @@ export interface Shot {
 
 const CLS = 'lightbox'
 
-let shot: Shot | null = null
-const listeners = new Set<() => void>()
+const store = makeStore<Shot | null>(null)
 
-export const get = (): Shot | null => shot
-
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => { listeners.delete(fn) }
-}
-
-function commit(next: Shot | null): void {
-  shot = next
-  flushSync(() => { for (const fn of [...listeners]) fn() })
-}
+/** The one shot on screen, and the verb that puts it there. */
+export const { get, set, subscribe, _resetForTests } = store
 
 export function close(): void {
-  commit(null)
+  set(null)
   /* Anything else carrying the class as well, because that is how the overlay
      order finds an overlay: it asks the document rather than this module, so
      close() has to answer for a node this module did not draw. */
@@ -61,6 +50,6 @@ export function open(src: string, name?: string): void {
   /* One at a time: opening a second over the first would leave the first to be
      closed by a click the reader thinks closed the second. */
   close()
-  commit({ src, alt: name || '', label: t('gui.img.close') })
+  set({ src, alt: name || '', label: t('gui.img.close') })
   document.querySelector<HTMLElement>('.' + CLS)?.focus()
 }

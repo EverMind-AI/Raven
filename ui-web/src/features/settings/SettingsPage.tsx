@@ -2851,7 +2851,7 @@ function Drawers({ s }: { s: SettingsState }): JSX.Element | null {
 }
 
 export function SettingsApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
   /* The header is static markup the legacy drawSettings wrote into; the
      island keeps doing exactly that. */
   useEffect(() => {

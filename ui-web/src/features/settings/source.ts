@@ -216,3 +216,12 @@ export const settingsSource: SettingsSource = {
      itself if it fails. */
   setLang: (v) => chrome.setLang(v),
 }
+
+/* Test seam only: the raw config, the path it came from and the chrome the page
+   registered are all the module's. */
+export function _resetForTests(): void {
+  RAW = {}
+  configPathLive = '~/.raven/config.json'
+  everosLive = null
+  chrome = { version: () => null, checkUpdate: () => {}, setLang: () => {} }
+}

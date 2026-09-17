@@ -404,7 +404,7 @@ describe('the live turn row', () => {
     const host = document.createElement('div')
     host.dataset.cvl = '1'
     render(<TurnLive afterPaint={() => {
-      if (!store.getState().live) { host.remove(); return }
+      if (!store.get().live) { host.remove(); return }
       if (stage.lastElementChild !== host) stage.appendChild(host)
     }} />, { container: host })
 

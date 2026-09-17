@@ -15,6 +15,7 @@ import type { AgentRow, InstanceRow } from '../subagents/types'
 import type { DeskDuo, DeskPane, DeskSplits, DeskState, DeskTab } from './deskTypes'
 import type { WsChange } from './types'
 import { panel } from '../../state/wsPanel'
+import { makeStore } from '../../state/store'
 
 /* What a reload needs to put the desk back: what the reader OPENED, in the
    order they opened it, and where the frame put it.
@@ -123,12 +124,12 @@ function remember(): void {
      nowhere to come back to. */
   if (!key || REPLAYING.has(key)) return
   KEPT.write(key, {
-    tab: state.tab,
-    open: state.panes.map(intentOf).filter((intent): intent is DeskIntent => !!intent),
-    solo: state.solo,
-    active: state.active,
-    splits: state.splits,
-    duo: state.duo,
+    tab: get().tab,
+    open: get().panes.map(intentOf).filter((intent): intent is DeskIntent => !!intent),
+    solo: get().solo,
+    active: get().active,
+    splits: get().splits,
+    duo: get().duo,
   })
 }
 
@@ -183,24 +184,18 @@ function initialState(): DeskState {
   }
 }
 
-let state = initialState()
-const listeners = new Set<() => void>()
+const store = makeStore<DeskState>(initialState())
 
-export const getState = (): DeskState => state
+export const { get, subscribe } = store
 
-export function subscribe(listener: () => void): () => void {
-  listeners.add(listener)
-  return () => listeners.delete(listener)
-}
-
-export function update(patch: Partial<DeskState>): void {
-  state = { ...state, ...patch }
-  listeners.forEach((listener) => listener())
+/** A patch, merged into the desk's state. */
+export function set(patch: Partial<DeskState>): void {
+  store.set((prev) => ({ ...prev, ...patch }))
 }
 
 /* One change the reader made, recorded so a reload can replay it. */
-function commit(patch: Partial<DeskState>): void {
-  update(patch)
+function record(patch: Partial<DeskState>): void {
+  set(patch)
   remember()
 }
 
@@ -220,15 +215,15 @@ function revealWorkspace(): void {
    reached a second way must land in the slot the first one took, or the reader
    ends up with two panes showing one node. */
 function addPane(pane: DeskPane, supersedes?: string | null): void {
-  const same = state.panes.findIndex((item) => item.id === pane.id)
+  const same = get().panes.findIndex((item) => item.id === pane.id)
   /* Already on the desk, and holding nothing a replacement could refresh: bring
      it forward and stop. Re-opening it replaced the pane object and re-tiled the
      grid to arrive at exactly the screen that was already there, remounting the
      pane body on the way -- a click that looked inert but was not.
 
      Narrowed to these two kinds because only their payload is re-read: an
-     `agent` pane re-finds its row in `state.instances` on every render and an
-     `agent-record` pane in `state.rows` (SubagentsPage.tsx), so the object held
+     `agent` pane re-finds its row in `get().instances` on every render and an
+     `agent-record` pane in `get().rows` (SubagentsPage.tsx), so the object held
      here is never staler than the one that would replace it. A `file` pane is
      the opposite -- `FileView` renders `workspace.makeFile(...)` directly, so
      the replacement is how a re-open picks up a download path the first caller
@@ -241,34 +236,34 @@ function addPane(pane: DeskPane, supersedes?: string | null): void {
        toggle -- `DeskSurface` draws only the soloed pane while solo is set.
        Same rule the full path applies below, and it has to be applied here too:
        returning before it is what made the click genuinely inert. */
-    const solo = state.solo === pane.id ? state.solo : null
+    const solo = get().solo === pane.id ? get().solo : null
     /* `paletteOpen` joins the guard rather than forcing a commit: a click that
        changes nothing must still change nothing, which is what this branch
        exists for. */
-    if (state.active !== pane.id || solo !== state.solo || state.paletteOpen) {
-      commit({ active: pane.id, solo, paletteOpen: false })
+    if (get().active !== pane.id || solo !== get().solo || get().paletteOpen) {
+      record({ active: pane.id, solo, paletteOpen: false })
     }
     revealWorkspace()
     return
   }
   const slot = same >= 0
     ? same
-    : supersedes ? state.panes.findIndex((item) => item.id === supersedes) : -1
+    : supersedes ? get().panes.findIndex((item) => item.id === supersedes) : -1
   let panes: DeskPane[]
-  if (slot >= 0) panes = state.panes.map((item, index) => index === slot ? pane : item)
+  if (slot >= 0) panes = get().panes.map((item, index) => index === slot ? pane : item)
   else {
-    if (state.panes.length >= 4) {
+    if (get().panes.length >= 4) {
       toast(t('gui.ws.desk_limit'))
       return
     }
-    panes = [...state.panes, pane]
+    panes = [...get().panes, pane]
   }
-  commit({
+  record({
     panes,
     /* A pane taking the fullscreen pane's own slot keeps the fullscreen: the
        reader did not ask to come back out. Anything else is a new thing to
        look at, and looking at it means leaving the one screen that hides it. */
-    solo: state.solo && (state.solo === pane.id || state.solo === supersedes) ? pane.id : null,
+    solo: get().solo && (get().solo === pane.id || get().solo === supersedes) ? pane.id : null,
     active: pane.id,
     /* The desk stands down for what it just opened. Not written to the
        conversation's palette note, so this is a suspension rather than a
@@ -296,7 +291,7 @@ function addPane(pane: DeskPane, supersedes?: string | null): void {
    while a file was delivered, this answered 0 for the one tab the reader is
    most likely to have left in front of them. */
 export function unseen(tab: DeskTab): number {
-  if (showing() && state.tab === tab) return 0
+  if (showing() && get().tab === tab) return 0
   const known = seen.of_(tab)
   return idsOf(tab).filter((id) => !known.has(id)).length
 }
@@ -319,7 +314,7 @@ export const working = (): boolean =>
    being new, so the doors say it here rather than each tab inventing its own
    idea of when to stop counting. */
 export function readItem(tab: DeskTab, id: string): void {
-  if (seen.mark(tab, [id])) update({})
+  if (seen.mark(tab, [id])) set({})
 }
 
 /* The reader is looking at this tab, so nothing in it is new any more. Called
@@ -329,7 +324,7 @@ export function seeTab(tab: DeskTab): void {
   /* `update`, not `commit`: the seen record keeps its own per-conversation
      store (seen.ts), and `remember()` would republish the whole desk note from
      whatever is on screen at that instant -- during a resume, nothing. */
-  if (seen.mark(tab, idsOf(tab))) update({})
+  if (seen.mark(tab, idsOf(tab))) set({})
 }
 
 /* Whether the palette is on screen, which is not the same question as whether
@@ -349,7 +344,7 @@ export function seeTab(tab: DeskTab): void {
  * One answer, because more than the rendering reads it: the marks are moved
  * from the same flag, and a bubble cleared behind a fullscreen pane is news the
  * reader never saw. */
-export const showing = (): boolean => state.paletteOpen && !state.solo
+export const showing = (): boolean => get().paletteOpen && !get().solo
 
 /* Which tab the desk should come up on.
  *
@@ -377,8 +372,8 @@ export function pickTab(): DeskTab {
 }
 
 export function toggleDesk(): void {
-  const paletteOpen = !state.paletteOpen
-  const tab = paletteOpen ? pickTab() : state.tab
+  const paletteOpen = !get().paletteOpen
+  const tab = paletteOpen ? pickTab() : get().tab
   /* Filed under the conversation, so this conversation is how the reader left
      it the next time they open it (palette.ts). */
   palette.write(currentSession(), paletteOpen)
@@ -389,12 +384,12 @@ export function toggleDesk(): void {
      answer for being intermittent. Safe from here in a way it is not from
      `seeTab`: this is the reader's own hand on their own desk, never a
      mark moving mid-replay. */
-  commit({ paletteOpen, tab })
+  record({ paletteOpen, tab })
 }
 
 function applyPalette(key: string | null): void {
   const paletteOpen = deskUp(key)
-  if (paletteOpen !== state.paletteOpen) update({ paletteOpen })
+  if (paletteOpen !== get().paletteOpen) set({ paletteOpen })
 }
 
 /* The conversation changed under the desk, so the palette's own answer did too.
@@ -432,7 +427,7 @@ export function openDeskTab(tab: DeskTab): void {
   /* Asking for a view of the desk is asking for the desk, so it outranks a
      collapse this conversation had on file. */
   palette.write(currentSession(), true)
-  commit({ paletteOpen: true, ...(TABS.includes(tab) ? { tab } : {}) })
+  record({ paletteOpen: true, ...(TABS.includes(tab) ? { tab } : {}) })
 }
 
 /* Every way of opening a file lands here -- the shelf's row, the delivery card
@@ -498,11 +493,11 @@ export function openDeskAgentRecord(row: AgentRow): void {
 }
 
 export function closePane(id: string): void {
-  const panes = state.panes.filter((item) => item.id !== id)
-  commit({
+  const panes = get().panes.filter((item) => item.id !== id)
+  record({
     panes,
-    solo: state.solo === id ? null : state.solo,
-    active: state.active === id ? panes[panes.length - 1]?.id || null : state.active,
+    solo: get().solo === id ? null : get().solo,
+    active: get().active === id ? panes[panes.length - 1]?.id || null : get().active,
     /* The last window closing gives the reader their desk back -- as they left
        it, not open. `deskUp` is the same answer `sync` gives on a session
        switch, so a conversation whose desk the reader collapsed stays collapsed
@@ -514,15 +509,15 @@ export function closePane(id: string): void {
 }
 
 export function setActive(id: string): void {
-  if (state.active !== id) commit({ active: id })
+  if (get().active !== id) record({ active: id })
 }
 
 export function toggleSolo(id: string): void {
-  commit({ solo: state.solo === id ? null : id })
+  record({ solo: get().solo === id ? null : id })
 }
 
 export function updateSplits(patch: Partial<DeskSplits>): void {
-  commit({ splits: { ...state.splits, ...patch } })
+  record({ splits: { ...get().splits, ...patch } })
 }
 
 /* The desk a drop leaves behind: the same panes, in the order and orientation
@@ -532,15 +527,15 @@ export function updateSplits(patch: Partial<DeskSplits>): void {
    commit, always: the drop indicator previews without touching the store, so
    the drop is the gesture's only mutation and a reload should replay it. */
 export function arrange(order: string[], duo: DeskDuo): void {
-  const by = new Map(state.panes.map((pane) => [pane.id, pane]))
+  const by = new Map(get().panes.map((pane) => [pane.id, pane]))
   /* Counted as a list, not only as a set. `['a', 'b', 'b']` names two distinct
      panes, both of them up, and passed a set-size test while committing three
      entries with one pane object in it twice -- two windows sharing a pane's
-     state, and a React key repeated. */
+     get(), and a React key repeated. */
   if (order.length !== by.size || new Set(order).size !== order.length) return
   if (order.some((id) => !by.has(id))) return
   const panes = order.map((id) => by.get(id) as DeskPane)
-  commit({ panes, duo })
+  record({ panes, duo })
 }
 
 /* A stored split is a percentage the surface hands straight to a CSS
@@ -554,18 +549,18 @@ const pct = (v: unknown, fallback: number): number =>
    Records nothing, like the opens it follows: it is applying a note, not
    writing one. */
 export function applyLayout(kept: DeskSaved): void {
-  const here = (id: string | null): boolean => !!id && state.panes.some((pane) => pane.id === id)
-  update({
+  const here = (id: string | null): boolean => !!id && get().panes.some((pane) => pane.id === id)
+  set({
     /* Checked as well as versioned: the version bump covers the bundle that
        wrote it, this covers a note that arrived any other way -- edited by hand,
        or written by a build the reader rolled back to and forward from. This is
        the one door into the tab that does not go through `openDeskTab`. */
-    tab: TABS.includes(kept.tab) ? kept.tab : state.tab,
+    tab: TABS.includes(kept.tab) ? kept.tab : get().tab,
     /* Only onto a pane that actually came back. A solo id naming a pane whose
        intent could not be replayed would leave the desk fullscreen on nothing --
        `DeskSurface` draws the soloed pane and only it. */
     solo: here(kept.solo) ? kept.solo : null,
-    active: here(kept.active) ? kept.active : state.active,
+    active: here(kept.active) ? kept.active : get().active,
     splits: {
       column: pct(kept.splits?.column, 50),
       left: pct(kept.splits?.left, 50),
@@ -600,11 +595,11 @@ export function applyLayout(kept: DeskSaved): void {
  *   with the reader's own open, which the first guard has already dealt with. */
 function weighTheDesk(): void {
   const key = currentSession()
-  if (!state.panes.length && !state.paletteOpen && palette.stated(key) === null && worthShowing()) {
-    update({ paletteOpen: true })
+  if (!get().panes.length && !get().paletteOpen && palette.stated(key) === null && worthShowing()) {
+    set({ paletteOpen: true })
     return
   }
-  update({})
+  set({})
 }
 
 export function notifyDesk(): void {
@@ -631,15 +626,13 @@ export function reset(): void {
      on screen is not known yet (`sync`). Shutting it now and opening it again a
      moment later is a flicker with no information in it. `initialState` reads
      the conversation being left, which is what is on screen. */
-  state = initialState()
-  listeners.forEach((listener) => listener())
+  store.set(initialState())
 }
 
 export function _resetForTests(): void {
-  palette._clearForTests()
-  state = initialState()
-  seen._clearForTests()
+  palette._resetForTests()
+  store.set(initialState())
+  seen._resetForTests()
   KEPT.clear()
   REPLAYING.clear()
-  listeners.clear()
 }

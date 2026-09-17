@@ -4,6 +4,7 @@ import { show as toast } from '../../state/toast'
 
 import type { ConnChannel, ConnSource } from './types'
 import * as page from '../../state/page'
+import { makeStore } from '../../state/store'
 
 /* Page state, outside React on purpose: the legacy shell drives this page
  * imperatively (nav opens it, Esc closes it and its dialog, a language flip
@@ -27,19 +28,13 @@ export interface ConnState {
   host?: boolean
 }
 
-let state: ConnState = { rows: [], loaded: false, dialogId: null, epoch: 0 }
-const listeners = new Set<() => void>()
+const store = makeStore<ConnState>({ rows: [], loaded: false, dialogId: null, epoch: 0 })
 
-export const getState = (): ConnState => state
+export const { get, subscribe, _resetForTests } = store
 
-export function subscribe(l: () => void): () => void {
-  listeners.add(l)
-  return () => listeners.delete(l)
-}
-
-function set(patch: Partial<ConnState>): void {
-  state = { ...state, ...patch }
-  for (const l of listeners) l()
+/** A patch, merged into the page's state. */
+export function set(patch: Partial<ConnState>): void {
+  store.set((prev) => ({ ...prev, ...patch }))
 }
 
 export const source = (): ConnSource => ds<ConnSource>('conn')
@@ -59,7 +54,7 @@ export function close(): void {
 }
 
 export function openDialog(c: ConnChannel): void {
-  set({ dialogId: c.id, epoch: state.epoch + 1 })
+  set({ dialogId: c.id, epoch: get().epoch + 1 })
 }
 
 export function closeDialog(): void {
@@ -67,7 +62,7 @@ export function closeDialog(): void {
 }
 
 /* Optimistic, like the accessor it replaces: both sources flip `c.on` before
-   their first await, so the redraw right after already shows the new state;
+   their first await, so the redraw right after already shows the new get();
    the rpc source reverts the flag and rejects handled on failure, and the
    second redraw takes the switch back. */
 export function toggle(c: ConnChannel): void {
@@ -77,7 +72,7 @@ export function toggle(c: ConnChannel): void {
 }
 
 /* Credentials and the switch travel together; the source speaks its own
-   failures, so this only has to repaint whatever state the write left. */
+   failures, so this only has to repaint whatever get() the write left. */
 export async function apply(c: ConnChannel, patch: Record<string, string>, enable: boolean): Promise<void> {
   try {
     await source().apply(c, patch, enable)

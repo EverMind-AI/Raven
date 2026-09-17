@@ -53,7 +53,7 @@ const ctxRef = (items: () => MenuItem[]) => (el: HTMLElement | null): void => {
 }
 
 export function WsApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
   const ws = store.shared()
   if (s.route === 'launch') return <Launch />
   if (s.route === 'file') return <FileView ws={ws} />

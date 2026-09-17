@@ -44,10 +44,9 @@
  * not in force whenever it refuses.
  */
 
-import { flushSync } from 'react-dom'
-
 import { t } from '../i18n/t'
 import { ds } from './sources'
+import { makeStore } from './store'
 import { show as toast } from './toast'
 
 export interface TierOption {
@@ -125,21 +124,10 @@ export interface TierPanel {
 }
 
 const shut: TierPanel = { open: false, listed: null, opened: 0, paint: null, head: null }
-let panel: TierPanel = shut
-const listeners = new Set<() => void>()
+const store = makeStore<TierPanel>(shut)
 
 /** The panel's state, for <TierPop/> and <TierChip/>. */
-export function get(): TierPanel {
-  return panel
-}
-
-/** For useSyncExternalStore: called whenever the panel changes. */
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => {
-    listeners.delete(fn)
-  }
-}
+export const { get, subscribe } = store
 
 /* Field by field, for the reason perm.ts's samePaint gives: a fresh object per
    draw would otherwise be a change every time, and a comparison by reference
@@ -159,13 +147,11 @@ const sameHead = (a: TierHeadings | null, b: TierHeadings | null): boolean => {
 
 /* Committed synchronously, for the reason perm.ts's put gives: `open` measures
    the panel it has just filled. */
-function put(next: TierPanel): void {
-  if (next.open === panel.open && next.listed === panel.listed && next.opened === panel.opened
-    && samePaint(next.paint, panel.paint) && sameHead(next.head, panel.head)) return
-  panel = next
-  flushSync(() => {
-    for (const fn of [...listeners]) fn()
-  })
+export function set(next: TierPanel): void {
+  const now = get()
+  if (next.open === now.open && next.listed === now.listed && next.opened === now.opened
+    && samePaint(next.paint, now.paint) && sameHead(next.head, now.head)) return
+  store.set(next)
 }
 
 /* Who else the tier moves. It is a session-wide setting, and a surface showing
@@ -257,11 +243,11 @@ function label(id: string): string {
    the page's own literal is what this did when it returned early. */
 export function draw(): void {
   if (!loaded || !menu.length) {
-    put({ ...panel, paint: { off: true } })
+    set({ ...get(), paint: { off: true } })
     return
   }
-  put({
-    ...panel,
+  set({
+    ...get(),
     paint: {
       off: false,
       label: label(mode),
@@ -346,14 +332,14 @@ export function open(): void {
      effect measures the panel where it now stands, at the size the headings and
      the rows of this same commit gave it. */
   if (pop.parentElement !== document.body) document.body.appendChild(pop)
-  put({ ...panel, open: true, listed: rows(), opened: panel.opened + 1, head: headings() })
+  set({ ...get(), open: true, listed: rows(), opened: get().opened + 1, head: headings() })
 }
 
 export function close(): void {
-  put({ ...panel, open: false })
+  set({ ...get(), open: false })
 }
 
-export const isOpen = (): boolean => panel.open
+export const isOpen = (): boolean => get().open
 
 export function toggle(): void {
   if (isOpen()) close()
@@ -398,5 +384,5 @@ export function _resetForTests(): void {
   mode = ''
   menu = []
   loaded = false
-  put(shut)
+  set(shut)
 }

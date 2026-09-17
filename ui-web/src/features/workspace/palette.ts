@@ -171,7 +171,7 @@ export function adopt(key: string | null): void {
   draft = null
 }
 
-export function _clearForTests(): void {
+export function _resetForTests(): void {
   draft = null
   said.clear()
   try {

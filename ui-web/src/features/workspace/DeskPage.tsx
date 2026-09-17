@@ -67,7 +67,7 @@ const AGENTS_POLL_MS = 8000
  * its list at whatever it held when the reader opened it. */
 
 export function DeskApp(): JSX.Element {
-  useSyncExternalStore(workspace.subscribe, workspace.getState)
+  useSyncExternalStore(workspace.subscribe, workspace.get)
   useEffect(() => {
     document.documentElement.classList.add('desk-ready')
     return () => document.documentElement.classList.remove('desk-ready')

@@ -37,10 +37,9 @@
  * leaves for good is the rack's job, through the teardown below.
  */
 
-import { flushSync } from 'react-dom'
-
 import { current } from '../lib/session'
 import { dockLift } from '../features/composer/store'
+import { makeStore } from './store'
 
 import type { ReactNode } from 'react'
 
@@ -117,21 +116,12 @@ export interface RackSheet {
 }
 
 const VIEWS = new WeakMap<HTMLElement, RackSheet>()
-let shown: readonly RackSheet[] = []
-let made = 0
-const listeners = new Set<() => void>()
+const store = makeStore<readonly RackSheet[]>([])
 
 /** The interiors to render, for useSyncExternalStore. */
-export function sheets(): readonly RackSheet[] {
-  return shown
-}
+export const { get, set, subscribe } = store
 
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => {
-    listeners.delete(fn)
-  }
-}
+let made = 0
 
 /* Recomputed from the buckets rather than tracked alongside them, so the one
    record of who is where cannot disagree with itself. The same array comes back
@@ -149,13 +139,10 @@ function paint(): void {
       if (sheet) next.push(sheet)
     }
   }
+  const shown = get()
   const same = next.length === shown.length && next.every((s, i) => shown[i] === s)
   if (same) return
-  shown = next
-  if (!listeners.size) return
-  flushSync(() => {
-    for (const fn of [...listeners]) fn()
-  })
+  set(next)
 }
 
 /* A draft is not a session yet -- the session pointer is null until the first

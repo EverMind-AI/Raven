@@ -90,7 +90,7 @@ function ArmButton({
 }
 
 export function PlugApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
   return (
     <>
       {s.view === 'installed' ? <Installed s={s} /> : <Market s={s} />}

@@ -21,7 +21,7 @@
  * page's own root is committed with flushSync at boot (src/main.tsx).
  */
 
-import { flushSync } from 'react-dom'
+import { makeStore } from './store'
 
 export type ConfirmState = {
   readonly open: boolean
@@ -33,43 +33,27 @@ export type ConfirmState = {
   readonly label: string | null
 }
 
-let state: ConfirmState = { open: false, title: null, body: '', label: null }
-const listeners = new Set<() => void>()
+const store = makeStore<ConfirmState>({ open: false, title: null, body: '', label: null })
 
 /* The answer, beside the state rather than in it: nothing renders it. Only yes
    has one -- no caller of this dialog has ever wanted a no branch. */
 let onYes: (() => void) | null = null
 
-/** What the sheet is asking. */
-export function get(): ConfirmState {
-  return state
-}
-
-/** For useSyncExternalStore: called on every ask and every answer. */
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => {
-    listeners.delete(fn)
-  }
-}
-
-function notify(): void {
-  for (const fn of [...listeners]) fn()
-}
+/** What the sheet is asking; `set` is what asks and what answers. */
+export const { get, set, subscribe } = store
 
 /* One writer for the flag, so it cannot disagree with the state. */
 function paint(): void {
   const el = document.getElementById('veil')
-  if (el) el.dataset.open = String(state.open)
+  if (el) el.dataset.open = String(get().open)
 }
 
 /* Asking, in the order confirmAsk wrote it: the question first, then the veil,
    then the focus. The cancel button takes the focus so that a stray Enter or
    Escape answers no -- Escape reaches the chain, which clicks it. */
 export function ask(title: string, body: string, label: string, fn: () => void): void {
-  state = { open: true, title, body, label }
+  set({ open: true, title, body, label })
   onYes = fn
-  flushSync(notify)
   paint()
   document.getElementById('cfNo')?.focus()
 }
@@ -83,8 +67,13 @@ export function ask(title: string, body: string, label: string, fn: () => void):
 export function answer(ok: boolean): void {
   const fn = onYes
   onYes = null
-  state = { ...state, open: false }
+  set({ ...get(), open: false })
   paint()
-  notify()
   if (ok) fn?.()
+}
+
+/** Test seam only: the question and its answer are the module's. */
+export function _resetForTests(): void {
+  store._resetForTests()
+  onYes = null
 }

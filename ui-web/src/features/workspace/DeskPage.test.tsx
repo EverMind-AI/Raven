@@ -98,7 +98,7 @@ describe('asking for the instance list', () => {
 
   it('keeps the count live while the reader is on another tab', async () => {
     render(<DeskApp />)
-    await act(async () => { desk.update({ paletteOpen: true, tab: 'diff' }) })
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
     await tick(0)
     expect(desk.unseen('agents')).toBe(0)
 
@@ -110,7 +110,7 @@ describe('asking for the instance list', () => {
 
   it('keeps asking with the desk shut while a turn is running', async () => {
     render(<DeskApp />)
-    await act(async () => { desk.update({ paletteOpen: false }) })
+    await act(async () => { desk.set({ paletteOpen: false }) })
     await tick(0)
     const before = asked.length
 
@@ -135,7 +135,7 @@ describe('asking for the instance list', () => {
    * relying on the glyph instead of the palette. */
   it('keeps asking until the run it is showing has settled', async () => {
     render(<DeskApp />)
-    await act(async () => { desk.update({ paletteOpen: false }) })
+    await act(async () => { desk.set({ paletteOpen: false }) })
     await act(async () => { turn.dispatch({ type: 'send' }) })
     agentRows = [inst('h1', 'running')]
     await tick()
@@ -163,7 +163,7 @@ describe('asking for the instance list', () => {
      relying on while the desk is down never came on at all. */
   it('lights the glyph for a run that outlives the turn that started it', async () => {
     render(<DeskApp />)
-    await act(async () => { desk.update({ paletteOpen: false }) })
+    await act(async () => { desk.set({ paletteOpen: false }) })
     /* No turn is ever dispatched: the launching one is already over. */
     expect(turn.busy()).toBe(false)
     agentRows = [inst('h1', 'running')]
@@ -181,7 +181,7 @@ describe('asking for the instance list', () => {
      when the tab was opened. */
   it('keeps asking while the desk sits on the agents tab', async () => {
     render(<DeskApp />)
-    await act(async () => { desk.update({ paletteOpen: true, tab: 'agents' }) })
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'agents' }) })
     agentRows = [inst('h1', 'running')]
     await tick()
     expect(desk.working()).toBe(true)
@@ -199,7 +199,7 @@ describe('asking for the instance list', () => {
      and no turn up is exactly the state a background playbook leaves behind. */
   it('keeps asking with the desk shut and no turn running', async () => {
     render(<DeskApp />)
-    await act(async () => { desk.update({ paletteOpen: false }) })
+    await act(async () => { desk.set({ paletteOpen: false }) })
     await tick(0)
     const before = asked.length
 
@@ -215,7 +215,7 @@ describe('asking for the instance list', () => {
   it('asks nothing at all until a conversation is open', async () => {
     setCurrent(null)
     render(<DeskApp />)
-    await act(async () => { desk.update({ paletteOpen: true, tab: 'agents' }) })
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'agents' }) })
     await tick(30000)
 
     expect(asked.length).toBe(0)
@@ -234,7 +234,7 @@ describe('asking for the instance list', () => {
 
   it('keeps its rendered shape', async () => {
     const view = render(<DeskApp />)
-    await act(async () => { desk.update({ paletteOpen: true, tab: 'agents' }) })
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'agents' }) })
     agentRows = [inst('h1', 'running')]
     await tick()
     expect(domSnapshot(view.container)).toMatchSnapshot()

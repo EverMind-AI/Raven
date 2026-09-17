@@ -105,3 +105,9 @@ export const connSource: ConnSource = {
      same waiting frame the old panel kept. */
   qr: (c) => (servesChannels() ? gateway().call('channels.qr', { name: c.id }) : Promise.resolve(null)),
 }
+
+/* Test seam only: what the gateway last said about a running host is the
+   module's, so it outlives a case. */
+export function _resetForTests(): void {
+  gatewayRunningLive = false
+}

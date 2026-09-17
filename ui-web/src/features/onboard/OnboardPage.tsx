@@ -69,7 +69,7 @@ function CopyCommand({ provider }: { provider: OnboardProvider }): JSX.Element {
 }
 
 export function OnboardApp(): JSX.Element | null {
-  const opening = useSyncExternalStore(store.subscribe, store.snapshot)
+  const opening = useSyncExternalStore(store.subscribe, store.get)
   if (!opening.source) return null
   return <Flow key={opening.epoch} source={opening.source} />
 }

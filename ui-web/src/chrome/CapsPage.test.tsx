@@ -60,7 +60,7 @@ function createButtons(): void {
 beforeEach(() => {
   /* The tab, the filter and the two buttons are module state, and this
      component renders them, so every case starts from the served page. */
-  caps.wipe()
+  caps._resetForTests()
   asked.list.length = 0
   Object.assign(islands.skills, {
     setQuery: (q: string) => asked.list.push(`skills.setQuery:${q}`),
