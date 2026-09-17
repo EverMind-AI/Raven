@@ -732,6 +732,48 @@ async def test_validate_case_rejects_non_string_tool_names(tmp_path, bad_name) -
     assert any("name must be a non-empty string" in p for p in problems)
 
 
+def _mutate_llm_inputs(case: Path, mutate) -> int:
+    """Apply ``mutate`` to every llm.input artifact payload; count touched."""
+    touched = 0
+    for span in _spans(case):
+        ref = (span.get("attributes") or {}).get("llm.input.artifact_path")
+        if not ref:
+            continue
+        artifact = case / "cassette" / ref
+        payload = json.loads(artifact.read_text(encoding="utf-8"))
+        mutate(payload)
+        artifact.write_text(json.dumps(payload), encoding="utf-8")
+        touched += 1
+    return touched
+
+
+@pytest.mark.parametrize(
+    ("key", "expected_error"),
+    [
+        ("model", "model as a non-empty string"),
+        ("messages", "messages as a list"),
+        ("tools", "tools as a list"),
+    ],
+)
+async def test_validate_case_rejects_llm_input_missing_comparison_fields(tmp_path, key, expected_error) -> None:
+    """Deleting a comparison-bearing input field silently narrows what the
+    replay compares (an absent model skips the model check; absent tools meet
+    the registry's equally empty live surface), so a completed green replay
+    would guard nothing. The static gate must reject the case regardless of
+    what the expectation declares."""
+    case = _case_copy(tmp_path)
+    assert _mutate_llm_inputs(case, lambda payload: payload.pop(key, None))
+    problems = validate_case(case)
+    assert any(expected_error in p for p in problems)
+
+
+async def test_validate_case_rejects_blank_llm_input_model(tmp_path) -> None:
+    case = _case_copy(tmp_path)
+    assert _mutate_llm_inputs(case, lambda payload: payload.__setitem__("model", ""))
+    problems = validate_case(case)
+    assert any("model as a non-empty string" in p for p in problems)
+
+
 async def test_validate_case_rejects_semantically_empty_turn_input(tmp_path) -> None:
     """Valid JSON is not a usable payload: {} yields no replayable turn."""
     case = _case_copy(tmp_path)

@@ -565,6 +565,7 @@ def _cassette_problems(cassette_dir: Path) -> list[str]:
             # halt can even masquerade as the expected divergence.
             problems.extend(f"cassette is not replayable: {p}" for p in validate_recording(recording))
             problems.extend(_tool_contract_problems(recording))
+            problems.extend(_llm_contract_problems(recording))
     return problems
 
 
@@ -587,6 +588,38 @@ def _tool_contract_problems(recording: Any) -> list[str]:
             problems.append(
                 f"cassette tool call #{i + 1} params must be a mapping, got {type(call.params).__name__}"
                 " — a missing params disables the replay's argument comparison"
+            )
+    return problems
+
+
+def _llm_contract_problems(recording: Any) -> list[str]:
+    """Recorded model calls whose comparison-bearing input fields are gone.
+
+    compare_llm_request skips the model check when the recorded model is
+    absent, and a recording without tools meets the replay registry's equally
+    empty live tool surface, so both compare green while guarding nothing (a
+    missing messages list at least diverges, but that divergence can be
+    declared expected). The recorder always emits model/messages/tools and
+    minimize preserves exactly those keys — their absence means the cassette
+    was tampered with, so a committed case requires all three. The gate's
+    guarding contract again, not replay's crash contract."""
+    problems: list[str] = []
+    for i, call in enumerate(recording.llm_calls):
+        payload = call.input
+        if not isinstance(payload, dict):
+            continue
+        model = payload.get("model")
+        if not isinstance(model, str) or not model:
+            problems.append(
+                f"cassette llm call #{i + 1} input must record model as a non-empty string, got {model!r}"
+                " — a missing model disables the replay's model comparison"
+            )
+        if not isinstance(payload.get("messages"), list):
+            problems.append(f"cassette llm call #{i + 1} input must record messages as a list")
+        if not isinstance(payload.get("tools"), list):
+            problems.append(
+                f"cassette llm call #{i + 1} input must record tools as a list"
+                " — a missing tools list compares equal to the replay's empty live tool surface"
             )
     return problems
 
