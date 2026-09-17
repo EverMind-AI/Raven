@@ -14,7 +14,6 @@ import { get as railOpen, set as setRail } from '../../state/rail'
 import { sources } from '../../state/sources'
 import { $, T } from './010-kernel.js'
 import { turn } from './040-state.js'
-import { renameTitle } from './050-rail.js'
 import { setWs, wsOpen } from './100-workspace.js'
 import { closeCaps, closeDetail, closeSet, closeXa, setIsOpen } from './120-capabilities.js'
 import { isMac } from './130-settings.js'
@@ -102,7 +101,6 @@ export function install() {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n' && !inField) { e.preventDefault(); $('#newBtn').click(); }
   });
 
-  $('#renameBtn').onclick = () => renameTitle();
   /* Collapsing the rail is the user's call, never the window's: it holds the
    session list, and having it vanish on resize loses your place. The rail's own
    toggle is a component's click now (src/chrome/Rail.tsx); this is the twin

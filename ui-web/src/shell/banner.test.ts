@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { draw, setFault } from './banner'
 import { resetSources, setSources } from '../state/sources'
 import { resetShell, setShell } from './bridge'
+import { mountPageRoot } from '../test/pageRoot'
 
 import type { BannerSource } from './banner'
 import type { Shell } from './bridge'
@@ -11,6 +12,13 @@ import type { Shell } from './bridge'
 interface Wired {
   opened: number
 }
+
+/* The container page.html carries. #bannerHost itself is the page root's now
+   (src/chrome/ChatTop.tsx renders the scroller's three grounds), so the bench
+   needs the root standing for the host to exist at all. */
+const MARKUP = '<div class="app"><div class="main"><div class="split"><div class="chat"><div class="scroll" id="scroll"></div></div></div></div></div>'
+
+let unmount = (): void => {}
 
 function wire(needsWebsearch = false, withSource = true): Wired {
   const w: Wired = { opened: 0 }
@@ -25,7 +33,9 @@ function wire(needsWebsearch = false, withSource = true): Wired {
   setShell(shell)
   const source: BannerSource = { websearchNeeds: () => needsWebsearch }
   setSources(withSource ? { banner: source } : {})
-  document.body.innerHTML = '<div id="bannerHost"></div>'
+  unmount()
+  document.body.innerHTML = MARKUP
+  unmount = mountPageRoot()
   return w
 }
 
@@ -40,6 +50,8 @@ afterEach(() => {
   setFault(null)
   resetShell()
   resetSources()
+  unmount()
+  unmount = () => {}
   document.body.innerHTML = ''
 })
 
@@ -148,5 +160,15 @@ describe('the banner strip', () => {
       setFault('disk full')
       draw()
     }).not.toThrow()
+  })
+
+  /* No host means no decision, which is what the question about the host has
+     to come BEFORE: every bench that drives a conversation without the chat
+     column calls this (state/session/registry.ts, residency.ts), and none of
+     them installs the seam a decision would consult. */
+  it('asks nothing of its source when there is no host to draw into', () => {
+    wire(true, false)
+    document.body.innerHTML = ''
+    expect(() => draw()).not.toThrow()
   })
 })
