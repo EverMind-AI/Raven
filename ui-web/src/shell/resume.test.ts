@@ -3,7 +3,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { _resetForTests as sheetReset } from '../features/composer/sheets'
+import { _resetForTests as sheetReset } from '../state/sheetRack'
 import { run as dagOpen, start as dagStart, _resetForTests as dagReset } from '../features/dag/mount'
 import { openDeskAgent, openDeskAgentRecord, openDeskFile, openDeskTab, getState as deskState, reset as deskLeave, saved as deskSaved, setActive, toggleSolo, updateSplits, _resetForTests as deskReset } from '../features/workspace/deskStore'
 /* The wiring main.tsx gets from this import: the subagents panel's pane

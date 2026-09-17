@@ -3,9 +3,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { open as approveOpen } from './approve'
 import { close, open } from './clarify'
-import { _resetForTests, forget, sync } from './sheets'
+import { _resetForTests, forget, sync } from '../../state/sheetRack'
+import { _resetForTests as draftsReset, read, slot } from '../../state/sheetDrafts'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 import { resetShell, setShell } from '../../shell/bridge'
+import { mountPageRoot } from '../../test/pageRoot'
 
 import type { Shell } from '../../shell/bridge'
 
@@ -19,7 +21,12 @@ function wire(): void {
   document.body.innerHTML =
     '<div class="chat"><div class="dock"><div class="sheets" id="sheetRack"></div>'
     + '<div class="dock-in"></div></div></div>'
+  /* The sheets render from the page's own root (src/chrome/SheetRack.tsx), so it
+     has to be standing before one is raised. */
+  unmount = mountPageRoot()
 }
+
+let unmount: (() => void) | null = null
 
 const rack = (): HTMLElement => document.getElementById('sheetRack')!
 const sheets = (): HTMLElement[] => [...rack().querySelectorAll<HTMLElement>('.csheet')]
@@ -39,10 +46,13 @@ beforeEach(() => {
   sessionReset()
   setCurrent('a')
   _resetForTests()
+  draftsReset()
   wire()
 })
 
 afterEach(() => {
+  if (unmount) unmount()
+  unmount = null
   sessionReset()
   resetShell()
   document.body.innerHTML = ''
@@ -203,6 +213,37 @@ describe('the clarify sheet', () => {
     expect(said).toEqual([])
   })
 
+  /* The Enter that commits a candidate is not the Enter that answers: the whole
+     handler stands back while an input method is composing, the way the
+     composer's own field does (features/composer/store.ts). */
+  it('leaves an input method alone in the field', () => {
+    const said: string[] = []
+    open({ question: 'q' }, (a) => said.push(a))
+    type('typed')
+    field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, isComposing: true }))
+    field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, keyCode: 229 }))
+    expect(said).toEqual([])
+    field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(said).toEqual(['typed'])
+  })
+
+  /* What is typed into the field is not the page's to read: the chrome owns
+     Escape and the slash palette's keys, and a document handler seeing them
+     would act on an answer being written. */
+  it('keeps what is typed in the field away from the page', () => {
+    open({ question: 'q' }, () => {})
+    let heard = 0
+    const sentinel = (): void => { heard += 1 }
+    document.addEventListener('keydown', sentinel)
+    try {
+      field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      field().dispatchEvent(new KeyboardEvent('keydown', { key: '/', bubbles: true }))
+      expect(heard).toBe(0)
+    } finally {
+      document.removeEventListener('keydown', sentinel)
+    }
+  })
+
   /* A sheet parked with another conversation still holds a document handler,
      because the rack detaches the element rather than destroying it. */
   it('is not answerable by number while it is parked', () => {
@@ -213,6 +254,38 @@ describe('the clarify sheet', () => {
     sync()
     key('1')
     expect(said).toEqual([])
+  })
+
+  /* The half-typed answer is state, not a DOM leftover: the sheet's interior is
+     unmounted while the reader is in another conversation, so what they typed
+     has to be somewhere else by then. */
+  it('keeps the half-typed answer in the draft store', () => {
+    open({ question: 'q', request_id: 'q1' }, () => {})
+    type('half a sen')
+    expect(read(slot('a', 'q1')).text).toBe('half a sen')
+  })
+
+  it('still has the half-typed answer after a conversation switch and back', () => {
+    open({ question: 'q', request_id: 'q1' }, () => {})
+    type('half a sen')
+    setCurrent('b')
+    sync()
+    setCurrent('a')
+    sync()
+    expect(field().value).toBe('half a sen')
+    /* And the submit button is live for it, rather than waiting for one more
+       keystroke to notice there is an answer. */
+    expect(submit().disabled).toBe(false)
+  })
+
+  /* A question that replaces the pending one starts empty: the draft belonged to
+     the question the reader was answering, not to the conversation. */
+  it('does not hand a new question the retired one\'s draft', () => {
+    open({ question: 'q1' }, () => {})
+    type('half a sen')
+    open({ question: 'q2' }, () => {})
+    expect(field().value).toBe('')
+    expect(submit().disabled).toBe(true)
   })
 
   it('folds and unfolds, and the question unfolds it too', () => {

@@ -1,7 +1,8 @@
 /* The page's own React root: the regions src/page.html used to carry as markup
  * -- the dialog shells, the rail, the composer dock and the capabilities
  * page's chrome -- and the two overlays, the context menu's rows and the
- * notices, that the chrome used to build by hand.
+ * notices, that the chrome used to build by hand -- and the interiors of the
+ * sheets that dock above the composer.
  *
  * Every element below is a transcription -- tag, id, class, data-*, role, aria
  * and text exactly as page.html spelled them, attributes in the same order --
@@ -42,6 +43,7 @@ import { CapsPage } from './chrome/CapsPage'
 import { ChatTop } from './chrome/ChatTop'
 import { Dock } from './chrome/Dock'
 import { Rail } from './chrome/Rail'
+import { SheetRack } from './chrome/SheetRack'
 import { WsPane } from './chrome/WsPane'
 import * as menu from './shell/menu'
 import * as toast from './shell/toast'
@@ -198,9 +200,10 @@ function Toasts(): JSX.Element {
    the island mounts are: a document without the container renders nothing
    rather than throwing. The rail, the chat column and the workspace pane
    resolve their own containers -- div.app's two columns are the regions with no
-   id -- so does the dock, which is nested inside one, and the two overlays
-   below find their own host, because theirs is the one that was standing when
-   they were raised. */
+   id -- so does the dock, which is nested inside one, the two overlays below
+   find their own host, because theirs is the one that was standing when they
+   were raised, and each sheet in the rack portals into the element the rack
+   filed it under. */
 export function App(): JSX.Element {
   const veilEl = document.getElementById('veil')
   const detailEl = document.getElementById('detail')
@@ -217,6 +220,7 @@ export function App(): JSX.Element {
       {veilEl ? createPortal(<ConfirmSheet />, veilEl) : null}
       <ContextMenu />
       <Toasts />
+      <SheetRack />
     </>
   )
 }

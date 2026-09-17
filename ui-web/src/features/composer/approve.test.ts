@@ -2,9 +2,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { closeApproval, open, openApproval } from './approve'
-import { _resetForTests, forget, session, sync } from './sheets'
+import { _resetForTests, forget, session, sync } from '../../state/sheetRack'
+import { _resetForTests as draftsReset, read, slot } from '../../state/sheetDrafts'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 import { resetShell, setShell } from '../../shell/bridge'
+import { mountPageRoot } from '../../test/pageRoot'
 
 import type { Shell } from '../../shell/bridge'
 
@@ -18,7 +20,12 @@ function wire(): void {
   document.body.innerHTML =
     '<div class="chat"><div class="dock"><div class="sheets" id="sheetRack"></div>'
     + '<div class="dock-in"></div></div></div>'
+  /* The sheets render from the page's own root (src/chrome/SheetRack.tsx), so it
+     has to be standing before one is raised. */
+  unmount = mountPageRoot()
 }
+
+let unmount: (() => void) | null = null
 
 const rack = (): HTMLElement => document.getElementById('sheetRack')!
 const sheets = (): HTMLElement[] => [...rack().querySelectorAll<HTMLElement>('.csheet')]
@@ -32,10 +39,13 @@ beforeEach(() => {
   sessionReset()
   setCurrent('a')
   _resetForTests()
+  draftsReset()
   wire()
 })
 
 afterEach(() => {
+  if (unmount) unmount()
+  unmount = null
   sessionReset()
   resetShell()
   document.body.innerHTML = ''
@@ -408,6 +418,94 @@ describe('the permission approval sheet', () => {
     openApproval(req, (choice, feedback) => said.push([choice, feedback]))
     opts()[3]!.click()
     expect(said).toEqual([['deny_stop', '']])
+  })
+
+  const noteBox = () => document.querySelector<HTMLInputElement>('.csheet .note-in:not(.pattern-in)')!
+  const typeIn = (el: HTMLInputElement, v: string): void => {
+    el.value = v
+    el.dispatchEvent(new Event('input'))
+  }
+
+  /* The note and the prefix are state, not DOM leftovers: the sheet's interior
+     is unmounted while the reader is in another conversation. */
+  it('keeps the typed note and prefix in the draft store', () => {
+    openApproval(suggested, () => {})
+    typeIn(noteBox(), 'hold on')
+    typeIn(patternBox(), 'git push origin *')
+    expect(read(slot(session(), 'ap-1'))).toEqual({ note: 'hold on', pattern: 'git push origin *' })
+  })
+
+  it('still has them after a conversation switch and back', () => {
+    openApproval(suggested, () => {})
+    typeIn(noteBox(), 'hold on')
+    typeIn(patternBox(), 'git push origin *')
+    setCurrent('b')
+    sync()
+    setCurrent('a')
+    sync()
+    expect(noteBox().value).toBe('hold on')
+    expect(patternBox().value).toBe('git push origin *')
+  })
+
+  /* An emptied prefix stays emptied: re-offering the server's suggestion on the
+     way back would save a rule the reader had just declined. */
+  it('comes back emptied when that is how the reader left the prefix', () => {
+    openApproval(suggested, () => {})
+    typeIn(patternBox(), '')
+    setCurrent('b')
+    sync()
+    setCurrent('a')
+    sync()
+    expect(patternBox().value).toBe('')
+  })
+
+  /* The same keyboard rules the preview variant has, on the sheet that carries
+     two fields: a parked request is not answerable, an empty note still lets the
+     digits through, and a note with anything in it owns them. */
+  it('ignores the keyboard while its conversation is not the open one', () => {
+    const said: string[] = []
+    openApproval(req, (choice) => said.push(choice))
+    setCurrent('b')
+    sync()
+    key('1')
+    key('Escape')
+    expect(said).toEqual([])
+    setCurrent('a')
+    sync()
+    key('1')
+    expect(said).toEqual(['allow'])
+  })
+
+  it('keeps the digits working while the note is empty, and not once it is not', () => {
+    const said: string[] = []
+    openApproval(suggested, (choice) => said.push(choice))
+    noteBox().focus()
+    key('1')
+    expect(said).toEqual(['allow'])
+
+    openApproval(suggested, (choice) => said.push(choice))
+    typeIn(noteBox(), '2 is not a choice here')
+    noteBox().focus()
+    key('1')
+    expect(said).toEqual(['allow'])
+    /* And the prefix field is text from the first key, empty or not. */
+    patternBox().focus()
+    key('1')
+    expect(said).toEqual(['allow'])
+  })
+
+  /* The prefix field sits inside the row that saves it, so the row's own click
+     would answer the request the moment the reader put the caret in the field. */
+  it('lets the reader edit the prefix without picking its row', () => {
+    const said: unknown[] = []
+    openApproval(suggested, (choice) => said.push(choice))
+    patternBox().click()
+    expect(said).toEqual([])
+    expect(sheets().length).toBe(1)
+    /* Enter there saves it, which is the row's other door. */
+    typeIn(patternBox(), 'git push origin *')
+    patternBox().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(said).toEqual(['allow_always'])
   })
 
   it('withdraws silently when the server closes the request', () => {
