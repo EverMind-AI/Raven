@@ -24,7 +24,9 @@ if TYPE_CHECKING:
 # The turn's own bound on recall. The backend plugin carries a stricter one so
 # its circuit breaker fires first; this is the floor under any third-party
 # MemoryBackend, which the Protocol does not oblige to have a timeout at all.
-_RECALL_BUDGET_S: float = 5.0
+# Raised with HttpMemoryBackend.RECALL_TIMEOUT_S (2.5 -> 8.0) to keep that
+# ordering: a hosted cloud backend answers in seconds, not milliseconds.
+_RECALL_BUDGET_S: float = 10.0
 
 
 class MemorySegmentBuilder:

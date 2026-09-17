@@ -90,4 +90,17 @@ class TestMemos(HostedBackendCases):
         await backend.health()
         (req,) = fake.requests
         assert req.url.path.endswith("/search/memory")
-        assert FakeMemos.body(req)["top_k"] == 1
+        assert FakeMemos.body(req)["memory_limit_number"] == 1
+
+    async def test_recall_asks_for_rows_by_the_field_the_route_reads(self, backend, fake):
+        """memory_limit_number, never top_k.
+
+        The route ignores an unknown field instead of refusing it, so sending
+        top_k leaves the service on its own default (6 rows) and the caller's
+        budget has no effect at all -- a silent cap, not an error.
+        """
+        await backend.recall("tea", user_id=USER, top_k=40)
+        (req,) = fake.requests
+        body = FakeMemos.body(req)
+        assert body["memory_limit_number"] == 40
+        assert "top_k" not in body

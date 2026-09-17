@@ -7,6 +7,10 @@ conversation back, ``POST /delete/memory`` with ``memory_ids`` alone for the
 browser. A search row is ``{"id", "memory_key", "memory_value", "memory_type",
 "relativity", "conversation_id", ...}`` (observed 2026-09-15).
 
+A search takes its row budget as memory_limit_number; top_k is not a
+field of this route and is ignored rather than refused, which caps a caller that
+sends it at the service default of 6 rows.
+
 MemOS reports failure inside a 200: ``code`` is ``0`` on success, ``40309`` on
 rate limiting, and ``message`` is ``"ok"``. ``_effective_status`` folds those
 onto the HTTP statuses the base class already handles. A search answers with
@@ -51,7 +55,14 @@ class MemosBackend(HttpMemoryBackend):
         return self._effective_status(reply) == 200 and (reply.body or {}).get("message") == "ok"
 
     def _recall_call(self, query: str, top_k: int, owner: str) -> Call:
-        return Call("POST", "/search/memory", json={"query": query, "user_id": owner, "top_k": top_k})
+        # The row budget is memory_limit_number. top_k is not a field of
+        # this route: it is accepted and ignored, so the service answers with its
+        # own default (6 rows, measured 2026-09-17) whatever the caller asked for.
+        return Call(
+            "POST",
+            "/search/memory",
+            json={"query": query, "user_id": owner, "memory_limit_number": top_k},
+        )
 
     def _parse_hits(self, body: Any) -> list[Memory]:
         data = (body or {}).get("data") or {}
@@ -113,7 +124,11 @@ class MemosBackend(HttpMemoryBackend):
         return out
 
     def _health_call(self) -> Call:
-        return Call("POST", "/search/memory", json={"query": "health", "user_id": self._user_id, "top_k": 1})
+        return Call(
+            "POST",
+            "/search/memory",
+            json={"query": "health", "user_id": self._user_id, "memory_limit_number": 1},
+        )
 
 
 def make_backend(ctx: PluginContext) -> MemosBackend:

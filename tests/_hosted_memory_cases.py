@@ -18,6 +18,7 @@ from typing import Any
 import httpx
 import pytest
 
+from raven.context_engine.segments.memory import _RECALL_BUDGET_S
 from raven.contracts.memory import BackendHealth, Memory
 from raven.memory_engine.http_backend import RECALL_TIMEOUT_S, HttpMemoryBackend
 from raven.plugins import PluginContext, ServiceLocator
@@ -189,10 +190,16 @@ class HostedBackendCases:
         assert await backend.recall("tea", user_id=USER, top_k=5) == []
 
     async def test_recall_timeout_is_under_the_host_budget(self, backend, fake):
+        """Read the host's bound rather than restating it.
+
+        Both numbers moved once already (2.5/5.0 -> 8.0/10.0, for hosted clouds
+        that answer in seconds); a copy of the ceiling here would have gone on
+        passing while the ordering it stands for was broken.
+        """
         await backend.recall("tea", user_id=USER, top_k=5)
         (req,) = fake.requests
         timeout = req.extensions["timeout"]
-        assert timeout["read"] <= RECALL_TIMEOUT_S < 5.0
+        assert timeout["read"] <= RECALL_TIMEOUT_S < _RECALL_BUDGET_S
         assert timeout["connect"] <= RECALL_TIMEOUT_S
 
     # ── store ────────────────────────────────────────────────────────

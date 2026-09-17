@@ -39,9 +39,17 @@ import httpx
 from raven.contracts.memory import BackendHealth, HealthCheck, Memory
 from raven.plugins import PluginContext
 
-# The host abandons a recall at 5.0s (raven/context_engine/segments/memory.py);
+# The host abandons a recall at 10.0s (raven/context_engine/segments/memory.py);
 # the client gives up first so the host never waits on a call it has dropped.
-RECALL_TIMEOUT_S = 2.5
+#
+# 2.5s was under the floor of what a hosted service answers in. Measured
+# 2026-09-17 against the live clouds with a ~3k-character query, serially:
+# Mem0 /v3/memories/search/ took 1.19s, 2.45s, 2.48s; MemOS /search/memory took
+# 0.43s, 0.45s, 0.53s. Mem0 alone was already losing roughly half its recalls at
+# 2.5s with one caller, and a timeout here is silent -- the turn continues with
+# no recalled memory and one warning line -- so the failure reads as "this
+# backend recalls nothing" rather than as a timeout.
+RECALL_TIMEOUT_S = 8.0
 STORE_TIMEOUT_S = 10.0
 HEALTH_TIMEOUT_S = 5.0
 
