@@ -188,6 +188,106 @@ async def test_a_stall_after_streamed_output_is_not_retried_by_the_outer_ladder_
     assert seen == ["partial", "answer"]
 
 
+class _ThinksThenStalls(LLMProvider):
+    """Streams a long thought and a half-built tool call, then stalls; answers next time."""
+
+    def __init__(self):
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, *args, **kwargs):  # pragma: no cover - the stream path is under test
+        raise NotImplementedError
+
+    async def chat_stream(self, *args, **kwargs):
+        from raven.providers.base import ChatDelta
+
+        self.calls += 1
+        if self.calls == 1:
+            yield ChatDelta(content=None, reasoning_content="weighing the layout")
+            yield ChatDelta(
+                content=None,
+                tool_call_delta={
+                    "tool_calls": [{"index": 0, "id": "c1", "function": {"name": "write_file", "arguments": '{"pa'}}]
+                },
+            )
+            raise TimeoutError
+        yield ChatDelta(content="answer")
+
+
+@pytest.mark.asyncio
+async def test_a_stall_during_a_silent_think_is_asked_again(workspace):
+    """Nothing reached the caller, so asking again repeats nothing. A thought is not
+    the reply unless the caller wired `on_reasoning_delta`, and the fragments of a
+    tool call are never rendered as one -- counting either as output made the long
+    quiet round, the one that writes a whole build script, the one round a dropped
+    stream could always end."""
+    provider = _ThinksThenStalls()
+    seen: list[str] = []
+
+    out = await _streamed_turn(_streaming_agent(workspace, provider, retry_after_output=False), seen)
+
+    assert out is not None and out[0] == "answer"
+    assert provider.calls == 2
+    assert seen == ["answer"], "the watcher saw the reply once"
+    assert "weighing" not in (out[0] or ""), "the abandoned thought is not part of the reply"
+
+
+@pytest.mark.asyncio
+async def test_what_the_failed_attempt_left_behind_is_dropped():
+    """`stream_llm_call` directly, for the invariant the loop cannot show: every
+    retry starts from empty buffers. While a retry was only possible with all three
+    empty, the paths that ask again did not have to clear them; once a silent think
+    retries, a slot left standing merges with the next attempt's fragments into a
+    call the model never made, and a thinking block keeps the signature of a
+    generation that no longer exists."""
+    from raven.providers.base import ChatDelta
+    from raven.providers.streaming import stream_llm_call
+
+    class _HalfCallThenAnswers(LLMProvider):
+        def __init__(self):
+            super().__init__(api_key="test")
+            self.calls = 0
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+        async def chat(self, *args, **kwargs):  # pragma: no cover - the stream path is under test
+            raise NotImplementedError
+
+        async def chat_stream(self, *args, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                yield ChatDelta(content=None, reasoning_content="first thought")
+                yield ChatDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [{"index": 0, "id": "c1", "function": {"name": "exec", "arguments": '{"comm'}}]
+                    },
+                    thinking_blocks=[{"type": "thinking", "thinking": "A", "signature": "sigA"}],
+                )
+                raise ConnectionError("upstream went away")
+            yield ChatDelta(content="here is the plan")
+
+    provider = _HalfCallThenAnswers()
+    out = await stream_llm_call(
+        provider,
+        messages=[{"role": "user", "content": "go"}],
+        tools=None,
+        model="stub",
+        on_token_delta=None,
+        max_reconnects=1,
+    )
+
+    assert provider.calls == 2
+    assert out.content == "here is the plan"
+    assert not out.tool_calls, "no call the second attempt did not make"
+    assert "first thought" not in (out.reasoning_content or "")
+    assert not out.thinking_blocks, "no signed block from a generation that is gone"
+
+
 @pytest.mark.production_timing
 def test_the_ladder_comes_from_agents_defaults():
     class _Defaults:
