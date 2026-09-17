@@ -37,6 +37,49 @@ Results describe the published test configurations; model, task set, and evaluat
 
 https://github.com/user-attachments/assets/3c541dae-5852-447f-8ea6-c9877612ad57
 
+
+## 🤝 Raven Agents
+
+Raven's modular architecture powers four state-of-the-art agents, each assembled from reusable harness components with tools, skills, and workflows tailored to its domain. It can delegate a focused task to one agent or coordinate several agents in a shared workflow.
+
+| Agent | What it does |
+| --- | --- |
+| **Raven-Research** | Searches the live web, reads and compares sources, and produces research reports with citations and references. |
+| **Raven-Code** | Writes, runs, and debugs code with state-of-the-art performance, covering feature development, bug fixes, refactoring, scripting, and testing. |
+| **Raven-Design** | Creates, edits, and reviews visual work: brand assets, diagrams, charts, illustrations, icons, slide decks, and interface designs. |
+| **Raven-Oncall** | Runs and monitors experiments and long-running jobs on local or remote machines, evaluates results, adjusts subsequent runs, and reports the outcome. |
+
+For example, Raven-Research can gather evidence, Raven-Code can implement an experiment, Raven-Oncall can run and monitor it, and Raven-Design can turn the results into charts and a presentation.
+
+Enable the agents you need during onboarding. See [`agents/README.md`](agents/README.md) for configuration details.
+
+## 🔌 Preset Third-Party Agents
+
+Raven includes presets for these third-party agents, so you can bring their capabilities into its orchestration workflows.
+
+<table width="100%">
+<tr>
+<td width="20%" align="center"><img src="ui-web/src/assets/agents/claudecode-color.svg" alt="Claude Code" width="64" height="64"><br><strong>Claude Code</strong></td>
+<td width="20%" align="center"><img src="ui-web/src/assets/agents/codex-color.svg" alt="Codex" width="64" height="64"><br><strong>Codex</strong></td>
+<td width="20%" align="center"><img src="ui-web/src/assets/agents/opencode.svg" alt="OpenCode" width="64" height="64"><br><strong>OpenCode</strong></td>
+<td width="20%" align="center"><img src="ui-web/src/assets/agents/hermesagent.svg" alt="Hermes Agent" width="64" height="64"><br><strong>Hermes Agent</strong></td>
+<td width="20%" align="center"><img src="ui-web/src/assets/agents/openclaw-color.svg" alt="OpenClaw" width="64" height="64"><br><strong>OpenClaw</strong></td>
+</tr>
+<tr>
+<td align="center"><img src="ui-web/src/assets/agents/miromind.svg" alt="MiroThinker" width="64" height="64"><br><strong>MiroThinker</strong></td>
+<td align="center"><img src="ui-web/src/assets/agents/copilot-color.svg" alt="GitHub Copilot" width="64" height="64"><br><strong>GitHub Copilot</strong></td>
+<td align="center"><img src="ui-web/src/assets/agents/qwen-color.svg" alt="Qwen Code" width="64" height="64"><br><strong>Qwen Code</strong></td>
+<td align="center"><img src="ui-web/src/assets/agents/codebuddy-color.svg" alt="CodeBuddy" width="64" height="64"><br><strong>CodeBuddy</strong></td>
+<td align="center"><img src="ui-web/src/assets/agents/qoder-color.svg" alt="Qoder" width="64" height="64"><br><strong>Qoder</strong></td>
+</tr>
+<tr>
+<td align="center"><img src="ui-web/src/assets/agents/grok.svg" alt="Grok Build" width="64" height="64"><br><strong>Grok Build</strong></td>
+<td align="center"><img src="ui-web/src/assets/agents/kimi.svg" alt="Kimi Code" width="64" height="64"><br><strong>Kimi Code</strong></td>
+<td align="center"><img src="ui-web/src/assets/agents/pi.svg" alt="Pi" width="64" height="64"><br><strong>Pi</strong></td>
+<td colspan="2"></td>
+</tr>
+</table>
+
 ## 🚀 Quick Start
 
 ### 📦 Install
@@ -81,66 +124,89 @@ checkout reads the tree in place. Setup asks about each product and registers
 the ones you take up, on the model it is tuned for or on this raven's LLM.
 See [`agents/README.md`](agents/README.md).
 
-### 🧭 Onboard and run
+## 🏠 Self-Hosting
+
+Raven can run directly from a checkout or as a single Docker Compose service. The
+Compose deployment serves the built page through nginx, keeps the Raven engine
+and its child services in one container, and stores durable state in a named
+volume.
+
+### 📝 Prerequisites
+
+For a Docker deployment, install Docker Engine and Docker Compose v2. For a
+source deployment, install Python 3.12, `uv`, Node.js, and npm. A source
+checkout also needs the repository dependencies installed before starting the
+engine.
+
+### 🚀 Start the server from source
+
+From the repository root:
 
 ```bash
-raven
+make install-deps
+make build-ui
+uv run raven web
 ```
 
-On first launch, Raven guides you through setup and opens the terminal UI. You can skip optional steps.
+`raven web` opens the local page and leaves the engine running after the
+terminal exits. It defaults to `http://127.0.0.1:18792`. Use
+`uv run raven web --foreground` when debugging, or `uv run raven web --stop` to
+stop the resident engine. The first run can start without a configured model;
+add one from **Settings > Models** or run `uv run raven onboard`.
 
-Run `raven onboard` to reconfigure or `raven doctor` to check your setup.
+To run only the engine without the browser launcher, use
+`uv run raven gateway`.
 
-### ⬆️ Upgrade
+### 🐳 Start with Docker Compose
+
+The repository Compose setup builds the page and Python environment as part of
+the image, so no separate host-side build is required:
 
 ```bash
-raven upgrade --check
-raven upgrade
+cd docker
+docker compose up
 ```
 
-Upgrades preserve configuration, sessions, and memory. Raven does not update automatically.
+Open <http://127.0.0.1:18793>. The Compose container runs the full `gateway`
+engine so providers added from **Settings > Models** are available on the next
+turn without restarting.
 
-## 🤝 Raven Agents
+For the detailed container layout, sign-in flow, provider setup, and operational
+notes, see [`docker/README.md`](docker/README.md).
 
-Raven's modular architecture powers four state-of-the-art agents, each assembled from reusable harness components with tools, skills, and workflows tailored to its domain. It can delegate a focused task to one agent or coordinate several agents in a shared workflow.
+### ⚙️ Configuration
 
-| Agent | What it does |
-| --- | --- |
-| **Raven-Research** | Searches the live web, reads and compares sources, and produces research reports with citations and references. |
-| **Raven-Code** | Writes, runs, and debugs code with state-of-the-art performance, covering feature development, bug fixes, refactoring, scripting, and testing. |
-| **Raven-Design** | Creates, edits, and reviews visual work: brand assets, diagrams, charts, illustrations, icons, slide decks, and interface designs. |
-| **Raven-Oncall** | Runs and monitors experiments and long-running jobs on local or remote machines, evaluates results, adjusts subsequent runs, and reports the outcome. |
+Docker reads committed defaults from [`docker/.env`](docker/.env), then loads
+the optional, git-ignored `docker/.env.local` over them.
+Put credentials and deployment-specific overrides in `.env.local`, not in the
+committed file. 
 
-For example, Raven-Research can gather evidence, Raven-Code can implement an experiment, Raven-Oncall can run and monitor it, and Raven-Design can turn the results into charts and a presentation.
+Raven stores its configuration, sessions, workspace, logs, and memory under
+`RAVEN_HOME`. The Compose image maps this to `/data` through the `raven-data`
+volume. Keep that volume for upgrades and restarts; `docker compose down -v`
+deletes it and its data.
 
-Enable the agents you need during onboarding. See [`agents/README.md`](agents/README.md) for configuration details.
+### 🛠️ Build a Docker image
 
-## 🔌 Preset Third-Party Agents
+Build the image using the Makefile target:
 
-Raven includes presets for these third-party agents, so you can bring their capabilities into its orchestration workflows.
+```bash
+make docker-build
+```
 
-<table width="100%">
-<tr>
-<td width="20%" align="center"><img src="ui-web/src/assets/agents/claudecode-color.svg" alt="Claude Code" width="64" height="64"><br><strong>Claude Code</strong></td>
-<td width="20%" align="center"><img src="ui-web/src/assets/agents/codex-color.svg" alt="Codex" width="64" height="64"><br><strong>Codex</strong></td>
-<td width="20%" align="center"><img src="ui-web/src/assets/agents/opencode.svg" alt="OpenCode" width="64" height="64"><br><strong>OpenCode</strong></td>
-<td width="20%" align="center"><img src="ui-web/src/assets/agents/hermesagent.svg" alt="Hermes Agent" width="64" height="64"><br><strong>Hermes Agent</strong></td>
-<td width="20%" align="center"><img src="ui-web/src/assets/agents/openclaw-color.svg" alt="OpenClaw" width="64" height="64"><br><strong>OpenClaw</strong></td>
-</tr>
-<tr>
-<td align="center"><img src="ui-web/src/assets/agents/miromind.svg" alt="MiroThinker" width="64" height="64"><br><strong>MiroThinker</strong></td>
-<td align="center"><img src="ui-web/src/assets/agents/copilot-color.svg" alt="GitHub Copilot" width="64" height="64"><br><strong>GitHub Copilot</strong></td>
-<td align="center"><img src="ui-web/src/assets/agents/qwen-color.svg" alt="Qwen Code" width="64" height="64"><br><strong>Qwen Code</strong></td>
-<td align="center"><img src="ui-web/src/assets/agents/codebuddy-color.svg" alt="CodeBuddy" width="64" height="64"><br><strong>CodeBuddy</strong></td>
-<td align="center"><img src="ui-web/src/assets/agents/qoder-color.svg" alt="Qoder" width="64" height="64"><br><strong>Qoder</strong></td>
-</tr>
-<tr>
-<td align="center"><img src="ui-web/src/assets/agents/grok.svg" alt="Grok Build" width="64" height="64"><br><strong>Grok Build</strong></td>
-<td align="center"><img src="ui-web/src/assets/agents/kimi.svg" alt="Kimi Code" width="64" height="64"><br><strong>Kimi Code</strong></td>
-<td align="center"><img src="ui-web/src/assets/agents/pi.svg" alt="Pi" width="64" height="64"><br><strong>Pi</strong></td>
-<td colspan="2"></td>
-</tr>
-</table>
+The default tag is `raven:local`. To select a different tag or optional
+dependency set:
+
+```bash
+make docker-build DOCKER_IMAGE=raven:local
+docker build -t raven:local --build-arg RAVEN_EXTRAS="channels,tools,sandbox" .
+```
+
+Run the locally built image through Compose by exporting
+`RAVEN_IMAGE=raven:local` (or prefixing the command with that assignment) and
+running `docker compose up` from `docker/`. The Makefile shortcut is
+`RAVEN_IMAGE=raven:local make docker-up`. Stop the stack with `make docker-down`.
+
 
 ## 🧩 Core Systems
 
@@ -214,98 +280,7 @@ The command opens the WebUI in your browser and keeps Raven running in the backg
 
 Run `raven --help` or `raven <command> --help` for the complete CLI surface.
 
-## 🏠 Self-Hosting
 
-Raven can run directly from a checkout or as a single Docker Compose service. The
-Compose deployment serves the built page through nginx, keeps the Raven engine
-and its child services in one container, and stores durable state in a named
-volume.
-
-### 📝 Prerequisites
-
-For a Docker deployment, install Docker Engine and Docker Compose v2. For a
-source deployment, install Python 3.12, `uv`, Node.js, and npm. A source
-checkout also needs the repository dependencies installed before starting the
-engine.
-
-### 🚀 Start the server from source
-
-From the repository root:
-
-```bash
-make install-deps
-make build-ui
-uv run raven web
-```
-
-`raven web` opens the local page and leaves the engine running after the
-terminal exits. It defaults to `http://127.0.0.1:18792`. Use
-`uv run raven web --foreground` when debugging, or `uv run raven web --stop` to
-stop the resident engine. The first run can start without a configured model;
-add one from **Settings > Models** or run `uv run raven onboard`.
-
-To run only the engine without the browser launcher, use
-`uv run raven gateway`.
-
-### 🐳 Start with Docker Compose
-
-The repository Compose setup builds the page and Python environment as part of
-the image, so no separate host-side build is required:
-
-```bash
-cd docker
-docker compose up
-```
-
-Open <http://127.0.0.1:18793>. The Compose container runs the full `gateway`
-engine so providers added from **Settings > Models** are available on the next
-turn without restarting.
-
-For the detailed container layout, sign-in flow, provider setup, and operational
-notes, see [`docker/README.md`](docker/README.md).
-
-### ⚙️ Configuration
-
-Docker reads committed defaults from [`docker/.env`](docker/.env), then loads
-the optional, git-ignored `docker/.env.local` over them.
-Put credentials and deployment-specific overrides in `.env.local`, not in the
-committed file. Common settings include:
-
-| Variable | Purpose |
-| --- | --- |
-| `RAVEN_WEB_PORT` | Host port published by Compose (default `18793`) |
-| `RAVEN_AUTO_LOGIN` | Automatically sign in local browsers; set to `0` for remote exposure |
-| `RAVEN_EXTRAS` | Optional image extras such as `channels`, `tools`, `sandbox`, `browser`, or `eval` |
-| `RAVEN_PLUGINS` | Bundled plugins to install in the image, including `everos-memory` |
-| `RAVEN_PROVIDER` | Optional provider seeded into `config.json` at container startup |
-| `RAVEN_API_KEY` | Optional provider key; local providers may leave it empty |
-| `RAVEN_API_BASE` | Optional custom endpoint, sufficient by itself for keyless local providers |
-
-Raven stores its configuration, sessions, workspace, logs, and memory under
-`RAVEN_HOME`. The Compose image maps this to `/data` through the `raven-data`
-volume. Keep that volume for upgrades and restarts; `docker compose down -v`
-deletes it and its data.
-
-### 🛠️ Build a Docker image
-
-Build the image using the Makefile target:
-
-```bash
-make docker-build
-```
-
-The default tag is `raven:local`. To select a different tag or optional
-dependency set:
-
-```bash
-make docker-build DOCKER_IMAGE=raven:local
-docker build -t raven:local --build-arg RAVEN_EXTRAS="channels,tools,sandbox" .
-```
-
-Run the locally built image through Compose by exporting
-`RAVEN_IMAGE=raven:local` (or prefixing the command with that assignment) and
-running `docker compose up` from `docker/`. The Makefile shortcut is
-`RAVEN_IMAGE=raven:local make docker-up`. Stop the stack with `make docker-down`.
 
 ## 📚 Documentation
 

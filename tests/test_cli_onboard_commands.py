@@ -5995,21 +5995,26 @@ def test_installers_no_longer_probe_config_to_word_a_closing_hint() -> None:
         assert "Raven updated" not in text, name
 
 
-def test_readme_quickstart_matches_the_installer_hint() -> None:
-    """The README's first step and the installer's first-run hint must name the
-    same command. They drifted once -- the installer said nothing about setup
-    while the README opened with ``raven onboard`` -- and a first-time user who
-    followed the terminal hit the missing-credentials error instead."""
+def test_readme_quickstart_matches_the_installer() -> None:
+    """Both READMEs' Quick Start must describe the clone install the way the
+    installer behaves. ``./install.sh`` and a piped run do different things from
+    inside a checkout -- local mode requires ``$0`` to be a real file -- and
+    RAVEN_LOCAL_SRC is the documented opt-out. A reader who cannot see that from
+    the README installs the release wheel believing they installed their tree.
+
+    This replaces a pin on the old "Onboard and run" heading. The installers no
+    longer close with a first-run hint and the READMEs no longer carry that
+    section, so the two have no shared command left to agree on; the clone
+    install is what they must not drift on now.
+    """
     root = Path(__file__).resolve().parents[1]
-    for name, title in (
-        ("README.md", "Onboard and run"),
-        ("README.zh-CN.md", "完成引导并运行"),
-    ):
+    assert "RAVEN_LOCAL_SRC" in (root / "install.sh").read_text()
+    for name in ("README.md", "README.zh-CN.md"):
         text = (root / name).read_text()
-        heading = re.search(rf"^### (?:\S+\s+)?{re.escape(title)}\s*$", text, re.MULTILINE)
-        assert heading is not None, name
-        block = text[heading.start() :][:200]
-        assert "```bash\nraven\n```" in block, name
+        quickstart = next(b for b in re.split(r"^## ", text, flags=re.MULTILINE) if b.startswith("\U0001f680 "))
+        assert "git clone" in quickstart, name
+        assert "./install.sh" in quickstart, name
+        assert "RAVEN_LOCAL_SRC" in quickstart, name
 
 
 def test_pick_model_shows_default_positioning_line(
