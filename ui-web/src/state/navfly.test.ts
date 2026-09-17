@@ -2,8 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { markNew as railMarkNew } from '../features/rail/store'
-import { MORE_ROWS, draw, install as installNav, mark, toggle } from './navfly'
+import { MORE_ROWS, draw, mark, reset, toggle } from './navfly'
 import { resetSources, setSources } from './sources'
+import { mountPageRoot } from '../test/pageRoot'
 
 import { resetTranslator, setTranslator } from '../i18n/t'
 import * as confirmStore from './confirm'
@@ -76,22 +77,22 @@ function openPage(id: string | null): void {
   document.querySelector<HTMLElement>('.app')!.dataset.page = id ? 'on' : 'off'
 }
 
+/* The page root rather than a fixture of the strip: the rows are rendered by
+   <MoreFly/> from this store now, and the fold's own button reads `open` off it
+   (src/chrome/Rail.tsx), so a case has to mount the column. The store outlives
+   a remount -- drawn rows stay drawn -- so each case starts it over. */
+let unmount = (): void => {}
+
 beforeEach(() => {
-  document.body.innerHTML =
-    '<div class="app" data-page="off">' +
-    '<button id="newBtn"></button><button id="skillBtn"></button><button id="plugBtn"></button>' +
-    '<button id="memBtn"></button>' +
-    '<div class="moresub" id="moreFly" data-open="false"></div>' +
-    '<button class="navi more" id="moreBtn" aria-expanded="false">' +
-    '<span class="l-more">更多</span><span class="l-less">收起</span></button>' +
-    '<section id="capsPage" data-open="false"></section>' +
-    '<section id="xaPage" data-open="false"></section>' +
-    '<section id="connPage" data-open="false"></section>' +
-    '<section id="cronPage" data-open="false"></section>' +
-    '<section id="memPage" data-open="false"></section></div>'
+  reset()
+  document.body.innerHTML = ''
+  unmount = mountPageRoot()
 })
 
 afterEach(() => {
+  unmount()
+  unmount = () => {}
+  document.body.innerHTML = ''
   resetTranslator()
   resetSources()
 })
@@ -198,7 +199,6 @@ describe('opening and closing the group', () => {
 
   it('is what the group button does, without the click reaching the document', () => {
     install()
-    installNav()
     const seen: string[] = []
     document.addEventListener('click', () => seen.push('document'))
     document.getElementById('moreBtn')!.click()

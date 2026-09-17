@@ -5,8 +5,8 @@
  * renders page.html's body plus this root) and by both boot goldens, so nothing
  * here re-states it. What is here is what a golden of tags, ids, classes and
  * data-* cannot see: the roles and flags that are not data-*, the elements
- * handed over empty because another writer owns them, which row opens what, and
- * that the literals come from the catalogue rather than from a copy in the JSX.
+ * handed over empty, which row opens what, and that the literals come from the
+ * catalogue rather than from a copy in the JSX.
  */
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -109,11 +109,12 @@ describe('the rail', () => {
     }
   })
 
-  /* Shared ground and other modules' values: the rail island roots itself in
-     #list, state/navfly.ts builds the rows inside #moreFly and re-decides their
-     marks, features/rail/store.ts writes aria-current over the nav buttons, and
-     state/foot.ts writes the two slots in the door. React owning any of them
-     would tear down what the other side put there. */
+  /* Shared ground, and values nothing has answered yet: the rail island roots
+     itself in #list, so React must not own that child list; the fold's rows and
+     the two slots in the door are rendered from stores that hold nothing until
+     a boot step or a reader asks (state/navfly.ts, state/foot.ts); and the
+     aria-current over the nav buttons is written from outside React
+     (features/rail/store.ts), which is why none of them carries one here. */
   it('hands the list, the fold and the foot slots over empty', () => {
     render()
     for (const id of ['list', 'moreFly', 'meSub', 'meKbd']) {

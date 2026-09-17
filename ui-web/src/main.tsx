@@ -25,7 +25,6 @@ import * as workspace from './features/workspace/store'
 import { XaApp } from './features/xa/XaPage'
 import { SettingsApp } from './features/settings/SettingsPage'
 import * as find from './state/find'
-import * as navfly from './state/navfly'
 import * as panes from './chrome/behaviour/panes'
 import * as scrollbars from './chrome/behaviour/scrollbars'
 import * as session from './lib/session'
@@ -106,11 +105,10 @@ composer.install()
    by the time this bundle runs: the page script below is the LAST thing in the
    body. Installing here rather than from the shell keeps each module's wiring
    next to the behaviour it belongs to. What each of these installs is
-   element-level -- the grips, the More button, the search row -- except the
-   scrollbars, which raise the layer their thumbs are parked in. */
+   element-level -- the grips, the search row -- except the scrollbars, which
+   raise the layer their thumbs are parked in. */
 scrollbars.install()
 panes.install()
-navfly.install()
 find.install()
 
 /* The model picker renders nothing until asked. One root at the body rather

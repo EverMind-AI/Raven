@@ -50,8 +50,9 @@ export function repaint(): void {
   try { islands.memory.redraw() } catch { /* memory not loaded yet */ }
   try { islands.knowledge.redraw() } catch { /* knowledge not loaded yet */ }
   try { islands.playbooks.redraw() } catch { /* playbooks not loaded yet */ }
-  /* The More rows are redrawn on each open, so only a group standing open at
-     the moment of the flip keeps the old names. */
+  /* The rows' own words follow the catalogue on their own (chrome/MoreFly.tsx);
+     what this asks for is the mark on each of them, which is written from
+     outside React and is the one thing a re-render leaves alone. */
   islands.nav.draw()
   /* The shared drawer is closed rather than redrawn: it is not on any page, so
      nothing above reaches it, and every one of its five openers would have to

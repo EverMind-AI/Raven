@@ -139,9 +139,11 @@ export const islands = {
     /* Started by app/boot.ts once the session pointer is real. */
     watch: resume.watch,
   },
-  /* Not a React island: the nav flyout is a writer (see state/navfly.ts). It
-     rides the same bag because the bag is what a page-wide writer is reached
-     through, island or not -- here, by the language repaint. */
+  /* Not a React island: the nav flyout is a store with one chrome component
+     over it (state/navfly.ts, chrome/MoreFly.tsx), and draw() is what marks
+     the rows it has drawn. It rides the same bag because the bag is what a
+     page-wide verb is reached through, island or not -- here, by the language
+     repaint. */
   nav: {
     draw: navfly.draw,
   },

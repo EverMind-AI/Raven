@@ -24,13 +24,13 @@
  *     chrome that carries it, which is what src/app/install.ts's
  *     installActions() is for; it binds this button by id there, and the dead
  *     second handler the demo layer had is gone.
- *   - #moreFly's rows and the two flags the fold writes (#moreFly[data-open],
- *     #moreBtn[aria-expanded]). The group is shared ground the way #list is:
- *     src/state/navfly.ts builds the rows from a table and re-decides their
- *     aria-current on demand, and the rail island's markNew() drives that.
+ *   - #moreFly's data-open, the flag the stylesheet unfolds the group off, and
+ *     the aria-current on each row inside it. Both are src/state/navfly.ts's,
+ *     and the rail island's markNew() drives the second; the rows themselves
+ *     are rendered from that store by src/chrome/MoreFly.tsx.
  *   - the aria-current marks on the six nav buttons (features/rail/store.ts).
- *   - #meSub and #meKbd's text (src/state/foot.ts), the update row's text and
- *     its hidden flag (src/app/updates.ts), and #upnote's click.
+ *   - the update row's text and its hidden flag (src/app/updates.ts), and
+ *     #upnote's click.
  *   - #list's children (the rail island's own root) and #railGrip's drag
  *     (src/chrome/behaviour/panes.ts).
  * Each of those is still exactly one writer of the value it writes, and React
@@ -44,8 +44,11 @@ import { useSyncExternalStore } from 'react'
 import { openPlugins, openSkills } from '../features/plugins/nav'
 import { islands } from '../features/registry'
 import * as find from '../state/find'
+import * as foot from '../state/foot'
 import * as lang from '../state/lang'
+import * as navfly from '../state/navfly'
 import * as rail from '../state/rail'
+import { MoreFly } from './MoreFly'
 
 import type { JSX } from 'react'
 
@@ -95,6 +98,7 @@ function RailTop(): JSX.Element {
    the three set-up-once ones. */
 function RailNav(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
+  const fold = useSyncExternalStore(navfly.subscribe, navfly.get)
   return (
     <nav className="rail-nav">
       <button className="navi newrun" id="newBtn">
@@ -137,13 +141,24 @@ function RailNav(): JSX.Element {
       {/* Sub-agents / entrances / schedules live one level in: they are
            set-up-once surfaces,
            not daily destinations, and seven top-level rows buried the four
-           that are. The group drawn by navfly's draw() is their home.
+           that are. <MoreFly/> is their home.
 
            The rows land above this button, not below it, because the button is
            the fold: it reads "More" while they are hidden and "Less" once they
            stand in the list, which only works if it sits at the list's end. */}
-      <div className="moresub" id="moreFly" data-open="false" role="group" data-i18n-aria="gui.nav.more" aria-label={lang.attr('gui.nav.more')} />
-      <button className="navi more" id="moreBtn" aria-expanded="false" aria-controls="moreFly">
+      <MoreFly />
+      {/* The click stops here. The document's own click chain takes a panel
+          down, and unfolding the group is not leaving it. */}
+      <button
+        className="navi more"
+        id="moreBtn"
+        aria-expanded={fold.open}
+        aria-controls="moreFly"
+        onClick={(e) => {
+          e.stopPropagation()
+          navfly.toggle()
+        }}
+      >
         <svg className="chev" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <path d="M7 9.8l5 5.4 5-5.4" />
         </svg>
@@ -187,12 +202,14 @@ function FindRow(): JSX.Element {
   )
 }
 
-/* The foot row. The update notice above it and the two slots inside the door --
-   the running build and this platform's shortcut for it -- are written by the
-   modules that know those facts (app/updates.ts, state/foot.ts), so this
-   renders them as the page serves them: empty. */
+/* The foot row. The update notice above it is written by the module that knows
+   that fact (app/updates.ts), so this renders it as the page serves it: empty
+   and hidden. The two slots inside the door -- the running build and this
+   platform's shortcut for it -- come from state/foot.ts, which is served empty
+   as well and answers once the boot has asked the install what it is running. */
 function RailFoot(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
+  const f = useSyncExternalStore(foot.subscribe, foot.get)
   return (
     <div className="rail-foot">
       <button className="upnote" id="upnote" hidden>
@@ -202,7 +219,7 @@ function RailFoot(): JSX.Element {
       </button>
       {/* The foot is the door to settings, and only that: accounts are not a
            thing this product has, so nothing down here pretends to be one.
-           The version under the label is drawn by drawFoot(). */}
+           The version under the label is state/foot.ts's. */}
       <button className="me" id="meBtn" data-i18n-aria="gui.nav.set" aria-label={lang.attr('gui.nav.set')} onClick={() => void islands.settings.open()}>
         <span className="av anon">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" />
@@ -210,9 +227,9 @@ function RailFoot(): JSX.Element {
         </span>
         <span className="who">
           <span className="n" data-i18n="gui.nav.set">{lang.text('gui.nav.set', '设置')}</span>
-          <span className="s" id="meSub" />
+          <span className="s" id="meSub">{f.sub || null}</span>
         </span>
-        <span className="kbd" id="meKbd" />
+        <span className="kbd" id="meKbd">{f.kbd || null}</span>
       </button>
     </div>
   )

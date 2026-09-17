@@ -7,14 +7,21 @@
  * the same shape as the four modules above them: unfolding the group makes one
  * list longer rather than opening a second, indented one under it.
  *
- * A writer, not an island. Two reasons: each row carries raw SVG path data
- * that the style freeze wants byte-identical, and the marks on these rows are
- * decided together with the marks on the rail's own nav buttons -- which live
- * outside any root a component here could own. So this module owns #moreFly
- * and everything inside it, the rail island owns the buttons above it, and
- * mark() below is the seam between them: the rail's markNew() calls it and
- * reads back whether the group stood open, instead of reaching into these rows
- * itself. One writer per element, named.
+ * The rows themselves are rendered from `rows` below by src/chrome/MoreFly.tsx,
+ * which is the component that owns #moreFly and everything inside it. What is
+ * left here is the group's own state and the one thing about these rows that
+ * React must not own: their `aria-current`. The marks are decided together with
+ * the marks on the rail's own nav buttons, which live outside any root a
+ * component could hold, so the rail island's markNew() asks mark() below for
+ * the rows and reads back whether the group stood open -- one writer per
+ * element, named. React cannot undo those marks: it never renders the attribute,
+ * and it diffs against the props it rendered last rather than against the
+ * document.
+ *
+ * `#moreFly[data-open]` is written here too. It is the flag the stylesheet
+ * unfolds the group off (src/styles/page.css), and every reader of "is the
+ * group open" -- mark() included -- is an imperative one, so it stays a write by
+ * id; the button's `aria-expanded` is the same fact rendered from `open` below.
  *
  * The three openers are imported from the islands that own those pages, and
  * markNew from the rail's store. That last one and this module import each
@@ -23,16 +30,16 @@
  * reader clicks rather than while the bundle evaluates.
  */
 
+import { flushSync } from 'react-dom'
+
 import { open as openConn } from '../features/connections/nav'
 import { open as openCron } from '../features/cron/store'
 import { markNew } from '../features/rail/store'
 import { open as openXa } from '../features/xa/store'
-import { t } from '../i18n/t'
 
-interface NavRow {
+export interface NavRow {
   page: string
   nameKey: string
-  path: string
   go(): void
 }
 
@@ -40,50 +47,78 @@ export const MORE_ROWS: readonly NavRow[] = [
   {
     page: 'xaPage',
     nameKey: 'gui.nav.agents',
-    path: '<rect x="3.5" y="4" width="7" height="7" rx="1.6"/><rect x="13.5" y="13" width="7" height="7" rx="1.6"/><path d="M10.5 7.5h3.5a3 3 0 0 1 3 3v2.5"/>',
     go: () => openXa(),
   },
   {
     page: 'connPage',
     nameKey: 'gui.nav.conn',
-    path: '<path d="M9.5 14.5 6.8 17.2a3.3 3.3 0 0 1-4.7-4.7l2.7-2.7M14.5 9.5l2.7-2.7a3.3 3.3 0 0 1 4.7 4.7l-2.7 2.7M9 15l6-6"/>',
     go: () => openConn(),
   },
   {
     page: 'cronPage',
     nameKey: 'gui.nav.cron',
-    path: '<circle cx="12" cy="12.5" r="7.5"/><path d="M12 8.5v4.2l2.6 1.6M9 2.5h6"/>',
     go: () => openCron(),
   },
 ]
+
+export interface NavFlyState {
+  /** Whether the group stands unfolded. Served folded. */
+  readonly open: boolean
+  /** The rows that have been drawn. Empty until the group is first opened. */
+  readonly rows: readonly NavRow[]
+}
+
+/* Served empty: page.html handed #moreFly over with no children, and the rows
+   are drawn on the way open. Once drawn they stay -- folding the group is a
+   flag, not a teardown. */
+const NONE: readonly NavRow[] = []
+let state: NavFlyState = { open: false, rows: NONE }
+const listeners = new Set<() => void>()
+
+/** The group's state, for <MoreFly/> and for the fold's own button. */
+export function get(): NavFlyState {
+  return state
+}
+
+/** For useSyncExternalStore: called whenever the fold or the rows change. */
+export function subscribe(fn: () => void): () => void {
+  listeners.add(fn)
+  return () => {
+    listeners.delete(fn)
+  }
+}
+
+/* Committed synchronously: draw() marks the rows straight afterwards, and the
+   rows have to be in the document by then. */
+function put(next: Partial<NavFlyState>): void {
+  const merged = { ...state, ...next }
+  if (merged.open === state.open && merged.rows === state.rows) return
+  state = merged
+  flushSync(() => {
+    for (const fn of [...listeners]) fn()
+  })
+}
 
 const fly = (): HTMLElement | null => document.getElementById('moreFly')
 
 const pageUp = (page: string): boolean => document.getElementById(page)?.dataset.open === 'true'
 
-export function draw(): void {
+/* One pass over whichever rows stand in the group, in the table's order. Read
+   off the document rather than off `rows` so that the pass covers what is
+   really there: the rail island's own test hands #moreFly three rows of its
+   own, and this is the writer it asks. */
+function paint(): void {
   const box = fly()
   if (!box) return
-  box.innerHTML = ''
-  MORE_ROWS.forEach((row) => {
-    const b = document.createElement('button')
-    b.className = 'navi'
-    b.setAttribute('aria-current', String(pageUp(row.page)))
-    b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${row.path}</svg>`
-    /* Names only. These three rows are places the reader already knows by
-       name; a sentence under each turned a three-item group into a panel. */
-    const nm = document.createElement('div')
-    nm.className = 'nm'
-    nm.textContent = t(row.nameKey)
-    b.appendChild(nm)
-    /* The group stays open on a pick: it is navigation now, and the row's own
-       current mark is the answer to "where am I". */
-    b.onclick = () => {
-      row.go()
-      markNew()
-    }
-    box.appendChild(b)
+  box.querySelectorAll('.navi').forEach((b, i) => {
+    const row = MORE_ROWS[i]
+    b.setAttribute('aria-current', String(!!row && pageUp(row.page)))
   })
+}
+
+export function draw(): void {
+  put({ rows: MORE_ROWS })
+  paint()
 }
 
 /* Re-reads the mark on every row and answers whether the group stands open.
@@ -93,12 +128,17 @@ export function draw(): void {
 export function mark(): boolean {
   const box = fly()
   if (!box || box.dataset.open !== 'true') return false
-  const rows = box.querySelectorAll('.navi')
-  rows.forEach((b, i) => {
-    const row = MORE_ROWS[i]
-    b.setAttribute('aria-current', String(!!row && pageUp(row.page)))
-  })
+  paint()
   return true
+}
+
+/* A row's own click. The group stays open on a pick: it is navigation now, and
+   the row's own current mark is the answer to "where am I". Here rather than in
+   the component so that the rows reach markNew() through the seam this module
+   already has with the rail, instead of a second edge into it from chrome/. */
+export function pick(row: NavRow): void {
+  row.go()
+  markNew()
 }
 
 export function toggle(force?: boolean): void {
@@ -107,16 +147,14 @@ export function toggle(force?: boolean): void {
   const open = force != null ? force : box.dataset.open !== 'true'
   if (open) draw()
   box.dataset.open = String(open)
-  document.getElementById('moreBtn')?.setAttribute('aria-expanded', String(open))
+  put({ open })
   markNew()
 }
 
-export function install(): void {
-  const btn = document.getElementById('moreBtn')
-  if (btn) {
-    btn.onclick = (e) => {
-      e.stopPropagation()
-      toggle()
-    }
-  }
+/* Back to the state a fresh page starts in: folded, with no rows drawn. For a
+   test, the way state/sources.ts's resetSources() is -- the rows outlive a
+   remount, so a case that drew them must not hand them to the next one. The
+   page never calls this. */
+export function reset(): void {
+  put({ open: false, rows: NONE })
 }

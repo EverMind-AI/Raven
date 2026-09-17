@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { draw } from './foot'
 import { resetSources, setSources } from './sources'
+import { mountPageRoot } from '../test/pageRoot'
 
 import type { SettingsSource } from '../features/settings/types'
 
@@ -24,11 +25,20 @@ function install(facts: Facts = {}): void {
 const sub = (): string => document.getElementById('meSub')?.textContent ?? ''
 const kbd = (): string => document.getElementById('meKbd')?.textContent ?? ''
 
+/* The page root rather than a fixture of the two spans: the row is rendered by
+   <RailFoot/> from this store now, so a case has to mount the column that holds
+   it (src/chrome/Rail.tsx). */
+let unmount = (): void => {}
+
 beforeEach(() => {
-  document.body.innerHTML = '<button class="me" id="meBtn"><span class="s" id="meSub"></span><span class="kbd" id="meKbd"></span></button>'
+  document.body.innerHTML = ''
+  unmount = mountPageRoot()
 })
 
 afterEach(() => {
+  unmount()
+  unmount = () => {}
+  document.body.innerHTML = ''
   resetSources()
   if (originalPlatform) Object.defineProperty(navigator, 'platform', originalPlatform)
   else Reflect.deleteProperty(navigator, 'platform')
