@@ -16,7 +16,7 @@ import type { ModelSource, Provider } from './types'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const toastWriter = vi.hoisted(() => ({ items: [] as string[] }))
-vi.mock('../../shell/toast', () => ({
+vi.mock('../../state/toast', () => ({
   show: (text: string) => { toastWriter.items.push(text) },
 }))
 

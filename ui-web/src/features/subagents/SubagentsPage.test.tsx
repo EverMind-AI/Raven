@@ -13,15 +13,15 @@ import {
   SubagentsApp,
 } from './SubagentsPage'
 import * as store from './store'
-import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
+import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
 
 import { domSnapshot } from '../../test/domSnapshot'
-import { islands } from '../../islands'
+import { islands } from '../registry'
 import { resetSources, setSources, sources } from '../../state/sources'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
-import { installWsPanel } from '../../test/wsPanel'
+import { installWsPanel } from '../../test/wsPanelHarness'
 import * as pageStore from '../../state/page'
 import type { JSX } from 'react'
 import type { ComposerSource } from '../composer/types'
@@ -2053,7 +2053,7 @@ describe('subagents island, what a spawned run opens as', () => {
 })
 
 /* The read in flight is shared with whoever asks for the same list while it is
-   still going (shell/resume.ts waits on it to put a window back). Shared state
+   still going (lib/resume.ts waits on it to put a window back). Shared state
    has to be dropped when the conversation changes, or the next one waits on an
    answer that was thrown away. */
 describe('the list reads', () => {
@@ -2213,7 +2213,7 @@ describe('the compact roster', () => {
      and a name the user may have changed, and the head reads the preset -- so
      a renamed Claude Code row still wears its own mark, and a row the user
      wrote themselves wears the glyph. The mark's own table is pinned in
-     shell/agent-mark.test.tsx; what this adds is that the head passes it the
+     components/AgentMark.test.tsx; what this adds is that the head passes it the
      preset and not the name. */
   it('marks a head from its preset, not from what the row is called', () => {
     wire({ list: async () => [] })

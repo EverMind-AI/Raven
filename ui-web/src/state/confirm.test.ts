@@ -114,7 +114,7 @@ describe('the confirm dialog', () => {
 
 /* Last in the file on purpose: applying a language is module state for
    everything after it. What this proves is that the label's two writers agree
-   -- the pass state/lang.ts makes over the document's data-i18n attributes, and
+   -- the pass state/lang/store.ts makes over the document's data-i18n attributes, and
    the component rendering the same key through lang.text -- so the sheet cannot
    come back in the served language once a flip has moved it. A re-render alone
    would not show it: React diffs against the props it rendered last, so a

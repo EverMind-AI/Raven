@@ -34,7 +34,7 @@ export function SheetRack(): JSX.Element {
 /* One numbered row, which all three sheets wear: the number the keyboard picks
    it by, the wording, and for the approval sheet's persisted grant the prefix
    field that rides inside the row. Shared rather than drawn three times, for the
-   reason shell/ico.tsx gives about its glyphs. */
+   reason components/Ico.tsx gives about its glyphs. */
 export interface SheetOptionRow {
   readonly label: string
   readonly run: () => void

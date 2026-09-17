@@ -2,8 +2,8 @@
  *
  * A page's renderer lives once and reads its data only through a source. The
  * page installs one per domain synchronously before the first data-driven
- * paint (src/state/install.ts), and which transport answers behind it is the
- * URL's decision rather than the renderer's (src/state/transport.ts). No flags,
+ * paint (src/app/install.ts), and which transport answers behind it is the
+ * URL's decision rather than the renderer's (src/rpc/chooseTransport.ts). No flags,
  * no clearing, no repaint.
  * Design: docs/specs/2026-08-19-page-datasource-seam.md
  *
@@ -31,9 +31,9 @@ import type { AgentsSource } from '../features/subagents/types'
 import type { ArtifactsSource, TranscriptSource } from '../features/transcript/types'
 import type { WorkspaceSource } from '../features/workspace/types'
 import type { XaSource } from '../features/xa/types'
-import type { BannerSource } from '../shell/banner'
-import type { ProseSource } from '../shell/prose'
-import type { TierSource } from '../shell/tier'
+import type { ProseSource } from '../lib/prose'
+import type { BannerSource } from './banner'
+import type { TierSource } from './tier'
 
 /* Whether the extensions list has been read, and reading it. Declared here
    rather than in a feature's types because no island has this domain: the

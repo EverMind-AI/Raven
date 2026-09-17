@@ -25,23 +25,26 @@
  * lands, the catalogue's text afterwards. The data-i18n* keys stay on the
  * elements -- they are what says which phrase a line of chrome speaks, and the
  * region goldens record them -- but nothing reads them any more (see
- * state/lang.ts). The literals with no key (#cfTitle, #cfYes, #setTitle,
+ * state/lang/store.ts). The literals with no key (#cfTitle, #cfYes, #setTitle,
  * #title) have nothing to look up: each is owned by whoever writes it
  * afterwards, and a re-render cannot undo that, because React diffs against the
  * props it rendered last rather than against the document.
  *
  * Flags this renders but does not own, for the same reason: `data-open` on the
  * seven pages and the veils, `hidden` on button#railShow, `data-rail` and
- * `data-page` on div.app, `data-open` / `data-full` on #split. Each is rendered
- * as the value the page is served with and written afterwards by the one store
- * that owns it (state/page.ts, state/rail.ts, state/ws.ts) -- which is also
- * what keeps the order those writes land in.
+ * `data-page` on div.app, `data-open` / `data-full` on #split, `data-open` on
+ * #menu. Each is rendered as the value the page is served with and written
+ * afterwards by the one store that owns it (state/page.ts, state/rail.ts,
+ * state/ws.ts, state/menu.ts) -- which is also what keeps the order those
+ * writes land in. #menu's `left` and `top` are that store's too and are not
+ * rendered at all: the menu is placed by measuring it after its rows are in it,
+ * which is a value no render could carry.
  *
  * Not here, and not later: #splash and #noJs. Both are pre-JavaScript shells --
  * the splash is the literal first frame, painted while this bundle is still
  * being evaluated, and #noJs is what a reader gets when it never runs -- so
  * neither can be something React puts on screen. They stay in page.html and are
- * taken down at boot (state/splash.ts). #onb stays
+ * taken down at boot (app/splash.ts). #onb stays
  * with them because a portal can only append: rendered from here it would land
  * after #noJs instead of between the two.
  */
@@ -58,13 +61,13 @@ import { SheetRack } from './chrome/SheetRack'
 import { Tooltip } from './chrome/Tooltip'
 import { UpgradeShade } from './chrome/UpgradeShade'
 import { WsPane } from './chrome/WsPane'
-import * as menu from './shell/menu'
-import * as toast from './shell/toast'
 import * as confirm from './state/confirm'
 import * as detail from './state/detail'
 import * as lang from './state/lang'
+import * as menu from './state/menu'
 import * as rail from './state/rail'
-import * as settings from './state/settingsDialog'
+import * as settings from './state/settings'
+import * as toast from './state/toast'
 
 import type { JSX } from 'react'
 
@@ -199,7 +202,7 @@ function SettingsModal(): JSX.Element {
   )
 }
 
-/* The context menu's rows, in the host they were raised in (shell/menu.ts). The
+/* The context menu's rows, in the host they were raised in (state/menu.ts). The
    flag and the position are the store's, because they belong to div#menu, which
    this file renders as an empty region; what is here is the row list the writer
    used to build by hand. */
@@ -218,7 +221,7 @@ function ContextMenu(): JSX.Element | null {
   )
 }
 
-/* One notice (shell/toast.ts). A notice offering an action carries the button
+/* One notice (state/toast.ts). A notice offering an action carries the button
    that takes it; a plain one is one span, and the difference is what the two
    lifetimes are for. */
 function Notice({ t }: { t: toast.Toast }): JSX.Element {

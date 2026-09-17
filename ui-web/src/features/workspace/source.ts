@@ -5,11 +5,11 @@
    seam, which replaces the fixture ones before the first paint. */
 
 import type { WorkspaceSource } from './types'
-import type { ProseSource, ProseTarget } from '../../shell/prose'
+import type { ProseSource, ProseTarget } from '../../lib/prose'
 
-import { islands } from '../../islands'
-import { current as sessionCurrent } from '../../shell/session'
-import { gateway } from '../../state/gateway'
+import { current as sessionCurrent } from '../../lib/session'
+import { gateway } from '../../rpc/gateway'
+import { islands } from '../registry'
 
 export function relToWorkspace(p: string | null | undefined): string | null {
   const s = String(p || '')
@@ -38,7 +38,7 @@ export const relToWsRoot = (p: string | null | undefined): string | null => {
 }
 
 /* What the workspace panel shows as a short path, and what its own tests
-   shorten with. Handed in by the boot's own wiring (state/install.ts), which
+   shorten with. Handed in by the boot's own wiring (app/install.ts), which
    reads it off the installed source. */
 let shorten: (p: string) => string = (p) => p
 export function setShortener(fn: (p: string) => string): void {
@@ -100,7 +100,7 @@ export const proseSource: ProseSource = {
 }
 
 /* The gateway host's OS family, handed in by the boot's own wiring
-   (state/install.ts), which learns it from the handshake. */
+   (app/install.ts), which learns it from the handshake. */
 let hostPlatformLive: () => string = () => ''
 export function setHostPlatformReader(fn: () => string): void {
   hostPlatformLive = fn

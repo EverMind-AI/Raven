@@ -1,8 +1,8 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
-import { show as menuAt } from '../../shell/menu'
-import { show as toast } from '../../shell/toast'
+import { show as menuAt } from '../../state/menu'
+import { show as toast } from '../../state/toast'
 import {
   RENDERED, appFor, canOpenInApp, copyToClip, extOf, fileURL,
   hostPlatform, mdHtml, openInApp, renderURL, runURL, setAppFor,
@@ -10,7 +10,7 @@ import {
 import * as deliveries from './deliveries'
 import * as store from './store'
 
-import type { MenuItem } from '../../shell/menu'
+import type { MenuItem } from '../../state/menu'
 import type { WsChange, WsFile, WsShared } from './types'
 import type { JSX, PointerEvent as ReactPointerEvent } from 'react'
 

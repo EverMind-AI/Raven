@@ -17,10 +17,10 @@
  */
 
 import { cleanPreview, okOf } from '../../features/transcript/source'
-import { islands } from '../../islands'
+import { islands } from '../../features/registry'
 import { hasToolOk } from '../../rpc/capabilities'
-import { current as sessionCurrent } from '../../shell/session'
-import { show as toast } from '../../shell/toast'
+import { current as sessionCurrent } from '../../lib/session'
+import { show as toast } from '../toast'
 import { sources } from '../sources'
 import { T } from '../../i18n/t'
 import { drawMeter, goPaint as goState, turn } from '../../features/composer/mount'

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
-import { copy } from '../../shell/clipboard'
-import { language } from '../../shell/platform'
+import { copy } from '../../lib/clipboard'
+import { language } from '../../lib/platform'
 import * as store from './store'
 
 import type { BrowserState } from './store'

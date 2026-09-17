@@ -126,7 +126,7 @@ export const hasStillOnDisk = (answer: unknown): boolean => field(answer, 'still
  * A `system.version` answer says a newer build exists. Absent until the
  * gateway carries the field, and the notice row simply stays hidden -- an
  * older gateway degrades to no notice rather than to a broken one. Sites: the
- * boot check and its unawaited re-check in src/state/boot.ts, and the
+ * boot check and its unawaited re-check in src/app/boot.ts, and the
  * settings page's own check button (src/features/settings/chrome.ts).
  */
 export const hasUpdateFlag = (version: unknown): boolean => !!field(version, 'update_available')
@@ -134,7 +134,7 @@ export const hasUpdateFlag = (version: unknown): boolean => !!field(version, 'up
 /**
  * The gateway has the `browser.frame` surface.
  *
- * Site: src/state/install.ts registers BOTH frame paths -- the
+ * Site: src/app/install.ts registers BOTH frame paths -- the
  * binary `RVF1` sink and the base64 `browser.frame` notify an older gateway
  * pushes instead -- because a page cannot know which one it will be sent until
  * a frame arrives. So the registration is unconditional today and nothing

@@ -8,7 +8,7 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import * as tier from '../../shell/tier'
+import * as tier from '../../state/tier'
 import { InstanceMode } from './InstanceMode'
 import { resetSources, setSources } from '../../state/sources'
 import { mountPageRoot } from '../../test/pageRoot'

@@ -7,11 +7,11 @@
  * envelope.
  *
  * Ten are raven/acp/updates.py's SIDE_CHANNEL_METHODS, and
- * scripts/notifications-contract.test.mjs reads that frozenset directly rather
- * than trusting this copy of it. The eleventh, `browser.frame`, is not on the
- * server's list: it is the base64 screencast an older gateway pushes instead
- * of a binary frame, and it is the only name that gate allows here beyond the
- * server's ten.
+ * scripts/gates/notifications-contract.test.mjs reads that frozenset directly
+ * rather than trusting this copy of it. The eleventh, `browser.frame`, is not
+ * on the server's list: it is the base64 screencast an older gateway pushes
+ * instead of a binary frame, and it is the only name that gate allows here
+ * beyond the server's ten.
  *
  * The params are hand-written from the emitting sites, each named in its doc
  * comment. They are not generated and the contract is not changed to carry
@@ -40,7 +40,7 @@ export type NotificationMethod = (typeof NOTIFICATION_METHODS)[number]
 /**
  * A name `gateway().on(...)` accepts: the eleven, plus the subscription
  * envelope. Anything else is a compile error, and
- * scripts/notifications-contract.test.mjs holds this list equal to the
+ * scripts/gates/notifications-contract.test.mjs holds this list equal to the
  * gateway's own.
  */
 export type PushMethod = NotificationMethod | 'event'

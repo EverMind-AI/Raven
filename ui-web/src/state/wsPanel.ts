@@ -11,7 +11,7 @@
  *
  * So the four questions an island has for its panel are declared here, in a
  * module that imports nothing, and src/main.tsx hands the panel in. The same
- * inversion src/islands.ts makes for the other direction, and the same one
+ * inversion src/features/registry.ts makes for the other direction, and the same one
  * features/workspace/store.ts's setDeskOpener makes inside the feature.
  */
 

@@ -5,7 +5,7 @@
 
 import type { OnboardSource } from './types'
 
-import { gateway } from '../../state/gateway'
+import { gateway } from '../../rpc/gateway'
 
 export const onboardSource: OnboardSource = {
   options: () => gateway().call('model.options', {}),

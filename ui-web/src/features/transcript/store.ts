@@ -1,8 +1,8 @@
 import * as dagNodes from '../dag/nodes'
 import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
-import { formatDuration } from '../../shell/duration'
-import { md } from '../../shell/prose'
+import { formatDuration } from '../../lib/duration'
+import { md } from '../../lib/prose'
 import * as deliveries from '../workspace/deliveries'
 import * as hunks from '../workspace/hunks'
 

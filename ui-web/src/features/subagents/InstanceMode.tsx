@@ -1,6 +1,6 @@
 /* One instance's own operating mode: the chip on its pane header.
  *
- * The session tier (`shell/tier.ts`) says what raven asks of every sub-agent it
+ * The session tier (`state/tier.ts`) says what raven asks of every sub-agent it
  * dispatches. This says what it asks of THIS one, and the two are a precedence
  * rather than a pair: `SubagentManager.resolve_mode` reads the instance's
  * override, and falls through to the session's tier when there is none.
@@ -30,9 +30,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { t } from '../../i18n/t'
-import { show as menuAt } from '../../shell/menu'
-import { watch as watchTier } from '../../shell/tier'
-import { show as toast } from '../../shell/toast'
+import { show as menuAt } from '../../state/menu'
+import { watch as watchTier } from '../../state/tier'
+import { show as toast } from '../../state/toast'
 import * as store from './store'
 
 import type { JSX, MouseEvent } from 'react'

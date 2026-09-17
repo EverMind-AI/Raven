@@ -5,11 +5,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AttTray, QueueList, SlashList, TurnLive } from './ComposerPage'
 import * as store from './store'
 import * as turn from './turn'
-import * as attachmentCache from '../../shell/attachment-cache'
+import * as attachmentCache from '../../lib/attachmentCache'
 import * as tail from '../transcript/tail'
 
 import { Lightbox } from '../../chrome/Lightbox'
-import { close as closeLightbox } from '../../shell/lightbox'
+import { close as closeLightbox } from '../../state/lightbox'
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources } from '../../state/sources'
 
@@ -29,7 +29,7 @@ vi.mock('../transcript/mount', async (original) => ({
   ...(await original<Record<string, unknown>>()),
   note: (label: string, detail: string) => { directNotes.push([label, detail]) },
 }))
-vi.mock('../../shell/toast', () => ({
+vi.mock('../../state/toast', () => ({
   show: (text: string) => { toastWriter.items.push(text) },
 }))
 

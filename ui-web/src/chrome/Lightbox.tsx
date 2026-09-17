@@ -1,4 +1,4 @@
-/* The full-size image over the page (shell/lightbox.ts).
+/* The full-size image over the page (state/lightbox.ts).
  *
  * A portal at the body rather than into a layer of its own: the overlay is one
  * node that belongs to no page, and the body is where it has always been
@@ -12,7 +12,7 @@
 import { useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import * as lightbox from '../shell/lightbox'
+import * as lightbox from '../state/lightbox'
 
 import type { JSX } from 'react'
 

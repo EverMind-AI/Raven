@@ -26,10 +26,10 @@
 import { flushSync } from 'react-dom'
 
 import { T } from '../i18n/t'
-import { show as toast } from '../shell/toast'
 import * as detail from './detail'
 import * as page from './page'
 import { sources } from './sources'
+import { show as toast } from './toast'
 
 /** The two modules the one section serves. */
 export type Tab = 'skill' | 'plugin'

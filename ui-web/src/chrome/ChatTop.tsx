@@ -3,8 +3,9 @@
  * regions src/page.html used to carry as markup.
  *
  * One file per region of the page, under src/chrome/, beside src/features/
- * (islands) and src/shell/ (behaviour modules). Every element below is a
- * transcription -- tag, id, class, data-*, role, aria, the svg path data and
+ * (islands), src/state/ and src/chrome/behaviour/ (the modules that own
+ * listeners and measurements rather than markup). Every element below
+ * is a transcription -- tag, id, class, data-*, role, aria, the svg path data and
  * the text exactly as page.html spelled them, attributes in the same order --
  * and src/test/__golden__/region-app.txt is what says so. The containers are
  * here too now: src/App.tsx renders div.chat and this is the first five of its
@@ -36,13 +37,13 @@
 import { useSyncExternalStore } from 'react'
 
 import { Banner } from './Banner'
-import { islands } from '../islands'
+import { islands } from '../features/registry'
 import * as lang from '../state/lang'
 
 import type { JSX } from 'react'
 
 /* The session header. Its two buttons say their words through data-i18n-tip /
-   -aria, which state/lang.ts writes onto the attributes, so there is no literal
+   -aria, which state/lang/store.ts writes onto the attributes, so there is no literal
    here to take through lang.text -- and #title has no key at all, because its
    text is a conversation's name rather than a phrase from the catalogue. */
 function Header(): JSX.Element {
@@ -113,7 +114,7 @@ export function ChatTop(): JSX.Element {
       </button>
       {/* The workspace seam, hung off the chat rather than the panel: the panel
           clips its own overflow, so a grip inside it could only be grabbed from
-          one side. No interior at all, and dragged by id from shell/panes.ts. */}
+          one side. No interior at all, and dragged by id from chrome/behaviour/panes.ts. */}
       <div
         className="grip"
         id="wsGrip"

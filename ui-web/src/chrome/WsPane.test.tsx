@@ -12,7 +12,7 @@
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { islands } from '../islands'
+import { islands } from '../features/registry'
 import * as lang from '../state/lang'
 import * as ws from '../state/ws'
 import { mountPageRoot } from '../test/pageRoot'
@@ -230,7 +230,7 @@ describe('the keyboard shortcuts on the pane', () => {
 })
 
 /* Last in the file on purpose: applying a language is module state for
-   everything after it. Same agreement as the rail's -- the pass state/lang.ts
+   everything after it. Same agreement as the rail's -- the pass state/lang/store.ts
    makes over the document's data-i18n attributes, and the component rendering
    the same key through lang.text -- so the strip cannot come back in the served
    language once a flip has moved it. A re-render alone would not show it: React

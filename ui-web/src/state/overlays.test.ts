@@ -23,12 +23,12 @@ import { readFileSync } from 'node:fs'
 
 import { openApproval } from '../features/composer/approve'
 import * as turn from '../features/composer/turn'
-import { islands } from '../islands'
-import * as find from '../shell/find'
-import { _resetForTests as sessionReset, setCurrent } from '../shell/session'
+import { islands } from '../features/registry'
+import { _resetForTests as sessionReset, setCurrent } from '../lib/session'
+import * as find from './find'
 import { installEscapeChain } from './globalListeners'
 import * as overlays from './overlays'
-import * as settingsDialog from './settingsDialog'
+import * as settingsDialog from './settings'
 import * as sheets from './sheetRack'
 import { resetSources, sources } from './sources'
 
@@ -339,7 +339,7 @@ describe('the one listener that reads the order', () => {
 
   /* And bubbling is what lets a field keep the key: the search row stops
      Escape on its own input so that dismissing the row does not also take a
-     page down behind it (shell/find.ts). A capture-phase listener would have
+     page down behind it (state/find.ts). A capture-phase listener would have
      read the key before the field ever saw it. */
   it('does not see a key an element stopped', () => {
     find.install()

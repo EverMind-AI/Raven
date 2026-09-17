@@ -12,17 +12,17 @@ import { resetSources, setSources, sources } from '../../state/sources'
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
-import { installWsPanel } from '../../test/wsPanel'
+import { installWsPanel } from '../../test/wsPanelHarness'
 import type { WorkspaceSnapshot, WorkspaceSource, WsChange } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const writers = vi.hoisted(() => ({ calls: [] as Array<[string, unknown]> }))
-vi.mock('../../shell/toast', () => ({
+vi.mock('../../state/toast', () => ({
   show: (text: string) => { writers.calls.push(['toast', text]) },
 }))
-vi.mock('../../shell/menu', () => ({
+vi.mock('../../state/menu', () => ({
   show: (_x: number, _y: number, items: unknown) => { writers.calls.push(['menuAt', items]) },
 }))
 

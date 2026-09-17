@@ -35,7 +35,7 @@ const SHARED = new Set([
   // knowledge base, and that is one stylesheet rule rather than three.
   'prose',
   // Every vendor logo on the page wears this, from one component and one rule
-  // in shell/provider-mark.tsx -- including its dark-mode handling, which an
+  // in components/ProviderMark.tsx -- including its dark-mode handling, which an
   // island restyling the class for itself would get wrong.
   'provider-icon',
 ])
