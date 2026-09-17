@@ -218,18 +218,39 @@ def is_configured(cap: Capability, config: "Config") -> bool:
     return WebSearchTool.is_configured(config.tools.web.vendor_key(provider), provider)
 
 
+def disabled_by(cap: Capability, config: "Config") -> str:
+    """Which setting switched this tool off, or ``""`` when none did.
+
+    The path and not merely a flag, because the row reporting the off state has
+    to name the setting that undoes it. Two switches reach here, because the
+    loop reads two. ``tools.disabledTools`` is applied after registration
+    (``AgentLoop._apply_disabled_tools``) and covers any tool by name.
+    ``tools.web.search.images`` decides whether ``image_search`` is registered
+    at all (``wiring.py``).
+
+    The registration gate is named first where both are shut. It is the one the
+    deny list cannot override: an operator who takes ``image_search`` out of
+    ``tools.disabledTools`` while the switch is off restarts into the same
+    missing tool, which is the circle these rows exist to prevent.
+    """
+    from raven.agent.tools.web import ImageSearchTool
+
+    if cap.tool == ImageSearchTool.name and not config.tools.web.search.images:
+        return "tools.web.search.images"
+    if cap.tool in (config.tools.disabled_tools or []):
+        return "tools.disabledTools"
+    return ""
+
+
 def is_disabled(cap: Capability, config: "Config") -> bool:
-    """Whether the deployment has switched this tool off by name.
+    """Whether the deployment has switched this tool off.
 
     A separate state from unconfigured, and reported as one: a switched-off
     tool usually has its credential set, and calling it unconfigured would send
-    the deployer to set a key that is already there.
-
-    ``tools.disabledTools`` is applied after registration
-    (``AgentLoop._apply_disabled_tools``), so this is the only thing standing
-    between a satisfied credential gate and a tool the agent actually holds.
+    the deployer to set a key that is already there. :func:`disabled_by` says
+    which switch did it, and is what a report should render.
     """
-    return cap.tool in (config.tools.disabled_tools or [])
+    return bool(disabled_by(cap, config))
 
 
 def is_offered(cap: Capability, config: "Config") -> bool:
