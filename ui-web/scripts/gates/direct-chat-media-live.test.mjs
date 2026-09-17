@@ -13,16 +13,16 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { fakeGateway, loadPart } from './module-harness.mjs'
+import { fakeGateway, loadPart } from '../module-harness.mjs'
 
 /* `sources.agents.instanceSend` as the page installs it, with the real `mediaOf`
    and the real note text behind it -- the note is what splits the message. */
 async function sender(calls) {
-  const wiring = await loadPart(() => import('../src/app/install'), {
+  const wiring = await loadPart(() => import('../../src/app/install'), {
     fakes: { 'src/lib/session': { current: () => 's1' } },
   })
   await fakeGateway((method, params) => { calls.push([method, params]); return Promise.resolve({}) })
-  const { setSources, sources } = await import('../src/state/sources')
+  const { setSources, sources } = await import('../../src/state/sources')
   /* The two seam objects the chrome builds, which this case does not install. */
   setSources({ composer: {}, transcript: {} })
   wiring.installSources()
@@ -30,7 +30,7 @@ async function sender(calls) {
   return sources.agents.instanceSend
 }
 
-const { I18N } = await import('../src/i18n/t')
+const { I18N } = await import('../../src/i18n/t')
 const note = I18N.ui['gui.att.note'].en
 
 describe('the instance send', () => {

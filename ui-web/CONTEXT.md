@@ -75,7 +75,8 @@ One entry of `STAGES` (`src/state/session/stages.ts`): the names of the
 `TurnEvent` kinds it handles, and what each does to the runtime it is given.
 The table is applied in order and is exhaustive over `TurnEvent['type']` --
 `assertNever` makes a new member a compile error, and
-`scripts/pipeline-coverage.test.mjs` holds the union of `handles` equal to it.
+`scripts/gates/pipeline-coverage.test.mjs` holds the union of `handles` equal
+to it.
 An event the page deliberately does not render still has a stage, with an empty
 body.
 

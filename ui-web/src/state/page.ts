@@ -29,8 +29,8 @@ export type PageId = 'capsPage' | 'xaPage' | 'connPage' | 'memPage' | 'pbPage' |
    Named rather than derived, and the capabilities page's entry is a function
    because that one section serves two modules and lights whichever tab stands
    open. An outside gate reads this table against the rail's own list of the
-   buttons it writes (scripts/rail-nav-registry.test.mjs), because a page in
-   here that the rail does not mark has no selected state at all and nothing
+   buttons it writes (scripts/gates/rail-nav-registry.test.mjs), because a page
+   in here that the rail does not mark has no selected state at all and nothing
    else fails. */
 const NAV_OF = {
   capsPage: () => (caps.get().tab === 'plugin' ? 'plugBtn' : 'skillBtn'),

@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
-const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
+const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src')
 const MARK = readFileSync(join(SRC, 'components', 'ProviderMark.tsx'), 'utf8')
 
 const body = (name, open, close) => {

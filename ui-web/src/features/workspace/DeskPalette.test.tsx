@@ -635,10 +635,10 @@ describe('the size the desk comes up at', () => {
 /* That the reserve reaches the stylesheet at all.
  *
  * `deskGeometry.test.ts` pins what the number is and
- * `scripts/desk-reserve-css.test.mjs` pins where the stylesheet spends it. This
- * is the join: the panel is `position: fixed`, so the only thing connecting it
- * to the layout is this property landing on the root, and neither of those two
- * tests would notice if it stopped being set.
+ * `scripts/gates/desk-reserve-css.test.mjs` pins where the stylesheet spends
+ * it. This is the join: the panel is `position: fixed`, so the only thing
+ * connecting it to the layout is this property landing on the root, and
+ * neither of those two tests would notice if it stopped being set.
  */
 describe('the reserve the palette publishes', () => {
   /* happy-dom measures everything as zero, and the reserve turns on the chat's

@@ -7,7 +7,7 @@ import { resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { loadPart, moduleText } from './module-harness.mjs'
+import { loadPart, moduleText } from '../module-harness.mjs'
 
 const bootText = moduleText('app/boot.ts')
 const installText = moduleText('app/install.ts')
@@ -35,7 +35,7 @@ const STEPS = [
 async function harness(rows = []) {
   const calls = []
   const step = (name) => (...args) => calls.push([name, ...args])
-  const part = await loadPart(() => import('../src/app/boot'), {
+  const part = await loadPart(() => import('../../src/app/boot'), {
     fakes: {
       'src/state/look': { load: step('lookLoad') },
       'src/chrome/behaviour/panes': { load: step('paneLoad') },

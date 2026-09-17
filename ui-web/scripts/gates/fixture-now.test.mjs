@@ -16,15 +16,15 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { PARAMS, PLAYBOOKS } from './fixture-params.mjs'
+import { PARAMS, PLAYBOOKS } from '../fixture-params.mjs'
 
 /* Not "now": a fixed instant with a known local wording, so a failure reads as
    a drifting field rather than as a clock that moved. */
 const FIXED = 1789000000000
 
 async function library() {
-  const { demoFixtures } = await import('../src/rpc/fixtures/index.ts')
-  const { FixtureTransport } = await import('../src/rpc/fixtureTransport.ts')
+  const { demoFixtures } = await import('../../src/rpc/fixtures/index.ts')
+  const { FixtureTransport } = await import('../../src/rpc/fixtureTransport.ts')
   /* Scheduled work is collected rather than run: a scripted turn's frames are
      pushed on this timer, and a gate that ran them would be asserting on the
      page instead of on the answers. */

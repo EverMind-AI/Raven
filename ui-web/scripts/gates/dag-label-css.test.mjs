@@ -14,7 +14,7 @@ import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'
 
-const css = readFileSync(new URL('../src/styles/page.css', import.meta.url), 'utf8')
+const css = readFileSync(new URL('../../src/styles/page.css', import.meta.url), 'utf8')
 
 /* The declarations of one rule, by exact selector, comments stripped first so
    prose that names a selector cannot be read as one. */

@@ -16,8 +16,8 @@ import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'
 
-const pages = readFileSync(new URL('../src/state/page.ts', import.meta.url), 'utf8')
-const rail = readFileSync(new URL('../src/features/rail/store.ts', import.meta.url), 'utf8')
+const pages = readFileSync(new URL('../../src/state/page.ts', import.meta.url), 'utf8')
+const rail = readFileSync(new URL('../../src/features/rail/store.ts', import.meta.url), 'utf8')
 
 function navOf() {
   const block = pages.match(/const NAV_OF = \{(.*?)\n\}/s)

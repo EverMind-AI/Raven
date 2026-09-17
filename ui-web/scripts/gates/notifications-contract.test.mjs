@@ -20,7 +20,7 @@ import { resolve } from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
-import { NOTIFICATION_METHODS } from '../src/rpc/notifications'
+import { NOTIFICATION_METHODS } from '../../src/rpc/notifications'
 
 /* The one name the page listens for that the server's list does not carry: an
    older gateway pushes the screencast frame as base64 JSON instead of sending

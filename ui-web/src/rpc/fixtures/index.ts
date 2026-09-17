@@ -9,8 +9,9 @@
  * the wrong thing offline is drawing the wrong thing live.
  *
  * Every time value comes from the injected clock, so two passes over the
- * library answer byte-identically (ui-web/scripts/fixture-now.test.mjs), and
- * the scripted conversations push their frames on the injected timer.
+ * library answer byte-identically
+ * (ui-web/scripts/gates/fixture-now.test.mjs), and the scripted conversations
+ * push their frames on the injected timer.
  */
 
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'

@@ -24,7 +24,7 @@ import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'
 
-const css = readFileSync(new URL('../src/styles/page.css', import.meta.url), 'utf8')
+const css = readFileSync(new URL('../../src/styles/page.css', import.meta.url), 'utf8')
 
 function rule(selector) {
   const rules = css.replace(/\/\*[\s\S]*?\*\//g, ' ')

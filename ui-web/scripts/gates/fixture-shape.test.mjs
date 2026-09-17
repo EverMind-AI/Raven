@@ -20,7 +20,7 @@ import { resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { PARAMS, PLAYBOOKS } from './fixture-params.mjs'
+import { PARAMS, PLAYBOOKS } from '../fixture-params.mjs'
 
 const contract = JSON.parse(readFileSync(resolve(process.cwd(), '../rpc-schema/openrpc.json'), 'utf8'))
 const schemas = contract.components.schemas
@@ -91,8 +91,8 @@ function check(schema, value, path, out) {
    is dropped rather than run, so a scripted turn cannot push frames into a
    page that is not there. */
 async function library() {
-  const { demoFixtures } = await import('../src/rpc/fixtures/index.ts')
-  const { FixtureTransport } = await import('../src/rpc/fixtureTransport.ts')
+  const { demoFixtures } = await import('../../src/rpc/fixtures/index.ts')
+  const { FixtureTransport } = await import('../../src/rpc/fixtureTransport.ts')
   const transport = new FixtureTransport(demoFixtures, { now: () => 1789000000000, timer: () => {} })
   return transport
 }
@@ -140,8 +140,8 @@ describe('the offline fixture library', () => {
      a wrong shape in front of a working gateway. */
   it('answers every method its two canvases override', async () => {
     const base = await library()
-    const { OverrideTransport } = await import('../src/rpc/overrideTransport.ts')
-    const { deskDemoOverrides, onboardDemoOverrides } = await import('../src/rpc/fixtures/index.ts')
+    const { OverrideTransport } = await import('../../src/rpc/overrideTransport.ts')
+    const { deskDemoOverrides, onboardDemoOverrides } = await import('../../src/rpc/fixtures/index.ts')
     const later = (ms, fn) => { fn() }
     const roster = () => Promise.resolve(['raven', 'claude_code'])
     const groups = {
@@ -152,7 +152,7 @@ describe('the offline fixture library', () => {
        answered reads the roster through the seam, and only a booted page has
        one installed. The shape of the answer is what this gate is about, so the
        seam gets the two verbs that door touches and nothing else. */
-    const { sources } = await import('../src/state/sources.ts')
+    const { sources } = await import('../../src/state/sources.ts')
     sources.agents = { instances: async () => [], roster: async () => [] }
     const failures = []
     for (const [label, overrides] of Object.entries(groups)) {

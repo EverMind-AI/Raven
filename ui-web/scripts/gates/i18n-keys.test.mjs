@@ -8,8 +8,8 @@ import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-const SRC = new URL('../src/', import.meta.url)
-const CATALOGUE = new URL('../../i18n/messages.json', import.meta.url)
+const SRC = new URL('../../src/', import.meta.url)
+const CATALOGUE = new URL('../../../i18n/messages.json', import.meta.url)
 
 // Absent from the catalogue today; tracked as a copy fix, not fixed here
 // because i18n/messages.json is outside the page's own tree.

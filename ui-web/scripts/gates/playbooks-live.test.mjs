@@ -11,19 +11,19 @@ import { resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { fakeGateway, loadPart } from './module-harness.mjs'
+import { fakeGateway, loadPart } from '../module-harness.mjs'
 
 const contract = JSON.parse(readFileSync(resolve(process.cwd(), '../rpc-schema/openrpc.json'), 'utf8'))
 const declared = new Set(contract.methods.map((m) => m.name))
 
 async function source(answers) {
   const calls = []
-  const wiring = await loadPart(() => import('../src/app/install'))
+  const wiring = await loadPart(() => import('../../src/app/install'))
   await fakeGateway((method, params) => {
     calls.push([method, params])
     return Promise.resolve(answers[method])
   })
-  const { setSources, sources } = await import('../src/state/sources')
+  const { setSources, sources } = await import('../../src/state/sources')
   /* The two seam objects the chrome builds, which this case does not install. */
   setSources({ composer: {}, transcript: {} })
   wiring.installSources()

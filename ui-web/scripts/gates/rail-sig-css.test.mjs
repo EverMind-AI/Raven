@@ -12,8 +12,8 @@ import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'
 
-const css = readFileSync(new URL('../src/styles/page.css', import.meta.url), 'utf8')
-const page = readFileSync(new URL('../src/features/rail/RailPage.tsx', import.meta.url), 'utf8')
+const css = readFileSync(new URL('../../src/styles/page.css', import.meta.url), 'utf8')
+const page = readFileSync(new URL('../../src/features/rail/RailPage.tsx', import.meta.url), 'utf8')
 
 /* The `tail` line is the producer: whatever it admits is what can reach the
    slot. Anchored on `const tail =` so an unrelated comparison elsewhere in the

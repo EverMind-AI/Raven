@@ -18,7 +18,7 @@ export type Fixtures = { [M in RpcMethod]?: Responder<M> }
 /* What a responder is given instead of the ambient clock and the ambient
    timer. Every time field a fixture answers comes from `now()`, so two passes
    over the same fixtures with the same `now` are byte-identical
-   (scripts/fixture-now.test.mjs), and a scripted conversation pushes its
+   (scripts/gates/fixture-now.test.mjs), and a scripted conversation pushes its
    frames through `emit` on `schedule`'s clock -- which is how the offline page
    plays a turn out over time through the same pipeline the live page uses. */
 export interface FixtureEnv {
