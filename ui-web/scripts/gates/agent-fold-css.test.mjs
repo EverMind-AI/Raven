@@ -12,19 +12,9 @@
  * room when it is empty.
  */
 
-import { readFileSync } from 'node:fs'
-
 import { describe, expect, it } from 'vitest'
 
-const css = readFileSync(new URL('../../src/styles/page.css', import.meta.url), 'utf8')
-
-function rule(selector) {
-  const rules = css.replace(/\/\*[\s\S]*?\*\//g, ' ')
-  for (const match of rules.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    if (match[1].trim() === selector) return match[2]
-  }
-  return null
-}
+import { rule } from './css.mjs'
 
 describe('the agent roster fold slot', () => {
   it('hides the glyph of an unfoldable head without collapsing its slot', () => {

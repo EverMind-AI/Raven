@@ -65,8 +65,9 @@ type Row = [string, string, string, boolean, unknown]
 /* Which handler each row is, for every row whose handler another module owns.
    Four are this module's own and cannot be named from outside: the popover
    arbitration, the code-block copy, the Escape chain and the settings shortcut
-   -- and those four are exactly what the two source-text cases in
-   state/overlays.test.ts and the order above pin instead.
+   -- and those four are what the order above pins instead, together with the
+   source-text case in state/overlays.test.ts that holds every keydown the page
+   installs to the bubble phase.
 
    Identity, not shape, because two rows of the same shape are the pairs that
    matter most: which of the two capture-phase pointerdown listeners closes

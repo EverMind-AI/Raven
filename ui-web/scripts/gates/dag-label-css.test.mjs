@@ -10,26 +10,9 @@
  * the line, at whatever width the box is and whenever the font turns up.
  */
 
-import { readFileSync } from 'node:fs'
-
 import { describe, expect, it } from 'vitest'
 
-const css = readFileSync(new URL('../../src/styles/page.css', import.meta.url), 'utf8')
-
-/* The declarations of one rule, by exact selector, comments stripped first so
-   prose that names a selector cannot be read as one. */
-function declsOf(selector, source = css) {
-  for (const rule of source.replace(/\/\*[\s\S]*?\*\//g, ' ').matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    if (rule[1].trim() !== selector) continue
-    const out = new Map()
-    for (const decl of rule[2].split(';')) {
-      const at = decl.indexOf(':')
-      if (at > 0) out.set(decl.slice(0, at).trim(), decl.slice(at + 1).trim())
-    }
-    return out
-  }
-  return null
-}
+import { decls as declsOf } from './css.mjs'
 
 describe('a dag node label', () => {
   /* One line, cut at the end of the box, with the cut marked. Drop any one of
