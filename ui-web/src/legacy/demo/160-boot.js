@@ -12,6 +12,7 @@ import { load as lookLoad } from '../../shell/look'
 import { load as paneLoad } from '../../shell/panes'
 import { draw as drawPerm } from '../../shell/perm'
 import { load as loadTier } from '../../shell/tier'
+import { hideSplash, markStart } from '../../state/splash'
 import { bootError } from './040-state.js'
 import { sessionDraw, sessionOpen, sessionRows } from './050-rail.js'
 import { goState } from './090-composer.js'
@@ -48,20 +49,6 @@ function bootPage() {
 
 /* ══ boot splash + first-run onboarding ══════════════════════════ */
 
-/* The splash is already on screen (it is the first thing in <body>); all the
-   page has to do is take it down at the right moment. A floor on its display
-   time keeps a fast boot from flashing it for two frames. */
-let _spT0;
-function hideSplash(minMs) {
-  const s = document.getElementById('splash');
-  if (!s) return;
-  const wait = Math.max(0, (minMs == null ? 600 : minMs) - (Date.now() - _spT0));
-  setTimeout(() => {
-    s.dataset.off = '1';
-    setTimeout(() => s.remove(), 560);
-  }, wait);
-}
-
 /* The first-run flow, through the bag because the bag is what the onboarding
    island is reached by. */
 const showOnboard = () => islands.onboard.open();
@@ -81,7 +68,7 @@ export function install() {
   /* The page's own boot runs later in this same task and claims this moment
    before microtasks drain; its last step queues bootPage itself. */
   queueMicrotask(() => { if (!liveClaimed) bootPage(); });
-  _spT0 = Date.now();
+  markStart();
 
   addEventListener('load', () => {
     if (/[?&]onboard=demo/.test(location.search)) showOnboard();
@@ -90,4 +77,4 @@ export function install() {
   });
 }
 
-export { bootPage, _spT0, hideSplash, showOnboard, liveClaimed, claimBoot }
+export { bootPage, showOnboard, liveClaimed, claimBoot }

@@ -15,11 +15,15 @@
  *               moved back.
  *   append   -- created at runtime and appended to the body.
  */
+import { createElement } from 'react'
+import { createRoot } from 'react-dom/client'
+import { flushSync } from 'react-dom'
 import { describe, expect, it } from 'vitest'
 
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readFileSync } from 'node:fs'
 
+import { App } from '../App'
 import * as session from '../shell/session'
 import * as tier from '../shell/tier'
 import { resetShell, setShell } from '../shell/bridge'
@@ -162,6 +166,17 @@ describe('the portal table', () => {
     for (const id of ['#permPop', '#tierPop']) {
       expect(PORTALS.find((p) => p.selector === id)!.at).toBe('last')
     }
+  })
+
+  /* The page's own root renders into the containers page.html provides and
+     adds nothing beside them: it is detached, and a root AT the body would
+     clear the regions instead of joining them (see src/main.tsx). */
+  it('leaves the body order untouched when the page root renders', () => {
+    const doc = pageMarkup()
+    const before = bodySiblings(doc)
+    const root = createRoot(document.createElement('div'))
+    flushSync(() => root.render(createElement(App)))
+    expect(bodySiblings(doc)).toEqual(before)
   })
 
   it('starts the two popovers inside the composer card', () => {

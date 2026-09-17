@@ -13,9 +13,10 @@
 // Kept as a shell helper because the memory drawer uses it too.
 
 import { islands } from '../../islands'
+import * as page from '../../state/page'
 import { sources } from '../../state/sources'
 import { $, T, mk } from './010-kernel.js'
-import { closeDetail, decorateCloseDetail, decorateExtSet, decorateShowPage, extTab } from './120-capabilities.js'
+import { closeDetail, decorateCloseDetail, decorateExtSet, extTab } from './120-capabilities.js'
 import { decorateDrawCaps, skInstBtn, skView } from './152-skills.js'
 
 function pmTile(name) {
@@ -128,9 +129,8 @@ export function install() {
       if (extTab !== was) { islands.plugins.reset(); $('.cbar').style.display = ''; }
     });
 
-    decorateShowPage((prev) => (id) => {
-      prev(id);
-      if (id !== 'capsPage') { islands.plugins.drawerClosed(); $('.cbar').style.display = ''; }
+    page.subscribe(() => {
+      if (page.get() !== 'capsPage') { islands.plugins.drawerClosed(); $('.cbar').style.display = ''; }
     });
 
     decorateCloseDetail((prev) => () => { islands.plugins.drawerClosed(); prev(); });

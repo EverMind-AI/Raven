@@ -11,9 +11,10 @@
    Shared verb: the plugin layer and the skills island both call it. */
 
 import { islands } from '../../islands'
+import * as page from '../../state/page'
 import { sources } from '../../state/sources'
 import { $, T, applyDecorators, mk } from './010-kernel.js'
-import { closeDetail, decorateCloseDetail, decorateExtSet, decorateShowPage, drawCapsBadge, extTab } from './120-capabilities.js'
+import { closeDetail, decorateCloseDetail, decorateExtSet, drawCapsBadge, extTab } from './120-capabilities.js'
 
 function useInTask(promptKey, name) {
   closeDetail();
@@ -92,9 +93,8 @@ export function install() {
       if (extTab !== was) islands.skills.reset();
     });
 
-    decorateShowPage((prev) => (id) => {
-      prev(id);
-      if (id !== 'capsPage') islands.skills.dropDrawer();
+    page.subscribe(() => {
+      if (page.get() !== 'capsPage') islands.skills.dropDrawer();
     });
 
     decorateCloseDetail((prev) => () => { islands.skills.dropDrawer(); prev(); });
