@@ -160,7 +160,7 @@ notes, see [`docker/README.md`](docker/README.md).
 Docker reads committed defaults from [`docker/.env`](docker/.env), then loads
 the optional, git-ignored `docker/.env.local` over them.
 Put credentials and deployment-specific overrides in `.env.local`, not in the
-committed file. 
+committed file.
 
 Raven stores its configuration, sessions, workspace, logs, and memory under
 `RAVEN_HOME`. The Compose image maps this to `/data` through the `raven-data`
