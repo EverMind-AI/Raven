@@ -257,38 +257,19 @@
      技能 and 插件 are separate rail entries but the same machinery: search,
      status pills, card grid, detail drawer. The section is reused; the title
      and the body follow whichever module opened it. -->
+<!-- The interiors of the three containers below are rendered from
+     src/chrome/CapsPage.tsx: the heading, the filter bar and the manual-add
+     fold. #capsBody stays an empty container between two of them -- the two
+     islands attach their own hosts under it and a tab draw clears it -- so the
+     three are separate portals rather than one over .wrap. -->
 <section class="page" id="capsPage" data-open="false">
-  <header>
-    <h2 id="capsTitle" data-i18n="gui.tab.skills">技能</h2>
-  </header>
+  <header></header>
   <div class="work">
     <div class="wrap">
-      <div class="cbar">
-        <div class="cfind">
-          <svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-            <circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3"/>
-          </svg>
-          <input id="cq" placeholder="搜索" data-i18n-aria="gui.search" />
-        </div>
-        <div class="pills" id="cKind" role="group" data-i18n-aria="gui.filter_status">
-          <button class="pill" data-k="all" aria-pressed="true" data-i18n="gui.filter.all">全部</button>
-          <button class="pill" data-k="on" aria-pressed="false" data-i18n="gui.filter.on">已启用</button>
-          <button class="pill" data-k="attn" aria-pressed="false" data-i18n="gui.filter.todo">需要处理</button>
-          <button class="pill" data-k="add" aria-pressed="false" data-i18n="gui.filter.add">可添加</button>
-        </div>
-      </div>
+      <div class="cbar"></div>
       <div id="capsBody"></div>
 
-      <details class="adv" id="advAdd">
-        <summary data-i18n="gui.adv_add">高级 &middot; 手动添加</summary>
-        <p style="color:var(--muted);font-size:12.5px;margin:10px 0 0" data-i18n="gui.adv_hint">
-          知道要接什么就直接填地址或启动命令，Raven 会握手取回它提供的动作。</p>
-        <div class="row">
-          <input id="mName" data-i18n-ph="gui.adv_name_ph" placeholder="名称，例如 内部 CRM" />
-          <input id="mAddr" data-i18n-ph="gui.adv_addr_ph" placeholder="地址或命令，例如 npx -y @acme/crm-mcp" />
-          <button class="mini" id="mAdd" data-i18n="gui.add">添加</button>
-        </div>
-      </details>
+      <details class="adv" id="advAdd"></details>
     </div>
   </div>
 </section>

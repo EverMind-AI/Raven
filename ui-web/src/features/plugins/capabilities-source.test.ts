@@ -110,29 +110,23 @@ describe('manual plugin add', () => {
     const drawCaps = vi.fn()
     const drawCapsBadge = vi.fn()
     const toast = vi.fn()
-    const part = await loadPart(() => import('../../legacy/demo/150-chrome.js'), {
+    const part = await loadPart(() => import('../../state/caps'), {
       fakes: {
-        'demo/010-kernel.js': {
-          $: looseQuery(),
-          T: (key: string, args?: Record<string, string>) => args?.err || args?.name || key,
-        },
         'demo/120-capabilities.js': { drawCapsBadge },
         'demo/152-skills.js': { drawCaps },
         'src/shell/toast': { show: toast },
       },
     })
     ;(await seam()).plugins = { manual } as unknown as PluginsSource
-    part.install()
     const name = document.querySelector<HTMLInputElement>('#mName')!
     const address = document.querySelector<HTMLInputElement>('#mAddr')!
     name.value = 'CRM'
     address.value = 'npx -y @acme/crm-mcp'
 
-    /* The handler the part hung on the button, called the way a click calls
-       it -- it reads the two fields itself and takes no argument. */
-    const click = document.querySelector<HTMLButtonElement>('#mAdd')!
-      .onclick as unknown as () => Promise<void>
-    const pending = click()
+    /* The action button#mAdd calls (src/chrome/CapsPage.tsx), driven here the
+       way the click drives it -- it reads the two fields itself and takes no
+       argument. That the button is wired to it is CapsPage.test.tsx's. */
+    const pending = part.manualAdd()
     expect(manual).toHaveBeenCalledWith('CRM', 'npx -y @acme/crm-mcp')
     expect(name.value).toBe('CRM')
     expect(drawCaps).not.toHaveBeenCalled()
