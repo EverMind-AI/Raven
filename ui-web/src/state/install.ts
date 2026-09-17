@@ -42,9 +42,9 @@ import { clarifyRequest, dispatch, installPipeline } from './session/pipeline'
 import { installComposerActions, installSlashActions } from './session/runtime'
 import { sources } from './sources'
 import { showUpNote } from './updates'
+import * as caps from './caps'
+import * as page from './page'
 import { $, HOST_PLATFORM, T } from '../legacy/demo/010-kernel.js'
-import { drawCapsBadge, showPage } from '../legacy/demo/120-capabilities.js'
-import { drawCaps } from '../legacy/demo/152-skills.js'
 import { wsShortPath } from '../legacy/demo/100-workspace.js'
 
 import type { ComposerSource } from '../features/composer/types'
@@ -225,12 +225,11 @@ async function afterReconnect(): Promise<void> {
   /* Repainted, not just re-read: the island renders on its own `set`, which
      refilling the module state does not call, so the extensions page would
      keep showing the offline note after the reconnect it tells the reader to
-     wait for. `drawCaps` is the entry for both tabs (153-plugins.js wraps
-     it), guarded the way `redrawAll` guards it -- the page may not be up. */
+     wait for. `caps.draw` is the entry for both tabs, guarded the way the
+     language repaint guards it -- the page may not be up. */
   loadExt()
     .then(() => {
-      drawCapsBadge()
-      try { drawCaps() } catch { /* extensions page not built yet */ }
+      try { caps.draw() } catch { /* extensions page not built yet */ }
     })
     .catch(() => {})
 }
@@ -245,7 +244,7 @@ export function installActions(): void {
 
   $('#newBtn').onclick = () => {
     if (openModelsForMissingProvider()) return
-    showPage(null); switchToDraft()
+    page.show(null); switchToDraft()
   }
 }
 

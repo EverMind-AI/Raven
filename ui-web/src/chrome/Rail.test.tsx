@@ -43,8 +43,9 @@ vi.mock('../legacy/demo/154-playbooks.js', async (original) => ({
   openPb: () => { opened.list.push('playbooks') },
 }))
 
-/* The container page.html carries, and the two regions the collapse writes. */
-const MARKUP = '<div class="app"><aside class="rail"></aside></div><button id="railShow" hidden></button>'
+/* Nothing: the page root renders the grid, the column and the collapse's twin,
+   so a case gets all three by mounting it. */
+const MARKUP = ''
 
 let unmount = (): void => {}
 
@@ -70,7 +71,7 @@ afterEach(() => {
 })
 
 describe('the rail', () => {
-  it('portals the six children into the column, in the order page.html had them', () => {
+  it('renders the column with the six children page.html had, in order', () => {
     render()
     expect(Array.from(rail().children).map((child) => child.id || child.className)).toEqual([
       'railtop',

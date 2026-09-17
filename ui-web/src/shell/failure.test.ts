@@ -7,7 +7,9 @@ import { resetShell, setShell } from './bridge'
 import { mountPageRoot } from '../test/pageRoot'
 
 /* Both bars are drawn by src/chrome/FailureBar.tsx, so the page's own root has
-   to be standing for one to reach the body (see src/main.tsx). */
+   to be standing for one to reach the body (see src/main.tsx) -- and that root
+   renders the page, so a bar is the body's LAST child rather than its only
+   one. */
 let unmount = (): void => {}
 
 function wire(): void {
@@ -35,9 +37,11 @@ afterEach(() => {
 describe('the failure bar writer', () => {
   it('appends the legacy top bar and updates the same node', () => {
     const bar = show('Checking')
-    expect(document.body.innerHTML).toBe('<div class="topfail">Checking</div>')
+    const node = document.body.lastElementChild as HTMLElement
+    expect(node.outerHTML).toBe('<div class="topfail">Checking</div>')
     bar.say('Stopped')
-    expect(document.body.innerHTML).toBe('<div class="topfail">Stopped</div>')
+    expect(document.body.lastElementChild).toBe(node)
+    expect(node.outerHTML).toBe('<div class="topfail">Stopped</div>')
   })
 
   it('draws the boot fallback with its source line and reports the failure', () => {
@@ -46,7 +50,7 @@ describe('the failure bar writer', () => {
     const error = new Error('broken')
     error.stack = 'Error: broken\n    at boot.js:7:3'
     bootError('drawList', error)
-    const bar = document.body.firstElementChild as HTMLElement
+    const bar = document.body.lastElementChild as HTMLElement
     expect(bar.className).toBe('')
     expect(bar.getAttribute('style')).toBe(
       'position: fixed; left: 0px; right: 0px; top: 0px; z-index: 99; background: #d96a5b; color: #fff; font: 12px / 1.5 ui-monospace, monospace; padding: 8px 14px; white-space: pre-wrap;'

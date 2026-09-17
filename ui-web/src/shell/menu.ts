@@ -4,7 +4,7 @@
  * it was raised with -- plus the two things that are not rendering: the flag and
  * the position on the host element, and the pointerdown that closes it from
  * anywhere on the document. The rows themselves are rendered by <ContextMenu/>
- * (src/App.tsx) into div#menu, which is static markup in src/page.html until the
+ * (src/App.tsx) into div#menu, which that root renders as a standing host at the
  * end of stage C.
  *
  * `show` still commits synchronously, because the position is measured from the

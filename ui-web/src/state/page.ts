@@ -2,17 +2,12 @@
  *
  * Was showPageBase in legacy/demo/120-capabilities.js, whose seven writes were
  * the whole of the state: "which page is up" was readable only by asking the
- * DOM what carried data-open="true". The writes stay -- the seven <section> of
- * src/page.html are static markup until the end of stage C, and the flyout, the
- * Escape chain and the desk's own stylesheet rule all read them off the
- * elements -- but the answer is a field here as well, so a caller can ask
- * without a selector.
- *
- * NAV_OF stays in the legacy part: an outside gate parses the table out of that
- * file's text (scripts/rail-nav-registry.test.mjs), and the capsPage entry is a
- * function so that it can read the layer's own extTab. So this module imports
- * the one table rather than keeping a second copy of the keys; the import goes
- * when the part does.
+ * DOM what carried data-open="true". The writes stay, and stay here: the flyout,
+ * the Escape chain and the desk's own stylesheet rule all read the flag off the
+ * elements, the order these seven land in relative to the four effects below is
+ * the contract this module's gate pins, and src/App.tsx renders each section
+ * with the value the page is served with and then never writes it again. The
+ * answer is a field here as well, so a caller can ask without a selector.
  *
  * The two layers that used to decorate showPage subscribe here instead
  * (legacy/demo/152-skills.js, 153-plugins.js). Registration order is the order
@@ -22,11 +17,43 @@
 
 import { islands } from '../islands'
 import { markNewCurrent } from '../legacy/demo/050-rail.js'
-import { NAV_OF } from '../legacy/demo/120-capabilities.js'
+import * as caps from './caps'
 import * as detail from './detail'
 
 /** The seven module pages, keyed as their <section> ids. */
 export type PageId = 'capsPage' | 'xaPage' | 'connPage' | 'memPage' | 'pbPage' | 'kbPage' | 'cronPage'
+
+/* Which rail button each page lights up. Only one module page is open at a
+   time: they used to cover the whole window, so two open at once was invisible;
+   now that the rail stays put, the one behind shows through.
+
+   Named rather than derived, and the capabilities page's entry is a function
+   because that one section serves two modules and lights whichever tab stands
+   open. An outside gate reads this table against the rail's own list of the
+   buttons it writes (scripts/rail-nav-registry.test.mjs), because a page in
+   here that the rail does not mark has no selected state at all and nothing
+   else fails. */
+const NAV_OF = {
+  capsPage: () => (caps.get().tab === 'plugin' ? 'plugBtn' : 'skillBtn'),
+  xaPage: 'moreBtn',
+  connPage: 'moreBtn',
+  memPage: 'memBtn',
+  pbPage: 'pbBtn',
+  kbPage: 'kbBtn',
+  cronPage: 'moreBtn',
+}
+
+/** The pages, and the button each lights up -- what markNew asks of the page
+ *  registry. The More rows are not in here: the nav flyout marks its own. */
+export function navState(): { pages: string[]; btnOf(p: string): string | undefined } {
+  return {
+    pages: Object.keys(NAV_OF),
+    btnOf: (p) => {
+      const of = NAV_OF[p as keyof typeof NAV_OF]
+      return typeof of === 'function' ? of() : of
+    },
+  }
+}
 
 let current: PageId | null = null
 const listeners = new Set<() => void>()
@@ -44,9 +71,6 @@ export function subscribe(fn: () => void): () => void {
   }
 }
 
-/* Only one module page at a time. They used to cover the whole window, so two
-   open at once was invisible; now that the rail stays put, the one behind shows
-   through. */
 export function show(id: PageId | null): void {
   current = id
   for (const p of Object.keys(NAV_OF)) {

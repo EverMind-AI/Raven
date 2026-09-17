@@ -33,7 +33,6 @@ import * as demo153plugins from './demo/153-plugins.js'
 import * as demo154playbooks from './demo/154-playbooks.js'
 import * as demo155bridge from './demo/155-bridge.js'
 import * as demo160boot from './demo/160-boot.js'
-import * as live120settings from './live/120-settings.js'
 const DEMO = [
   demo010kernel,
   demo040state,
@@ -55,7 +54,7 @@ const DEMO = [
 ]
 
 const LIVE = [
-  live120settings,
+
 ]
 
 export function installLegacy() {

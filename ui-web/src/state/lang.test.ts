@@ -2,11 +2,12 @@
 /* The language store, against the two states a page is really in.
  *
  * The one that is easy to forget is the first: nothing has applied a language
- * yet. src/page.html declares lang="zh-CN" and carries Chinese literals, and
- * neither load mode translates them on its own -- the fixture config has no
- * `language` key and a page with no gateway never gets that far -- so the page
- * a reader opens sits in that state indefinitely. Every case below that names
- * `applied == null` is pinning what such a page shows.
+ * yet. src/page.html declares lang="zh-CN" and the regions src/App.tsx renders
+ * carry the literals that markup was served with, and neither load mode
+ * translates them on its own -- the fixture config has no `language` key and a
+ * page with no gateway never gets that far -- so the page a reader opens sits in
+ * that state indefinitely. Every case below that names `applied == null` is
+ * pinning what such a page shows.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -93,11 +94,25 @@ describe('applying a language', () => {
     expect(lang.text('gui.new_task', 'the markup literal')).toBe(ZH_NEW_TASK)
   })
 
-  /* The five passes applyI18n made over the static markup, in one case each:
-     text, placeholder, the two attributes that are read out, and the hover
-     pill. page.html is still where that markup comes from, so this is what
-     keeps the served page translating on a flip. */
-  it('fills every kind of i18n attribute in the markup', async () => {
+  /* What the five passes applyI18n made over the document became: a value the
+     region renders beside the key. `text` answers the ones the markup carried a
+     literal for and `attr` the ones it did not, which is every aria-label,
+     title and data-tip on the page -- so one is the literal until a pick lands
+     and the other is nothing at all. Which element gets which is
+     src/App.test.tsx's and each region's own test's. */
+  it('answers attr() with nothing until a language lands, then the catalogue', async () => {
+    const lang = await fresh()
+    expect(lang.attr('gui.collapse_rail')).toBe(undefined)
+    lang.set('en')
+    expect(lang.attr('gui.collapse_rail')).toBe('Collapse sidebar')
+    lang.set('zh')
+    expect(lang.attr('gui.collapse_rail')).not.toBe('Collapse sidebar')
+  })
+
+  /* Nothing walks the document any more: the keys on the markup are inert
+     markers, and an element that is not rendered by a region cannot be
+     translated by a pick. */
+  it('leaves a keyed element in the document untouched', async () => {
     document.body.innerHTML = [
       '<span data-i18n="gui.new_task">literal</span>',
       '<input data-i18n-ph="gui.search_sessions">',
@@ -108,11 +123,11 @@ describe('applying a language', () => {
     const lang = await fresh()
     lang.set('en')
     const at = (selector: string): HTMLElement => document.querySelector(selector) as HTMLElement
-    expect(at('[data-i18n]').textContent).toBe('New task')
-    expect((at('[data-i18n-ph]') as HTMLInputElement).placeholder).toBe('Search sessions')
-    expect(at('[data-i18n-title]').title).toBe('Collapse sidebar')
-    expect(at('[data-i18n-aria]').getAttribute('aria-label')).toBe('Collapse sidebar')
-    expect(at('[data-i18n-tip]').dataset.tip).toBe('Collapse sidebar')
+    expect(at('[data-i18n]').textContent).toBe('literal')
+    expect((at('[data-i18n-ph]') as HTMLInputElement).placeholder).toBe('')
+    expect(at('[data-i18n-title]').title).toBe('')
+    expect(at('[data-i18n-aria]').getAttribute('aria-label')).toBe(null)
+    expect(at('[data-i18n-tip]').dataset.tip).toBe(undefined)
   })
 })
 
@@ -130,17 +145,31 @@ describe('the subscribers', () => {
     expect(calls).toBe(2)
   })
 
-  /* The boot restore's setter. `langRestore` applies the remembered language
-     ahead of the first data-driven paint and repaints nothing, which is why
-     the whole-page redraw subscribed to `set` must not run for it. */
+  /* The boot restore's setter. `restore` applies the remembered language ahead
+     of the first data-driven paint and repaints nothing DRAWN, which is why the
+     whole-page redraw must not run for it. */
   it('hears nothing from the quiet setter, which still applies the language', async () => {
     const lang = await fresh()
     let calls = 0
-    lang.subscribe(() => { calls += 1 })
+    lang.onApplied(() => { calls += 1 })
     lang.setQuiet('zh')
     expect(calls).toBe(0)
     expect(lang.get()).toBe('zh')
     expect(document.documentElement.lang).toBe('zh-CN')
     expect(lang.text('gui.new_task', 'the markup literal')).toBe(ZH_NEW_TASK)
+  })
+
+  /* The markup is the other half, and the quiet setter moves it: applyI18n ran
+     on every call site including this one, so a page that boots with a
+     remembered language has to be in it before the first frame. */
+  it('still tells the regions to draw again from the quiet setter', async () => {
+    const lang = await fresh()
+    const seen: string[] = []
+    lang.subscribe(() => { seen.push('render') })
+    lang.onApplied(() => { seen.push('redraw') })
+    lang.setQuiet('zh')
+    expect(seen).toEqual(['render'])
+    lang.set('en')
+    expect(seen).toEqual(['render', 'render', 'redraw'])
   })
 })

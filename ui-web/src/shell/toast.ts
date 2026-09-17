@@ -2,7 +2,7 @@
  *
  * The notices are state here -- one entry per notice that is still up, with the
  * host it was raised in -- and <Toasts/> (src/App.tsx) renders them into that
- * host, which is static markup in src/page.html until the end of stage C. What
+ * host, which the page's own root renders at the body. What
  * is here besides the list is the pair of lifetimes: a plain notice is read in
  * passing, one that offers an action has to outlast reaching for it.
  *

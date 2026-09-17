@@ -20,15 +20,9 @@ import { mountPageRoot } from '../test/pageRoot'
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-/* The containers page.html carries: the grid, the chat header's toggle with its
-   badge, and the column this portals into. */
-const MARKUP = '<div class="app"><div class="split" id="split">'
-  + '<div class="chat"><div class="top">'
-  + '<button class="ghost-ic wstog tipdn" id="wsBtn" aria-expanded="false">'
-  + '<span class="bdg" id="wsBdg" hidden>2</span></button>'
-  + '</div></div>'
-  + '<aside class="ws" id="ws" data-i18n-aria="gui.workspace"></aside>'
-  + '</div></div>'
+/* Nothing: the page root renders the grid, the chat header's toggle with its
+   badge, and this column, so a case gets all of them by mounting it. */
+const MARKUP = ''
 
 let unmount = (): void => {}
 let picked: string[] = []
@@ -68,7 +62,7 @@ afterEach(() => {
 })
 
 describe('the workspace pane', () => {
-  it('portals the two children into the column, in the order page.html had them', () => {
+  it('renders the column with the two children page.html had, in order', () => {
     expect(Array.from(pane().children).map((child) => child.id || child.className)).toEqual([
       'ws-top',
       'wsBody',

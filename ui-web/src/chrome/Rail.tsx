@@ -9,13 +9,15 @@
  * Every element below is a transcription -- tag, id, class, data-*, role, aria,
  * the svg path data and the text exactly as page.html spelled them, attributes
  * in the same order -- and src/test/__golden__/region-app.txt is what says so.
- * The container, aside.rail, stays in page.html until the end of stage C and
- * this portals into it (see src/App.tsx for why the root is detached).
+ * The column itself is here too now: src/App.tsx renders this region inside the
+ * one portal it makes at the body.
  *
- * Literals go through lang.text(key, literal): the served markup carries
- * data-i18n* keys and state/lang.ts applies a language by walking the document
- * and rewriting them, so a component rendering one of those keyed literals has
- * two writers and has to read the same catalogue to agree with the other one.
+ * Words go through lang.text(key, literal) and keyed attributes through
+ * lang.attr(key): the literal the page was served with until a language is
+ * applied, the catalogue's text afterwards. That pair is what applyI18n's
+ * passes over the document used to do, read from the other end -- the data-i18n*
+ * keys stay on the elements as the record of which phrase each line speaks, and
+ * nothing walks them any more (state/lang.ts).
  *
  * What this does NOT own, though it renders the elements:
  *   - #newBtn's click. Its action belongs to the session rather than to the
@@ -38,7 +40,6 @@
  */
 
 import { useSyncExternalStore } from 'react'
-import { createPortal } from 'react-dom'
 
 import { openPlugins, openSkills } from '../legacy/demo/120-capabilities.js'
 import { openKb, openMem } from '../legacy/demo/140-schedule.js'
@@ -66,6 +67,8 @@ function RailTop(): JSX.Element {
         aria-expanded="true"
         data-i18n-tip="gui.collapse_rail"
         data-i18n-aria="gui.collapse_rail"
+        data-tip={lang.attr('gui.collapse_rail')}
+        aria-label={lang.attr('gui.collapse_rail')}
         onClick={() => rail.set(false)}
       >
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
@@ -78,6 +81,8 @@ function RailTop(): JSX.Element {
         data-i18n-tip="gui.search_sessions"
         data-i18n-aria="gui.search_sessions"
         aria-expanded={s.open}
+        data-tip={lang.attr('gui.search_sessions')}
+        aria-label={lang.attr('gui.search_sessions')}
         onClick={() => find.toggle()}
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
@@ -139,7 +144,7 @@ function RailNav(): JSX.Element {
            The rows land above this button, not below it, because the button is
            the fold: it reads "More" while they are hidden and "Less" once they
            stand in the list, which only works if it sits at the list's end. */}
-      <div className="moresub" id="moreFly" data-open="false" role="group" data-i18n-aria="gui.nav.more" />
+      <div className="moresub" id="moreFly" data-open="false" role="group" data-i18n-aria="gui.nav.more" aria-label={lang.attr('gui.nav.more')} />
       <button className="navi more" id="moreBtn" aria-expanded="false" aria-controls="moreFly">
         <svg className="chev" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <path d="M7 9.8l5 5.4 5-5.4" />
@@ -175,9 +180,10 @@ function FindRow(): JSX.Element {
         data-i18n-ph="gui.search_sessions"
         data-i18n-aria="gui.search_sessions"
         placeholder={lang.text('gui.search_sessions', '搜索会话')}
+        aria-label={lang.attr('gui.search_sessions')}
       />
       {' '}
-      <button className="clr" id="sclr" hidden={!s.query} data-i18n-aria="gui.clear_search" onClick={() => find.clear()}>&#10005;</button>
+      <button className="clr" id="sclr" hidden={!s.query} data-i18n-aria="gui.clear_search" aria-label={lang.attr('gui.clear_search')} onClick={() => find.clear()}>&#10005;</button>
       {' '}
     </div>
   )
@@ -199,7 +205,7 @@ function RailFoot(): JSX.Element {
       {/* The foot is the door to settings, and only that: accounts are not a
            thing this product has, so nothing down here pretends to be one.
            The version under the label is drawn by drawFoot(). */}
-      <button className="me" id="meBtn" data-i18n-aria="gui.nav.set" onClick={() => openSettings()}>
+      <button className="me" id="meBtn" data-i18n-aria="gui.nav.set" aria-label={lang.attr('gui.nav.set')} onClick={() => openSettings()}>
         <span className="av anon">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" />
             <path d="M12 3v2.2M12 18.8V21M4.6 7.8l1.9 1.1M17.5 15.1l1.9 1.1M4.6 16.2l1.9-1.1M17.5 8.9l1.9-1.1M3 12h2.2M18.8 12H21" /></svg>
@@ -214,14 +220,13 @@ function RailFoot(): JSX.Element {
   )
 }
 
-/* The six children of aside.rail, in the order page.html had them. #list is
+/* The column and its six children, in the order page.html had them. #list is
    handed over empty: the rail island roots itself in it (src/main.tsx), so
    React must not own that child list. */
-export function Rail(): JSX.Element | null {
-  const host = document.querySelector('.rail')
-  if (!host) return null
-  return createPortal(
-    <>
+export function Rail(): JSX.Element {
+  useSyncExternalStore(lang.subscribe, lang.get)
+  return (
+    <aside className="rail">
       <RailTop />
       <RailNav />
       <FindRow />
@@ -234,8 +239,9 @@ export function Rail(): JSX.Element | null {
         aria-orientation="vertical"
         data-i18n-title="gui.resize_rail"
         data-i18n-aria="gui.resize_rail"
+        title={lang.attr('gui.resize_rail')}
+        aria-label={lang.attr('gui.resize_rail')}
       />
-    </>,
-    host
+    </aside>
   )
 }

@@ -5,34 +5,43 @@
  * The component that renders what is state here has its own file
  * (src/chrome/CapsPage.test.tsx). What is asserted here is what the legacy
  * chrome used to do by id, in the order it did it: the two tab layers'
- * effects, the three container attributes, the hero's position, and the names
- * the other layers still call.
+ * effects, the container attributes, the hero's position, and the names the
+ * other layers still call.
  */
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { T } from '../i18n/t'
+import { mountPageRoot } from '../test/pageRoot'
 
 /* Every case starts from the served page: the tab, the two buttons and the
    registered hooks are module state, so a case that ran before must not be
    visible in the next. */
 let caps: typeof import('./caps')
 
-const MARKUP =
-  '<section class="page" id="capsPage" data-open="false">' +
-  '<header></header><div class="work"><div class="wrap">' +
-  '<div class="cbar"><input id="cq"></div><div id="capsBody"></div>' +
-  '<details class="adv" id="advAdd"></details>' +
-  '</div></div></section>' +
-  '<aside id="detail" data-open="true"></aside>'
-
 const el = (id: string): HTMLElement => document.getElementById(id) as HTMLElement
 const field = (): HTMLInputElement => el('cq') as HTMLInputElement
 const bar = (): HTMLElement => document.querySelector('#capsPage .cbar') as HTMLElement
 
+let unmount = (): void => {}
+
+/* The section is src/chrome/CapsPage.tsx's markup now, so the page's own root is
+   what a case reads the six values off -- the store commits synchronously, which
+   is what keeps every assertion below a read straight after the write. */
 beforeEach(async () => {
-  document.body.innerHTML = MARKUP
+  unmount()
+  document.body.innerHTML = ''
   caps = await import('./caps')
   caps.wipe()
+  unmount = mountPageRoot()
+  /* Two cases below are about a tab flip closing a card that is open, and the
+     served drawer is shut. */
+  el('detail').dataset.open = 'true'
+})
+
+afterEach(() => {
+  unmount()
+  unmount = () => {}
+  document.body.innerHTML = ''
 })
 
 describe('the capabilities page state', () => {
@@ -184,7 +193,7 @@ describe('the capabilities page state', () => {
     const plugins = await import('../legacy/demo/153-plugins.js')
     let draws = 0
     caps.onDraw({ skill: () => { draws += 1 } })
-    skills.drawCaps()
+    caps.draw()
     expect(draws).toBe(1)
     legacy.extSetBase('plugin')
     expect(caps.get().tab).toBe('plugin')

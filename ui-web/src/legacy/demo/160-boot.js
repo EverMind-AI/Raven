@@ -12,15 +12,14 @@ import { load as lookLoad } from '../../shell/look'
 import { load as paneLoad } from '../../shell/panes'
 import { draw as drawPerm } from '../../shell/perm'
 import { load as loadTier } from '../../shell/tier'
+import * as caps from '../../state/caps'
 import { set as setRail } from '../../state/rail'
 import { hideSplash, markStart } from '../../state/splash'
 import { bootError } from './040-state.js'
 import { sessionDraw, sessionOpen, sessionRows } from './050-rail.js'
 import { goState } from './090-composer.js'
 import { bumpWs } from './100-workspace.js'
-import { drawCapsBadge } from './120-capabilities.js'
 import { drawSettings, setRuntime } from './130-settings.js'
-import { drawCaps } from './152-skills.js'
 
 function bootPage() {
   [
@@ -31,11 +30,10 @@ function bootPage() {
     /* Live boot deliberately starts with an empty source and chooses a draft
        after the real list lands. Demo mode has a fixture row to open here. */
     ['sessionOpen', () => { const first = sessionRows()[0]; if (first) sessionOpen(first); }],
-    ['drawCapsBadge', () => drawCapsBadge()],
     ['drawPerm', () => drawPerm()],
     ['loadTier', () => loadTier()],
     ['drawCtx', () => drawCtx()],
-    ['drawCaps', () => drawCaps()],
+    ['drawCaps', () => caps.draw()],
     ['drawFoot', () => drawFoot()],
     ['bumpWs', () => bumpWs()],
     ['drawSettings', () => drawSettings()],

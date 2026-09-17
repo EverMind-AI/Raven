@@ -8,8 +8,8 @@
  * Every element below is a transcription -- tag, id, class, data-*, role, aria,
  * the svg path data and the text exactly as page.html spelled them, attributes
  * in the same order -- and src/test/__golden__/region-app.txt is what says so.
- * The container, aside.ws#ws, stays in page.html until the end of stage C and
- * this portals into it (see src/App.tsx for why the root is detached).
+ * The column itself is here too now: src/App.tsx renders it as one of the two
+ * children of #split.
  *
  * Literals go through lang.text(key, literal): the served markup carries
  * data-i18n* keys and state/lang.ts applies a language by walking the document
@@ -37,8 +37,6 @@
  */
 
 import { useEffect, useSyncExternalStore } from 'react'
-import { createPortal } from 'react-dom'
-
 import { composing } from '../features/composer/store'
 import { islands } from '../islands'
 import * as lang from '../state/lang'
@@ -48,8 +46,9 @@ import type { JSX, MouseEvent } from 'react'
 
 /* 1-4 pick a view while the pane has focus, and the toggle in the chat header
    opens the floating desk. Both elements are outside this component's markup --
-   aside.ws is the container page.html provides and #wsBtn belongs to the chat
-   header -- so both are bound by id, once, rather than on every render. */
+   the pane is this component's own element and #wsBtn belongs to the chat
+   header, and neither listener is a prop -- so both are bound by id, once,
+   rather than on every render. */
 function useOutsideControls(): void {
   useEffect(() => {
     const pane = document.getElementById('ws')
@@ -125,6 +124,8 @@ function WsActs(): JSX.Element {
         aria-pressed="false"
         data-i18n-tip="gui.ws.expand_panel"
         data-i18n-aria="gui.ws.expand_panel"
+        data-tip={lang.attr('gui.ws.expand_panel')}
+        aria-label={lang.attr('gui.ws.expand_panel')}
         onClick={() => ws.setFull(!ws.wide)}
       >
         <svg className="ex" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
@@ -147,6 +148,8 @@ function WsActs(): JSX.Element {
         aria-expanded="true"
         data-i18n-tip="gui.collapse_ws"
         data-i18n-aria="gui.collapse_ws"
+        data-tip={lang.attr('gui.collapse_ws')}
+        aria-label={lang.attr('gui.collapse_ws')}
         onClick={() => ws.setOpen(false)}
       >
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
@@ -157,20 +160,18 @@ function WsActs(): JSX.Element {
   )
 }
 
-/* The two children of aside.ws, in the order page.html had them. #wsBody is
+/* The column and its two children, in the order page.html had them. #wsBody is
    handed over empty, for the reason the header gives. */
-export function WsPane(): JSX.Element | null {
+export function WsPane(): JSX.Element {
   useOutsideControls()
-  const host = document.getElementById('ws')
-  if (!host) return null
-  return createPortal(
-    <>
+  useSyncExternalStore(lang.subscribe, lang.get)
+  return (
+    <aside className="ws" id="ws" data-i18n-aria="gui.workspace" aria-label={lang.attr('gui.workspace')}>
       <div className="ws-top">
         <WsTabs />
         <WsActs />
       </div>
       <div className="ws-body" id="wsBody" />
-    </>,
-    host
+    </aside>
   )
 }

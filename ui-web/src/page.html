@@ -11,6 +11,12 @@
 </head>
 <body>
 
+<!-- What is left in here is what React cannot put on screen: the two
+     pre-JavaScript shells, and the one empty host another root mounts into.
+     Every other region of the page is rendered by src/App.tsx, which portals
+     into this body after these three -- and the two shells are taken down at
+     boot, so the body a reader ever sees is the React tree. -->
+
 <!-- Boot splash: the literal first frame. Markup lives here, before anything
      else in <body>, so the browser paints it ahead of the app shell -- no
      flash of skeleton rows or half-drawn chrome. The demo hides it on window
@@ -23,10 +29,14 @@
   </div>
 </div>
 
-<!-- First-run onboarding surface. Empty shell: showOnboard() renders the
-     steps into it, driven by the same RPCs the TUI setup gate uses
-     (setup.status / model.options / model.save_key / config.set), so the
-     onboarding logic itself lives once, server-side. -->
+<!-- First-run onboarding surface. Empty shell: the onboarding island roots
+     itself in it (src/main.tsx) and renders the steps, driven by the same RPCs
+     the TUI setup gate uses (setup.status / model.options / model.save_key /
+     config.set), so the onboarding logic itself lives once, server-side.
+
+     Static, and between the two shells on purpose: a portal can only append,
+     so a region rendered from App.tsx lands after #noJs -- and this one has to
+     stay where the page has always served it. -->
 <div id="onb" hidden></div>
 
 <div id="noJs" style="position:fixed;left:0;right:0;top:0;z-index:99;background:#e0a030;color:#16150f;
@@ -34,179 +44,6 @@
   <b>这个页面的脚本没有运行</b> —— 所以只剩空壳：没有会话列表、没有对话、发送键是空的。
   多半是当前预览环境不执行 JavaScript。把文件保存到本地，用 Chrome 或 Safari 直接打开即可。
 </div>
-
-<div class="app">
-  <!-- ─── rail ─────────────────────────────────────────────────────── -->
-  <!-- The six children inside render from src/chrome/Rail.tsx; only the column
-       itself is static markup. Its #list is shared ground: the rail island
-       roots itself in it. -->
-  <aside class="rail"></aside>
-
-  <!-- ─── main ─────────────────────────────────────────────────────── -->
-  <div class="main">
-    <div class="split" id="split">
-      <div class="chat">
-        <!-- The session header belongs to the chat column, not the whole main
-             pane: spanning both columns would leave a band of empty header
-             above the workspace, which then reads as detached from the top. -->
-        <!-- The interiors of the four containers below render from
-             src/chrome/ChatTop.tsx; only the containers are static markup.
-             #stage and #flash are shared ground: the transcript island and the
-             composer append their own hosts into #stage, so React hands both
-             over empty. -->
-        <div class="top"></div>
-
-        <div class="scroll" id="scroll"></div>
-        <button class="backpill" id="backpill" hidden></button>
-        <!-- The workspace seam, hung off the chat rather than the panel: the panel
-             clips its own overflow, so a grip inside it could only be grabbed
-             from one side. Empty, and staying static: there is no interior to
-             render, and shell/panes.ts drags it by id. -->
-        <div class="grip" id="wsGrip" role="separator" aria-orientation="vertical"
-             data-i18n-title="gui.resize_ws" data-i18n-aria="gui.resize_ws"></div>
-
-        <div id="brand" aria-hidden="true"></div>
-
-        <!-- The four children inside render from src/chrome/Dock.tsx; only the
-             band itself is static markup. It has to stay one node: the composer
-             watches it for every reason its height changes. -->
-        <div class="dock"></div>
-      </div>
-
-      <!-- workspace: what the agent is touching right now -->
-      <!-- The two children inside render from src/chrome/WsPane.tsx; only the
-           column itself is still markup. Its #wsBody is shared ground: the
-           workspace, browser and sub-agent views each draw into that box. -->
-      <aside class="ws" id="ws" data-i18n-aria="gui.workspace"></aside>
-    </div>
-  </div>
-</div>
-
-<!-- The way back when the rail is collapsed. It sits out here rather than in
-     the chat header because that header opens a stacking context of its own
-     (.top is positioned with a z-index), which capped this button below the
-     full-page modules no matter how high its own z-index went -- collapsing the
-     rail inside 技能 / 插件 / 记忆 then covered the only control that brings it
-     back, with no way left to reach another module. -->
-<button class="ghost-ic tipdn" id="railShow" data-i18n-tip="gui.expand_rail" data-i18n-aria="gui.expand_rail" hidden>
-  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-    <rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/>
-  </svg>
-</button>
-
-<!-- ─── module 2: capabilities (one section, two modules) ──────────────
-     技能 and 插件 are separate rail entries but the same machinery: search,
-     status pills, card grid, detail drawer. The section is reused; the title
-     and the body follow whichever module opened it. -->
-<!-- The interiors of the three containers below are rendered from
-     src/chrome/CapsPage.tsx: the heading, the filter bar and the manual-add
-     fold. #capsBody stays an empty container between two of them -- the two
-     islands attach their own hosts under it and a tab draw clears it -- so the
-     three are separate portals rather than one over .wrap. -->
-<section class="page" id="capsPage" data-open="false">
-  <header></header>
-  <div class="work">
-    <div class="wrap">
-      <div class="cbar"></div>
-      <div id="capsBody"></div>
-
-      <details class="adv" id="advAdd"></details>
-    </div>
-  </div>
-</section>
-
-<!-- ─── module 2b: connections ─────────────────────────────────────── -->
-<section class="page" id="xaPage" data-open="false" data-i18n-aria="gui.page.agents">
-  <header>
-    <h2 data-i18n="gui.page.agents">子智能体</h2>
-  </header>
-  <div class="work">
-    <div class="wrap" id="xaBody"></div>
-  </div>
-</section>
-
-<section class="page" id="connPage" data-open="false" data-i18n-aria="gui.page.conn">
-  <header>
-    <h2 data-i18n="gui.page.conn">入口</h2>
-  </header>
-  <div class="work">
-    <div class="wrap" id="connBody"></div>
-  </div>
-</section>
-
-<!-- ─── module 3b: data & memory ───────────────────────────────────── -->
-<section class="page" id="memPage" data-open="false" data-i18n-aria="gui.mem.hero">
-  <header>
-    <h2 data-i18n="gui.nav.mem">记忆</h2>
-  </header>
-  <div class="work">
-    <div class="wrap" id="memBody"></div>
-  </div>
-</section>
-
-<!-- ─── module 3b2: playbooks ──────────────────────────────────────── -->
-<section class="page" id="pbPage" data-open="false" data-i18n-aria="gui.nav.pb">
-  <header>
-    <h2 data-i18n="gui.nav.pb">剧本</h2>
-  </header>
-  <div class="work">
-    <div class="wrap" id="pbBody"></div>
-  </div>
-</section>
-
-<!-- ─── module 3c: knowledge bases ─────────────────────────────────── -->
-<section class="page" id="kbPage" data-open="false" data-i18n-aria="gui.nav.kb">
-  <header>
-    <h2 data-i18n="gui.nav.kb">知识库</h2>
-  </header>
-  <div class="work">
-    <div class="wrap" id="kbBody"></div>
-  </div>
-</section>
-
-<!-- ─── module 4: scheduled ────────────────────────────────────────── -->
-<section class="page" id="cronPage" data-open="false" data-i18n-aria="gui.page.cron">
-  <header>
-    <h2 data-i18n="gui.page.cron">定时</h2>
-  </header>
-  <div class="work">
-    <div class="wrap" id="cronBody"></div>
-  </div>
-</section>
-
-<!-- The new-job sheet renders here from the cron island
-     (ui/src/features/cron/CronPage.tsx); only the veil is static markup. -->
-<div class="veil" id="jobVeil" data-open="false"></div>
-
-<!-- The panel inside renders from src/App.tsx; only the scrim is static
-     markup. Its #dBody is shared ground: four islands append their own host
-     into it (memory, xa, skills, plugins). -->
-<aside class="detail" id="detail" data-open="false" role="dialog" aria-modal="true" data-i18n-aria="gui.cap_detail"></aside>
-
-<!-- ─── module 3: settings ─────────────────────────────────────────── -->
-<!-- Settings is a dialog, not a place: it is something you adjust and dismiss,
-     and taking over the whole window made a two-second change feel like leaving
-     the session behind. -->
-<!-- The dialog inside renders from src/App.tsx; only the scrim is static
-     markup. -->
-<div class="veil setveil" id="setVeil" data-open="false"></div>
-
-<!-- ─── overlays ───────────────────────────────────────────────────── -->
-<!-- The confirm sheet inside renders from src/App.tsx; only the scrim is
-     static markup. -->
-<div class="veil" id="veil" data-open="false"></div>
-
-<!-- One entry's credentials. Its own veil rather than the confirm dialog's:
-     disconnecting from inside it raises that one, and a dialog cannot be both
-     the thing asking and the thing asked. The sheet renders here from the
-     connections island (ui/src/features/connections/ConnPage.tsx); only the
-     veil is static markup. -->
-<div class="veil" id="connVeil" data-open="false"></div>
-
-<!-- The 更多 flyout: a slim second column that grows out of the rail, drawn by
-     drawMoreFly(). It holds the set-up-once modules: sub-agents, entrances, schedules. -->
-<div class="menu" id="menu" data-open="false" role="menu"></div>
-<div class="toasts" id="toasts" aria-live="polite"></div>
 
 <script>
 /* The digest of the asset tree this page was built from, hung on the window

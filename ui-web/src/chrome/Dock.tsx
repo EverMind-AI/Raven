@@ -5,8 +5,8 @@
  * Every element below is a transcription -- tag, id, class, data-*, role, aria,
  * the svg path data and the text exactly as page.html spelled them, attributes
  * in the same order -- and src/test/__golden__/region-app.txt is what says so.
- * The container, div.dock, stays in page.html until the end of stage C and this
- * portals into it (see src/App.tsx for why the root is detached). It has to
+ * The band itself is here too now: src/App.tsx renders div.chat and this is its
+ * sixth and last child. It has to
  * stay one stable node for a second reason too: the composer hangs a
  * ResizeObserver and a MutationObserver on it (features/composer/mount.tsx), and
  * a node rebuilt per render would lose both.
@@ -54,7 +54,6 @@
  */
 
 import { useSyncExternalStore } from 'react'
-import { createPortal } from 'react-dom'
 
 import { CtxChip } from './CtxChip'
 import { PermChip } from './PermChip'
@@ -84,7 +83,7 @@ function DockIn(): JSX.Element {
             reproduced: it collapses at both line edges either way, but the rule
             that makes it harmless is the line edge, not the parent (.tool-btn,
             src/styles/page.css:2135). */}
-        <button className="tool-btn" id="attBtn" data-i18n-tip="gui.attach" data-i18n-aria="gui.attach">
+        <button className="tool-btn" id="attBtn" data-i18n-tip="gui.attach" data-i18n-aria="gui.attach" data-tip={lang.attr('gui.attach')} aria-label={lang.attr('gui.attach')}>
           {' '}
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
             <path d="M15 7l-6.2 6.2a2.6 2.6 0 0 0 3.7 3.7L19 10a4.4 4.4 0 0 0-6.2-6.2L6 10.5a6.2 6.2 0 0 0 8.8 8.8l3.4-3.4" />
@@ -97,10 +96,10 @@ function DockIn(): JSX.Element {
         <CtxChip />
         <TierChip />
         <button className="chip" id="modelChip"><span id="modelName">minimax-m3</span></button>
-        <button className="go" id="go" disabled data-i18n-aria="gui.send" />
+        <button className="go" id="go" disabled data-i18n-aria="gui.send" aria-label={lang.attr('gui.send')} />
       </div>
 
-      <div className="pop slash" id="slashPop" data-open="false" role="listbox" data-i18n-aria="gui.commands">
+      <div className="pop slash" id="slashPop" data-open="false" role="listbox" data-i18n-aria="gui.commands" aria-label={lang.attr('gui.commands')}>
         <div className="hd"><span className="lab" data-i18n="gui.session_commands">{lang.text('gui.session_commands', '会话命令')}</span></div>
         <div id="slashList" />
       </div>
@@ -111,15 +110,14 @@ function DockIn(): JSX.Element {
   )
 }
 
-/* The four children of div.dock, in the order page.html had them. The rack is
-   handed over empty, which is load-bearing: `.dock .sheets:has(> *)` is what
-   gives the stack its frost, so an empty rack has to be an element with no
-   children rather than a wrapper around none. */
-export function Dock(): JSX.Element | null {
-  const host = document.querySelector('.dock')
-  if (!host) return null
-  return createPortal(
-    <>
+/* The band and its four children, in the order page.html had them. It has to
+   stay one node: the composer watches it for every reason its height changes.
+   The rack is handed over empty, which is load-bearing: `.dock .sheets:has(> *)`
+   is what gives the stack its frost, so an empty rack has to be an element with
+   no children rather than a wrapper around none. */
+export function Dock(): JSX.Element {
+  return (
+    <div className="dock">
       {/* Behind the composer on purpose: this one is drawn as a torso
            leaning over the top edge, and the card cutting off its lower
            half is what makes it look like it is ON the box rather than
@@ -145,7 +143,6 @@ export function Dock(): JSX.Element | null {
         <img className="rv rv-coding" src="assets/ravens/coding.webp" alt="" decoding="async" />
         <img className="rv rv-data" src="assets/ravens/data.webp" alt="" decoding="async" />
       </div>
-    </>,
-    host
+    </div>
   )
 }
