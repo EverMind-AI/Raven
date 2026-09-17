@@ -484,6 +484,70 @@ async def test_editing_a_chunk_that_is_not_there_is_refused(manager) -> None:
         await manager.update_chunk(doc.id, "no-such-chunk", "text")
 
 
+async def test_a_legacy_word_document_has_a_parser(manager) -> None:
+    """It had none, so every reindex of a base holding one failed on it -- a
+    file the panel can preview and the engine refused to read."""
+    from raven.knowledge._manager import _default_parsers
+
+    claimed = {media for parser in _default_parsers() for media in parser.supported_media_types}
+
+    assert "application/msword" in claimed
+    assert ".doc" in manager.supported_extensions()
+
+
+async def test_a_table_carries_its_surroundings_without_being_asked(manager) -> None:
+    """On by default, and it reaches the bases that predate the setting: none
+    of them stored a value, so they take what the record defaults to. A table
+    on its own embeds as a grid of values with nothing saying what they are
+    about."""
+    base = await manager.create_base(name="tables")
+
+    assert base.table_context_size == 64
+    assert base.image_context_size == 64
+    chunker = manager._chunker_for(base)
+    assert chunker.table_context_size == 64
+
+
+# -- whether a base can embed at all -------------------------------
+
+
+async def test_a_base_on_the_configured_model_can_embed(manager) -> None:
+    base = await manager.create_base(name="current")
+
+    assert manager.embedding_reach(base) == ""
+
+
+async def test_a_base_with_no_provider_and_another_model_says_so(manager) -> None:
+    """The case that actually happens: a base built before providers were
+    recorded, on a model the configured endpoint does not serve. Nothing it
+    holds can be indexed until that is fixed, and the reason belongs where the
+    reader is looking rather than in a line of the gateway log."""
+    base = await manager.create_base(name="stranded")
+    # The pin moves under it, which is what leaves a base naming a model the
+    # configured endpoint does not serve.
+    manager._embedding = replace(manager._embedding, model="a-different-model")
+
+    assert manager.embedding_reach(manager.get_base(base.id)) == "no_provider"
+
+
+async def test_a_base_whose_provider_has_no_credential_says_which(manager, endpoints, monkeypatch) -> None:
+    """A different repair from the one above, so a different answer."""
+    base = await manager.create_base(name="keyless")
+    manager._embedding = replace(manager._embedding, model="a-different-model")
+    manager.configure_base(base.id, embedding_provider="siliconflow")
+    monkeypatch.setattr("raven.knowledge._manager.embedding_config_for", lambda *a, **k: None)
+
+    assert manager.embedding_reach(manager.get_base(base.id)) == "no_credential"
+
+
+async def test_a_base_with_no_model_is_not_unreachable(manager) -> None:
+    """A base created without embedding is not broken; it is what it asked to
+    be, and warning about it would be warning about a choice."""
+    base = await manager.create_base(name="files only", embedding=False)
+
+    assert manager.embedding_reach(base) == ""
+
+
 # -- the settings a base is chunked by -----------------------------
 
 

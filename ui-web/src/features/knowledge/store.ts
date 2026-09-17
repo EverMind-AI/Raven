@@ -657,9 +657,14 @@ export const DEFAULTS: Required<KbSettings> = {
   /* Off. Overlap repeats text between neighbouring chunks, and every repeated
      passage is retrieved twice and reads as two findings. */
   chunk_overlap: 0,
-  table_context_size: 0,
-  image_context_size: 0,
+  /* About a sentence either side of a table or a figure. What the engine
+     defaults to, so the panel and Restore Defaults say the same thing. */
+  table_context_size: 64,
+  image_context_size: 64,
   file_processing: '',
+  /* Empty means the configured endpoint, which is where a base built today
+     gets its model. */
+  embedding_provider: '',
 }
 
 /* One base's settings, defaulted field by field rather than wholesale: a base
@@ -674,11 +679,38 @@ export function settingsOf(base: KbBase): Required<KbSettings> {
     table_context_size: base.table_context_size ?? DEFAULTS.table_context_size,
     image_context_size: base.image_context_size ?? DEFAULTS.image_context_size,
     file_processing: base.file_processing ?? DEFAULTS.file_processing,
+    embedding_provider: base.embedding_provider ?? DEFAULTS.embedding_provider,
   }
+}
+
+/* Providers this install has a credential for, for the picker that repairs a
+   base whose endpoint moved.
+
+   Read once, when the settings panel is opened, and kept: the list changes
+   when somebody edits their providers, which is not something that happens
+   while this dialog is up. An install whose provider list cannot be read
+   offers an empty picker rather than failing the dialog -- the base is still
+   readable, and the field is the only part that needs it. */
+let providers: string[] = []
+
+export function providerChoices(): string[] {
+  return providers
 }
 
 export function openSettings(): void {
   set({ settings: true })
+  void loadProviders()
+}
+
+async function loadProviders(): Promise<void> {
+  if (providers.length) return
+  try {
+    const found = await source().providers()
+    providers = found
+    set({})
+  } catch {
+    /* The picker stays empty; nothing else on the panel depends on it. */
+  }
 }
 
 export function closeSettings(): void {

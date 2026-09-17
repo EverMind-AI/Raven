@@ -105,8 +105,8 @@ def install_hint() -> str:
     return "apt install libreoffice"
 
 
-def convert_command(source: Path, staged: Path, profile: Path, *, executable: str) -> list[str]:
-    """The argv that converts `source` to PDF into `staged`, using `profile` alone."""
+def convert_command(source: Path, staged: Path, profile: Path, *, executable: str, target: str = "pdf") -> list[str]:
+    """The argv that converts `source` into `staged` as `target`, using `profile` alone."""
     return [
         executable,
         "--headless",
@@ -119,7 +119,7 @@ def convert_command(source: Path, staged: Path, profile: Path, *, executable: st
         "--norestore",
         f"-env:UserInstallation={profile.resolve().as_uri()}",
         "--convert-to",
-        "pdf",
+        target,
         "--outdir",
         str(staged),
         str(Path(source).resolve()),
@@ -144,7 +144,26 @@ def to_pdf(
     timeout_s: float,
     profile_root: Path | None = None,
 ) -> Converted:
+    """One conversion to PDF. What the two rendering callers want."""
+    return convert(source, staged, executable=executable, timeout_s=timeout_s, target="pdf", profile_root=profile_root)
+
+
+def convert(
+    source: Path,
+    staged: Path,
+    *,
+    executable: str,
+    timeout_s: float,
+    target: str = "pdf",
+    profile_root: Path | None = None,
+) -> Converted:
     """Run one conversion of `source` into `staged`, and say what came of it.
+
+    `target` is LibreOffice's own filter name -- `pdf` to render one, `docx` to
+    bring a format raven has a parser for within reach of it. Rendering and
+    re-formatting are the same run with a different word in the argv, and
+    keeping them one function is what stops the profile and teardown rules
+    below being written twice again.
 
     `staged` is the caller's, because where the output lands decides how it is
     moved afterwards -- a rename is not a rename across filesystems. The profile
@@ -159,9 +178,11 @@ def to_pdf(
     with tempfile.TemporaryDirectory(prefix="raven-soffice-", dir=profile_root) as scratch:
         profile = Path(scratch) / "profile"
         profile.mkdir()
-        command = convert_command(Path(source), Path(staged), profile, executable=executable)
+        command = convert_command(Path(source), Path(staged), profile, executable=executable, target=target)
         returncode, stdout, stderr = _run(command, timeout_s=timeout_s)
-    return Converted(produced=sorted(Path(staged).glob("*.pdf")), returncode=returncode, stdout=stdout, stderr=stderr)
+    return Converted(
+        produced=sorted(Path(staged).glob(f"*.{target}")), returncode=returncode, stdout=stdout, stderr=stderr
+    )
 
 
 def _run(command: Sequence[str], *, timeout_s: float) -> tuple[int, str, str]:

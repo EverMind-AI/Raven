@@ -139,7 +139,7 @@ def test_a_table_is_its_own_chunk() -> None:
     happened to sit beside it."""
     section = _with_elements([("Before.", "text"), ("Region | EU", "table"), ("After.", "text")])
 
-    chunks = _chunk([section], chunk_size=1000)
+    chunks = _chunk([section], chunk_size=1000, table_context_size=0)
 
     assert _texts(chunks) == ["Before.", "Region | EU", "After."]
 
@@ -147,7 +147,9 @@ def test_a_table_is_its_own_chunk() -> None:
 def test_a_figure_is_its_own_chunk_too() -> None:
     section = _with_elements([("Before.", "text"), ("Latency over time", "figure")])
 
-    assert _texts(_chunk([section], chunk_size=1000)) == ["Before.", "Latency over time"]
+    chunks = _chunk([section], chunk_size=1000, image_context_size=0)
+
+    assert _texts(chunks) == ["Before.", "Latency over time"]
 
 
 def test_a_data_block_is_passed_through_whole() -> None:
@@ -176,10 +178,22 @@ def test_a_table_carries_the_prose_around_it_when_asked() -> None:
     assert "third quarter" in table
 
 
-def test_context_is_off_by_default() -> None:
+def test_context_comes_along_by_default() -> None:
+    """A table on its own embeds as a grid of values with nothing saying what
+    they are about, so the chunker carries some of the prose around it unless
+    it is told not to."""
     section = _with_elements([("Around it.", "text"), ("Region | EU", "table")])
 
     table = next(text for text in _texts(_chunk([section], chunk_size=1000)) if "Region" in text)
+
+    assert "Around it." in table
+
+
+def test_context_can_be_turned_off() -> None:
+    section = _with_elements([("Around it.", "text"), ("Region | EU", "table")])
+
+    chunks = _chunk([section], chunk_size=1000, table_context_size=0)
+    table = next(text for text in _texts(chunks) if "Region" in text)
 
     assert table == "Region | EU"
 

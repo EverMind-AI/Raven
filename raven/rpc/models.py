@@ -3665,8 +3665,11 @@ class KnowledgeBase(_Strict):
     separator: str = "\n\n"
     #: Tokens of the prose around a table or a figure to carry into the chunk
     #: that holds it. Zero is off.
-    table_context_size: int = 0
-    image_context_size: int = 0
+    table_context_size: int = 64
+    image_context_size: int = 64
+    #: Empty when the base's model can be reached; otherwise why not. Answered
+    #: from what is recorded rather than by calling the endpoint.
+    embedding_reach: str = ""
     #: What a chunk is aimed at, and how much of the previous one each carries.
     chunk_size: int = 2048
     chunk_overlap: int = 215
@@ -3747,6 +3750,9 @@ class KnowledgeBasesSettingsParams(_Strict):
     separator: str | None = None
     table_context_size: int | None = None
     image_context_size: int | None = None
+    #: Where this base's model is reached. Not the model or the width, which
+    #: are what the collection was built to and cannot move.
+    embedding_provider: str | None = None
     chunk_size: int | None = None
     chunk_overlap: int | None = None
     file_processing: str | None = None

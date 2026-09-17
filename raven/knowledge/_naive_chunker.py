@@ -154,8 +154,8 @@ class NaiveChunker(ChunkerBase):
         chunk_size: int = 512,
         separator: str = DEFAULT_DELIMITER,
         overlap_size: int = 0,
-        table_context_size: int = 0,
-        image_context_size: int = 0,
+        table_context_size: int = 64,
+        image_context_size: int = 64,
     ) -> None:
         """
         Args:

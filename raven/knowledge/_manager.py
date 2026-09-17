@@ -39,6 +39,7 @@ from raven.knowledge._structure import StructuredTextParser
 from raven.knowledge._types import Chunk, StoredChunk, TextBlock, VectorRecord, VectorSearchResult
 from raven.knowledge._vector_store import VectorStoreBase
 from raven.knowledge.parser import LayoutType, ParserBase, section_metadata
+from raven.knowledge.parser.doc_parser import LegacyDocParser
 from raven.knowledge.parser.docx_parser import DocxParser
 from raven.knowledge.parser.text_parser import TextParser
 
@@ -158,11 +159,11 @@ def _default_parsers() -> list[ParserBase]:
 
     Order matters: the structured parser takes the two formats it can find
     headings in, and TextParser has to stay behind it for CSV, JSON, YAML,
-    RST and plain text, which would otherwise have no parser at all. DocxParser
-    claims a media type no other parser here answers to, so its position is
-    free.
+    RST and plain text, which would otherwise have no parser at all. The two
+    Word parsers claim media types no other parser here answers to, so their
+    position is free.
     """
-    return [StructuredTextParser(), DocxParser(), TextParser()]
+    return [StructuredTextParser(), DocxParser(), LegacyDocParser(), TextParser()]
 
 
 def supported_extensions() -> list[str]:
@@ -293,6 +294,32 @@ class KnowledgeManager:
             f"{where} failed ({exc}). Point the base at a provider that serves it, or rebuild it on the model "
             "configured now."
         )
+
+    def embedding_reach(self, base: KnowledgeBaseRecord) -> str:
+        """Why this base's model cannot be reached, or ``""`` when it can.
+
+        Asked without calling anything: a list of bases is drawn on every visit
+        to the page, and probing each endpoint to draw it would spend a request
+        per base per render. So this answers from what is recorded -- which is
+        enough to catch the case that actually happens, a base whose model is
+        not the configured one and which names no provider of its own. An
+        endpoint that is merely down still looks reachable here and fails at
+        the request, which is the right place to find that out.
+
+        A reason rather than a flag, because the panel has to say what to do
+        and the two cases differ: a provider whose credential has gone is a
+        different repair from a base that never recorded one.
+        """
+        if not self.embeds(base):
+            return ""
+        configured = self._embedding or load_embedding_config()
+        if configured is not None and base.embedding_model == configured.model:
+            return ""
+        if base.embedding_provider:
+            if embedding_config_for(base.embedding_provider, base.embedding_model) is not None:
+                return ""
+            return "no_credential"
+        return "no_provider"
 
     def _endpoint(self) -> EmbeddingConfig:
         config = self._embedding or load_embedding_config()

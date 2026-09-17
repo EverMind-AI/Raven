@@ -180,9 +180,15 @@ class KnowledgeBaseRecord:
     chunk_overlap: int = DEFAULT_CHUNK_OVERLAP
     #: Tokens of the prose around a table or a figure to carry into the chunk
     #: that holds it. A table on its own embeds as a grid of values with
-    #: nothing saying what they are about. Zero is off.
-    table_context_size: int = 0
-    image_context_size: int = 0
+    #: nothing saying what they are about, and a figure with only its caption
+    #: is worse -- so this is on, at about a sentence either side. Zero is off.
+    #:
+    #: Read by the naive strategy, where a table and a figure are each their
+    #: own chunk. A base carrying no value for this takes what is here, so
+    #: turning it on reaches the bases that predate the setting the next time
+    #: they are indexed.
+    table_context_size: int = 64
+    image_context_size: int = 64
     #: Which pre-processing a file goes through on the way in. Empty is
     #: "don't use", which is the only setting there is so far.
     file_processing: str = ""

@@ -71,6 +71,12 @@ DS.knowledge = {
       .then((r) => (r && r.remaining) || 0),
   createChunk: (documentId, text) =>
     rpc.call('knowledge.chunks.create', { document_id: documentId, text }).then((r) => r && r.chunk),
+  /* Only the authenticated ones: a provider with no credential cannot serve
+     an embedding call, so offering it would be offering a repair that fails. */
+  providers: () =>
+    rpc
+      .call('model.options', {})
+      .then((r) => ((r && r.providers) || []).filter((p) => p && p.authenticated).map((p) => p.slug)),
   updateChunk: (documentId, chunkId, text) =>
     rpc
       .call('knowledge.chunks.update', { document_id: documentId, chunk_id: chunkId, text })

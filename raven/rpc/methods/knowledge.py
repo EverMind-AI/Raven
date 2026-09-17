@@ -110,6 +110,10 @@ def _base_row(manager: KnowledgeManager, base: Any) -> dict[str, Any]:
         "chunk_size": int(getattr(base, "chunk_size", DEFAULT_CHUNK_SIZE) or DEFAULT_CHUNK_SIZE),
         "chunk_overlap": int(getattr(base, "chunk_overlap", DEFAULT_CHUNK_OVERLAP) or 0),
         "file_processing": str(getattr(base, "file_processing", "") or ""),
+        # Why this base cannot embed, when it cannot. The page needs it on the
+        # row rather than on a failure: a base that cannot index says so where
+        # a reader is looking, instead of in a line of the gateway log.
+        "embedding_reach": manager.embedding_reach(base),
     }
 
 
@@ -228,6 +232,8 @@ async def knowledge_bases_settings(params: dict[str, Any]) -> dict[str, Any]:
         settings["smart_chunking"] = bool(params["smart_chunking"])
     if params.get("separator") is not None:
         settings["separator"] = str(params["separator"])
+    if params.get("embedding_provider") is not None:
+        settings["embedding_provider"] = str(params["embedding_provider"]).strip()
     for name in ("table_context_size", "image_context_size"):
         size = _bounded(params, name, 0, CONTEXT_MAX)
         if size is not None:

@@ -1452,6 +1452,10 @@ export interface KnowledgeBase {
    * Tokens of the prose around a figure to carry into the chunk that holds it. Zero is off.
    */
   image_context_size?: number;
+  /**
+   * Empty when this base's model can be reached. Otherwise why not: `no_provider` for a base whose model is not the configured one and which records no provider of its own, `no_credential` for one whose recorded provider has no usable credential. Answered from what is recorded rather than by calling the endpoint, so an endpoint that is merely down still reads as reachable here.
+   */
+  embedding_reach?: string;
 }
 /**
  * One uploaded document and where its indexing got to.
@@ -3882,6 +3886,7 @@ export interface KnowledgeBasesSettingsParams {
   file_processing?: string;
   table_context_size?: number;
   image_context_size?: number;
+  embedding_provider?: string;
 }
 export interface KnowledgeBasesSettingsResult {
   base: KnowledgeBase;

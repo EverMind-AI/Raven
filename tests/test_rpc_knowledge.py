@@ -36,6 +36,11 @@ class _FakeManager:
     def list_bases(self) -> list[_FakeBase]:
         return list(self._bases)
 
+    def embedding_reach(self, base: object) -> str:
+        """Reachable unless a test says otherwise; the rule itself is the
+        engine's, and is tested there."""
+        return str(getattr(base, "embedding_reach", "") or "")
+
     def list_documents(self, base_id: str) -> list[object]:
         self.asked.append(base_id)
         return [object()] * self._docs.get(base_id, 0)
@@ -189,6 +194,7 @@ async def test_creating_a_base_answers_the_row_the_list_would_show() -> None:
         "separator",
         "table_context_size",
         "image_context_size",
+        "embedding_reach",
         "chunk_size",
         "chunk_overlap",
         "file_processing",

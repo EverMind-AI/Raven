@@ -47,6 +47,7 @@ from raven.knowledge._types import (
 )
 from raven.knowledge._vector_store import VectorStoreBase
 from raven.knowledge.parser import BBox, ElementSpan, LayoutType, ParserBase
+from raven.knowledge.parser.doc_parser import LegacyDocParser
 from raven.knowledge.parser.docx_parser import DocxParser
 from raven.knowledge.parser.text_parser import TextParser
 
@@ -72,6 +73,7 @@ __all__ = [
     "KnowledgeError",
     "KnowledgeManager",
     "LanceDBVectorStore",
+    "LegacyDocParser",
     "LayoutType",
     "ParserBase",
     "RecordStore",

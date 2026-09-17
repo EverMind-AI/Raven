@@ -26,6 +26,12 @@ export interface KbBase {
   table_context_size?: number
   image_context_size?: number
   file_processing?: string
+  /* Where this base's model is reached, when it is not the configured one. */
+  embedding_provider?: string
+  /* Empty when the model can be reached; otherwise why not -- `no_provider`
+     or `no_credential`. Answered from what is recorded, so an endpoint that is
+     merely down still reads as reachable. */
+  embedding_reach?: string
 }
 
 /* What the settings panel can write. Every field optional: the ones left out
@@ -39,6 +45,8 @@ export interface KbSettings {
   table_context_size?: number
   image_context_size?: number
   file_processing?: string
+  /* Not the model or the width, which are what the collection was built to. */
+  embedding_provider?: string
 }
 
 /* One document and where its indexing got to. `error` is empty unless `status`
@@ -121,6 +129,10 @@ export interface KnowledgeSource {
   /* Rewrite one piece, re-embedding it so the vector says what it says.
      Its id changes with its text, because ids are derived from content. */
   updateChunk(documentId: string, chunkId: string, text: string): Promise<KbChunk>
+  /* The providers this install holds a credential for, by slug. What the
+     picker offers for a base whose model is served somewhere other than the
+     configured endpoint. */
+  providers(): Promise<string[]>
   /* Take one document out. The page's only way past a row that will not
      index: without it the base around it is the smallest thing that can be
      deleted. */

@@ -82,6 +82,7 @@ function source(over: Partial<KnowledgeSource> = {}): void {
       index: async (id: string) => doc({ id, status: 'ready', chunk_count: 2 }),
       search: async () => ({ hits: [], search_ms: 0, embed_ms: 0 }),
       chunks: async () => ({ chunks: [], total: 0 }),
+      providers: async () => ['siliconflow', 'dashscope'],
       switchChunks: async () => 0,
       deleteChunks: async () => 0,
       createChunk: async (_d: string, text: string) => ({ chunk_index: 9, total_chunks: 10, text, manual: true }),
@@ -446,10 +447,35 @@ describe('the write surface', () => {
     })
     expect(screen.getByText('onboarding.md')).toBeTruthy()
     expect(screen.getByText('gui.kb.doc_ready')).toBeTruthy()
-    /* Four columns and no chunk count: the table answers "what is in this base
-       and is it searchable", and how a document was cut up is what View Chunks
-       is for. */
     expect(screen.getByText('gui.kb.col_updated')).toBeTruthy()
+    /* The count is in the table now rather than only behind View Chunks: how
+       many pieces a file became is the first thing a reader checks when a
+       search answers with less than they expected, and opening every file to
+       find out is a poor way to compare them. */
+    expect(screen.getByText('gui.kb.col_chunks')).toBeTruthy()
+    const cells = [...document.querySelectorAll('.kbtable .td')].map((c) => c.textContent)
+    expect(cells).toContain('3')
+  })
+
+  it('shows a dash rather than a zero for a file with no chunks', async () => {
+    /* A document that failed, one still queued and one in a base with no model
+       have no count to report, and a zero would read as a file that was cut
+       into nothing. */
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [
+        doc({ id: 'd1', source: 'broken.pdf', status: 'failed', chunk_count: 0 }),
+        doc({ id: 'd2', source: 'queued.md', status: 'pending', chunk_count: 0 }),
+      ],
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+
+    const cells = [...document.querySelectorAll('.kbtable .td')].map((c) => c.textContent)
+    expect(cells.filter((text) => text === '\u2014').length).toBe(2)
+    expect(cells).not.toContain('0')
   })
 
   it('carries a failed document reason on its status', async () => {
@@ -1551,8 +1577,20 @@ describe('adding a data source', () => {
     await openBase()
     await openSourceMenu()
 
-    const items = [...document.querySelectorAll('.kbsrc .kbmenu .mi')].map((b) => b.textContent)
-    expect(items).toEqual(['gui.kb.src_file', 'gui.kb.src_note', 'gui.kb.src_folder', 'gui.kb.src_url'])
+    const items = [...document.querySelectorAll('.kbsrc .kbmenu .mi')]
+    expect(items.map((b) => b.textContent)).toEqual([
+      'gui.kb.src_file',
+      'gui.kb.src_note',
+      'gui.kb.src_folder',
+      'gui.kb.src_url',
+    ])
+    /* One drawing each, and hidden from a screen reader: the word beside it is
+       already the name, and an icon read aloud after it says it twice. */
+    for (const item of items) {
+      const glyph = item.querySelector('svg.kbmi')
+      expect(glyph).not.toBeNull()
+      expect(glyph!.getAttribute('aria-hidden')).toBe('true')
+    }
   })
 
   it('picks a folder with the attribute that makes a chooser a folder chooser', async () => {
@@ -2250,15 +2288,83 @@ describe('the knowledge base settings', () => {
     }
   })
 
+  it('says a base cannot embed, where a reader is looking at it', async () => {
+    /* Nothing it holds can be indexed or searched until the model it was built
+       with can be reached again, and a line in the gateway log is not where
+       the person who can fix that is looking. */
+    source({
+      bases: async () => [
+        base({ id: 'b1', embedding_model: 'BAAI/bge-large-zh-v1.5', embedding_reach: 'no_provider' }),
+      ],
+      documents: async () => [],
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+
+    const warning = document.querySelector('.kbunreach') as HTMLButtonElement
+    expect(warning).not.toBeNull()
+    expect(warning.textContent).toBe('gui.kb.reach_no_provider')
+    expect(warning.title).toContain('BAAI/bge-large-zh-v1.5')
+
+    /* And it opens the panel that holds the repair. */
+    await act(async () => {
+      warning.click()
+    })
+    expect(document.querySelector('.kbsets')).not.toBeNull()
+  })
+
+  it('says nothing when the model is reachable', async () => {
+    source({ bases: async () => [base({ id: 'b1' })], documents: async () => [] })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+
+    expect(document.querySelector('.kbunreach')).toBeNull()
+  })
+
+  it('shows the provider and the model as one endpoint', async () => {
+    /* An embedding endpoint is a provider and a model together -- a model id
+       does not name a credential -- so they read as one value rather than as
+       two fields to reconcile. A provider with no credential is not offered:
+       that would be offering a repair that fails. */
+    await openSettings({}, { embedding_model: 'BAAI/bge-large-zh-v1.5', embedding_provider: 'siliconflow' })
+
+    const row = field('gui.kb.set_embed')
+    const picker = row.querySelector('select') as HTMLSelectElement
+    expect(picker.value).toBe('siliconflow')
+    expect(row.textContent).toContain('BAAI/bge-large-zh-v1.5')
+    const offered = [...picker.options].map((o) => o.value)
+    expect(offered).toContain('')
+    expect(offered).toContain('dashscope')
+  })
+
+  it('shows no picker for a base that was made without embedding', async () => {
+    /* Nothing to reach, so nothing to point somewhere else. */
+    await openSettings({}, { embedding_model: '' })
+
+    const row = field('gui.kb.set_embed')
+    expect(row.querySelector('select')).toBeNull()
+    expect(row.textContent).toContain('gui.kb.embed_off')
+  })
+
   it('shows the embedding model without offering to change it', async () => {
     /* The store is sized to its vector width when the base is created, so a
-       dropdown here would be a way to invalidate every vector in the base. */
-    await openSettings({}, { embedding_model: 'BAAI/bge-large-zh-v1.5' })
+       way to change the model here would be a way to invalidate every vector
+       in the base. The provider beside it is a different matter -- it moves
+       where the same model is reached, and no vector depends on that. */
+    await openSettings({}, { embedding_model: 'BAAI/bge-large-zh-v1.5', embedding_provider: 'siliconflow' })
 
     const row = field('gui.kb.set_embed')
     expect(row.textContent).toContain('BAAI/bge-large-zh-v1.5')
-    expect(row.querySelector('select')).toBeNull()
     expect(row.querySelector('input')).toBeNull()
+    /* The one control is the provider picker, and no option in it is a
+       model. */
+    const controls = [...row.querySelectorAll('select')]
+    expect(controls.length).toBe(1)
+    expect([...controls[0]!.options].map((o) => o.value)).not.toContain('BAAI/bge-large-zh-v1.5')
   })
 
   it('lists the processors it will offer, every one of them unavailable', async () => {
@@ -2478,13 +2584,13 @@ describe('picking several files at once', () => {
   })
 
   it('marks a picked row across its whole width', async () => {
-    /* The table is a grid, so a row is six sibling cells rather than an
+    /* The table is a grid, so a row is seven sibling cells rather than an
        element that could carry the state; marking only some would stripe it. */
     await openWith()
     await tick(1)
 
     const marked = [...document.querySelectorAll('.kbtable .td.kbsel')]
-    expect(marked.length).toBe(6)
+    expect(marked.length).toBe(7)
     expect(marked.map((c) => c.textContent).join('')).toContain('report.docx')
   })
 

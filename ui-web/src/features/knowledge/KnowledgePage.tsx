@@ -350,6 +350,10 @@ function SourceMenu({ busy }: { busy: boolean }): JSX.Element {
               files.current?.click()
             }}
           >
+            <svg className="kbmi" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" />
+              <path d="M14 3v5h5" />
+            </svg>
             {t('gui.kb.src_file')}
           </button>
           <button
@@ -360,6 +364,10 @@ function SourceMenu({ busy }: { busy: boolean }): JSX.Element {
               store.openDialog('note')
             }}
           >
+            <svg className="kbmi" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" />
+              <path d="M14 3v5h5M9 13h6M9 17h4" />
+            </svg>
             {t('gui.kb.src_note')}
           </button>
           <button
@@ -370,6 +378,9 @@ function SourceMenu({ busy }: { busy: boolean }): JSX.Element {
               folder.current?.click()
             }}
           >
+            <svg className="kbmi" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+            </svg>
             {t('gui.kb.src_folder')}
           </button>
           <button
@@ -380,6 +391,10 @@ function SourceMenu({ busy }: { busy: boolean }): JSX.Element {
               store.openDialog('url')
             }}
           >
+            <svg className="kbmi" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M10.5 13.5a4 4 0 0 0 5.7 0l2.6-2.6a4 4 0 0 0-5.7-5.7l-1.3 1.3" />
+              <path d="M13.5 10.5a4 4 0 0 0-5.7 0l-2.6 2.6a4 4 0 0 0 5.7 5.7l1.3-1.3" />
+            </svg>
             {t('gui.kb.src_url')}
           </button>
         </div>
@@ -734,6 +749,7 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
   const [lap, setLap] = useState(String(saved.chunk_overlap))
   const [tableCtx, setTableCtx] = useState(String(saved.table_context_size ?? 0))
   const [imageCtx, setImageCtx] = useState(String(saved.image_context_size ?? 0))
+  const [provider, setProvider] = useState(base.embedding_provider ?? '')
   const [adv, setAdv] = useState(true)
 
   const close = (): void => store.closeSettings()
@@ -755,6 +771,7 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
       chunk_overlap: Number(lap),
       table_context_size: Number(tableCtx),
       image_context_size: Number(imageCtx),
+      embedding_provider: provider,
     })
   }
   /* The two numbers are typed, so they can be mid-edit and empty or nonsense;
@@ -778,8 +795,37 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
           <FileProcessing />
         </Field>
 
+        {/* One value, not two fields: an embedding endpoint is a provider and
+            a model together -- a model id does not name a credential, and
+            neither half is worth reading without the other. The model is fixed
+            because the collection was sized to its width; the provider is the
+            half that can move, which is the repair for a base whose endpoint
+            changed under it. */}
         <Field label={t('gui.kb.set_embed')} help={t('gui.kb.set_embed_help')}>
-          <div className="kbfixed">{base.embedding_model || t('gui.kb.embed_off')}</div>
+          {base.embedding_model ? (
+            <div className="kbembed">
+              {/* The base's own provider is always among the options, even
+                  when the list cannot be read: a select whose value matches no
+                  option shows as empty, which would tell a reader their base
+                  has no provider when it has one. */}
+              <select value={provider} onChange={(e) => setProvider(e.currentTarget.value)}>
+                <option value="">{t('gui.kb.set_provider_configured')}</option>
+                {[...new Set([provider, ...store.providerChoices()])]
+                  .filter(Boolean)
+                  .map((slug) => (
+                    <option key={slug} value={slug}>
+                      {slug}
+                    </option>
+                  ))}
+              </select>
+              <span className="sep">/</span>
+              <span className="mdl" title={base.embedding_model}>
+                {base.embedding_model}
+              </span>
+            </div>
+          ) : (
+            <div className="kbfixed">{t('gui.kb.embed_off')}</div>
+          )}
         </Field>
 
         <Field label={t('gui.kb.set_topk')} help={t('gui.kb.set_topk_help')}>
@@ -1167,6 +1213,11 @@ function DocRow({ doc, busy, picked }: { doc: KbDoc; busy: boolean; picked: bool
       <div className={`${td} st s-${doc.status}`} title={doc.error || undefined}>
         {t('gui.kb.doc_' + doc.status)}
       </div>
+      {/* A dash rather than a zero for a document that has not been through
+          the chunker: one that failed, one still queued, and one in a base
+          with no model have no count to report, and a zero would read as a
+          document that was cut into nothing. */}
+      <div className={`${td} kbnum`}>{doc.status === 'ready' ? doc.chunk_count : '\u2014'}</div>
       <div className={td}>{ago(doc.updated_at)}</div>
       <div className={td}>
         <DocMenu doc={doc} busy={busy} />
@@ -1620,6 +1671,19 @@ function BasePanel({ base, s }: { base: KbBase; s: ReturnType<typeof store.getSt
             a mismatch is why a search stops answering. A base made without one
             says so, rather than borrowing today's model to fill the space. */}
         <span className="mdl">{base.embedding_model || t('gui.kb.embed_off')}</span>
+        {/* A base that cannot embed says so here rather than in a line of the
+            gateway log: nothing it holds can be indexed or searched until the
+            model it was built with can be reached again, and the reader who
+            can fix that is the one looking at this header. */}
+        {base.embedding_reach && (
+          <button
+            className="kbunreach"
+            title={t('gui.kb.reach_' + base.embedding_reach + '_help', { model: base.embedding_model })}
+            onClick={() => store.openSettings()}
+          >
+            {t('gui.kb.reach_' + base.embedding_reach)}
+          </button>
+        )}
         {/* A base with no embedding model has no vectors to search, and
             `search` skips it rather than failing -- which from here would look
             like a base that answers nothing to every question. Disabled and
@@ -1686,6 +1750,7 @@ function BasePanel({ base, s }: { base: KbBase; s: ReturnType<typeof store.getSt
           <div className="th">{t('gui.kb.col_name')}</div>
           <div className="th">{t('gui.kb.col_type')}</div>
           <div className="th">{t('gui.kb.col_status')}</div>
+          <div className="th kbnum">{t('gui.kb.col_chunks')}</div>
           <div className="th">{t('gui.kb.col_updated')}</div>
           <div className="th" />
           {s.docs.map((d) => (
