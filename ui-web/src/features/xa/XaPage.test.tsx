@@ -180,8 +180,12 @@ const click = async (el: Element | null | undefined): Promise<void> => {
 }
 
 afterEach(() => {
+  /* The real close path, not the island's closer alone: `sheetDismissed` arms a
+     drop keyed on the drawer's generation, and only a close makes the next
+     open a new generation. Armed without one, the drop outlives this case and
+     clears the card the next case opens -- a 260ms window a slow runner hits. */
   act(() => {
-    store.sheetDismissed()
+    detail.close()
   })
   cleanup()
   resetSources()
