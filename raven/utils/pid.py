@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Callable
+from typing import Any
 
 _ERROR_ACCESS_DENIED = 5
 _SYNCHRONIZE = 0x00100000
@@ -46,7 +48,13 @@ def _alive_posix(pid: int) -> bool:
     return True
 
 
-def _alive_windows(pid: int) -> bool:
+def _win32_api() -> tuple[Any, Callable[[], int]]:  # pragma: no cover - WinDLL does not load off Windows
+    """kernel32 with the three calls bound, and the reader for its error code.
+
+    Split from the decision below so the decision can be exercised anywhere.
+    This half is ctypes declarations and nothing else, and it cannot run on the
+    platform that measures coverage.
+    """
     import ctypes
     from ctypes import wintypes
 
@@ -57,13 +65,18 @@ def _alive_windows(pid: int) -> bool:
     kernel32.WaitForSingleObject.restype = wintypes.DWORD
     kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
     kernel32.CloseHandle.restype = wintypes.BOOL
+    return kernel32, ctypes.get_last_error
+
+
+def _alive_windows(pid: int) -> bool:
+    kernel32, last_error = _win32_api()
 
     handle = kernel32.OpenProcess(_SYNCHRONIZE, False, pid)
     if not handle:
         # Only one refusal means the process is there: a handle this account
         # may not open. No such pid, and a pid already reaped, both land here
         # too, and both are dead.
-        return ctypes.get_last_error() == _ERROR_ACCESS_DENIED
+        return last_error() == _ERROR_ACCESS_DENIED
     try:
         # A process handle signals when the process exits, so a wait that times
         # out at once is the liveness answer. GetExitCodeProcess would serve
