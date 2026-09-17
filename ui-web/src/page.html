@@ -444,56 +444,23 @@
      (ui/src/features/cron/CronPage.tsx); only the veil is static markup. -->
 <div class="veil" id="jobVeil" data-open="false"></div>
 
-<aside class="detail" id="detail" data-open="false" role="dialog" aria-modal="true" data-i18n-aria="gui.cap_detail">
-  <div class="dpanel">
-    <header>
-      <b id="dTitle">—</b>
-      <button class="dx" id="dClose" data-i18n-aria="gui.close" aria-label="关闭">
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
-      </button>
-    </header>
-    <div class="body" id="dBody"></div>
-  </div>
-</aside>
+<!-- The panel inside renders from src/App.tsx; only the scrim is static
+     markup. Its #dBody is shared ground: four islands append their own host
+     into it (memory, xa, skills, plugins). -->
+<aside class="detail" id="detail" data-open="false" role="dialog" aria-modal="true" data-i18n-aria="gui.cap_detail"></aside>
 
 <!-- ─── module 3: settings ─────────────────────────────────────────── -->
 <!-- Settings is a dialog, not a place: it is something you adjust and dismiss,
      and taking over the whole window made a two-second change feel like leaving
      the session behind. -->
-<div class="veil setveil" id="setVeil" data-open="false">
-  <div class="smodal" id="setModal" role="dialog" aria-modal="true" data-i18n-aria="gui.page.set">
-    <nav class="snav" id="snav">
-      <div class="brandrow">
-        <span class="wm" data-i18n="gui.page.set">设置</span>
-      </div>
-      <div class="snavlist" id="snavList"></div>
-    </nav>
-    <div class="sbody">
-      <header class="shd">
-        <div class="ttl">
-          <h3 id="setTitle">设置</h3>
-          <p class="sub" id="setSub"></p>
-        </div>
-        <button class="icb" id="setClose" data-i18n-tip="gui.close" data-i18n-aria="gui.close">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
-        </button>
-      </header>
-      <div class="spanels" id="spanels"></div>
-    </div>
-  </div>
-</div>
+<!-- The dialog inside renders from src/App.tsx; only the scrim is static
+     markup. -->
+<div class="veil setveil" id="setVeil" data-open="false"></div>
 
 <!-- ─── overlays ───────────────────────────────────────────────────── -->
-<div class="veil" id="veil" data-open="false">
-  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="cfTitle">
-    <header id="cfTitle">确认</header>
-    <div class="body" id="cfBody"></div>
-    <footer>
-      <button class="btn" id="cfNo" data-i18n="gui.cancel">取消</button>
-      <button class="btn bad" id="cfYes">确认</button>
-    </footer>
-  </div>
-</div>
+<!-- The confirm sheet inside renders from src/App.tsx; only the scrim is
+     static markup. -->
+<div class="veil" id="veil" data-open="false"></div>
 
 <!-- One entry's credentials. Its own veil rather than the confirm dialog's:
      disconnecting from inside it raises that one, and a dialog cannot be both

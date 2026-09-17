@@ -2,6 +2,7 @@
 
 import { islands } from '../../islands'
 import { show as toast } from '../../shell/toast'
+import * as page from '../../state/page'
 import { sources } from '../../state/sources'
 import { $, applyDecorators } from './010-kernel.js'
 import { markNewCurrent } from './050-rail.js'
@@ -33,26 +34,10 @@ var showPageDecorators;
 function showPage(id) { return applyDecorators(showPageDecorators, showPageBase)(id); }
 function decorateShowPage(wrap) { (showPageDecorators ??= []).push(wrap); }
 
-function showPageBase(id) {
-  Object.keys(NAV_OF).forEach((p) => { $('#' + p).dataset.open = String(p === id); });
-  /* From the top, every time: the scroller keeps its position across a close
-     and reopen, so a page could greet the reader halfway down its own list. */
-  if (id) {
-    const sc = $('#' + id).querySelector('.work');
-    if (sc) sc.scrollTop = 0;
-  }
-  /* Read by the rail: while a page is up it owns the selected state, so the
-     session behind it stops claiming one too. */
-  document.querySelector('.app').dataset.page = id ? 'on' : 'off';
-  markNewCurrent();
-  /* caps and memory both use the shared detail drawer */
-  if (id !== 'capsPage' && id !== 'memPage') closeDetail();
-  /* Same rule for the overlays a single page owns: the channel drawer and the
-     new-job sheet used to survive the switch and sit over whatever came next,
-     still showing the entry the reader had left behind. */
-  if (id !== 'connPage') islands?.connections?.closeDialog?.();
-  if (id !== 'cronPage') islands?.cron?.closeSheet?.();
-}
+/* The seven open flags, the scroll reset and the overlay closes are
+   src/state/page.ts's now. This is still the name the chrome calls and the two
+   layers above decorate, so the shell stays where it was. */
+function showPageBase(id) { page.show(id); }
 
 /* Switching module resets the filters: a query typed while browsing skills is
    not a question about plugins. */

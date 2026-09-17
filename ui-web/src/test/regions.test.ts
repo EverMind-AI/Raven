@@ -12,10 +12,15 @@
  *
  * The markup is read and parsed rather than booted: no script runs, so what is
  * pinned is the skeleton the document is served with, before any island or
- * writer has touched it. The boot-time shape has its own gate
+ * writer has touched it -- plus the page's own root (App.tsx), which renders
+ * synchronously in main.tsx and is part of that skeleton for the regions whose
+ * interiors have moved into it. The boot-time shape has its own gate
  * (scripts/boot-snapshot.mjs) and the body's standing order has another
  * (portals.test.ts).
  */
+import { createElement } from 'react'
+import { createRoot } from 'react-dom/client'
+import { flushSync } from 'react-dom'
 import { describe, expect, it } from 'vitest'
 
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
@@ -23,6 +28,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { env } from 'node:process'
 
+import { App } from '../App'
 import { bodySiblings, elementSnapshot } from './domSnapshot'
 
 /* The nineteen regions, in document order, keyed the way their golden files
@@ -79,11 +85,19 @@ function pageBody(): string {
   return html.slice(open + '<body>'.length, close).replace(/<script[\s\S]*?<\/script>/g, '')
 }
 
-/* Where each region's markup comes from. The C2..C13 steps replace the body of
-   this function, region by region, with a render of App.tsx -- the goldens
-   above do not change with it. */
+/* Where each region's markup comes from: page.html for the sixteen regions it
+   still carries, and App.tsx for the interiors of the three it no longer does
+   (#detail, #setVeil, #veil -- C2). The C3..C13 steps move more of page.html
+   into App.tsx the same way and the goldens above do not change with it.
+
+   The root is detached and every region portals into the container page.html
+   provides, which is how the page itself renders them (src/main.tsx): a root AT
+   a container would clear the markup written just above. flushSync, so the
+   commit has happened by the time the assertions read the document. */
 function render(): Document {
   document.body.innerHTML = pageBody()
+  const root = createRoot(document.createElement('div'))
+  flushSync(() => root.render(createElement(App)))
   return document
 }
 
