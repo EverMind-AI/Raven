@@ -63,7 +63,7 @@ export function set(patch: Partial<SkillsState>): void {
   store.set((prev) => ({ ...prev, ...patch }))
 }
 
-export const source = (): SkillsSource => ds<SkillsSource>('skills')
+export const source = (): SkillsSource => ds('skills')
 export const view = (): SkillsState['view'] => get().view
 export const installedRows = (): InstalledSkill[] => source().installed()
 

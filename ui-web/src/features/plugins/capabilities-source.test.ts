@@ -195,7 +195,7 @@ describe('the live extension source', () => {
     expect(plugins.rows().map((row) => row.name)).toEqual(['Python', 'remote'])
     /* Imported after loadPart's reset, so it is the same module instance the
        part just installed from. */
-    const { extTools } = await import('./source')
+    const { extTools } = await import('../installed/source')
     expect(extTools().map((row) => row.id)).toEqual(['read_file'])
 
     await plugins.manual('CRM', 'npx -y @acme/crm-mcp')

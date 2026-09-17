@@ -77,7 +77,7 @@ export function set(patch: Partial<PlugState>): void {
   store.set((prev) => ({ ...prev, ...patch }))
 }
 
-export const source = (): PluginsSource => ds<PluginsSource>('plugins')
+export const source = (): PluginsSource => ds('plugins')
 
 /* Installs whose authentication hasn't been proven yet: while an id is in
    here the entry stays out of every "installed" surface, and the pending

@@ -341,7 +341,7 @@ async function railHarness(
   const { setSources } = await import('../sources')
   setSources({ composer: { slash: [] }, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
   const wiring = (await import('../../app/install')) as Wiring
-  const { sessionsSource } = await import('../../app/boot')
+  const { sessionsSource } = await import('../../features/rail/source')
   /* The pin is a verb of the session source itself, which the boot installs. */
   setSources({ sessions: sessionsSource } as unknown as Partial<Sources>)
   wiring.installActions()
@@ -516,8 +516,12 @@ async function bulkHarness(answers: Record<string, Answer | Error>) {
     return a
   })
   const { setSources } = await import('../sources')
-  const { sessionsSource } = await import('../../app/boot')
+  const { sessionsSource } = await import('../../features/rail/source')
   setSources({ sessions: sessionsSource } as unknown as Partial<Sources>)
+  /* The three writes that also move the reader are installed onto the source
+     rather than built into it, the way the page installs them. */
+  const { installSessionActions } = await import('../../features/rail/leave')
+  installSessionActions()
   return { deleteAll: () => runtime.deleteAll(), left: () => live.map((s) => s.id) }
 }
 

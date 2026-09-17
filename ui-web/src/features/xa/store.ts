@@ -40,7 +40,7 @@ export function set(patch: Partial<XaState>): void {
   store.set((prev) => ({ ...prev, ...patch }))
 }
 
-export const source = (): XaSource => ds<XaSource>('xa')
+export const source = (): XaSource => ds('xa')
 
 /* What to show a reader when a call fails. The server's own sentence first: a
    rejected rpc frame carries `message` as the error's *code name*

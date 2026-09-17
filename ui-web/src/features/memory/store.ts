@@ -57,7 +57,7 @@ export function set(patch: Partial<MemoryState>): void {
   store.set((prev) => ({ ...prev, ...patch }))
 }
 
-export const source = (): MemorySource => ds<MemorySource>('memory')
+export const source = (): MemorySource => ds('memory')
 
 function failure(e: unknown): string {
   const err = e as { data?: { detail?: string }; message?: string }

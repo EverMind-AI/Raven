@@ -46,6 +46,17 @@ const treeModules = (dir) => readdirSync(resolve(process.cwd(), 'src', dir), { w
 
 const FILES = [...sourceModules(), ...treeModules('state'), ...treeModules('app')]
 
+/* Every module under features/, components and all, for the rule below. */
+const featureModules = (dir = 'features') => readdirSync(resolve(process.cwd(), 'src', dir), { withFileTypes: true })
+  .flatMap((e) => (e.isDirectory()
+    ? featureModules(`${dir}/${e.name}`)
+    : /\.tsx?$/.test(e.name) && !e.name.includes('.test.') ? [`${dir}/${e.name}`] : []))
+
+/* Domain modules that speak to the gateway outside their own source.ts. None
+   today; a name here would be a call the domain's source does not know about,
+   pinned with the reason it cannot move. Down or gone. */
+const OUTSIDE_SOURCE = {}
+
 /* A `gateway().call(...)` or `gateway().binary(...)`: the callee is a property
    of a call to `gateway`, which is what tells it apart from `source.call(...)`
    or any other object's method of the same name. */
@@ -92,7 +103,21 @@ describe('the method names the page calls', () => {
     /* A ratchet rather than a floor near zero: a gate that found nothing would
        pass forever, and so would one that lost a whole scan root -- the seven
        calls in app/ dropping out of the count was invisible under `> 100`. */
-    expect(called.length).toBeGreaterThan(135)
+    expect(called.length).toBeGreaterThan(140)
+  })
+
+  /* Where a call may be written, as opposed to what it may be named. A domain's
+     source is "everything one domain knows about speaking to the gateway"
+     (CONTEXT.md), and the value of that is a reader who can answer "what does
+     this page ask of the server for X" by opening one file. A wire call in a
+     component, a tab module or a store is that answer being somewhere else --
+     and it is also outside the scan above, so the name goes unchecked. */
+  it('keeps every call in a domain\'s own source module', () => {
+    const stray = featureModules()
+      .filter((rel) => !rel.endsWith('/source.ts') && !(rel in OUTSIDE_SOURCE))
+      .filter((rel) => /gateway\(\)/.test(readFileSync(resolve(process.cwd(), 'src', rel), 'utf8')))
+    expect(stray, 'move the call into the domain\'s source.ts, or pin it in OUTSIDE_SOURCE with the reason')
+      .toEqual([])
   })
 
   it('are all declared by the contract', () => {

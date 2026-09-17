@@ -71,7 +71,7 @@ export function set(patch: Partial<PlaybooksState>): void {
   store.set((prev) => ({ ...prev, ...patch }))
 }
 
-const source = (): PlaybooksSource => ds<PlaybooksSource>('playbooks')
+const source = (): PlaybooksSource => ds('playbooks')
 
 export async function load(): Promise<void> {
   /* Reading the list is the moment the library is looked at afresh, so nothing

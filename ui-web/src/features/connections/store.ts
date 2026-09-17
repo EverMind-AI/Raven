@@ -37,7 +37,7 @@ export function set(patch: Partial<ConnState>): void {
   store.set((prev) => ({ ...prev, ...patch }))
 }
 
-export const source = (): ConnSource => ds<ConnSource>('conn')
+export const source = (): ConnSource => ds('conn')
 
 export async function refresh(initial = false): Promise<void> {
   try {

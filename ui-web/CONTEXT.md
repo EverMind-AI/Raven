@@ -26,10 +26,15 @@ decided once, from the URL, by `chooseTransport()`
 **Source**:
 `features/<domain>/source.ts` -- everything one domain knows about speaking to
 the gateway, plus the pure functions that map an answer into the shape that
-domain's renderer reads. One per domain; the renderer beside it never calls the
-gateway itself. Installed onto the `sources` seam (`src/state/sources.ts`) by
-the page's wiring (`src/app/install.ts`), which is the only module that
-assigns those members.
+domain's renderer reads. One per domain, and the only place in it a
+`gateway()` call may be written (`scripts/gates/rpc-names.test.mjs`); the
+renderer beside it never calls the gateway itself. Installed onto the `sources`
+seam (`src/state/sources.ts`) by the page's own lifecycle -- `src/app/install.ts`
+for all but one, and `src/app/boot.ts`'s claim on the first frame for the
+session source, which everything below it reads. Nothing outside `src/app/`
+assigns a member of the seam. A domain is asked for by its key: `ds('cron')`
+answers `Sources['cron']`, so a domain renamed or misspelt is a compile error
+rather than a throw at the first paint that reads it.
 
 **Fixtures**:
 The offline answer library, `src/rpc/fixtures/` -- one responder per domain,

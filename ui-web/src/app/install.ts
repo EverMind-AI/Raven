@@ -20,11 +20,14 @@ import { connSource } from '../features/connections/source'
 import { cronSource } from '../features/cron/source'
 import { knowledgeSource } from '../features/knowledge/source'
 import { memorySource } from '../features/memory/source'
-import { openModelsForMissingProvider } from '../features/model/source'
+import { modelSource, openModelsForMissingProvider, tierSource } from '../features/model/source'
 import { onboardSource } from '../features/onboard/source'
 import { playbooksSource } from '../features/playbooks/source'
-import { capabilitiesSource, extPlugins, loadExt, pluginsSource, skillsSource } from '../features/plugins/source'
+import { capabilitiesSource, extPlugins, loadExt } from '../features/installed/source'
+import { pluginsSource } from '../features/plugins/source'
+import { skillsSource } from '../features/skills/source'
 import { installSessionActions } from '../features/rail/leave'
+import { bannerSource, settingsSource } from '../features/settings/source'
 import { agentsSource, startAgentHeartbeat } from '../features/subagents/source'
 import {
   branch, cleanPreview, dagRun, okOf, openDagNode, openDagRun, openSpawn, spawnList, spawnRecord,
@@ -43,7 +46,7 @@ import { gateway } from '../rpc/gateway'
 import { reconnect, switchToDraft } from '../state/session/registry'
 import { clarifyRequest, dispatch, installPipeline } from '../state/session/pipeline'
 import { installComposerActions, installSlashActions } from '../state/session/runtime'
-import { sources } from '../state/sources'
+import { ds, sources } from '../state/sources'
 import { showUpNote } from './updates'
 import { T } from '../i18n/t'
 import { $ } from '../lib/dom'
@@ -124,6 +127,16 @@ export function installSources(): void {
   transcript.spawnList = spawnList
   transcript.openSpawn = openSpawn
 
+  /* The four the settings dialog's own wiring used to assign. Here rather than
+     there because this is the page's one assigner, and first in this list
+     because that is where they landed before: settingsChrome.install() runs
+     ahead of boot() (src/main.tsx). */
+  sources.banner = bannerSource
+  sources.settings = settingsSource
+  sources.tier = tierSource
+  sources.model = modelSource
+  composer.beforeSend = openModelsForMissingProvider
+
   sources.capabilities = capabilitiesSource
   sources.cron = cronSource
   sources.conn = connSource
@@ -140,7 +153,7 @@ export function installSources(): void {
   /* The workspace panel's chrome is still the page's, so the two things its
      source cannot work out for itself are handed over here. */
   setHostPlatformReader(hostPlatform)
-  setShortener((p) => sources.workspace!.shortPath(p))
+  setShortener((p) => ds('workspace').shortPath(p))
   sources.prose = proseSource
   sources.workspace = workspaceSource
 

@@ -28,7 +28,6 @@ import { SHEET, ordered, summary } from './graph'
 import * as store from './store'
 
 import type { DagRun } from './types'
-import type { TranscriptSource } from '../transcript/types'
 import type { JSX } from 'react'
 
 const anyRunning = (d: DagRun): boolean => [...d.nodes.values()].some((n) => n.status === 'running')
@@ -94,7 +93,7 @@ export function Sheet({ sess, host, onClose }: { sess: string; host: HTMLElement
       </div>
       <DagGraph dims={SHEET} nodes={nodes} now={Date.now()} surface="sheet"
         selectedId={sel && sel.run_id === d.run_id ? sel.node : null}
-        onPick={(n) => ds<TranscriptSource>('transcript').openDagNode?.(d.run_id, n.id, n.node_summary)} />
+        onPick={(n) => ds('transcript').openDagNode?.(d.run_id, n.id, n.node_summary)} />
     </>
   )
 }

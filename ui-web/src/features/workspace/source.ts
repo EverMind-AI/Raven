@@ -106,6 +106,13 @@ export function setHostPlatformReader(fn: () => string): void {
   hostPlatformLive = fn
 }
 
+/* A path as the panel shows it. A free function beside the source rather than
+   only a member of it, because this domain's own modules read it too and a
+   domain reaching its own source through the page seam is a round trip
+   (features/workspace/record.ts files every row under this name). */
+export const shortPath = (p: string): string =>
+  relToWsRoot(p) || relToWorkspace(p) || String(p).replace(/^\/Users\/[^/]+\//, '~/')
+
 export const workspaceSource: WorkspaceSource = {
   hostPlatform: () => hostPlatformLive(),
   canBrowse: true,
@@ -120,7 +127,7 @@ export const workspaceSource: WorkspaceSource = {
      desktop -- see hostIsLocal above. */
   openIn: (p, app) => gateway().call('fs.open', { path: p, session: sessionCurrent() || '', ...(app ? { app } : {}) }),
   hostIsLocal,
-  shortPath: (p) => relToWsRoot(p) || relToWorkspace(p) || String(p).replace(/^\/Users\/[^/]+\//, '~/'),
+  shortPath,
 }
 
 /* Test seam only: the workspace root and the two injected helpers are the

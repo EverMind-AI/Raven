@@ -114,7 +114,7 @@ export function set(patch: Partial<State>): void {
   store.set((prev) => ({ ...prev, ...patch }))
 }
 
-const source = (): KnowledgeSource => ds<KnowledgeSource>('knowledge')
+const source = (): KnowledgeSource => ds('knowledge')
 
 export async function load(): Promise<void> {
   let src: KnowledgeSource

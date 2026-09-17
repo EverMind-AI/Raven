@@ -11,14 +11,14 @@
 
 import * as caps from '../../state/caps'
 import * as page from '../../state/page'
-import { sources } from '../../state/sources'
+import { ds } from '../../state/sources'
 import { show as toast } from '../../state/toast'
 import { islands } from '../registry'
 
 export async function openCaps(tab: caps.Tab): Promise<void> {
   caps.extSet(tab)
   page.show('capsPage')
-  const src = sources.capabilities!
+  const src = ds('capabilities')
   if (src.loaded()) caps.draw()
   else {
     const box = document.getElementById('capsBody') as HTMLElement

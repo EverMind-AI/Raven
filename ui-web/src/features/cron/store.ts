@@ -44,7 +44,7 @@ export function set(patch: Partial<CronState>): void {
   store.set((prev) => ({ ...prev, ...patch }))
 }
 
-export const source = (): CronSource => ds<CronSource>('cron')
+export const source = (): CronSource => ds('cron')
 
 export async function refresh(): Promise<void> {
   try {

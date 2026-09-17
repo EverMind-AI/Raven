@@ -47,7 +47,7 @@ let epoch = 0
 let selected = 'minimax-m3'
 const subs = new Set<() => void>()
 
-export const source = (): ModelSource => ds<ModelSource>('model')
+export const source = (): ModelSource => ds('model')
 
 /* Installed by the live layer only. The offline demo's chip opens a plain menu
    of its own (demo/150-chrome.js), so the opener below has to be callable and

@@ -77,9 +77,12 @@ export function setSources(patch: Partial<Sources>): void {
 
 /* One domain's source, or a loud failure. An island runs inside the assembled
    page or inside a case that installed what it reads, never standalone, and a
-   silent undefined would just move the failure downstream. */
-export function ds<S>(domain: string): S {
-  const source = sources[domain as keyof Sources] as S | undefined
+   silent undefined would just move the failure downstream.
+   Keyed by the seam rather than by the type the caller expects: the key decides
+   what comes back, so a domain renamed or misspelt is a compile error here
+   instead of a throw at the first paint that reads it. */
+export function ds<K extends keyof Sources>(domain: K): Sources[K] {
+  const source = sources[domain]
   if (!source) throw new Error(`DS.${domain} is not installed`)
   return source
 }

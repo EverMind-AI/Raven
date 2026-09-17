@@ -403,7 +403,7 @@ function SpawnDetail({ s, open }: { s: AgentsState; open: Extract<OpenItem, { ki
    render rather than captured, like the composer store's own `canAttach`. */
 function uploader(): ComposerSource['upload'] | undefined {
   try {
-    return ds<ComposerSource>('composer').upload
+    return ds('composer').upload
   } catch {
     return undefined
   }

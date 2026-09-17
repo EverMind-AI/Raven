@@ -294,7 +294,7 @@ function absorb(reply: TierReply | null | undefined): void {
    will not run at is worse than no chip. */
 export async function load(): Promise<void> {
   try {
-    absorb(await ds<TierSource>('tier').read())
+    absorb(await ds('tier').read())
   } catch {
     loaded = false
     draw()
@@ -359,7 +359,7 @@ export function pick(id: string): void {
    next turn will not run at. */
 async function choose(id: string): Promise<void> {
   try {
-    absorb(await ds<TierSource>('tier').set(id))
+    absorb(await ds('tier').set(id))
   } catch (err) {
     toast(t('gui.tier.failed', { name: label(id) }))
     /* Nothing moved -- `mode` still holds what the server last told us -- but

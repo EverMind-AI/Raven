@@ -84,7 +84,7 @@ function set(p: Partial<AgentsState>): void {
   clockSync()
 }
 
-export const source = (): AgentsSource => ds<AgentsSource>('agents')
+export const source = (): AgentsSource => ds('agents')
 
 /* Where a pane opened from this panel goes: the floating desk, when the page
    has one. Handed in (src/features/registry.ts) rather than imported from
@@ -183,7 +183,7 @@ const sessionKey = (): string => currentSession() || ''
    promotion with two callers is the point. */
 function conversationStarter(): ComposerSource['startConversation'] {
   try {
-    return ds<ComposerSource>('composer').startConversation
+    return ds('composer').startConversation
   } catch {
     return undefined
   }

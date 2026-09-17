@@ -25,7 +25,7 @@ import { ds } from './sources'
 
 import type { ProseSource, ProseTarget } from '../lib/prose'
 
-const source = (): ProseSource => ds<ProseSource>('prose')
+const source = (): ProseSource => ds('prose')
 
 /* The chip is the record: prose.ts wrote the resolved path onto data-p, and
    `data-d` marks the ones that resolved to a folder. Reading the DOM back is

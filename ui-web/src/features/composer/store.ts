@@ -55,7 +55,7 @@ export function set(p: Partial<ComposerState>): void {
   store.set((prev) => ({ ...prev, ...p, v: prev.v + 1 }))
 }
 
-export const source = (): ComposerSource => ds<ComposerSource>('composer')
+export const source = (): ComposerSource => ds('composer')
 
 const el = <T extends HTMLElement>(id: string): T | null => document.getElementById(id) as T | null
 

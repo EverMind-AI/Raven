@@ -36,7 +36,6 @@ import { current, onChange } from './session'
 
 import type { DeskIntent } from '../features/workspace/deskStore'
 import type { AgentRow, InstanceRow } from '../features/subagents/types'
-import type { TranscriptSource } from '../features/transcript/types'
 
 /* A direct chat and a spawn's record are named by ids only the panel's own
    lists can resolve, and a page that has just loaded has asked for neither. So
@@ -145,7 +144,7 @@ async function resumeDag(key: string, runIds?: readonly string[]): Promise<void>
   if (!id) return
   /* `dag.get` and nothing else decides what the nodes are doing: the sources
      above say WHICH run, never a status. */
-  const read = ds<TranscriptSource>('transcript').dagRun
+  const read = ds('transcript').dagRun
   if (!read) return
   dagResume(key, await read(id))
 }

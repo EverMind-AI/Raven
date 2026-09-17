@@ -32,7 +32,7 @@ import * as caps from './caps'
 import * as detail from './detail'
 import { close as closeImage, isOpen as imageOpen } from './lightbox'
 import * as settingsDialog from './settings'
-import { sources } from './sources'
+import { ds } from './sources'
 
 export type Overlay = {
   /** The text the chain tested for this layer. */
@@ -73,7 +73,7 @@ export const ORDER: readonly Overlay[] = [
   { id: 'setIsOpen()', isOpen: settingsDialog.isOpen, close: settingsDialog.close },
   /* The last resort: with nothing on screen to take back, Escape interrupts
      the running turn. */
-  { id: 'turn.busy()', isOpen: turnBusy, close: () => sources.composer?.stop() },
+  { id: 'turn.busy()', isOpen: turnBusy, close: () => ds('composer').stop() },
 ]
 
 /** Closes the first layer that is open. Whether one was is the answer. */

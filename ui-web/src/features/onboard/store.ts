@@ -20,7 +20,7 @@ export function open(): Promise<void> {
   resolveOpen?.()
   return new Promise(resolve => {
     resolveOpen = resolve
-    set({ source: ds<OnboardSource>('onboard'), epoch: get().epoch + 1 })
+    set({ source: ds('onboard'), epoch: get().epoch + 1 })
   })
 }
 

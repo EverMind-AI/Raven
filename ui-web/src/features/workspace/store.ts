@@ -74,7 +74,7 @@ export function set(patch: Partial<WsIslandState>): void {
   store.set((prev) => ({ ...prev, ...patch }))
 }
 
-export const source = (): WorkspaceSource => ds<WorkspaceSource>('workspace')
+export const source = (): WorkspaceSource => ds('workspace')
 
 export function copyToClip(text: string, done: string): void {
   copy(text, done)

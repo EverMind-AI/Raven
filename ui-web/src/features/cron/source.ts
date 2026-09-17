@@ -6,7 +6,6 @@
 
 import type { CronJob, CronDraft, CronRun, CronSource } from './types'
 import type { ParamsOf, ResultOf } from '../../rpc/generated'
-import type { RailSource } from '../rail/types'
 
 import { cronExprHuman } from './humanize'
 import { islands } from '../registry'
@@ -130,7 +129,7 @@ export const cronSource: CronSource = {
     .catch((e) => toast(t('gui.op.trigger_failed', { detail: e.message || e }))),
   openRun: async (j) => {
     islands.cron.close()
-    const rail = ds<RailSource>('sessions')
+    const rail = ds('sessions')
     const s = { id: `cron:${j.id}`, title: j.name, last: '', when: '',
       at: Math.floor(Date.now() / 1000), run: null, live: true, from: 'cron' }
     const rows = rail.snapshot().rows

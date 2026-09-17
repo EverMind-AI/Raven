@@ -10,7 +10,6 @@
 import { hasStillOnDisk } from '../../rpc/capabilities'
 import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
 import { show as toast } from '../../state/toast'
-import { gateway } from '../../rpc/gateway'
 import { forget as forgetSubscription, switchToDraft } from '../../state/session/registry'
 import { sources } from '../../state/sources'
 import { islands } from '../registry'
@@ -21,7 +20,7 @@ import { ask as confirmAsk } from '../../state/confirm'
 import { forget as sheetsForget } from '../../state/sheetRack'
 import { open as sessionOpen, replace as sessionReplace, rows as sessionRows } from '../../state/session/rows'
 import { draw as sessionDraw } from './store'
-import { renamedSession } from './source'
+import { deleteSession, renamed, setArchived } from './source'
 
 import type { SessRow } from './types'
 
@@ -66,10 +65,10 @@ const detailOf = (e: unknown): string => {
   return (o && ((o.data && o.data.detail) || o.message)) || String(e)
 }
 
-export function removeSession(s: SessRow): void {
+export function remove(s: SessRow): void {
   confirmAsk(T('gui.sess.delete_title'), T('gui.sess.delete_body', { title: s.title }), T('gui.sess.delete'), async () => {
     try {
-      const r = await gateway().call('session.delete', { session_id: s.id })
+      const r = await deleteSession(s.id)
       /* A null `deleted` is two answers and only one of them may drop the row.
        Nothing left to remove -- an unknown key, or a conversation whose first
        turn never saved a file -- is the reader's own goal, so the row goes; a
@@ -90,17 +89,17 @@ export function removeSession(s: SessRow): void {
   })
 }
 
-export async function archiveSession(s: SessRow): Promise<void> {
+export async function archive(s: SessRow): Promise<void> {
   try {
     const at = sessionRows().findIndex((row: SessRow) => row.id === s.id)
-    const result = await gateway().call('session.archive', { session_id: s.id, archived: true })
+    const result = await setArchived(s.id, true)
     if (!result.archived || result.session_key !== s.id) throw new Error(`session ${s.id} was not archived`)
     await leaveArchivedSession(s.id)
     toast(T('gui.sess.archived', { title: s.title }), {
       label: T('gui.undo'),
       fn: async () => {
         try {
-          const restored = await gateway().call('session.archive', { session_id: s.id, archived: false })
+          const restored = await setArchived(s.id, false)
           if (restored.archived || restored.session_key !== s.id) {
             throw new Error(`session ${s.id} was not restored`)
           }
@@ -118,7 +117,7 @@ export async function archiveSession(s: SessRow): Promise<void> {
   }
 }
 
-export async function deleteAllSessions(): Promise<void> {
+export async function deleteAll(): Promise<void> {
   const gone: string[] = []
   for (const s of sessionRows().slice() as SessRow[]) {
     try {
@@ -133,7 +132,7 @@ export async function deleteAllSessions(): Promise<void> {
        was removed, and when there was nothing to remove; keep it when the
        file survived, or when a server too old to carry the field leaves the
        question open. */
-      const r = await gateway().call('session.delete', { session_id: s.id })
+      const r = await deleteSession(s.id)
       const removed = hasStillOnDisk(r) && r.still_on_disk === false
       if (r.deleted !== s.id && !removed) continue
       gone.push(s.id); dropDraft(s.id)
@@ -148,13 +147,13 @@ export async function deleteAllSessions(): Promise<void> {
     : T('gui.set.dat.del_done', { n: gone.length }))
 }
 
-/* The three the override layer installs together, and the two the turn and
-   settings layers install beside them. Assigned onto the source rather than
-   replacing it: the boot guard builds the object, with the rows it holds. */
+/* The three writes that also move the reader somewhere else. Assigned onto the
+   source rather than replacing it: ./source.ts builds the object, with the rows
+   it holds, and this module is what imports that one rather than the reverse. */
 export function installSessionActions(): void {
   const target = sources.sessions
   if (!target) return
-  target.remove = removeSession
-  target.archive = archiveSession
-  target.renamed = renamedSession
+  target.remove = remove
+  target.archive = archive
+  target.deleteAll = deleteAll
 }

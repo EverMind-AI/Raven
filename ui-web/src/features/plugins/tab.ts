@@ -16,7 +16,7 @@ import { T } from '../../i18n/t'
 import { islands } from '../registry'
 import * as caps from '../../state/caps'
 import * as page from '../../state/page'
-import { sources } from '../../state/sources'
+import { ds } from '../../state/sources'
 
 /* Which rows the rail's attention badge counts. Skills never block (they are
    method, not access), so a badge that says "something needs you" belongs to
@@ -25,7 +25,7 @@ import { sources } from '../../state/sources'
    with the inventory. */
 const needsAttn = (c: { state?: string; update?: unknown }): boolean =>
   c.state === 'need' || c.state === 'fail' || !!c.update
-const attnCount = (): number => sources.plugins!.rows().filter(needsAttn).length
+const attnCount = (): number => ds('plugins').rows().filter(needsAttn).length
 
 /* The plugin tab's face on the body: the host first, then the chrome. The host
    node survives other tabs clearing the body (they only detach it), so

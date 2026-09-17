@@ -26,7 +26,7 @@
 import { T } from '../i18n/t'
 import * as detail from './detail'
 import * as page from './page'
-import { sources } from './sources'
+import { ds } from './sources'
 import { makeStore } from './store'
 import { show as toast } from './toast'
 
@@ -268,7 +268,7 @@ export async function manualAdd(): Promise<void> {
     return
   }
   try {
-    await sources.plugins!.manual(n, a)
+    await ds('plugins').manual(n, a)
   } catch (e) {
     toast(T('gui.plug.op_failed', { err: (e as Error).message || String(e) }))
     return

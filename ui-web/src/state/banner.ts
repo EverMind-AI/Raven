@@ -91,4 +91,4 @@ export function _resetForTests(): void {
   fault = null
 }
 
-const source = (): BannerSource => ds<BannerSource>('banner')
+const source = (): BannerSource => ds('banner')

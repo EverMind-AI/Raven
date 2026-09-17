@@ -21,7 +21,6 @@ import * as store from './store'
 import { ImageModelPicker } from './ImageModelPicker'
 
 import type { SettingsState } from './store'
-import type { RailSource } from '../rail/types'
 import type { EverosSection, ProviderRow, ToolGroup, ToolRow } from './types'
 import type { JSX, ReactNode, RefObject } from 'react'
 import { ask as confirmAsk } from '../../state/confirm'
@@ -30,10 +29,10 @@ import * as settingsDialog from '../../state/settings'
 /* The session list, reached through the seam. `deleteAll` is wrapped because
    a source that has none is the shape a demo shell can be in, and an
    optimistic click must not throw out of the confirm. */
-const sessionCount = (): number => ds<RailSource>('sessions').snapshot().rows.length
+const sessionCount = (): number => ds('sessions').snapshot().rows.length
 const deleteAllSessions = (): void => {
   try {
-    ds<RailSource>('sessions').deleteAll?.()
+    ds('sessions').deleteAll?.()
   } catch {
     /* no source, nothing to delete */
   }

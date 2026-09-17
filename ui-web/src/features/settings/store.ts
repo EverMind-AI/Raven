@@ -101,7 +101,7 @@ export function set(patch: Partial<SettingsState>): void {
   store.set((prev) => ({ ...prev, ...patch }))
 }
 
-export const source = (): SettingsSource => ds<SettingsSource>('settings')
+export const source = (): SettingsSource => ds('settings')
 
 const curTab = (): string => settingsTab.id ?? get().tab
 

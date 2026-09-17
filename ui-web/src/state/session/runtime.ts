@@ -29,7 +29,7 @@ import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/s
 import { load as loadTier } from '../tier'
 import { show as toast } from '../toast'
 import { gateway } from '../../rpc/gateway'
-import { sources } from '../sources'
+import { ds, sources } from '../sources'
 import { T } from '../../i18n/t'
 import { $ } from '../../lib/dom'
 import { drawMeter, goPaint as goState, queuePush, queueShift, turn } from '../../features/composer/mount'
@@ -624,10 +624,10 @@ export function beginNaming(text: string): void {
 /* ---- what a reader can do to a conversation ---------------------------- */
 
 /** Fork it, and open the fork. */
-export const branch = (_text = ''): void => sources.transcript?.branch?.(_text)
+export const branch = (_text = ''): void => ds('transcript').branch?.(_text)
 
 /** Empty its transcript, from the slash palette. */
-export const clear = (): void => sources.composer?.slash.find((x) => x.id === 'gui.clear')?.fn()
+export const clear = (): void => ds('composer').slash.find((x) => x.id === 'gui.clear')?.fn()
 
 /* Manual compaction. The runtime already compacts when a prompt outgrows the
    window; this forces the same pass early, which is what you want once the
@@ -707,20 +707,20 @@ export function clearConversation(): void {
 }
 
 /** Delete it, transcript and all. */
-export const remove = (s: SessRow): void => sources.sessions?.remove?.(s)
+export const remove = (s: SessRow): void => ds('sessions').remove?.(s)
 
 /** Hide it from the rail, with an undo. */
-export const archive = (s: SessRow): void => sources.sessions?.archive?.(s)
+export const archive = (s: SessRow): void => ds('sessions').archive?.(s)
 
 /** Pin it to the top of the rail. */
-export const pin = (id: string, pinned: boolean): void => sources.sessions?.pin?.(id, pinned)
+export const pin = (id: string, pinned: boolean): void => ds('sessions').pin?.(id, pinned)
 
 /** Persist a title the reader typed. */
 export const rename = (id: string, title: string, previous: string): void =>
-  sources.sessions?.renamed?.(id, title, previous)
+  ds('sessions').renamed?.(id, title, previous)
 
 /** Delete every conversation, from the settings page. */
-export const deleteAll = (): void => sources.sessions?.deleteAll?.()
+export const deleteAll = (): void => ds('sessions').deleteAll?.()
 
 /* ---- installs ---------------------------------------------------------- */
 
@@ -741,7 +741,7 @@ export function installComposerActions(): void {
 /* The slash palette's two session verbs, replaced on the rows the composer
    island declares. */
 export function installSlashActions(): void {
-  sources.composer?.slash.forEach((x) => {
+  ds('composer').slash.forEach((x) => {
     if (x.id === 'gui.clear') x.fn = clearConversation
     if (x.id === 'gui.compress') x.fn = compressNow
   })

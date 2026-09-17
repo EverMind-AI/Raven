@@ -23,14 +23,14 @@ import { panel } from '../../state/wsPanel'
  * streaming leaf.
  */
 
-export const source = (): TranscriptSource => ds<TranscriptSource>('transcript')
+export const source = (): TranscriptSource => ds('transcript')
 
 /* Tolerated missing rather than thrown on: a page that has installed no
    artifacts source has no products to show, and the bar is drawn from the same
    boot sequence that installs it. */
 export function artifactsSource(): ArtifactsSource {
   try {
-    return ds<ArtifactsSource>('artifacts')
+    return ds('artifacts')
   } catch {
     return { changes: () => [] }
   }
@@ -108,7 +108,7 @@ export const durText = formatDuration
 
 const shortPath = (p: string): string => {
   try {
-    return ds<{ shortPath(p: string): string }>('workspace').shortPath(p)
+    return ds('workspace').shortPath(p)
   } catch {
     return String(p || '')
   }

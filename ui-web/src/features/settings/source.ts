@@ -15,7 +15,7 @@ import type { BannerSource } from '../../state/banner'
 
 import { defaultModel, defaultProvider, loadProviders, providers, setDefaultPair, showModel } from '../model/source'
 import { open as openModelPicker } from '../model/store'
-import { extTools, loadExt } from '../plugins/source'
+import { extTools, loadExt } from '../installed/source'
 import { draw as drawBanner } from '../../state/banner'
 import { t } from '../../i18n/t'
 import { setFromConfig as setPermMode } from '../../state/perm'
@@ -98,6 +98,18 @@ export async function loadPermMode(sid?: string | null, gen?: number): Promise<v
 }
 
 export const pushPermMode = (): Promise<void> => loadPermMode(sessionCurrent())
+
+/* The About card's own check, on demand. `check: true` means fetch now rather
+   than read the daily cache: the button says check for updates, and a person
+   who has just clicked it is asking about now. */
+export const checkVersion = (): Promise<ResultOf<'system.version'>> =>
+  gateway().call('system.version', { check: true })
+
+/* A permission pick, written under the conversation it was made in. What a
+   refusal says to the reader is the chip's decision (../settings/chrome.ts). */
+export const savePermMode = (mode: string, sid: string): Promise<boolean> =>
+  gateway().call('config.set', { key: 'permissions.mode', value: mode, scope: 'session', session_id: sid })
+    .then((r) => !!(r && r.applied))
 
 export async function loadSettings(): Promise<void> {
   const r = await gateway().call('settings.get', {})

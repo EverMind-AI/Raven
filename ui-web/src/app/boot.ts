@@ -17,12 +17,10 @@
  * until the real counts land.
  */
 
-import { turn } from '../features/composer/mount'
 import { setupState } from '../features/model/source'
 import { onboardSource } from '../features/onboard/source'
-import { loadExt } from '../features/plugins/source'
-import { deleteAllSessions } from '../features/rail/leave'
-import { loadSessions, pinSession } from '../features/rail/source'
+import { loadExt } from '../features/installed/source'
+import { loadSessions, sessionsSource } from '../features/rail/source'
 import { loadSettings, pushPermMode } from '../features/settings/source'
 import { islands } from '../features/registry'
 import { hasUpdateFlag } from '../rpc/capabilities'
@@ -49,29 +47,13 @@ import { hideSplash } from './splash'
 import { appVersionSet, resumeUpgrade, showUpNote, watchForUpdates } from './updates'
 import { bump as bumpWs } from '../state/ws'
 
-import type { RailSource, SessRow } from '../features/rail/types'
+import type { SessRow } from '../features/rail/types'
 
 /* `update_available` and `latest_version` ride along with the version answer
    without being in the contract's result schema: the gateway adds them from
    its own update cache, so a server too old to have one omits both and the
    notice row simply stays hidden (see rpc/capabilities.hasUpdateFlag). */
 const latestOf = (v: unknown): string | undefined => (v as { latest_version?: string }).latest_version
-
-/* The rows the rail draws, held here because the page holds them: the list is
-   one answer to `session.list`, read back by every draw and replaced whole by
-   the next answer. */
-let rows: SessRow[] = []
-
-/* The session source, which is also where the three writes a row makes for
-   itself are answered. Built as one object rather than grown by five installs:
-   every verb on it is now a function with a home of its own. */
-export const sessionsSource: RailSource = {
-  snapshot: () => ({ rows, cur: sessionCurrent(), busy: turn.busy() }),
-  replace: (next) => { rows = next },
-  open: (s) => switchTo(s),
-  pin: pinSession,
-  deleteAll: deleteAllSessions,
-}
 
 /* The page's own claim on the first frame: the shell's markers, the splash,
    and the rail held on skeleton rows until the first list lands. Everything

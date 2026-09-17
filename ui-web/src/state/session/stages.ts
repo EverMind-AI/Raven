@@ -21,7 +21,7 @@ import { islands } from '../../features/registry'
 import { hasToolOk } from '../../rpc/capabilities'
 import { current as sessionCurrent } from '../../lib/session'
 import { show as toast } from '../toast'
-import { sources } from '../sources'
+import { ds } from '../sources'
 import { T } from '../../i18n/t'
 import { drawMeter, goPaint as goState, turn } from '../../features/composer/mount'
 import { draw as sessionDraw } from '../../features/rail/store'
@@ -93,8 +93,8 @@ export const STAGES: readonly Stage[] = [
         status: d.status,
         body: d.content || '',
         open: () => {
-          if (isDag) { sources.transcript!.openDagRun!(d.run_id || d.label || ''); return }
-          sources.transcript!.openSpawn!('', d.label || '')
+          if (isDag) { ds('transcript').openDagRun!(d.run_id || d.label || ''); return }
+          ds('transcript').openSpawn!('', d.label || '')
         },
       })
     }

@@ -14,7 +14,7 @@
 import { T } from '../../i18n/t'
 import * as caps from '../../state/caps'
 import * as page from '../../state/page'
-import { sources } from '../../state/sources'
+import { ds } from '../../state/sources'
 import { islands } from '../registry'
 
 /* Mirror of the island's view, read by the plugin tab's hero sync: the hero
@@ -45,7 +45,7 @@ export function drawSkillTab(): void {
 export function syncInstalledButton(): void {
   caps.installedButton('skill', {
     hidden: caps.get().tab !== 'skill' || islands.skills.view() === 'installed',
-    label: T('gui.plug.installed_n', { n: sources.skills!.installed().length }),
+    label: T('gui.plug.installed_n', { n: ds('skills').installed().length }),
     badge: null,
   })
 }

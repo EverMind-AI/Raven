@@ -14,7 +14,7 @@
 
 import { islands } from '../registry'
 import { T } from '../../i18n/t'
-import { sources } from '../../state/sources'
+import { shortPath } from './source'
 import { panel } from '../../state/wsPanel'
 
 import type { WsChange, WsHunk, WsShared } from './types'
@@ -41,7 +41,7 @@ export function wsRecordChange(path: string, kind: string, hunk: WsHunk): WsChan
   const key = String(path)
   let c = WS.changes.find((x) => x.key === key && x.turn === WS.turn)
   if (!c) {
-    const shown = sources.workspace!.shortPath(key)
+    const shown = shortPath(key)
     const cut = shown.lastIndexOf('/')
     /* The newest change is the one you came here to read, so it arrives
        expanded. `auto` marks it as opened by us, so the next arrival folds it

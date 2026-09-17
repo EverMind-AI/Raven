@@ -15,7 +15,6 @@ import { isMac, modKey } from '../lib/platform'
 import { ds } from './sources'
 import { makeStore } from './store'
 
-import type { SettingsSource } from '../features/settings/types'
 
 export interface FootState {
   /** The running build, or a dash while the install has not answered. */
@@ -40,7 +39,7 @@ export function set(next: FootState): void {
 }
 
 export function draw(): void {
-  const version = ds<SettingsSource>('settings').version()
+  const version = ds('settings').version()
   /* Mac spells the modifier as a glyph that reads as one key with the comma;
      every other platform needs the gap. */
   const mod = modKey()

@@ -101,7 +101,7 @@ let canvasEl: HTMLCanvasElement | null = null
 let stageEl: HTMLElement | null = null
 let urlEl: HTMLInputElement | null = null
 
-export const source = (): BrowserSource => ds<BrowserSource>('browser')
+export const source = (): BrowserSource => ds('browser')
 const chromium = (): ChromiumSource => source() as ChromiumSource
 
 export function setHost(el: HTMLElement): void {
