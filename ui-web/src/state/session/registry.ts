@@ -21,7 +21,7 @@ import { loadPermMode } from '../../features/settings/source'
 import { renderHistory } from '../../features/transcript/source'
 import { wsOnHistory } from '../../features/workspace/record'
 import { wsSetRoot } from '../../features/workspace/source'
-import { refreshDag, resume as resumeConversation } from '../../lib/resume'
+import { refreshDag, resume as resumeConversation } from './resume'
 import { loadDeliveries } from '../../features/workspace/store'
 import { killStatus, status as transcriptStatus, stopStream } from '../../features/transcript/mount'
 import { draw as drawBanner } from '../banner'
@@ -311,7 +311,7 @@ export async function switchTo(s: SessRow): Promise<void> {
     /* Every graph this conversation started, oldest first, as the gateway
        stamped them onto the rows that started them. This is the only source
        that survives a run the reader never saw start: no live event reached
-       this page for it, so nothing was written down -- see lib/resume.ts. */
+       this page for it, so nothing was written down -- see state/session/resume.ts. */
     const dagRuns = (r.messages || [])
       .map((m) => (m && m.dag_run_id) || '')
       .filter((id): id is string => !!id)

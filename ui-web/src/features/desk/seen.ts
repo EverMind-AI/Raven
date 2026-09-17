@@ -27,7 +27,7 @@ else.
 import { slot } from '../../lib/persist'
 import { current as currentSession } from '../../lib/session'
 
-import type { DeskSeen, DeskTab } from './deskTypes'
+import type { DeskSeen, DeskTab } from './types'
 
 const EMPTY = (): DeskSeen => ({ diff: [], deliverables: [], agents: [] })
 

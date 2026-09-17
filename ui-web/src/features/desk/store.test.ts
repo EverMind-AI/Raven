@@ -4,9 +4,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as agents from '../subagents/store'
-import * as deliveries from './deliveries'
-import * as desk from './deskStore'
-import * as workspace from './store'
+import * as deliveries from '../workspace/deliveries'
+import * as desk from './store'
+import * as workspace from '../workspace/store'
 import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
 import { resetSources, setSources, sources } from '../../state/sources'
 

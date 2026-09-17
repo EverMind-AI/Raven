@@ -1,7 +1,7 @@
 /** Shared types for the floating workspace desk. */
 
 import type { AgentRow, InstanceRow } from '../subagents/types'
-import type { WsChange, WsFile } from './types'
+import type { WsChange, WsFile } from '../workspace/types'
 
 export type DeskTab = 'diff' | 'deliverables' | 'agents'
 

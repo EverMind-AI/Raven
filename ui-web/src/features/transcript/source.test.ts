@@ -95,7 +95,7 @@ async function nodeHarness({ rows = [{ kind: 'spawn', agent: 'raven', label: 'qc
         openRow: (row: SpawnRow) => calls.push(['openRow', row.label]),
         refresh: () => calls.push(['refresh']),
       },
-      'src/features/workspace/deskStore': {
+      'src/features/desk/store': {
         openDeskTab: (tab: string) => calls.push(['openDeskTab', tab]),
       },
     },

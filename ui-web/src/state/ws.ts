@@ -30,12 +30,12 @@
  * `code`).
  */
 
-import { notifyDesk, openDeskTab, reset as resetDesk } from '../features/workspace/deskStore'
+import { notifyDesk, openDeskTab, reset as resetDesk } from '../features/desk/store'
 import { reset as resetSubagents } from '../features/subagents/store'
 import * as workspace from '../features/workspace/store'
 import { t } from '../i18n/t'
 
-import type { DeskTab } from '../features/workspace/deskTypes'
+import type { DeskTab } from '../features/desk/types'
 import type { WsPanelView } from './wsPanel'
 
 /** Which view the pane shows: diff, file, browser or agents. */
@@ -138,7 +138,7 @@ export function pick(view: string): void {
     if (view !== 'browser') {
       /* Cast, not validated: the desk's own opener is written for these two
          call sites and stops a view name it does not know (openDeskTab in
-         features/workspace/deskStore.ts). */
+         features/desk/store.ts). */
       openDeskTab(view as DeskTab)
       return
     }

@@ -15,7 +15,7 @@
  * move at the frame rate whatever the panes hold.
  */
 
-import type { DeskDuo, DeskSplits } from './deskTypes'
+import type { DeskDuo, DeskSplits } from './types'
 
 export interface SlotRect {
   left: number

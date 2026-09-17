@@ -27,15 +27,15 @@
  * promotion rules.
  */
 
-import { resume as dagResume, run as dagOpen, saved as dagSaved } from '../features/dag/mount'
-import * as agents from '../features/subagents/store'
-import * as desk from '../features/workspace/deskStore'
-import { ds } from '../state/sources'
-import { only } from './persist'
-import { current, onChange } from './session'
+import { resume as dagResume, run as dagOpen, saved as dagSaved } from '../../features/dag/mount'
+import * as agents from '../../features/subagents/store'
+import * as desk from '../../features/desk/store'
+import { ds } from '../sources'
+import { only } from '../../lib/persist'
+import { current, onChange } from '../../lib/session'
 
-import type { DeskIntent } from '../features/workspace/deskStore'
-import type { AgentRow, InstanceRow } from '../features/subagents/types'
+import type { DeskIntent } from '../../features/desk/store'
+import type { AgentRow, InstanceRow } from '../../features/subagents/types'
 
 /* A direct chat and a spawn's record are named by ids only the panel's own
    lists can resolve, and a page that has just loaded has asked for neither. So

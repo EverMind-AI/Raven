@@ -37,7 +37,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react'
 import { composing } from '../features/composer/store'
-import { toggleDesk } from '../features/workspace/deskStore'
+import { toggleDesk } from '../features/desk/store'
 import { t } from '../i18n/t'
 import * as lang from '../state/lang'
 import * as ws from '../state/ws'

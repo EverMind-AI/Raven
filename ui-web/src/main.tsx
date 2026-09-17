@@ -12,8 +12,8 @@ import { PlugApp } from './features/plugins/PluginsPage'
 import * as rail from './features/rail/store'
 import { Skeleton as SkillsSkeleton, SkillsApp } from './features/skills/SkillsPage'
 import { WsApp } from './features/workspace/WorkspacePage'
-import { DeskApp } from './features/workspace/DeskPage'
-import * as desk from './features/workspace/deskStore'
+import { DeskApp } from './features/desk/DeskApp'
+import * as desk from './features/desk/store'
 import * as workspace from './features/workspace/store'
 import * as subagents from './features/subagents/store'
 import * as find from './state/find'
@@ -75,7 +75,7 @@ installGlobalListeners()
 setWsPanel(ws)
 
 /* The desk, handed to the two island stores that open something in it. Handed
-   rather than reached for: features/workspace/deskStore imports both of them
+   rather than reached for: features/desk/store imports both of them
    back and subscribes to one as it evaluates, so an import the other way would
    run that subscription against a half-built module -- which is also why the
    panel those stores ask about is handed to them (state/wsPanel.ts). Here,
@@ -177,7 +177,7 @@ dropNoJs()
 /* The session pointer starts on the offline fixture's first conversation, and
    the boot's own claim clears it again a few lines below: the two writes
    together are what keeps a reload's "come back here" note off fixture noise
-   (app/boot.ts's claimFirstFrame, lib/resume.ts). */
+   (app/boot.ts's claimFirstFrame, state/session/resume.ts). */
 session.setCurrent('a')
 /* The half of the composer's source no transport answers, before the settings
    seam adds its own member to the same object. */

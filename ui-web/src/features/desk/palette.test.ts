@@ -1,6 +1,6 @@
 /** Tests for the desk palette's per-conversation open/shut memory: what the
  * reader stated, and null where they stated nothing. Who supplies the fallback
- * for null, and on what evidence, is `deskStore`'s -- see `deskUp` there.
+ * for null, and on what evidence, is `store.ts`'s -- see `deskUp` there.
  */
 
 // @vitest-environment happy-dom

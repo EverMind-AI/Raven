@@ -15,11 +15,11 @@
  */
 import { useEffect, useLayoutEffect, useRef } from 'react'
 
-import { SheetHead } from './ApproveSheet'
-import { SheetOption } from './SheetRack'
-import * as drafts from '../state/sheetDrafts'
+import { SheetHead } from './AskApproveSheet'
+import { SheetOption } from '../../chrome/SheetRack'
+import * as drafts from '../../state/sheetDrafts'
 
-import type { SheetOptionRow } from './SheetRack'
+import type { SheetOptionRow } from '../../chrome/SheetRack'
 import type { JSX } from 'react'
 
 /* What the opener reads when it answers: the note the refusal carries, and the
@@ -50,7 +50,7 @@ export interface ApprovalProps {
   readonly onSaveRule: () => void
 }
 
-export function ApprovalSheet(
+export function GateSheet(
   { ctl, draft, command, words, opts, suggested, onDeny, onSaveRule }: ApprovalProps,
 ): JSX.Element {
   const note = useRef<HTMLInputElement | null>(null)

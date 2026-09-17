@@ -17,7 +17,7 @@ import {
   defaultGeometry,
   workspaceColumnCount,
   workspaceTransitionWidth,
-} from './deskGeometry'
+} from './geometry'
 
 /* The launcher, at the size and place the stylesheet gives it: a 30px button
    centred on y=27 against the right edge with a 12px gutter. */

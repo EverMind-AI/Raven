@@ -1,27 +1,14 @@
-/** Floating workspace composition and public compatibility entry points. */
+/** The desk's root: the palette, the follow toggle and the pane surface. */
 
 import { useEffect, useSyncExternalStore } from 'react'
 
 import * as agents from '../subagents/store'
 import { DeskPalette } from './DeskPalette'
 import { DeskFollowToggle, DeskSurface } from './DeskSurface'
-import * as workspace from './store'
+import * as workspace from '../workspace/store'
 import * as lang from '../../state/lang'
 
 import type { JSX } from 'react'
-
-export {
-  claimDraft,
-  notifyDesk,
-  openDeskAgent,
-  openDeskAgentRecord,
-  openDeskDiff,
-  openDeskFile,
-  openDeskTab,
-  reset,
-  sync,
-  toggleDesk,
-} from './deskStore'
 
 /* Slow on purpose: this feeds a number on a tab and a glyph on a button, not a
    spinner. The agents store keeps its own 2.5s floor besides. */
@@ -59,13 +46,14 @@ const AGENTS_POLL_MS = 8000
  * the agents store's own 2.5s floor underneath it and an early return when no
  * conversation is open. That is smaller than the feature. Anyone reaching for a
  * condition here again needs a test for a run that outlives the turn that
- * started it -- `DeskPage.test.tsx` has one.
+ * started it -- `DeskApp.test.tsx` has one.
  *
  * The agents tab is not excepted either. It looks like it should be, since the
  * panel refreshes when it draws -- but only when it draws. The recurring poll
- * in the subagents store gates on `wsShows('agents')`, which reports the LEGACY
- * panel's tab and is never set by the desk palette, so excepting the tab froze
- * its list at whatever it held when the reader opened it. */
+ * in the subagents store (its `onPoll`) gates on `panel().view()`, which
+ * reports the WORKSPACE PANEL's tab (state/ws.ts) and is never set by the desk
+ * palette, so excepting the tab froze its list at whatever it held when the
+ * reader opened it. */
 
 export function DeskApp(): JSX.Element {
   useSyncExternalStore(workspace.subscribe, workspace.get)

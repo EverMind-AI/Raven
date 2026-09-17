@@ -32,6 +32,7 @@ import { manifest as composer } from './composer/manifest'
 import { manifest as connections } from './connections/manifest'
 import { manifest as cron } from './cron/manifest'
 import { manifest as dag } from './dag/manifest'
+import { manifest as desk } from './desk/manifest'
 import { manifest as installed } from './installed/manifest'
 import { manifest as knowledge } from './knowledge/manifest'
 import { manifest as memory } from './memory/manifest'
@@ -67,13 +68,14 @@ export interface DomainManifest {
   readonly host?: string
 }
 
-/** The nineteen, alphabetically: nothing reads them in an order. */
+/** The twenty, alphabetically: nothing reads them in an order. */
 export const MANIFESTS: readonly DomainManifest[] = [
   browser,
   composer,
   connections,
   cron,
   dag,
+  desk,
   installed,
   knowledge,
   memory,

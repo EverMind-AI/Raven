@@ -29,6 +29,10 @@ const EXCEPTIONS = {
     'the dock\'s seam is assembled by the page: the palette half in app/install.ts and the '
     + 'rest by the settings chrome, because no transport answers either half',
   'dag/source.ts': 'answers no seam of its own -- a graph arrives on the turn\'s own events',
+  'desk/source.ts':
+    'a pane shows the workspace\'s record, so the desk reads the workspace\'s source the way '
+    + 'features/skills/ reads features/plugins/; a source of its own is what takes its two '
+    + 'reaches into that store off the cross-domain list',
   'installed/types.ts': 'no island: one shared read, whose row shapes are the two hubs\' own types',
   'installed/store.ts': 'no island: nothing to hold between two reads of ext.list',
 }
@@ -40,7 +44,7 @@ const NAMES = {
   connections: ['ConnApp'],
   model: ['ModelPickerApp'],
   plugins: ['PlugApp'],
-  workspace: ['DeskApp', 'WsApp'],
+  workspace: ['WsApp'],
 }
 
 /* Domains with no root component of their own, one reason each. */

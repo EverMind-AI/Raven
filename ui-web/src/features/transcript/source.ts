@@ -12,7 +12,7 @@
 import { run as dagRunOf } from '../dag/mount'
 import { history as drawHistory } from './mount'
 import * as subagents from '../subagents/store'
-import { openDeskTab } from '../workspace/deskStore'
+import { openDeskTab } from '../desk/store'
 import { has } from '../../rpc/capabilities'
 import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
 import { show as toast } from '../../state/toast'

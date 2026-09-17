@@ -34,8 +34,9 @@ import { ask, noteRow } from './conversation'
 import { wsOnTool, wsOnToolDone } from '../../features/workspace/record'
 import { touchSession } from '../../features/rail/source'
 import { viewRuntime } from './registry'
+import { namingEnded, settleNaming } from './naming'
 import {
-  drain, ensureStep, finishTurn, flushSay, namingEnded, send, settleNaming, softStop,
+  drain, ensureStep, finishTurn, flushSay, send, softStop,
 } from './runtime'
 
 import type { SessionRuntime } from './runtime'

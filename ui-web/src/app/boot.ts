@@ -27,7 +27,7 @@ import { warm as warmCron } from '../features/cron/store'
 import { open as openOnboard } from '../features/onboard/store'
 import { draw as sessionDraw, hold as holdRail, release as releaseRail } from '../features/rail/store'
 import { redraw as redrawSettings } from '../features/settings/store'
-import { landing, watch as watchSessionNote } from '../lib/resume'
+import { landing, watch as watchSessionNote } from '../state/session/resume'
 import { hasUpdateFlag } from '../rpc/capabilities'
 import { draw as drawCtx } from '../state/ctxChip'
 import { draw as drawFoot } from '../state/foot'
@@ -84,7 +84,7 @@ function claimFirstFrame(): void {
      for the next reload. Started after the line above on purpose: the demo
      chrome has already opened its canned session on this page, and both that
      and the clear above are fixture noise the note must not carry (see
-     lib/resume.ts). */
+     state/session/resume.ts). */
   watchSessionNote()
 }
 
@@ -133,7 +133,7 @@ async function sequence(): Promise<void> {
        conversation and did not ask to leave it -- the page was replaced under
        them, by a refresh or by an upgrade -- so the tab's own note is what
        decides here, and it exists only for a tab that was already somewhere
-       (lib/resume.ts). Asked of the list rather than opened blind: a
+       (state/session/resume.ts). Asked of the list rather than opened blind: a
        conversation deleted since is a note for something that is not there any
        more, and the new-task screen is the right answer for it. */
     const back = landing(sessionRows().map((s: SessRow) => s.id))

@@ -47,7 +47,7 @@ type Kept = Record<string, Row>
  * Nothing else spends it, which is the line that matters: a conversation the
  * reader OPENED -- from the rail, by forking, by opening a cron run -- is found
  * as that conversation was left, never as the new-task screen was left. See
- * deskStore.claimDraft.
+ * store.claimDraft.
  *
  * Not stored, unlike a conversation's answer: "leave the desk out of my way in
  * this conversation" is worth keeping across reloads, "I was starting something
@@ -72,7 +72,7 @@ function read_(): Kept {
  * that a preference which cannot be stored is one the next VISIT does without.
  * That is still true of the next visit and was never true of this one: the
  * answer is read back while the reader is still sitting in front of the desk
- * (deskStore.closePane hands it back when the last window shuts, and `sync`
+ * (store.closePane hands it back when the last window shuts, and `sync`
  * re-reads it on every session switch), so a refused write turned a collapse
  * they had just made into the conversation default and put the desk back in
  * front of them.
@@ -158,7 +158,7 @@ export function write(key: string | null, open: boolean): void {
  * one second in, for the rest of its life and across reloads. What to do when
  * nobody has stated anything is not this module's question; see `stated`.
  *
- * Called from the page that performs that transition (deskStore.claimDraft),
+ * Called from the page that performs that transition (store.claimDraft),
  * never inferred from the pointer: "the draft became this session" and "the
  * reader opened this session while a draft was up" are the same move at the
  * pointer -- null to an id -- and three sites make the second one. Inferring it

@@ -11,10 +11,10 @@
  * request lands, so a language flip does not re-word a question already on
  * screen.
  */
-import { SheetOption } from './SheetRack'
-import { CROSS, Glyph } from '../components/Ico'
+import { SheetOption } from '../../chrome/SheetRack'
+import { CROSS, Glyph } from '../../components/Ico'
 
-import type { SheetOptionRow } from './SheetRack'
+import type { SheetOptionRow } from '../../chrome/SheetRack'
 import type { JSX } from 'react'
 
 /* The row every sheet in the rack opens with: what is being asked, and the
@@ -40,7 +40,7 @@ export interface ApproveProps {
   readonly onDeny: () => void
 }
 
-export function ApproveSheet({ title, deny, prompt, opts, onDeny }: ApproveProps): JSX.Element {
+export function AskApproveSheet({ title, deny, prompt, opts, onDeny }: ApproveProps): JSX.Element {
   return (
     <>
       <SheetHead title={title} deny={deny} onDeny={onDeny} />

@@ -1,6 +1,6 @@
 /** Geometry and width policy for the floating workspace desk. */
 
-import type { DeskGeometry, DeskPane } from './deskTypes'
+import type { DeskGeometry, DeskPane } from './types'
 
 /* Bumped whenever the default placement or size changes. A stored geometry is
    written on the first render, so every reader who has opened the desk once

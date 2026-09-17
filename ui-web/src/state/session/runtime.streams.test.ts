@@ -113,8 +113,8 @@ async function harness({ rows = [] as Row[] } = {}) {
         advanceTurn: () => {}, currentTurn: () => 1, loadDeliveries: () => {},
         snapshot: () => ({}), restore: () => {},
       },
-      'src/features/workspace/deskStore': { claimDraft: () => {} },
-      'src/lib/resume': { resume: () => {}, refreshDag: () => {} },
+      'src/features/desk/store': { claimDraft: () => {} },
+      'src/state/session/resume': { resume: () => {}, refreshDag: () => {} },
       'src/features/dag/mount': { forget: () => {} },
     },
   })

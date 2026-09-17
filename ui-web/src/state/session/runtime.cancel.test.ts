@@ -102,7 +102,7 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
         currentTurn: () => 1,
         loadDeliveries: () => {},
       },
-      'src/lib/resume': {
+      'src/state/session/resume': {
         resume: () => {},
         refreshDag: () => {},
       },

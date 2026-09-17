@@ -12,7 +12,7 @@
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import * as desk from '../features/workspace/deskStore'
+import * as desk from '../features/desk/store'
 import * as workspace from '../features/workspace/store'
 import * as lang from '../state/lang'
 import * as ws from '../state/ws'

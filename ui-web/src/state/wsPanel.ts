@@ -4,7 +4,7 @@
  * every island it draws -- the workspace's record, the browser's frames, the
  * delegated rows, the desk. An island importing it back would put its own
  * initialisation inside that cycle, and two modules in there do real work as
- * they evaluate: features/workspace/deskStore.ts builds its first state from
+ * they evaluate: features/desk/store.ts builds its first state from
  * the workspace store, and the desk and the sub-agents store open things in
  * each other. A cycle is harmless when every read is inside a function; those
  * are not.

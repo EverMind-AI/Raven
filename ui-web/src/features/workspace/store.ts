@@ -290,7 +290,7 @@ export function relToWorkspace(p: string): string | null {
 }
 
 /* The desk's file opener, handed in by src/main.tsx for the same reason the
-   subagents panel takes its pane opener that way: features/workspace/deskStore
+   subagents panel takes its pane opener that way: features/desk/store
    imports this module back. Null leaves the panel path below, which is what a
    page without a desk has. */
 let deskFile: ((path: string) => void) | null = null

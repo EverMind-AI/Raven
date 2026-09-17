@@ -9,20 +9,20 @@ import { InstanceModel } from '../subagents/InstanceModel'
 import { TurnClock } from '../subagents/TurnClock'
 import * as agents from '../subagents/store'
 import { t } from '../../i18n/t'
-import { ChgDiff, FileView } from './WorkspacePage'
-import * as deliveries from './deliveries'
+import { ChgDiff, FileView } from '../workspace/WorkspacePage'
+import * as deliveries from '../workspace/deliveries'
 import { DeskIcon } from './DeskIcon'
-import { dragProposal, slotRects } from './deskDrag'
+import { dragProposal, slotRects } from './drag'
 import {
   workspaceAvailableWidth,
   workspaceColumnCount,
   workspaceTransitionWidth,
-} from './deskGeometry'
-import * as desk from './deskStore'
-import * as workspace from './store'
+} from './geometry'
+import * as desk from './store'
+import * as workspace from '../workspace/store'
 
-import type { DeskArrangement, SlotRect } from './deskDrag'
-import type { DeskPane } from './deskTypes'
+import type { DeskArrangement, SlotRect } from './drag'
+import type { DeskPane } from './types'
 import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent } from 'react'
 
 function FullscreenIcon({ active }: { active: boolean }): JSX.Element {

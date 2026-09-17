@@ -6,14 +6,14 @@ import { current as currentSession } from '../../lib/session'
 import { show as toast } from '../../state/toast'
 import { instanceState } from '../subagents/history'
 import * as agents from '../subagents/store'
-import * as deliveries from './deliveries'
+import * as deliveries from '../workspace/deliveries'
 import * as seen from './seen'
 import * as palette from './palette'
-import * as workspace from './store'
+import * as workspace from '../workspace/store'
 
 import type { AgentRow, InstanceRow } from '../subagents/types'
-import type { DeskDuo, DeskPane, DeskSplits, DeskState, DeskTab } from './deskTypes'
-import type { WsChange } from './types'
+import type { DeskDuo, DeskPane, DeskSplits, DeskState, DeskTab } from './types'
+import type { WsChange } from '../workspace/types'
 import { panel } from '../../state/wsPanel'
 import { makeStore } from '../../state/store'
 
@@ -616,7 +616,7 @@ export function notifyDesk(): void {
  * that way, and it left the desk down for good.
  *
  * Subscribed here rather than fixed at the poll: the poll is one of several
- * writers -- the panel refreshes on its own, and `lib/resume` forces one --
+ * writers -- the panel refreshes on its own, and `state/session/resume` forces one --
  * and a store should hear its own evidence change wherever it changes from. */
 agents.subscribe(weighTheDesk)
 

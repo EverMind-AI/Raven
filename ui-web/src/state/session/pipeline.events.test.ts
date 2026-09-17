@@ -258,8 +258,8 @@ describe('session.titled', () => {
 describe('session.naming_ended', () => {
   it('hands the reason to the one place that decides (050-turn.js:139)', async () => {
     const h = await harness({ rows: [{ id: 's1', title: 'gui.new_task' }] })
-    const runtime = await import('./runtime')
-    runtime.beginNaming('please cut a desktop release')
+    const naming = await import('./naming')
+    naming.beginNaming('please cut a desktop release')
 
     h.dispatch({ type: 'session.naming_ended', payload: { session_id: 's1', reason: 'no_title' } })
 

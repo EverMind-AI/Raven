@@ -4,9 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as agents from '../subagents/store'
 import { DeskFollowToggle, DeskSurface } from './DeskSurface'
-import * as deliveries from './deliveries'
-import * as desk from './deskStore'
-import * as workspace from './store'
+import * as deliveries from '../workspace/deliveries'
+import * as desk from './store'
+import * as workspace from '../workspace/store'
 
 import { setCurrent } from '../../lib/session'
 import { resetSources, setSources, sources } from '../../state/sources'
@@ -15,7 +15,7 @@ import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
 import type { InstanceRow } from '../subagents/types'
-import type { WorkspaceSource } from './types'
+import type { WorkspaceSource } from '../workspace/types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -187,7 +187,7 @@ describe('the pane of a delivered file', () => {
 
 /* happy-dom lays nothing out, so the geometry the gesture reads is stubbed at
    the one seam it crosses: the grid's rect. Slot arithmetic is pure
-   (deskDrag.test.ts); this is the wiring from a pointer to the store. */
+   (drag.test.ts); this is the wiring from a pointer to the store. */
 describe('dragging a pane by its header', () => {
   /* The rect spy patches Element.prototype; scoped restore so no sibling suite
      inherits an 800x600 world. */

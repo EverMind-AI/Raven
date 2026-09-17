@@ -22,10 +22,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 
-import { SheetOption } from './SheetRack'
-import { CHEVRON_DOWN, CROSS, Glyph } from '../components/Ico'
-import { composing } from '../features/composer/store'
-import * as drafts from '../state/sheetDrafts'
+import { SheetOption } from '../../chrome/SheetRack'
+import { CHEVRON_DOWN, CROSS, Glyph } from '../../components/Ico'
+import { composing } from './store'
+import * as drafts from '../../state/sheetDrafts'
 
 import type { JSX } from 'react'
 

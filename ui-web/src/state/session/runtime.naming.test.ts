@@ -1,12 +1,12 @@
 // @vitest-environment happy-dom
-/* The runtime's session naming: a placeholder that always ends, and a title
-   that lands without a page reload. */
+/* The session naming block: a placeholder that always ends, and a title that
+   lands without a page reload. */
 
 import { describe, expect, it, vi } from 'vitest'
 
 import { fakeGateway, loadPart, looseQuery, moduleText } from '../../../scripts/module-harness.mjs'
 
-type Runtime = typeof import('./runtime')
+type Naming = typeof import('./naming')
 
 interface Row { id: string; title: string; naming?: boolean }
 
@@ -16,13 +16,13 @@ async function harness({ rows, current, titleCall }: {
   rows: Row[]
   current: string | null
   titleCall: (method: string, params?: unknown) => Promise<unknown>
-}): Promise<Runtime & { heading: HTMLElement; draws: string[] }> {
+}): Promise<Naming & { heading: HTMLElement; draws: string[] }> {
   document.body.innerHTML = '<h1 id="title"></h1>'
   const heading = document.getElementById('title') as HTMLElement
   const draws: string[] = []
   /* The module under test is what the fakes are installed around: a module
      the first import did not reach is loaded afterwards without them. */
-  await loadPart(() => import('./runtime'), {
+  await loadPart(() => import('./naming'), {
     fakes: {
       'src/features/rail/store': {
         draw: () => draws.push('draw'),
@@ -40,9 +40,9 @@ async function harness({ rows, current, titleCall }: {
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
     },
   })
-  const runtime = (await import('./runtime')) as Runtime
+  const naming = (await import('./naming')) as Naming
   await fakeGateway(titleCall)
-  return { ...runtime, heading, draws }
+  return { ...naming, heading, draws }
 }
 
 describe('the live naming block', () => {
@@ -216,10 +216,11 @@ describe('a server that declines to name', () => {
 
 /* The rules below are about the source rather than about a behaviour a harness
    can drive: which call sites carry a branch, and which branch the dispatcher
-   reaches. Read from the modules that hold them: the runtime for the sends and
-   the timer, the stage table for the two events. */
+   reaches. Read from the modules that hold them: the runtime for the sends, the
+   naming block for the timer, the stage table for the two events. */
 const read = (rel: string): string => moduleText(rel) as string
 const turnText = read('state/session/runtime.ts')
+const namingText = read('state/session/naming.ts')
 const stageText = read('state/session/stages.ts')
 /* Every `turn.send` the page makes: the conversation's two, and the sub-agent
    instance lane's one, which names no session and is expected to carry no
@@ -292,8 +293,8 @@ describe('the naming_ended event', () => {
     /* An old server sends neither event, and a dropped connection sends
        nothing at all. Removing the timer once the event exists would put those
        readers back on a placeholder that never ends. */
-    expect(turnText).toContain('NAMING_GRACE_MS')
-    expect(turnText).toMatch(/setTimeout\(\s*\(\)\s*=>\s*\{\s*namingGaveUp\(id\);?\s*\}/)
+    expect(namingText).toContain('NAMING_GRACE_MS')
+    expect(namingText).toMatch(/setTimeout\(\s*\(\)\s*=>\s*\{\s*namingGaveUp\(id\);?\s*\}/)
   })
 })
 

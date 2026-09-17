@@ -3,9 +3,9 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { dragProposal, slotRects } from './deskDrag'
+import { dragProposal, slotRects } from './drag'
 
-import type { DeskArrangement, SlotRect } from './deskDrag'
+import type { DeskArrangement, SlotRect } from './drag'
 
 const SPLITS = { column: 50, left: 50, right: 50 }
 const GRID = { width: 800, height: 600 }

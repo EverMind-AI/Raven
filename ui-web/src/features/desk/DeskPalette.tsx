@@ -14,14 +14,14 @@ import {
   DESK_GEOMETRY_KEY,
   deskReserve,
   magnetGeometry,
-} from './deskGeometry'
-import * as deliveries from './deliveries'
-import * as desk from './deskStore'
-import { fileKind } from './store'
-import * as workspace from './store'
+} from './geometry'
+import * as deliveries from '../workspace/deliveries'
+import * as desk from './store'
+import { fileKind } from '../workspace/store'
+import * as workspace from '../workspace/store'
 
-import type { DeskGeometry, DeskTab } from './deskTypes'
-import type { DeliveryRow } from './types'
+import type { DeskGeometry, DeskTab } from './types'
+import type { DeliveryRow } from '../workspace/types'
 import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent } from 'react'
 
 /* The three tabs, each carrying what is new in it. The bubble is the same thing
@@ -283,7 +283,7 @@ function storedGeometry(): DeskGeometry {
 export function DeskPalette(): JSX.Element | null {
   const state = useSyncExternalStore(desk.subscribe, desk.get)
   /* Not `state.paletteOpen`: a fullscreen pane is the whole window and the desk
-     is not on it (deskStore.showing). Everything below reads this one answer,
+     is not on it (store.showing). Everything below reads this one answer,
      the marks included -- a tab marked seen behind a fullscreen pane is news
      the reader never saw. */
   const shown = desk.showing()

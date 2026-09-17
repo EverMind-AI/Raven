@@ -6,12 +6,12 @@ import { DeskPalette } from './DeskPalette'
 import {
   DESK_COLUMN_FLOOR, DESK_DEFAULT_HEIGHT, DESK_DEFAULT_WIDTH, DESK_DRAG_THRESHOLD,
   DESK_GEOMETRY_KEY, DESK_LAUNCHER_EDGE, DESK_TEXT_GAP,
-} from './deskGeometry'
+} from './geometry'
 import * as agents from '../subagents/store'
-import * as deliveries from './deliveries'
-import * as desk from './deskStore'
+import * as deliveries from '../workspace/deliveries'
+import * as desk from './store'
 import * as seen from './seen'
-import * as workspace from './store'
+import * as workspace from '../workspace/store'
 
 import { setCurrent } from '../../lib/session'
 import { installDeskHandoff } from '../../test/deskHandoff'
@@ -22,7 +22,7 @@ import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
 import { installWsPanel } from '../../test/wsPanelHarness'
 import type { AgentsSource, InstanceRow } from '../subagents/types'
-import type { WorkspaceSource, WsChange } from './types'
+import type { WorkspaceSource, WsChange } from '../workspace/types'
 
 /* The wiring src/main.tsx does: the desk's file opener is handed to the
    workspace store there, and `openDelivery` reaches the desk through it. */
@@ -636,7 +636,7 @@ describe('the size the desk comes up at', () => {
 
 /* That the reserve reaches the stylesheet at all.
  *
- * `deskGeometry.test.ts` pins what the number is and
+ * `geometry.test.ts` pins what the number is and
  * `scripts/gates/desk-reserve-css.test.mjs` pins where the stylesheet spends
  * it. This is the join: the panel is `position: fixed`, so the only thing
  * connecting it to the layout is this property landing on the root, and

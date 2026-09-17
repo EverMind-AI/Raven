@@ -4,10 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as turn from '../composer/turn'
 import * as agents from '../subagents/store'
-import { DeskApp } from './DeskPage'
-import * as deliveries from './deliveries'
-import * as desk from './deskStore'
-import * as workspace from './store'
+import { DeskApp } from './DeskApp'
+import * as deliveries from '../workspace/deliveries'
+import * as desk from './store'
+import * as workspace from '../workspace/store'
 
 import { setCurrent } from '../../lib/session'
 import { installDeskHandoff } from '../../test/deskHandoff'
@@ -18,7 +18,7 @@ import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
 import type { InstanceRow } from '../subagents/types'
-import type { WorkspaceSource } from './types'
+import type { WorkspaceSource } from '../workspace/types'
 
 /* The wiring src/main.tsx does: the desk's file opener is handed to the
    workspace store there, and `openDelivery` reaches the desk through it. */
@@ -177,8 +177,9 @@ describe('asking for the instance list', () => {
 
   /* Nothing else refreshes this list while the desk sits on the agents tab.
      The panel asks once when it mounts; the recurring poll in the subagents
-     store gates on `wsShows('agents')`, which is the LEGACY panel's tab and is
-     never set by the desk palette. Skipping the tab here on the belief that
+     store (its `onPoll`) gates on `panel().view()`, which is the WORKSPACE
+     PANEL's tab and is never set by the desk palette. Skipping the tab here
+     on the belief that
      "the panel refreshes its own" therefore froze the list at whatever it held
      when the tab was opened. */
   it('keeps asking while the desk sits on the agents tab', async () => {

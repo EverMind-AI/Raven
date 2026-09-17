@@ -114,7 +114,7 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
         status: (text: string) => calls.push(['showStatus', text]),
       },
       'src/features/workspace/store': { loadDeliveries: (id: string) => calls.push(['loadDeliveries', id]) },
-      'src/lib/resume': {
+      'src/state/session/resume': {
         resume: (id: string) => calls.push(['viewResume', id]),
         refreshDag: (id: string) => calls.push(['viewRefreshDag', id]),
       },

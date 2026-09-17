@@ -23,7 +23,7 @@ const listeners = new Set<() => void>()
    were watching, and whether they had folded it. Not what a reload NEEDS -- a
    sheet comes back from the run ids the transcript carries when there is no note
    at all, which is the case for a graph that started while the reader was in
-   another conversation (see `dagToRead` in lib/resume.ts). What only this can
+   another conversation (see `dagToRead` in state/session/resume.ts). What only this can
    say is which of several runs was wanted, and the fold.
 
    The graph is not in here on purpose -- it is read back from `dag.get`, the

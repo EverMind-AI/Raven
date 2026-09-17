@@ -1,6 +1,6 @@
 /** Icons shared by the floating desk and its panes. */
 
-import type { DeskTab } from './deskTypes'
+import type { DeskTab } from './types'
 import type { JSX } from 'react'
 
 /* Tabs and panes share this table: a pane's kind is not a tab (there is no

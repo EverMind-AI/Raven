@@ -10,7 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import * as desk from '../features/workspace/deskStore'
+import * as desk from '../features/desk/store'
 import * as subagents from '../features/subagents/store'
 import * as workspace from '../features/workspace/store'
 import { t } from '../i18n/t'
