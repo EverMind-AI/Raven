@@ -26,26 +26,81 @@ from raven.contracts.agent_conduct import AgentConduct, ConductFactory, StepView
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 
 
+class _Row(dict):
+    """One message as a conduct sees it: a dict that refuses to be written.
+
+    A ``dict`` subclass rather than ``MappingProxyType`` because every reader on
+    the other side of this seam asks ``isinstance(m, dict)`` -- the loop's own
+    helpers do, and so do the plugins -- and a proxy fails that test. This keeps
+    every read working and turns the write the paper forbids into a loud
+    ``TypeError`` instead of a silent edit of the transcript the loop prompts
+    with.
+
+    Shallow, like the freeze it replaces: a nested list inside a row is still
+    the loop's own object. Naming that limit is better than implying a depth
+    this does not have.
+    """
+
+    __slots__ = ()
+
+    def _refuse(self, *_args: Any, **_kwargs: Any) -> None:
+        raise TypeError("a StepView row is read-only: a conduct answers by returning, never by writing to the step")
+
+    __setitem__ = _refuse
+    __delitem__ = _refuse
+    clear = _refuse
+    pop = _refuse
+    popitem = _refuse
+    setdefault = _refuse
+    update = _refuse
+
+
+def _frozen(value: Any) -> Any:
+    """A mapping a conduct cannot write through, or the value unchanged."""
+    return _Row(value) if isinstance(value, Mapping) else value
+
+
+def _readonly(rows: Any) -> tuple[Any, ...]:
+    """The loop's own rows, published so a conduct cannot edit them.
+
+    ``tuple`` freezes the sequence; the mappings inside it are the very objects
+    the loop prompts with, so a plain tuple would let a conduct rewrite the
+    transcript through a field the paper calls read-only.
+    """
+    return tuple(_frozen(row) for row in (rows or ()))
+
+
 @dataclass
 class _Seat:
     """One turn's conduct and what it spliced into the system message.
 
-    The addendum is (the part as it was spliced, where it went), so the next
-    call takes that one back out rather than stacking a second copy.
+    The addendum is the part exactly as it was spliced, so the next call finds
+    that one and takes it back out rather than stacking a second copy.
     """
 
     conduct: AgentConduct
-    addendum: tuple[Any, int] | None = None
+    addendum: Any = None
 
 
 class ConductHook(AgentHook):
     """One plugin's conduct, seated in the hook chain."""
 
-    # A conduct's ``review`` may resample, so the loop holds this turn's
-    # deltas the way it does for any hook that can send a response back.
+    # The default a seat declares to the loop, overridden per seat below. Kept
+    # as a class attribute because that is where the rollback registry looks.
     rolls_back_iterations = True
 
-    def __init__(self, name: str, factory: ConductFactory) -> None:
+    def __init__(self, name: str, factory: ConductFactory, *, rolls_back: bool = True) -> None:
+        """``rolls_back`` is what the seat declares to the loop.
+
+        The loop reads ``rolls_back_iterations`` off every hook it holds and, if
+        any says yes, withholds the reply's tokens behind a draft gate so a
+        verdict can still send the turn back. That is the right default for a
+        conduct whose ``review`` may resample, and the wrong one for a conduct
+        that never does: it would buy nothing and cost the incremental reply the
+        reader sees. Declared per seat rather than inherited, because the
+        plugins this replaces declared it per hook.
+        """
+        self.rolls_back_iterations = rolls_back
         self._name = name
         self._factory = factory
         self._seat_key = f"raven.conduct.{name}"
@@ -104,30 +159,42 @@ class ConductHook(AgentHook):
             session_key=getattr(ctx, "session_key", "") or "",
             iteration=getattr(ctx, "iteration", None) or 0,
             response=getattr(ctx, "response", None),
-            transcript=tuple(getattr(ctx, "messages", None) or ()),
-            history=tuple(getattr(ctx, "session_history", None) or ()),
+            transcript=_readonly(getattr(ctx, "messages", None)),
+            history=_readonly(getattr(ctx, "session_history", None)),
             turn_base=getattr(ctx, "turn_base", 0) or 0,
             question=getattr(ctx, "turn_question", "") or "",
             rollbacks=int(meta.get("hook_rollbacks", 0) or 0),
             mode=meta.get("mode"),
-            mode_overlay=meta.get("mode_overlay"),
+            mode_overlay=_frozen(meta.get("mode_overlay")),
             tools_ran=tools_ran,
-            tools=tuple(getattr(ctx, "tools", None) or ()),
+            tools=_readonly(getattr(ctx, "tools", None)),
             window=getattr(ctx, "context_window_tokens", None) or None,
             max_iterations=getattr(ctx, "max_iterations", None) or None,
         )
 
     @staticmethod
     def _with_trail(seat: "_Seat", decision: HookDecision) -> HookDecision:
-        """The decision with whatever this turn's conduct noted along the way."""
-        trail = seat.conduct.drain_trail()
+        """The decision with whatever this turn's conduct noted along the way.
+
+        ``getattr`` because the trail is a convenience the base class offers,
+        not a verb the contract requires: a conduct that implements the nine
+        verbs without inheriting ``AgentConduct`` is a conduct, and asking it
+        for a method it never claimed would raise into the composite's catch --
+        which would log the plugin as broken and drop the answer it just gave.
+        """
+        drain = getattr(seat.conduct, "drain_trail", None)
+        trail = drain() if callable(drain) else []
         if not trail:
             return decision
         return replace(decision, notes=[*decision.notes, *trail])
 
     @staticmethod
     def _decide(verdict) -> HookDecision:
-        notes = [verdict.note] if verdict.note else []
+        # Both, de-duplicated: ``Resample`` takes its reason positionally, so an
+        # author writes one there and often the same sentence again as a note.
+        # Reading only the note dropped the line a conduct that wrote just the
+        # reason meant to leave behind.
+        notes = list(dict.fromkeys(n for n in (verdict.reason, verdict.note) if n))
         if verdict.kind == "resample":
             return HookDecision(
                 rollback=True,
@@ -214,22 +281,38 @@ class ConductHook(AgentHook):
         return next((m for m in messages if isinstance(m, dict) and m.get("role") == "system"), None)
 
     def _strip_addendum(self, ctx: Any, seat: "_Seat") -> None:
-        """Take this conduct's previous addendum back out of the system message."""
-        if seat.addendum is None:
+        """Take this conduct's previous addendum back out of the system message.
+
+        Found by its text rather than by where it was put: another conduct's
+        seat may have spliced after this one and stripped before it, so an
+        offset taken last iteration does not survive a second seat. The
+        bookkeeping is cleared only once the text is actually gone -- a strip
+        that cannot find its target has not removed anything, and forgetting it
+        would splice a second copy next call and a third after that.
+        """
+        previous = seat.addendum
+        if previous is None:
             return
-        previous, offset = seat.addendum
-        seat.addendum = None
         system = self._system_message(ctx)
         if system is None:
             return
-        content = system.get("content") or ""
+        content = system.get("content")
         if isinstance(content, str) and isinstance(previous, str):
-            if content[offset : offset + len(previous)] == previous:
-                system["content"] = content[:offset] + content[offset + len(previous) :]
-        elif isinstance(content, list) and offset < len(content) and content[offset] == previous:
-            content = list(content)
-            content.pop(offset)
-            system["content"] = content
+            at = content.rfind(previous)
+            if at < 0:
+                return
+            system["content"] = content[:at] + content[at + len(previous) :]
+        elif isinstance(content, list):
+            # By equality and from the end, like the string branch: the loop
+            # rebuilds the content list between iterations, so the part this
+            # seat spliced comes back equal rather than identical.
+            at = next((i for i in range(len(content) - 1, -1, -1) if content[i] == previous), None)
+            if at is None:
+                return
+            system["content"] = [*content[:at], *content[at + 1 :]]
+        else:
+            return
+        seat.addendum = None
 
     def _splice_addendum(self, ctx: Any, text: str, seat: "_Seat") -> None:
         """Append ``text`` to the system message, in the shape its content has."""
@@ -243,7 +326,7 @@ class ConductHook(AgentHook):
         else:
             part = ("\n\n" if content else "") + text
             system["content"] = content + part
-        seat.addendum = (part, len(content))
+        seat.addendum = part
 
     async def before_execute_tools(self, ctx: AgentHookContext) -> HookDecision:
         seat = self._seat(ctx)

@@ -24,7 +24,7 @@ from collections.abc import Sequence
 
 from raven.agent.harness.conducts import compose_advice
 from raven.contracts.agent_conduct import AgentConduct, StepView
-from raven.contracts.harness import PlanningRequest, PlanningResult
+from raven.contracts.harness import PlanningModule, PlanningRequest, PlanningResult
 
 
 class DefaultPlanning:
@@ -37,4 +37,20 @@ class DefaultPlanning:
         return await compose_advice(step, conducts)
 
 
-__all__ = ["DefaultPlanning"]
+def bind(planning: DefaultPlanning) -> PlanningModule:
+    """Admit a built Planning role, naming a missing member at assembly rather
+    than as an AttributeError inside somebody's turn.
+
+    The same guard the other two roles get. It matters here for the reason it
+    matters for Action: the composite catches whatever a hook phase raises and
+    logs it under the *plugin's* name, so a role missing ``advise`` would read
+    as a broken plugin rather than as a role that cannot serve.
+    """
+    if not isinstance(planning, PlanningModule):
+        raise TypeError(
+            f"{type(planning).__name__} cannot serve as the Planning role: it must provide prepare and advise"
+        )
+    return planning
+
+
+__all__ = ["DefaultPlanning", "bind"]

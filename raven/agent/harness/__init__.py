@@ -26,6 +26,7 @@ from raven.agent.harness.capability import DefaultCapability
 from raven.agent.harness.memory import DefaultMemory
 from raven.agent.harness.memory import bind as bind_memory
 from raven.agent.harness.planning import DefaultPlanning
+from raven.agent.harness.planning import bind as bind_planning
 from raven.contracts.harness import HarnessModules
 
 if TYPE_CHECKING:
@@ -57,7 +58,7 @@ def default_harness_modules(
     )
     return HarnessModules(
         memory=bind_memory(memory),
-        planning=DefaultPlanning(),
+        planning=bind_planning(DefaultPlanning()),
         capability=DefaultCapability(registry_provider),
         action=bind_action(DefaultAction()),
     )

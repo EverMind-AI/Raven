@@ -129,7 +129,13 @@ class AgentConduct:
         return None
 
     async def select_tools(self, offered: list[dict[str, Any]], step: StepView) -> list[dict[str, Any]] | None:
-        """The tool array this iteration, narrowed. Never wider than ``offered``."""
+        """The tool array this iteration carries, or None to leave ``offered``.
+
+        Usually narrower, and not required to be: a conduct may hand back an
+        array carrying a tool its own product contributes, which is what the
+        research flow does with its escalation tool. Handing a name back is not
+        granting it -- ``ToolRegistry.execute`` still adjudicates every call, so
+        the product's own withholding stands whatever this returns."""
         return None
 
     async def advise(self, step: StepView) -> str | None:

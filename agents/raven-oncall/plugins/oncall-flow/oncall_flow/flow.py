@@ -519,7 +519,10 @@ class OncallFlowHook(AgentHook):
         self._axes: tuple[AgentHook, ...] = (
             TurnContextHook(),
             TurnAccountingHook(),
-            ConductHook("oncall_flow", lambda: OncallConduct(provider, judge_model)),
+            # ``rolls_back=False``: this conduct closes a turn, which the loop
+            # takes as a short circuit; it never resamples, so holding the
+            # reply's tokens would buy nothing.
+            ConductHook("oncall_flow", lambda: OncallConduct(provider, judge_model), rolls_back=False),
         )
 
     @property

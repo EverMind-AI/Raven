@@ -11,6 +11,7 @@ through every conduct until one ends the turn.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import Any
 
 from raven.contracts.agent_conduct import Accept, AgentConduct, Intake, StepView, Verdict
@@ -48,12 +49,14 @@ async def compose_review(step: StepView, conducts: Sequence[AgentConduct]) -> Ve
         if not verdict.accepted:
             return verdict
         accepted.append(verdict)
-    if len(accepted) == 1:
-        # One conduct, its own verdict: nothing to merge, and whatever else it
-        # said about accepting stands as it wrote it.
-        return accepted[0]
+    if not accepted:
+        return Accept()
+    # The first accepted verdict carries the merge, so an accept keeps whatever
+    # else it was written with whether one conduct answered or five. Rebuilding
+    # a bare ``Accept`` above one and not the other made the same conduct behave
+    # differently in a process with a second plugin loaded.
     notes = [v.note for v in accepted if v.note]
-    return Accept(note="\n".join(notes) or None)
+    return replace(accepted[0], note="\n".join(notes) or None)
 
 
 async def compose_salvage(step: StepView, conducts: Sequence[AgentConduct]) -> Any | None:

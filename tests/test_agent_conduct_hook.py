@@ -170,7 +170,8 @@ async def test_review_verdicts_become_the_decisions_the_loop_acts_on():
     assert decision.rollback is True
     assert decision.rollback_inject == [{"role": "user", "content": "more"}]
     assert decision.rollback_overrides == {"reasoning_effort": "high"}
-    assert decision.notes == ["gate: thin"] and decision.append_note is None
+    assert decision.notes == ["too thin", "gate: thin"], "both the reason and the note reach the loop"
+    assert decision.append_note is None
     hook = ConductHook("probe", lambda: _Recording(verdict=End("done here")))
     assert (await hook.before_execute_tools(_ctx(iteration=3))).short_circuit_result == "done here"
     hook = ConductHook("probe", lambda: _Recording(verdict=Accept(note="fine"), note="carry on"))
@@ -256,3 +257,106 @@ async def test_a_bound_harness_decides_what_a_conducts_verdict_does():
         assert (await hook.terminal_answerless(_ctx())).short_circuit_result == "the module's own salvage"
         inbound = await hook.before_user_inbound(_ctx(inbound_content="q"))
         assert inbound.modified_content == "q (as the module reads it)", "Memory answers for the intake"
+
+
+# --------------------------------------------------------------------------- #
+# What the contract claims, asserted                                           #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.asyncio
+async def test_a_conduct_cannot_write_through_the_step_it_is_shown():
+    """ "Read-only" is the paper's word, so the rows are rows a write raises on.
+    Without this the tuple froze the sequence and left every message inside it
+    the loop's own object, open to edit from a seam that returns its answers."""
+
+    wrote: list[str] = []
+
+    class Mutator(AgentConduct):
+        async def advise(self, step):
+            for field in (step.transcript, step.history, step.tools):
+                if field:
+                    try:
+                        field[0]["role"] = "rewritten"
+                        wrote.append("yes")
+                    except TypeError:
+                        pass
+            return None
+
+    ctx = _ctx(
+        iteration=1,
+        messages=[{"role": "user", "content": "q"}],
+        session_history=[{"role": "assistant", "content": "a"}],
+        tools=[{"name": "web_search"}],
+    )
+    await ConductHook("probe", Mutator).before_iteration(ctx)
+
+    assert wrote == [], "a conduct wrote through the step"
+    assert ctx.messages[0]["role"] == "user"
+    assert ctx.session_history[0]["role"] == "assistant"
+
+
+@pytest.mark.asyncio
+async def test_two_seats_each_keep_one_addendum_in_the_system_message():
+    """Two conducts append to the same system message, and each takes its own
+    text back out. Offsets could not do this: the first seat's strip shifts the
+    second seat's text, so the second found nothing and spliced a second copy."""
+
+    class Adds(AgentConduct):
+        def __init__(self, text):
+            self.text = text
+
+        async def system_addendum(self, step):
+            return Intake(text=self.text)
+
+    ctx = _ctx(iteration=1, messages=[{"role": "system", "content": "base"}])
+    first, second = ConductHook("a", lambda: Adds("A")), ConductHook("b", lambda: Adds("B"))
+    for _ in range(3):
+        await first.before_iteration(ctx)
+        await second.before_iteration(ctx)
+
+    assert ctx.messages[0]["content"] == "base\n\nA\n\nB", "an addendum stacked or went missing"
+
+
+@pytest.mark.asyncio
+async def test_a_conduct_may_contribute_a_tool_of_its_own_to_the_iteration():
+    """The array is the iteration's, not a subset of what it was offered: the
+    research flow contributes its escalation tool this way. Handing a name back
+    is not granting it -- the registry still adjudicates every call."""
+
+    class Contributes(AgentConduct):
+        async def select_tools(self, offered, step):
+            return [*offered, {"name": "request_research"}]
+
+    offered = [{"name": "web_search"}]
+    decision = await ConductHook("probe", Contributes).before_iteration(_ctx(iteration=1, tools=list(offered)))
+    assert [t["name"] for t in decision.modified_tools] == ["web_search", "request_research"]
+
+
+@pytest.mark.asyncio
+async def test_a_conduct_that_only_implements_the_verbs_is_still_heard():
+    """The verbs are the contract; inheriting the base class is a convenience.
+    An object that implements them without it used to have its answer dropped
+    by the composite, because the seat asked it for the trail unconditionally."""
+
+    class Standalone:
+        async def review(self, step):
+            return End("closed by a conduct that inherits nothing")
+
+    decision = await ConductHook("probe", Standalone).before_execute_tools(_ctx(iteration=1))
+    assert decision.short_circuit_result == "closed by a conduct that inherits nothing"
+
+
+@pytest.mark.asyncio
+async def test_the_reason_a_resample_was_written_with_reaches_the_loops_notes():
+    """``Resample`` takes its reason positionally, so an author writes it there
+    first. Reading only the note dropped it."""
+
+    class Sends(AgentConduct):
+        async def review(self, step):
+            return Resample("the draft is thin")
+
+    decision = await ConductHook("probe", Sends).after_iteration(
+        _ctx(iteration=1, response=SimpleNamespace(content="draft", tool_calls=None))
+    )
+    assert decision.rollback is True and decision.notes == ["the draft is thin"]

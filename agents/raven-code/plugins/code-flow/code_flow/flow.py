@@ -245,6 +245,9 @@ class CodeFlowHook(ConductHook):
         super().__init__(
             "code_flow",
             lambda: CodeConduct(seated_ledger, names, todos, flow_enabled, reads),
+            # This conduct does not review, so no verdict of its can send a turn
+            # back, and the loop should stream the reply rather than hold it.
+            rolls_back=False,
         )
 
 

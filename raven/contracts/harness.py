@@ -10,7 +10,15 @@ a transcript is made to fit again mid-turn, Planning may prepare turn guidance,
 Capability picks the tool definitions one iteration exposes, and Action produces
 one usable model response and judges a call against the dispatch's Charter.
 Each also answers for the conducts seated on it: Memory their intake, Planning
-their advice, Action their review and salvage. Everything else the turn does --
+their advice, Action their review and salvage.
+
+``Sequence[AgentConduct]`` on those four, and not one conduct, because a seat
+speaks for more than a plugin: a dispatch's own judgements and anything
+generated for it join the same list once they are materialised. Today a seat
+holds the one conduct its plugin wrote, so a process running two plugins asks
+the role twice, once per seat -- composing *across* plugins stays where it has
+always been, in the hook composite, and the role composes the participants of
+the seat that asked. Everything else the turn does --
 iteration accounting, hook phases, tool execution and approval, persistence and
 event order -- stays with the L2 shell, which is what makes these four
 replaceable at all.
@@ -182,8 +190,8 @@ class MemoryModule(Protocol):
     async def intake(self, text: str, step: "StepView", conducts: "Sequence[AgentConduct]") -> "Intake | None":
         """What the turn's inbound text becomes before anything is assembled:
         each conduct's ``intake`` in order, threaded, until one ends the turn.
-        Memory's because it decides what the model is shown; the seat that
-        asks hands over this turn's conducts and renders the answer."""
+        Memory's because it decides what the model is shown; the seat that asks
+        hands over the conducts it speaks for and renders the answer."""
         ...
 
 
