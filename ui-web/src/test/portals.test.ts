@@ -22,8 +22,10 @@ import * as menu from '../shell/menu'
 import * as session from '../shell/session'
 import * as tier from '../shell/tier'
 import * as toast from '../shell/toast'
+import * as upgrade from '../shell/upgrade'
 import { resetShell, setShell } from '../shell/bridge'
 import * as confirm from '../state/confirm'
+import * as tip from '../state/tooltip'
 import { BOOT_BODY_ORDER, LAYERS, PORTALS, _resetForTests as resetLayers, host } from '../state/portals'
 import { resetSources, setSources } from '../state/sources'
 import { bodySiblings } from './domSnapshot'
@@ -106,6 +108,45 @@ describe('the portal table', () => {
     expect(BOOT_BODY_ORDER.indexOf('div.tipp')).toBeGreaterThan(-1)
     expect(PORTALS.find((p) => p.selector === '.tipp')!.at).toBe(21)
     expect(PORTALS.find((p) => p.selector === '.upshade')!.at).toBe('last')
+  })
+
+  /* The table says it; this is the page doing it. Both are at the body at
+     once, which is the only moment the tie at 90 is decided by anything. */
+  it('keeps the tooltip layer under the update shade on the page itself', () => {
+    let unmount = (): void => {}
+    try {
+      const doc = pageMarkup()
+      resetLayers()
+      tip.mount()
+      unmount = mountPageRoot()
+      const shade = upgrade.open()
+      shade.say('Working')
+      const order = bodySiblings(doc)
+      const pill = order.findIndex((line) => line.startsWith('div.tipp'))
+      const up = order.findIndex((line) => line.startsWith('div.upshade'))
+      expect(pill, 'the tooltip layer is not at the body').toBeGreaterThan(-1)
+      expect(up, 'the update shade is not at the body').toBeGreaterThan(-1)
+      expect(pill).toBeLessThan(up)
+    } finally {
+      upgrade._resetForTests()
+      tip._resetForTests()
+      unmount()
+      resetLayers()
+    }
+  })
+
+  /* The scrollbar layer is the first of the four, whatever order they are
+     asked for in -- which is what keeps the picker under the two popovers and
+     the pill under the shade no matter which module asks first. */
+  it('hands out the four standing layers in the table\'s order, not the asking\'s', () => {
+    const doc = pageMarkup()
+    try {
+      resetLayers()
+      for (const layer of [...LAYERS].reverse()) host(layer)
+      expect(bodySiblings(doc).slice(-4)).toEqual(['div.sbars', 'div', 'div#deskHost', 'div.tipp'])
+    } finally {
+      resetLayers()
+    }
   })
 
   it('gives the model picker a place before the two popovers, breaking the tie at 46', () => {

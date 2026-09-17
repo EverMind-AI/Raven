@@ -1,10 +1,16 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { close, isOpen, open } from './lightbox'
 import { resetShell, setShell } from './bridge'
+import { mountPageRoot } from '../test/pageRoot'
 
 import type { Shell } from './bridge'
+
+/* The overlay is drawn by src/chrome/Lightbox.tsx, so the page's own root has
+   to be standing for one to reach the body -- the way src/main.tsx stands it
+   up before anything can ask for an overlay. */
+let unmount = (): void => {}
 
 function wire(): void {
   const shell: Shell = {
@@ -18,8 +24,13 @@ function wire(): void {
 
 const overlay = (): HTMLElement | null => document.querySelector('.lightbox')
 
+beforeEach(() => {
+  unmount = mountPageRoot()
+})
+
 afterEach(() => {
   close()
+  unmount()
   resetShell()
   document.body.innerHTML = ''
 })

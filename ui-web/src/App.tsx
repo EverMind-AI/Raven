@@ -30,6 +30,15 @@
  * because React diffs against the props it rendered last rather than against
  * the document.
  *
+ * The last four belong to no page at all: the hover pill, the full-size image,
+ * the upgrade card and the failure bars. Three of them portal straight to the
+ * body, which is where they have always been appended -- each is
+ * `position: fixed` over the whole window, so a wrapper would take the inset --
+ * and the pill portals into the one layer state/portals.ts stands at the body
+ * for it. Where each of them sits among the body's children is what decides
+ * which covers which for the two deliberate ties on the `--z` ladder, so that
+ * order is declared once, there.
+ *
  * Not here, and not later: #splash and #noJs. Both are pre-JavaScript shells --
  * the splash is the literal first frame, painted while this bundle is still
  * being evaluated, and #noJs is what a reader gets when it never runs -- so
@@ -42,8 +51,12 @@ import { createPortal } from 'react-dom'
 import { CapsPage } from './chrome/CapsPage'
 import { ChatTop } from './chrome/ChatTop'
 import { Dock } from './chrome/Dock'
+import { FailureBars } from './chrome/FailureBar'
+import { Lightbox } from './chrome/Lightbox'
 import { Rail } from './chrome/Rail'
 import { SheetRack } from './chrome/SheetRack'
+import { Tooltip } from './chrome/Tooltip'
+import { UpgradeShade } from './chrome/UpgradeShade'
 import { WsPane } from './chrome/WsPane'
 import * as menu from './shell/menu'
 import * as toast from './shell/toast'
@@ -221,6 +234,10 @@ export function App(): JSX.Element {
       <ContextMenu />
       <Toasts />
       <SheetRack />
+      <Tooltip />
+      <Lightbox />
+      <UpgradeShade />
+      <FailureBars />
     </>
   )
 }

@@ -62,6 +62,17 @@ let liveClaimed = false;
 
 function claimBoot() { liveClaimed = true; }
 
+/* The loaded page: the splash lifts unless the page's own boot has claimed
+   that moment. Registered with the page's other window listeners
+   (ui-web/src/state/globalListeners.ts); the flag above is read when the event
+   arrives, not when it is registered, which is what lets the claim happen in
+   between. */
+function onLoad() {
+  if (/[?&]onboard=demo/.test(location.search)) showOnboard();
+  if (liveClaimed) return;
+  hideSplash(250);
+}
+
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
@@ -69,12 +80,6 @@ export function install() {
    before microtasks drain; its last step queues bootPage itself. */
   queueMicrotask(() => { if (!liveClaimed) bootPage(); });
   markStart();
-
-  addEventListener('load', () => {
-    if (/[?&]onboard=demo/.test(location.search)) showOnboard();
-    if (liveClaimed) return;
-    hideSplash(250);
-  });
 }
 
-export { bootPage, showOnboard, liveClaimed, claimBoot }
+export { bootPage, showOnboard, liveClaimed, claimBoot, onLoad }

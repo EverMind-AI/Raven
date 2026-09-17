@@ -78,13 +78,10 @@ export function pick(item: MenuItem): void {
   item.fn()
 }
 
-export function install(): void {
-  document.addEventListener(
-    'pointerdown',
-    event => {
-      const target = event.target as Element | null
-      if (!target?.closest('#menu')) close()
-    },
-    true
-  )
+/* A pointer outside the menu closes it. Registered in the capture phase with
+   the page's other document listeners (state/globalListeners.ts): the row the
+   pointer landed on may stop the event, and the menu still has to come down. */
+export function onPointerDown(event: PointerEvent): void {
+  const target = event.target as Element | null
+  if (!target?.closest('#menu')) close()
 }
