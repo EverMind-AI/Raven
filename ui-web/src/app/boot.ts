@@ -10,6 +10,11 @@
  * Which transport answers the calls is decided before any of this runs
  * (src/rpc/chooseTransport.ts): a page opened from disk or with ?stub=1 reads the
  * offline fixture library through the very same sequence.
+ *
+ * The two elements it reaches for are the ones no component renders: the
+ * pre-JavaScript splash, removed outright inside the desktop shell, and
+ * `.rail`, which carries the pending-counts flag from before the first paint
+ * until the real counts land.
  */
 
 import { turn } from '../features/composer/mount'

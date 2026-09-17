@@ -2,9 +2,13 @@
  * one row raven speaks about itself in.
  *
  * The renderer is the transcript island (features/transcript/); what is here
- * is the empty-state flag -- which is a
- * whole layout rather than a message, so it belongs to the chat column -- and
- * the three verbs the session runtime and its stages drive the island by.
+ * is the empty-state flag -- which is a whole layout rather than a message, so
+ * it belongs to the chat column -- and the three verbs the session runtime and
+ * its stages drive the island by.
+ *
+ * The flag is written on `.chat` by reaching for that element: the column is
+ * the chat's own ground, rendered by src/chrome/ChatTop.tsx's neighbours and
+ * owned by nobody who could be handed the flag instead.
  */
 
 import { islands } from '../../features/registry'

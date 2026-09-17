@@ -3,11 +3,11 @@
  *
  * A store rather than a writer, for the reasons `perm.ts` gives next door:
  * <TierChip/> and <TierPop/> render both nodes from it (src/chrome/TierChip.tsx,
- * src/chrome/TierPop.tsx) -- the chip's four values and the panel's two
- * headings included -- the panel is still moved to the body by hand to be
- * positioned at all, and what stays here decides. The two chips sit side by side
- * and are built the same way on purpose -- a reader meets them as one row of
- * session settings, not as two unrelated controls.
+ * src/chrome/TierPop.tsx), the chip's four values and the panel's two headings
+ * included. The panel is still moved to the body by hand, because that is the
+ * only way it can be positioned at all; what stays here is what decides. The
+ * two chips sit side by side and are built the same way on purpose -- a reader
+ * meets them as one row of session settings, not as two unrelated controls.
  *
  * What it is NOT is a model. What it IS depends on the catalogue, and the panel
  * says which rather than assuming.

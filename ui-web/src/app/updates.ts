@@ -10,6 +10,10 @@
  * no backend support needed. The page never reloads itself: a reload mid-turn
  * would drop the live transcript, so the amber row in the rail foot waits for a
  * click.
+ *
+ * That row is `#upnote` and its two spans, reached for by id here: the rail
+ * renders the element (src/chrome/Rail.tsx) and what it says, what it offers
+ * and its click are this module's.
  */
 
 import type { UpgradeShade } from '../state/upgradeShade'

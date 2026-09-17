@@ -3,8 +3,12 @@
  * A hand-written list of nineteen calls (`redrawAll`) is what this was.
  * Everything the catalogue reaches that is DRAWN rather than rendered is
  * in it: the regions src/App.tsx renders read the catalogue themselves and
- * redraw on the same notification, so what is left here is the eleven islands,
- * the four chrome writers, the shared drawer and the one reload.
+ * redraw on the same notification, so what is left here is nine island
+ * redraws, the rail's own draw and the capabilities page's, the three stores
+ * whose draw commits a field their component renders (the permission chip, the
+ * rail foot, the context ring), the model label -- the one step left that
+ * writes an element by id -- the composer's queue, the shared drawer and the
+ * one reload.
  *
  * One subscriber rather than a call beside each `lang.set`: the rollback path in
  * state/lang/pick.ts would otherwise have to remember to redraw a second time,

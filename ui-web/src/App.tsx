@@ -32,10 +32,13 @@
  *
  * Flags this renders but does not own, for the same reason: `data-open` on the
  * seven pages and the veils, `hidden` on button#railShow, `data-rail` and
- * `data-page` on div.app, `data-open` / `data-full` on #split. Each is rendered
- * as the value the page is served with and written afterwards by the one store
- * that owns it (state/page.ts, state/rail.ts, state/ws.ts) -- which is also
- * what keeps the order those writes land in.
+ * `data-page` on div.app, `data-open` / `data-full` on #split, `data-open` on
+ * #menu. Each is rendered as the value the page is served with and written
+ * afterwards by the one store that owns it (state/page.ts, state/rail.ts,
+ * state/ws.ts, state/menu.ts) -- which is also what keeps the order those
+ * writes land in. #menu's `left` and `top` are that store's too and are not
+ * rendered at all: the menu is placed by measuring it after its rows are in it,
+ * which is a value no render could carry.
  *
  * Not here, and not later: #splash and #noJs. Both are pre-JavaScript shells --
  * the splash is the literal first frame, painted while this bundle is still

@@ -8,6 +8,10 @@
  * driven off the transport's own connection state, plus the desktop shell's
  * `ready` and `reauth` messages, because the shell is the other end of both
  * the splash and the credential this page cannot mint.
+ *
+ * It asks the document for `.upshade` because "is a card already up" is a
+ * question about the whole page: the one an upgrade this page started built
+ * belongs to that watcher, which is still writing into it.
  */
 
 import { islands } from '../features/registry'

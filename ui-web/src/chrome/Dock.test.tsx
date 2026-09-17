@@ -28,6 +28,7 @@ import { resetTranslator, setTranslator } from '../i18n/t'
 import * as confirmStore from '../state/confirm'
 import * as pageStore from '../state/page'
 import type { ComposerSource } from '../features/composer/types'
+import type { TierSource } from '../state/tier'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -142,6 +143,43 @@ describe('the dock', () => {
     for (const crew of dock().querySelectorAll('.crew')) {
       expect(crew.getAttribute('aria-hidden')).toBe('true')
     }
+  })
+
+  /* The warning class and the order it lands in. It was a classList.toggle, so
+     `risk` came after `chip` and the pair reads `class="chip risk"` everywhere a
+     golden or a stylesheet records it; <PermChip/> renders the whole attribute
+     now, and this is what says the string did not change with the writer. */
+  it('paints the permission chip in the warning colour, after its own class', () => {
+    render()
+    expect(el('permChip').className).toBe('chip')
+    perm.setFromConfig('full')
+    expect(el('permChip').className).toBe('chip risk')
+    expect(el('permChip').getAttribute('aria-label')).toBe('t:gui.perm.title: t:gui.perm.full')
+  })
+
+  /* The bars are the store's markup rather than the two the page is served
+     with: `max` is three of them and the served svg has two (state/tier.ts's
+     ICO table, src/chrome/TierChip.tsx's SERVED), so a chip still rendering the
+     literal reds here instead of passing by coincidence -- which is what the
+     ladder's middle rung would do, its glyph being the served one exactly. */
+  it('draws the tier chip from the catalogue that answered', async () => {
+    const bars = (): Array<string | null> =>
+      [...el('tierChip').querySelectorAll('.pico path')].map((path) => path.getAttribute('d'))
+    render()
+    const menu = [{ id: 'medium' }, { id: 'high' }, { id: 'max' }]
+    setSources({
+      tier: {
+        read: async () => ({ mode: 'max', availableModes: menu }),
+        set: async () => ({ mode: 'max', availableModes: menu }),
+      } satisfies TierSource,
+    })
+    expect(bars()).toEqual(['M6 18.5v-4', 'M12 18.5v-9'])
+
+    await act(async () => { await tier.load() })
+
+    expect(el('tierChip').hidden).toBe(false)
+    expect(el('tierName').textContent).toBe('Max')
+    expect(bars()).toEqual(['M6 18.5v-4', 'M12 18.5v-9', 'M18 18.5v-14'])
   })
 
   /* The context ring is served with neither attribute, which is why the store
