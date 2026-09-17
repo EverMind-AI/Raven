@@ -3,25 +3,25 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { install, onChange, term, toggle } from './find'
 import { resetShell, setShell } from './bridge'
+import { mountPageRoot } from '../test/pageRoot'
 
 import type { Shell } from './bridge'
 
-/* The same four elements page.html carries, with the same starting state: the
-   row hidden, the clear button hidden, the button reporting collapsed. */
+/* The rail's container, as page.html carries it. The four elements this module
+   drives are the page root's now (src/chrome/Rail.tsx), so they are rendered
+   here rather than copied: the row hidden, the clear button hidden and the
+   search button reporting collapsed are what that component renders from the
+   store's served state. */
 function markup(): void {
-  document.body.innerHTML = `
-    <button id="findBtn" aria-expanded="false"></button>
-    <div class="find" id="findBox" hidden>
-      <input id="sfind" />
-      <button class="clr" id="sclr" hidden></button>
-    </div>`
+  document.body.innerHTML = '<div class="app"><aside class="rail"></aside></div>'
 }
 
 let draws = 0
+let unmount = (): void => {}
 
 function wire(): void {
   markup()
-  draws = 0
+  unmount = mountPageRoot()
   const shell: Shell = {
     T: (key) => key,
     confirmAsk: () => {},
@@ -32,6 +32,10 @@ function wire(): void {
     draws += 1
   })
   install()
+  /* The row's own state outlives a case now that it is the store's rather than
+     the markup's: fresh markup used to reset it. */
+  toggle(false)
+  draws = 0
 }
 
 const field = (): HTMLInputElement => document.getElementById('sfind') as HTMLInputElement
@@ -50,6 +54,7 @@ const key = (name: string, over: Partial<KeyboardEventInit> = {}): boolean =>
 beforeEach(wire)
 
 afterEach(() => {
+  unmount()
   onChange(() => {})
   resetShell()
   document.body.innerHTML = ''
