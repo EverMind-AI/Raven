@@ -25,7 +25,82 @@ Powered by the [EverOS](https://github.com/EverMind-AI/EverOS) memory system, Ra
 
 > Raven is pre-alpha. Interfaces and configuration may change quickly.
 
-## 📊 Benchmarks
+## ❯❯ Raven Agents
+
+Raven's modular architecture powers four specialized agents, each assembled from reusable harness components with tools, skills, and workflows tailored to its domain. It can delegate a focused task to one agent or coordinate several agents in a shared workflow.
+
+For example, Raven-Research can gather evidence, Raven-Code can implement an experiment, Raven-Oncall can run and monitor it, and Raven-Design can turn the results into charts and a presentation.
+
+Enable the agents you need during onboarding. See [`agents/README.md`](agents/README.md) for configuration details.
+
+### Raven-Research
+
+**Raven-Research** enables **autonomous deep research** for complex questions, literature reviews, and technical analysis. It delivers clear, structured reports with traceable sources, helping users understand unfamiliar domains, compare alternatives, and make informed decisions.
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/d072a514-58fd-41c7-8fcd-40782ebb4c80"><img src="https://github.com/user-attachments/assets/d072a514-58fd-41c7-8fcd-40782ebb4c80" alt="DeepResearch Mixed: Accuracy, Input Tokens, Output Tokens, and Cost" width="70%"></a>
+</p>
+
+<p align="center"><em>Raven-Research on DeepResearch Mixed</em></p>
+
+### Raven-Code
+
+**Raven-Code** enables **agentic software development**, turning requirements into working, tested code. It supports feature implementation, debugging, refactoring, data processing, and data analysis, helping users build new capabilities, resolve issues, and improve code quality while following their project's conventions.
+
+<table width="100%">
+<tr>
+<td width="58.82%" align="center" valign="top">
+  <a href="https://github.com/user-attachments/assets/0bf3221c-6bb7-4483-bd80-05ae43fda706"><img src="https://github.com/user-attachments/assets/0bf3221c-6bb7-4483-bd80-05ae43fda706" alt="Coding Benchmarks: SWE-bench Pro, SWE-bench Verified, WorkBuddy-Code Reward, and SWE-Refactor" width="100%"></a>
+</td>
+<td width="41.18%" align="center" valign="top">
+  <a href="https://github.com/user-attachments/assets/bccb4ab1-b49c-4b51-a209-67dc940cc485"><img src="https://github.com/user-attachments/assets/bccb4ab1-b49c-4b51-a209-67dc940cc485" alt="DataAgentBench (2026-08-24 Live): Raven-Code with Opus-5 achieves 0.8762 Pass@1" width="100%"></a>
+</td>
+</tr>
+<tr>
+<td align="center"><em>Raven-Code on Coding Benchmarks</em></td>
+<td align="center"><em>Raven-Code tops on DataAgentBench (2026-08-24 Live)</em></td>
+</tr>
+</table>
+
+### Raven-Design
+
+**Raven-Design** performs **visual design**, turning ideas and content into polished visual deliverables. It creates presentations, brand assets, charts, diagrams, and web interfaces, refining layout, typography, and visual consistency to help users communicate clearly and bring their ideas to life.
+
+<table width="100%">
+<tr>
+<td width="50%" align="center" valign="top">
+  <a href="https://github.com/user-attachments/assets/a356c0c6-cce4-44cb-89b4-414af1a57a2f"><img src="https://github.com/user-attachments/assets/a356c0c6-cce4-44cb-89b4-414af1a57a2f" alt="PresentBench: Raven-Design, Claude Code, and public leaderboard scores" width="100%"></a>
+</td>
+<td width="50%" align="center" valign="top">
+  <a href="https://github.com/user-attachments/assets/2006798b-4852-4117-be05-3343e5c86fa6"><img src="https://github.com/user-attachments/assets/2006798b-4852-4117-be05-3343e5c86fa6" alt="Visual Design: Raven-Design, Claude Code, and Hermes on ArtifactsBench Dashboard, ArtifactsBench SVG, and GDPVal" width="100%"></a>
+</td>
+</tr>
+<tr>
+<td align="center"><em>Raven-Design on PresentBench</em></td>
+<td align="center"><em>Raven-Design on ArtifactsBench and GDPVal</em></td>
+</tr>
+</table>
+
+### Raven-Oncall
+
+**Raven-Oncall** enables **unattended workflow automation** for experimentation, optimization, and continuous monitoring. It autonomously manages workflows from start to completion, sustaining progress over hours or overnight, delivering results, and involving users only when human judgment is needed.
+
+<table width="100%">
+<tr>
+<td width="50%" align="center" valign="top">
+  <a href="https://github.com/user-attachments/assets/1a1b161e-946b-4049-ad4b-8ed8f22ac658"><img src="https://github.com/user-attachments/assets/1a1b161e-946b-4049-ad4b-8ed8f22ac658" alt="AI4AI (Nanochat 50M Pretraining): Bits Per Byte (BPB), Runtime, Tokens, and Cost" width="100%"></a>
+</td>
+<td width="50%" align="center" valign="top">
+  <a href="https://github.com/user-attachments/assets/358fc781-7524-4c1e-997b-fc31943d29d7"><img src="https://github.com/user-attachments/assets/358fc781-7524-4c1e-997b-fc31943d29d7" alt="AI4S Internal Benchmark: Success Rate, Average Total Runtime, Average Total Tokens, and Average Cost" width="100%"></a>
+</td>
+</tr>
+<tr>
+<td align="center"><em>Raven-Oncall vs. Claude Code on AI4AI (Nanochat 50M Pretraining)</em></td>
+<td align="center"><em>Raven-Oncall vs. Claude Code on AI4S Internal Benchmark</em></td>
+</tr>
+</table>
+
+## ❯❯ Benchmarks
 
 | Benchmark | Raven Result | Comparison |
 | --- | --- | --- |
@@ -37,31 +112,15 @@ Results describe the published test configurations; model, task set, and evaluat
 
 https://github.com/user-attachments/assets/3c541dae-5852-447f-8ea6-c9877612ad57
 
+## ❯❯ Connect Third-Party Agents
 
-## 🤝 Raven Agents
-
-Raven's modular architecture powers four state-of-the-art agents, each assembled from reusable harness components with tools, skills, and workflows tailored to its domain. It can delegate a focused task to one agent or coordinate several agents in a shared workflow.
-
-| Agent | What it does |
-| --- | --- |
-| **Raven-Research** | Searches the live web, reads and compares sources, and produces research reports with citations and references. |
-| **Raven-Code** | Writes, runs, and debugs code with state-of-the-art performance, covering feature development, bug fixes, refactoring, scripting, and testing. |
-| **Raven-Design** | Creates, edits, and reviews visual work: brand assets, diagrams, charts, illustrations, icons, slide decks, and interface designs. |
-| **Raven-Oncall** | Runs and monitors experiments and long-running jobs on local or remote machines, evaluates results, adjusts subsequent runs, and reports the outcome. |
-
-For example, Raven-Research can gather evidence, Raven-Code can implement an experiment, Raven-Oncall can run and monitor it, and Raven-Design can turn the results into charts and a presentation.
-
-Enable the agents you need during onboarding. See [`agents/README.md`](agents/README.md) for configuration details.
-
-## 🔌 Preset Third-Party Agents
-
-Raven includes presets for these third-party agents, so you can bring their capabilities into its orchestration workflows.
+Raven can connect to and orchestrate these third-party agents, delegating tasks and coordinating their capabilities in shared workflows.
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/3370c883-00ac-4471-97ef-f4312df77202" width="70%" alt="Preset third-party agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, MiroThinker, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi">
+  <img src="https://github.com/user-attachments/assets/3370c883-00ac-4471-97ef-f4312df77202" width="70%" alt="Third-party agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, MiroThinker, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi">
 </p>
 
-## 🚀 Quick Start
+## ❯❯ Quick Start
 
 ### 📦 Install
 
@@ -105,7 +164,7 @@ checkout reads the tree in place. Setup asks about each product and registers
 the ones you take up, on the model it is tuned for or on this raven's LLM.
 See [`agents/README.md`](agents/README.md).
 
-## 🏠 Self-Hosting
+## ❯❯ Self-Hosting
 
 Raven can run directly from a checkout or as a single Docker Compose service. The
 Compose deployment serves the built page through nginx, keeps the Raven engine
@@ -130,7 +189,7 @@ docker compose up
 ```
 
 Open <http://127.0.0.1:18793>. The Compose container runs the full `gateway`
-engine so providers added from **Settings > Models** are available on the next
+engine so providers added from **Settings > Model providers** are available on the next
 turn without restarting.
 
 For the detailed container layout, sign-in flow, provider setup, and operational
@@ -184,12 +243,12 @@ uv run raven web
 terminal exits. It defaults to `http://127.0.0.1:18792`. Use
 `uv run raven web --foreground` when debugging, or `uv run raven web --stop` to
 stop the resident engine. The first run can start without a configured model;
-add one from **Settings > Model Providers** or run `uv run raven onboard`.
+add one from **Settings > Model providers** or run `uv run raven onboard`.
 
 To run only the engine without the browser launcher, use
 `uv run raven gateway`.
 
-## 🧩 Core Systems
+## ❯❯ Core Systems
 
 | System | What it adds |
 | --- | --- |
@@ -207,7 +266,7 @@ To run only the engine without the browser launcher, use
 </div>
 
 
-## 🌐 Launch WebUI
+## ❯❯ Launch WebUI
 
 Raven's WebUI brings conversations, multi-agent collaboration, and workspace management into your browser. Chat with agents, follow task progress, inspect files and outputs, and browse memory and skills in one place.
 
@@ -223,7 +282,7 @@ The command opens the WebUI in your browser and keeps Raven running in the backg
 
 > **Screenshot placeholder 3:** Memory and skill management.
 
-## 📋 Command Reference
+## ❯❯ Command Reference
 
 | Command | Purpose |
 | --- | --- |
@@ -261,9 +320,7 @@ The command opens the WebUI in your browser and keeps Raven running in the backg
 
 Run `raven --help` or `raven <command> --help` for the complete CLI surface.
 
-
-
-## 📚 Documentation
+## ❯❯ Documentation
 
 - [Documentation index](docs/README.md)
 - [Developer workflow](docs/dev.md)
@@ -280,7 +337,7 @@ Run `raven --help` or `raven <command> --help` for the complete CLI surface.
 
 </div>
 
-## 🗂️ Repo layout
+## ❯❯ Repo layout
 
 The shared Python runtime lives in `raven/`. Agent definitions, plugin distributions, frontends, and development tools live alongside it.
 
@@ -348,7 +405,7 @@ The following runtime packages and modules form the canonical commit scopes unde
 | `updates` | Release discovery, upgrade planning, installation handoff, and update notices |
 | `utils` | Shared utilities, including atomic file writes |
 
-## 🏗️ Architecture
+## ❯❯ Architecture
 
 Each runtime entrance assembles Raven through the same **Assembly Root**, `raven/core/runtime.py:build_runtime`. Configuration and plugin contributions determine the components in a runtime generation; the Spine schedules turns and delivers events around the Agent Loop.
 
@@ -389,9 +446,9 @@ See the [Context Map](CONTEXT-MAP.md) for subsystem boundaries, the [Runtime Con
 
 </div>
 
-## 🌐 EverMind Ecosystem
+## ❯❯ EverMind Ecosystem
 
-EverMind connects memory research, production-ready products, and practical
+[EverMind](https://evermind.ai/) connects memory research, production-ready products, and practical
 integrations into one open-source ecosystem.
 
 <table>
@@ -462,10 +519,17 @@ Together, these projects form EverMind's research-to-runtime stack: methods
 and benchmarks become reusable memory infrastructure, products, and agent
 integrations.
 
-## 🤝 Contributing
+<br>
+<div align="right">
+
+[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
+
+</div>
+
+## ❯❯ Contributing
 
 Issues and pull requests are welcome. Start with the [developer workflow](docs/dev.md), follow [AGENTS.md](AGENTS.md) for repository rules, and use [GitHub Discussions](https://github.com/EverMind-AI/Raven/discussions) for design conversations.
 
-## ⚖️ License
+## ❯❯ License
 
 [Apache License 2.0](LICENSE)
