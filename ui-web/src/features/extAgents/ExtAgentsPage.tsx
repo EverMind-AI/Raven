@@ -9,13 +9,13 @@ import { KeyInput } from '../../components/KeyInput'
 import { SetupGroup, SetupRow } from '../../components/SetupRow'
 import * as store from './store'
 
-import type { XaRow } from './types'
+import type { ExtAgentRow } from './types'
 import type { JSX } from 'react'
 import { ask as confirmAsk } from '../../state/confirm'
 
 /* Connect the agents this machine can hand work to. One row per agent; the rows
-   are whatever `DS.xa` answers -- the fixture source with no gateway behind the
-   page, the `subagents.*` source in the live layer.
+   are whatever `DS.extAgents` answers -- the fixture source with no gateway
+   behind the page, the `subagents.*` source in the live layer.
  *
  * Two verbs on a row, and only two: connect and disconnect. Connect does whatever
  * this particular agent needs to become dispatchable -- build a shipped folder's
@@ -50,7 +50,7 @@ const kindText = (kind: string): string =>
    Deliberately not where the agent came from: whether an install shipped it or
    a reader connected it changes nothing about using it, and the row and the card
    are both about using it. */
-function wayIn(row: XaRow): string {
+function wayIn(row: ExtAgentRow): string {
   return [
     kindText(row.kind),
     /* The preset moved to another transport since this entry was written.
@@ -71,7 +71,7 @@ function wayIn(row: XaRow): string {
  * Four probe verdicts, and they are not two. `attention` means the binary is
  * there but nothing has verified it can do a task -- an amber nudge, not a
  * failure. `unknown` is "not measured", which earns no colour at all. */
-function dotOf(row: XaRow): string {
+function dotOf(row: ExtAgentRow): string {
   /* A built-in agent is this process: reading it through the probe verdicts
      would report "not measured" about a loop that is demonstrably running. */
   if (row.builtin) return row.enabled ? 'ok' : 'off'
@@ -94,7 +94,7 @@ function dotOf(row: XaRow): string {
  * its manifest flag back. The probe verdict is what separates them. */
 export type Stage = 'builtin' | 'building' | 'install' | 'add' | 'key' | 'stale' | 'off' | 'live'
 
-export function stageOf(row: XaRow): Stage {
+export function stageOf(row: ExtAgentRow): Stage {
   if (row.builtin) return 'builtin'
   if (row.building) return 'building'
   if (row.vendored) {
@@ -123,7 +123,7 @@ export function stageOf(row: XaRow): Stage {
  * `key` is the one stage whose write cannot be done from here: only the reader
  * has the credential. In the row it opens the card, where the field is; in the
  * card it is the field's own button, which is why the card passes `onKey`. */
-function AgentAct({ row, onKey }: { row: XaRow; onKey?: () => void }): JSX.Element | null {
+function AgentAct({ row, onKey }: { row: ExtAgentRow; onKey?: () => void }): JSX.Element | null {
   const stage = stageOf(row)
   if (stage === 'builtin') return null
   if (stage === 'building') {
@@ -189,7 +189,7 @@ function AgentAct({ row, onKey }: { row: XaRow; onKey?: () => void }): JSX.Eleme
    where nine of the eleven live on a stock install. It is also the only group a
    reader can be done with, which is why it is the one that folds. */
 type Grp = 'on' | 'switch' | 'setup' | 'install'
-const groupOf = (row: XaRow): Grp => {
+const groupOf = (row: ExtAgentRow): Grp => {
   const stage = stageOf(row)
   if (stage === 'live' || stage === 'builtin') return 'on'
   if (stage === 'install' || stage === 'building') return 'install'
@@ -220,7 +220,7 @@ const groupOf = (row: XaRow): Grp => {
    which group the row is in; what is left is the one distinction the groups do
    not draw, between an entry Raven writes on its own and a credential the
    reader has to go and find. */
-const costOf = (row: XaRow): number => {
+const costOf = (row: ExtAgentRow): number => {
   const stage = stageOf(row)
   return stage === 'off' ? 0 : stage === 'add' ? 1 : stage === 'key' ? 2 : 3
 }
@@ -233,7 +233,7 @@ const costOf = (row: XaRow): number => {
    it was never in, and `source: "config"` searches a config file it has no
    entry in, so both answer `subagent_not_found`. Offering the button there
    would be offering a click that can only fail. */
-const canTest = (row: XaRow): boolean => !row.builtin && !row.vendored
+const canTest = (row: ExtAgentRow): boolean => !row.builtin && !row.vendored
 
 /* How long ago, in the coarsest unit that still says it. Same thresholds as the
    TUI's roster (ui-tui/src/components/subagentsHub.tsx `ageText`), spelled
@@ -255,7 +255,7 @@ function agoText(ms: number): string {
    a hole in it: the server writes `ok` and `tested_at_ms` from one record, so
    the two are either both there or both absent, and printing "Worked, {ago}"
    with the placeholder still in it is worse than saying nothing was measured. */
-function testVerdict(row: XaRow): { cls: string; text: string } {
+function testVerdict(row: ExtAgentRow): { cls: string; text: string } {
   if (row.last_test_ok == null || row.last_test_at_ms == null) {
     return { cls: 'off', text: t('gui.agent.test_never') }
   }
@@ -269,9 +269,9 @@ function testVerdict(row: XaRow): { cls: string; text: string } {
    real task; acp reaches its verdict in the handshake and openai in the free
    `/models` probe, and warning about a bill neither of them sends is how a
    reader learns to ignore the warning. */
-const testCosts = (row: XaRow): boolean => row.kind === 'cli'
+const testCosts = (row: ExtAgentRow): boolean => row.kind === 'cli'
 
-function AgentRow({ row, sel }: { row: XaRow; sel: boolean }): JSX.Element {
+function AgentRow({ row, sel }: { row: ExtAgentRow; sel: boolean }): JSX.Element {
   /* Health is only a question about an agent that is supposed to be working.
      Outside the connected group not-dispatchable is what every row is, so a red
      dot and the clay stripe that comes with it were an alarm about the group's
@@ -309,7 +309,7 @@ function AgentRow({ row, sel }: { row: XaRow; sel: boolean }): JSX.Element {
    Two of the three things this card says are the reader's: what this agent is
    called here, and what it is for. The rest -- how Raven reaches it, whether it
    answered -- belongs to the transport and to the agent. `subagents.update` has
-   always taken both, `DS.xa` has always forwarded both, and the store has always
+   always taken both, `DS.extAgents` has always forwarded both, and the store has always
    moved an open sheet onto a new name; the page was the only piece missing, and
    it went out with the form this card replaced.
 
@@ -398,7 +398,7 @@ function Editable({
  * before the one thing to do. The verdict is back, but as a section of its own
  * with the button that renews it: it was noise as a line in a form nobody had
  * asked a question of, and it is the answer once somebody asks. */
-function AgentCard({ row, testing }: { row: XaRow; testing: boolean }): JSX.Element {
+function AgentCard({ row, testing }: { row: ExtAgentRow; testing: boolean }): JSX.Element {
   const dHost = store.detailHost()
   const keyRef = useRef<HTMLInputElement>(null)
   const stage = stageOf(row)
@@ -547,7 +547,7 @@ function AgentCard({ row, testing }: { row: XaRow; testing: boolean }): JSX.Elem
   )
 }
 
-export function XaApp(): JSX.Element {
+export function ExtAgentsApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   /* The language the page resolved, so a pick repaints this island: every word
      below is a t(key) read at render time (state/lang/store.ts). */
@@ -561,10 +561,10 @@ export function XaApp(): JSX.Element {
     { grp: 'setup', label: t('gui.agent.g_setup') },
     { grp: 'install', label: t('gui.agent.g_install'), folds: true },
   ]
-  const listFor = (grp: Grp): XaRow[] =>
+  const listFor = (grp: Grp): ExtAgentRow[] =>
     s.rows.filter((a) => groupOf(a) === grp).sort((a, b) => costOf(a) - costOf(b))
   const sheetRow = s.sheet ? s.rows.find((x) => x.name === s.sheet) : undefined
-  const rows = (list: XaRow[]): JSX.Element => (
+  const rows = (list: ExtAgentRow[]): JSX.Element => (
     <div className="sulist">
       {list.map((row) => (
         <AgentRow key={row.name} row={row} sel={s.sheet === row.name} />

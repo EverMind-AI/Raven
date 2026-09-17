@@ -22,7 +22,7 @@ div.app
         svg
           path
         span[data-i18n=gui.tab.plugins]
-      button#pbBtn.navi
+      button#playbooksBtn.navi
         svg
           circle
           circle
@@ -33,7 +33,7 @@ div.app
         svg
           path
         span[data-i18n=gui.nav.kb]
-      button#memBtn.navi
+      button#memoryBtn.navi
         svg
           path
         span[data-i18n=gui.nav.mem]

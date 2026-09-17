@@ -77,7 +77,7 @@ function claimFirstFrame(): void {
   /* Set before the deferred first paint, cleared once the real counts land. */
   const rail = document.querySelector('.rail') as HTMLElement | null
   if (rail) rail.dataset.counts = 'pending'
-  sources.sessions = sessionsSource
+  sources.rail = sessionsSource
   holdRail()
   sessionSet(null)
   /* From here on the pointer is the page's own, so what it says can be recorded

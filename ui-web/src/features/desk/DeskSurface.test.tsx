@@ -85,7 +85,7 @@ describe("the header of a graph node's pane", () => {
        this is about, so an empty answer is enough. */
     setCurrent('s1')
     setSources({
-      agents: { list: async () => [], instances: async () => [], node: async () => ({ messages: [] }) },
+      subagents: { list: async () => [], instances: async () => [], node: async () => ({ messages: [] }) },
     })
   })
 
@@ -379,7 +379,7 @@ describe('the collapsed launcher', () => {
        answer for any other, so the harness has to be in one. */
     setCurrent('s1')
     setSources({
-      agents: { list: async () => [], instances: async () => agentRows },
+      subagents: { list: async () => [], instances: async () => agentRows },
     })
   })
 
@@ -534,7 +534,7 @@ describe('a pane headed by an instance', () => {
     agentRows = []
     setCurrent('s1')
     setSources({
-      agents: { list: async () => [], instances: async () => agentRows },
+      subagents: { list: async () => [], instances: async () => agentRows },
     })
   })
 

@@ -46,7 +46,7 @@ let everosLive: ResultOf<'settings.everos'> | null = null
 /* The three members that need page chrome no island owns: the version the foot
    learned from `system.version`, the check that drives the update notice and
    the upgrade prompt, and the language pick. Installed by
-   features/settings/chrome.ts, which owns the settings transport. */
+   features/settings/wire.ts, which owns the settings transport. */
 export interface SettingsChrome {
   version(): string | null
   checkUpdate(btn: HTMLButtonElement): void | Promise<void>
@@ -106,7 +106,7 @@ export const checkVersion = (): Promise<ResultOf<'system.version'>> =>
   gateway().call('system.version', { check: true })
 
 /* A permission pick, written under the conversation it was made in. What a
-   refusal says to the reader is the chip's decision (../settings/chrome.ts). */
+   refusal says to the reader is the chip's decision (./wire.ts). */
 export const savePermMode = (mode: string, sid: string): Promise<boolean> =>
   gateway().call('config.set', { key: 'permissions.mode', value: mode, scope: 'session', session_id: sid })
     .then((r) => !!(r && r.applied))

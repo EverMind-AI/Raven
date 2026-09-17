@@ -16,7 +16,7 @@ import { ModelIcon, ProviderIcon, ProviderLink, ProviderStatus } from '../../com
 import { hint as reachHint, text as reachText } from '../../lib/reach'
 import { show as toast } from '../../state/toast'
 import { subscribe as langSubscribe, tag as langTag } from '../../state/lang'
-import { open as openConn } from '../connections/nav'
+import { open as openConnections } from '../connections/wire'
 import * as store from './store'
 import { ImageModelPicker } from './ImageModelPicker'
 
@@ -29,10 +29,10 @@ import * as settingsDialog from '../../state/settings'
 /* The session list, reached through the seam. `deleteAll` is wrapped because
    a source that has none is the shape a demo shell can be in, and an
    optimistic click must not throw out of the confirm. */
-const sessionCount = (): number => ds('sessions').snapshot().rows.length
+const sessionCount = (): number => ds('rail').snapshot().rows.length
 const deleteAllSessions = (): void => {
   try {
-    ds('sessions').deleteAll?.()
+    ds('rail').deleteAll?.()
   } catch {
     /* no source, nothing to delete */
   }
@@ -2409,7 +2409,7 @@ function ProactPage(): JSX.Element {
           className="mini ghost"
           onClick={() => {
             settingsDialog.close()
-            openConn()
+            openConnections()
           }}
         >
           {t('gui.set.chn.manage')}
@@ -2472,7 +2472,7 @@ function ChannelPage({ s }: { s: SettingsState }): JSX.Element {
           className="mini ghost"
           onClick={() => {
             settingsDialog.close()
-            openConn()
+            openConnections()
           }}
         >
           {t('gui.set.chn.manage')}

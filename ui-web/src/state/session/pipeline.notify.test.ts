@@ -90,7 +90,7 @@ async function harness({ rows = [] as Row[], current = 'tui:open' as string | nu
     return Promise.resolve({})
   })
   const { setSources } = await import('../sources')
-  setSources({ composer: {}, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+  setSources({ composer: {}, rail: {}, transcript: {} } as unknown as Partial<Sources>)
   pipeline.installPipeline()
   return {
     pipeline,

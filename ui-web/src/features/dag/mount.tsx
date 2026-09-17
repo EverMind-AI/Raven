@@ -13,7 +13,7 @@ import { createRoot } from 'react-dom/client'
 
 import { t } from '../../i18n/t'
 import { add as sheetAdd, askingIn, remove as sheetRemove, watchAsking } from '../../state/sheetRack'
-import { Sheet } from './DagSheet'
+import { DagSheet } from './DagSheet'
 import { fromSnapshot } from './nodes'
 import * as store from './store'
 
@@ -79,7 +79,7 @@ function host(key: string): void {
        is refused with a warning. */
     setTimeout(() => root.unmount(), 0)
   })
-  root.render(<Sheet sess={key} host={el} onClose={() => drop(key)} />)
+  root.render(<DagSheet sess={key} host={el} onClose={() => drop(key)} />)
 }
 
 /* A graph arrives whole, before any node runs, so this is also the only moment

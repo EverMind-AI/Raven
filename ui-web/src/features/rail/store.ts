@@ -33,7 +33,7 @@ export function set(patch: Partial<RailState>): void {
   store.set((prev) => ({ ...prev, ...patch }))
 }
 
-export const source = (): RailSource => ds('sessions')
+export const source = (): RailSource => ds('rail')
 
 export function reconcileRows(
   previous: SessRow[],

@@ -285,7 +285,7 @@ export function visible(): PlaybookRow[] {
 }
 
 export function openPage(): void {
-  page.show('pbPage')
+  page.show('playbooksPage')
   void load()
 }
 

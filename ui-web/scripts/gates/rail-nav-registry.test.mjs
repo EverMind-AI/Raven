@@ -44,7 +44,7 @@ describe('the rail nav registry', () => {
     /* The seven the page has: the draft row, the two capability tabs, the three
        module rows and the fold that stands in for the pages inside it. */
     expect([...buttons].sort()).toEqual(
-      ['kbBtn', 'memBtn', 'moreBtn', 'newBtn', 'pbBtn', 'plugBtn', 'skillBtn'],
+      ['kbBtn', 'memoryBtn', 'moreBtn', 'newBtn', 'playbooksBtn', 'plugBtn', 'skillBtn'],
     )
   })
 

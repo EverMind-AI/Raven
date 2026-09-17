@@ -1,23 +1,53 @@
-/* The plugin tab's face on the capabilities page, and the hero above both.
+/* The plugins domain's side of the page: how the page reaches it, and the face
+ * it puts on the capabilities page.
+ *
+ * Opening the page on whichever of its two tabs is navigation -- "where the
+ * rail's button goes" -- and keeping it out of state/caps.ts leaves that store
+ * holding only what the page shows. The skeleton before the first load is the
+ * skills island's, appended into the shared body by hand: nothing is rendered
+ * in there until a draw, and an empty grid reads as "this install has no
+ * skills" rather than "this is loading".
  *
  * The island renders everything inside the shared body and the shared detail
- * drawer
- * (features/plugins/); what is here is the draw that puts the host there, the
- * chrome that draw decides, and the hero -- which covers BOTH tabs, which is
- * why it is the last step of either draw and why it reads the skill tab's own
- * view mirror (features/skills/tab.ts).
+ * drawer (features/plugins/); what is here is the draw that puts the host
+ * there, the chrome that draw decides, and the hero -- which covers BOTH tabs,
+ * which is why it is the last step of either draw and why it reads the skill
+ * tab's own view mirror (features/skills/wire.ts).
  *
- * The steps here are the outer half of a draw: state/caps.ts declares the
- * order the two tabs draw in and calls these.
+ * The draw steps are the outer half of a draw: state/caps.ts declares the order
+ * the two tabs draw in and calls these. `install()` is everything this used to
+ * do while the concatenated page script ran, in order.
  */
 
-import { view as skillView } from '../skills/tab'
 import { t } from '../../i18n/t'
-import { plugHost } from '../hosts'
-import * as plugins from './store'
 import * as caps from '../../state/caps'
 import * as page from '../../state/page'
 import { ds } from '../../state/sources'
+import { show as toast } from '../../state/toast'
+import { plugHost, skillsSkeletonHost } from '../hosts'
+import { view as skillView } from '../skills/wire'
+import * as plugins from './store'
+
+export async function openCaps(tab: caps.Tab): Promise<void> {
+  caps.extSet(tab)
+  page.show('capsPage')
+  const src = ds('capabilities')
+  if (src.loaded()) caps.draw()
+  else {
+    const box = document.getElementById('capsBody') as HTMLElement
+    box.innerHTML = ''
+    box.appendChild(skillsSkeletonHost)
+  }
+  try {
+    if (await src.load()) caps.draw()
+  } catch (e) {
+    toast(`加载失败：${(e as Error).message || String(e)}`)
+    caps.draw()
+  }
+}
+
+export const openSkills = (): Promise<void> => openCaps('skill')
+export const openPlugins = (): Promise<void> => openCaps('plugin')
 
 /* Which rows the rail's attention badge counts. Skills never block (they are
    method, not access), so a badge that says "something needs you" belongs to

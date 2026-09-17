@@ -7,7 +7,7 @@ import { plainTitle as stripTitle } from '../rail/title'
 import { instanceCtxStatus, toInstanceCtx } from './history'
 
 import type { ComposerSource } from '../composer/types'
-import type { AgentRow, AgentsSource, InstanceCtx, InstanceRow, OpenItem, SubagentRow } from './types'
+import type { AgentRow, InstanceCtx, InstanceRow, OpenItem, SubagentRow, SubagentsSource } from './types'
 import { panel } from '../../state/wsPanel'
 
 /* Page state, outside React on purpose: the legacy shell drives this view
@@ -84,7 +84,7 @@ function set(p: Partial<AgentsState>): void {
   clockSync()
 }
 
-export const source = (): AgentsSource => ds('agents')
+export const source = (): SubagentsSource => ds('subagents')
 
 /* Where a pane opened from this panel goes: the floating desk, when the page
    has one. Handed in (src/main.tsx) rather than imported from
@@ -1016,7 +1016,7 @@ export function paintAgentRecord(box: HTMLElement, row: AgentRow): void {
    flight has to move without being reopened, and its header has to change
    the moment the run does -- a detail page still saying "working" over a run
    the list already knows failed is the panel lying. */
-let hooked: AgentsSource | null = null
+let hooked: SubagentsSource | null = null
 const detailPollListeners = new Set<() => void>()
 
 export function subscribeDetailPoll(listener: () => void): () => void {
@@ -1026,7 +1026,7 @@ export function subscribeDetailPoll(listener: () => void): () => void {
 }
 
 export function hook(): void {
-  const src = sources.agents
+  const src = sources.subagents
   if (!src || !src.watch || src === hooked) return
   hooked = src
   src.watch(onPoll)

@@ -265,7 +265,7 @@ describe('forgetting a conversation subscription', () => {
       return Promise.resolve({})
     })
     const { setSources } = await import('../sources')
-    setSources({ composer: {}, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+    setSources({ composer: {}, rail: {}, transcript: {} } as unknown as Partial<Sources>)
     /* The two books the subscription used to be kept in, and the one field that
        said which stream painted the stage: all three are the conversation's own
        `subscriptionId` now, so they are read back off it. */

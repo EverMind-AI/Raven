@@ -12,7 +12,7 @@ import type { DomainManifest } from '../manifests'
    column is the page's furniture and the rows in it are this domain's. */
 export const manifest: DomainManifest = {
   domain: 'rail',
-  sources: ['sessions'],
+  sources: ['rail'],
   root: RailApp,
   host: 'list',
 }

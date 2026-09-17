@@ -583,20 +583,20 @@ export function clearConversation(): void {
 }
 
 /** Delete it, transcript and all. */
-export const remove = (s: SessRow): void => ds('sessions').remove?.(s)
+export const remove = (s: SessRow): void => ds('rail').remove?.(s)
 
 /** Hide it from the rail, with an undo. */
-export const archive = (s: SessRow): void => ds('sessions').archive?.(s)
+export const archive = (s: SessRow): void => ds('rail').archive?.(s)
 
 /** Pin it to the top of the rail. */
-export const pin = (id: string, pinned: boolean): void => ds('sessions').pin?.(id, pinned)
+export const pin = (id: string, pinned: boolean): void => ds('rail').pin?.(id, pinned)
 
 /** Persist a title the reader typed. */
 export const rename = (id: string, title: string, previous: string): void =>
-  ds('sessions').renamed?.(id, title, previous)
+  ds('rail').renamed?.(id, title, previous)
 
 /** Delete every conversation, from the settings page. */
-export const deleteAll = (): void => ds('sessions').deleteAll?.()
+export const deleteAll = (): void => ds('rail').deleteAll?.()
 
 /* ---- installs ---------------------------------------------------------- */
 

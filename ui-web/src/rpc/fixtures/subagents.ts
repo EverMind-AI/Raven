@@ -2,8 +2,8 @@
  * is talking to directly.
  *
  * Two tables, and they answer two different pages. `subagents.list` is the
- * external-agents roster (the xa island) and is a plain inventory; the instance
- * calls below it are the desk canvas's, and they are reached only through
+ * external-agents roster (the extAgents island) and is a plain inventory; the
+ * instance calls below it are the desk canvas's, and they are reached only through
  * `?desk-demo=1` -- which is why they are exported as an override group rather
  * than as part of the offline library. That entrance has always been applied
  * on the live page, and it still is: the group goes on whichever transport the

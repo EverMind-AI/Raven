@@ -19,7 +19,7 @@ import { mediaOf } from '../../state/session/runtime'
 import { agentStage } from '../transcript/mount'
 
 import type { AgentCtxLike } from '../transcript/store'
-import type { AgentsSource } from './types'
+import type { SubagentsSource } from './types'
 
 /* Every call here is addressed to the conversation on screen, and every caller
    is a panel that only exists inside one. */
@@ -29,7 +29,7 @@ const openKey = (): string => sessionCurrent() as string
    without being reopened, and there is no push for it. */
 let agentsWatch: (() => void) | null = null
 
-export const agentsSource: AgentsSource = {
+export const agentsSource: SubagentsSource = {
   /* Filtered on whether the agent can be dispatched, not on where it came
    from. It filtered `vendored` -- which is true of every agent that ships
    WITH raven -- so Raven-Code, Raven-PPT and Raven-Research were absent from

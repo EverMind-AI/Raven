@@ -22,7 +22,7 @@ import { offered } from './types'
 import type { ApiProtocol, Provider } from './types'
 import type { JSX } from 'react'
 
-export function ModelPickerApp(): JSX.Element | null {
+export function ModelApp(): JSX.Element | null {
   const at = useSyncExternalStore(store.subscribe, store.openAt)
   /* The language the page resolved, so a pick repaints this island: every word
      below is a t(key) read at render time (state/lang/store.ts). */

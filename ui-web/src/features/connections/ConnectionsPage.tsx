@@ -102,7 +102,7 @@ const APPLY: Record<string, string> = {
   matrix: 'https://app.element.io',
 }
 
-export function ConnApp(): JSX.Element {
+export function ConnectionsApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   /* The language the page resolved, so a pick repaints this island: every word
      below is a t(key) read at render time (state/lang/store.ts). */

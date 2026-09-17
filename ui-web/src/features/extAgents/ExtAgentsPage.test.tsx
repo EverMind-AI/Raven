@@ -2,7 +2,7 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { XaApp } from './XaPage'
+import { ExtAgentsApp } from './ExtAgentsPage'
 import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
@@ -12,7 +12,7 @@ import { resetSources, setSources, sources } from '../../state/sources'
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
-import type { XaActArgs, XaRow, XaSource } from './types'
+import type { ExtAgentActArgs, ExtAgentRow, ExtAgentsSource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -24,7 +24,7 @@ vi.mock('../../state/toast', () => ({
   },
 }))
 
-function row(over: Partial<XaRow> = {}): XaRow {
+function row(over: Partial<ExtAgentRow> = {}): ExtAgentRow {
   return {
     name: 'claude_code',
     preset: 'claude_code',
@@ -46,11 +46,11 @@ function row(over: Partial<XaRow> = {}): XaRow {
 
 /* The island runs against the same two seams production wires: a stand-in
    translator on setTranslator (it returns its key, so tests assert catalogue
-   keys, not translations) and a fixture source on sources.xa. */
-function install(rows: XaRow[], over: Partial<XaSource> = {}) {
-  const acts: Array<[string, string, XaActArgs]> = []
+   keys, not translations) and a fixture source on sources.extAgents. */
+function install(rows: ExtAgentRow[], over: Partial<ExtAgentsSource> = {}) {
+  const acts: Array<[string, string, ExtAgentActArgs]> = []
   const loads: boolean[] = []
-  const source: XaSource = {
+  const source: ExtAgentsSource = {
     load: async (probe) => {
       loads.push(!!probe)
       return rows
@@ -76,16 +76,16 @@ function install(rows: XaRow[], over: Partial<XaSource> = {}) {
   confirms.push(title)
   fn()
   })
-  setSources({ xa: source })
+  setSources({ extAgents: source })
   document.body.innerHTML =
-    '<section id="xaPage"><div id="xaBody"></div></section>' +
+    '<section id="extAgentsPage"><div id="extAgentsBody"></div></section>' +
     '<aside id="detail" data-open="false"><b id="dTitle">—</b><div id="dBody"></div></aside>' +
     '<div id="menu" data-open="false"></div>'
   return { source, acts, loads, toasts, confirms }
 }
 
 async function mount() {
-  const view = render(<XaApp />, { container: document.getElementById('xaBody')! })
+  const view = render(<ExtAgentsApp />, { container: document.getElementById('extAgentsBody')! })
   await act(async () => {
     store.open()
   })
@@ -191,7 +191,7 @@ afterEach(() => {
   resetSources()
 })
 
-describe('xa island', () => {
+describe('extAgents island', () => {
   /* Four groups, one per answer to "what would it take to use this". Two of
      them replaced a single "available" that held the switch worth one click
      and the CLI this machine has never had, in one list. Provenance is still a
@@ -270,7 +270,7 @@ describe('xa island', () => {
   it('prints no prose: no subtitle, no group hints, no descriptions on rows', async () => {
     install([row()])
     await mount()
-    const page = document.getElementById('xaPage')!
+    const page = document.getElementById('extAgentsPage')!
     /* The page is titled with its own name, the same one the rail row carries.
        It was a sentence about what the page is for -- "other agents Raven can
        hand work to" -- which is a subtitle wearing the title's slot. */
@@ -285,10 +285,10 @@ describe('xa island', () => {
     install([row({ configured: false })])
     await mount()
     expect(await screen.findByText('claude_code')).toBeTruthy()
-    expect([...document.querySelectorAll('#xaPage .sugrp .hd b')].map((b) => b.textContent)).toEqual([
+    expect([...document.querySelectorAll('#extAgentsPage .sugrp .hd b')].map((b) => b.textContent)).toEqual([
       'gui.agent.g_setup',
     ])
-    expect(document.querySelector('#xaPage .empty-note')).toBeNull()
+    expect(document.querySelector('#extAgentsPage .empty-note')).toBeNull()
   })
 
   /* The addable rows are still ordered by what connecting costs; what is gone is
@@ -296,8 +296,8 @@ describe('xa island', () => {
   it('does not caption the ordering', async () => {
     install([row(), row({ name: 'codex', configured: false })])
     await mount()
-    expect(document.querySelector('#xaPage .sugrp .hd .tool')).toBeNull()
-    expect(document.querySelector('#xaPage .free')).toBeNull()
+    expect(document.querySelector('#extAgentsPage .sugrp .hd .tool')).toBeNull()
+    expect(document.querySelector('#extAgentsPage .free')).toBeNull()
   })
 
   /* No re-check button: opening the page re-measures availability, which is
@@ -313,9 +313,9 @@ describe('xa island', () => {
       row({ name: 'not_here', configured: false, probe_status: 'missing' }),
     ])
     await mount()
-    expect(document.querySelectorAll('#xaPage .sugrp').length).toBe(3)
-    expect([...document.querySelectorAll('#xaPage .sugrp .hd button')].map((b) => b.className)).toEqual(['gfold'])
-    expect(document.querySelector('#xaPage')!.textContent).not.toContain('gui.agent.probe')
+    expect(document.querySelectorAll('#extAgentsPage .sugrp').length).toBe(3)
+    expect([...document.querySelectorAll('#extAgentsPage .sugrp .hd button')].map((b) => b.className)).toEqual(['gfold'])
+    expect(document.querySelector('#extAgentsPage')!.textContent).not.toContain('gui.agent.probe')
   })
 
   it('re-measures availability every time the page opens', async () => {
@@ -512,7 +512,7 @@ describe('xa island', () => {
       await expandGroup('gui.agent.g_install')
       expect(rowsOf().map((r) => r.querySelector('.sufacts'))).toEqual([null, null, null, null])
       expect(subOf('broken')).toBeNull()
-      expect(document.querySelector('#xaPage')!.textContent).not.toContain('codex: not found')
+      expect(document.querySelector('#extAgentsPage')!.textContent).not.toContain('codex: not found')
     })
 
     it('still colours the dot from the probe verdict, for what is connected', async () => {
@@ -539,7 +539,7 @@ describe('xa island', () => {
       await expandGroup('gui.agent.g_install')
       expect(dotOf('needs_key')).toBe('led off')
       expect(dotOf('unbuilt')).toBe('led off')
-      expect([...document.querySelectorAll('#xaPage .surow.bad')]).toEqual([])
+      expect([...document.querySelectorAll('#extAgentsPage .surow.bad')]).toEqual([])
     })
 
     /* Where an agent came from changes nothing about using it, and both the row
@@ -1089,7 +1089,7 @@ describe('xa island', () => {
        ordinary result, which would repaint the card as though the running test
        had answered. */
     it('drops a second call rather than sending one the server would refuse', async () => {
-      const acts: Array<[string, string, XaActArgs]> = []
+      const acts: Array<[string, string, ExtAgentActArgs]> = []
       let settle = (): void => {}
       const only = row()
       install([only], {
@@ -1112,7 +1112,7 @@ describe('xa island', () => {
 
     it('offers stop only while one is running, and cancels through it', async () => {
       let settle = (): void => {}
-      const acts: Array<[string, string, XaActArgs]> = []
+      const acts: Array<[string, string, ExtAgentActArgs]> = []
       install([row()], {
         act: async (op, r, args) => {
           acts.push([op, r.name, args || {}])
@@ -1449,7 +1449,7 @@ describe('xa island', () => {
     ])
     await mount()
     await screen.findByText('claude_code')
-    expect(domSnapshot(document.getElementById('xaBody')!)).toMatchSnapshot()
+    expect(domSnapshot(document.getElementById('extAgentsBody')!)).toMatchSnapshot()
   })
 
   it('keeps its rendered shape, card', async () => {

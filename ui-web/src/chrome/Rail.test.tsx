@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs'
 
 import * as knowledge from '../features/knowledge/store'
 import * as memory from '../features/memory/store'
-import * as nav from '../features/plugins/nav'
+import * as nav from '../features/plugins/wire'
 import * as playbooks from '../features/playbooks/store'
 import * as settings from '../features/settings/store'
 import * as lang from '../state/lang'
@@ -83,7 +83,7 @@ describe('the rail', () => {
     render()
     for (const id of [
       'railBtn', 'findBtn',
-      'newBtn', 'skillBtn', 'plugBtn', 'pbBtn', 'kbBtn', 'memBtn', 'moreFly', 'moreBtn',
+      'newBtn', 'skillBtn', 'plugBtn', 'playbooksBtn', 'kbBtn', 'memoryBtn', 'moreFly', 'moreBtn',
       'findBox', 'sfind', 'sclr', 'list',
       'upnote', 'meBtn', 'meSub', 'meKbd', 'railGrip',
     ]) {
@@ -123,14 +123,14 @@ describe('the rail', () => {
     for (const id of ['list', 'moreFly', 'meSub', 'meKbd']) {
       expect(el(id).childNodes, id).toHaveLength(0)
     }
-    for (const id of ['newBtn', 'skillBtn', 'plugBtn', 'pbBtn', 'kbBtn', 'memBtn', 'moreBtn']) {
+    for (const id of ['newBtn', 'skillBtn', 'plugBtn', 'playbooksBtn', 'kbBtn', 'memoryBtn', 'moreBtn']) {
       expect(el(id).getAttribute('aria-current'), id).toBe(null)
     }
   })
 
   it('renders a literal in every element that carried one', () => {
     render()
-    for (const sel of ['#newBtn span', '#skillBtn span', '#plugBtn span', '#pbBtn span', '#kbBtn span', '#memBtn span', '.l-more', '.l-less', '#upnote .t', '#upnote .rl', '.me .who .n']) {
+    for (const sel of ['#newBtn span', '#skillBtn span', '#plugBtn span', '#playbooksBtn span', '#kbBtn span', '#memoryBtn span', '.l-more', '.l-less', '#upnote .t', '#upnote .rl', '.me .who .n']) {
       expect(document.querySelector(sel)?.textContent, sel).not.toBe('')
     }
   })
@@ -153,7 +153,7 @@ describe('the rail', () => {
      all, is invisible to a test that clicks a single one. */
   it('opens the page each row names', () => {
     render()
-    for (const id of ['skillBtn', 'plugBtn', 'pbBtn', 'kbBtn', 'memBtn', 'meBtn']) {
+    for (const id of ['skillBtn', 'plugBtn', 'playbooksBtn', 'kbBtn', 'memoryBtn', 'meBtn']) {
       act(() => {
         el(id).click()
       })
@@ -189,7 +189,7 @@ describe('the rail', () => {
    is. */
 describe('the rail once a language is applied', () => {
   it('renders the applied words when the column is mounted again', () => {
-    const KEYED = ['#newBtn span', '#skillBtn span', '#plugBtn span', '#pbBtn span', '#kbBtn span', '#memBtn span', '.l-more', '.l-less', '#upnote .t', '#upnote .rl', '.me .who .n']
+    const KEYED = ['#newBtn span', '#skillBtn span', '#plugBtn span', '#playbooksBtn span', '#kbBtn span', '#memoryBtn span', '.l-more', '.l-less', '#upnote .t', '#upnote .rl', '.me .who .n']
     const words = (): string[] => KEYED.map((sel) => document.querySelector(sel)?.textContent ?? '')
     const hint = (): string => (el('sfind') as HTMLInputElement).placeholder
     render()

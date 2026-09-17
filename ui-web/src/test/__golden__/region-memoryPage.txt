@@ -1,0 +1,5 @@
+section#memoryPage.page[data-i18n-aria=gui.mem.hero][data-open=false]
+  header
+    h2[data-i18n=gui.nav.mem]
+  div.work
+    div#memoryBody.wrap

@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ModelPickerApp } from './ModelPicker'
+import { ModelApp } from './ModelPicker'
 import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
@@ -75,7 +75,7 @@ function install(over: Partial<ModelSource> = {}, providers = PROVIDERS): Harnes
   return h
 }
 
-const mount = () => render(<ModelPickerApp />, { container: document.body.appendChild(document.createElement('div')) })
+const mount = () => render(<ModelApp />, { container: document.body.appendChild(document.createElement('div')) })
 
 const pick = (): HTMLElement | null => document.querySelector('.mpick')
 const rows = (col: string): HTMLElement[] => [...document.querySelectorAll<HTMLElement>(`.mpick .${col} .row`)]

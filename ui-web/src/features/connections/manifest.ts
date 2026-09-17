@@ -4,13 +4,13 @@
  * by the two gates that hold the page's tables complete
  * (scripts/gates/domain-shape.test.mjs, domain-registration.test.mjs).
  */
-import { ConnApp } from './ConnPage'
+import { ConnectionsApp } from './ConnectionsPage'
 
 import type { DomainManifest } from '../manifests'
 
 export const manifest: DomainManifest = {
   domain: 'connections',
-  page: 'connPage',
-  sources: ['conn'],
-  root: ConnApp,
+  page: 'connectionsPage',
+  sources: ['connections'],
+  root: ConnectionsApp,
 }

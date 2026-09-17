@@ -35,7 +35,7 @@ async function harness() {
   })
   await fakeGateway(() => Promise.resolve({}))
   const { setSources, sources } = await import('../../state/sources')
-  setSources({ composer: { slash: [] }, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+  setSources({ composer: { slash: [] }, rail: {}, transcript: {} } as unknown as Partial<Sources>)
   wiring.installSources()
   /* The interval is opened with the push handlers, so the clock has to be fake
      before they install. */
@@ -51,7 +51,7 @@ describe('the sub-agent heartbeat', () => {
     const { sources } = await harness()
     const beat = vi.fn()
 
-    sources.agents!.watch!(beat)
+    sources.subagents!.watch!(beat)
     await vi.advanceTimersByTimeAsync(2000)
     expect(beat).toHaveBeenCalledTimes(1)
 
@@ -66,7 +66,7 @@ describe('the sub-agent heartbeat', () => {
 
     await vi.advanceTimersByTimeAsync(6000)
     const beat = vi.fn()
-    sources.agents!.watch!(beat)
+    sources.subagents!.watch!(beat)
     await vi.advanceTimersByTimeAsync(2000)
 
     expect(beat).toHaveBeenCalledTimes(1)

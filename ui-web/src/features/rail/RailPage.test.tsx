@@ -47,7 +47,7 @@ interface Harness {
 
 /* The island runs against the same two seams production wires: a stand-in
    translator on setTranslator (it returns its key, so tests assert catalogue
-   keys) and a snapshot source on sources.sessions. */
+   keys) and a snapshot source on sources.rail. */
 function install(over: Partial<RailSnapshot> = {}): Harness {
   const state: RailSnapshot = { rows: [row()], cur: 'a', busy: false, ...over }
   const calls: Array<[string, unknown]> = []
@@ -63,7 +63,7 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
     state.cur = id
     store.draw()
   })
-  setSources({ sessions: {
+  setSources({ rail: {
     snapshot: () => state,
     replace: (rows: SessRow[]) => { state.rows = rows },
     open: (s: SessRow) => calls.push(['openSession', s.id]),
@@ -71,7 +71,7 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
   document.body.innerHTML =
     '<div class="app" data-page="off">' +
     '<button id="newBtn"></button><button id="skillBtn"></button>' +
-    '<button id="plugBtn"></button><button id="memBtn"></button><button id="moreBtn"></button>' +
+    '<button id="plugBtn"></button><button id="memoryBtn"></button><button id="moreBtn"></button>' +
     '<div id="moreFly" data-open="false"></div>' +
     PAGES.map(p => `<div id="${p}" data-open="false"></div>`).join('') +
     '<div id="list"></div><h1 id="title">t</h1><button id="renameBtn"></button></div>'
@@ -79,18 +79,18 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
 }
 
 /* The installed source, for the cases that add a write verb to it. */
-const src = (): RailSource => sources.sessions as RailSource
+const src = (): RailSource => sources.rail as RailSource
 
 /* The nav the assembled page hands over (demo/155-bridge.js reads it off
    NAV_OF and MORE_ROWS): every module page, the rail button each one lights
    up, and the More group's rows in their drawn order. The default fake above
    hands over an empty one, which is the whole page shut. */
-const PAGES = ['capsPage', 'xaPage', 'connPage', 'memPage', 'cronPage']
+const PAGES = ['capsPage', 'extAgentsPage', 'connectionsPage', 'memoryPage', 'cronPage']
 const BTN_OF: Record<string, string> = {
   capsPage: 'skillBtn',
-  xaPage: 'moreBtn',
-  connPage: 'moreBtn',
-  memPage: 'memBtn',
+  extAgentsPage: 'moreBtn',
+  connectionsPage: 'moreBtn',
+  memoryPage: 'memoryBtn',
   cronPage: 'moreBtn'
 }
 
@@ -315,7 +315,7 @@ describe('rail island', () => {
     const host = mount()
     expect(screen.getByText('GTM research')).toBeTruthy()
     setSources({
-      sessions: {
+      rail: {
         snapshot: () => {
           throw new Error('gone')
         }
@@ -673,16 +673,16 @@ describe('rail island', () => {
     /* Nothing covering the chat and no session: the draft row is current. */
     act(() => store.markNew())
     expect(current('newBtn')).toBe('true')
-    navUp('memPage')
+    navUp('memoryPage')
     act(() => store.markNew())
-    expect(current('memBtn')).toBe('true')
+    expect(current('memoryBtn')).toBe('true')
     expect(current('newBtn')).toBe('false')
     /* The capabilities page lights whichever capability button is showing;
        btnOf is the shell's answer, not a table the island keeps. */
     navUp('capsPage')
     act(() => store.markNew())
     expect(current('skillBtn')).toBe('true')
-    expect(current('memBtn')).toBe('false')
+    expect(current('memoryBtn')).toBe('false')
   })
 
   it('hands the mark to the More row while the group is open, and takes it back when folded', () => {
@@ -694,7 +694,8 @@ describe('rail island', () => {
     fly.dataset.open = 'true'
     act(() => store.markNew())
     const rows = [...fly.querySelectorAll('.navi')].map(b => b.getAttribute('aria-current'))
-    /* morePages is [xa, conn, cron]: the third row is the page that is up. */
+    /* morePages is [extAgents, connections, cron]: the third row is the page
+       that is up. */
     expect(rows).toEqual(['false', 'false', 'true'])
     expect(current('moreBtn')).toBe('false')
     /* Folded, the group has to stand in for the page it hides. */

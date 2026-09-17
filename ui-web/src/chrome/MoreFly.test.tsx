@@ -78,7 +78,7 @@ describe('the more flyout', () => {
    everything after it. */
 describe('the more flyout once a language is applied', () => {
   it('renders the applied words, and leaves the mark and the fold alone', () => {
-    document.getElementById('connPage')!.dataset.open = 'true'
+    document.getElementById('connectionsPage')!.dataset.open = 'true'
     navfly.draw()
     /* The state the rows are in before the flip: the middle page is the one
        that is up, and the group has been unfolded by its own writer. */

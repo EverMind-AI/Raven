@@ -33,6 +33,7 @@ import { manifest as connections } from './connections/manifest'
 import { manifest as cron } from './cron/manifest'
 import { manifest as dag } from './dag/manifest'
 import { manifest as desk } from './desk/manifest'
+import { manifest as extAgents } from './extAgents/manifest'
 import { manifest as installed } from './installed/manifest'
 import { manifest as knowledge } from './knowledge/manifest'
 import { manifest as memory } from './memory/manifest'
@@ -46,7 +47,6 @@ import { manifest as skills } from './skills/manifest'
 import { manifest as subagents } from './subagents/manifest'
 import { manifest as transcript } from './transcript/manifest'
 import { manifest as workspace } from './workspace/manifest'
-import { manifest as xa } from './xa/manifest'
 
 import type { PageId } from '../state/pages'
 import type { Sources } from '../state/sources'
@@ -76,6 +76,7 @@ export const MANIFESTS: readonly DomainManifest[] = [
   cron,
   dag,
   desk,
+  extAgents,
   installed,
   knowledge,
   memory,
@@ -89,5 +90,4 @@ export const MANIFESTS: readonly DomainManifest[] = [
   subagents,
   transcript,
   workspace,
-  xa,
 ]

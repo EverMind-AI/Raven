@@ -1,6 +1,6 @@
 /* The external-agents page's rows and its DataSource contract. The row is
  * what both sources answer: the fixture in demo/120-capabilities.js and the
- * `subagents.*` mapper in features/xa/source.ts.
+ * `subagents.*` mapper in features/extAgents/source.ts.
  *
  * Three facts, deliberately kept apart: `configured` is "Raven knows about
  * it", `enabled` is "Raven may dispatch to it", and `probe_status` is "the
@@ -8,14 +8,14 @@
  * reads as broken, or a missing binary reads as switched off.
  */
 
-export type XaKind = 'builtin' | 'cli' | 'acp' | 'openai'
+export type ExtAgentKind = 'builtin' | 'cli' | 'acp' | 'openai'
 
-export type XaProbe = 'ready' | 'attention' | 'unknown' | 'missing'
+export type ExtAgentProbe = 'ready' | 'attention' | 'unknown' | 'missing'
 
-export interface XaRow {
+export interface ExtAgentRow {
   name: string
   preset?: string
-  kind: XaKind | string
+  kind: ExtAgentKind | string
   configured: boolean
   /* A built-in agent is this process. It has no row to write, which is why
      `configured` is false on one and why the connect paths below leave it out:
@@ -34,7 +34,7 @@ export interface XaRow {
      compatibility. */
   building?: boolean
   enabled: boolean
-  probe_status: XaProbe | string
+  probe_status: ExtAgentProbe | string
   probe_detail: string
   has_api_key: boolean
   description: string
@@ -52,16 +52,16 @@ export interface XaRow {
    cancel are the odd pair: they write nothing the reader asked for and answer
    a question instead. They are here rather than on a row for that reason, and
    they live in the card. Remove is still gone with the buttons that named it. */
-export type XaOp = 'build' | 'connect' | 'migrate' | 'test' | 'test_cancel' | 'toggle' | 'update'
+export type ExtAgentOp = 'build' | 'connect' | 'migrate' | 'test' | 'test_cancel' | 'toggle' | 'update'
 
-export interface XaActArgs {
+export interface ExtAgentActArgs {
   new_name?: string
   description?: string
   api_key?: string
   enabled?: boolean
 }
 
-export interface XaSource {
-  load(probe?: boolean): Promise<XaRow[]>
-  act(op: XaOp, row: XaRow, args?: XaActArgs): Promise<XaRow[]>
+export interface ExtAgentsSource {
+  load(probe?: boolean): Promise<ExtAgentRow[]>
+  act(op: ExtAgentOp, row: ExtAgentRow, args?: ExtAgentActArgs): Promise<ExtAgentRow[]>
 }

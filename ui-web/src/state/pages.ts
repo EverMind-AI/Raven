@@ -47,12 +47,12 @@ export interface ModulePage {
    rather than seven shapes of one row each. */
 const DECLARED = [
   { id: 'capsPage', bodyId: 'capsBody', navButtons: ['skillBtn', 'plugBtn'], escapeRank: 5, own: true },
-  { id: 'xaPage', bodyId: 'xaBody', navButtons: ['moreBtn'], escapeRank: 6, head: 'gui.page.agents', aria: 'gui.page.agents' },
-  { id: 'connPage', bodyId: 'connBody', navButtons: ['moreBtn'], escapeRank: 7, head: 'gui.page.conn', aria: 'gui.page.conn' },
+  { id: 'extAgentsPage', bodyId: 'extAgentsBody', navButtons: ['moreBtn'], escapeRank: 6, head: 'gui.page.agents', aria: 'gui.page.agents' },
+  { id: 'connectionsPage', bodyId: 'connectionsBody', navButtons: ['moreBtn'], escapeRank: 7, head: 'gui.page.conn', aria: 'gui.page.conn' },
   /* The memory page is announced by its hero's phrase rather than by its
      heading, which is why the two keys differ. */
-  { id: 'memPage', bodyId: 'memBody', navButtons: ['memBtn'], escapeRank: 2, head: 'gui.nav.mem', aria: 'gui.mem.hero' },
-  { id: 'pbPage', bodyId: 'pbBody', navButtons: ['pbBtn'], escapeRank: 3, head: 'gui.nav.pb', aria: 'gui.nav.pb' },
+  { id: 'memoryPage', bodyId: 'memoryBody', navButtons: ['memoryBtn'], escapeRank: 2, head: 'gui.nav.mem', aria: 'gui.mem.hero' },
+  { id: 'playbooksPage', bodyId: 'playbooksBody', navButtons: ['playbooksBtn'], escapeRank: 3, head: 'gui.nav.pb', aria: 'gui.nav.pb' },
   { id: 'kbPage', bodyId: 'kbBody', navButtons: ['kbBtn'], escapeRank: 4, head: 'gui.nav.kb', aria: 'gui.nav.kb' },
   { id: 'cronPage', bodyId: 'cronBody', navButtons: ['moreBtn'], escapeRank: 1, head: 'gui.page.cron', aria: 'gui.page.cron' },
 ] as const satisfies readonly ModulePage[]

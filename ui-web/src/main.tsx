@@ -7,11 +7,11 @@ import * as composer from './features/composer/mount'
 import * as sheets from './state/sheetRack'
 import * as dagSheet from './features/dag/mount'
 import { installLinkTrap } from './features/browser/store'
-import { ModelPickerApp } from './features/model/ModelPicker'
-import { PlugApp } from './features/plugins/PluginsPage'
+import { ModelApp } from './features/model/ModelPicker'
+import { PluginsApp } from './features/plugins/PluginsPage'
 import * as rail from './features/rail/store'
 import { Skeleton as SkillsSkeleton, SkillsApp } from './features/skills/SkillsPage'
-import { WsApp } from './features/workspace/WorkspacePage'
+import { WorkspaceApp } from './features/workspace/WorkspacePage'
 import { DeskApp } from './features/desk/DeskApp'
 import * as desk from './features/desk/store'
 import * as workspace from './features/workspace/store'
@@ -23,9 +23,9 @@ import * as session from './lib/session'
 import { plugHost, skillsHost, skillsSkeletonHost } from './features/hosts'
 import { MANIFESTS } from './features/manifests'
 import { pageOf } from './state/pages'
-import * as pluginsTab from './features/plugins/tab'
-import * as settingsChrome from './features/settings/chrome'
-import * as skillsTab from './features/skills/tab'
+import * as pluginsTab from './features/plugins/wire'
+import * as settingsChrome from './features/settings/wire'
+import * as skillsTab from './features/skills/wire'
 import { boot } from './app/boot'
 import { installComposerPalette } from './app/install'
 import * as langEffects from './state/lang/effects'
@@ -124,7 +124,7 @@ find.install()
    standing layers belongs: this one shares its `--z` step with the two composer
    popovers, and being appended before them is the whole of what puts it under
    them. */
-createRoot(portals.host('picker')).render(<ModelPickerApp />)
+createRoot(portals.host('picker')).render(<ModelApp />)
 
 /* Every island whose root goes into a box the page renders, from the one
    declaration each domain makes (features/manifests.ts): the page's own body
@@ -153,9 +153,9 @@ createRoot(skillsSkeletonHost).render(<>{Array.from({ length: 6 }, (_, i) => <Sk
    and browser tabs draw into it through their own island roots, so the
    workspace root exists only while a workspace view is up (see
    workspace/store.draw). */
-workspace.setRenderer(() => createElement(WsApp))
+workspace.setRenderer(() => createElement(WorkspaceApp))
 
-createRoot(plugHost).render(<PlugApp />)
+createRoot(plugHost).render(<PluginsApp />)
 
 /* The one data entry point, installed before anything can ask for it. Every
    mode has one now: a page served by a raven gets the socket, and a page opened

@@ -658,9 +658,9 @@ describe('the playbook library', () => {
   it('opens through the shell page registry, so the rail lights up', () => {
     install()
     store.openPage()
-    expect(pages).toEqual(['pbPage'])
+    expect(pages).toEqual(['playbooksPage'])
     store.closePage()
-    expect(pages).toEqual(['pbPage', null])
+    expect(pages).toEqual(['playbooksPage', null])
   })
 
   it('keeps its rendered shape, library', async () => {

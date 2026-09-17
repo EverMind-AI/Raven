@@ -18,7 +18,7 @@ import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as pageStore from '../../state/page'
 import * as confirmStore from '../../state/confirm'
 import { installWsPanel } from '../../test/wsPanelHarness'
-import type { AgentsSource } from '../subagents/types'
+import type { SubagentsSource } from '../subagents/types'
 import type { TranscriptSource } from '../transcript/types'
 import type { DagRun } from './types'
 
@@ -33,7 +33,7 @@ function wire(): void {
   vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
   setSources({
     transcript: { openDagNode: (runId: string, nodeId: string) => opened.push([runId, nodeId]) } as unknown as TranscriptSource,
-    agents: {} as unknown as AgentsSource,
+    subagents: {} as unknown as SubagentsSource,
   })
   document.body.innerHTML =
     '<div class="chat"><div class="dock"><div class="sheets" id="sheetRack"></div>'

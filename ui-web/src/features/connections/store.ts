@@ -2,7 +2,7 @@ import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
 import { show as toast } from '../../state/toast'
 
-import type { ConnChannel, ConnSource } from './types'
+import type { ConnChannel, ConnectionsSource } from './types'
 import * as page from '../../state/page'
 import { makeStore } from '../../state/store'
 
@@ -23,7 +23,7 @@ export interface ConnState {
      inputs start from the row's current values. */
   epoch: number
   /* Whether anything is running that could host an adapter (see
-     ConnSource.hostRunning). Undefined until a source that answers has been
+     ConnectionsSource.hostRunning). Undefined until a source that answers has been
      asked. */
   host?: boolean
 }
@@ -37,7 +37,7 @@ export function set(patch: Partial<ConnState>): void {
   store.set((prev) => ({ ...prev, ...patch }))
 }
 
-export const source = (): ConnSource => ds('conn')
+export const source = (): ConnectionsSource => ds('connections')
 
 export async function refresh(initial = false): Promise<void> {
   try {

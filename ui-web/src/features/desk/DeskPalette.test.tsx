@@ -21,7 +21,7 @@ import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
 import { installWsPanel } from '../../test/wsPanelHarness'
-import type { AgentsSource, InstanceRow } from '../subagents/types'
+import type { InstanceRow, SubagentsSource } from '../subagents/types'
 import type { WorkspaceSource, WsChange } from '../workspace/types'
 
 /* The wiring src/main.tsx does: the desk's file opener is handed to the
@@ -74,7 +74,7 @@ function wire(): void {
     workspace: source,
     /* The agents tab counts the instances this session started, so the harness
        answers for them the way the live source does. */
-    agents: {
+    subagents: {
       list: async () => [],
       instances: async (key: string) => { asked.push(key); return agentRows },
     },
@@ -237,7 +237,7 @@ describe('a tab with nothing in it', () => {
   })
 
   it('says so in the same shape when the server does not report the work', async () => {
-    setSources({ agents: { list: async () => [], instances: async () => [], absent: () => true } as unknown as AgentsSource })
+    setSources({ subagents: { list: async () => [], instances: async () => [], absent: () => true } as unknown as SubagentsSource })
     render(<DeskPalette />)
     await act(async () => { desk.set({ paletteOpen: true, tab: 'agents' }) })
     await act(async () => { await agents.refreshInstances(true) })

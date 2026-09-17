@@ -29,10 +29,10 @@
 import { busy as turnBusy } from '../features/composer/turn'
 import * as connections from '../features/connections/store'
 import * as cron from '../features/cron/store'
+import * as extAgents from '../features/extAgents/store'
 import * as knowledge from '../features/knowledge/store'
 import * as memory from '../features/memory/store'
 import * as playbooks from '../features/playbooks/store'
-import * as xa from '../features/xa/store'
 import * as caps from './caps'
 import * as detail from './detail'
 import { close as closeImage, isOpen as imageOpen } from './lightbox'
@@ -68,10 +68,10 @@ const cancels = (id: string) => (): void => { document.getElementById(id)?.click
    silence. The verb is the domain's; the order is the table's. */
 const CLOSERS: Record<PageId, () => void> = {
   capsPage: caps.close,
-  xaPage: () => xa.close(),
-  connPage: () => connections.close(),
-  memPage: () => memory.close(),
-  pbPage: () => playbooks.closePage(),
+  extAgentsPage: () => extAgents.close(),
+  connectionsPage: () => connections.close(),
+  memoryPage: () => memory.close(),
+  playbooksPage: () => playbooks.closePage(),
   kbPage: () => knowledge.close(),
   cronPage: () => cron.close(),
 }

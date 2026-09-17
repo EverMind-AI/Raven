@@ -2,7 +2,7 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { WsApp } from './WorkspacePage'
+import { WorkspaceApp } from './WorkspacePage'
 import * as deliveries from './deliveries'
 import * as store from './store'
 
@@ -89,7 +89,7 @@ function install(ws: WorkspaceSnapshot, over: Partial<WorkspaceSource> = {}, vie
 }
 
 async function mount() {
-  const view = render(<WsApp />, { container: document.getElementById('wsBody')! })
+  const view = render(<WorkspaceApp />, { container: document.getElementById('wsBody')! })
   await act(async () => {
     store.sync()
   })

@@ -24,7 +24,7 @@ import { installWsPanel } from '../../test/wsPanelHarness'
 import * as pageStore from '../../state/page'
 import type { JSX } from 'react'
 import type { ComposerSource } from '../composer/types'
-import type { AgentCtx, AgentRow, AgentsSource, DirectTurn, InstanceRow, SubagentRow } from './types'
+import type { AgentCtx, AgentRow, DirectTurn, InstanceRow, SubagentRow, SubagentsSource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -43,9 +43,9 @@ store.setAgentPane(deskPane)
 
 /* The island runs against the same two seams production wires up: a stand-in
    translator on setTranslator (it returns its key) and a source on
-   sources.agents -- the fixture shape for offline behaviour, list/context/node
+   sources.subagents -- the fixture shape for offline behaviour, list/context/node
    for live behaviour. */
-function wire(source: AgentsSource): void {
+function wire(source: SubagentsSource): void {
   paints.length = 0
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
   installWsPanel({ view: () => ({ tab: 'agents', open: true, picked: true }) })
@@ -57,13 +57,13 @@ function wire(source: AgentsSource): void {
     paints.push({ ctx, opts })
     box.appendChild(document.createElement('p'))
   }
-  setSources({ agents: source })
+  setSources({ subagents: source })
   document.body.innerHTML =
     '<span id="wsAgentRun" hidden></span><div class="ws-body" id="wsBody" data-view="agents"></div>'
 }
 
-function rows(items: AgentRow[], over: Partial<AgentsSource> = {}): AgentsSource {
-  const source: AgentsSource = { list: async () => items, ...over }
+function rows(items: AgentRow[], over: Partial<SubagentsSource> = {}): SubagentsSource {
+  const source: SubagentsSource = { list: async () => items, ...over }
   wire(source)
   return source
 }
@@ -77,8 +77,8 @@ function inst(over: Partial<InstanceRow> & { handle: string }): InstanceRow {
 
 /* The panel drawing instances rather than runs: `list` still answers, because a
    run detail opened from the conversation reads its header off that list. */
-function instances(items: InstanceRow[], over: Partial<AgentsSource> = {}): AgentsSource {
-  const source: AgentsSource = { list: async () => [], instances: async () => items, ...over }
+function instances(items: InstanceRow[], over: Partial<SubagentsSource> = {}): SubagentsSource {
+  const source: SubagentsSource = { list: async () => [], instances: async () => items, ...over }
   wire(source)
   return source
 }
@@ -289,7 +289,7 @@ describe('subagents island, the list', () => {
 
   /* One roster of four, so a single mount can say which agents get the button
      and which do not. `hermes` is the only one that can hold a direct chat. */
-  function startable(over: Partial<AgentsSource> = {}): AgentsSource {
+  function startable(over: Partial<SubagentsSource> = {}): SubagentsSource {
     const roster = [
       { name: 'hermes', enabled: true, stateful: true },
       { name: 'mute', enabled: true, stateful: false },
@@ -957,7 +957,7 @@ describe('subagents island, an instance detail', () => {
     expect(document.querySelector('.satx .wsempty')).toBeNull()
   })
 
-  async function openInstance(row: InstanceRow, over: Partial<AgentsSource> = {}): Promise<void> {
+  async function openInstance(row: InstanceRow, over: Partial<SubagentsSource> = {}): Promise<void> {
     instances([row], { instanceHistory: async () => ({ turns: [] }), ...over })
     await mount()
     await act(async () => {
@@ -1453,7 +1453,7 @@ describe('subagents island, an instance detail', () => {
   /* Alpha open, of two resumable rows, with `instanceSend` under the test's
      control. The refusal wording is true of one instance and a lie about any
      other, so where it is shown is the whole point. */
-  async function alphaRefusing(send: AgentsSource['instanceSend']): Promise<void> {
+  async function alphaRefusing(send: SubagentsSource['instanceSend']): Promise<void> {
     instances(
       [
         inst({ handle: 'alpha', status: 'running', resumable: true }),

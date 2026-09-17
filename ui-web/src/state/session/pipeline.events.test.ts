@@ -136,7 +136,7 @@ async function harness({
   const pipeline = (await import('./pipeline')) as Pipeline
   await fakeGateway(() => Promise.resolve({ sessions: [] }))
   const { setSources } = await import('../sources')
-  setSources({ composer: {}, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+  setSources({ composer: {}, rail: {}, transcript: {} } as unknown as Partial<Sources>)
   const registry = await import('./registry')
   const runtime = await import('./runtime')
   /* The two page-level objects the turn used to live on, as the conversation

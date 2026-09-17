@@ -43,7 +43,7 @@ const anyRunning = (d: DagRun): boolean => [...d.nodes.values()].some((n) => n.s
    host, and the host belongs to mount.tsx. Folding is a store action for the
    opposite reason: the flag rides on the run, so it survives the reader
    switching conversations and coming back. */
-export function Sheet({ sess, host, onClose }: { sess: string; host: HTMLElement; onClose: () => void }): JSX.Element | null {
+export function DagSheet({ sess, host, onClose }: { sess: string; host: HTMLElement; onClose: () => void }): JSX.Element | null {
   useSyncExternalStore(store.subscribe, store.version)
   const sub = useSyncExternalStore(subSubscribe, subState)
   const d = store.run(sess)

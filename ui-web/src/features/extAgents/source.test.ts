@@ -6,18 +6,18 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { resetXaSeen, xaFetch, xaRowOf, xaSource } from './source'
+import { resetExtAgentsSeen, extAgentsFetch, extAgentRowOf, extAgentsSource } from './source'
 import { FixtureTransport } from '../../rpc/fixtureTransport'
 import { setGateway } from '../../rpc/gateway'
 
-import type { XaRowWire } from './source'
-import type { XaRow } from './types'
+import type { ExtAgentRowWire } from './source'
+import type { ExtAgentRow } from './types'
 
-const wire = (over: Partial<XaRowWire>): XaRowWire => ({ name: 'codex', ...over } as XaRowWire)
+const wire = (over: Partial<ExtAgentRowWire>): ExtAgentRowWire => ({ name: 'codex', ...over } as ExtAgentRowWire)
 
 /* A transport whose `subagents.list` answers from a queue, so a test can play
    a probing read and the probe-less read that follows it. */
-function listing(...answers: XaRowWire[][]): { probes: boolean[] } {
+function listing(...answers: ExtAgentRowWire[][]): { probes: boolean[] } {
   const probes: boolean[] = []
   const transport = new FixtureTransport({})
   transport.call = (async (method: string, params: { probe?: boolean }) => {
@@ -30,37 +30,37 @@ function listing(...answers: XaRowWire[][]): { probes: boolean[] } {
 }
 
 beforeEach(() => {
-  resetXaSeen()
+  resetExtAgentsSeen()
   vi.restoreAllMocks()
 })
 
 describe('one agent row', () => {
   it('names its kind from the flag when the server sends none', () => {
-    expect(xaRowOf(wire({ builtin: true })).kind).toBe('builtin')
-    expect(xaRowOf(wire({})).kind).toBe('cli')
-    expect(xaRowOf(wire({ kind: 'acp' })).kind).toBe('acp')
+    expect(extAgentRowOf(wire({ builtin: true })).kind).toBe('builtin')
+    expect(extAgentRowOf(wire({})).kind).toBe('cli')
+    expect(extAgentRowOf(wire({ kind: 'acp' })).kind).toBe('acp')
   })
 
   /* Three facts kept apart: knowing about it, being allowed to dispatch to it,
      and being able to run it. */
   it('keeps configured, enabled and the probe verdict apart', () => {
-    const row = xaRowOf(wire({ configured: false, enabled: true, probe_status: 'ready' }))
+    const row = extAgentRowOf(wire({ configured: false, enabled: true, probe_status: 'ready' }))
     expect(row).toMatchObject({ configured: false, enabled: true, probe_status: 'ready' })
   })
 
   it('calls a verdict it was not given unknown', () => {
-    expect(xaRowOf(wire({})).probe_status).toBe('unknown')
+    expect(extAgentRowOf(wire({})).probe_status).toBe('unknown')
   })
 
   /* A field this mapper does not name is a field the island never sees. */
   it('is a whitelist, so an unnamed field does not reach the page', () => {
-    const row = xaRowOf(wire({ command: ['codex', '--json'] } as Partial<XaRowWire>))
+    const row = extAgentRowOf(wire({ command: ['codex', '--json'] } as Partial<ExtAgentRowWire>))
     expect(row).not.toHaveProperty('command')
   })
 
   it('reads a missing test verdict as no verdict rather than as a failure', () => {
-    expect(xaRowOf(wire({})).last_test_ok).toBe(null)
-    expect(xaRowOf(wire({ last_test_ok: false })).last_test_ok).toBe(false)
+    expect(extAgentRowOf(wire({})).last_test_ok).toBe(null)
+    expect(extAgentRowOf(wire({ last_test_ok: false })).last_test_ok).toBe(false)
   })
 })
 
@@ -73,8 +73,8 @@ describe('refetching the list', () => {
       [wire({ probe_status: 'ready', probe_detail: 'v2 on PATH' })],
       [wire({})],
     )
-    await xaFetch(true)
-    const [row] = await xaFetch(false)
+    await extAgentsFetch(true)
+    const [row] = await extAgentsFetch(false)
     expect(probes).toEqual([true, false])
     expect(row).toMatchObject({ probe_status: 'ready', probe_detail: 'v2 on PATH' })
   })
@@ -84,15 +84,15 @@ describe('refetching the list', () => {
       [wire({ probe_status: 'ready', probe_detail: 'v2 on PATH' })],
       [wire({ probe_status: 'missing', probe_detail: 'not on PATH' })],
     )
-    await xaFetch(true)
-    const [row] = await xaFetch(true)
+    await extAgentsFetch(true)
+    const [row] = await extAgentsFetch(true)
     expect(row).toMatchObject({ probe_status: 'missing', probe_detail: 'not on PATH' })
   })
 
   it('remembers nothing about an agent it has not seen', async () => {
     listing([wire({ name: 'claude', probe_status: 'ready' })], [wire({ name: 'codex' })])
-    await xaFetch(true)
-    const [row] = await xaFetch(false)
+    await extAgentsFetch(true)
+    const [row] = await extAgentsFetch(false)
     expect(row).toMatchObject({ name: 'codex', probe_status: 'unknown' })
   })
 
@@ -102,9 +102,9 @@ describe('refetching the list', () => {
       [],
       [wire({})],
     )
-    await xaFetch(true)
-    await xaFetch(false)
-    const [row] = await xaFetch(false)
+    await extAgentsFetch(true)
+    await extAgentsFetch(false)
+    const [row] = await extAgentsFetch(false)
     expect(row?.probe_status).toBe('unknown')
   })
 })
@@ -123,8 +123,8 @@ function writes(): { asked: Array<[string, Record<string, unknown>]> } {
   return { asked }
 }
 
-const card = (over: Partial<XaRow> = {}): XaRow =>
-  ({ name: 'codex', preset: 'codex-cli', description: 'the cli one', configured: true, ...over } as XaRow)
+const card = (over: Partial<ExtAgentRow> = {}): ExtAgentRow =>
+  ({ name: 'codex', preset: 'codex-cli', description: 'the cli one', configured: true, ...over } as ExtAgentRow)
 
 describe('the seven writes a card can make', () => {
   it('connects with the preset and the three fields a person can type', async () => {
@@ -133,7 +133,7 @@ describe('the seven writes a card can make', () => {
        would make "which agent is this" unanswerable. */
     const { asked } = writes()
 
-    await xaSource.act('connect', card({ preset: 'codex-cli' }), { new_name: 'mine', description: 'd', api_key: 'k' })
+    await extAgentsSource.act('connect', card({ preset: 'codex-cli' }), { new_name: 'mine', description: 'd', api_key: 'k' })
 
     expect(asked).toEqual([
       ['subagents.add', { preset: 'codex-cli', name: 'mine', description: 'd', api_key: 'k' }],
@@ -144,7 +144,7 @@ describe('the seven writes a card can make', () => {
   it('updates without renaming when the name did not change', async () => {
     const { asked } = writes()
 
-    await xaSource.act('update', card(), { new_name: 'codex', description: 'a new line' })
+    await extAgentsSource.act('update', card(), { new_name: 'codex', description: 'a new line' })
 
     expect(asked[0]).toEqual(['subagents.update', {
       name: 'codex', new_name: undefined, description: 'a new line', api_key: undefined,
@@ -154,7 +154,7 @@ describe('the seven writes a card can make', () => {
   it('toggles one switch for every kind of row', async () => {
     const { asked } = writes()
 
-    await xaSource.act('toggle', card(), { enabled: true })
+    await extAgentsSource.act('toggle', card(), { enabled: true })
 
     expect(asked[0]).toEqual(['subagents.toggle', { name: 'codex', enabled: true }])
   })
@@ -165,7 +165,7 @@ describe('the seven writes a card can make', () => {
        entry mutated underneath its session handles. */
     const { asked } = writes()
 
-    await xaSource.act('migrate', card())
+    await extAgentsSource.act('migrate', card())
 
     expect(asked.map(([method]) => method))
       .toEqual(['subagents.remove', 'subagents.add', 'subagents.list'])
@@ -179,8 +179,8 @@ describe('the seven writes a card can make', () => {
        runs it on page load. */
     const { asked } = writes()
 
-    await xaSource.act('test', card({ configured: true }))
-    await xaSource.act('test', card({ configured: false }))
+    await extAgentsSource.act('test', card({ configured: true }))
+    await extAgentsSource.act('test', card({ configured: false }))
 
     expect(asked.filter(([m]) => m === 'subagents.test').map(([, p]) => p.source))
       .toEqual(['config', 'preset'])
@@ -189,7 +189,7 @@ describe('the seven writes a card can make', () => {
   it('cancels a test by name alone', async () => {
     const { asked } = writes()
 
-    await xaSource.act('test_cancel', card())
+    await extAgentsSource.act('test_cancel', card())
 
     expect(asked[0]).toEqual(['subagents.test_cancel', { name: 'codex' }])
   })
@@ -197,7 +197,7 @@ describe('the seven writes a card can make', () => {
   it('starts a build by name alone', async () => {
     const { asked } = writes()
 
-    await xaSource.act('build', card())
+    await extAgentsSource.act('build', card())
 
     expect(asked[0]).toEqual(['subagents.build', { name: 'codex' }])
   })

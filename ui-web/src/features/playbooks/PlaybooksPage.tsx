@@ -496,7 +496,7 @@ function Board({ detail, picked }: { detail: PlaybookDetail; picked: string | nu
 
   /* Measured on every render, plus a frame-by-frame retry while there is nothing
      to measure, and NOT on a notification alone.
-     The island mounts into `#pbBody` at boot, while the page is still
+     The island mounts into `#playbooksBody` at boot, while the page is still
      `display: none` -- so the first measurement is always zero-width, and a
      design that settled for 1:1 there would frame every graph wrongly until
      something happened to resize the box. A ResizeObserver rescues that in a

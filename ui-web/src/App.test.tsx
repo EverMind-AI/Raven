@@ -95,8 +95,8 @@ describe('the page root', () => {
       'dTitle', 'dClose', 'dBody',
       'setModal', 'snav', 'snavList', 'setTitle', 'setSub', 'setClose', 'spanels',
       'railShow', 'split', 'jobVeil', 'connVeil', 'menu', 'toasts',
-      'capsPage', 'xaPage', 'connPage', 'memPage', 'pbPage', 'kbPage', 'cronPage',
-      'xaBody', 'connBody', 'memBody', 'pbBody', 'kbBody', 'cronBody',
+      'capsPage', 'extAgentsPage', 'connectionsPage', 'memoryPage', 'playbooksPage', 'kbPage', 'cronPage',
+      'extAgentsBody', 'connectionsBody', 'memoryBody', 'playbooksBody', 'kbBody', 'cronBody',
     ]) {
       expect(document.querySelectorAll(`#${id}`), id).toHaveLength(1)
     }
@@ -111,7 +111,7 @@ describe('the page root', () => {
     render()
     for (const id of [
       'dBody', 'snavList', 'spanels',
-      'xaBody', 'connBody', 'memBody', 'pbBody', 'kbBody', 'cronBody',
+      'extAgentsBody', 'connectionsBody', 'memoryBody', 'playbooksBody', 'kbBody', 'cronBody',
     ]) {
       expect(document.getElementById(id)!.childNodes, id).toHaveLength(0)
     }
@@ -131,7 +131,7 @@ describe('the page root', () => {
     expect(key('setModal', 'data-i18n-aria')).toBe('gui.page.set')
     expect(key('detail', 'data-i18n-aria')).toBe('gui.cap_detail')
     expect(key('railShow', 'data-i18n-tip')).toBe('gui.expand_rail')
-    expect(key('xaPage', 'data-i18n-aria')).toBe('gui.page.agents')
+    expect(key('extAgentsPage', 'data-i18n-aria')).toBe('gui.page.agents')
     expect(document.querySelector('.wm')!.getAttribute('data-i18n')).toBe('gui.page.set')
   })
 
@@ -167,7 +167,7 @@ describe('the page root', () => {
     for (const id of ['cfTitle', 'cfNo', 'cfYes', 'dTitle', 'setTitle']) {
       expect(document.getElementById(id)!.textContent, id).not.toBe('')
     }
-    for (const sel of ['#xaPage h2', '#connPage h2', '#memPage h2', '#pbPage h2', '#kbPage h2', '#cronPage h2']) {
+    for (const sel of ['#extAgentsPage h2', '#connectionsPage h2', '#memoryPage h2', '#playbooksPage h2', '#kbPage h2', '#cronPage h2']) {
       expect(document.querySelector(sel)!.textContent, sel).not.toBe('')
     }
     expect(document.querySelector('.wm')!.textContent).not.toBe('')
@@ -183,7 +183,7 @@ describe('the page root', () => {
     expect(document.getElementById('detail')!.getAttribute('aria-label')).toBe(null)
     expect(document.getElementById('setModal')!.getAttribute('aria-label')).toBe(null)
     expect(document.getElementById('setClose')!.dataset.tip).toBe(undefined)
-    expect(document.getElementById('xaPage')!.getAttribute('aria-label')).toBe(null)
+    expect(document.getElementById('extAgentsPage')!.getAttribute('aria-label')).toBe(null)
     expect(document.getElementById('wsGrip')!.getAttribute('title')).toBe(null)
   })
 })
@@ -198,8 +198,8 @@ describe('the page root once a language is applied', () => {
     act(() => {
       lang.set('en')
     })
-    expect(document.querySelector('#xaPage h2')!.textContent).toBe(t('gui.page.agents'))
-    expect(document.getElementById('xaPage')!.getAttribute('aria-label')).toBe(t('gui.page.agents'))
+    expect(document.querySelector('#extAgentsPage h2')!.textContent).toBe(t('gui.page.agents'))
+    expect(document.getElementById('extAgentsPage')!.getAttribute('aria-label')).toBe(t('gui.page.agents'))
     expect(document.getElementById('railShow')!.dataset.tip).toBe(t('gui.expand_rail'))
     expect(document.getElementById('railShow')!.getAttribute('aria-label')).toBe(t('gui.expand_rail'))
     expect(document.getElementById('wsGrip')!.getAttribute('title')).toBe(t('gui.resize_ws'))

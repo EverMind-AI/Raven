@@ -44,7 +44,7 @@ async function opener(calls: unknown[][], run: unknown) {
     },
   })
   const { setSources, sources } = await import('../../state/sources')
-  setSources({ transcript: {}, composer: {}, sessions: {} } as unknown as Partial<Sources>)
+  setSources({ transcript: {}, composer: {}, rail: {} } as unknown as Partial<Sources>)
   wiring.installSources()
   if (!sources.transcript!.openDagRun) throw new Error('openDagRun is absent from the page wiring')
   return sources.transcript!.openDagRun

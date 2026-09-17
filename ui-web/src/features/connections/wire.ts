@@ -12,6 +12,6 @@ import * as page from '../../state/page'
 
 export function open(): void {
   closeDialog()
-  page.show('connPage')
+  page.show('connectionsPage')
   void refresh(true)
 }

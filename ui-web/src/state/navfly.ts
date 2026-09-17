@@ -30,10 +30,10 @@
  * reader clicks rather than while the bundle evaluates.
  */
 
-import { open as openConn } from '../features/connections/nav'
+import { open as openConnections } from '../features/connections/wire'
 import { open as openCron } from '../features/cron/store'
+import { open as openExtAgents } from '../features/extAgents/store'
 import { markNew } from '../features/rail/store'
-import { open as openXa } from '../features/xa/store'
 import { makeStore } from './store'
 
 export interface NavRow {
@@ -44,14 +44,14 @@ export interface NavRow {
 
 export const MORE_ROWS: readonly NavRow[] = [
   {
-    page: 'xaPage',
+    page: 'extAgentsPage',
     nameKey: 'gui.nav.agents',
-    go: () => openXa(),
+    go: () => openExtAgents(),
   },
   {
-    page: 'connPage',
+    page: 'connectionsPage',
     nameKey: 'gui.nav.conn',
-    go: () => openConn(),
+    go: () => openConnections(),
   },
   {
     page: 'cronPage',

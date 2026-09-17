@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { draw, setFault } from './banner'
 import { resetTranslator, setTranslator } from '../i18n/t'
-import * as nav from '../features/plugins/nav'
+import * as nav from '../features/plugins/wire'
 import * as plugins from '../features/plugins/store'
 import * as confirmStore from './confirm'
 import * as pageStore from './page'

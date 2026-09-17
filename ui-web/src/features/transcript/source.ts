@@ -112,7 +112,7 @@ export const spawnRecord = (callId: string) =>
    turn a restored card's task id into the record id its stream is read by: a
    record's directory is `<stamp>-<task_id>`, so the row is found by suffix. */
 export function spawnList() {
-  /* Guarded like sources.agents.list is: a server without the subagent surface
+  /* Guarded like sources.subagents.list is: a server without the subagent surface
    answers -32601, and a card that asked would then re-ask on every reopen for
    an answer that cannot arrive. */
   if (!has('subagent')) return Promise.resolve([])

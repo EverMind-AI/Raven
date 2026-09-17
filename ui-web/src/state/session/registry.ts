@@ -14,7 +14,7 @@
  */
 
 import { loadProviders } from '../../features/model/source'
-import { leaveDeletedSession } from '../../features/rail/leave'
+import { leaveDeletedSession } from '../../features/rail/wire'
 import { rowFrom, SESS_CHANNELS } from '../../features/rail/source'
 import { plainTitle } from '../../features/rail/title'
 import { loadPermMode } from '../../features/settings/source'

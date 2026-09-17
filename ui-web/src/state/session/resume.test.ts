@@ -67,7 +67,7 @@ function wire(): void {
         return dagRun(runId)
       },
     } as unknown as TranscriptSource,
-    agents: {
+    subagents: {
       list: () => Promise.resolve([]),
       instances: () => {
         instanceCalls += 1

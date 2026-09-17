@@ -351,7 +351,7 @@ export function App(): JSX.Element {
       {/* One entry's credentials. Its own veil rather than the confirm dialog's:
           disconnecting from inside it raises that one, and a dialog cannot be
           both the thing asking and the thing asked. The sheet renders here from
-          the connections island (src/features/connections/ConnPage.tsx). */}
+          the connections island (src/features/connections/ConnectionsPage.tsx). */}
       <div className="veil" id="connVeil" data-open="false" />
       <div className="menu" id="menu" data-open="false" role="menu" />
       <div className="toasts" id="toasts" aria-live="polite" />

@@ -29,7 +29,7 @@ function wire(): void {
   agentRows = []
   setSources({
     workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: true, openPath: () => {} },
-    agents: { list: async () => [], instances: async () => agentRows },
+    subagents: { list: async () => [], instances: async () => agentRows },
   })
   setTranslator((key) => key)
   vi.spyOn(pageStore, 'show').mockImplementation(() => {})

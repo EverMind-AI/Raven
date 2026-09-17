@@ -14,7 +14,7 @@
 import { useSyncExternalStore } from 'react'
 
 import * as banner from '../state/banner'
-import { openPlugins } from '../features/plugins/nav'
+import { openPlugins } from '../features/plugins/wire'
 import { t } from '../i18n/t'
 import { openDetail } from '../features/plugins/store'
 

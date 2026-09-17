@@ -2,8 +2,8 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ConnApp } from './ConnPage'
-import { open } from './nav'
+import { ConnectionsApp } from './ConnectionsPage'
+import { open } from './wire'
 import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
@@ -12,7 +12,7 @@ import { resetSources, setSources, sources } from '../../state/sources'
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
-import type { ConnChannel, ConnQr, ConnSource } from './types'
+import type { ConnChannel, ConnQr, ConnectionsSource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -34,10 +34,10 @@ function chan(over: Partial<ConnChannel> = {}): ConnChannel {
 
 /* The island runs against the same two seams production wires up: a stand-in
    translator on setTranslator (it returns its key, so tests assert catalogue
-   keys, not translations) and a fixture source on sources.conn. */
-function install(rows: ConnChannel[], over: Partial<ConnSource> = {}) {
+   keys, not translations) and a fixture source on sources.connections. */
+function install(rows: ConnChannel[], over: Partial<ConnectionsSource> = {}) {
   const calls: Array<[string, unknown]> = []
-  const source: ConnSource = {
+  const source: ConnectionsSource = {
     rows: async () => rows,
     toggle: async (c, on) => {
       c.on = on
@@ -62,9 +62,9 @@ function install(rows: ConnChannel[], over: Partial<ConnSource> = {}) {
   fn()
   })
   vi.spyOn(pageStore, 'show').mockImplementation((id) => shellCalls.push(['showPage', id]))
-  setSources({ conn: source })
+  setSources({ connections: source })
   document.body.innerHTML =
-    '<section id="connPage"><div id="connBody"></div></section>' +
+    '<section id="connectionsPage"><div id="connectionsBody"></div></section>' +
     '<div class="veil" id="connVeil" data-open="false"></div>' +
     '<div id="menu" data-open="false"></div>'
   return { source, calls, shellCalls }
@@ -150,7 +150,7 @@ function pressOver(under: Element): void {
 }
 
 async function mount() {
-  const view = render(<ConnApp />, { container: document.getElementById('connBody')! })
+  const view = render(<ConnectionsApp />, { container: document.getElementById('connectionsBody')! })
   await act(async () => {
     open()
   })
@@ -180,7 +180,7 @@ describe('connections island', () => {
     expect(groupOf('Slack')).toBe('gui.conn.g_on')
     expect(groupOf('Telegram')).toBe('gui.conn.g_off')
     /* The page's own prose is gone: the title, and nothing under it. */
-    expect(document.getElementById('connBody')!.textContent).not.toContain('gui.conn.hero_sub')
+    expect(document.getElementById('connectionsBody')!.textContent).not.toContain('gui.conn.hero_sub')
   })
 
   /* The addable group is ordered by what it costs to get in, so the quickest
@@ -244,7 +244,7 @@ describe('connections island', () => {
       expect(rowNamed('A')).toBeTruthy()
       expect(rowsOf().map((r) => r.querySelector('.sufacts'))).toEqual([null, null, null])
       expect(subOf('B')).toBeNull()
-      expect(document.querySelector('#connBody')!.textContent).not.toContain('gui.conn.st_down')
+      expect(document.querySelector('#connectionsBody')!.textContent).not.toContain('gui.conn.st_down')
     })
 
     /* Five states, and they are not two: "the gateway could not be asked" is
@@ -312,7 +312,7 @@ describe('connections island', () => {
         chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [], on: true, running: true, connected: false }),
       ])
       await mount()
-      expect([...document.querySelectorAll('#connPage .sugrp .hd b')].map((b) => b.textContent)).toEqual([
+      expect([...document.querySelectorAll('#connectionsPage .sugrp .hd b')].map((b) => b.textContent)).toEqual([
         'gui.conn.g_off',
       ])
       /* Nothing on the row narrates it either: what is true of it is still that
@@ -394,7 +394,7 @@ describe('connections island', () => {
      switched on. Counting the switch is how the page came to say "receiving on
      1 entrance" over a card that said the adapter had never started. */
   describe('the gateway line', () => {
-    const bar = (): HTMLElement => document.querySelector('#connBody > .sustate')!
+    const bar = (): HTMLElement => document.querySelector('#connectionsBody > .sustate')!
 
     it('counts only the entrances that are actually receiving', async () => {
       install([
@@ -413,7 +413,7 @@ describe('connections island', () => {
     it('says nothing when an entrance is switched on but not receiving', async () => {
       install([chan({ id: 'weixin', key: 'gui.chan.weixin', on: true, qrLogin: true, fields: [] })])
       await mount()
-      expect(document.querySelector('#connBody > .sustate')).toBeNull()
+      expect(document.querySelector('#connectionsBody > .sustate')).toBeNull()
       expect(groupOf('gui.chan.weixin')).toBe('gui.conn.g_off')
     })
 
@@ -731,7 +731,7 @@ describe('connections island', () => {
     expect(veil.dataset.open).toBe('true')
     expect(cardHead().querySelector('.meta b')!.textContent).toBe('Slack')
     await act(async () => {
-      document.getElementById('connBody')!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+      document.getElementById('connectionsBody')!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
     })
     expect(veil.dataset.open).toBe('false')
   })
@@ -939,18 +939,18 @@ describe('connections island', () => {
     install([chan({ missing: ['bot_token'] })])
     await mount()
     expect(await screen.findByText('Slack')).toBeTruthy()
-    expect([...document.querySelectorAll('#connBody .sugrp .hd b')].map((b) => b.textContent)).toEqual([
+    expect([...document.querySelectorAll('#connectionsBody .sugrp .hd b')].map((b) => b.textContent)).toEqual([
       'gui.conn.g_off',
     ])
-    expect(document.querySelector('#connBody .empty-note')).toBeNull()
+    expect(document.querySelector('#connectionsBody .empty-note')).toBeNull()
   })
 
   /* The addable rows are still cost-ordered; the caption that said so is gone. */
   it('does not caption the ordering', async () => {
     install([chan({ on: true, running: true }), chan({ id: 'telegram', name: 'Telegram' })])
     await mount()
-    expect(document.querySelector('#connBody .sugrp .hd .tool')).toBeNull()
-    expect(document.querySelector('#connBody .free')).toBeNull()
+    expect(document.querySelector('#connectionsBody .sugrp .hd .tool')).toBeNull()
+    expect(document.querySelector('#connectionsBody .free')).toBeNull()
   })
 
   /* `SetupGroup` grew an optional fold for the sub-agents page's catalogue.
@@ -960,8 +960,8 @@ describe('connections island', () => {
   it('has no fold on its group headings', async () => {
     install([chan({ on: true, running: true }), chan({ id: 'telegram', name: 'Telegram' })])
     await mount()
-    expect(document.querySelector('#connBody .sugrp .hd .gfold')).toBeNull()
-    expect([...document.querySelectorAll('#connBody .surow')].length).toBe(2)
+    expect(document.querySelector('#connectionsBody .sugrp .hd .gfold')).toBeNull()
+    expect([...document.querySelectorAll('#connectionsBody .surow')].length).toBe(2)
   })
 
   /* The same centred card every module's detail is. It was briefly a side
@@ -1255,7 +1255,7 @@ describe('connections island', () => {
     ])
     await mount()
     await screen.findByText('Slack')
-    expect(domSnapshot(document.getElementById('connBody')!)).toMatchSnapshot()
+    expect(domSnapshot(document.getElementById('connectionsBody')!)).toMatchSnapshot()
   })
 
   it('keeps its rendered shape, dialog', async () => {

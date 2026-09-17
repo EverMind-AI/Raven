@@ -28,7 +28,7 @@ mountPageRoot()
 /* The connections page is opened by importing its island, so standing in for
    that module is how the manage button's second half is observed. */
 const connOpens = vi.hoisted(() => ({ n: 0 }))
-vi.mock('../connections/nav', () => ({ open: () => { connOpens.n += 1 } }))
+vi.mock('../connections/wire', () => ({ open: () => { connOpens.n += 1 } }))
 
 const toastWriter = vi.hoisted(() => ({ calls: [] as Array<[string, unknown]> }))
 vi.mock('../../state/toast', () => {
@@ -125,11 +125,11 @@ function install(data: SettingsSnapshot = snap(), over: Partial<SettingsSource> 
   vi.spyOn(settingsDialogStore, 'open').mockImplementation(() => shellCalls.push(['openSet', null]))
   vi.spyOn(settingsDialogStore, 'close').mockImplementation(() => shellCalls.push(['closeSet', null]))
   /* The danger card's button is a SESSION operation offered from this page, so
-     it goes out through DS.sessions rather than this page's own source. */
+     it goes out through DS.rail rather than this page's own source. */
   const wiped: Array<null> = []
   setSources({
     settings: source,
-    sessions: {
+    rail: {
       snapshot: () => ({ rows: [{}, {}, {}], cur: null, busy: false }),
       replace: () => {},
       open: () => {},
@@ -220,7 +220,7 @@ describe('settings island', () => {
   })
 
   /* The one destructive button on the page, and it had no coverage: it used to
-     leave through a shell verb, and now it leaves through DS.sessions. Either
+     leave through a shell verb, and now it leaves through DS.rail. Either
      way what matters is that it goes out at all, and only after the confirm. */
   it('wipes every session through the session source, from the data page', async () => {
     const h = install()

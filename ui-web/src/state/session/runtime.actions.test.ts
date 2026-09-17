@@ -85,7 +85,7 @@ async function harness({ rows }: { rows: Row[] }) {
     return new Promise((res, rej) => { settle = { res, rej } })
   })
   const { setSources } = await import('../sources')
-  setSources({ composer: { slash }, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+  setSources({ composer: { slash }, rail: {}, transcript: {} } as unknown as Partial<Sources>)
   const wiring = await import('../../app/install')
   wiring.installSources()
   wiring.installActions()
@@ -335,11 +335,11 @@ async function railHarness(
     return answer
   })
   const { setSources } = await import('../sources')
-  setSources({ composer: { slash: [] }, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+  setSources({ composer: { slash: [] }, rail: {}, transcript: {} } as unknown as Partial<Sources>)
   const wiring = (await import('../../app/install')) as Wiring
   const { sessionsSource } = await import('../../features/rail/source')
   /* The pin is a verb of the session source itself, which the boot installs. */
-  setSources({ sessions: sessionsSource } as unknown as Partial<Sources>)
+  setSources({ rail: sessionsSource } as unknown as Partial<Sources>)
   wiring.installActions()
   const tick = () => new Promise((r) => setTimeout(r, 0))
   return {
@@ -477,7 +477,7 @@ describe('a refused pin or rename', () => {
 async function bulkHarness(answers: Record<string, Answer | Error>) {
   let live = Object.keys(answers).map((id) => ({ id, title: id }))
   await loadPart(async () => {
-    await import('../../features/rail/leave')
+    await import('../../features/rail/wire')
     return import('../../app/boot')
   }, {
     fakes: {
@@ -511,10 +511,10 @@ async function bulkHarness(answers: Record<string, Answer | Error>) {
   })
   const { setSources } = await import('../sources')
   const { sessionsSource } = await import('../../features/rail/source')
-  setSources({ sessions: sessionsSource } as unknown as Partial<Sources>)
+  setSources({ rail: sessionsSource } as unknown as Partial<Sources>)
   /* The three writes that also move the reader are installed onto the source
      rather than built into it, the way the page installs them. */
-  const { installSessionActions } = await import('../../features/rail/leave')
+  const { installSessionActions } = await import('../../features/rail/wire')
   installSessionActions()
   return { deleteAll: () => runtime.deleteAll(), left: () => live.map((s) => s.id) }
 }

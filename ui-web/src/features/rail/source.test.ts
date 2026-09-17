@@ -225,7 +225,7 @@ async function refreshHarness({
         $: looseQuery(),
       },
       'src/lib/session': { current: () => cur },
-      'src/features/rail/leave': {
+      'src/features/rail/wire': {
         leaveDeletedSession: (id: string) => { log.push(['leaveDeleted', id]); return Promise.resolve() },
       },
       'src/features/transcript/mount': {
@@ -237,7 +237,7 @@ async function refreshHarness({
   const registry = await import('../../state/session/registry')
   await fakeGateway(async () => answer)
   const { setSources } = await import('../../state/sources')
-  setSources({ composer: {}, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+  setSources({ composer: {}, rail: {}, transcript: {} } as unknown as Partial<Sources>)
   return { registry, log }
 }
 

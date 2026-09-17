@@ -39,13 +39,9 @@ const EXCEPTIONS = {
 
 /* The root component each domain exports, where its name is not `<Domain>App`
    yet. Every one of these is a name the rename step converges, and the
-   directory is what it converges on. */
-const NAMES = {
-  connections: ['ConnApp'],
-  model: ['ModelPickerApp'],
-  plugins: ['PlugApp'],
-  workspace: ['WsApp'],
-}
+   directory is what it converges on. Four have converged and the fifth moved
+   into a directory of its own, so nothing is pinned here today. */
+const NAMES = {}
 
 /* Domains with no root component of their own, one reason each. */
 const NO_ROOT = {

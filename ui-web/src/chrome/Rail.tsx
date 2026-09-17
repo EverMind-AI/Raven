@@ -41,7 +41,7 @@
 
 import { useSyncExternalStore } from 'react'
 
-import { openPlugins, openSkills } from '../features/plugins/nav'
+import { openPlugins, openSkills } from '../features/plugins/wire'
 import { open as openKnowledge } from '../features/knowledge/store'
 import { open as openMemory } from '../features/memory/store'
 import { openPage as openPlaybooks } from '../features/playbooks/store'
@@ -127,7 +127,7 @@ const NAV_ROWS: ReadonlyArray<{
     icon: <path d="M9 3.5v4.5M15 3.5v4.5M7 8h10v4.5a5 5 0 0 1-10 0zM12 17.5v3" />,
   },
   {
-    button: 'pbBtn',
+    button: 'playbooksBtn',
     key: 'gui.nav.pb',
     open: () => openPlaybooks(),
     icon: (
@@ -144,7 +144,7 @@ const NAV_ROWS: ReadonlyArray<{
     icon: <path d="M5 4.5h9.5a2 2 0 0 1 2 2v13H7a2 2 0 0 1-2-2zM16.5 6.5H19v13h-2.5M8 8.5h5M8 12h5" />,
   },
   {
-    button: 'memBtn',
+    button: 'memoryBtn',
     key: 'gui.nav.mem',
     open: () => openMemory(),
     icon: <path d="M12 3l8 4.5-8 4.5-8-4.5zM4 12.4l8 4.5 8-4.5M4 16.6l8 4.5 8-4.5" />,

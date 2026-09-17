@@ -10,17 +10,17 @@ import { mountPageRoot } from '../../test/pageRoot'
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as pageStore from '../../state/page'
 import * as confirmStore from '../../state/confirm'
-import type { AgentsSource, InstanceRow } from './types'
+import type { InstanceRow, SubagentsSource } from './types'
 
 /* The chip's menu rows render from src/App.tsx into the shared #menu host, so
    the page's own root has to be standing for them to appear. */
 mountPageRoot()
 
-function wire(over: Partial<AgentsSource> = {}): void {
+function wire(over: Partial<SubagentsSource> = {}): void {
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
   vi.spyOn(pageStore, 'show').mockImplementation(() => {})
   vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
-  setSources({ agents: { list: async () => [], ...over } as AgentsSource })
+  setSources({ subagents: { list: async () => [], ...over } as SubagentsSource })
   document.body.innerHTML = '<div id="menu" data-open="false"></div><div id="toast"></div>'
 }
 

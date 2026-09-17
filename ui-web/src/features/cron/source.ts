@@ -130,7 +130,7 @@ export const cronSource: CronSource = {
     .catch((e) => toast(t('gui.op.trigger_failed', { detail: e.message || e }))),
   openRun: async (j) => {
     closeCronPage()
-    const rail = ds('sessions')
+    const rail = ds('rail')
     const s = { id: `cron:${j.id}`, title: j.name, last: '', when: '',
       at: Math.floor(Date.now() / 1000), run: null, live: true, from: 'cron' }
     const rows = rail.snapshot().rows

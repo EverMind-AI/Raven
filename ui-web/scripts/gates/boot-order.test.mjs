@@ -17,7 +17,7 @@ const installText = moduleText('app/install.ts')
    than about which of them a line sits in. */
 const wiring = bootText + installText + moduleText('app/connection.ts')
   + moduleText('app/updates.ts') + moduleText('state/lang/pick.ts')
-  + moduleText('state/lang/effects.ts') + moduleText('features/settings/chrome.ts')
+  + moduleText('state/lang/effects.ts') + moduleText('features/settings/wire.ts')
   + moduleText('features/model/chip.ts')
 
 /* One step fewer than the concatenated boot had: `drawCapsBadge` was an empty
@@ -168,7 +168,7 @@ describe('the claim on the first frame', () => {
   /* Both of those paint, and both read the session source, so it has to answer
      before either runs. */
   it('installs the session source before it holds the rail', () => {
-    const install = bootText.indexOf('sources.sessions = sessionsSource')
+    const install = bootText.indexOf('sources.rail = sessionsSource')
     expect(install).toBeGreaterThan(-1)
     expect(bootText.indexOf('holdRail()')).toBeGreaterThan(install)
   })

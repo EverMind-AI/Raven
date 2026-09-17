@@ -2,7 +2,7 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { PlugApp } from './PluginsPage'
+import { PluginsApp } from './PluginsPage'
 import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
@@ -108,7 +108,7 @@ function install(
 }
 
 async function mount() {
-  const view = render(<PlugApp />, { container: document.getElementById('capsBody')! })
+  const view = render(<PluginsApp />, { container: document.getElementById('capsBody')! })
   await act(async () => {
     await store.search()
   })

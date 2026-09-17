@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`xa island > keeps its rendered shape, card 1`] = `
+exports[`extAgents island > keeps its rendered shape, card 1`] = `
 "b#dTitle
 div#dBody
   div
@@ -27,7 +27,7 @@ div#dBody
       div.pmdesc"
 `;
 
-exports[`xa island > keeps its rendered shape, list 1`] = `
+exports[`extAgents island > keeps its rendered shape, list 1`] = `
 "div.pmhero
   h3
 div.sugrp

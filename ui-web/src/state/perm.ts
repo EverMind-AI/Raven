@@ -152,7 +152,7 @@ function remember(value: string): void {
 /* The mode the engine actually holds, pushed in once the config has loaded
    (and again whenever another surface changes it). */
 /* How a pick reaches the config, when anything can write one. Registered by
-   src/features/settings/chrome.ts, which owns the settings transport; null on
+   src/features/settings/wire.ts, which owns the settings transport; null on
    the offline shell, where the pick commits locally. */
 let persist: ((mode: string) => Promise<boolean> | boolean) | null = null
 

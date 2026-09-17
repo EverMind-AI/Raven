@@ -2,9 +2,9 @@
    `subagents.*` is one surface shared with the TUI and the web UI: the rows,
    the install grouping and the write path all live server-side, so this module
    only maps a row into what the page draws and sends the mutation back. The
-   xa island (ui-web/src/features/xa/) owns the renderer and every flag it
-   reads. It is the seam's one roster source: a page with no gateway behind it
-   reads the same calls off the fixture transport.
+   extAgents island (ui-web/src/features/extAgents/) owns the renderer and
+   every flag it reads. It is the seam's one roster source: a page with no
+   gateway behind it reads the same calls off the fixture transport.
 
    The list is re-fetched after every mutation rather than patched locally: the
    handler recomputes `group`, `enabled` and the probe verdict together, and a
@@ -13,16 +13,16 @@
    availability check, which can cost up to ten seconds per entry and would only
    re-measure what the write just changed. */
 
-import type { XaRow, XaSource } from './types'
+import type { ExtAgentRow, ExtAgentsSource } from './types'
 import type { ResultOf } from '../../rpc/generated'
 
 import { hasBuildFlag } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
 
 /** One agent as `subagents.list` sends it. */
-export type XaRowWire = ResultOf<'subagents.list'>['rows'][number]
+export type ExtAgentRowWire = ResultOf<'subagents.list'>['rows'][number]
 
-export function xaRowOf(r: XaRowWire): XaRow {
+export function extAgentRowOf(r: ExtAgentRowWire): ExtAgentRow {
   return {
     name: r.name,
     preset: r.preset,
@@ -61,34 +61,34 @@ export function xaRowOf(r: XaRowWire): XaRow {
    the carry-over below is a fact about this transport (a probe-less list says
    "unknown" for every row), so the source answers it from its own memory
    instead of reaching into the array the page is rendering. */
-let xaSeen = new Map<string, XaRow>()
+let extAgentsSeen = new Map<string, ExtAgentRow>()
 
-export async function xaFetch(probe: boolean): Promise<XaRow[]> {
+export async function extAgentsFetch(probe: boolean): Promise<ExtAgentRow[]> {
   const res = await gateway().call('subagents.list', { probe: !!probe })
   /* A probe-less list reports every row as "unknown", which would blank the
      health line of a row that was ready a second ago -- connecting an agent
      would look like it broke it. The verdict cannot have changed by writing
      config, so the last known one is carried over. */
   const rows = (res.rows || []).map((r) => {
-    const row = xaRowOf(r)
-    const prev = xaSeen.get(row.name)
+    const row = extAgentRowOf(r)
+    const prev = extAgentsSeen.get(row.name)
     if (row.probe_status === 'unknown' && prev && prev.probe_status !== 'unknown') {
       row.probe_status = prev.probe_status
       row.probe_detail = prev.probe_detail
     }
     return row
   })
-  xaSeen = new Map(rows.map((r) => [r.name, r]))
+  extAgentsSeen = new Map(rows.map((r) => [r.name, r]))
   return rows
 }
 
 /** Back to a fresh page's memory of the probe verdicts. For tests. */
-export function resetXaSeen(): void {
-  xaSeen = new Map()
+export function resetExtAgentsSeen(): void {
+  extAgentsSeen = new Map()
 }
 
-export const xaSource: XaSource = {
-  load: (probe) => xaFetch(!!probe),
+export const extAgentsSource: ExtAgentsSource = {
+  load: (probe) => extAgentsFetch(!!probe),
   act: async (op, row, args) => {
     const a = args || {}
     if (op === 'connect') {
@@ -149,11 +149,11 @@ export const xaSource: XaSource = {
          still going, and the store polls the list while any row carries it. */
       await gateway().call('subagents.build', { name: row.name })
     }
-    return xaFetch(false)
+    return extAgentsFetch(false)
   },
 }
 
 /* Test seam only: the rows carried across a refetch are the module's. */
 export function _resetForTests(): void {
-  xaSeen = new Map()
+  extAgentsSeen = new Map()
 }

@@ -17,27 +17,27 @@ import type { RailSource } from '../features/rail/types'
 const opens = vi.hoisted(() => ({ list: [] as string[] }))
 /* Partial, not wholesale: the page store and the rail call other verbs of each
    of these modules by name. */
-vi.mock('../features/connections/nav', async (original) => ({
+vi.mock('../features/connections/wire', async (original) => ({
   ...(await original<Record<string, unknown>>()),
-  open: () => opens.list.push('connPage'),
+  open: () => opens.list.push('connectionsPage'),
 }))
 vi.mock('../features/cron/store', async (original) => ({
   ...(await original<Record<string, unknown>>()),
   open: () => opens.list.push('cronPage'),
 }))
-vi.mock('../features/xa/store', async (original) => ({
+vi.mock('../features/extAgents/store', async (original) => ({
   ...(await original<Record<string, unknown>>()),
-  open: () => opens.list.push('xaPage'),
+  open: () => opens.list.push('extAgentsPage'),
 }))
 
 /* NAV_OF, as far as the flyout is concerned: which button a page lights up.
    The three rows all light up the group's own parent. */
 const NAV_OF: Record<string, string> = {
   capsPage: 'skillBtn',
-  xaPage: 'moreBtn',
-  connPage: 'moreBtn',
+  extAgentsPage: 'moreBtn',
+  connectionsPage: 'moreBtn',
   cronPage: 'moreBtn',
-  memPage: 'memBtn',
+  memoryPage: 'memoryBtn',
 }
 
 interface Harness {
@@ -57,7 +57,7 @@ function install(): Harness {
   vi.spyOn(pageStore, 'show').mockImplementation(() => {})
   vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   vi.spyOn(pageStore, 'navState').mockImplementation(() => ({ pages: Object.keys(NAV_OF), btnOf: (p) => NAV_OF[p] }))
-  setSources({ sessions: { snapshot: () => ({ rows: [], cur: 'a', busy: false, query: '' }) } as unknown as RailSource })
+  setSources({ rail: { snapshot: () => ({ rows: [], cur: 'a', busy: false, query: '' }) } as unknown as RailSource })
   return seen
 }
 
@@ -128,7 +128,7 @@ describe('the nav flyout', () => {
 
   it('marks the row whose page stands open, from the first draw', () => {
     install()
-    openPage('connPage')
+    openPage('connectionsPage')
     draw()
     expect(marked()).toEqual(['false', 'true', 'false'])
   })
@@ -209,7 +209,7 @@ describe('opening and closing the group', () => {
 describe('marking the rows', () => {
   it('answers that the group is shut, and leaves the rows alone', () => {
     install()
-    openPage('connPage')
+    openPage('connectionsPage')
     draw()
     openPage('cronPage')
     expect(mark()).toBe(false)
@@ -232,7 +232,7 @@ describe('marking the rows', () => {
     install()
     draw()
     fly().dataset.open = 'true'
-    openPage('memPage')
+    openPage('memoryPage')
     mark()
     expect(marked()).toEqual(['false', 'false', 'false'])
   })
@@ -263,9 +263,9 @@ describe('together with the rail', () => {
   it('leaves the other nav buttons to the rail', () => {
     install()
     toggle(true)
-    openPage('memPage')
+    openPage('memoryPage')
     railMarkNew()
-    expect(current('memBtn')).toBe('true')
+    expect(current('memoryBtn')).toBe('true')
     expect(current('moreBtn')).toBe('false')
     expect(marked()).toEqual(['false', 'false', 'false'])
   })

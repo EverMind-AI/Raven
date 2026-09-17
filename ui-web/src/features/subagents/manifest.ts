@@ -12,5 +12,5 @@ import type { DomainManifest } from '../manifests'
    rather than per page. */
 export const manifest: DomainManifest = {
   domain: 'subagents',
-  sources: ['agents'],
+  sources: ['subagents'],
 }

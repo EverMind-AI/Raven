@@ -1068,7 +1068,7 @@ function DocMenu({ doc, busy }: { doc: KbDoc; busy: boolean }): JSX.Element {
    upload; an absolute date is for a column nobody is watching.
 
    The same thresholds and the same keys as the agents roster
-   (features/xa/XaPage.tsx `agoText`), spelled again rather than imported --
+   (features/extAgents/ExtAgentsPage.tsx `agoText`), spelled again rather than imported --
    the two islands share no module, and the ratchet in
    scripts/count-shared-globals.mjs is there to keep it that way. An
    unparseable stamp is shown as it came: a row dated "Invalid Date" says less

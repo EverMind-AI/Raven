@@ -127,7 +127,7 @@ async function harness({ rows = [] as Row[] } = {}) {
     return Promise.resolve({})
   })
   const { setSources } = await import('../sources')
-  setSources({ composer: { slash: [] }, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+  setSources({ composer: { slash: [] }, rail: {}, transcript: {} } as unknown as Partial<Sources>)
   const wiring = await import('../../app/install')
   const connection = await import('../../app/connection')
   wiring.installActions()

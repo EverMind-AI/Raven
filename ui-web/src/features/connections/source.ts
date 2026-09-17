@@ -4,7 +4,7 @@
    catalogue's rows. The live layer installs it onto the seam, which replaces
    the fixture source before the first paint. */
 
-import type { ConnSource } from './types'
+import type { ConnectionsSource } from './types'
 
 import { servesChannels } from '../../rpc/capabilities'
 import { t } from '../../i18n/t'
@@ -46,7 +46,7 @@ export async function loadChannels(): Promise<void> {
 
 let gatewayRunningLive = false
 
-export const connSource: ConnSource = {
+export const connSource: ConnectionsSource = {
   /* `initial` is the page-open fetch: only that one toasts a failed load or
      warns about a gateway that is not receiving -- a background reload (the
      scan poll's refresh) stays silent, as the old page did. */

@@ -26,7 +26,7 @@ import { playbooksSource } from '../features/playbooks/source'
 import { capabilitiesSource, extPlugins, loadExt } from '../features/installed/source'
 import { pluginsSource } from '../features/plugins/source'
 import { skillsSource } from '../features/skills/source'
-import { installSessionActions } from '../features/rail/leave'
+import { installSessionActions } from '../features/rail/wire'
 import { bannerSource, settingsSource } from '../features/settings/source'
 import { agentsSource, startAgentHeartbeat } from '../features/subagents/source'
 import {
@@ -35,7 +35,7 @@ import {
 import {
   proseSource, setHostPlatformReader, setShortener, workspaceSource,
 } from '../features/workspace/source'
-import { xaSource } from '../features/xa/source'
+import { extAgentsSource } from '../features/extAgents/source'
 import { closeDialog as closeConnDialog } from '../features/connections/store'
 import { closeSheet as closeCronSheet } from '../features/cron/store'
 import { onEvent as pluginsEvent } from '../features/plugins/store'
@@ -143,7 +143,7 @@ export function installSources(): void {
 
   sources.capabilities = capabilitiesSource
   sources.cron = cronSource
-  sources.conn = connSource
+  sources.connections = connSource
   sources.skills = skillsSource
   sources.plugins = pluginsSource
   sources.memory = memorySource
@@ -151,8 +151,8 @@ export function installSources(): void {
   sources.playbooks = playbooksSource
   sources.onboard = onboardSource
   sources.browser = browserSource
-  sources.agents = agentsSource
-  sources.xa = xaSource
+  sources.subagents = agentsSource
+  sources.extAgents = extAgentsSource
 
   /* The workspace panel's chrome is still the page's, so the two things its
      source cannot work out for itself are handed over here. */

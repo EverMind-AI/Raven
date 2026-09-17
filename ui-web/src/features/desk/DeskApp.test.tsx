@@ -47,7 +47,7 @@ function wire(): void {
   setCurrent('s1')
   setSources({
     workspace: source,
-    agents: {
+    subagents: {
       list: async () => [],
       instances: async (key: string) => { asked.push(key); return agentRows },
     },

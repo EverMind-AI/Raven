@@ -2,8 +2,8 @@
  * each island renders that card into.
  *
  * Four islands drew into the same #detail dialog by id -- memory, plugins,
- * skills and xa. Each cleared #dBody with innerHTML, blanked #dTitle, wrote
- * data-open for itself, and two of them watched the element with a
+ * skills and extAgents. Each cleared #dBody with innerHTML, blanked #dTitle,
+ * wrote data-open for itself, and two of them watched the element with a
  * MutationObserver to learn that one of the others had closed it. The drawer's
  * state was therefore a reading of the DOM, with four writers and no order.
  *
@@ -26,7 +26,7 @@
 import { makeStore } from './store'
 
 /** The four islands that share the drawer. */
-export type DetailOwner = 'memory' | 'plugins' | 'skills' | 'xa'
+export type DetailOwner = 'memory' | 'plugins' | 'skills' | 'extAgents'
 
 export type DetailState = {
   readonly owner: DetailOwner | null
@@ -39,7 +39,7 @@ export type DetailState = {
   readonly gen: number
 }
 
-const CLOSE_ORDER: readonly DetailOwner[] = ['plugins', 'skills', 'memory', 'xa']
+const CLOSE_ORDER: readonly DetailOwner[] = ['plugins', 'skills', 'memory', 'extAgents']
 
 /* Kept in step with `.detail`'s opacity transition in page.css. A little
    longer than the transition, so the drop lands after the last painted frame
@@ -83,7 +83,7 @@ export function host(owner: DetailOwner): HTMLDivElement {
   let el = hosts.get(owner)
   if (!el) {
     el = document.createElement('div')
-    if (owner === 'memory' || owner === 'xa') el.style.display = 'contents'
+    if (owner === 'memory' || owner === 'extAgents') el.style.display = 'contents'
     hosts.set(owner, el)
   }
   return el

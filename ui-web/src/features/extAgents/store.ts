@@ -3,7 +3,7 @@ import { ds } from '../../state/sources'
 import { show as toast } from '../../state/toast'
 import * as detail from '../../state/detail'
 
-import type { XaActArgs, XaOp, XaRow, XaSource } from './types'
+import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource } from './types'
 import * as page from '../../state/page'
 import { makeStore } from '../../state/store'
 
@@ -13,8 +13,8 @@ import { makeStore } from '../../state/store'
  * and the component subscribes.
  */
 
-export interface XaState {
-  rows: XaRow[]
+export interface ExtAgentsState {
+  rows: ExtAgentRow[]
   /* The one flag only the page can answer: which card is open. It is about what
      is drawn, so it does not belong to whichever source is answering. */
   sheet: string | null
@@ -31,16 +31,16 @@ export interface XaState {
   testing: string[]
 }
 
-const store = makeStore<XaState>({ rows: [], sheet: null, epoch: 0, testing: [] })
+const store = makeStore<ExtAgentsState>({ rows: [], sheet: null, epoch: 0, testing: [] })
 
 export const { get, subscribe, _resetForTests } = store
 
 /** A patch, merged into the page's state. */
-export function set(patch: Partial<XaState>): void {
+export function set(patch: Partial<ExtAgentsState>): void {
   store.set((prev) => ({ ...prev, ...patch }))
 }
 
-export const source = (): XaSource => ds('xa')
+export const source = (): ExtAgentsSource => ds('extAgents')
 
 /* What to show a reader when a call fails. The server's own sentence first: a
    rejected rpc frame carries `message` as the error's *code name*
@@ -56,7 +56,7 @@ const failure = (e: unknown): string => {
    that asks for it now: the group heading in the page is a fresh answer every
    time the reader arrives, which is what the re-check button used to be for. */
 export function open(): void {
-  page.show('xaPage')
+  page.show('extAgentsPage')
   void source()
     .load(true)
     .then((rows) => set({ rows, epoch: get().epoch + 1 }))
@@ -72,7 +72,7 @@ export function close(): void {
 
 /* Every write goes through here: one place that toasts the failure and repaints
    from whatever the source answered, so no caller has to remember either. */
-export async function run(op: XaOp, row?: XaRow, args?: XaActArgs): Promise<void> {
+export async function run(op: ExtAgentOp, row?: ExtAgentRow, args?: ExtAgentActArgs): Promise<void> {
   let rows = get().rows
   /* A rename moves the open sheet, but only once the rows that carry the new
      name are here: the sheet is resolved by looking the name up in rows, so
@@ -82,12 +82,12 @@ export async function run(op: XaOp, row?: XaRow, args?: XaActArgs): Promise<void
      the sheet at a name no row will ever have and close the drawer. */
   let renamed = ''
   try {
-    rows = await source().act(op, row as XaRow, args || {})
+    rows = await source().act(op, row as ExtAgentRow, args || {})
     if (row && args?.new_name && args.new_name !== row.name) renamed = args.new_name
   } catch (e) {
     toast(t('gui.agent.failed', { detail: failure(e) }))
   }
-  const landed: Partial<XaState> = { rows, epoch: get().epoch + 1 }
+  const landed: Partial<ExtAgentsState> = { rows, epoch: get().epoch + 1 }
   if (renamed && get().sheet === row?.name) landed.sheet = renamed
   set(landed)
   if (get().sheet && !rows.some((x) => x.name === get().sheet)) closeSheet()
@@ -102,7 +102,7 @@ export async function run(op: XaOp, row?: XaRow, args?: XaActArgs): Promise<void
    A second press for a name already running is dropped here rather than sent:
    the server refuses it, but its refusal is a normal result, so the toast-free
    path would repaint the card as though the running test had answered. */
-export async function runTest(row: XaRow): Promise<void> {
+export async function runTest(row: ExtAgentRow): Promise<void> {
   if (get().testing.includes(row.name)) return
   set({ testing: [...get().testing, row.name] })
   /* `finally` rather than a line after the await: `run` turns every rejection
@@ -118,7 +118,7 @@ export async function runTest(row: XaRow): Promise<void> {
 
 /* Stop it. The cancelled test's own call returns too, with `cancelled` set, and
    repaints from its own refetch -- so this one only has to reach the server. */
-export function stopTest(row: XaRow): void {
+export function stopTest(row: ExtAgentRow): void {
   void run('test_cancel', row)
 }
 
@@ -134,7 +134,7 @@ export function stopTest(row: XaRow): void {
 let buildTimer: ReturnType<typeof setTimeout> | null = null
 const BUILD_POLL_MS = 4000
 
-function watchBuilds(rows: XaRow[]): void {
+function watchBuilds(rows: ExtAgentRow[]): void {
   if (buildTimer !== null) return
   if (!rows.some((r) => r.building)) return
   buildTimer = setTimeout(() => {
@@ -163,11 +163,11 @@ function watchBuilds(rows: XaRow[]): void {
 
 /** Where the card renders: the host the shared drawer keeps for this island. */
 export function detailHost(): HTMLDivElement {
-  return detail.host('xa')
+  return detail.host('extAgents')
 }
 
-export function sheetOpen(row: XaRow): void {
-  detail.open('xa')
+export function sheetOpen(row: ExtAgentRow): void {
+  detail.open('extAgents')
   set({ sheet: row.name, epoch: get().epoch + 1 })
 }
 
@@ -192,7 +192,7 @@ export function sheetDismissed(): void {
     () => detail.get().gen !== gen,
   )
 }
-detail.onClose('xa', sheetDismissed)
+detail.onClose('extAgents', sheetDismissed)
 
 /* A language flip changes nothing in this state, but every visible string
    comes from t(), so a re-render is the whole redraw. */

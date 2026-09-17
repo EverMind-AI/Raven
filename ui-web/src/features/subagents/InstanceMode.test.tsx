@@ -16,7 +16,7 @@ import { mountPageRoot } from '../../test/pageRoot'
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as pageStore from '../../state/page'
 import * as confirmStore from '../../state/confirm'
-import type { AgentsSource, InstanceModeReply, InstanceRow } from './types'
+import type { InstanceModeReply, InstanceRow, SubagentsSource } from './types'
 
 /* The chip's menu rows render from src/App.tsx into the shared #menu host, so
    the page's own root has to be standing for them to appear. */
@@ -39,18 +39,18 @@ const MENU = [
 let asked: unknown[]
 let answer: (mode: string | null | undefined) => Promise<InstanceModeReply>
 
-function wire(over: Partial<AgentsSource> = {}): void {
+function wire(over: Partial<SubagentsSource> = {}): void {
   asked = []
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
   vi.spyOn(pageStore, 'show').mockImplementation(() => {})
   vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
-  const source: AgentsSource = {
+  const source: SubagentsSource = {
     list: async () => [],
     instanceMode: async (agent, handle) => { asked.push(['read', agent, handle]); return answer(undefined) },
     instanceSetMode: async (agent, handle, mode) => { asked.push(['set', agent, handle, mode]); return answer(mode) },
     ...over,
   }
-  setSources({ agents: source })
+  setSources({ subagents: source })
   document.body.innerHTML = '<div id="menu" data-open="false"></div><div id="toasts"></div>'
 }
 

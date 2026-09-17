@@ -28,7 +28,7 @@ import * as cron from '../features/cron/store'
 import * as knowledge from '../features/knowledge/store'
 import * as memory from '../features/memory/store'
 import * as playbooks from '../features/playbooks/store'
-import * as xa from '../features/xa/store'
+import * as extAgents from '../features/extAgents/store'
 import { _resetForTests as sessionReset, setCurrent } from '../lib/session'
 import * as find from './find'
 import { installEscapeChain } from './globalListeners'
@@ -51,12 +51,12 @@ const ESCAPE_ORDER = [
   '#detail',
   '#jobVeil',
   '#cronPage',
-  '#memPage',
-  '#pbPage',
+  '#memoryPage',
+  '#playbooksPage',
   '#kbPage',
   '#capsPage',
-  '#xaPage',
-  '#connPage',
+  '#extAgentsPage',
+  '#connectionsPage',
   'setIsOpen()',
   'turn.busy()',
 ] as const
@@ -74,10 +74,10 @@ const PAGE = [
   '<div class="chat"><div class="dock"><div class="sheets" id="sheetRack"></div>',
   '<div class="dock-in"><textarea id="ta"></textarea></div></div></div>',
   '<section class="page" id="capsPage" data-open="false"></section>',
-  '<section class="page" id="xaPage" data-open="false"></section>',
-  '<section class="page" id="connPage" data-open="false"></section>',
-  '<section class="page" id="memPage" data-open="false"></section>',
-  '<section class="page" id="pbPage" data-open="false"></section>',
+  '<section class="page" id="extAgentsPage" data-open="false"></section>',
+  '<section class="page" id="connectionsPage" data-open="false"></section>',
+  '<section class="page" id="memoryPage" data-open="false"></section>',
+  '<section class="page" id="playbooksPage" data-open="false"></section>',
   '<section class="page" id="kbPage" data-open="false"></section>',
   '<section class="page" id="cronPage" data-open="false"></section>',
   '<div class="veil" id="jobVeil" data-open="false"><button id="jobNo"></button></div>',
@@ -100,7 +100,7 @@ const spies = {
   memClose: vi.fn(),
   pbClose: vi.fn(),
   kbClose: vi.fn(),
-  xaClose: vi.fn(),
+  extAgentsClose: vi.fn(),
   stop: vi.fn(),
 }
 
@@ -129,14 +129,14 @@ const LAYERS: Record<string, { up: () => void; taken: () => boolean }> = {
   '#detail': { up: flag('detail'), taken: lowered('detail') },
   '#jobVeil': { up: flag('jobVeil'), taken: () => cancelled.includes('jobNo') },
   '#cronPage': { up: flag('cronPage'), taken: called(spies.cronClose) },
-  '#memPage': { up: flag('memPage'), taken: called(spies.memClose) },
-  '#pbPage': { up: flag('pbPage'), taken: called(spies.pbClose) },
+  '#memoryPage': { up: flag('memoryPage'), taken: called(spies.memClose) },
+  '#playbooksPage': { up: flag('playbooksPage'), taken: called(spies.pbClose) },
   '#kbPage': { up: flag('kbPage'), taken: called(spies.kbClose) },
   /* The capabilities page closes through the page store, which lowers all
      seven sections -- so its own mark is the one section it was asked about. */
   '#capsPage': { up: flag('capsPage'), taken: lowered('capsPage') },
-  '#xaPage': { up: flag('xaPage'), taken: called(spies.xaClose) },
-  '#connPage': { up: flag('connPage'), taken: called(spies.connClose) },
+  '#extAgentsPage': { up: flag('extAgentsPage'), taken: called(spies.extAgentsClose) },
+  '#connectionsPage': { up: flag('connectionsPage'), taken: called(spies.connClose) },
   'setIsOpen()': { up: () => settingsDialog.open(), taken: () => !settingsDialog.isOpen() },
   'turn.busy()': { up: () => turn.dispatch({ type: 'send' }), taken: called(spies.stop) },
 }
@@ -163,7 +163,7 @@ beforeEach(() => {
   vi.spyOn(memory, 'close').mockImplementation(spies.memClose)
   vi.spyOn(playbooks, 'closePage').mockImplementation(spies.pbClose)
   vi.spyOn(knowledge, 'close').mockImplementation(spies.kbClose)
-  vi.spyOn(xa, 'close').mockImplementation(spies.xaClose)
+  vi.spyOn(extAgents, 'close').mockImplementation(spies.extAgentsClose)
   sources.composer = { stop: spies.stop } as unknown as ComposerSource
   settingsDialog.close()
   /* The row's flag outlives a case now that it is a store's rather than the
@@ -236,7 +236,7 @@ describe('the Escape priority order', () => {
 
 describe('the one listener that reads the order', () => {
   it('takes back the first open layer on Escape', () => {
-    LAYERS['#memPage']!.up()
+    LAYERS['#memoryPage']!.up()
     key('Escape')
     expect(spies.memClose).toHaveBeenCalledTimes(1)
   })
@@ -245,7 +245,7 @@ describe('the one listener that reads the order', () => {
      reader's back. Both spellings, because older input methods send the
      keyCode instead of the flag. */
   it('leaves an input method alone mid-composition', () => {
-    LAYERS['#memPage']!.up()
+    LAYERS['#memoryPage']!.up()
     key('Escape', { isComposing: true })
     key('Escape', { keyCode: 229 })
     expect(spies.memClose).not.toHaveBeenCalled()
@@ -312,7 +312,7 @@ describe('the one listener that reads the order', () => {
   it('does not see a key an element stopped', () => {
     find.install()
     find.toggle(true)
-    LAYERS['#memPage']!.up()
+    LAYERS['#memoryPage']!.up()
     document.getElementById('sfind')!
       .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
     expect(find.get().open).toBe(false)

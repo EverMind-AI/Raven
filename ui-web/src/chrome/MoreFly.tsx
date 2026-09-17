@@ -31,12 +31,12 @@ import type { JSX } from 'react'
 /* The glyphs, in the shape and the attribute order page.css and the sibling nav
    rows have them: one 24x24 box, stroked by the rule rather than by the tag. */
 const GLYPH: Record<string, JSX.Element> = {
-  xaPage: (
+  extAgentsPage: (
     <>
       <rect x="3.5" y="4" width="7" height="7" rx="1.6" /><rect x="13.5" y="13" width="7" height="7" rx="1.6" /><path d="M10.5 7.5h3.5a3 3 0 0 1 3 3v2.5" />
     </>
   ),
-  connPage: <path d="M9.5 14.5 6.8 17.2a3.3 3.3 0 0 1-4.7-4.7l2.7-2.7M14.5 9.5l2.7-2.7a3.3 3.3 0 0 1 4.7 4.7l-2.7 2.7M9 15l6-6" />,
+  connectionsPage: <path d="M9.5 14.5 6.8 17.2a3.3 3.3 0 0 1-4.7-4.7l2.7-2.7M14.5 9.5l2.7-2.7a3.3 3.3 0 0 1 4.7 4.7l-2.7 2.7M9 15l6-6" />,
   cronPage: (
     <>
       <circle cx="12" cy="12.5" r="7.5" /><path d="M12 8.5v4.2l2.6 1.6M9 2.5h6" />

@@ -53,7 +53,7 @@ const ctxRef = (items: () => MenuItem[]) => (el: HTMLElement | null): void => {
   if (el) (el as CtxHost)._ctx = items
 }
 
-export function WsApp(): JSX.Element {
+export function WorkspaceApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   /* The language the page resolved, so a pick repaints this island: every word
      below is a t(key) read at render time (state/lang/store.ts). */

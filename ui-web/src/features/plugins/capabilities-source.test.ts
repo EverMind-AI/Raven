@@ -49,7 +49,7 @@ async function opener(source: CapabilitiesSource): Promise<{
   const toast = vi.fn()
   const skeleton = document.createElement('div')
   skeleton.id = 'skeleton'
-  const part = await loadPart(() => import('./nav'), {
+  const part = await loadPart(() => import('./wire'), {
     fakes: {
       'src/state/page': { show: (page: string | null) => calls.push(`page:${page}`) },
       'src/state/caps': {

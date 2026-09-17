@@ -86,7 +86,7 @@ export function refreshStats(): Promise<void> {
 }
 
 export function open(): void {
-  page.show('memPage')
+  page.show('memoryPage')
   void refreshStats()
   void load()
 }

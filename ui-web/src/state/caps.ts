@@ -13,8 +13,8 @@
  * component renders in its place rather than a node inserted before it.
  *
  * The draw is dispatched from here rather than from a chain of decorators. The
- * two tabs' renderers live beside the islands they draw (features/skills/tab.ts,
- * features/plugins/tab.ts), and this declares the order their steps run in
+ * two tabs' renderers live beside the islands they draw (features/skills/wire.ts,
+ * features/plugins/wire.ts), and this declares the order their steps run in
  * (see `draw`), the way
  * state/detail.ts declares the drawer's close order.
  *

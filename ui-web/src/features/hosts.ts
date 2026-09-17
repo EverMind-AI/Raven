@@ -13,10 +13,10 @@
  * The React roots that render into them are src/main.tsx's.
  */
 
-/* Re-attached under #capsBody on every draw (features/skills/tab.ts). */
+/* Re-attached under #capsBody on every draw (features/skills/wire.ts). */
 export const skillsHost = document.createElement('div')
 export const skillsSkeletonHost = document.createElement('div')
 skillsSkeletonHost.className = 'hubgrid'
 
-/* The same, for the plugin tab's own draw (features/plugins/tab.ts). */
+/* The same, for the plugin tab's own draw (features/plugins/wire.ts). */
 export const plugHost = document.createElement('div')

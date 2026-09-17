@@ -41,7 +41,7 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
   const pending: Array<{ id: string; res: (v: unknown) => void; rej: (e: unknown) => void }> = []
   const subs: Array<{ id: string; res: () => void }> = []
   /* The seam the registry reaches its own switch through: sessionOpen is
-     sources.sessions.open, which the boot installs as the switch. Bound
+     sources.rail.open, which the boot installs as the switch. Bound
      through this holder rather than stubbed, so the reconnect drives the real
      function. */
   const api: { switchTo?: Registry['switchTo'] } = {}
@@ -138,7 +138,7 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
   })
   const wiring = (await import('../../app/install')) as Wiring
   const { setSources } = await import('../sources')
-  setSources({ composer: { slash: [] }, sessions: {}, transcript: {} } as never)
+  setSources({ composer: { slash: [] }, rail: {}, transcript: {} } as never)
   const { staging } = await import('./staging')
   const connection = await import('../../app/connection')
   wiring.installActions()

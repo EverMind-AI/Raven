@@ -106,7 +106,7 @@ export interface InstanceModelReply {
   availableModels?: SubagentModelChoice[]
 }
 
-export interface AgentsSource {
+export interface SubagentsSource {
   roster?(): Promise<SubagentRow[]>
   list(sessionId: string): Promise<AgentRow[]>
   /* Live-only: the fixture replay records no per-run context, so the demo

@@ -152,7 +152,7 @@ export async function deleteAll(): Promise<void> {
    source rather than replacing it: ./source.ts builds the object, with the rows
    it holds, and this module is what imports that one rather than the reverse. */
 export function installSessionActions(): void {
-  const target = sources.sessions
+  const target = sources.rail
   if (!target) return
   target.remove = remove
   target.archive = archive

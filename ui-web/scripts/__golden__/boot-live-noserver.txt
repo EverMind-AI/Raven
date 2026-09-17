@@ -23,7 +23,7 @@ div.app[data-rail=on]
         svg
           path
         span[data-i18n=gui.tab.plugins]
-      button#pbBtn.navi
+      button#playbooksBtn.navi
         svg
           circle
           circle
@@ -34,7 +34,7 @@ div.app[data-rail=on]
         svg
           path
         span[data-i18n=gui.nav.kb]
-      button#memBtn.navi
+      button#memoryBtn.navi
         svg
           path
         span[data-i18n=gui.nav.mem]
@@ -214,26 +214,26 @@ section#capsPage.page[data-open=false]
           input#mName[data-i18n-ph=gui.adv_name_ph]
           input#mAddr[data-i18n-ph=gui.adv_addr_ph]
           button#mAdd.mini[data-i18n=gui.add]
-section#xaPage.page[data-i18n-aria=gui.page.agents][data-open=false]
+section#extAgentsPage.page[data-i18n-aria=gui.page.agents][data-open=false]
   header
     h2[data-i18n=gui.page.agents]
   div.work
-    div#xaBody.wrap
-section#connPage.page[data-i18n-aria=gui.page.conn][data-open=false]
+    div#extAgentsBody.wrap
+section#connectionsPage.page[data-i18n-aria=gui.page.conn][data-open=false]
   header
     h2[data-i18n=gui.page.conn]
   div.work
-    div#connBody.wrap
-section#memPage.page[data-i18n-aria=gui.mem.hero][data-open=false]
+    div#connectionsBody.wrap
+section#memoryPage.page[data-i18n-aria=gui.mem.hero][data-open=false]
   header
     h2[data-i18n=gui.nav.mem]
   div.work
-    div#memBody.wrap
-section#pbPage.page[data-i18n-aria=gui.nav.pb][data-open=false]
+    div#memoryBody.wrap
+section#playbooksPage.page[data-i18n-aria=gui.nav.pb][data-open=false]
   header
     h2[data-i18n=gui.nav.pb]
   div.work
-    div#pbBody.wrap
+    div#playbooksBody.wrap
 section#kbPage.page[data-i18n-aria=gui.nav.kb][data-open=false]
   header
     h2[data-i18n=gui.nav.kb]

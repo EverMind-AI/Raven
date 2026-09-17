@@ -10,7 +10,7 @@ import type { DomainManifest } from '../manifests'
 
 export const manifest: DomainManifest = {
   domain: 'playbooks',
-  page: 'pbPage',
+  page: 'playbooksPage',
   sources: ['playbooks'],
   root: PlaybooksApp,
 }
