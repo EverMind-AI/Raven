@@ -9,14 +9,14 @@ import { describe, expect, it } from 'vitest'
 
 import { loadPart, moduleText } from './module-harness.mjs'
 
-const bootText = moduleText('state/boot.ts')
-const installText = moduleText('state/install.ts')
+const bootText = moduleText('app/boot.ts')
+const installText = moduleText('app/install.ts')
 /* The page's own half, as one text: the claim on the first frame, the wiring,
    the gateway sequence and the settings seam were the whole of the live layer
    and are six modules now, and every rule below is about the whole of it rather
    than about which of them a line sits in. */
-const wiring = bootText + installText + moduleText('state/connection.ts')
-  + moduleText('state/updates.ts') + moduleText('state/langPick.ts')
+const wiring = bootText + installText + moduleText('app/connection.ts')
+  + moduleText('app/updates.ts') + moduleText('state/langPick.ts')
   + moduleText('state/langEffects.ts') + moduleText('features/settings/chrome.ts')
   + moduleText('features/model/chip.ts')
 
@@ -35,7 +35,7 @@ const STEPS = [
 async function harness(rows = []) {
   const calls = []
   const step = (name) => (...args) => calls.push([name, ...args])
-  const part = await loadPart(() => import('../src/state/boot'), {
+  const part = await loadPart(() => import('../src/app/boot'), {
     fakes: {
       'src/state/look': { load: step('lookLoad') },
       'src/chrome/behaviour/panes': { load: step('paneLoad') },
@@ -88,10 +88,10 @@ describe('the page boot order', () => {
      them. */
   it('queues the first paint only after every synchronous source installer', () => {
     const carriers = [
-      ['state/boot.ts', bootText],
-      ['state/install.ts', installText],
+      ['app/boot.ts', bootText],
+      ['app/install.ts', installText],
     ].filter(([, text]) => text.includes('queueMicrotask(bootPage)'))
-    expect(carriers.map(([name]) => name)).toEqual(['state/boot.ts'])
+    expect(carriers.map(([name]) => name)).toEqual(['app/boot.ts'])
 
     const opened = bootText.indexOf('export function boot(): void {')
     const body = bootText.slice(opened, bootText.indexOf('\n}\n', opened))
@@ -113,7 +113,7 @@ describe('the page boot order', () => {
      ?stub=1 used to skip the live half and let the offline fixtures answer
      instead; the fixtures are responders behind the transport now
      (src/rpc/fixtures/), so one set of installers runs and the URL only decides
-     which transport they read (src/state/transport.ts).
+     which transport they read (src/rpc/chooseTransport.ts).
 
      The order between them is what the concatenated script's manifest was, and
      these four are the ones that depend on it: the palette's half of the

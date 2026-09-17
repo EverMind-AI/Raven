@@ -22,7 +22,7 @@ async function opener(calls: unknown[][], run: unknown) {
      around the module under test. */
   const wiring = await loadPart(async () => {
     await import('./source')
-    return import('../../state/install')
+    return import('../../app/install')
   }, {
     fakes: {
       'src/state/wsPanel': {
@@ -74,7 +74,7 @@ async function nodeHarness({ rows = [{ kind: 'spawn', agent: 'raven', label: 'qc
   const calls: unknown[][] = []
   const wiring = await loadPart(async () => {
     await import('./source')
-    return import('../../state/install')
+    return import('../../app/install')
   }, {
     fakes: {
       'src/state/wsPanel': {

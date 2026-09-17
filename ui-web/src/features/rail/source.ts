@@ -12,7 +12,7 @@
 
 import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
 import { show as toast } from '../../state/toast'
-import { gateway } from '../../state/gateway'
+import { gateway } from '../../rpc/gateway'
 import { T } from '../../i18n/t'
 import { $ } from '../../lib/dom'
 import { replace as sessionReplace, rows as sessionRows, sess } from '../../state/session/rows'

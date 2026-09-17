@@ -9,7 +9,7 @@
  */
 
 import { code as LANG, T } from '../i18n/t'
-import { gateway } from './gateway'
+import { gateway } from '../rpc/gateway'
 import * as lang from './lang'
 import { show as toast } from './toast'
 

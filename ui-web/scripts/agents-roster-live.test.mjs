@@ -13,7 +13,7 @@ import { fakeGateway, loadPart } from './module-harness.mjs'
 /* The seam the page installs, driven against a transport of our own: the
    filter is the whole subject, so the rows it is handed have to be ours. */
 async function roster(call) {
-  const wiring = await loadPart(() => import('../src/state/install'))
+  const wiring = await loadPart(() => import('../src/app/install'))
   await fakeGateway(call)
   const { setSources, sources } = await import('../src/state/sources')
   /* The two seam objects the chrome builds, which this case does not install. */

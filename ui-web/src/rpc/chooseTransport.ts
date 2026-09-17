@@ -17,15 +17,15 @@
  * against a real serve before.
  */
 
-import type { RpcTransport } from '../rpc/transport'
+import type { RpcTransport } from './transport'
 
-import { demoFixtures, deskDemoOverrides, onboardDemoOverrides } from '../rpc/fixtures'
-import { FixtureTransport } from '../rpc/fixtureTransport'
-import { OverrideTransport } from '../rpc/overrideTransport'
-import { WsTransport } from '../rpc/wsTransport'
+import { demoFixtures, deskDemoOverrides, onboardDemoOverrides } from './fixtures'
+import { FixtureTransport } from './fixtureTransport'
+import { OverrideTransport } from './overrideTransport'
+import { WsTransport } from './wsTransport'
 
-/** Whether this page has a gateway to talk to at all. */
-export function liveMode(): boolean {
+/* Whether this page has a gateway to talk to at all. */
+function liveMode(): boolean {
   return /^http/.test(location.protocol) && !/(^|[?&])stub=1/.test(location.search)
 }
 
@@ -50,8 +50,8 @@ export function chooseTransport(): RpcTransport {
   return withCanvases(base)
 }
 
-/** The URL-asked canvases, in the order they are layered. */
-export function withCanvases(base: RpcTransport): RpcTransport {
+/* The URL-asked canvases, in the order they are layered. */
+function withCanvases(base: RpcTransport): RpcTransport {
   let transport = base
   if (asked(/[?&]onboard=demo/)) {
     transport = new OverrideTransport(transport, onboardDemoOverrides(later))

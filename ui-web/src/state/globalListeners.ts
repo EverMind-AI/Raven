@@ -23,6 +23,8 @@
  * WHERE it stands among the body's children is state/portals.ts's to decide.
  */
 
+import { onLoad as onPageLoad } from '../app/boot'
+import { onVisible as probeOnVisible } from '../app/updates'
 import { onResize as reclampPanes } from '../chrome/behaviour/panes'
 import { onResize as dropBars, onScroll as barsOnScroll } from '../chrome/behaviour/scrollbars'
 import { trap as linkTrap } from '../features/browser/store'
@@ -31,7 +33,6 @@ import { composing } from '../features/composer/store'
 import { T } from '../i18n/t'
 import { islands } from '../islands'
 import { isMac } from '../lib/platform'
-import { onLoad as onPageLoad } from './boot'
 import { onContextMenu } from './contextMenu'
 import { toggle as toggleFind } from './find'
 import { onPointerDown as menuAway } from './menu'
@@ -44,7 +45,6 @@ import { close as closeSettings, isOpen as settingsIsOpen } from './settingsDial
 import { onDblClick as shellZoom, onMouseDown as shellDrag } from './shellWindow'
 import { close as closeTierPop } from './tier'
 import * as tip from './tooltip'
-import { onVisible as probeOnVisible } from './updates'
 
 /* The two composer popovers have no close button and no Escape branch: a
    pointer landing outside one is the way back out. Capture, because the row
@@ -156,10 +156,10 @@ export function installGlobalListeners(): void {
   document.addEventListener('keydown', onSettingsKey)
   /* The loaded page. The splash is the boot sequence's to lift, so what is
      left on this event is the one URL flag that asks for the canned onboarding
-     pass (state/boot.ts). */
+     pass (app/boot.ts). */
   window.addEventListener('load', onPageLoad)
   /* A tab coming back to the front is a reason to look for a new build. The
      watcher decides whether there is anything to look for; until it has
-     started, this answers nothing (state/updates.ts). */
+     started, this answers nothing (app/updates.ts). */
   document.addEventListener('visibilitychange', probeOnVisible)
 }

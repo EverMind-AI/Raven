@@ -111,7 +111,7 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
   })
   const { setSources } = await import('../sources')
   setSources({ composer: { slash: [] }, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
-  const part = await import('../install')
+  const part = await import('../../app/install')
   part.installActions()
   /* A turn is running on the open conversation, which is what a send records:
      the phase reducer is only reached for the conversation the page shows. */

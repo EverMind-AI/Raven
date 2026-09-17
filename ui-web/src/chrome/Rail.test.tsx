@@ -160,7 +160,7 @@ describe('the rail', () => {
   /* A React onClick leaves no trace on the element -- the root delegates every
      click -- so the count that matters is over the source. The new-task row's
      action belongs to the session rather than to the chrome that carries it, so
-     state/install.ts's installActions() binds it by id. */
+     app/install.ts's installActions() binds it by id. */
   it('leaves the new-task row exactly one handler, in the module that owns the action', () => {
     render()
     /* React leaves an empty onclick on every element it takes a click of (the
@@ -169,7 +169,7 @@ describe('the rail', () => {
        than replace it. */
     expect(el('newBtn').onclick).toBe(null)
     expect(el('skillBtn').onclick).not.toBe(null)
-    const wiring = source('state/install.ts')
+    const wiring = source('app/install.ts')
     expect([...wiring.matchAll(/\$\('#newBtn'\)!?\.onclick/g)]).toHaveLength(1)
     const tag = /<button[^>]*id="newBtn"[^>]*>/.exec(source('chrome/Rail.tsx'))
     expect(tag?.[0]).not.toMatch(/onClick/)

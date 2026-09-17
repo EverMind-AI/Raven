@@ -29,7 +29,7 @@ async function harness({ rows = [] as Row[] } = {}) {
   await loadPart(async () => {
     await import('./runtime'); await import('./stages')
     await import('./pipeline')
-    return import('../install')
+    return import('../../app/install')
   }, {
     fakes: {
       'src/state/caps': { draw: () => {} },
@@ -126,8 +126,8 @@ async function harness({ rows = [] as Row[] } = {}) {
   })
   const { setSources } = await import('../sources')
   setSources({ composer: { slash: [] }, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
-  const wiring = await import('../install')
-  const connection = await import('../connection')
+  const wiring = await import('../../app/install')
+  const connection = await import('../../app/connection')
   wiring.installActions()
   /* The push handlers, which the page's wiring installs beside them. */
   pipeline.installPipeline()

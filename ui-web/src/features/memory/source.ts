@@ -8,7 +8,7 @@ import type { MemorySource } from './types'
 import type { ParamsOf } from '../../rpc/generated'
 
 import { t } from '../../i18n/t'
-import { gateway } from '../../state/gateway'
+import { gateway } from '../../rpc/gateway'
 import { show as toast } from '../../state/toast'
 
 export const memorySource: MemorySource = {

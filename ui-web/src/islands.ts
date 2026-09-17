@@ -136,7 +136,7 @@ export const islands = {
        lib/resume.ts. */
     refreshDag: resume.refreshDag,
     landing: resume.landing,
-    /* Started by state/boot.ts once the session pointer is real. */
+    /* Started by app/boot.ts once the session pointer is real. */
     watch: resume.watch,
   },
   /* Not a React island: the nav flyout is a writer (see state/navfly.ts). It

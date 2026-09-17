@@ -7,7 +7,7 @@
  * are four lists now, in the order the manifest ran them, and the order is
  * load-bearing in exactly two places, both marked below.
  *
- * Called once, from the boot (state/boot.ts), after the legacy chrome has
+ * Called once, from the boot (app/boot.ts), after the legacy chrome has
  * installed itself. Split into four rather than one so a test can drive the
  * half it is about: the seam touches nothing but `sources`, while the pushes
  * need a transport and the actions need the document.
@@ -34,22 +34,22 @@ import {
 } from '../features/workspace/source'
 import { xaSource } from '../features/xa/source'
 import { islands } from '../islands'
-import { setFault as setMemFault } from './banner'
-import { show as toast } from './toast'
+import { setFault as setMemFault } from '../state/banner'
+import { show as toast } from '../state/toast'
 import { current as sessionCurrent } from '../lib/session'
 import { refusal as uploadRefusal } from '../lib/upload'
 import { installConnectionUI, onReconnect, surface } from './connection'
-import { gateway } from './gateway'
-import { reconnect, switchToDraft } from './session/registry'
-import { clarifyRequest, dispatch, installPipeline } from './session/pipeline'
-import { installComposerActions, installSlashActions } from './session/runtime'
-import { sources } from './sources'
+import { gateway } from '../rpc/gateway'
+import { reconnect, switchToDraft } from '../state/session/registry'
+import { clarifyRequest, dispatch, installPipeline } from '../state/session/pipeline'
+import { installComposerActions, installSlashActions } from '../state/session/runtime'
+import { sources } from '../state/sources'
 import { showUpNote } from './updates'
 import { T } from '../i18n/t'
 import { $ } from '../lib/dom'
 import { hostPlatform } from '../lib/platform'
-import * as caps from './caps'
-import * as page from './page'
+import * as caps from '../state/caps'
+import * as page from '../state/page'
 
 import type { ComposerSource } from '../features/composer/types'
 import type { SlashCmd } from '../features/composer/types'

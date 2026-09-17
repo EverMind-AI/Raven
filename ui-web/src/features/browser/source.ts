@@ -13,7 +13,7 @@ import type { BrowserFramePushParams } from '../../rpc/notifications'
 import type { ChromiumSource, FrameHead } from './types'
 
 import { islands } from '../../islands'
-import { gateway } from '../../state/gateway'
+import { gateway } from '../../rpc/gateway'
 
 const b64Blob = (b64: string): Blob => {
   const s = atob(b64)

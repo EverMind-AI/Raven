@@ -21,7 +21,7 @@
  *
  * What this does NOT own, though it renders the elements:
  *   - #newBtn's click. Its action belongs to the session rather than to the
- *     chrome that carries it, which is what src/state/install.ts's
+ *     chrome that carries it, which is what src/app/install.ts's
  *     installActions() is for; it binds this button by id there, and the dead
  *     second handler the demo layer had is gone.
  *   - #moreFly's rows and the two flags the fold writes (#moreFly[data-open],
@@ -30,7 +30,7 @@
  *     aria-current on demand, and the rail island's markNew() drives that.
  *   - the aria-current marks on the six nav buttons (features/rail/store.ts).
  *   - #meSub and #meKbd's text (src/state/foot.ts), the update row's text and
- *     its hidden flag (src/state/updates.ts), and #upnote's click.
+ *     its hidden flag (src/app/updates.ts), and #upnote's click.
  *   - #list's children (the rail island's own root) and #railGrip's drag
  *     (src/chrome/behaviour/panes.ts).
  * Each of those is still exactly one writer of the value it writes, and React
@@ -189,7 +189,7 @@ function FindRow(): JSX.Element {
 
 /* The foot row. The update notice above it and the two slots inside the door --
    the running build and this platform's shortcut for it -- are written by the
-   modules that know those facts (state/updates.ts, state/foot.ts), so this
+   modules that know those facts (app/updates.ts, state/foot.ts), so this
    renders them as the page serves them: empty. */
 function RailFoot(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)

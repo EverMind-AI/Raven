@@ -15,7 +15,7 @@
 import { islands } from '../../islands'
 import { current as sessionCurrent } from '../../lib/session'
 import { gone, has } from '../../rpc/capabilities'
-import { gateway } from '../../state/gateway'
+import { gateway } from '../../rpc/gateway'
 import { mediaOf } from '../../state/session/runtime'
 
 import type { AgentCtxLike } from '../transcript/store'

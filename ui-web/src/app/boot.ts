@@ -8,7 +8,7 @@
  * is that the order is now readable as a list.
  *
  * Which transport answers the calls is decided before any of this runs
- * (src/state/transport.ts): a page opened from disk or with ?stub=1 reads the
+ * (src/rpc/chooseTransport.ts): a page opened from disk or with ?stub=1 reads the
  * offline fixture library through the very same sequence.
  */
 
@@ -21,28 +21,28 @@ import { loadSessions, pinSession } from '../features/rail/source'
 import { loadSettings, pushPermMode } from '../features/settings/source'
 import { islands } from '../islands'
 import { hasUpdateFlag } from '../rpc/capabilities'
-import { draw as drawCtx } from './ctxChip'
-import { draw as drawFoot } from './foot'
-import { bootError } from './failureBar'
-import { load as lookLoad } from './look'
+import { draw as drawCtx } from '../state/ctxChip'
+import { draw as drawFoot } from '../state/foot'
+import { bootError } from '../state/failureBar'
+import { load as lookLoad } from '../state/look'
 import { load as paneLoad } from '../chrome/behaviour/panes'
-import { draw as drawPerm } from './perm'
+import { draw as drawPerm } from '../state/perm'
 import { hostPlatformSet } from '../lib/platform'
 import { current as sessionCurrent, setCurrent as sessionSet } from '../lib/session'
-import { load as loadTier } from './tier'
-import * as caps from './caps'
+import { load as loadTier } from '../state/tier'
+import * as caps from '../state/caps'
 import { authFail, bootFail, shellReady, surface } from './connection'
-import { setRuntime } from './envChip'
-import { gateway } from './gateway'
+import { setRuntime } from '../state/envChip'
+import { gateway } from '../rpc/gateway'
 import { installPage } from './install'
-import { load as loadLang, restore as langRestore } from './langPick'
-import { set as setRail } from './rail'
-import { open as sessionOpen, rows as sessionRows, sess } from './session/rows'
-import { switchTo, switchToDraft } from './session/registry'
-import { sources } from './sources'
+import { load as loadLang, restore as langRestore } from '../state/langPick'
+import { set as setRail } from '../state/rail'
+import { open as sessionOpen, rows as sessionRows, sess } from '../state/session/rows'
+import { switchTo, switchToDraft } from '../state/session/registry'
+import { sources } from '../state/sources'
 import { hideSplash } from './splash'
 import { appVersionSet, resumeUpgrade, showUpNote, watchForUpdates } from './updates'
-import { bump as bumpWs } from './ws'
+import { bump as bumpWs } from '../state/ws'
 
 import type { RailSource, SessRow } from '../features/rail/types'
 
@@ -107,7 +107,7 @@ async function sequence(): Promise<void> {
      does mean the session is not welcome: nothing has been served to this page
      yet that could have come from a gateway which then went away. The rejoin
      path decides differently, and has to -- see the transport's rejoin and the
-     reconnect UI in state/connection.ts. */
+     reconnect UI in app/connection.ts. */
   if (!(await gateway().connect())) { authFail(); return }
   try {
     const hello = await gateway().call('system.hello', { client_version: '0.1.0', surface: surface() })

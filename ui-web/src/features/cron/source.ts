@@ -14,7 +14,7 @@ import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
 import { setCurrent as sessionSet } from '../../lib/session'
 import { show as toast } from '../../state/toast'
-import { gateway } from '../../state/gateway'
+import { gateway } from '../../rpc/gateway'
 
 /** One job as `cron.list` sends it. */
 export type CronJobWire = ResultOf<'cron.list'>['jobs'][number]

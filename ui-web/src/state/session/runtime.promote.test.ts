@@ -49,7 +49,7 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
      the order that keeps one module graph: the fakes are installed around the
      modules the first import reaches, and one it did not is loaded afterwards
      without them. */
-  await loadPart(async () => { await import('./runtime'); return import('../install') }, {
+  await loadPart(async () => { await import('./runtime'); return import('../../app/install') }, {
     fakes: {
       'src/state/caps': { draw: () => {} },
       'src/state/page': { show: () => {} },

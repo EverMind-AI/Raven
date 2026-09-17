@@ -8,7 +8,7 @@
  * silently drop -- nothing else fails when a panel merely stops refreshing.
  *
  * Opened by the page's wiring, beside the handlers for the pushes that do
- * exist (src/state/install.ts), so that is what this drives.
+ * exist (src/app/install.ts), so that is what this drives.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -20,7 +20,7 @@ import type { Sources } from '../../state/sources'
 async function harness() {
   const wiring = await loadPart(async () => {
     await import('./source')
-    return import('../../state/install')
+    return import('../../app/install')
   }, {
     fakes: {
       'src/lib/session': { current: () => 's1' },

@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetXaSeen, xaFetch, xaRowOf, xaSource } from './source'
 import { FixtureTransport } from '../../rpc/fixtureTransport'
-import { setGateway } from '../../state/gateway'
+import { setGateway } from '../../rpc/gateway'
 
 import type { XaRowWire } from './source'
 import type { XaRow } from './types'

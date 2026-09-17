@@ -12,14 +12,14 @@
 
 import { T } from '../i18n/t'
 import { islands } from '../islands'
-import { show as failureBar } from './failureBar'
-import { gateway } from './gateway'
+import { gateway } from '../rpc/gateway'
+import { show as failureBar } from '../state/failureBar'
+import { open as upShade } from '../state/upgradeShade'
 import { hideSplash } from './splash'
 import { distMoved, upgradeKind, upMarkClear } from './updates'
-import { open as upShade } from './upgradeShade'
 
 import type { ConnectionState, StateInfo } from '../rpc/transport'
-import type { UpgradeShade } from './upgradeShade'
+import type { UpgradeShade } from '../state/upgradeShade'
 
 /* Whether this page is the desktop shell's own window. Read on demand rather
    than latched at boot: the user agent cannot change under a loaded page, and
@@ -108,7 +108,7 @@ export function bootFail(e: unknown): void {
 /* What has to happen again once a dropped connection is back. A registry
    rather than one slot, because the transport reports a reconnect to whoever
    is listening and this module is what decides the order things are refetched
-   in; the page's wiring (state/install.ts) is the one registrar today. */
+   in; the page's wiring (app/install.ts) is the one registrar today. */
 export const reconnectHandlers = new Set<() => void>()
 export function onReconnect(fn: () => void): () => void {
   reconnectHandlers.add(fn)

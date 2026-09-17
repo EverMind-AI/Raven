@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { FixtureTransport } from '../rpc/fixtureTransport'
+import { FixtureTransport } from './fixtureTransport'
 import { gateway, setGateway } from './gateway'
 
 afterEach(() => {

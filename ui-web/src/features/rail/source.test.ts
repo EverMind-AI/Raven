@@ -275,7 +275,7 @@ describe('re-reading the session list', () => {
 
   it('keeps the stale list when the read fails', async () => {
     const h = await refreshHarness({ rows: [{ id: 'a' }] })
-    const { setGateway } = await import('../../state/gateway')
+    const { setGateway } = await import('../../rpc/gateway')
     const transport = await import('../../rpc/fixtureTransport')
     const broken = new transport.FixtureTransport({})
     broken.call = () => Promise.reject(new Error('not connected'))

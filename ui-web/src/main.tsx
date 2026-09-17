@@ -33,16 +33,16 @@ import { plugHost, skillsHost, skillsSkeletonHost } from './islands'
 import * as pluginsTab from './features/plugins/tab'
 import * as settingsChrome from './features/settings/chrome'
 import * as skillsTab from './features/skills/tab'
-import { boot } from './state/boot'
-import { installComposerPalette } from './state/install'
+import { boot } from './app/boot'
+import { installComposerPalette } from './app/install'
 import * as langEffects from './state/langEffects'
-import { dropNoJs, markStart } from './state/splash'
+import { dropNoJs, markStart } from './app/splash'
 import * as ws from './state/ws'
 import { setWsPanel } from './state/wsPanel'
-import { setGateway } from './state/gateway'
+import { setGateway } from './rpc/gateway'
 import { installGlobalListeners } from './state/globalListeners'
 import * as portals from './state/portals'
-import { chooseTransport } from './state/transport'
+import { chooseTransport } from './rpc/chooseTransport'
 
 /* The page: the one root that renders it, the roots the islands mount, the
  * chrome that wires itself over what they render, and the one transport.
@@ -160,7 +160,7 @@ if (setHost) createRoot(setHost).render(<SettingsApp />)
 /* The one data entry point, installed before anything can ask for it. Every
    mode has one now: a page served by a raven gets the socket, and a page opened
    from disk or with ?stub=1 gets the offline fixture library, which answers the
-   same contract (state/transport.ts). */
+   same contract (rpc/chooseTransport.ts). */
 setGateway(chooseTransport())
 
 /* What the concatenated page script did while it ran, in the order it ran it.
@@ -177,7 +177,7 @@ dropNoJs()
 /* The session pointer starts on the offline fixture's first conversation, and
    the boot's own claim clears it again a few lines below: the two writes
    together are what keeps a reload's "come back here" note off fixture noise
-   (state/boot.ts's claimFirstFrame, lib/resume.ts). */
+   (app/boot.ts's claimFirstFrame, lib/resume.ts). */
 session.setCurrent('a')
 /* The half of the composer's source no transport answers, before the settings
    seam adds its own member to the same object. */
@@ -195,9 +195,9 @@ pluginsTab.install()
 langEffects.install()
 settingsChrome.install()
 /* The splash is up; this is the clock the floor on its display time measures
-   from (state/splash.ts). */
+   from (app/splash.ts). */
 markStart()
 
 /* The page's own boot: the seam, the pushes, the actions, then everything a
-   first frame needs from the gateway (state/boot.ts). */
+   first frame needs from the gateway (app/boot.ts). */
 boot()

@@ -10,7 +10,7 @@
 import { hasStillOnDisk } from '../../rpc/capabilities'
 import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
 import { show as toast } from '../../state/toast'
-import { gateway } from '../../state/gateway'
+import { gateway } from '../../rpc/gateway'
 import { forget as forgetSubscription, switchToDraft } from '../../state/session/registry'
 import { sources } from '../../state/sources'
 import { islands } from '../../islands'

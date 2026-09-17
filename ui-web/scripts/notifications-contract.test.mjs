@@ -46,7 +46,7 @@ function sideChannelMethods() {
    the seven that are not a turn's, and the session pipeline, which took the
    subscription envelope and the five requests that block a turn. */
 const SITES = [
-  'state/install.ts',
+  'app/install.ts',
   'state/session/pipeline.ts',
 ]
 

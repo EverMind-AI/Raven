@@ -17,7 +17,7 @@ import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harne
 import type { Sources } from '../sources'
 
 type Runtime = typeof import('./runtime')
-type Wiring = typeof import('../install')
+type Wiring = typeof import('../../app/install')
 
 interface Row { id: string; title?: string; last?: string; pin?: boolean }
 
@@ -36,7 +36,7 @@ async function harness({ rows }: { rows: Row[] }) {
      without them. */
   await loadPart(async () => {
     await import('./runtime')
-    return import('../install')
+    return import('../../app/install')
   }, {
     fakes: {
       'src/features/composer/mount': { drawMeter: () => calls.push(['drawMeter']) },
@@ -73,7 +73,7 @@ async function harness({ rows }: { rows: Row[] }) {
       },
       'src/features/rail/title': { plainTitle: (t: unknown) => String(t) },
       'src/state/toast': { show: (text: string) => calls.push(['toast', text]) },
-      'src/state/updates': { showUpNote: () => {} },
+      'src/app/updates': { showUpNote: () => {} },
     },
     islands: {
       transcript: {
@@ -88,7 +88,7 @@ async function harness({ rows }: { rows: Row[] }) {
   })
   const { setSources } = await import('../sources')
   setSources({ composer: { slash }, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
-  const wiring = await import('../install')
+  const wiring = await import('../../app/install')
   wiring.installSources()
   wiring.installActions()
   const tick = () => new Promise((r) => setTimeout(r, 0))
@@ -289,7 +289,7 @@ async function railHarness(
   let settled: Promise<void> = Promise.resolve()
   await loadPart(async () => {
     await import('./runtime')
-    return import('../install')
+    return import('../../app/install')
   }, {
     fakes: {
       'src/state/session/rows': {
@@ -340,8 +340,8 @@ async function railHarness(
   })
   const { setSources } = await import('../sources')
   setSources({ composer: { slash: [] }, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
-  const wiring = (await import('../install')) as Wiring
-  const { sessionsSource } = await import('../boot')
+  const wiring = (await import('../../app/install')) as Wiring
+  const { sessionsSource } = await import('../../app/boot')
   /* The pin is a verb of the session source itself, which the boot installs. */
   setSources({ sessions: sessionsSource } as unknown as Partial<Sources>)
   wiring.installActions()
@@ -482,7 +482,7 @@ async function bulkHarness(answers: Record<string, Answer | Error>) {
   let live = Object.keys(answers).map((id) => ({ id, title: id }))
   await loadPart(async () => {
     await import('../../features/rail/leave')
-    return import('../boot')
+    return import('../../app/boot')
   }, {
     fakes: {
       'src/state/session/rows': {
@@ -516,7 +516,7 @@ async function bulkHarness(answers: Record<string, Answer | Error>) {
     return a
   })
   const { setSources } = await import('../sources')
-  const { sessionsSource } = await import('../boot')
+  const { sessionsSource } = await import('../../app/boot')
   setSources({ sessions: sessionsSource } as unknown as Partial<Sources>)
   return { deleteAll: () => runtime.deleteAll(), left: () => live.map((s) => s.id) }
 }

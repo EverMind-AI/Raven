@@ -41,7 +41,7 @@
  * the splash is the literal first frame, painted while this bundle is still
  * being evaluated, and #noJs is what a reader gets when it never runs -- so
  * neither can be something React puts on screen. They stay in page.html and are
- * taken down at boot (state/splash.ts). #onb stays
+ * taken down at boot (app/splash.ts). #onb stays
  * with them because a portal can only append: rendered from here it would land
  * after #noJs instead of between the two.
  */

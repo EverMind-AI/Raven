@@ -13,7 +13,7 @@ import type { TierReply, TierSource } from '../../state/tier'
 import { islands } from '../../islands'
 import { t } from '../../i18n/t'
 import { current as sessionCurrent } from '../../lib/session'
-import { gateway } from '../../state/gateway'
+import { gateway } from '../../rpc/gateway'
 import { generation } from '../../state/session/generation'
 import { staging } from '../../state/session/staging'
 
@@ -35,7 +35,7 @@ let defaultModelLive = ''
 let defaultProviderLive = ''
 
 /* Whether first-run setup reported a configured provider. On an object because
-   the boot in src/state/boot.ts is what learns the answer. */
+   the boot in src/app/boot.ts is what learns the answer. */
 export const setupState: { providerConfigured: boolean | null } = { providerConfigured: null }
 
 export const providers = (): Provider[] => providersLive

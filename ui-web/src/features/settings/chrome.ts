@@ -5,7 +5,7 @@
  * answer the dialog, the model list, the tier and the rail banner.
  *
  * Installed once, from src/main.tsx: after the chrome it reaches for, before
- * the boot's own wiring (src/state/install.ts).
+ * the boot's own wiring (src/app/install.ts).
  */
 
 import { modelSource, openModelsForMissingProvider, setChipPainter, tierSource } from '../model/source'
@@ -16,11 +16,11 @@ import { hasUpdateFlag } from '../../rpc/capabilities'
 import { setPermPersister } from '../../state/perm'
 import { current as sessionCurrent } from '../../lib/session'
 import { show as toast } from '../../state/toast'
-import { gateway } from '../../state/gateway'
+import { gateway } from '../../rpc/gateway'
 import { pick as langPick } from '../../state/langPick'
 import { staging } from '../../state/session/staging'
 import { sources } from '../../state/sources'
-import { APP_VERSION, appVersionSet, askUpgrade, showUpNote } from '../../state/updates'
+import { APP_VERSION, appVersionSet, askUpgrade, showUpNote } from '../../app/updates'
 import { islands } from '../../islands'
 
 import type { ComposerSource } from '../composer/types'

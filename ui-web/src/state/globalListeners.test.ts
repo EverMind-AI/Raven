@@ -22,12 +22,12 @@ import { installGlobalListeners } from './globalListeners'
 import { _resetForTests as resetLayers } from './portals'
 import * as selection from './selection'
 import * as tip from './tooltip'
-import * as updates from './updates'
+import * as updates from '../app/updates'
 import * as contextMenu from './contextMenu'
 import * as shellWindow from './shellWindow'
 import * as browser from '../features/browser/store'
 import * as composer from '../features/composer/mount'
-import * as boot from './boot'
+import * as boot from '../app/boot'
 import * as chips from './proseChips'
 import * as menu from './menu'
 import * as panes from '../chrome/behaviour/panes'
@@ -56,8 +56,8 @@ const ORDER = [
   ['document', 'click', 'bubble', "a code block's copy button"],
   ['document', 'keydown', 'bubble', 'the Escape order and its three shortcuts'],
   ['document', 'keydown', 'bubble', 'the settings shortcut'],
-  ['window', 'load', 'bubble', 'the boot\'s load handler (state/boot)'],
-  ['document', 'visibilitychange', 'bubble', 'the build watch (state/updates)'],
+  ['window', 'load', 'bubble', 'the boot\'s load handler (app/boot)'],
+  ['document', 'visibilitychange', 'bubble', 'the build watch (app/updates)'],
 ] as const
 
 type Row = [string, string, string, boolean, unknown]

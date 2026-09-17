@@ -17,7 +17,7 @@ import type { XaRow, XaSource } from './types'
 import type { ResultOf } from '../../rpc/generated'
 
 import { hasBuildFlag } from '../../rpc/capabilities'
-import { gateway } from '../../state/gateway'
+import { gateway } from '../../rpc/gateway'
 
 /** One agent as `subagents.list` sends it. */
 export type XaRowWire = ResultOf<'subagents.list'>['rows'][number]

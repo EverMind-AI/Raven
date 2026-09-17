@@ -22,7 +22,7 @@ import { islands } from '../../islands'
 import { code as LANG } from '../../i18n/t'
 import { t } from '../../i18n/t'
 import { show as toast } from '../../state/toast'
-import { gateway } from '../../state/gateway'
+import { gateway } from '../../rpc/gateway'
 
 type ExtList = ResultOf<'ext.list'>
 /** The four row shapes one `ext.list` read answers with. */

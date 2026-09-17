@@ -28,9 +28,9 @@ import { RPC_METHODS } from '../src/rpc/generated'
    plugin-add path in features/plugins/source.ts. */
 const UNCHECKED = ['raven.mcp.list', 'raven.mcp.set']
 
-/* Every feature's source module and everything under state/: the calls moved
-   there as each domain left the legacy layer, and the two sets together are the
-   page's whole traffic. Paths are from src/. */
+/* Every feature's source module and everything under state/ and app/: the
+   calls moved there as each domain left the legacy layer, and the two sets
+   together are the page's whole traffic. Paths are from src/. */
 const sourceModules = () => readdirSync(resolve(process.cwd(), 'src/features'), { withFileTypes: true })
   .filter((e) => e.isDirectory())
   .map((e) => `features/${e.name}/source.ts`)
@@ -38,13 +38,13 @@ const sourceModules = () => readdirSync(resolve(process.cwd(), 'src/features'), 
     try { readFileSync(resolve(process.cwd(), 'src', rel)); return true } catch { return false }
   })
 
-/* Every .ts under state/, at any depth, tests excluded. */
-const stateModules = (dir = 'state') => readdirSync(resolve(process.cwd(), 'src', dir), { withFileTypes: true })
+/* Every .ts under one of those trees, at any depth, tests excluded. */
+const treeModules = (dir) => readdirSync(resolve(process.cwd(), 'src', dir), { withFileTypes: true })
   .flatMap((e) => (e.isDirectory()
-    ? stateModules(`${dir}/${e.name}`)
+    ? treeModules(`${dir}/${e.name}`)
     : e.name.endsWith('.ts') && !e.name.includes('.test.') ? [`${dir}/${e.name}`] : []))
 
-const FILES = [...sourceModules(), ...stateModules()]
+const FILES = [...sourceModules(), ...treeModules('state'), ...treeModules('app')]
 
 /* A `gateway().call(...)` or `gateway().binary(...)`: the callee is a property
    of a call to `gateway`, which is what tells it apart from `source.call(...)`
@@ -89,8 +89,10 @@ describe('the method names the page calls', () => {
   const called = names('call')
 
   it('reaches the layer at all', () => {
-    /* A gate that found nothing would pass forever. */
-    expect(called.length).toBeGreaterThan(100)
+    /* A ratchet rather than a floor near zero: a gate that found nothing would
+       pass forever, and so would one that lost a whole scan root -- the seven
+       calls in app/ dropping out of the count was invisible under `> 100`. */
+    expect(called.length).toBeGreaterThan(135)
   })
 
   it('are all declared by the contract', () => {

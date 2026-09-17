@@ -77,7 +77,7 @@ export async function loadPart(importPart, { fakes = {}, islands = {} } = {}) {
    defer a call and settle it in whatever order the race under test needs. */
 export async function fakeGateway(handler) {
   const { FixtureTransport } = await import('../src/rpc/fixtureTransport')
-  const { setGateway } = await import('../src/state/gateway')
+  const { setGateway } = await import('../src/rpc/gateway')
   const transport = new FixtureTransport({})
   transport.call = handler
   transport.callUnchecked = handler

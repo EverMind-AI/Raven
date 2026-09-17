@@ -150,7 +150,7 @@ describe('the live extension source', () => {
       plugins: [{ id: 'python', display_name: 'Python', version: '1', enabled: true }],
       mcp: [{ name: 'remote', transport: 'http', enabled: true, state: 'connected', tool_count: 2 }],
     }
-    const wiring = await loadPart(() => import('../../state/install'), {
+    const wiring = await loadPart(() => import('../../app/install'), {
       fakes: {
         'src/state/banner': { setFault: vi.fn() },
         'src/state/toast': { show: vi.fn() },

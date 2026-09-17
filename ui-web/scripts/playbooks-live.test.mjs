@@ -18,7 +18,7 @@ const declared = new Set(contract.methods.map((m) => m.name))
 
 async function source(answers) {
   const calls = []
-  const wiring = await loadPart(() => import('../src/state/install'))
+  const wiring = await loadPart(() => import('../src/app/install'))
   await fakeGateway((method, params) => {
     calls.push([method, params])
     return Promise.resolve(answers[method])

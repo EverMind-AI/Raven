@@ -21,7 +21,7 @@ import { t } from '../../i18n/t'
 import { setFromConfig as setPermMode } from '../../state/perm'
 import { current as sessionCurrent } from '../../lib/session'
 import { show as toast } from '../../state/toast'
-import { gateway } from '../../state/gateway'
+import { gateway } from '../../rpc/gateway'
 import { generation } from '../../state/session/generation'
 import { staging } from '../../state/session/staging'
 

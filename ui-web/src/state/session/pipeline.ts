@@ -15,7 +15,7 @@
 
 import { current as sessionCurrent } from '../../lib/session'
 import { show as toast } from '../toast'
-import { gateway } from '../gateway'
+import { gateway } from '../../rpc/gateway'
 import { T } from '../../i18n/t'
 import { closeApproval as approvalClose, open as approveSheet, openApproval as approvalSheet } from '../../features/composer/approve'
 import { close as clarifyClose, open as clarifySheet } from '../../features/composer/clarify'

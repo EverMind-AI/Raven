@@ -2,8 +2,8 @@
  *
  * A page's renderer lives once and reads its data only through a source. The
  * page installs one per domain synchronously before the first data-driven
- * paint (src/state/install.ts), and which transport answers behind it is the
- * URL's decision rather than the renderer's (src/state/transport.ts). No flags,
+ * paint (src/app/install.ts), and which transport answers behind it is the
+ * URL's decision rather than the renderer's (src/rpc/chooseTransport.ts). No flags,
  * no clearing, no repaint.
  * Design: docs/specs/2026-08-19-page-datasource-seam.md
  *
