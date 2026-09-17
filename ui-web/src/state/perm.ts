@@ -1,11 +1,11 @@
 /* The permission mode: the chip on the composer (#permChip) and the panel it
  * opens (#permPop).
  *
- * A store rather than a writer, now that <PermChip/> and <PermPop/> render both
- * from it (src/chrome/PermChip.tsx, src/chrome/PermPop.tsx). What stays here is
- * the state and everything that decides: the three tiers, the mode in force,
- * where a pick is written, and the rows a panel shows when it opens. The chip
- * itself is still painted by hand -- see `draw`.
+ * A store rather than a writer: <PermChip/> and <PermPop/> render both from it
+ * (src/chrome/PermChip.tsx, src/chrome/PermPop.tsx). What stays here is the
+ * state and everything that decides: the three tiers, the mode in force, where
+ * a pick is written, the rows a panel shows when it opens, and the chip's own
+ * four values -- `draw` fills those rather than writing them by id.
  *
  * Three tiers, ordered from the strictest to the one with no brakes, because
  * that is the order a reader should meet them in. The engine's permission gate
@@ -69,6 +69,18 @@ export interface PermRow {
   readonly ticked: boolean
 }
 
+/* The chip's own four values, as the last draw read the catalogue: the tier's
+   name, whether it is the one in the warning colour, its shield and the
+   accessible name. Null until the first draw, and then <PermChip/> shows the
+   word the page was served with. */
+export interface PermPaint {
+  readonly label: string
+  readonly risk: boolean
+  /** The shield's paths, as markup, because that is how ICO spells them. */
+  readonly ico: string
+  readonly aria: string
+}
+
 export interface PermPanel {
   /** Up or down: the panel's data-open and the chip's aria-expanded. */
   readonly open: boolean
@@ -80,9 +92,11 @@ export interface PermPanel {
   readonly listed: readonly PermRow[] | null
   /** Bumped by every open, so a panel opened twice is measured twice. */
   readonly opened: number
+  /** What the chip shows, or null while nothing has drawn it yet. */
+  readonly paint: PermPaint | null
 }
 
-const shut: PermPanel = { open: false, listed: null, opened: 0 }
+const shut: PermPanel = { open: false, listed: null, opened: 0, paint: null }
 let panel: PermPanel = shut
 const listeners = new Set<() => void>()
 
@@ -99,12 +113,23 @@ export function subscribe(fn: () => void): () => void {
   }
 }
 
+/* Field by field, not by reference: `draw` builds a fresh paint on every call,
+   and comparing the two objects would make each call a change -- while a paint
+   compared by reference alone would also let a language flip re-render the chip
+   into the same words for nothing. */
+const samePaint = (a: PermPaint | null, b: PermPaint | null): boolean => {
+  if (a === b) return true
+  if (!a || !b) return false
+  return a.label === b.label && a.risk === b.risk && a.ico === b.ico && a.aria === b.aria
+}
+
 /* Committed synchronously, the way the writes by id were: `open` measures the
    panel it has just filled, and a caller that opens and then reads the DOM --
    the chip's own toggle, the pointerdown that closes it, every case in
    perm.test.ts -- has to see it. */
 function put(next: PermPanel): void {
-  if (next.open === panel.open && next.listed === panel.listed && next.opened === panel.opened) return
+  if (next.open === panel.open && next.listed === panel.listed && next.opened === panel.opened
+    && samePaint(next.paint, panel.paint)) return
   panel = next
   flushSync(() => {
     for (const fn of [...listeners]) fn()
@@ -158,12 +183,14 @@ export const current = (): string => mode
 
 const el = <T extends HTMLElement>(id: string): T | null => document.getElementById(id) as T | null
 
-/* The chip, painted by hand over what <PermChip/> renders: the icon is markup
-   ICO carries as a string, and the label and the accessible name are one write
-   each that React would only ever render the served literal of. Safe because
-   the component renders no value for any of the three -- React diffs against
-   the props it rendered last, so a prop it never changes is never written
-   again.
+/* The chip, as four values <PermChip/> renders. The name is `draw` and so are
+   its two call sites (the boot's ordered list and the language repaint), which
+   is what the two ordered-list gates assert by literal; what changed is that
+   the four land in the store instead of being written by id.
+
+   Nothing here reads the document, so there is nothing to guard: a page whose
+   markup has gone still has a React tree to commit into (measured), and the
+   panel's own open is what still needs the two nodes to exist.
 
    The chip reads its own state, which is why it carries no hover label: the
    detail of each tier belongs in the panel the click opens. Nothing to remove
@@ -172,14 +199,15 @@ const el = <T extends HTMLElement>(id: string): T | null => document.getElementB
    this one carried was dead there too. It did not come across. */
 export function draw(): void {
   const cur = TIERS.find((p) => p.id === mode) || TIERS[0]!
-  const name = el('permName')
-  if (name) name.textContent = t(cur.label)
-  const chip = el('permChip')
-  if (!chip) return
-  chip.classList.toggle('risk', !!cur.risk)
-  const pic = chip.querySelector('.pico')
-  if (pic) pic.innerHTML = ICO[cur.id] || ICO.full!
-  chip.setAttribute('aria-label', `${t('gui.perm.title')}: ${t(cur.label)}`)
+  put({
+    ...panel,
+    paint: {
+      label: t(cur.label),
+      risk: !!cur.risk,
+      ico: ICO[cur.id] || ICO.full!,
+      aria: `${t('gui.perm.title')}: ${t(cur.label)}`,
+    },
+  })
 }
 
 const rows = (): readonly PermRow[] =>
@@ -204,7 +232,7 @@ export function open(): void {
      Before the rows and the flag, because the placement <PermPop/> makes in
      its layout effect measures the panel where it now stands. */
   if (pop.parentElement !== document.body) document.body.appendChild(pop)
-  put({ open: true, listed: rows(), opened: panel.opened + 1 })
+  put({ ...panel, open: true, listed: rows(), opened: panel.opened + 1 })
 }
 
 export function close(): void {

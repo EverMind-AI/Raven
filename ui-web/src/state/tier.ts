@@ -3,7 +3,8 @@
  *
  * A store rather than a writer, for the reasons `perm.ts` gives next door:
  * <TierChip/> and <TierPop/> render both nodes from it (src/chrome/TierChip.tsx,
- * src/chrome/TierPop.tsx), the panel is still moved to the body by hand to be
+ * src/chrome/TierPop.tsx) -- the chip's four values and the panel's two
+ * headings included -- the panel is still moved to the body by hand to be
  * positioned at all, and what stays here decides. The two chips sit side by side
  * and are built the same way on purpose -- a reader meets them as one row of
  * session settings, not as two unrelated controls.
@@ -84,6 +85,27 @@ export interface TierRow {
   readonly ticked: boolean
 }
 
+/* The chip, as <TierChip/> renders it. `off` is the whole of it for a chip with
+   nothing honest to show -- no reply yet, or a build with no catalogue -- and
+   the three words are not carried at all there, because the hidden chip goes on
+   showing the shape the page was served with rather than a tier this side
+   invented. */
+export type TierPaint =
+  | { readonly off: true }
+  | {
+    readonly off: false
+    readonly label: string
+    /** The bars, as markup, because that is how ICO spells them. */
+    readonly ico: string
+    readonly aria: string
+  }
+
+/** The panel's heading and footer, as the open that built them read them. */
+export interface TierHeadings {
+  readonly lab: string
+  readonly note: string
+}
+
 export interface TierPanel {
   /** Up or down: the panel's data-open and the chip's aria-expanded. */
   readonly open: boolean
@@ -94,9 +116,15 @@ export interface TierPanel {
   readonly listed: readonly TierRow[] | null
   /** Bumped by every open, so a panel opened twice is measured twice. */
   readonly opened: number
+  /** What the chip shows, or null while nothing has drawn it yet. */
+  readonly paint: TierPaint | null
+  /* The words the last open chose, or null while the panel has never been
+     opened -- and then the two nodes stand empty, which is how the page is
+     served with them. */
+  readonly head: TierHeadings | null
 }
 
-const shut: TierPanel = { open: false, listed: null, opened: 0 }
+const shut: TierPanel = { open: false, listed: null, opened: 0, paint: null, head: null }
 let panel: TierPanel = shut
 const listeners = new Set<() => void>()
 
@@ -113,10 +141,27 @@ export function subscribe(fn: () => void): () => void {
   }
 }
 
+/* Field by field, for the reason perm.ts's samePaint gives: a fresh object per
+   draw would otherwise be a change every time, and a comparison by reference
+   alone would let a reply that moved nothing re-render the chip. */
+const samePaint = (a: TierPaint | null, b: TierPaint | null): boolean => {
+  if (a === b) return true
+  if (!a || !b || a.off !== b.off) return false
+  if (a.off || b.off) return true
+  return a.label === b.label && a.ico === b.ico && a.aria === b.aria
+}
+
+const sameHead = (a: TierHeadings | null, b: TierHeadings | null): boolean => {
+  if (a === b) return true
+  if (!a || !b) return false
+  return a.lab === b.lab && a.note === b.note
+}
+
 /* Committed synchronously, for the reason perm.ts's put gives: `open` measures
    the panel it has just filled. */
 function put(next: TierPanel): void {
-  if (next.open === panel.open && next.listed === panel.listed && next.opened === panel.opened) return
+  if (next.open === panel.open && next.listed === panel.listed && next.opened === panel.opened
+    && samePaint(next.paint, panel.paint) && sameHead(next.head, panel.head)) return
   panel = next
   flushSync(() => {
     for (const fn of [...listeners]) fn()
@@ -149,7 +194,6 @@ function told(): void {
 }
 
 export const current = (): string => mode
-export const options = (): readonly TierOption[] => menu
 
 const el = <T extends HTMLElement>(id: string): T | null => document.getElementById(id) as T | null
 
@@ -202,41 +246,41 @@ function label(id: string): string {
   return found?.name || (id ? id.charAt(0).toUpperCase() + id.slice(1) : '')
 }
 
-/* The chip, painted by hand over what <TierChip/> renders, for the reason
-   perm.ts's draw gives: four writes the component renders no value for, so
-   React never writes any of them again.
+/* The chip, as the four values <TierChip/> renders, for the reason perm.ts's
+   draw gives. Nothing here reads the document.
 
    Hidden until the first reply, and hidden again for a build with no catalogue.
    A chip that draws before the answer arrives has to invent a tier to show, and
    the one it would invent -- the ladder's default -- is exactly the value a
-   deployment with its own catalogue does not use. */
+   deployment with its own catalogue does not use. That is why `off` carries no
+   words: there is nothing honest to put in them, and a hidden chip left showing
+   the page's own literal is what this did when it returned early. */
 export function draw(): void {
-  const chip = el('tierChip')
-  if (!chip) return
-  const off = !loaded || !menu.length
-  chip.hidden = off
-  if (off) return
-  const name = el('tierName')
-  if (name) name.textContent = label(mode)
-  const pic = chip.querySelector('.pico')
-  if (pic) pic.innerHTML = ICO[mode] || FALLBACK
-  chip.setAttribute('aria-label', `${t(ranked() ? 'gui.tier.title' : 'gui.tier.mode')}: ${label(mode)}`)
+  if (!loaded || !menu.length) {
+    put({ ...panel, paint: { off: true } })
+    return
+  }
+  put({
+    ...panel,
+    paint: {
+      off: false,
+      label: label(mode),
+      ico: ICO[mode] || FALLBACK,
+      aria: `${t(ranked() ? 'gui.tier.title' : 'gui.tier.mode')}: ${label(mode)}`,
+    },
+  })
 }
 
-/* The panel's heading and footer, written on open because both depend on the
-   catalogue that answered. Neither can be rendered from a key: <TierPop/> is
-   built before anything is asked, and a key there would have the lang store
-   paint the tier wording back over a mode catalogue's. Written by hand for the
-   same reason the chip is -- the component renders no value for either, so a
-   re-render leaves both standing. */
-function headings(): void {
-  const lab = document.querySelector<HTMLElement>('#tierPop .hd .lab')
-  const note = document.querySelector<HTMLElement>('#tierPop .note')
-  const tier = ranked()
-  if (lab) lab.textContent = t(tier ? 'gui.tier.title' : 'gui.tier.mode')
-  /* Keyed to the rung in force, not to `tier`: see `inForceReaches`. */
-  if (note) note.textContent = t(inForceReaches() ? 'gui.tier.scope' : 'gui.tier.mode_scope')
-}
+/* The panel's heading and footer, chosen on open because both depend on the
+   catalogue that answered, and then held in the store until the next one.
+   Neither can be rendered from a key: <TierPop/> is built before anything is
+   asked, and a key there would have the lang store paint the tier wording back
+   over a mode catalogue's. */
+const headings = (): TierHeadings => ({
+  lab: t(ranked() ? 'gui.tier.title' : 'gui.tier.mode'),
+  /* Keyed to the rung in force, not to the catalogue: see `inForceReaches`. */
+  note: t(inForceReaches() ? 'gui.tier.scope' : 'gui.tier.mode_scope'),
+})
 
 function absorb(reply: TierReply | null | undefined): void {
   if (!reply) return
@@ -296,11 +340,13 @@ export function open(): void {
   const pop = el('tierPop')
   const chip = el('tierChip')
   if (!pop || !chip) return
-  headings()
   /* Positioned off the chip, raised clear of the card, and moved to the body --
-     all three for the reasons `perm.ts` records next door, its open included. */
+     all three for the reasons `perm.ts` records next door, its open included.
+     Before the commit, because the placement <TierPop/> makes in its layout
+     effect measures the panel where it now stands, at the size the headings and
+     the rows of this same commit gave it. */
   if (pop.parentElement !== document.body) document.body.appendChild(pop)
-  put({ open: true, listed: rows(), opened: panel.opened + 1 })
+  put({ ...panel, open: true, listed: rows(), opened: panel.opened + 1, head: headings() })
 }
 
 export function close(): void {
@@ -337,7 +383,6 @@ async function choose(id: string): Promise<void> {
   }
 }
 
-/* Test seam: the module's state outlives a test file's DOM. */
 /* Test seam: the module's state outlives a test file's DOM. Watchers are NOT
    cleared, for the reason `state/sheetRack` gives -- one is registered when its
    own module loads, which happens once per test file, so clearing them would

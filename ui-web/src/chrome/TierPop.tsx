@@ -5,12 +5,13 @@
  * src/chrome/PermPop.tsx records them; the two panels are built the same way on
  * purpose.
  *
- * What differs is the wording. The heading and the note are written on open by
- * state/tier.ts, from the catalogue that answered, and neither carries a
- * data-i18n key: the built-in ladder is a Session Tier and reaches sub-agents,
- * a deployment's own catalogue is a Session Mode and does not, so a language
- * flip walking the document's keys would paint the tier wording back over a
- * mode catalogue's. Rendered empty here, and left alone on every re-render.
+ * What differs is the wording. The heading and the note come from the store's
+ * `head`, which the open chooses from the catalogue that answered, and neither
+ * carries a data-i18n key: the built-in ladder is a Session Tier and reaches
+ * sub-agents, a deployment's own catalogue is a Session Mode and does not, so a
+ * language flip walking the document's keys would paint the tier wording back
+ * over a mode catalogue's. Both stand empty until the first open, which is how
+ * the page is served with them.
  */
 
 import { useLayoutEffect, useRef, useSyncExternalStore } from 'react'
@@ -42,7 +43,7 @@ export function TierPop(): JSX.Element {
       aria-labelledby="tierPopLab"
       ref={box}
     >
-      <div className="hd"><span className="lab" id="tierPopLab" /></div>
+      <div className="hd"><span className="lab" id="tierPopLab">{s.head?.lab}</span></div>
       <div id="tierList" role="radiogroup" />
       {s.listed && list
         ? createPortal(
@@ -72,7 +73,7 @@ export function TierPop(): JSX.Element {
           list
         )
         : null}
-      <div className="note" />
+      <div className="note">{s.head?.note}</div>
     </div>
   )
 }
