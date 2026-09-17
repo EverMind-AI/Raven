@@ -4,7 +4,7 @@
  * implementation.
  */
 
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { MARKS, depths, layout, took } from './graph'
 import { trimShared } from './labels'
 

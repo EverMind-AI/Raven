@@ -3,13 +3,14 @@ import { createPortal } from 'react-dom'
 import { useSyncExternalStore } from 'react'
 
 import { AgentMark, isOwnAgent } from '../../shell/agent-mark'
-import { shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { KeyInput } from '../../shell/key-input'
 import { SetupGroup, SetupRow } from '../../shell/setuprow'
 import * as store from './store'
 
 import type { XaRow } from './types'
 import type { JSX } from 'react'
+import { ask as confirmAsk } from '../../state/confirm'
 
 /* Connect the agents this machine can hand work to. One row per agent; the rows
    are whatever `DS.xa` answers -- the fixture source with no gateway behind the
@@ -201,7 +202,7 @@ function AgentAct({ row, busy, onKey }: { row: XaRow; busy?: boolean; onKey?: ()
          changes a transport, so the entry is removed and added back from the
          preset -- which drops the handles of runs already in flight, and is
          why this one asks first. */
-      shell().confirmAsk?.(
+      confirmAsk(
         t('gui.agent.migrate_do'),
         t('gui.agent.migrate_body', { name: row.name, to: kindText(row.upgrade_to || '') }),
         t('gui.agent.migrate_do'),

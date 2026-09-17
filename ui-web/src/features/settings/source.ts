@@ -17,7 +17,7 @@ import { defaultModel, defaultProvider, loadProviders, providers, setDefaultPair
 import { open as openModelPicker } from '../model/store'
 import { extTools, loadExt } from '../plugins/source'
 import { draw as drawBanner } from '../../shell/banner'
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { setFromConfig as setPermMode } from '../../shell/perm'
 import { current as sessionCurrent } from '../../shell/session'
 import { show as toast } from '../../shell/toast'
@@ -43,11 +43,10 @@ let RAW: Record<string, unknown> = {}
 let configPathLive = '~/.raven/config.json'
 let everosLive: ResultOf<'settings.everos'> | null = null
 
-/* The three members that need page chrome no island owns yet: the version the
-   foot learned from `system.version`, the check that drives the update notice
-   and the upgrade prompt, and the language flip's whole-page redraw. The page
-   publishes them (src/legacy/live/120-settings.js); stage C makes all three
-   components and this seam goes. */
+/* The three members that need page chrome no island owns: the version the foot
+   learned from `system.version`, the check that drives the update notice and
+   the upgrade prompt, and the language pick. Installed by
+   features/settings/chrome.ts, which owns the settings transport. */
 export interface SettingsChrome {
   version(): string | null
   checkUpdate(btn: HTMLButtonElement): void | Promise<void>
@@ -154,8 +153,8 @@ export const settingsSource: SettingsSource = {
     await loadEveros()
     return settingsSnapshot()
   },
-  /* Toasts are spoken here, where the legacy wording lived; the thrown
-     handled tag tells the island to only redraw. */
+  /* Toasts are spoken here, where the wording lives; the thrown handled tag
+     tells the island to only redraw. */
   set: async (key, value) => {
     try {
       await gateway().call('settings.set', { key, value: value as ParamsOf<'settings.set'>['value'] })

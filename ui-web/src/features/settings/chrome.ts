@@ -1,13 +1,11 @@
 /* The settings dialog's seam onto the page, and the transports beside it.
  *
- * Was the rest of the live layer's settings part (legacy/live/120-settings.js),
- * which was the last part of that layer and the reason it was still one: what
- * is here is page chrome none of the islands own -- the update check the About
- * card's button runs, the permission chip's write-back, and the four sources
- * that answer the dialog, the model list, the tier and the rail banner.
+ * Page chrome none of the islands own -- the update check the About card's
+ * button runs, the permission chip's write-back, and the four sources that
+ * answer the dialog, the model list, the tier and the rail banner.
  *
- * Installed once, from src/main.tsx, at the point the live part installed: after
- * the chrome, before the boot's own wiring (src/state/install.ts).
+ * Installed once, from src/main.tsx: after the chrome it reaches for, before
+ * the boot's own wiring (src/state/install.ts).
  */
 
 import { modelSource, openModelsForMissingProvider, setChipPainter, tierSource } from '../model/source'
@@ -22,8 +20,8 @@ import { gateway } from '../../state/gateway'
 import { pick as langPick } from '../../state/langPick'
 import { staging } from '../../state/session/staging'
 import { sources } from '../../state/sources'
-import { askUpgrade, showUpNote } from '../../state/updates'
-import { APP_VERSION, appVersionSet, drawSettings } from '../../legacy/demo/130-settings.js'
+import { APP_VERSION, appVersionSet, askUpgrade, showUpNote } from '../../state/updates'
+import { islands } from '../../islands'
 
 import type { ComposerSource } from '../composer/types'
 
@@ -39,7 +37,7 @@ export async function checkUpdate(btn: HTMLButtonElement): Promise<void> {
     if (v.raven_version) appVersionSet(v.raven_version)
     if (hasUpdateFlag(v)) {
       showUpNote('ver', (v as { latest_version?: string }).latest_version)
-      drawSettings()
+      islands.settings.redraw()
       askUpgrade()
       return
     }
@@ -62,7 +60,7 @@ export function install(): void {
   /* The chip the provider refresh and the settings default both move. */
   setChipPainter(chip.label)
   setSettingsChrome({
-    version: () => APP_VERSION,
+    version: APP_VERSION,
     checkUpdate,
     /* Not awaited: the pick repaints synchronously and the persist speaks for
        itself if it fails. */

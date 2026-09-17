@@ -184,18 +184,16 @@ describe('the capabilities page state', () => {
     expect(el('pageHero').childNodes).toHaveLength(0)
   })
 
-  /* The names the other layers, the boot list and the bridge still call: each
-     is a shell over this store now, and the two tab renderers register into it
-     rather than decorating each other. */
-  it('is what the legacy names the rest of the page calls go through', async () => {
-    const legacy = await import('../legacy/demo/120-capabilities.js')
-    const skills = await import('../legacy/demo/152-skills.js')
-    const plugins = await import('../legacy/demo/153-plugins.js')
+  /* What the rest of the page reaches this store by: one dispatch, and the two
+     tab renderers registering into it rather than decorating each other. */
+  it('is what the rest of the page reaches the two tabs through', async () => {
+    const skills = await import('../features/skills/tab')
+    const plugins = await import('../features/plugins/tab')
     let draws = 0
     caps.onDraw({ skill: () => { draws += 1 } })
     caps.draw()
     expect(draws).toBe(1)
-    legacy.extSetBase('plugin')
+    caps.extSet('plugin')
     expect(caps.get().tab).toBe('plugin')
     expect(typeof plugins.drawPlugTab).toBe('function')
     expect(typeof skills.drawSkillTab).toBe('function')
@@ -237,7 +235,7 @@ describe('the two draws the dispatch reaches', () => {
   })
 
   it('gives the skill market its title, its hint, no pills and no manual add', async () => {
-    const { drawSkillTab } = await import('../legacy/demo/152-skills.js')
+    const { drawSkillTab } = await import('../features/skills/tab')
     /* What the other tab left in the box, which a draw clears wholesale. */
     el('capsBody').appendChild(document.createElement('i'))
     drawSkillTab()
@@ -254,7 +252,7 @@ describe('the two draws the dispatch reaches', () => {
   })
 
   it('renames the skill tab and takes the bar down on its installed view', async () => {
-    const { drawSkillTab } = await import('../legacy/demo/152-skills.js')
+    const { drawSkillTab } = await import('../features/skills/tab')
     views.skill = 'installed'
     drawSkillTab()
     expect(caps.get().title).toBe(T('gui.plug.installed_title'))
@@ -265,7 +263,7 @@ describe('the two draws the dispatch reaches', () => {
   })
 
   it('gives the plugin market the manual add, which only it offers', async () => {
-    const { drawPlugTab } = await import('../legacy/demo/153-plugins.js')
+    const { drawPlugTab } = await import('../features/plugins/tab')
     caps.extSet('plugin')
     drawPlugTab()
     expect(caps.get().title).toBe(T('gui.tab.plugins'))
@@ -280,7 +278,7 @@ describe('the two draws the dispatch reaches', () => {
   })
 
   it('hides the manual add on the plugin tab installed view', async () => {
-    const { drawPlugTab } = await import('../legacy/demo/153-plugins.js')
+    const { drawPlugTab } = await import('../features/plugins/tab')
     caps.extSet('plugin')
     views.plugin = 'installed'
     drawPlugTab()
@@ -293,8 +291,8 @@ describe('the two draws the dispatch reaches', () => {
   /* The hero covers both tabs from the plugin layer, and only the markets have
      one: an installed view is a list, not a shop front. */
   it('gives each market a hero and takes it away on the installed views', async () => {
-    const plugins = await import('../legacy/demo/153-plugins.js')
-    const { drawSkillTab } = await import('../legacy/demo/152-skills.js')
+    const plugins = await import('../features/plugins/tab')
+    const { drawSkillTab } = await import('../features/skills/tab')
     caps.onDraw({ skill: drawSkillTab, plugin: plugins.drawPlugTab })
     plugins.install()
     caps.draw()

@@ -13,9 +13,9 @@ import { landing, refreshDag, resume, watch } from './resume'
 import { _resetForTests as sessionReset, setCurrent } from './session'
 import { reset as agentsLeave, _resetForTests as agentsReset, getState as agentsState } from '../features/subagents/store'
 import { resetSources, setSources } from '../state/sources'
-import { resetShell, setShell } from './bridge'
 
-import type { Shell } from './bridge'
+import { resetTranslator, setTranslator } from '../i18n/t'
+import { installWsPanel } from '../test/wsPanel'
 import type { DagRun } from '../features/dag/types'
 import type { InstanceRow } from '../features/subagents/types'
 import type { TranscriptSource } from '../features/transcript/types'
@@ -56,8 +56,8 @@ let openGate: () => void = () => {}
 let dagRun: (runId: string) => Promise<unknown> = () => Promise.resolve(runWire)
 
 function wire(): void {
-  const shell: Shell = { T: (key) => key, confirmAsk: () => {}, showPage: () => {} }
-  setShell(shell)
+  setTranslator((key) => key)
+  installWsPanel()
   setSources({
     transcript: {
       dagRun: (runId: string) => {
@@ -123,7 +123,7 @@ afterEach(() => {
   agentsReset()
   sheetReset()
   sessionReset()
-  resetShell()
+  resetTranslator()
   resetSources()
   document.body.innerHTML = ''
   sessionStorage.clear()

@@ -13,9 +13,11 @@ import { advance, forget, resume, run, settle, start, sync, touch, _resetForTest
 import { fold as storeFold } from './store'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 import { resetSources, setSources } from '../../state/sources'
-import { resetShell, setShell } from '../../shell/bridge'
 
-import type { Shell } from '../../shell/bridge'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as pageStore from '../../state/page'
+import * as confirmStore from '../../state/confirm'
+import { installWsPanel } from '../../test/wsPanel'
 import type { AgentsSource } from '../subagents/types'
 import type { TranscriptSource } from '../transcript/types'
 import type { DagRun } from './types'
@@ -25,12 +27,10 @@ import type { DagRun } from './types'
 const opened: Array<[string, string]> = []
 
 function wire(): void {
-  const shell: Shell = {
-    T: (key) => key,
-    confirmAsk: () => {},
-    showPage: () => {},
-  }
-  setShell(shell)
+  setTranslator((key) => key)
+  installWsPanel()
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
   setSources({
     transcript: { openDagNode: (runId: string, nodeId: string) => opened.push([runId, nodeId]) } as unknown as TranscriptSource,
     agents: {} as unknown as AgentsSource,
@@ -72,7 +72,7 @@ beforeEach(() => {
 
 afterEach(() => {
   sessionReset()
-  resetShell()
+  resetTranslator()
   resetSources()
   document.body.innerHTML = ''
   vi.useRealTimers()

@@ -1,4 +1,4 @@
-import { ds, shell } from '../../shell/bridge'
+import { ds } from '../../state/sources'
 import { dropDraft } from '../composer/store'
 import { mark as navMark } from '../../shell/navfly'
 import { setCurrent } from '../../shell/session'
@@ -6,6 +6,8 @@ import { show as toast } from '../../shell/toast'
 import { plainTitle } from './title'
 
 import type { RailSnapshot, RailSource, SessRow } from './types'
+import { t } from '../../i18n/t'
+import { navState } from '../../state/page'
 
 /* Rail state, outside React on purpose: the page layers redraw the list after
  * mutating the active session source, the live boot holds it on skeletons,
@@ -158,9 +160,7 @@ export function count(): number {
    empty `cur` is its state -- but only while nothing covers it. Imperative
    on purpose: every element it marks lives outside the island's root. */
 export function markNew(): void {
-  const sh = shell()
-  const nav = sh.navState?.()
-  if (!nav) return
+  const nav = navState()
   const el = (id: string): HTMLElement | null => document.getElementById(id)
   const app = document.querySelector<HTMLElement>('.app')
   const pageUp =
@@ -240,10 +240,9 @@ export function archive(s: SessRow): void {
   const at = rows.indexOf(s)
   const index = rows.findIndex(row => row.id === s.id)
   if (index >= 0) rows.splice(index, 1)
-  const sh = shell()
   draw()
-  toast(sh.T('gui.sess.archived', { title: s.title }), {
-    label: sh.T('gui.undo'),
+  toast(t('gui.sess.archived', { title: s.title }), {
+    label: t('gui.undo'),
     fn: () => {
       const current = source().snapshot().rows
       if (!current.some(row => row.id === s.id)) current.splice(Math.max(0, Math.min(at, current.length)), 0, s)
@@ -269,7 +268,6 @@ export function remove(s: SessRow): void {
     via(s)
     return
   }
-  const sh = shell()
   const rows = source().snapshot().rows
   const at = rows.indexOf(s)
   dropDraft(s.id)
@@ -285,8 +283,8 @@ export function remove(s: SessRow): void {
     }
   }
   draw()
-  toast(shell().T('gui.sess.deleted_x', { title: s.title }), {
-    label: shell().T('gui.undo'),
+  toast(t('gui.sess.deleted_x', { title: s.title }), {
+    label: t('gui.undo'),
     fn: () => {
       const bin = undoBin as { s: SessRow; at: number }
       source().snapshot().rows.splice(bin.at, 0, bin.s)

@@ -1,23 +1,21 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { open as approveOpen } from './approve'
 import { close, open } from './clarify'
 import { _resetForTests, forget, sync } from '../../state/sheetRack'
 import { _resetForTests as draftsReset, read, slot } from '../../state/sheetDrafts'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
-import { resetShell, setShell } from '../../shell/bridge'
 import { mountPageRoot } from '../../test/pageRoot'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as pageStore from '../../state/page'
+import * as confirmStore from '../../state/confirm'
 
-import type { Shell } from '../../shell/bridge'
 
 function wire(): void {
-  const shell: Shell = {
-    T: (key) => key,
-    confirmAsk: () => {},
-    showPage: () => {},
-  }
-  setShell(shell)
+  setTranslator((key) => key)
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
   document.body.innerHTML =
     '<div class="chat"><div class="dock"><div class="sheets" id="sheetRack"></div>'
     + '<div class="dock-in"></div></div></div>'
@@ -54,7 +52,7 @@ afterEach(() => {
   if (unmount) unmount()
   unmount = null
   sessionReset()
-  resetShell()
+  resetTranslator()
   document.body.innerHTML = ''
 })
 

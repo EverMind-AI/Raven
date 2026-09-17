@@ -12,7 +12,7 @@ import type { ExtFixture } from './ext'
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
 import type { ResultOf } from '../generated'
 
-import { LANG } from '../../legacy/demo/010-kernel.js'
+import { code as LANG } from '../../i18n/t'
 
 type Rung = NonNullable<ResultOf<'session.set_mode'>['availableModes']>[number]
 

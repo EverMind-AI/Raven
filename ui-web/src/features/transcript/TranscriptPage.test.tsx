@@ -16,10 +16,13 @@ import { snapshot as deliveriesSnapshot } from '../workspace/deliveries'
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
-import { setShell, shell } from '../../shell/bridge'
 import { hold as holdHost } from '../../state/session/hosts'
 
-import type { Shell } from '../../shell/bridge'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import { installWsPanel } from '../../test/wsPanel'
+import * as pageStore from '../../state/page'
+import { I18N } from '../../i18n/t'
 import type { ProseTarget } from '../../shell/prose'
 import type { WorkspaceSource } from '../workspace/types'
 import type { ArtifactsSource, HistoryMessage, SpawnListRow, TranscriptSource } from './types'
@@ -27,9 +30,9 @@ import type { ArtifactsSource, HistoryMessage, SpawnListRow, TranscriptSource } 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-/* The island runs against the same two seams production wires: a fake shell
-   handed in through setShell (T returns its key, prefixed by the current language
-   so a flip is observable) and a source on sources.transcript. */
+/* The island runs against the same two seams production wires: a stand-in
+   translator on setTranslator (it returns its key, prefixed by the current
+   language so a flip is observable) and a source on sources.transcript. */
 let lang = 'en'
 
 /* The renders are counted on the REAL renderer, not a stub: the island imports
@@ -44,13 +47,10 @@ vi.mock('../../shell/prose', async (importOriginal) => {
 function wire(over: Partial<TranscriptSource> = {}): void {
   lang = 'en'
   seen.md = 0
-  const fakeShell: Shell = {
-    T: (key, vars) => `${lang}:${key}` + (vars ? ` ${JSON.stringify(vars)}` : ''),
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: () => {},
-    attNotes: () => ['[attachments]'],
-  }
-  setShell(fakeShell)
+  setTranslator((key, vars) => `${lang}:${key}` + (vars ? ` ${JSON.stringify(vars)}` : ''))
+  installWsPanel()
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   const source: TranscriptSource = {
     clean: (t) => String(t == null ? '' : t).trim(),
     okOf: (_n, p) => !/^\s*(error|traceback|failed)\b/i.test(p),
@@ -131,11 +131,16 @@ afterEach(() => {
 
 const iso = (ms: number): string => new Date(ms).toISOString()
 
+/* The marker the composer writes above an attachment list, read from the
+   catalogue rather than quoted: the reader that splits it back off reads the
+   same entry (state/session/conversation.ts's splitAtts). */
+const ATT_NOTE = (I18N.ui['gui.att.note'] as Record<string, string>).en
+
 describe('transcript island, history', () => {
   it('renders a freshly uploaded image from the shared preview cache', () => {
     attachmentCache.set('uploads/shot.png', 'data:image/png;base64,eA==')
     act(() => {
-      mount.history([{ role: 'user', text: 'look\n\n[attachments]\n- uploads/shot.png' }])
+      mount.history([{ role: 'user', text: `look\n\n${ATT_NOTE}\n- uploads/shot.png` }])
     })
     expect($<HTMLImageElement>('.ask .shot')?.src).toBe('data:image/png;base64,eA==')
     expect($('.ask .achip')).toBeNull()
@@ -2155,7 +2160,7 @@ describe('transcript island, the delegation verbs', () => {
   it('sends a spawn row to the agents panel when nothing else will take it', () => {
     const went: string[] = []
     wire()
-    shell().showWorkspace = (tab) => went.push(tab)
+    installWsPanel({ show: (tab: string) => { went.push(tab) } })
     store.openSpawn('researcher', 'read the docs')
     expect(went).toEqual(['agents'])
   })

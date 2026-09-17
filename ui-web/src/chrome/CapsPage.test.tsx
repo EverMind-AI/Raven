@@ -30,7 +30,7 @@ import { mountPageRoot } from '../test/pageRoot'
 const MARKUP = ''
 
 /* The two verbs the field dispatches to, and the two the buttons call. The bag
-   is assigned over rather than mocked, the way scripts/legacy-part.mjs does it. */
+   is assigned over rather than mocked, the way scripts/module-harness.mjs does it. */
 const asked = vi.hoisted(() => ({ list: [] as string[] }))
 
 let unmount = (): void => {}
@@ -351,7 +351,6 @@ describe('the capabilities page chrome', () => {
     expect(el('cKind').onclick).toBe(null)
     expect(field().oninput).toBe(null)
     expect(field().onkeydown).toBe(null)
-    expect(source('legacy/demo/150-chrome.js')).not.toMatch(/#(cq|cKind|mAdd)'\)\./)
   })
 })
 

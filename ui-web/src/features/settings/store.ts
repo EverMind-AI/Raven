@@ -1,7 +1,9 @@
-import { ds, shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
 import { settingsTab } from '../../state/settingsTab'
 import { show as toast } from '../../shell/toast'
 
+import * as settingsDialog from '../../state/settingsDialog'
 import type {
   ModelCandidate,
   ProviderOp,
@@ -138,7 +140,7 @@ export async function open(): Promise<void> {
   lazy = true
   set({ tab: curTab() })
   await refresh()
-  shell().openSet?.()
+  settingsDialog.open()
   /* The counters are read when the tab comes up, the way the legacy usage
      page read them on every draw. The poll only keeps them current after
      that, and only while the dialog stays open. */

@@ -9,14 +9,11 @@ Sources under ``src/``:
 - ``.modern/modern.iife.js`` -- the bundle Vite builds from ``src/main.tsx``,
                      injected at the script marker.
 
-What is left of ``src/legacy/`` is ES modules, reached from ``src/main.tsx``
-through ``src/legacy/index.js`` and bundled by Vite with everything else, so
-this script no longer assembles them and no longer inlines the message
-catalogue either (``src/legacy/demo/010-kernel.js`` imports
-``i18n/messages.json`` directly). The manifest below stays: it is the order
-``src/legacy/index.js`` installs the parts in. No test reads it any more -- the
-harnesses import the parts (``ui-web/scripts/legacy-part.mjs``), and the two
-shape gates take the list of parts from ``src/legacy/index.js``.
+Three substitutions and a copy, and no assembly of its own: every line of
+JavaScript the page runs comes from that one bundle, which Vite builds from
+``src/main.tsx``. The message catalogue is in it too (``src/i18n/t.ts``
+imports ``i18n/messages.json``).
+
 Run:
 
     python ui-web/build.py
@@ -41,56 +38,6 @@ MODERN_MARK = "/*__MODERN__*/"
 ASSETV_MARK = "__ASSETV__"
 
 
-# Install order is semantics: each part's install() does what the part used to
-# do while the concatenated script ran, and several of them read what an earlier
-# one wrote. src/legacy/index.js calls them in exactly this order -- regenerate
-# it (scripts/legacy-index.mjs) after renaming, adding or removing a part.
-#
-# The live layer is gone: the page's own wiring and boot are
-# src/state/{install,boot}.ts, and its last part -- the settings chrome and the
-# whole-page redraw a language pick asks for -- is src/state/lang{Pick,Effects}.ts
-# and src/features/settings/chrome.ts.
-_DEMO_PARTS = [
-    "010-kernel.js",
-    "040-state.js",
-    "050-rail.js",
-    "060-conversation.js",
-    "070-transcript.js",
-    "090-composer.js",
-    "100-workspace.js",
-    "120-capabilities.js",
-    "130-settings.js",
-    "140-schedule.js",
-    "145-connections.js",
-    "150-chrome.js",
-    "152-skills.js",
-    "153-plugins.js",
-    "154-playbooks.js",
-    "155-bridge.js",
-    "160-boot.js",
-]
-_LIVE_PARTS = []
-
-
-def _concat(subdir: str, manifest: list[str]) -> str:
-    """The layer's parts as one text, in manifest order.
-
-    Nothing reads this any more. It goes with the last of the legacy layer.
-    """
-    layer = ROOT / "src" / "legacy" / subdir
-    found = {p.name for p in layer.glob("*.js")}
-    if found != set(manifest):
-        extra = sorted(found - set(manifest))
-        missing = sorted(set(manifest) - found)
-        raise SystemExit(
-            f"src/legacy/{subdir} does not match its manifest in build.py"
-            + (f"; not in manifest: {extra}" if extra else "")
-            + (f"; missing: {missing}" if missing else "")
-        )
-    text = "".join((layer / name).read_text(encoding="utf-8") for name in manifest)
-    return text[:-1] if text.endswith("\n") else text
-
-
 def _assets_stamp() -> str:
     """A short digest of everything under ``src/assets``, or "dev" if it is gone.
 
@@ -109,10 +56,11 @@ def _assets_stamp() -> str:
     return digest.hexdigest()[:10]
 
 
-#: The two load modes, each with its own golden. Stub mode is the demo shell on
-#: its fixtures; live mode is the page a reader gets when the gateway is not
-#: there, which settles into a different tree and would otherwise be unguarded
-#: -- a live-only boot break passes the stub snapshot untouched.
+#: The two load modes, each with its own golden. Stub mode is the page on its
+#: own fixtures (``?stub=1``); live mode is the page a reader gets when the
+#: gateway is not there, which settles into a different tree and would
+#: otherwise be unguarded -- a live-only boot break passes the stub snapshot
+#: untouched.
 _BOOT_SNAPSHOTS = (
     ("http://127.0.0.1:18792/?stub=1", "boot-stub.txt"),
     ("http://127.0.0.1:18792/", "boot-live-noserver.txt"),

@@ -36,7 +36,7 @@
 import { useSyncExternalStore } from 'react'
 
 import { Banner } from './Banner'
-import { renameTitle } from '../legacy/demo/050-rail.js'
+import { islands } from '../islands'
 import * as lang from '../state/lang'
 
 import type { JSX } from 'react'
@@ -56,7 +56,7 @@ function Header(): JSX.Element {
         data-i18n-aria="gui.rename_session"
         data-tip={lang.attr('gui.rename_session')}
         aria-label={lang.attr('gui.rename_session')}
-        onClick={() => renameTitle()}
+        onClick={() => islands.rail.rename()}
       >
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true">
           <path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3z" /><path d="M14.5 6.5 17.5 9.5" />

@@ -11,7 +11,7 @@
 
 import { createRoot } from 'react-dom/client'
 
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { add as sheetAdd, askingIn, remove as sheetRemove, watchAsking } from '../../state/sheetRack'
 import { Sheet } from './DagSheet'
 import { fromSnapshot } from './nodes'

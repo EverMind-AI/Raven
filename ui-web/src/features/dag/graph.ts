@@ -8,7 +8,7 @@
  * from a test while it lived inside the renderer in the live layer.
  */
 
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { formatDuration } from '../../shell/duration'
 import { settled } from './nodes'
 

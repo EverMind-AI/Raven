@@ -11,7 +11,8 @@
  */
 
 import { sources } from '../state/sources'
-import { ds, t } from './bridge'
+import { t } from '../i18n/t'
+import { ds } from '../state/sources'
 
 export interface ProseTarget {
   p: string

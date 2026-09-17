@@ -1,8 +1,8 @@
 /* Every listener the page holds on the document or the window, in one place.
  *
- * They used to be spread over eight modules and two legacy parts, each
- * registering its own from its own install(), and the order they ended up in
- * was an accident of which file main.tsx called first. That order is a
+ * They used to be spread over ten modules, each registering its own from its
+ * own install(), and the order they ended up in was an accident of which file
+ * main.tsx called first. That order is a
  * contract, not an accident: three of them are capture-phase and run before the
  * element the reader clicked ever sees the event, and inside one phase the
  * first handler registered runs first. So the popover arbitration closes the
@@ -27,8 +27,7 @@ import { trap as linkTrap } from '../features/browser/store'
 import { fitField, parkDraftNow } from '../features/composer/mount'
 import { composing } from '../features/composer/store'
 import { T } from '../i18n/t'
-import { openSettings } from '../legacy/demo/150-chrome.js'
-import { onLoad as splashOnLoad } from '../legacy/demo/160-boot.js'
+import { islands } from '../islands'
 import { onClick as chipClick, onKey as chipKey } from '../shell/chips'
 import { toggle as toggleFind } from '../shell/find'
 import { onPointerDown as menuAway } from '../shell/menu'
@@ -37,6 +36,7 @@ import { close as closePermPop } from '../shell/perm'
 import { isMac } from '../shell/platform'
 import { onResize as dropBars, onScroll as barsOnScroll } from '../shell/scrollbars'
 import { close as closeTierPop } from '../shell/tier'
+import { onLoad as onPageLoad } from './boot'
 import { onContextMenu } from './contextMenu'
 import * as overlays from './overlays'
 import { get as railOpen, set as setRail } from './rail'
@@ -105,7 +105,7 @@ function onSettingsKey(e: KeyboardEvent): void {
   if (e.key !== ',' || !(isMac() ? e.metaKey : e.ctrlKey)) return
   e.preventDefault()
   if (settingsIsOpen()) { closeSettings(); return }
-  void openSettings()
+  void islands.settings.open()
 }
 
 /* Its own entry point, because the order table it reads has a gate of its own
@@ -154,9 +154,10 @@ export function installGlobalListeners(): void {
   document.addEventListener('click', copyCodeBlock)
   installEscapeChain()
   document.addEventListener('keydown', onSettingsKey)
-  /* The splash comes down when the page is loaded, unless the page's own boot
-     has claimed that moment already (legacy/demo/160-boot.js). */
-  window.addEventListener('load', splashOnLoad)
+  /* The loaded page. The splash is the boot sequence's to lift, so what is
+     left on this event is the one URL flag that asks for the canned onboarding
+     pass (state/boot.ts). */
+  window.addEventListener('load', onPageLoad)
   /* A tab coming back to the front is a reason to look for a new build. The
      watcher decides whether there is anything to look for; until it has
      started, this answers nothing (state/updates.ts). */

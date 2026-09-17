@@ -23,7 +23,6 @@ import * as session from '../shell/session'
 import * as tier from '../shell/tier'
 import * as toast from '../shell/toast'
 import * as upgrade from '../shell/upgrade'
-import { resetShell, setShell } from '../shell/bridge'
 import * as confirm from '../state/confirm'
 import * as tip from '../state/tooltip'
 import { BOOT_BODY_ORDER, LAYERS, PORTALS, _resetForTests as resetLayers, host } from '../state/portals'
@@ -31,7 +30,7 @@ import { resetSources, setSources } from '../state/sources'
 import { bodySiblings } from './domSnapshot'
 import { mountPageRoot } from './pageRoot'
 
-import type { Shell } from '../shell/bridge'
+import { resetTranslator, setTranslator } from '../i18n/t'
 import type { TierReply, TierSource } from '../shell/tier'
 
 const source = (path: string): string => readFileSync(path, 'utf8') as string
@@ -254,7 +253,7 @@ describe('a popover that has been opened', () => {
   let unmount = (): void => {}
 
   async function open(): Promise<HTMLElement> {
-    setShell({ T: (key) => key, confirmAsk: () => {}, showPage: () => {} } as Shell)
+    setTranslator((key) => key)
     document.body.innerHTML = '<div class="dock"></div>'
     tier._resetForTests()
     session._resetForTests()
@@ -273,7 +272,7 @@ describe('a popover that has been opened', () => {
   function reset(): void {
     unmount()
     unmount = () => {}
-    resetShell()
+    resetTranslator()
     document.body.innerHTML = ''
     tier._resetForTests()
     session._resetForTests()

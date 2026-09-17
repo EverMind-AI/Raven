@@ -41,7 +41,7 @@
  * the splash is the literal first frame, painted while this bundle is still
  * being evaluated, and #noJs is what a reader gets when it never runs -- so
  * neither can be something React puts on screen. They stay in page.html and are
- * taken down at boot (state/splash.ts, legacy/demo/010-kernel.js). #onb stays
+ * taken down at boot (state/splash.ts). #onb stays
  * with them because a portal can only append: rendered from here it would land
  * after #noJs instead of between the two.
  */
@@ -63,6 +63,7 @@ import * as toast from './shell/toast'
 import * as confirm from './state/confirm'
 import * as detail from './state/detail'
 import * as lang from './state/lang'
+import * as rail from './state/rail'
 import * as settings from './state/settingsDialog'
 
 import type { JSX } from 'react'
@@ -244,7 +245,10 @@ function Toasts(): JSX.Element {
    技能 / 插件 / 记忆 then covered the only control that brings it back, with no
    way left to reach another module.
 
-   `hidden` is state/rail.ts's: it shows exactly while the rail does not. */
+   Collapsing the rail is the reader's call, never the window's: it holds the
+   session list, and having it vanish on resize loses your place. This is the
+   twin that brings it back; `hidden` is state/rail.ts's, and it shows exactly
+   while the rail does not. */
 function RailShow(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
@@ -256,6 +260,7 @@ function RailShow(): JSX.Element {
       hidden
       data-tip={lang.attr('gui.expand_rail')}
       aria-label={lang.attr('gui.expand_rail')}
+      onClick={() => rail.set(true)}
     >
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
         <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><path d="M9.5 4.5v15" />

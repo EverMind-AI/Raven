@@ -1,22 +1,20 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readdirSync, readFileSync } from 'node:fs'
 
 import { _resetForTests, add, dropClass, forget, remove, session, sheets, sync } from './sheetRack'
 import { _resetForTests as sessionReset, setCurrent } from '../shell/session'
-import { resetShell, setShell } from '../shell/bridge'
+import { resetTranslator, setTranslator } from '../i18n/t'
+import * as pageStore from '../state/page'
+import * as confirmStore from '../state/confirm'
 
-import type { Shell } from '../shell/bridge'
 
 function wire(): void {
-  const shell: Shell = {
-    T: (key) => key,
-    confirmAsk: () => {},
-    showPage: () => {},
-  }
-  setShell(shell)
+  setTranslator((key) => key)
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
   /* `.chat` and `.dock` because dockLift measures them; without both it returns
      early, which would make every assertion below pass for the wrong reason. */
   document.body.innerHTML =
@@ -41,7 +39,7 @@ beforeEach(() => {
 
 afterEach(() => {
   sessionReset()
-  resetShell()
+  resetTranslator()
   document.body.innerHTML = ''
 })
 
@@ -308,8 +306,6 @@ describe('who counts as asking', () => {
     'features/composer/clarify.ts': true,
     // The graph sheet is what steps aside for the two above; it asks nothing.
     'features/dag/mount.tsx': false,
-    // Not a tenant: the export binding the island bag hands to the demo layer.
-    'islands.ts': false,
   }
 
   const sources = (): Array<[string, string]> => {

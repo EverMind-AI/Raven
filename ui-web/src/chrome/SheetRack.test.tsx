@@ -6,16 +6,14 @@ import { open as clarifyOpen } from '../features/composer/clarify'
 import { _resetForTests, add, forget, sync } from '../state/sheetRack'
 import { _resetForTests as draftsReset } from '../state/sheetDrafts'
 import { _resetForTests as sessionReset, setCurrent } from '../shell/session'
-import { resetShell, setShell } from '../shell/bridge'
 import { mountPageRoot } from '../test/pageRoot'
+import { resetTranslator, setTranslator } from '../i18n/t'
 
-import type { Shell } from '../shell/bridge'
 
 let unmount: (() => void) | null = null
 
 function wire(): void {
-  const shell: Shell = { T: (key) => key, confirmAsk: () => {}, showPage: () => {} }
-  setShell(shell)
+  setTranslator((key) => key)
   document.body.innerHTML =
     '<div class="chat"><div class="dock"><div class="sheets" id="sheetRack"></div>'
     + '<div class="dock-in"></div></div></div>'
@@ -58,7 +56,7 @@ afterEach(() => {
   if (unmount) unmount()
   unmount = null
   sessionReset()
-  resetShell()
+  resetTranslator()
   document.body.innerHTML = ''
 })
 

@@ -11,14 +11,10 @@
  * popover that leaves the card's DOM without React noticing.
  */
 import { act } from 'react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-
-// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
-import { readFileSync, readdirSync } from 'node:fs'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as composer from '../features/composer/mount'
 import * as store from '../features/composer/store'
-import { resetShell, setShell } from '../shell/bridge'
 import * as ctx from '../shell/ctxchip'
 import * as perm from '../shell/perm'
 import * as tier from '../shell/tier'
@@ -28,8 +24,10 @@ import { setSources } from '../state/sources'
 import { bodySiblings } from '../test/domSnapshot'
 import { mountPageRoot } from '../test/pageRoot'
 
+import { resetTranslator, setTranslator } from '../i18n/t'
+import * as confirmStore from '../state/confirm'
+import * as pageStore from '../state/page'
 import type { ComposerSource } from '../features/composer/types'
-import type { Shell } from '../shell/bridge'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -44,12 +42,9 @@ let sent: string[] = []
 function render(over: Partial<ComposerSource> = {}): void {
   act(() => { unmount() })
   sent = []
-  const shell: Shell = {
-    T: (key) => `t:${key}`,
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: () => {},
-  }
-  setShell(shell)
+  setTranslator((key) => `t:${key}`)
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   setSources({
     composer: {
       meter: () => '',
@@ -94,7 +89,7 @@ afterEach(() => {
   ctx._resetForTests()
   perm._resetForTests()
   tier._resetForTests()
-  resetShell()
+  resetTranslator()
   localStorage.clear()
   document.body.innerHTML = ''
 })
@@ -469,26 +464,6 @@ describe('the two popovers', () => {
       const trap = el(chip).onclick!
       trap.call(el(chip), new PointerEvent('click'))
       expect(panel.isOpen(), name).toBe(false)
-    }
-  })
-
-  /* And nothing in the legacy layer takes their click any more: the chrome
-     bound both chips by hand until this step. The case above cannot see such a
-     binding -- the page root is not what the chrome installs into, and re-adding
-     the deleted line leaves it green (measured) -- so the source is where it has
-     to show. The pointerdown that closes the two panels names the same two ids
-     and is not a binding on them (legacy/demo/040-state.js), which is why the
-     line rather than the file is what this reads. */
-  it('is the only place in the tree that takes those two clicks', () => {
-    const dir = 'src/legacy'
-    const files = (readdirSync(dir, { recursive: true }) as string[]).filter((f) => f.endsWith('.js'))
-    expect(files.length).toBeGreaterThan(15)
-    for (const file of files) {
-      const text = readFileSync(`${dir}/${file}`, 'utf8') as string
-      for (const line of text.split('\n')) {
-        if (!line.includes('#permChip') && !line.includes('#tierChip')) continue
-        expect(line, file).not.toMatch(/onclick|addEventListener/)
-      }
     }
   })
 

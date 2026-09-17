@@ -1,11 +1,12 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { install, onChange, term, toggle } from './find'
-import { resetShell, setShell } from './bridge'
 import { mountPageRoot } from '../test/pageRoot'
+import { resetTranslator, setTranslator } from '../i18n/t'
+import * as pageStore from '../state/page'
+import * as confirmStore from '../state/confirm'
 
-import type { Shell } from './bridge'
 
 /* The rail's container, as page.html carries it. The four elements this module
    drives are the page root's now (src/chrome/Rail.tsx), so they are rendered
@@ -22,12 +23,9 @@ let unmount = (): void => {}
 function wire(): void {
   markup()
   unmount = mountPageRoot()
-  const shell: Shell = {
-    T: (key) => key,
-    confirmAsk: () => {},
-    showPage: () => {},
-  }
-  setShell(shell)
+  setTranslator((key) => key)
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
   onChange(() => {
     draws += 1
   })
@@ -56,7 +54,7 @@ beforeEach(wire)
 afterEach(() => {
   unmount()
   onChange(() => {})
-  resetShell()
+  resetTranslator()
   document.body.innerHTML = ''
 })
 

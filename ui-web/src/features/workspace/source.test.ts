@@ -161,8 +161,8 @@ describe('a markdown link target', () => {
 
 /* ---- what the panel records, and how it counts turns -------------------- */
 /* The record is this feature's own module now (./record.ts); the panel chrome
-   it draws through -- the badge, the redraw, which view is up -- is still the
-   page's (src/legacy/demo/100-workspace.js) and is faked here. */
+   it draws through -- the badge, the redraw, which view is up -- is the page's
+   (src/state/ws.ts) and is faked here. */
 
 interface Shared {
   changes: Array<Record<string, unknown>>
@@ -173,16 +173,23 @@ interface Shared {
 }
 
 async function panel() {
-  const { loadPart } = await import('../../../scripts/legacy-part.mjs')
+  const { loadPart } = await import('../../../scripts/module-harness.mjs')
   const shared: Shared = { changes: [], urls: [], file: null, turn: 0, unseen: 0 }
   const part = await loadPart(() => import('./record'), {
     fakes: {
-      'demo/010-kernel.js': { T: (key: string) => key },
-      'demo/100-workspace.js': {
-        bumpWs: () => {},
-        drawWs: () => {},
-        wsShortPath: (path: string) => path,
-        wsShowsTurn: () => false,
+      'src/state/wsPanel': {
+        panel: () => ({
+          view: () => ({ tab: 'diff', open: false, picked: false }),
+          bump: () => {},
+          draw: () => {},
+          showsTurn: () => false,
+        }),
+      },
+      'src/state/sources': {
+        sources: { workspace: { shortPath: (p: string) => p } },
+      },
+      'src/i18n/t': {
+        T: (key: string) => key,
       },
     },
     islands: {

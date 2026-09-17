@@ -12,6 +12,7 @@
  * offline fixture library through the very same sequence.
  */
 
+import { turn } from '../features/composer/mount'
 import { setupState } from '../features/model/source'
 import { onboardSource } from '../features/onboard/source'
 import { loadExt } from '../features/plugins/source'
@@ -20,23 +21,28 @@ import { loadSessions, pinSession } from '../features/rail/source'
 import { loadSettings, pushPermMode } from '../features/settings/source'
 import { islands } from '../islands'
 import { hasUpdateFlag } from '../rpc/capabilities'
+import { draw as drawCtx } from '../shell/ctxchip'
 import { draw as drawFoot } from '../shell/foot'
+import { bootError } from '../shell/failure'
+import { load as lookLoad } from '../shell/look'
+import { load as paneLoad } from '../shell/panes'
+import { draw as drawPerm } from '../shell/perm'
+import { hostPlatformSet } from '../shell/platform'
 import { current as sessionCurrent, setCurrent as sessionSet } from '../shell/session'
 import { load as loadTier } from '../shell/tier'
+import * as caps from './caps'
 import { authFail, bootFail, shellReady, surface } from './connection'
+import { setRuntime } from './envChip'
 import { gateway } from './gateway'
 import { installPage } from './install'
 import { load as loadLang, restore as langRestore } from './langPick'
+import { set as setRail } from './rail'
+import { open as sessionOpen, rows as sessionRows, sess } from './session/rows'
 import { switchTo, switchToDraft } from './session/registry'
 import { sources } from './sources'
 import { hideSplash } from './splash'
-import { resumeUpgrade, showUpNote, watchForUpdates } from './updates'
-import { hostPlatformSet } from '../legacy/demo/010-kernel.js'
-import { sess, turn } from '../legacy/demo/040-state.js'
-import { sessionRows } from '../legacy/demo/050-rail.js'
-import { appVersionSet } from '../legacy/demo/130-settings.js'
-import { cronWarm } from '../legacy/demo/140-schedule.js'
-import { bootPage, claimBoot, showOnboard } from '../legacy/demo/160-boot.js'
+import { appVersionSet, resumeUpgrade, showUpNote, watchForUpdates } from './updates'
+import { bump as bumpWs } from './ws'
 
 import type { RailSource, SessRow } from '../features/rail/types'
 
@@ -75,11 +81,6 @@ function claimFirstFrame(): void {
     const s = document.getElementById('splash')
     if (s) s.remove()
   }
-
-  /* Claims the splash and the onboarding moment from the demo shell: its load
-     handler backs off when this flag is set, and the sequence below decides
-     when the splash lifts and whether first-run setup is due (setup.status). */
-  claimBoot()
 
   /* Set before the deferred first paint, cleared once the real counts land. */
   const rail = document.querySelector('.rail') as HTMLElement | null
@@ -158,7 +159,7 @@ async function sequence(): Promise<void> {
          nothing would get the version that writes. */
       const cannedInstead = /[?&]onboard=demo/.test(location.search)
       if (!cannedInstead && /[?&]onboard=1/.test(location.search)) {
-        showOnboard()
+        islands.onboard.open()
       }
     } catch (e) {
       if (window.console) console.warn('[live boot] setup.status failed; skipping onboarding gate', e)
@@ -179,7 +180,7 @@ async function sequence(): Promise<void> {
        the demo mock's phantom counts. */
     Promise.allSettled([
       loadExt(),
-      cronWarm(),
+      islands.cron.warm(),
     ]).then(() => {
       const rail = document.querySelector('.rail') as HTMLElement | null
       if (rail) delete rail.dataset.counts
@@ -191,9 +192,46 @@ async function sequence(): Promise<void> {
   }
 }
 
+/* The first data-driven paint: everything a page can draw from what it already
+   holds, queued by `boot` below after every synchronous source installer so
+   that none of it observes a half-wired seam.
+ *
+ * Each step is isolated so one failure stays visible and the rest still
+ * renders. The order is the order the concatenated page ran them in. */
+export function bootPage(): void {
+  ;([
+    ['lookLoad', (): void => lookLoad()],
+    ['paneLoad', (): void => paneLoad()],
+    ['setRail', (): void => setRail(true)],
+    ['sessionDraw', (): void => islands.rail.draw()],
+    /* A live boot deliberately starts with an empty source and chooses a draft
+       after the real list lands; an offline page has a fixture row to open. */
+    ['sessionOpen', (): void => { const first = sessionRows()[0]; if (first) void sessionOpen(first) }],
+    ['drawPerm', (): void => drawPerm()],
+    ['loadTier', (): void => { void loadTier() }],
+    ['drawCtx', (): void => drawCtx()],
+    ['drawCaps', (): void => caps.draw()],
+    ['drawFoot', (): void => drawFoot()],
+    ['bumpWs', (): void => bumpWs()],
+    ['drawSettings', (): void => islands.settings.redraw()],
+    ['setRuntime', (): void => setRuntime()],
+    ['goState', (): void => islands.composer.goPaint()],
+  ] as Array<[string, () => void]>).forEach(([where, step]) => {
+    try { step() } catch (e) { bootError(where, e) }
+  })
+}
+
+/* The loaded page. The splash is the boot sequence's to lift, so what is left
+   on this event is the one URL flag that asks for the canned onboarding pass.
+   Registered with the page's other window listeners
+   (src/state/globalListeners.ts). */
+export function onLoad(): void {
+  if (/[?&]onboard=demo/.test(location.search)) islands.onboard.open()
+}
+
 /**
- * The page's boot, in order. main.tsx calls this once, after the legacy chrome
- * has installed itself.
+ * The page's boot, in order. main.tsx calls this once, after the chrome has
+ * installed itself.
  *
  * The three steps are load-bearing in this order: the seam has to answer before
  * the rail is held (the hold paints), every source has to be installed before

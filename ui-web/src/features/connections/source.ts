@@ -7,7 +7,7 @@
 import type { ConnSource } from './types'
 
 import { servesChannels } from '../../rpc/capabilities'
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { show as toast } from '../../shell/toast'
 import { gateway } from '../../state/gateway'
 

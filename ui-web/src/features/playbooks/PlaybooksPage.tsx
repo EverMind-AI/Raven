@@ -14,7 +14,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { layout } from '../dag/graph'
 import { cardPlan, edge } from './shape'
 import * as store from './store'

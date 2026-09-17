@@ -52,8 +52,8 @@ describe('the rail', () => {
   })
 
   /* The boot applies the standing state rather than assuming the markup says
-     it (legacy/demo/160-boot.js), which is why a page that has never collapsed
-     still carries data-rail="on". */
+     it (state/boot.ts), which is why a page that has never collapsed still
+     carries data-rail="on". */
   it('writes the grid on the way open too', () => {
     rail.set(true)
     expect(app().dataset.rail).toBe('on')

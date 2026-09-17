@@ -12,7 +12,7 @@
  * Refusing here turns it into a sentence about the file.
  */
 
-import { t } from './bridge'
+import { t } from '../i18n/t'
 
 export const UPLOAD_MAX_BYTES = 25 * 1024 * 1024
 

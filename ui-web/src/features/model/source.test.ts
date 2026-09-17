@@ -13,7 +13,8 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { fakeGateway, loadPart, looseQuery } from '../../../scripts/legacy-part.mjs'
+import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
+import { resetTranslator, setTranslator } from '../../i18n/t'
 
 /* One entry of the traffic log: a method name with its params, or a page verb
    with whatever it was handed. */
@@ -46,30 +47,37 @@ async function live({ session = null, answers = null }: Options = {}) {
   let switching = false
   await loadPart(() => import('../model/source'), {
     fakes: {
+      'src/state/ws': {
+        setOpen: () => {},
+        reset: () => {},
+      },
+      'src/state/session/conversation': {
+        pitch: () => {},
+        unpitch: () => {},
+      },
+      'src/features/rail/store': {
+        draw: () => {},
+      },
+      'src/features/composer/mount': {
+        drawMeter: () => {},
+        goPaint: () => {},
+        loadDraft: () => {},
+        parkDraft: () => {},
+        queueClear: () => {},
+        turn: { dispatch: () => {}, busy: () => false },
+      },
+      'src/features/model/store': {
+        current: () => '',
+        setCurrent: (m: string) => calls.push(['modelSet', m]),
+      },
+      'src/shell/dom': {
+        $: looseQuery(),
+      },
       'src/shell/session': { current: () => session, setCurrent: () => {} },
       'src/shell/banner': { draw: () => {} },
       'src/shell/toast': { show: (text: string) => calls.push(['toast', text]) },
       'src/shell/tier': { load: () => {} },
       'src/shell/perm': { setFromConfig: (m: string) => calls.push(['setPermMode', m]) },
-      'src/shell/bridge': {
-        t: (key: string, _vars?: unknown, fallback?: string) => (fallback ?? key),
-        ds: () => ({}),
-        shell: () => ({}),
-      },
-      'demo/010-kernel.js': { $: looseQuery() },
-      'demo/040-state.js': {
-        modelCurrent: () => '',
-        modelSet: (m: string) => calls.push(['modelSet', m]),
-        loadDraft: () => {},
-        parkDraft: () => {},
-        queueClear: () => {},
-        stop_: () => {},
-        turn: { dispatch: () => {}, busy: () => false },
-      },
-      'demo/050-rail.js': { sessionDraw: () => {} },
-      'demo/060-conversation.js': { pitch: () => {}, unpitch: () => {} },
-      'demo/090-composer.js': { drawMeter: () => {}, goState: () => {}, ta: { focus: () => {} } },
-      'demo/100-workspace.js': { setWs: () => {}, wsReset: () => {} },
       'src/state/session/residency': { park: () => {} },
     },
     islands: {

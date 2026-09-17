@@ -39,9 +39,9 @@ export type NotificationMethod = (typeof NOTIFICATION_METHODS)[number]
 
 /**
  * A name `gateway().on(...)` accepts: the eleven, plus the subscription
- * envelope. Anything else is a compile error wherever the caller is
- * TypeScript; src/legacy/ is JavaScript, and
- * scripts/notifications-contract.test.mjs is that half of the check.
+ * envelope. Anything else is a compile error, and
+ * scripts/notifications-contract.test.mjs holds this list equal to the
+ * gateway's own.
  */
 export type PushMethod = NotificationMethod | 'event'
 
@@ -145,7 +145,7 @@ export interface OauthDoneParams {
 }
 
 /**
- * The legacy screencast frame: an older gateway pushes the page state with the
+ * The older screencast frame: an older gateway pushes the page state with the
  * JPEG base64 inside it rather than sending the binary `RVF1` frame. Shaped
  * like `BrowserFrameResult` in raven/rpc/models.py, where every field is
  * optional because the surface grew over several gateway generations.

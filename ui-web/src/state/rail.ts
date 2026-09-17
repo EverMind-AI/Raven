@@ -1,7 +1,7 @@
 /* Whether the rail stands or is collapsed.
  *
- * Was setRail in the legacy chrome (legacy/demo/150-chrome.js): three writes
- * and no state, so "is the rail open" was readable only by asking the DOM what
+ * Three writes and no state was all this used to be, so "is the rail open" was
+ * readable only by asking the DOM what
  * `.app` carried -- which is what the keyboard shortcut for the rail did, and
  * why it reads the flag here instead now.
  *

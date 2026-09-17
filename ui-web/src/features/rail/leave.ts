@@ -14,10 +14,13 @@ import { gateway } from '../../state/gateway'
 import { forget as forgetSubscription, switchToDraft } from '../../state/session/registry'
 import { sources } from '../../state/sources'
 import { islands } from '../../islands'
-import { $, T } from '../../legacy/demo/010-kernel.js'
-import { confirmAsk, dropDraft, sheetsForget } from '../../legacy/demo/040-state.js'
-import { sessionDraw, sessionOpen, sessionReplace, sessionRows } from '../../legacy/demo/050-rail.js'
-import { drawSettings } from '../../legacy/demo/130-settings.js'
+import { T } from '../../i18n/t'
+import { $ } from '../../shell/dom'
+import { dropDraft } from '../composer/mount'
+import { ask as confirmAsk } from '../../state/confirm'
+import { forget as sheetsForget } from '../../state/sheetRack'
+import { open as sessionOpen, replace as sessionReplace, rows as sessionRows } from '../../state/session/rows'
+import { draw as sessionDraw } from './store'
 import { renamedSession } from './source'
 
 import type { SessRow } from './types'
@@ -34,7 +37,7 @@ export async function leaveDeletedSession(sessionId: string): Promise<void> {
   if (transition.kind === 'unchanged') { sessionDraw(); return }
   if (transition.kind === 'open') {
     sessionSet(transition.next!.id)
-    await sessionOpen(transition.next)
+    await sessionOpen(transition.next!)
     return
   }
   const ta = $('#ta') as HTMLTextAreaElement | null
@@ -48,7 +51,7 @@ export async function leaveArchivedSession(sessionId: string): Promise<void> {
   if (transition.kind === 'unchanged') { sessionDraw(); return }
   if (transition.kind === 'open') {
     sessionSet(transition.next!.id)
-    await sessionOpen(transition.next)
+    await sessionOpen(transition.next!)
     return
   }
   const ta = $('#ta') as HTMLTextAreaElement | null
@@ -139,7 +142,7 @@ export async function deleteAllSessions(): Promise<void> {
   sessionReplace(sessionRows().filter((s: SessRow) => !gone.includes(s.id)))
   sessionSet(null)
   switchToDraft()
-  drawSettings()
+  islands.settings.redraw()
   toast(sessionRows().length
     ? T('gui.set.dat.del_partial', { n: gone.length, left: sessionRows().length })
     : T('gui.set.dat.del_done', { n: gone.length }))

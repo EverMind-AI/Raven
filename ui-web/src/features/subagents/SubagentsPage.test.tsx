@@ -18,9 +18,11 @@ import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 import { domSnapshot } from '../../test/domSnapshot'
 import { islands } from '../../islands'
 import { resetSources, setSources, sources } from '../../state/sources'
-import { setShell, shell } from '../../shell/bridge'
 
-import type { Shell } from '../../shell/bridge'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import { installWsPanel } from '../../test/wsPanel'
+import * as pageStore from '../../state/page'
 import type { JSX } from 'react'
 import type { ComposerSource } from '../composer/types'
 import type { AgentCtx, AgentRow, AgentsSource, DirectTurn, InstanceRow, SubagentRow } from './types'
@@ -30,19 +32,16 @@ import type { AgentCtx, AgentRow, AgentsSource, DirectTurn, InstanceRow, Subagen
 
 const paints: Array<{ ctx: unknown; opts?: { key?: string; empty?: string; reset?: boolean } }> = []
 
-/* The island runs against the same two seams production wires up: a fake
-   shell handed in through setShell (T returns its key, dur a deterministic stamp)
-   and a source on sources.agents -- the fixture shape for demo behaviour,
-   list/context/node for live behaviour. */
+/* The island runs against the same two seams production wires up: a stand-in
+   translator on setTranslator (it returns its key) and a source on
+   sources.agents -- the fixture shape for offline behaviour, list/context/node
+   for live behaviour. */
 function wire(source: AgentsSource): void {
   paints.length = 0
-  const fakeShell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: () => {},
-    wsShows: (tab) => tab === 'agents',
-  }
-  setShell(fakeShell)
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  installWsPanel({ view: () => ({ tab: 'agents', open: true, picked: true }) })
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   sessionReset()
   setCurrent('s1')
   source.stagePaint = (box, ctx, opts) => {
@@ -1809,7 +1808,7 @@ describe('subagents island, an instance detail', () => {
           ],
       }),
     })
-    shell().wsShows = () => false
+    installWsPanel()
 
     render(<InstanceConversation row={row} />, {
       container: document.getElementById('wsBody')!,
@@ -1870,7 +1869,7 @@ describe('subagents island, an instance detail', () => {
           : [{ role: 'assistant', content: 'first' }, { role: 'assistant', content: 'second' }],
       }),
     })
-    shell().wsShows = () => false
+    installWsPanel()
 
     render(<AgentRecordConversation row={row} />, {
       container: document.getElementById('wsBody')!,

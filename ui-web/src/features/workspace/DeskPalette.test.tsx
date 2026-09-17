@@ -18,9 +18,11 @@ import { setCurrent } from '../../shell/session'
    to the workspace store here, and `openDelivery` reaches the desk through it. */
 import '../../islands'
 import { resetSources, setSources, sources } from '../../state/sources'
-import { resetShell, setShell } from '../../shell/bridge'
 
-import type { Shell } from '../../shell/bridge'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import { installWsPanel } from '../../test/wsPanel'
 import type { AgentsSource, InstanceRow } from '../subagents/types'
 import type { WorkspaceSource, WsChange } from './types'
 
@@ -51,12 +53,10 @@ const change = (key: string): WsChange => ({
 
 function wire(): void {
   opens.length = 0
-  const fakeShell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: () => {},
-    workspaceSetOpen: () => {},
-  }
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  installWsPanel()
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   const source: WorkspaceSource = {
     shortPath: (p) => p,
     hostPlatform: () => 'mac',
@@ -68,7 +68,6 @@ function wire(): void {
   /* The agents store files its lists under the open conversation and drops an
      answer for any other, so the harness has to be in one. */
   setCurrent('s1')
-  setShell(fakeShell)
   setSources({
     workspace: source,
     /* The agents tab counts the instances this session started, so the harness
@@ -106,7 +105,7 @@ afterEach(() => {
     deliveries.restore([])
     workspace.restore({ changes: [], urls: [], file: null, turn: 0, unseen: 0, deliveries: [] })
   })
-  resetShell()
+  resetTranslator()
   resetSources()
   setCurrent(null)
   agents.reset()

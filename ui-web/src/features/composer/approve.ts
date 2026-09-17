@@ -27,7 +27,7 @@ import { createElement } from 'react'
 
 import { ApprovalSheet } from '../../chrome/ApprovalSheet'
 import { ApproveSheet } from '../../chrome/ApproveSheet'
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import * as drafts from '../../state/sheetDrafts'
 import { add as sheetAdd, dropClass, remove as sheetRemove, session } from '../../state/sheetRack'
 import { composing } from './store'

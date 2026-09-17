@@ -30,21 +30,28 @@ import * as panes from './shell/panes'
 import * as scrollbars from './shell/scrollbars'
 import * as session from './shell/session'
 import { plugHost, skillsHost, skillsSkeletonHost } from './islands'
+import * as pluginsTab from './features/plugins/tab'
 import * as settingsChrome from './features/settings/chrome'
-import { installLegacy } from './legacy/index.js'
+import * as skillsTab from './features/skills/tab'
 import { boot } from './state/boot'
+import { installComposerPalette } from './state/install'
 import * as langEffects from './state/langEffects'
+import { dropNoJs, markStart } from './state/splash'
+import * as ws from './state/ws'
+import { setWsPanel } from './state/wsPanel'
 import { setGateway } from './state/gateway'
 import { installGlobalListeners } from './state/globalListeners'
 import * as portals from './state/portals'
 import { chooseTransport } from './state/transport'
 
-/* The island bundle: the React roots the page mounts, the chrome that wires
- * itself over the static markup, and the one transport. Nothing is published
- * on window any more -- the legacy layers import what they call, the island
- * bag (islands.ts) is imported too, and the shell half comes in through
- * setShell. The bundle reads the shell lazily (see shell/bridge.ts): at this
- * point no shell has been handed in yet.
+/* The page: the one root that renders it, the roots the islands mount, the
+ * chrome that wires itself over what they render, and the one transport.
+ *
+ * Nothing is published on window and nothing is injected from outside any
+ * more: every line below is this bundle calling a module of its own, in the
+ * order the concatenated page script ran them in. That order is the whole
+ * reason this file is a straight line rather than a set of install()s --
+ * several of these steps read what an earlier one wrote.
  */
 
 /* The page's own root, committed before anything reaches into what it renders.
@@ -69,6 +76,12 @@ flushSync(() => appRoot.render(<App />))
    renders, and because the root's own listener is react-dom's to register. */
 installGlobalListeners()
 
+/* The panel the workspace, browser and sub-agent views are drawn inside, handed
+   to the islands that ask it something rather than imported by them
+   (state/wsPanel.ts). */
+setWsPanel(ws)
+
+
 session.onChange(() => {
   sheets.sync()
   dagSheet.sync()
@@ -85,8 +98,9 @@ installLinkTrap()
 
 /* The dock's own listeners -- the field, the send button, the file picker, the
    drop target, the pill. Registered here rather than on the first paint
-   because the markup is already in the document; the handlers read the shell
-   and DS.composer lazily, which is what makes that safe this early. */
+   because the markup is already in the document; the handlers read the
+   translator and the composer source lazily, which is what makes that safe
+   this early. */
 composer.install()
 /* The chrome that wires itself over the static markup, which is already parsed
    by the time this bundle runs: the page script below is the LAST thing in the
@@ -149,18 +163,40 @@ if (setHost) createRoot(setHost).render(<SettingsApp />)
    same contract (state/transport.ts). */
 setGateway(chooseTransport())
 
-/* The legacy chrome, which used to be a third inline <script> after this
-   bundle. Before the boot and for the same reason it was last then: its
-   install() steps reach for the chrome this file has just wired and for the
-   island roots mounted above, and the boot below reaches for them. */
-installLegacy()
+/* What the concatenated page script did while it ran, in the order it ran it.
+   It was a third inline <script> after this bundle, then a list of install()
+   calls, and now it is this: each line belongs to the module that owns the
+   thing it does, and the order between them is the order that script had.
 
-/* What the live layer's last part installed, in the order it installed it: the
-   whole-page redraw a language pick asks for, then the settings transport and
-   the model chip. Here rather than inside the list above because the list is
-   what is left of a concatenated script and this is not. */
+   Before the boot below and for the same reason the script was last then: each
+   of these reaches for the chrome this file has just wired and for the island
+   roots mounted above, and the boot reaches for them. */
+
+/* If this bundle runs at all, the no-script marker goes. */
+dropNoJs()
+/* The session pointer starts on the offline fixture's first conversation, and
+   the boot's own claim clears it again a few lines below: the two writes
+   together are what keeps a reload's "come back here" note off fixture noise
+   (state/boot.ts's claimFirstFrame, shell/resume.ts). */
+session.setCurrent('a')
+/* The half of the composer's source no transport answers, before the settings
+   seam adds its own member to the same object. */
+installComposerPalette()
+/* What a match does is the panel's (state/ws.ts); the moment the split point is
+   watched from is here, after every listener the page registers itself. */
+ws.watchNarrow()
+/* The two tabs of the capabilities page, which register their renderers into
+   state/caps.ts in this order -- the plugin tab's steps are the outer half of a
+   draw and the shared hero is its last step. */
+skillsTab.install()
+pluginsTab.install()
+/* The whole-page redraw a language pick asks for, then the settings transport
+   and the model chip. */
 langEffects.install()
 settingsChrome.install()
+/* The splash is up; this is the clock the floor on its display time measures
+   from (state/splash.ts). */
+markStart()
 
 /* The page's own boot: the seam, the pushes, the actions, then everything a
    first frame needs from the gateway (state/boot.ts). */

@@ -38,8 +38,8 @@ export const relToWsRoot = (p: string | null | undefined): string | null => {
 }
 
 /* What the workspace panel shows as a short path, and what its own tests
-   shorten with. Published by the page (src/legacy/demo/100-workspace.js),
-   which owns the panel chrome; stage C folds it into the island. */
+   shorten with. Handed in by the boot's own wiring (state/install.ts), which
+   reads it off the installed source. */
 let shorten: (p: string) => string = (p) => p
 export function setShortener(fn: (p: string) => string): void {
   shorten = fn
@@ -99,8 +99,8 @@ export const proseSource: ProseSource = {
     : islands.workspace.showFile(p)),
 }
 
-/* The gateway host's OS family, published by the part that learns it from the
-   handshake (src/legacy/demo/010-kernel.js holds the slot). */
+/* The gateway host's OS family, handed in by the boot's own wiring
+   (state/install.ts), which learns it from the handshake. */
 let hostPlatformLive: () => string = () => ''
 export function setHostPlatformReader(fn: () => string): void {
   hostPlatformLive = fn

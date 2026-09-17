@@ -10,14 +10,13 @@
  * the splash and the credential this page cannot mint.
  */
 
+import { T } from '../i18n/t'
 import { islands } from '../islands'
 import { show as failureBar } from '../shell/failure'
 import { open as upShade } from '../shell/upgrade'
 import { gateway } from './gateway'
 import { hideSplash } from './splash'
 import { distMoved, upgradeKind, upMarkClear } from './updates'
-import { T } from '../legacy/demo/010-kernel.js'
-import { showStatus } from '../legacy/demo/070-transcript.js'
 
 import type { ConnectionState, StateInfo } from '../rpc/transport'
 import type { UpgradeShade } from '../shell/upgrade'
@@ -136,7 +135,7 @@ export async function onConnectionState(state: ConnectionState, info?: StateInfo
   if (state === 'reconnecting' && attempt === 0) {
     // In the DOM, not a toast: a silent drop mid-turn reads as the model
     // hanging forever, which is exactly the bug report this line answers.
-    try { showStatus(T('gui.reconnecting')) } catch { /* pre-boot */ }
+    try { islands.transcript.status(T('gui.reconnecting')) } catch { /* pre-boot */ }
     return
   }
   if (state === 'reconnecting') {

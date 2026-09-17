@@ -1,8 +1,10 @@
-import { ds, shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
 import { show as toast } from '../../shell/toast'
 import * as detail from '../../state/detail'
 
 import type { XaActArgs, XaOp, XaRow, XaSource } from './types'
+import * as page from '../../state/page'
 
 /* Page state, outside React on purpose: the legacy shell drives this page
  * imperatively (the More row opens it, Esc closes it, a language flip
@@ -66,7 +68,7 @@ const failure = (e: unknown): string => {
    that asks for it now: the group heading in the page is a fresh answer every
    time the reader arrives, which is what the re-check button used to be for. */
 export function open(): void {
-  shell().showPage('xaPage')
+  page.show('xaPage')
   void source()
     .load(true)
     .then((rows) => set({ rows, epoch: state.epoch + 1 }))
@@ -77,7 +79,7 @@ export function open(): void {
 }
 
 export function close(): void {
-  shell().showPage(null)
+  page.show(null)
 }
 
 /* Every write goes through here: one place that toasts the failure and repaints

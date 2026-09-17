@@ -19,7 +19,7 @@
 
 import { flushSync } from 'react-dom'
 
-import { ds } from './bridge'
+import { ds } from '../state/sources'
 
 export interface BannerSource {
   /* Whether the websearch capability is installed but not yet configured.

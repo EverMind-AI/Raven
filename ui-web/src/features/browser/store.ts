@@ -1,17 +1,18 @@
-import { ds, shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
 import { open as openUrl } from '../../shell/open-url'
 import { sources } from '../../state/sources'
 
 import type { BrowserReply, BrowserSource, BrowserTabRow, ChromiumSource, FrameHead } from './types'
+import { panel } from '../../state/wsPanel'
 
-/* Page state, outside React on purpose: the legacy shell drives this view
- * imperatively (drawWs mounts and unmounts it per redraw, frames land from
- * the transport, the transcript's link trap opens pages), so the state lives
- * in a plain store the shims can call, and the component subscribes.
+/* Page state, outside React on purpose: the panel drives this view imperatively
+ * (state/ws.ts mounts and unmounts it per redraw, frames land from the
+ * transport, the transcript's link trap opens pages), so the state lives in a
+ * plain store those callers can reach, and the component subscribes.
  *
- * This is the legacy BR object (ui-web/src/legacy/live/220-browser.js before the
- * migration) ported field for field; the paint/watch/poll machinery keeps
- * its shape so the two can be diffed.
+ * The paint/watch/poll machinery keeps the shape the page's own browser object
+ * had before this module, field for field, so the two could be diffed.
  */
 
 export interface BrowserState {
@@ -61,9 +62,9 @@ export function subscribe(l: () => void): () => void {
   return () => listeners.delete(l)
 }
 
-/* patch() mutates without notifying -- the legacy writes a later repaint
-   picked up; set() notifies when a field actually moved, which is the
-   repaint. Frames with unchanged metadata must cause no render at all. */
+/* patch() mutates without notifying -- the writes a later repaint picks up;
+   set() notifies when a field actually moved, which is the repaint. Frames with
+   unchanged metadata must cause no render at all. */
 function patch(p: Partial<BrowserState>): void {
   state = { ...state, ...p }
   barSync()
@@ -144,8 +145,8 @@ export const noFavAdd = (origin: string): void => {
 }
 
 export function showing(): boolean {
-  const s = shell()
-  return s.wsShows ? s.wsShows('browser') : false
+  const shown = panel().view()
+  return shown.open && shown.tab === 'browser'
 }
 
 const gone = (e: unknown): boolean =>
@@ -211,7 +212,7 @@ function frameMeta(head: FrameHead): boolean {
     stopped = !head.loading
   }
   /* Hidden: the facts are kept, the repaint is not -- the next draw reads
-     them, exactly as the legacy meta handler returned early here. */
+     them, which is where the metadata handler has always returned early. */
   if (!showing()) {
     patch(p)
     return false

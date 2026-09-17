@@ -1,22 +1,21 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { _resetForTests, draw, set } from './ctxchip'
-import { resetShell, setShell } from './bridge'
 import { mountPageRoot } from '../test/pageRoot'
+import { resetTranslator, setTranslator } from '../i18n/t'
+import * as confirmStore from '../state/confirm'
+import * as pageStore from '../state/page'
 
-import type { Shell } from './bridge'
 
 /* The catalogue's own shape for the tooltip, so the test reads what a reader
    would see rather than a key. */
-const fake: Shell = {
-  T: (key, vars) =>
-    key === 'gui.ctx.tip' && vars
-      ? `context ${vars.used}/${vars.max} ${vars.pct}%`
-      : key,
-  confirmAsk: (_t, _b, _l, fn) => fn(),
-  showPage: () => {},
-}
+setTranslator((key, vars) =>
+key === 'gui.ctx.tip' && vars
+? `context ${vars.used}/${vars.max} ${vars.pct}%`
+: key)
+vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
 
 const chip = (): HTMLElement => document.getElementById('ctxChip') as HTMLElement
 const fg = (): Element => chip().querySelector('.fg') as Element
@@ -34,7 +33,6 @@ let unmount = (): void => {}
    argument that clears it back to "no window known yet". */
 beforeEach(() => {
   _resetForTests()
-  setShell(fake)
   document.body.innerHTML = '<div class="dock"></div>'
   unmount = mountPageRoot()
 })
@@ -43,7 +41,7 @@ afterEach(() => {
   unmount()
   unmount = () => {}
   _resetForTests()
-  resetShell()
+  resetTranslator()
   document.body.innerHTML = ''
 })
 

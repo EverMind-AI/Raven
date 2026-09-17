@@ -19,7 +19,7 @@
 
 import type { ConnChannel } from './types'
 
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 
 interface CatalogueEntry {
   id: string

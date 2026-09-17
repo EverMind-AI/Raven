@@ -1,20 +1,18 @@
 /* The DataSource seam: one module, one domain per member, each typed.
  *
  * A page's renderer lives once and reads its data only through a source. The
- * demo shell REGISTERS its fixture source (`sources.x ??= fixture`), the live
- * layer INSTALLS the real one (`sources.x = rpcSource`), and because both
- * layers install synchronously before the load-event paint, whichever ran last
- * is the one the first paint reads. No flags, no clearing, no repaint.
+ * page installs one per domain synchronously before the first data-driven
+ * paint (src/state/install.ts), and which transport answers behind it is the
+ * URL's decision rather than the renderer's (src/state/transport.ts). No flags,
+ * no clearing, no repaint.
  * Design: docs/specs/2026-08-19-page-datasource-seam.md
  *
- * `Partial` because which domains exist depends on the load mode: two are the
- * offline shell's alone (`artifacts`, `composer`) and two the live layer's
- * (`knowledge`, `model`). Islands ask through `ds()` (see shell/bridge.ts),
- * which is where a missing one becomes a loud failure rather than undefined.
+ * `Partial` because which domains exist depends on the load mode. Islands ask
+ * through `ds()` below, which is where a missing one becomes a loud failure
+ * rather than undefined.
  *
- * The types are the islands' own, so the fixture source and the live source
- * are held to one shape. That only binds a TypeScript caller today: the two
- * layers under src/legacy/ are JavaScript and are not type-checked.
+ * The types are the islands' own, so the offline source and the live source are
+ * held to one shape.
  */
 import type { BrowserSource } from '../features/browser/types'
 import type { ComposerSource } from '../features/composer/types'
@@ -39,8 +37,8 @@ import type { TierSource } from '../shell/tier'
 
 /* Whether the extensions list has been read, and reading it. Declared here
    rather than in a feature's types because no island has this domain: the
-   capabilities page is still legacy chrome (src/legacy/demo/120-capabilities.js
-   is the only reader). */
+   capabilities page is chrome, and its opener is the only reader
+   (src/features/plugins/nav.ts). */
 export interface CapabilitiesSource {
   loaded(): boolean
   load(): Promise<boolean>
@@ -75,6 +73,15 @@ export const sources: Partial<Sources> = {}
 
 export function setSources(patch: Partial<Sources>): void {
   Object.assign(sources, patch)
+}
+
+/* One domain's source, or a loud failure. An island runs inside the assembled
+   page or inside a case that installed what it reads, never standalone, and a
+   silent undefined would just move the failure downstream. */
+export function ds<S>(domain: string): S {
+  const source = sources[domain as keyof Sources] as S | undefined
+  if (!source) throw new Error(`DS.${domain} is not installed`)
+  return source
 }
 
 /* Back to the state a fresh page starts in. For tests: a source one case

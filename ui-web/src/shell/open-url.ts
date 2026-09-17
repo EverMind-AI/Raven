@@ -1,6 +1,6 @@
 /* Open a web URL on the reader's host, or copy a non-URL value. */
 
-import { t } from './bridge'
+import { t } from '../i18n/t'
 import { show as toast } from './toast'
 
 export function open(value: string): void {

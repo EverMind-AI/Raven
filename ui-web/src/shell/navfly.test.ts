@@ -4,17 +4,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { markNew as railMarkNew } from '../features/rail/store'
 import { MORE_ROWS, draw, install as installNav, mark, toggle } from './navfly'
 import { resetSources, setSources } from '../state/sources'
-import { resetShell, setShell } from './bridge'
 
-import type { Shell } from './bridge'
+import { resetTranslator, setTranslator } from '../i18n/t'
+import * as confirmStore from '../state/confirm'
+import * as railStore from '../features/rail/store'
+import * as pageStore from '../state/page'
 import type { RailSource } from '../features/rail/types'
 
 /* The three openers are direct imports now, so the pages they open are observed
    by standing in for those modules rather than for a shell verb. */
 const opens = vi.hoisted(() => ({ list: [] as string[] }))
-vi.mock('../features/connections/nav', () => ({ open: () => opens.list.push('connPage') }))
-vi.mock('../features/cron/store', () => ({ open: () => opens.list.push('cronPage') }))
-vi.mock('../features/xa/store', () => ({ open: () => opens.list.push('xaPage') }))
+/* Partial, not wholesale: the rail's own marker reaches the page registry, which
+   reaches the island bag, and the bag is assembled from every member each of
+   these modules really has. */
+vi.mock('../features/connections/nav', async (original) => ({
+  ...(await original<Record<string, unknown>>()),
+  open: () => opens.list.push('connPage'),
+}))
+vi.mock('../features/cron/store', async (original) => ({
+  ...(await original<Record<string, unknown>>()),
+  open: () => opens.list.push('cronPage'),
+}))
+vi.mock('../features/xa/store', async (original) => ({
+  ...(await original<Record<string, unknown>>()),
+  open: () => opens.list.push('xaPage'),
+}))
 
 /* NAV_OF, as far as the flyout is concerned: which button a page lights up.
    The three rows all light up the group's own parent. */
@@ -28,25 +42,21 @@ const NAV_OF: Record<string, string> = {
 
 interface Harness {
   opened: string[]
-  marks: number
+  readonly marks: number
 }
 
-/* `markNew` here is the legacy markNewCurrent(), which is the rail island's
-   marker; the interplay tests below swap in the real one. */
-function install(over: Partial<Shell> = {}): Harness {
+/* The rail island's own marker is watched rather than stood in for: the
+   interplay cases below are about what it and this module write into the same
+   strip, so it has to really run, and the count is what the spy recorded. */
+function install(): Harness {
   opens.list.length = 0
-  const seen: Harness = { opened: opens.list, marks: 0 }
-  const fake: Shell = {
-    T: (key) => key,
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: () => {},
-    markNew: () => {
-      seen.marks += 1
-    },
-    navState: () => ({ pages: Object.keys(NAV_OF), btnOf: (p) => NAV_OF[p] }),
-    ...over,
-  }
-  setShell(fake)
+  const marker = vi.spyOn(railStore, 'markNew')
+  marker.mockClear()
+  const seen: Harness = { opened: opens.list, get marks() { return marker.mock.calls.length } }
+  setTranslator((key) => key)
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
+  vi.spyOn(pageStore, 'navState').mockImplementation(() => ({ pages: Object.keys(NAV_OF), btnOf: (p) => NAV_OF[p] }))
   setSources({ sessions: { snapshot: () => ({ rows: [], cur: 'a', busy: false, query: '' }) } as unknown as RailSource })
   return seen
 }
@@ -82,7 +92,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  resetShell()
+  resetTranslator()
   resetSources()
 })
 

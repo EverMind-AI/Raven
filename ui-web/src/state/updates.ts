@@ -14,13 +14,26 @@
 
 import type { UpgradeShade } from '../shell/upgrade'
 
+import { turn } from '../features/composer/mount'
+import { T } from '../i18n/t'
 import { open as upShade } from '../shell/upgrade'
+import { ask as confirmAsk } from './confirm'
 import { gateway } from './gateway'
-import { $, T } from '../legacy/demo/010-kernel.js'
-import { confirmAsk, turn } from '../legacy/demo/040-state.js'
-import { APP_VERSION } from '../legacy/demo/130-settings.js'
 
 type UpKind = 'ver' | 'ui'
+
+/* What build this window is running. Filled in from `system.version` once the
+   socket is up, and unknown until then: the running install is the only thing
+   that knows its version, so the rail foot and the About card render "--"
+   rather than a guess. Here because this module is what compares it with what
+   the gateway says is newest. */
+let appVersion: string | null = null
+
+export const APP_VERSION = (): string | null => appVersion
+
+export function appVersionSet(v: string): void {
+  appVersion = v
+}
 
 let upKind: UpKind | null = null
 let upLatest: string | null = null
@@ -29,7 +42,7 @@ let upLatest: string | null = null
 export const upgradeKind = (): UpKind | null => upKind
 
 export function showUpNote(kind: UpKind, latest?: string | null): void {
-  const note = $('#upnote') as HTMLElement | null
+  const note = document.getElementById('upnote')
   if (!note) return
   /* a pending version upgrade outranks a rebuilt page: upgrading reloads anyway */
   if (upKind === 'ver' && kind === 'ui') return
@@ -86,7 +99,7 @@ export function askUpgrade(): void {
     return
   }
   confirmAsk(T('gui.upg.title'),
-    T('gui.upg.body', { from: `v${APP_VERSION || '?'}`, to: `v${upLatest || '?'}` }),
+    T('gui.upg.body', { from: `v${APP_VERSION() || '?'}`, to: `v${upLatest || '?'}` }),
     T('gui.upg.go'), runUpgrade)
 }
 
@@ -210,7 +223,7 @@ export function onVisible(): void {
 }
 
 export function watchForUpdates(): void {
-  const note = $('#upnote') as HTMLElement | null
+  const note = document.getElementById('upnote')
   if (!note) return
   note.onclick = () => { if (upKind === 'ver') askUpgrade(); else window.location.reload() }
   /* The click stays wired either way -- the version notice this row also

@@ -14,6 +14,8 @@
  */
 
 import { onFrameBytes, onFrameJson, browserSource } from '../features/browser/source'
+import { open as approveSheet } from '../features/composer/approve'
+import { slashHelp, slashName } from '../i18n/t'
 import { connSource } from '../features/connections/source'
 import { cronSource } from '../features/cron/source'
 import { knowledgeSource } from '../features/knowledge/source'
@@ -33,6 +35,7 @@ import {
 import { xaSource } from '../features/xa/source'
 import { islands } from '../islands'
 import { setFault as setMemFault } from '../shell/banner'
+import { show as toast } from '../shell/toast'
 import { current as sessionCurrent } from '../shell/session'
 import { refusal as uploadRefusal } from '../shell/upload'
 import { installConnectionUI, onReconnect, surface } from './connection'
@@ -42,16 +45,47 @@ import { clarifyRequest, dispatch, installPipeline } from './session/pipeline'
 import { installComposerActions, installSlashActions } from './session/runtime'
 import { sources } from './sources'
 import { showUpNote } from './updates'
+import { T } from '../i18n/t'
+import { $ } from '../shell/dom'
+import { hostPlatform } from '../shell/platform'
 import * as caps from './caps'
 import * as page from './page'
-import { $, HOST_PLATFORM, T } from '../legacy/demo/010-kernel.js'
-import { wsShortPath } from '../legacy/demo/100-workspace.js'
 
 import type { ComposerSource } from '../features/composer/types'
+import type { SlashCmd } from '../features/composer/types'
 import type { TranscriptSource } from '../features/transcript/types'
 import type {
   McpStatusParams, MemoryHealthParams, OauthDoneParams, OauthPendingParams, SystemUpdateAvailableParams,
 } from '../rpc/notifications'
+
+/* ── the palette, which no transport answers ─────────────────────────────── */
+
+/* Two commands, deliberately. Anything else a palette could offer already has a
+   button -- send/stop, the model chip, the answer footer, the rail -- and a
+   second entry point for the same action is one more thing to keep in sync.
+   What is left is what has no button: acting on the session as a whole.
+
+   Both bodies are the session runtime's -- `installSlashActions` replaces them
+   on these very rows -- so what belongs here is the pair of ids the palette
+   renders, in the order it renders them. */
+const SLASH: SlashCmd[] = [
+  { id: 'gui.compress', fn: () => {} },
+  { id: 'gui.clear', fn: () => {} },
+]
+
+/**
+ * The composer source's palette half: which commands the dock offers and what
+ * each is called. Installed before the four lists below, because the settings
+ * seam adds `beforeSend` to the same object and the boot's own installer adds
+ * the meter and the upload to it (src/main.tsx calls this first).
+ */
+export function installComposerPalette(): void {
+  sources.composer = {
+    slash: SLASH,
+    slashName: (id: string) => slashName(id),
+    slashHelp: (id: string) => slashHelp(id),
+  } as ComposerSource
+}
 
 /* ── the seam: one source per domain ─────────────────────────────────────── */
 
@@ -105,10 +139,23 @@ export function installSources(): void {
 
   /* The workspace panel's chrome is still the page's, so the two things its
      source cannot work out for itself are handed over here. */
-  setHostPlatformReader(() => HOST_PLATFORM)
-  setShortener(wsShortPath)
+  setHostPlatformReader(hostPlatform)
+  setShortener((p) => sources.workspace!.shortPath(p))
   sources.prose = proseSource
   sources.workspace = workspaceSource
+
+  /* ── the turn's products ───────────────────────────────────────────────
+     The workspace record's own rows for one turn, unfiltered. Which of them
+     counts as a product, and what a tile can draw of it, are the transcript
+     island's to decide -- see artifactsOf in features/transcript/store.ts.
+
+     The turn number is the one the record files rows under: bumped per turn by
+     the pipeline, and per user message with text by the replay
+     (features/workspace/record.ts). The transcript counts it the same way over
+     the same payload. */
+  sources.artifacts = {
+    changes: (turn) => islands.workspace.shared().changes.filter((c) => c.turn === turn),
+  }
 
   /* Files are uploaded into <workspace>/uploads and handed to the agent as
      paths: every file tool is already workspace-scoped, so a path is all it
@@ -242,7 +289,7 @@ export function installActions(): void {
   /* The slash palette's two session verbs, on the rows the dock declares. */
   installSlashActions()
 
-  $('#newBtn').onclick = () => {
+  $('#newBtn')!.onclick = () => {
     if (openModelsForMissingProvider()) return
     page.show(null); switchToDraft()
   }
@@ -263,6 +310,11 @@ export function installDevHooks(): void {
   // The update row's version state only appears when a release is actually
   // newer, which never happens on a dev checkout (window.__upnote('ver', '0.1.11')).
   hooks.__upnote = (kind: 'ver' | 'ui', latest?: string) => showUpNote(kind || 'ver', latest)
+
+  /* The approval sheet only appears when an engine asks for one, which is too
+     long a loop to design a sheet in (window.__approve('rm -rf build/')). */
+  hooks.__approve = (p: unknown) => approveSheet((p as string) || 'rm -rf build/',
+    () => toast(T('gui.confirm.allow')), () => toast(T('gui.confirm.deny')))
 
   // The graph is only reachable by configuring third-party sub-agents and
   // spending a multi-agent run, which is too long a loop to design a layout in.

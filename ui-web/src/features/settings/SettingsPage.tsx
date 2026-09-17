@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import { ds, shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
 import { show as menuAt } from '../../shell/menu'
 import { KeyInput } from '../../shell/key-input'
 import * as lookStore from '../../shell/look'
@@ -23,6 +24,8 @@ import type { SettingsState } from './store'
 import type { RailSource } from '../rail/types'
 import type { EverosSection, ProviderRow, ToolGroup, ToolRow } from './types'
 import type { JSX, ReactNode, RefObject } from 'react'
+import { ask as confirmAsk } from '../../state/confirm'
+import * as settingsDialog from '../../state/settingsDialog'
 
 /* The session list, reached through the seam. `deleteAll` is wrapped because
    a source that has none is the shape a demo shell can be in, and an
@@ -769,7 +772,7 @@ function UsagePage({ s }: { s: SettingsState }): JSX.Element {
      which is where the store does them. */
   useEffect(() => {
     const timer = setInterval(() => {
-      if (shell().setIsOpen?.()) void store.usageLoad()
+      if (settingsDialog.isOpen()) void store.usageLoad()
     }, 15000)
     return () => clearInterval(timer)
   }, [])
@@ -1706,7 +1709,7 @@ function ProvPanel({ pv, s }: { pv: ProviderRow; s: SettingsState }): JSX.Elemen
             className="mini ghost danger"
             style={{ justifySelf: 'start' }}
             onClick={() =>
-              shell().confirmAsk(
+              confirmAsk(
                 t('gui.model.disconnect_title'),
                 t('gui.model.disconnect_body', { name: pv.name }),
                 t('gui.model.disconnect_title'),
@@ -2202,7 +2205,6 @@ function DefaultsPage({ s }: { s: SettingsState }): JSX.Element {
 
 function PermPage({ s }: { s: SettingsState }): JSX.Element {
   const raw = s.snap.raw
-  const sh = shell()
   const sb = String(V(raw, 'tools.sandbox.backend', 'none'))
   const sbName = sb === 'none' ? t('gui.set.prm.sb_none') : sb === 'auto' ? t('gui.set.prm.sb_auto') : sb
   return (
@@ -2397,7 +2399,6 @@ function MemoryPage({ s }: { s: SettingsState }): JSX.Element {
 /* ---- proactivity / exec / channel / data ----------------------------- */
 
 function ProactPage(): JSX.Element {
-  const sh = shell()
   return (
     <>
       <Scard>
@@ -2409,7 +2410,7 @@ function ProactPage(): JSX.Element {
         <button
           className="mini ghost"
           onClick={() => {
-            sh.closeSet?.()
+            settingsDialog.close()
             openConn()
           }}
         >
@@ -2441,7 +2442,6 @@ function ExecPage({ s }: { s: SettingsState }): JSX.Element {
 }
 
 function ChannelPage({ s }: { s: SettingsState }): JSX.Element {
-  const sh = shell()
   const raw = s.snap.raw
   return (
     <>
@@ -2460,7 +2460,7 @@ function ChannelPage({ s }: { s: SettingsState }): JSX.Element {
         <button
           className="mini ghost"
           onClick={() => {
-            sh.closeSet?.()
+            settingsDialog.close()
             openConn()
           }}
         >
@@ -2472,7 +2472,6 @@ function ChannelPage({ s }: { s: SettingsState }): JSX.Element {
 }
 
 function DataPage({ s }: { s: SettingsState }): JSX.Element {
-  const sh = shell()
   const cp = s.snap.configPath
   return (
     <>
@@ -2496,7 +2495,7 @@ function DataPage({ s }: { s: SettingsState }): JSX.Element {
                the session source's, not this page's -- read straight off the
                seam rather than through the rail island's store, which is the
                rail's own and not this page's to reach into. */
-            sh.confirmAsk(t('gui.set.delete_all'), t('gui.set.delete_all_body', { n: sessionCount() }), t('gui.set.delete_all_yes'), () =>
+            confirmAsk(t('gui.set.delete_all'), t('gui.set.delete_all_body', { n: sessionCount() }), t('gui.set.delete_all_yes'), () =>
               deleteAllSessions(),
             )
           }

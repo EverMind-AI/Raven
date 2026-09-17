@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { fakeGateway, loadPart } from './legacy-part.mjs'
+import { fakeGateway, loadPart } from './module-harness.mjs'
 
 /* The seam the page installs, driven against a transport of our own: the
    filter is the whole subject, so the rows it is handed have to be ours. */

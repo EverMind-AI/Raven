@@ -17,7 +17,7 @@
  */
 
 import { formatDuration } from '../../shell/duration'
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { useTick } from '../../shell/tick'
 
 import type { InstanceRow } from './types'

@@ -9,10 +9,12 @@ import * as notifications from '../../shell/notifications'
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
-import { setShell, shell } from '../../shell/bridge'
 import { mountPageRoot } from '../../test/pageRoot'
 
-import type { Shell } from '../../shell/bridge'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import * as settingsDialogStore from '../../state/settingsDialog'
 import type { RailSource } from '../rail/types'
 import type { SettingsSnapshot, SettingsSource } from './types'
 
@@ -85,8 +87,8 @@ function type(field: HTMLInputElement, value: string): void {
   field.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
-/* The island runs against the same two seams production wires up: a fake
-   shell handed in through setShell (T returns its key, so tests assert catalogue
+/* The island runs against the same two seams production wires up: a stand-in
+   translator on setTranslator (it returns its key, so tests assert catalogue
    keys, not translations) and a fixture source on sources.settings. */
 function install(data: SettingsSnapshot = snap(), over: Partial<SettingsSource> = {}) {
   const calls: Array<[string, unknown]> = []
@@ -117,15 +119,11 @@ function install(data: SettingsSnapshot = snap(), over: Partial<SettingsSource> 
   }
   const shellCalls: Array<[string, unknown]> = []
   toastWriter.calls = shellCalls
-  const fakeShell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    /* Confirms immediately: the dialog itself is legacy chrome, not island. */
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: (id) => shellCalls.push(['showPage', id]),
-    openSet: () => shellCalls.push(['openSet', null]),
-    closeSet: () => shellCalls.push(['closeSet', null]),
-  }
-  setShell(fakeShell)
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
+  vi.spyOn(pageStore, 'show').mockImplementation((id) => shellCalls.push(['showPage', id]))
+  vi.spyOn(settingsDialogStore, 'open').mockImplementation(() => shellCalls.push(['openSet', null]))
+  vi.spyOn(settingsDialogStore, 'close').mockImplementation(() => shellCalls.push(['closeSet', null]))
   /* The danger card's button is a SESSION operation offered from this page, so
      it goes out through DS.sessions rather than this page's own source. */
   const wiped: Array<null> = []
@@ -248,8 +246,7 @@ describe('settings island', () => {
         return null
       },
     })
-    const sh = shell()
-    sh.setIsOpen = () => up
+    vi.spyOn(settingsDialogStore, 'isOpen').mockImplementation(() => up)
     /* Mounting the root is what a page load does, Settings untouched. */
     render(<SettingsApp />, { container: document.getElementById('spanels')! })
     await act(async () => {
@@ -260,10 +257,10 @@ describe('settings island', () => {
       await vi.advanceTimersByTimeAsync(45000)
     })
     expect(asked).toBe(0)
-    /* Opening it. The veil goes up inside open(), so the fake follows it. */
-    sh.openSet = () => {
+    /* Opening it. The flag goes up inside open(), so the stand-in follows it. */
+    vi.spyOn(settingsDialogStore, 'open').mockImplementation(() => {
       up = true
-    }
+    })
     await act(async () => {
       await store.open()
     })

@@ -468,7 +468,6 @@ jobs:
           npm run --prefix ui-web build
           python3 ui-web/build.py
           node ui-web/scripts/check-page.mjs
-          node ui-web/scripts/count-shared-globals.mjs
           node ui-web/scripts/check-css.mjs
           node ui-web/scripts/check-class-namespace.mjs
 

@@ -7,9 +7,10 @@ import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
-import { setShell } from '../../shell/bridge'
 
-import type { Shell } from '../../shell/bridge'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
 import type { MemItem, MemStats, MemorySource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -28,8 +29,8 @@ function item(over: Partial<MemItem> = {}): MemItem {
   }
 }
 
-/* The island runs against the same two seams production wires: a fake
-   shell handed in through setShell (T returns its key, so tests assert catalogue
+/* The island runs against the same two seams production wires: a stand-in
+   translator on setTranslator (it returns its key, so tests assert catalogue
    keys, not translations) and a fixture source on sources.memory. */
 function install(over: Partial<MemorySource> = {}, stats: MemStats | null = null) {
   const calls: string[] = []
@@ -42,12 +43,9 @@ function install(over: Partial<MemorySource> = {}, stats: MemStats | null = null
     ...over,
   }
   const shellCalls: Array<[string, unknown]> = []
-  const fakeShell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: (id) => shellCalls.push(['showPage', id]),
-  }
-  setShell(fakeShell)
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
+  vi.spyOn(pageStore, 'show').mockImplementation((id) => shellCalls.push(['showPage', id]))
   setSources({ memory: source })
   document.body.innerHTML =
     '<section id="memPage"><div id="memBody"></div></section>' +

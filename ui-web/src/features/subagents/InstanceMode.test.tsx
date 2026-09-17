@@ -11,10 +11,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as tier from '../../shell/tier'
 import { InstanceMode } from './InstanceMode'
 import { resetSources, setSources } from '../../state/sources'
-import { resetShell, setShell } from '../../shell/bridge'
 import { mountPageRoot } from '../../test/pageRoot'
 
-import type { Shell } from '../../shell/bridge'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as pageStore from '../../state/page'
+import * as confirmStore from '../../state/confirm'
 import type { AgentsSource, InstanceModeReply, InstanceRow } from './types'
 
 /* The chip's menu rows render from src/App.tsx into the shared #menu host, so
@@ -40,11 +41,9 @@ let answer: (mode: string | null | undefined) => Promise<InstanceModeReply>
 
 function wire(over: Partial<AgentsSource> = {}): void {
   asked = []
-  setShell({
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: () => {},
-    showPage: () => {},
-  } as Shell)
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
   const source: AgentsSource = {
     list: async () => [],
     instanceMode: async (agent, handle) => { asked.push(['read', agent, handle]); return answer(undefined) },
@@ -66,7 +65,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
-  resetShell()
+  resetTranslator()
   document.body.innerHTML = ''
   resetSources()
 })

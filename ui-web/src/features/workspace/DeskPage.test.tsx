@@ -15,9 +15,10 @@ import { setCurrent } from '../../shell/session'
 import '../../islands'
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources } from '../../state/sources'
-import { resetShell, setShell } from '../../shell/bridge'
 
-import type { Shell } from '../../shell/bridge'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
 import type { InstanceRow } from '../subagents/types'
 import type { WorkspaceSource } from './types'
 
@@ -30,12 +31,9 @@ const inst = (handle: string, status?: string): InstanceRow =>
   ({ sessionKey: 's1', agent: 'hermes', handle, kind: 'cli', resumable: true, ...(status ? { status } : {}) })
 
 function wire(): void {
-  const fakeShell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: () => {},
-    workspaceSetOpen: () => {},
-  }
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   const source: WorkspaceSource = {
     shortPath: (p) => p,
     hostPlatform: () => 'mac',
@@ -45,7 +43,6 @@ function wire(): void {
   agentRows = []
   asked.length = 0
   setCurrent('s1')
-  setShell(fakeShell)
   setSources({
     workspace: source,
     agents: {
@@ -69,7 +66,7 @@ afterEach(() => {
     deliveries.restore([])
     workspace.restore({ changes: [], urls: [], file: null, turn: 0, unseen: 0, deliveries: [] })
   })
-  resetShell()
+  resetTranslator()
   resetSources()
   setCurrent(null)
   agents.reset()

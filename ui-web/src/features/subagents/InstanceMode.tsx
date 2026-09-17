@@ -29,7 +29,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { show as menuAt } from '../../shell/menu'
 import { watch as watchTier } from '../../shell/tier'
 import { show as toast } from '../../shell/toast'

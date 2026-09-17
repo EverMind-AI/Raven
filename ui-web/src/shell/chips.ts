@@ -21,7 +21,7 @@
  * its file view up. This module only turns a click into a resolved target.
  */
 
-import { ds } from './bridge'
+import { ds } from '../state/sources'
 
 import type { ProseSource, ProseTarget } from './prose'
 

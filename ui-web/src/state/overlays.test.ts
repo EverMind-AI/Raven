@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 /* The order Escape closes things in.
  *
- * The order was a fourteen-branch if chain in the legacy chrome
- * (src/legacy/demo/150-chrome.js) and this file asserted it against that
- * chain's source text, so that stage C11 could change what is asserted without
+ * The order was a fourteen-branch if chain in the page's chrome, and this file
+ * asserted it against that chain's source text, so that stage C11 could change
+ * what is asserted without
  * touching the expectation. C11 has: the order is the ordered table in
  * src/state/overlays.ts -- a table, not a stack, because each entry answers "am
  * I open" when Escape arrives, so "the last one opened closes first" never
@@ -24,7 +24,6 @@ import { readFileSync } from 'node:fs'
 import { openApproval } from '../features/composer/approve'
 import * as turn from '../features/composer/turn'
 import { islands } from '../islands'
-import { resetShell, setShell } from '../shell/bridge'
 import * as find from '../shell/find'
 import { _resetForTests as sessionReset, setCurrent } from '../shell/session'
 import { installEscapeChain } from './globalListeners'
@@ -33,8 +32,8 @@ import * as settingsDialog from './settingsDialog'
 import * as sheets from './sheetRack'
 import { resetSources, sources } from './sources'
 
+import { resetTranslator, setTranslator } from '../i18n/t'
 import type { ComposerSource } from '../features/composer/types'
-import type { Shell } from '../shell/bridge'
 
 /* The fourteen, in the order Escape reaches them. Each item is the text the
    chain tests to decide whether that layer is on screen -- a selector for the
@@ -87,9 +86,9 @@ const PAGE = [
 
 /* What each layer's close lands on. Every island verb the table reaches is a
    member of the island bag, which is an object, so a stand-in is an
-   assignment rather than a mocked module -- and this file is inside the import
-   cycle the legacy chrome sits in, where a mocked module would be a second
-   copy of half the page. Two of these are not probes but quiet stand-ins for
+   assignment rather than a mocked module -- where a mocked module would be a
+   second copy of half the page. Two of these are not probes but quiet
+   stand-ins for
    verbs a close reaches through: the cron sheet and the rail's marks, which the
    page store and the settings dialog call on their way out. */
 const spies = {
@@ -153,7 +152,7 @@ const LAYERS: Record<string, { up: () => void; taken: () => boolean }> = {
   'turn.busy()': { up: () => turn.dispatch({ type: 'send' }), taken: called(spies.stop) },
 }
 
-const shell: Shell = { T: (key) => key, confirmAsk: () => {}, showPage: () => {} }
+setTranslator((key) => key)
 
 beforeAll(() => {
   /* Once for the file: the listener is the document's, and rebuilding the body
@@ -185,7 +184,6 @@ beforeEach(() => {
   sessionReset()
   setCurrent('a')
   sheets._resetForTests()
-  setShell(shell)
 })
 
 afterEach(() => {
@@ -197,7 +195,7 @@ afterEach(() => {
   islands.xa.close = real.xaClose
   islands.rail.markNew = real.railMark
   resetSources()
-  resetShell()
+  resetTranslator()
   sessionReset()
   document.body.innerHTML = ''
 })
@@ -310,8 +308,8 @@ describe('the one listener that reads the order', () => {
   /* Where it is registered is the contract: document listeners go on in one
      order at boot, and this one sits between the code-block click and the
      settings shortcut -- which is where the handler it replaces was added,
-     back when the legacy chrome added all three (C13 moved every document
-     listener into one installer, so the text this reads moved with them). */
+     back when the chrome added all three (C13 moved every document listener
+     into one installer, so the text this reads moved with them). */
   it('is registered between the code-block click and the settings shortcut', () => {
     const listeners = source('src/state/globalListeners.ts')
     const copy = listeners.indexOf("document.addEventListener('click', copyCodeBlock)")
@@ -320,7 +318,6 @@ describe('the one listener that reads the order', () => {
     expect(copy, 'nothing catches the code-block click').toBeGreaterThan(-1)
     expect(chain, 'the Escape order is not installed after it').toBeGreaterThan(copy)
     expect(settings, 'the settings shortcut is no longer after it').toBeGreaterThan(chain)
-    expect(source('src/legacy/demo/150-chrome.js')).not.toMatch(/document\.addEventListener/)
   })
 
   it('is a bubble-phase listener, after the three the sheets register', () => {

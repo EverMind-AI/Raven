@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { fakeGateway, loadPart } from '../../../scripts/legacy-part.mjs'
+import { fakeGateway, loadPart } from '../../../scripts/module-harness.mjs'
 
 import type { SessRow } from '../../features/rail/types'
 
@@ -51,6 +51,35 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
      afterwards without them. */
   await loadPart(async () => { await import('./registry'); return import('../install') }, {
     fakes: {
+      'src/state/caps': { draw: () => {} },
+      'src/state/page': { show: () => {} },
+      'src/state/ws': { setOpen: () => {}, reset: () => {} },
+      'src/state/session/conversation': {
+        pitch: () => { state.fresh = '1'; calls.push(['pitch']) },
+        unpitch: () => { state.fresh = null; calls.push(['unpitch']) },
+      },
+      'src/features/rail/store': { markNew: () => {}, draw: () => calls.push(['sessionDraw']) },
+      'src/state/session/rows': {
+        sess: (id: string) => (rows || []).find((r) => r.id === id),
+        open: (s: Row) => api.switchTo!(s as SessRow),
+        replace: () => {},
+        rows: () => rows || [],
+      },
+      'src/features/composer/mount': {
+        drawMeter: () => {},
+        goPaint: () => {},
+        loadDraft: (id: string) => calls.push(['loadDraft', id]),
+        parkDraft: () => {},
+        queueClear: () => {},
+        queueRestore: () => {},
+        queueShift: () => undefined,
+        turn: {
+          dispatch: () => {}, busy: () => false, snapshot: () => ({}),
+          restore: () => {}, reduce: (phase: unknown) => phase,
+        },
+      },
+      'src/i18n/t': { T: (key: string) => key },
+      'src/shell/dom': { $ },
       'src/shell/session': { current: () => current, setCurrent: (id: string | null) => { current = id; calls.push(['sessionSet', id]) } },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
       'src/shell/toast': { show: (text: string) => calls.push(['toast', text]) },
@@ -58,40 +87,7 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
       'src/shell/banner': { draw: () => {} },
       'src/shell/tier': { load: () => calls.push(['loadTier']) },
       'src/shell/perm': { setFromConfig: () => {} },
-      'demo/010-kernel.js': { $, T: (key: string) => key },
-      'demo/040-state.js': {
-        loadDraft: (id: string) => calls.push(['loadDraft', id]),
-        parkDraft: () => {},
-        queueClear: () => {},
-        queueRestore: () => {},
-        queueShift: () => undefined,
-        sess: (id: string) => (rows || []).find((r) => r.id === id),
-        stop_: () => {},
-        turn: {
-          dispatch: () => {}, busy: () => false, snapshot: () => ({}),
-          restore: () => {}, reduce: (phase: unknown) => phase,
-        },
-      },
-      'demo/050-rail.js': {
-        markNewCurrent: () => {},
-        sessionDraw: () => calls.push(['sessionDraw']),
-        sessionOpen: (s: Row) => api.switchTo!(s as SessRow),
-        sessionReplace: () => {},
-        sessionRows: () => rows || [],
-      },
-      'demo/060-conversation.js': {
-        pitch: () => { state.fresh = '1'; calls.push(['pitch']) },
-        unpitch: () => { state.fresh = null; calls.push(['unpitch']) },
-      },
-      'demo/070-transcript.js': {
-        killStatus: () => {},
-        showStatus: (text: string) => calls.push(['showStatus', text]),
-      },
-      'demo/090-composer.js': { drawMeter: () => {}, goState: () => {}, ta: { focus: () => {} } },
-      'demo/100-workspace.js': { setWs: () => {}, wsReset: () => {} },
       'src/features/workspace/record': { wsOnHistory: () => {} },
-      'demo/120-capabilities.js': { drawCapsBadge: () => {}, showPage: () => {} },
-      'demo/152-skills.js': { drawCaps: () => {} },
       'src/features/transcript/source': {
         renderHistory: (messages: Array<{ text: string }>) => { state.fresh = null; calls.push(['renderHistory', messages[0]]) },
       },
@@ -103,7 +99,12 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
     },
     islands: {
       /* The streaming buffer the turn state resets through. */
-      transcript: { nudge: () => {}, stopStream: () => {} },
+      transcript: {
+        nudge: () => {},
+        stopStream: () => {},
+        killStatus: () => {},
+        status: (text: string) => calls.push(['showStatus', text]),
+      },
       workspace: { loadDeliveries: (id: string) => calls.push(['loadDeliveries', id]) },
       view: {
         resume: (id: string) => calls.push(['viewResume', id]),

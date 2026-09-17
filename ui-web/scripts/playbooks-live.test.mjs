@@ -11,7 +11,7 @@ import { resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { fakeGateway, loadPart } from './legacy-part.mjs'
+import { fakeGateway, loadPart } from './module-harness.mjs'
 
 const contract = JSON.parse(readFileSync(resolve(process.cwd(), '../rpc-schema/openrpc.json'), 'utf8'))
 const declared = new Set(contract.methods.map((m) => m.name))
