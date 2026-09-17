@@ -556,7 +556,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             session_dir=self.sessions.session_dir,
             session_tier=self.session_tier,
             target_ready=self._routed_target_ready,
-            recovery_limits=self._recovery_limits,
+            retry_delays=tuple(self._recovery_limits.llm_error_retry_delays),
+            retry_after_output=bool(self._recovery_limits.llm_retry_after_output),
         )
         # Reads the live direct chats through a lambda for the reason the identity
         # segment does: the manager is rebuilt on a hot config apply.
