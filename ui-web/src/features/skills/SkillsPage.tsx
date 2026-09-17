@@ -1,14 +1,16 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import { shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { text as reachText } from '../../shell/reach'
 import { CardSkeleton } from '../../shell/skeleton'
+import * as detail from '../../state/detail'
 import * as store from './store'
 
 import type { SkillsState } from './store'
 import type { HubItem } from './types'
 import type { JSX } from 'react'
+import { useInTask } from '../composer/useInTask'
 
 /* The skill tab mirrors the plugin tab exactly: the market IS the page,
    what you already have lives one level in (the installed button top-right
@@ -301,7 +303,7 @@ function SkillInstalled(): JSX.Element {
                     className="mini gold"
                     onClick={(e) => {
                       e.stopPropagation()
-                      shell().useInTask?.('gui.hub.use_prompt', c.name)
+                      useInTask('gui.hub.use_prompt', c.name)
                     }}
                   >
                     {t('gui.hub.use')}
@@ -362,7 +364,7 @@ function SkillDetail({ s, drawer }: { s: SkillsState; drawer: NonNullable<Skills
         {busy ? (
           <span className="pnote">{t('gui.hub.working')}</span>
         ) : installed ? (
-          <button className="mini gold" onClick={() => shell().useInTask?.('gui.hub.use_prompt', name)}>
+          <button className="mini gold" onClick={() => useInTask('gui.hub.use_prompt', name)}>
             {t('gui.hub.use')}
           </button>
         ) : (
@@ -462,37 +464,12 @@ function SkillDetail({ s, drawer }: { s: SkillsState; drawer: NonNullable<Skills
   )
 }
 
-/* The drawer's own host node, re-attached under #dBody whenever a skill
-   sheet opens: the plugin and memory drawers clear #dBody with innerHTML,
-   which must never tear down nodes React owns. */
-const drawerHost = document.createElement('div')
-
 export function SkillsApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.getState)
-  useEffect(() => {
-    const detail = document.getElementById('detail')
-    if (!detail) return
-    if (!s.drawer) {
-      delete detail.dataset.fill
-      return
-    }
-    const dBody = document.getElementById('dBody')
-    if (!dBody) return
-    if (drawerHost.parentElement !== dBody) {
-      dBody.innerHTML = ''
-      dBody.appendChild(drawerHost)
-    }
-    const dTitle = document.getElementById('dTitle')
-    if (dTitle) dTitle.textContent = ''
-    detail.dataset.open = 'true'
-    /* This card's body is fetched when it opens, so the panel holds a settled
-       box while it is on its way -- see `.detail[data-fill]`. */
-    detail.dataset.fill = 'true'
-  }, [s.drawer])
   return (
     <>
       {s.view === 'installed' ? <SkillInstalled /> : <SkillMarket s={s} />}
-      {s.drawer ? createPortal(<SkillDetail s={s} drawer={s.drawer} />, drawerHost) : null}
+      {s.drawer ? createPortal(<SkillDetail s={s} drawer={s.drawer} />, detail.host('skills')) : null}
     </>
   )
 }

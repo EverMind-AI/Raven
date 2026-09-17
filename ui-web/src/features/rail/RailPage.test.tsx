@@ -11,7 +11,12 @@ import {
   setCurrent,
 } from '../../shell/session'
 
-import type { Shell } from '../../shell/bridge'
+import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
+
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
 import type { MenuItem } from '../../shell/menu'
 import type { ToastAction } from '../../shell/toast'
 import type { RailSnapshot, RailSource, SessRow } from './types'
@@ -40,32 +45,29 @@ interface Harness {
   toasts: Array<{ text: string; action?: ToastAction }>
 }
 
-/* The island runs against the same two seams production wires: a fake shell
-   on window.RavenShell (T returns its key, so tests assert catalogue keys)
-   and a snapshot source on window.DS.sessions. */
+/* The island runs against the same two seams production wires: a stand-in
+   translator on setTranslator (it returns its key, so tests assert catalogue
+   keys) and a snapshot source on sources.sessions. */
 function install(over: Partial<RailSnapshot> = {}): Harness {
   const state: RailSnapshot = { rows: [row()], cur: 'a', busy: false, ...over }
   const calls: Array<[string, unknown]> = []
   const toasts: Array<{ text: string; action?: ToastAction }> = []
   toastWriter.items = toasts
-  const fakeShell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: id => calls.push(['showPage', id]),
-    navState: () => ({ pages: [], btnOf: () => undefined })
-  }
-  window.RavenShell = fakeShell
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
+  vi.spyOn(pageStore, 'show').mockImplementation(id => calls.push(['showPage', id]))
+  vi.spyOn(pageStore, 'navState').mockImplementation(() => ({ pages: [], btnOf: () => undefined }))
   sessionReset()
   setCurrent(state.cur)
   onChange((id) => {
     state.cur = id
     store.draw()
   })
-  window.DS = { sessions: {
+  setSources({ sessions: {
     snapshot: () => state,
     replace: (rows: SessRow[]) => { state.rows = rows },
     open: (s: SessRow) => calls.push(['openSession', s.id]),
-  } }
+  } as unknown as RailSource })
   document.body.innerHTML =
     '<div class="app" data-page="off">' +
     '<button id="newBtn"></button><button id="skillBtn"></button>' +
@@ -77,7 +79,7 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
 }
 
 /* The installed source, for the cases that add a write verb to it. */
-const src = (): RailSource => window.DS!.sessions as RailSource
+const src = (): RailSource => sources.sessions as RailSource
 
 /* The nav the assembled page hands over (demo/155-bridge.js reads it off
    NAV_OF and MORE_ROWS): every module page, the rail button each one lights
@@ -93,10 +95,9 @@ const BTN_OF: Record<string, string> = {
 }
 
 function navUp(open: string): void {
-  window.RavenShell!.navState = () => ({
+  vi.spyOn(pageStore, 'navState').mockReturnValue({
     pages: PAGES,
-    btnOf: p => BTN_OF[p],
-    morePages: ['xaPage', 'connPage', 'cronPage']
+    btnOf: (p: string) => BTN_OF[p]
   })
   document.querySelector<HTMLElement>('.app')!.dataset.page = 'on'
   PAGES.forEach(p => {
@@ -124,6 +125,7 @@ afterEach(() => {
   sessionReset()
   found.term = ''
   localStorage.clear()
+  resetSources()
 })
 
 describe('rail island', () => {
@@ -312,13 +314,13 @@ describe('rail island', () => {
     install()
     const host = mount()
     expect(screen.getByText('GTM research')).toBeTruthy()
-    window.DS = {
+    setSources({
       sessions: {
         snapshot: () => {
           throw new Error('gone')
         }
-      }
-    }
+      } as unknown as RailSource
+    })
     act(() => store.draw())
     expect(host.querySelectorAll('.sess').length).toBe(1)
     expect(screen.getByText('GTM research')).toBeTruthy()
@@ -714,5 +716,18 @@ describe('rail island', () => {
     expect(fold.textContent).toBe('gui.rail.collapse')
     act(() => fold.click())
     expect(host.querySelectorAll('.sess').length).toBe(15)
+  })
+
+  it('keeps its rendered shape', () => {
+    install({
+      rows: [
+        row(),
+        row({ id: 'p', title: 'pinned one', pin: true }),
+        row({ id: 'k', title: 'daily digest', from: 'cron' }),
+        row({ id: 'e', title: '🚀 Ship it' })
+      ]
+    })
+    const host = mount()
+    expect(domSnapshot(host)).toMatchSnapshot()
   })
 })

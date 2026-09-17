@@ -16,6 +16,8 @@
  * you look at the layout again.
  */
 
+import * as portals from '../state/portals'
+
 export const SB_HIDE = 900
 export const SB_MIN = 26
 export const SB_PAD = 2
@@ -41,18 +43,13 @@ const dragWired = new WeakSet<HTMLElement>()
    wider -- still has to have its thumb put back where the box now is. */
 const live = new Set<HTMLElement>()
 
-let sbLayer: HTMLElement | null = null
-
-function layer(): HTMLElement {
-  /* The isConnected half is for a test that replaced the body under us; in
-     the page the layer is appended once and never removed. */
-  if (!sbLayer || !sbLayer.isConnected) {
-    sbLayer = document.createElement('div')
-    sbLayer.className = 'sbars'
-    document.body.appendChild(sbLayer)
-  }
-  return sbLayer
-}
+/* The fixed layer the thumbs are parked in. Handed out by state/portals.ts,
+   which is where the order of everything standing at the body is declared:
+   this layer shares its `--z` step with nothing, but the two below it do, and
+   one module appending its own layer whenever it liked is how such an order
+   goes wrong. Still made on the first ask, which is what keeps it in the boot
+   goldens where it is. */
+const layer = (): HTMLElement => portals.host('sbars')
 
 /* The scroll event from the document, the documentElement and the window all
    mean the same scroller. */
@@ -263,7 +260,10 @@ function wireDrag(t: HTMLElement, el: HTMLElement, axis: Axis): void {
   })
 }
 
-function onScroll(e: Event): void {
+/* The capture-phase scroll, which is how one handler covers every scroller in
+   the app. Registered with the page's other document listeners
+   (state/globalListeners.ts). */
+export function onScroll(e: Event): void {
   const el = root(e.target)
   if (!el) return
   show(el)
@@ -272,12 +272,11 @@ function onScroll(e: Event): void {
 
 /* Resizing moves every box at once, and a bar mid-fade would be left hanging
    over whatever landed under it. */
-function onResize(): void {
+export function onResize(): void {
   live.forEach(hide)
 }
 
+/** Raises the layer, so the thumbs have somewhere to be parked. */
 export function install(): void {
   layer()
-  document.addEventListener('scroll', onScroll, true)
-  window.addEventListener('resize', onResize)
 }

@@ -1,11 +1,11 @@
 /* The permission mode: the chip on the composer (#permChip) and the panel it
  * opens (#permPop).
  *
- * A writer, not an island, and the reason is in the markup: both the chip and
- * the panel are static in page.html, the panel has to be REPARENTED to the body
- * to be positioned at all (see below), and the whole state is one string. A
- * component would own two nodes in two different places and re-render a radio
- * group of three.
+ * A store rather than a writer, now that <PermChip/> and <PermPop/> render both
+ * from it (src/chrome/PermChip.tsx, src/chrome/PermPop.tsx). What stays here is
+ * the state and everything that decides: the three tiers, the mode in force,
+ * where a pick is written, and the rows a panel shows when it opens. The chip
+ * itself is still painted by hand -- see `draw`.
  *
  * Three tiers, ordered from the strictest to the one with no brakes, because
  * that is the order a reader should meet them in. The engine's permission gate
@@ -16,14 +16,16 @@
  * The config file is the choice's home; localStorage only remembers the last
  * known value so the chip paints right before the live layer has loaded the
  * config. The live layer pushes the loaded value in through setFromConfig and
- * persists a pick through the late-bound window.persistPermMode -- late-bound
- * so the demo layer, which has no engine, simply has nobody listening.
+ * registers how a pick is written through setPermPersister -- registered
+ * rather than imported so the demo layer, which has no engine, simply leaves
+ * nobody listening.
  */
 
-import { t } from './bridge'
-import { clearance } from './popover'
+import { flushSync } from 'react-dom'
 
-interface Tier {
+import { t } from '../i18n/t'
+
+export interface Tier {
   id: string
   label: string
   sub: string
@@ -53,7 +55,61 @@ const ICO: Record<string, string> = {
     + '<path d="M12 8.6v3.6M12 15.2h.01"/>',
 }
 
-const CHECK = 'M5 12.5l4.5 4.5L19 7'
+/** The tick, which wears its stroke on the element rather than on the sheet. */
+export const CHECK = 'M5 12.5l4.5 4.5L19 7'
+
+/** One row of the panel, as the open that built it read the catalogue. */
+export interface PermRow {
+  readonly id: string
+  readonly name: string
+  readonly sub: string
+  readonly risk: boolean
+  /** The shield's paths, as markup, because that is how ICO spells them. */
+  readonly ico: string
+  readonly ticked: boolean
+}
+
+export interface PermPanel {
+  /** Up or down: the panel's data-open and the chip's aria-expanded. */
+  readonly open: boolean
+  /* The rows the last open built, or null while the panel has never been
+     opened. Not cleared when it closes, because closing only hid the panel
+     before and may not start emptying it -- so what is ticked here is the mode
+     as of the last open rather than the mode in force, and the words are the
+     catalogue as of the last open rather than the language in force. */
+  readonly listed: readonly PermRow[] | null
+  /** Bumped by every open, so a panel opened twice is measured twice. */
+  readonly opened: number
+}
+
+const shut: PermPanel = { open: false, listed: null, opened: 0 }
+let panel: PermPanel = shut
+const listeners = new Set<() => void>()
+
+/** The panel's state, for <PermPop/> and <PermChip/>. */
+export function get(): PermPanel {
+  return panel
+}
+
+/** For useSyncExternalStore: called whenever the panel changes. */
+export function subscribe(fn: () => void): () => void {
+  listeners.add(fn)
+  return () => {
+    listeners.delete(fn)
+  }
+}
+
+/* Committed synchronously, the way the writes by id were: `open` measures the
+   panel it has just filled, and a caller that opens and then reads the DOM --
+   the chip's own toggle, the pointerdown that closes it, every case in
+   perm.test.ts -- has to see it. */
+function put(next: PermPanel): void {
+  if (next.open === panel.open && next.listed === panel.listed && next.opened === panel.opened) return
+  panel = next
+  flushSync(() => {
+    for (const fn of [...listeners]) fn()
+  })
+}
 
 /* Read once, and validated: a stored id from an older build that no longer
    names a tier would leave the chip drawing nothing. Private mode throws on
@@ -82,8 +138,17 @@ function commit(value: string): void {
   draw()
 }
 
-/* The mode the engine actually holds, pushed in by the live layer once the
-   config has loaded (and again whenever another surface changes it). */
+/* The mode the engine actually holds, pushed in once the config has loaded
+   (and again whenever another surface changes it). */
+/* How a pick reaches the config, when anything can write one. Registered by
+   src/features/settings/chrome.ts, which owns the settings transport; null on
+   the offline shell, where the pick commits locally. */
+let persist: ((mode: string) => Promise<boolean> | boolean) | null = null
+
+export function setPermPersister(fn: (mode: string) => Promise<boolean> | boolean): void {
+  persist = fn
+}
+
 export function setFromConfig(value: string): void {
   if (!TIERS.some((p) => p.id === value) || value === mode) return
   commit(value)
@@ -93,11 +158,18 @@ export const current = (): string => mode
 
 const el = <T extends HTMLElement>(id: string): T | null => document.getElementById(id) as T | null
 
-/* The chip reads its own state, which is why it carries no hover label: the
+/* The chip, painted by hand over what <PermChip/> renders: the icon is markup
+   ICO carries as a string, and the label and the accessible name are one write
+   each that React would only ever render the served literal of. Safe because
+   the component renders no value for any of the three -- React diffs against
+   the props it rendered last, so a prop it never changes is never written
+   again.
+
+   The chip reads its own state, which is why it carries no hover label: the
    detail of each tier belongs in the panel the click opens. Nothing to remove
-   for that -- page.html ships #permChip with no data-tip and no data-i18n-tip
-   for applyI18n to fill, and the legacy drawPerm's `delete chip.dataset.tip`
-   was dead there too. It did not come across. */
+   for that -- the chip is rendered with no data-tip and no data-i18n-tip for
+   the lang store to fill, and the `delete chip.dataset.tip` the draw before
+   this one carried was dead there too. It did not come across. */
 export function draw(): void {
   const cur = TIERS.find((p) => p.id === mode) || TIERS[0]!
   const name = el('permName')
@@ -110,49 +182,36 @@ export function draw(): void {
   chip.setAttribute('aria-label', `${t('gui.perm.title')}: ${t(cur.label)}`)
 }
 
+const rows = (): readonly PermRow[] =>
+  TIERS.map((p) => ({
+    id: p.id,
+    name: t(p.label),
+    sub: t(p.sub),
+    risk: !!p.risk,
+    ico: ICO[p.id] ?? '',
+    ticked: p.id === mode,
+  }))
+
 export function open(): void {
-  const box = el('permList')
   const pop = el('permPop')
   const chip = el('permChip')
-  if (!box || !pop || !chip) return
-  box.textContent = ''
-  TIERS.forEach((p) => {
-    box.appendChild(row(p))
-  })
-
-  /* Fixed coordinates measured from the chip, which is what lets the panel
-     follow the composer wherever it sits -- and the pop has to leave the card's
-     DOM for that, because the card's entrance animation makes it a containing
-     block that quietly re-bases position: fixed.
-     The chip decides the side, `clearance` decides the height: the chip is on
-     the card's bottom bar, so a panel raised off the chip alone sat over the
-     line the reader types on. */
+  if (!pop || !chip) return
+  /* Out of the card first, and once only: the card's entrance animation makes
+     it a containing block, which quietly re-bases the panel's position: fixed
+     against the card instead of the viewport. Moving a node React rendered is
+     safe because none of the card's children is conditional, so React never
+     reconciles that child list and never puts it back (src/chrome/Dock.tsx).
+     Before the rows and the flag, because the placement <PermPop/> makes in
+     its layout effect measures the panel where it now stands. */
   if (pop.parentElement !== document.body) document.body.appendChild(pop)
-  pop.dataset.open = 'true'
-  /* clientWidth/Height, not innerWidth/Height: a backgrounded tab reports the
-     window as 0x0, and a panel placed from that lands in a corner. */
-  const vw = document.documentElement.clientWidth
-  const at = chip.getBoundingClientRect()
-  const over = clearance(chip)
-  const r = pop.getBoundingClientRect()
-  pop.style.position = 'fixed'
-  pop.style.left = `${Math.max(8, Math.min(vw - r.width - 8, at.left - 8))}px`
-  pop.style.right = 'auto'
-  pop.style.top = `${Math.max(8, over.top - r.height - 6)}px`
-  pop.style.bottom = 'auto'
-  /* Above the dock and everything mounted on it: a mode picker the user just
-     opened loses to nothing that was already on screen. */
-  pop.style.zIndex = '46'
-  chip.setAttribute('aria-expanded', 'true')
+  put({ open: true, listed: rows(), opened: panel.opened + 1 })
 }
 
 export function close(): void {
-  const pop = el('permPop')
-  if (pop) pop.dataset.open = 'false'
-  el('permChip')?.setAttribute('aria-expanded', 'false')
+  put({ ...panel, open: false })
 }
 
-export const isOpen = (): boolean => el('permPop')?.dataset.open === 'true'
+export const isOpen = (): boolean => panel.open
 
 /* The chip toggles rather than opens: it is the only way back out of the panel
    with the pointer, since the panel has no close button of its own. */
@@ -161,62 +220,31 @@ export function toggle(): void {
   else open()
 }
 
-function row(p: Tier): HTMLButtonElement {
-  const r = document.createElement('button')
-  r.className = 'prow' + (p.risk ? ' risk' : '')
-  r.setAttribute('role', 'radio')
-  r.setAttribute('aria-checked', String(p.id === mode))
-  const g = document.createElement('span')
-  g.className = 'pic'
-  g.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICO[p.id]}</svg>`
-  const txt = document.createElement('span')
-  txt.className = 'txt'
-  txt.append(span('nm', t(p.label)), span('sub', t(p.sub)))
-  r.append(g, txt)
-  if (p.id === mode) r.appendChild(tick())
-  r.onclick = () => {
-    close()
-    /* Late-bound: the live layer persists to config (the gate reads it live);
-       the demo layer publishes nothing and the pick commits locally. The chip
-       commits only on acknowledgement -- painting the new mode while the write
-       failed would show `ask` over a gate still running `full`, a false
-       security state, so a rejected write leaves the chip on the mode the
-       engine actually holds. */
-    const persist = (window as unknown as { persistPermMode?: (m: string) => Promise<boolean> | boolean })
-      .persistPermMode
-    if (!persist) {
-      commit(p.id)
-      return
-    }
-    Promise.resolve(persist(p.id)).then(
-      (ok) => { if (ok) commit(p.id) },
-      () => {},
-    )
+/* A row's click. The panel goes first, whatever the write does next.
+
+   Registered by the live layer, which persists to config (the gate reads it
+   live); the offline shell registers nothing and the pick commits locally. The
+   chip commits only on acknowledgement -- painting the new mode while the write
+   failed would show `ask` over a gate still running `full`, a false security
+   state, so a rejected write leaves the chip on the mode the engine actually
+   holds. */
+export function pick(id: string): void {
+  close()
+  if (!persist) {
+    commit(id)
+    return
   }
-  return r
+  Promise.resolve(persist(id)).then(
+    (ok) => { if (ok) commit(id) },
+    () => {},
+  )
 }
 
-const span = (cls: string, text: string): HTMLSpanElement => {
-  const n = document.createElement('span')
-  n.className = cls
-  n.textContent = text
-  return n
-}
-
-/* The same svg the legacy ico() built, attribute for attribute: this one wears
-   the stroke on the element rather than taking it from the stylesheet, unlike
-   the shields above, and the two are not interchangeable. */
-function tick(): SVGSVGElement {
-  const NS = 'http://www.w3.org/2000/svg'
-  const s = document.createElementNS(NS, 'svg')
-  s.setAttribute('viewBox', '0 0 24 24')
-  s.setAttribute('fill', 'none')
-  s.setAttribute('stroke', 'currentColor')
-  s.setAttribute('stroke-width', '1.8')
-  s.setAttribute('aria-hidden', 'true')
-  s.setAttribute('class', 'tick')
-  const p = document.createElementNS(NS, 'path')
-  p.setAttribute('d', CHECK)
-  s.appendChild(p)
-  return s
+/* Test seam only: the mode, the panel and the registered writer are the
+   module's now, so they outlive a case's DOM. The subscribers are left alone --
+   a mounted root owns its own, and React takes them back when it unmounts. */
+export function _resetForTests(): void {
+  mode = read()
+  persist = null
+  put(shut)
 }

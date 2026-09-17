@@ -1,6 +1,6 @@
 /* The page-scoped opening state for the first-run onboarding island. */
 
-import { ds } from '../../shell/bridge'
+import { ds } from '../../state/sources'
 
 import type { OnboardSource } from './types'
 

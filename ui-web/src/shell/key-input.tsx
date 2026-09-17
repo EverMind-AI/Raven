@@ -13,7 +13,7 @@
 
 import { forwardRef, useState } from 'react'
 
-import { t } from './bridge'
+import { t } from '../i18n/t'
 
 import type { InputHTMLAttributes, JSX } from 'react'
 

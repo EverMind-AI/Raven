@@ -14,16 +14,25 @@ import * as attachmentCache from '../../shell/attachment-cache'
 import { markMissing as markDeliveryMissing } from '../workspace/deliveries'
 import { snapshot as deliveriesSnapshot } from '../workspace/deliveries'
 
-import type { Shell } from '../../shell/bridge'
+import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
+import { hold as holdHost } from '../../state/session/hosts'
+
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import { installWsPanel } from '../../test/wsPanel'
+import * as pageStore from '../../state/page'
+import { I18N } from '../../i18n/t'
 import type { ProseTarget } from '../../shell/prose'
-import type { HistoryMessage, SpawnListRow, TranscriptSource } from './types'
+import type { WorkspaceSource } from '../workspace/types'
+import type { ArtifactsSource, HistoryMessage, SpawnListRow, TranscriptSource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-/* The island runs against the same two seams production wires: a fake shell
-   on window.RavenShell (T returns its key, prefixed by the current language
-   so a flip is observable) and a source on window.DS.transcript. */
+/* The island runs against the same two seams production wires: a stand-in
+   translator on setTranslator (it returns its key, prefixed by the current
+   language so a flip is observable) and a source on sources.transcript. */
 let lang = 'en'
 
 /* The renders are counted on the REAL renderer, not a stub: the island imports
@@ -38,25 +47,22 @@ vi.mock('../../shell/prose', async (importOriginal) => {
 function wire(over: Partial<TranscriptSource> = {}): void {
   lang = 'en'
   seen.md = 0
-  const fakeShell: Shell = {
-    T: (key, vars) => `${lang}:${key}` + (vars ? ` ${JSON.stringify(vars)}` : ''),
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: () => {},
-    attNotes: () => ['[attachments]'],
-  }
-  window.RavenShell = fakeShell
+  setTranslator((key, vars) => `${lang}:${key}` + (vars ? ` ${JSON.stringify(vars)}` : ''))
+  installWsPanel()
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   const source: TranscriptSource = {
     clean: (t) => String(t == null ? '' : t).trim(),
     okOf: (_n, p) => !/^\s*(error|traceback|failed)\b/i.test(p),
     ...over,
   }
-  window.DS = {
+  setSources({
     transcript: source,
-    workspace: { shortPath: (p: string) => p, openPath: (p: string) => opened.push(p) },
-    artifacts: { changes: (n: number) => PRODUCED.get(n) || [] },
+    workspace: { shortPath: (p: string) => p, openPath: (p: string) => opened.push(p) } as unknown as WorkspaceSource,
+    artifacts: { changes: (n: number) => PRODUCED.get(n) || [] } as unknown as ArtifactsSource,
     /* The renderer reads this for what counts as an openable path. */
     prose: { pathOf: () => null, linkTargetOf: () => null },
-  }
+  })
   document.body.innerHTML = '<div id="scroll"><div class="col" id="stage"></div></div>'
 }
 
@@ -120,15 +126,21 @@ afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+  resetSources()
 })
 
 const iso = (ms: number): string => new Date(ms).toISOString()
+
+/* The marker the composer writes above an attachment list, read from the
+   catalogue rather than quoted: the reader that splits it back off reads the
+   same entry (state/session/conversation.ts's splitAtts). */
+const ATT_NOTE = (I18N.ui['gui.att.note'] as Record<string, string>).en
 
 describe('transcript island, history', () => {
   it('renders a freshly uploaded image from the shared preview cache', () => {
     attachmentCache.set('uploads/shot.png', 'data:image/png;base64,eA==')
     act(() => {
-      mount.history([{ role: 'user', text: 'look\n\n[attachments]\n- uploads/shot.png' }])
+      mount.history([{ role: 'user', text: `look\n\n${ATT_NOTE}\n- uploads/shot.png` }])
     })
     expect($<HTMLImageElement>('.ask .shot')?.src).toBe('data:image/png;base64,eA==')
     expect($('.ask .achip')).toBeNull()
@@ -537,11 +549,11 @@ describe('transcript island, history', () => {
   })
 
   /* An edit's detail header names the file through the workspace source's
-     shortener, reached as window.DS.workspace rather than through ds(). The
+     shortener, reached as sources.workspace rather than through ds(). The
      fixture answers shortPath with the identity, so bypassing the call is
      invisible: this test gives it something to actually shorten. */
   it('names an edit through the workspace shortener, not the raw path', () => {
-    ;(window.DS as { workspace: { shortPath: (p: string) => string } }).workspace.shortPath =
+    ;(sources.workspace as { shortPath: (p: string) => string }).shortPath =
       (raw) => raw.replace('/home/me/project/', '')
     act(() => {
       mount.history([
@@ -894,6 +906,26 @@ describe('transcript island, history', () => {
     expect(notes[0]?.textContent).toContain('en:gui.notice.memory_flush')
     expect(notes[1]?.classList.contains('bad')).toBe(true)
     expect((notes[1] as HTMLElement).title).toBe('send failed · socket closed')
+  })
+
+  it('keeps its rendered shape', () => {
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'read both' },
+        {
+          role: 'assistant', text: '',
+          tool_calls: [
+            { id: 'c1', name: 'read_file', arguments: '{"path":"/tmp/a.log"}' },
+            { id: 'c2', name: 'read_file', arguments: '{"path":"/tmp/b.log"}' },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'c1', name: 'read_file', text: 'line1' },
+        { role: 'tool', tool_call_id: 'c2', name: 'read_file', text: 'Error: no such file' },
+        { role: 'assistant', text: 'one of them is missing' },
+      ])
+    })
+    openTurns()
+    expect(domSnapshot(document.getElementById('stage')!)).toMatchSnapshot()
   })
 })
 
@@ -1515,7 +1547,7 @@ describe('a delegated result coming back', () => {
     act(() => {
       mount.delivered({
         label: 'run-7', isDag: true, status: 'ok', body: injected,
-        open: () => (window.DS as { transcript?: TranscriptSource }).transcript?.openDagRun?.('run-7'),
+        open: () => sources.transcript?.openDagRun?.('run-7'),
       })
     })
     act(() => { (($('.sdlv .sdcv')) as HTMLElement).click() })
@@ -2128,7 +2160,7 @@ describe('transcript island, the delegation verbs', () => {
   it('sends a spawn row to the agents panel when nothing else will take it', () => {
     const went: string[] = []
     wire()
-    window.RavenShell!.showWorkspace = (tab) => went.push(tab)
+    installWsPanel({ show: (tab: string) => { went.push(tab) } })
     store.openSpawn('researcher', 'read the docs')
     expect(went).toEqual(['agents'])
   })
@@ -2290,7 +2322,7 @@ describe('transcript island, tool episodes', () => {
      click-to-open dead with the whole suite still green. */
   describe('a path chip in tool output', () => {
     const wireProse = (open: (at: ProseTarget) => void): void => {
-      window.DS = { ...window.DS, prose: { pathOf: () => null, linkTargetOf: () => null, open } }
+      setSources({ prose: { pathOf: () => null, linkTargetOf: () => null, open } })
     }
 
     function chip(): HTMLElement {
@@ -2617,9 +2649,9 @@ describe('transcript island, lane lifetime', () => {
   it('keeps a parked host: detached is not the same as thrown away', () => {
     turn('streaming')
     const parked = stage().querySelector('[data-tsl]')! as HTMLElement
-    /* What live/060-parked.js does on a mid-turn session switch: the stage's
-       children are held in a detached array, then wiped off the page. */
-    ;(window.DS!.transcript as TranscriptSource).parked = (node) => node === parked
+    /* What a mid-turn session switch does: the conversation being left takes
+       its lane host off the stage and holds it (state/session/residency.ts). */
+    holdHost(parked)
     stage().innerHTML = ''
     turn('the other session')
     seen.md = 0
@@ -2776,7 +2808,7 @@ describe('transcript island, delegated calls', () => {
   /* A conversation as `session.resume` hands it back: the assistant's call, then
      the tool row the server stamped the run's task id onto. */
   /* The spawn turn, and then a turn that only answered.
-     
+
      That second turn is what keeps the first one's fold SHUT, which is the
      state every case below is about: a replay opens the fold of the turn the
      conversation ends on, and a turn with no work of its own has no fold to

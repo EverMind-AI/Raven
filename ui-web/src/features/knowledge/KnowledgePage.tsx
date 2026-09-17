@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { md as mdHtml } from '../../shell/prose'
 import { ProviderIcon, ravenIconPath } from '../../shell/provider-mark'
 import { open as openSettings, setTab as setSettingsTab } from '../settings/store'

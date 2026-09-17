@@ -1,25 +1,24 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CARD, GAP_X, GAP_Y, H, PAD, SHEET, W, depths, layout, layers, ordered, shape, summary, took } from './graph'
 
-import type { Shell } from '../../shell/bridge'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as pageStore from '../../state/page'
+import * as confirmStore from '../../state/confirm'
 import type { DagNode, DagRun } from './types'
 
 /* T returns its key with the vars appended, so a test asserts which catalogue
    entry was chosen AND what was interpolated into it -- the legacy code did the
    interpolation by hand with .replace, so that is the part worth pinning. */
 beforeEach(() => {
-  const shell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: () => {},
-    showPage: () => {},
-  }
-  window.RavenShell = shell
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
 })
 
 afterEach(() => {
-  delete window.RavenShell
+  resetTranslator()
 })
 
 const node = (id: string, deps: string[] = [], over: Partial<DagNode> = {}): DagNode => ({

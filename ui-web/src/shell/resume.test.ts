@@ -3,16 +3,22 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { _resetForTests as sheetReset } from '../features/composer/sheets'
+import { _resetForTests as sheetReset } from '../state/sheetRack'
 import { run as dagOpen, start as dagStart, _resetForTests as dagReset } from '../features/dag/mount'
 import { openDeskAgent, openDeskAgentRecord, openDeskFile, openDeskTab, getState as deskState, reset as deskLeave, saved as deskSaved, setActive, toggleSolo, updateSplits, _resetForTests as deskReset } from '../features/workspace/deskStore'
+/* The wiring main.tsx gets from this import: the subagents panel's pane
+   openers are handed to it here, so replaying an open lands in a real pane. */
+import '../islands'
 import { landing, refreshDag, resume, watch } from './resume'
 import { _resetForTests as sessionReset, setCurrent } from './session'
 import { reset as agentsLeave, _resetForTests as agentsReset, getState as agentsState } from '../features/subagents/store'
+import { resetSources, setSources } from '../state/sources'
 
-import type { Shell } from './bridge'
+import { resetTranslator, setTranslator } from '../i18n/t'
+import { installWsPanel } from '../test/wsPanel'
 import type { DagRun } from '../features/dag/types'
 import type { InstanceRow } from '../features/subagents/types'
+import type { TranscriptSource } from '../features/transcript/types'
 
 const NOTE = 'raven.gui.view.dag'
 
@@ -50,15 +56,15 @@ let openGate: () => void = () => {}
 let dagRun: (runId: string) => Promise<unknown> = () => Promise.resolve(runWire)
 
 function wire(): void {
-  const shell: Shell = { T: (key) => key, confirmAsk: () => {}, showPage: () => {} }
-  window.RavenShell = shell
-  window.DS = {
+  setTranslator((key) => key)
+  installWsPanel()
+  setSources({
     transcript: {
       dagRun: (runId: string) => {
         readRuns.push(runId)
         return dagRun(runId)
       },
-    },
+    } as unknown as TranscriptSource,
     agents: {
       list: () => Promise.resolve([]),
       instances: () => {
@@ -70,11 +76,7 @@ function wire(): void {
         return listSlow ? Promise.resolve().then(() => Promise.resolve()).then(() => listed) : Promise.resolve(listed)
       },
     },
-    subagents: {},
-  }
-  /* The same wiring main.tsx does: the panel's open verbs reach the desk
-     through this bag, so replaying an open lands in a real pane. */
-  window.RavenIslands = { workspace: { openAgent: openDeskAgent, openAgentRecord: openDeskAgentRecord } }
+  })
   document.body.innerHTML = '<div id="split" data-open="false"></div>'
     + '<div class="chat"><div class="dock"><div class="sheets" id="sheetRack"></div></div></div>'
 }
@@ -121,9 +123,8 @@ afterEach(() => {
   agentsReset()
   sheetReset()
   sessionReset()
-  window.RavenShell = undefined
-  window.DS = undefined
-  window.RavenIslands = undefined
+  resetTranslator()
+  resetSources()
   document.body.innerHTML = ''
   sessionStorage.clear()
   localStorage.clear()

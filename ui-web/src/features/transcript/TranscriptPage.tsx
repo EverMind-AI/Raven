@@ -4,7 +4,7 @@ import { flushSync } from 'react-dom'
 import * as dag from '../dag/graph'
 import { DagGraph } from '../dag/DagGraph'
 import * as attachmentCache from '../../shell/attachment-cache'
-import { shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { copy } from '../../shell/clipboard'
 import { open as openChip } from '../../shell/chips'
 import { getVersion as deliveriesVersion, humanSize, subscribe as deliveriesSubscribe } from '../workspace/deliveries'
@@ -12,6 +12,7 @@ import {
   fileKind, fileURL, openDelivery as wsOpenDelivery, openPath as wsOpenPath,
 } from '../workspace/store'
 import { useTick } from '../../shell/tick'
+import { sources } from '../../state/sources'
 import { releaseUpward } from './overscroll'
 import * as store from './store'
 import * as tail from './tail'
@@ -433,7 +434,7 @@ function Dtl({ c, open }: { c: CallData; open: boolean }): ReactElement | null {
 
 const shortOr = (p: string): string => {
   try {
-    return (window.DS?.workspace as { shortPath?: (p: string) => string } | undefined)?.shortPath?.(p) ?? p
+    return sources.workspace?.shortPath?.(p) ?? p
   } catch { return p }
 }
 

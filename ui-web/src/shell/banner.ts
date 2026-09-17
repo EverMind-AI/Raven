@@ -1,18 +1,25 @@
 /* The strip above the transcript (#bannerHost): at most one standing notice
  * about something the reader has to act on outside this conversation.
  *
- * A writer, not an island. The host is one node the chrome already lays out,
- * nothing subscribes to what it holds, and the two notices are decided by
- * priority rather than composed -- a component would be a root around a
- * single-child switch.
+ * Which notice stands is state here, and <Banner/> (src/chrome/Banner.tsx) is
+ * the pair of shapes it picks between. The decision stays in `draw` rather than
+ * moving into the render for two reasons: it is a priority rather than a
+ * composition, and it consults the capability list -- a read that throws when
+ * the seam is not installed, which the caller has to hear about and a render
+ * must not make.
  *
  * Order is the whole design: a memory fault beats a missing capability,
  * because a backend that stopped storing has been handing back normal-looking
  * replies the whole time, while an unconfigured search has been visibly
  * refusing. Whichever wins draws alone.
+ *
+ * `draw` commits synchronously: it is the statement the caller's next line
+ * reads the page after.
  */
 
-import { ds, shell, t } from './bridge'
+import { flushSync } from 'react-dom'
+
+import { ds } from '../state/sources'
 
 export interface BannerSource {
   /* Whether the websearch capability is installed but not yet configured.
@@ -21,9 +28,35 @@ export interface BannerSource {
   websearchNeeds(): boolean
 }
 
+/** Which notice is standing, or none at all. */
+export type BannerKind = 'fault' | 'websearch' | null
+
+export interface BannerState {
+  readonly kind: BannerKind
+  /** The fault's detail, for the notice that carries one. */
+  readonly detail: string | null
+}
+
+const NOTHING: BannerState = { kind: null, detail: null }
+
 /* A standing memory fault, or null. Set from the `memory.health` event: three
    consecutive failed writes mean the backend is not coming back on its own. */
 let fault: string | null = null
+let state: BannerState = NOTHING
+const listeners = new Set<() => void>()
+
+/** The notice standing right now. */
+export function get(): BannerState {
+  return state
+}
+
+/** For useSyncExternalStore: called whenever which notice stands changes. */
+export function subscribe(fn: () => void): () => void {
+  listeners.add(fn)
+  return () => {
+    listeners.delete(fn)
+  }
+}
 
 /* Stores AND draws. It used to only store, so that the redraw would go out
    through the published drawBanner name and pick up the live layer's override
@@ -37,45 +70,31 @@ export function setFault(detail: string | null): void {
 }
 
 export function draw(): void {
-  const host = document.getElementById('bannerHost')
-  if (!host) return
-  host.innerHTML = ''
+  /* The host is rendered by the page's root now, and asking for it is what the
+     writer this replaces opened with: no host is nothing to decide, which is
+     also what keeps a bench with no chat column -- and none of the seam a
+     decision would need -- quiet. */
+  if (!document.getElementById('bannerHost')) return
   if (fault) {
-    /* No dismiss: the condition lasts until it is fixed, and a banner the
-       reader can wave away is one they will wave away and then forget. */
-    const b = document.createElement('div')
-    b.className = 'banner bad'
-    b.appendChild(el('b', t('gui.mem.down')))
-    b.appendChild(el('span', fault))
-    host.appendChild(b)
+    commit({ kind: 'fault', detail: fault })
     return
   }
-  if (!source().websearchNeeds()) return
-  host.appendChild(websearchNotice())
+  commit(source().websearchNeeds() ? { kind: 'websearch', detail: null } : NOTHING)
 }
 
-function websearchNotice(): HTMLElement {
-  const b = document.createElement('div')
-  b.className = 'banner'
-  b.appendChild(el('b', t('gui.ws.notice_title')))
-  b.appendChild(el('span', t('gui.ws.notice_body')))
-  const go = el('button', t('gui.ws.notice_go'))
-  go.onclick = () => shell().openWebsearch?.()
-  const x = el('button', '✕')
-  x.className = 'x'
-  x.setAttribute('aria-label', t('gui.ws.notice_dismiss'))
-  /* Dismissable, unlike the fault above: an unconfigured capability is a
-     suggestion, and the reader saying "not now" is an answer. */
-  x.onclick = () => b.remove()
-  b.appendChild(go)
-  b.appendChild(x)
-  return b
+/* The reader waving the suggestion away. Forgotten rather than remembered: the
+   next draw offers it again, which is what happened when the notice was rebuilt
+   by every draw. */
+export function dismiss(): void {
+  commit(NOTHING)
+}
+
+function commit(next: BannerState): void {
+  if (next.kind === state.kind && next.detail === state.detail) return
+  state = next
+  flushSync(() => {
+    for (const fn of [...listeners]) fn()
+  })
 }
 
 const source = (): BannerSource => ds<BannerSource>('banner')
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, text: string): HTMLElementTagNameMap[K] {
-  const n = document.createElement(tag)
-  n.textContent = text
-  return n
-}

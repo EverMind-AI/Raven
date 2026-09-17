@@ -32,10 +32,10 @@ export interface UploadRes {
   size: number
 }
 
-/* DS.composer: what the dock reads of the page it sits in. The demo shell
- * registers the fixture half (ui-web/src/demo/090-composer.js) and the live layer
- * installs over the parts only it can answer -- the meter's wording and the
- * upload transport. Turn phase and queue state belong to the composer store.
+/* The composer source: what the dock reads of the page it sits in. The boot's
+ * own wiring installs it (state/install.ts) and the settings chrome adds the
+ * one member only it can answer -- `beforeSend`. Turn phase and queue state
+ * belong to the composer store.
  */
 export interface ComposerSource {
   meter(): string

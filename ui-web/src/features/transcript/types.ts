@@ -407,7 +407,7 @@ export interface ArtifactsSource {
 }
 
 /* The pull half of the seam. Event pushes arrive through the island API the
-   live layer forwards into (window.RavenIslands.transcript). */
+   live layer forwards into (the island bag's `transcript`). */
 export interface TranscriptSource {
   clean(text: unknown): string
   okOf(name: string, preview: string): boolean
@@ -437,8 +437,4 @@ export interface TranscriptSource {
      live event handler doing it inline, because the replayed row has to open
      the same thing the live row does. */
   openDagRun?: (runId: string) => void
-  /* Whether a detached lane host is parked rather than discarded: leaving a
-     session mid-turn keeps the transcript as detached DOM and puts it back on
-     return, so off the page does not mean finished with. */
-  parked?: (node: HTMLElement) => boolean
 }

@@ -1,6 +1,7 @@
-import { ds, shell, t } from '../../shell/bridge'
-import { dropAfterFade } from '../../shell/detailfade'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
 import { show as toast } from '../../shell/toast'
+import * as detail from '../../state/detail'
 
 import type { HubDetail, HubItem, InstalledSkill, SkillsSource } from './types'
 
@@ -145,31 +146,34 @@ export function setCat(cat: string): void {
 
 export function toggleView(): void {
   set({ view: state.view === 'installed' ? 'market' : 'installed', drawer: null })
-  shell().closeDetail?.()
+  detail.close()
 }
 
+/* The card's body is fetched when it opens, so the drawer holds a settled box
+   while it is on its way -- `fill`, which the plugin card asks for too. */
 export function openDetail(kind: 'market' | 'inst', id: string): void {
   set({ drawer: { kind, id } })
+  detail.open('skills', { fill: true })
 }
 
-/* The legacy close path (X, Esc, page switch) already closed #detail;
-   this only drops the island's sheet state behind it -- and not until the
-   drawer has finished fading, or the card is gone from inside a panel that is
-   still on screen. */
+/* What this island does when the drawer closes, whoever closed it (the X, Esc,
+   a page switch): drop the sheet behind it -- and not until the drawer has
+   finished fading, or the card is gone from inside a panel that is still on
+   screen. */
 export function dropDrawer(): void {
   const was = state.drawer
   if (!was) return
-  dropAfterFade(
+  detail.dropAfterFade(
     () => set({ drawer: null }),
     () => state.drawer !== was,
   )
 }
+detail.onClose('skills', dropDrawer)
 
-/* The island's own close paths go through the shell so the shared
-   #detail dialog and its legacy cousins' state close with the sheet. */
+/* The island's own close paths close the shared drawer, so its cousins' cards
+   go with the sheet. */
 export function closeDrawer(): void {
-  shell().closeDetail?.()
-  dropDrawer()
+  detail.close()
 }
 
 export function fetchDetail(hubId: string): void {

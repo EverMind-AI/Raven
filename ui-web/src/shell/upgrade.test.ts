@@ -1,20 +1,31 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { Shell } from './bridge'
-import { open } from './upgrade'
+import { _resetForTests, open } from './upgrade'
+import { mountPageRoot } from '../test/pageRoot'
+import { resetTranslator, setTranslator } from '../i18n/t'
+import * as pageStore from '../state/page'
+import * as confirmStore from '../state/confirm'
+
+/* The card is drawn by src/chrome/UpgradeShade.tsx, so the page's own root has
+   to be standing for one to reach the body (see src/main.tsx). */
+let unmount = (): void => {}
 
 function wire(): void {
-  const shell: Shell = {
-    T: key => key,
-    confirmAsk: () => {},
-    showPage: () => {},
-  }
-  window.RavenShell = shell
+  setTranslator(key => key)
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
 }
 
+beforeEach(() => {
+  unmount = mountPageRoot()
+})
+
 afterEach(() => {
-  delete window.RavenShell
+  /* The card is never taken down in the page, so the store outlives a case. */
+  _resetForTests()
+  unmount()
+  resetTranslator()
   document.body.innerHTML = ''
   vi.restoreAllMocks()
 })

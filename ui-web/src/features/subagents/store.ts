@@ -1,21 +1,24 @@
-import { ds, shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
 import { formatDuration } from '../../shell/duration'
 import { current as currentSession, onChange as onSessionChange } from '../../shell/session'
+import { sources } from '../../state/sources'
 import { plainTitle as stripTitle } from '../rail/title'
 import { instanceCtxStatus, toInstanceCtx } from './history'
 
 import type { ComposerSource } from '../composer/types'
 import type { AgentRow, AgentsSource, InstanceCtx, InstanceRow, OpenItem, SubagentRow } from './types'
+import { panel } from '../../state/wsPanel'
 
 /* Page state, outside React on purpose: the legacy shell drives this view
  * imperatively (drawWs mounts and unmounts it per redraw, the dag sheet opens
  * nodes into it, wsReset clears it with the session), so the state lives in a
  * plain store the shims can call and the component subscribes.
  *
- * This is the legacy AGENTS/agentOpen/dagNode trio (ui-web/src/demo/110-subagents.js
- * before the migration) plus the refresh/poll judgements that lived beside it;
- * the fingerprint, the floor and the clock keep their behaviour so the two can
- * be diffed.
+ * This is the legacy AGENTS/agentOpen/dagNode trio (the demo layer's sub-agent
+ * part, before the migration) plus the refresh/poll judgements that lived
+ * beside it; the fingerprint, the floor and the clock keep their behaviour so
+ * the two can be diffed.
  */
 
 export interface AgentsState {
@@ -82,6 +85,23 @@ function set(p: Partial<AgentsState>): void {
 }
 
 export const source = (): AgentsSource => ds<AgentsSource>('agents')
+
+/* Where a pane opened from this panel goes: the floating desk, when the page
+   has one. Handed in (src/islands.ts) rather than imported from
+   features/workspace/deskStore, which is what the island bag used to stand in
+   for: the desk imports this store back and subscribes to it as it evaluates,
+   so an import in this direction would run that subscription against a
+   half-built module. Null on a page with no desk wired, which is every test
+   that does not ask for one. */
+interface AgentPane {
+  openAgent(row: InstanceRow, recordId?: string | null): void
+  openAgentRecord(row: AgentRow): void
+}
+let pane: AgentPane | null = null
+
+export function setAgentPane(p: AgentPane): void {
+  pane = p
+}
 
 export const absent = (): boolean => {
   const a = source().absent
@@ -328,13 +348,12 @@ export function openInstance(it: InstanceRow, recordId?: string | null): void {
   stageFresh = true
   paintedStatus = null
   set({ open: { kind: 'instance', agent: it.agent, handle: it.handle }, who: it.agent, epoch: state.epoch + 1 })
-  const workspace = window.RavenIslands?.workspace as
-    { openAgent?: (row: InstanceRow, recordId?: string | null) => void } | undefined
+  const workspace = pane
   /* The record this promotion is replacing, when it is a spawn's: the desk can
      derive a graph node's record id from the row, but a spawn's is the call id
      and the row does not carry one. Left off and the record pane stays open
      beside the instance pane. */
-  workspace?.openAgent?.(it, recordId || null)
+  workspace?.openAgent(it, recordId || null)
 }
 
 /* Rises once per start. Identifies the request `starting` is held for, so a
@@ -698,8 +717,7 @@ export function openRow(it: AgentRow): void {
        promotion above swaps in the instance view when one turns up. */
     if (it.instance) refreshInstances(true)
   }
-  const workspace = window.RavenIslands?.workspace as { openAgentRecord?: (row: AgentRow) => void } | undefined
-  workspace?.openAgentRecord?.(it)
+  pane?.openAgentRecord(it)
 }
 
 /* The dag sheet opens its nodes here (the sheet stays the map, this panel is
@@ -728,8 +746,7 @@ export function openDagNode(
      id stays the fallback: a run old enough to have no summary still has one. */
   const label = n.summary || n.id
   set({ open: { kind: 'dag', run_id: runId, node: n.id, agent: n.subagent, label }, who: null })
-  const workspace = window.RavenIslands?.workspace as { openAgentRecord?: (row: AgentRow) => void } | undefined
-  workspace?.openAgentRecord?.({ kind: 'dag', run_id: runId, node: n.id, agent: n.subagent, label })
+  pane?.openAgentRecord({ kind: 'dag', run_id: runId, node: n.id, agent: n.subagent, label })
   /* Opened before this panel had ever asked for its rows: ask now, and the
      refresh promotes this to the instance view if a row turns up. */
   refreshInstances(true)
@@ -1010,8 +1027,7 @@ export function subscribeDetailPoll(listener: () => void): () => void {
 }
 
 export function hook(): void {
-  const seam = window.DS
-  const src = seam && (seam['agents'] as AgentsSource | undefined)
+  const src = sources.agents
   if (!src || !src.watch || src === hooked) return
   hooked = src
   src.watch(onPoll)
@@ -1019,8 +1035,8 @@ export function hook(): void {
 
 function onPoll(): void {
   detailPollListeners.forEach((listener) => listener())
-  const shows = shell().wsShows
-  if (!shows || !shows('agents')) {
+  const shown = panel().view()
+  if (!(shown.open && shown.tab === 'agents')) {
     if (detailPollListeners.size) {
       refresh(true)
       refreshInstances(true)

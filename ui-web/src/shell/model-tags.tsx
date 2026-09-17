@@ -13,7 +13,7 @@
  * would state a fact nobody has.
  */
 
-import { t } from './bridge'
+import { t } from '../i18n/t'
 
 import type { JSX } from 'react'
 

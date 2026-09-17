@@ -1,7 +1,12 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { mountPageRoot } from '../test/pageRoot'
 import { show } from './toast'
+
+/* The notices render from src/App.tsx into the host each was raised in, so the
+   page's own root has to be standing for any of them to appear. */
+mountPageRoot()
 
 afterEach(() => {
   vi.useRealTimers()
@@ -30,6 +35,19 @@ describe('the toast writer', () => {
     expect(document.querySelector('.toast')).not.toBeNull()
     ;(document.querySelector('.toast button') as HTMLButtonElement).click()
     expect(calls).toEqual(['undo'])
+    expect(document.querySelector('.toast')).toBeNull()
+  })
+
+  /* The action runs first and the notice comes down after, which is what lets
+     an action raise a notice of its own: the drop is by id, so it cannot take
+     the new one with it. */
+  it('runs the action while its own notice is still up', () => {
+    vi.useFakeTimers()
+    document.body.innerHTML = '<div id="toasts"></div>'
+    const seen: string[] = []
+    show('Deleted', { label: 'Undo', fn: () => seen.push(document.querySelector('.toast .t')?.textContent ?? '') })
+    ;(document.querySelector('.toast button') as HTMLButtonElement).click()
+    expect(seen).toEqual(['Deleted'])
     expect(document.querySelector('.toast')).toBeNull()
   })
 

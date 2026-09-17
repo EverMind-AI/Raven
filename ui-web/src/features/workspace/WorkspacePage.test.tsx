@@ -6,7 +6,13 @@ import { WsApp } from './WorkspacePage'
 import * as deliveries from './deliveries'
 import * as store from './store'
 
-import type { Shell } from '../../shell/bridge'
+import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
+
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import { installWsPanel } from '../../test/wsPanel'
 import type { WorkspaceSnapshot, WorkspaceSource, WsChange } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -40,9 +46,9 @@ function emptyWs(over: Partial<WorkspaceSnapshot> = {}): WorkspaceSnapshot {
   return { changes: [], urls: [], file: null, turn: 1, unseen: 0, deliveries: [], ...over }
 }
 
-/* The island runs against the same two seams production wires up: a fake
-   shell on window.RavenShell (T returns its key) and a source on
-   window.DS.workspace -- the fixture shape for demo behaviour, a list/reveal
+/* The island runs against the same two seams production wires up: a stand-in
+   translator on setTranslator (it returns its key) and a source on
+   sources.workspace -- the fixture shape for offline behaviour, a list/reveal
    shape for live behaviour. */
 function install(ws: WorkspaceSnapshot, over: Partial<WorkspaceSource> = {}, view = { tab: 'diff', open: true, picked: true }) {
   store.restore(ws)
@@ -54,24 +60,27 @@ function install(ws: WorkspaceSnapshot, over: Partial<WorkspaceSource> = {}, vie
     openPath: (p) => shellCalls.push(['openPath', p]),
     ...over,
   }
-  const fakeShell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: (id) => shellCalls.push(['showPage', id]),
-    wsView: () => view,
-    showWorkspace: (tab) => {
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  /* The panel's own viewer, which is what this file is about: with a desk
+     opener wired the store hands every open to the floating window instead
+     (features/workspace/store.ts's showFile). */
+  store.setDeskOpener(null)
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
+  vi.spyOn(pageStore, 'show').mockImplementation((id) => shellCalls.push(['showPage', id]))
+  installWsPanel({
+    view: () => view,
+    show: (tab) => {
       shellCalls.push(['showWorkspace', tab])
       view.tab = tab
       view.picked = true
       store.sync()
     },
-    wsPick: (tab) => shellCalls.push(['wsPick', tab]),
-  }
-  window.RavenShell = fakeShell
+    pick: (tab) => { shellCalls.push(['wsPick', tab]) },
+  })
   /* The file view renders markdown through the bundle's renderer, which reads
-     DS.prose for what counts as an openable path -- the page installs it in
-     demo/020-prose.js, so the harness does too. */
-  window.DS = { workspace: source, prose: { pathOf: () => null, linkTargetOf: () => null } }
+     sources.prose for what counts as an openable path -- the page installs it
+     from features/workspace/source.ts, so the harness does too. */
+  setSources({ workspace: source, prose: { pathOf: () => null, linkTargetOf: () => null } })
   /* The viewer fetches /file for text kinds; a pending promise keeps the
      spinner up instead of letting happy-dom dial a real socket. */
   vi.stubGlobal('fetch', () => new Promise(() => {}))
@@ -96,6 +105,7 @@ afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+  resetSources()
 })
 
 describe('workspace island', () => {
@@ -671,11 +681,11 @@ describe('workspace island', () => {
     }, { tab: 'file', open: true, picked: true })
     await mount()
     const prose = document.querySelector('.prose')!
-    /* Real prose.ts output, so the heading cap and the emphasis are its own;
-       the shell has no md verb to stub, which is the point of the test. */
+    /* Real prose.ts output, so the heading cap and the emphasis are its own:
+       nothing between the panel and the renderer can stub the markdown, which
+       is the point of the test. */
     expect(prose.querySelector('h2')?.textContent).toBe('Title')
     expect(prose.querySelector('strong')?.textContent).toBe('this')
-    expect('md' in (window.RavenShell as object)).toBe(false)
   })
 
   it('shows the viewer error when the file read failed', async () => {
@@ -686,5 +696,18 @@ describe('workspace island', () => {
     }, { tab: 'file', open: true, picked: true })
     await mount()
     expect(await screen.findByText('gone for good')).toBeTruthy()
+  })
+
+  it('keeps its rendered shape', async () => {
+    install(emptyWs({
+      changes: [
+        change({ turn: 2, open: false }),
+        change({ key: '/repo/README.md', dir: '', name: 'README.md', kind: 'write', turn: 1, add: 5, del: 0 }),
+      ],
+      turn: 2,
+    }))
+    await mount()
+    await screen.findByText('app.py')
+    expect(domSnapshot(document.getElementById('wsBody')!)).toMatchSnapshot()
   })
 })

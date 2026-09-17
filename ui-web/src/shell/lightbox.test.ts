@@ -1,25 +1,35 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { close, isOpen, open } from './lightbox'
+import { mountPageRoot } from '../test/pageRoot'
+import { resetTranslator, setTranslator } from '../i18n/t'
+import * as pageStore from '../state/page'
+import * as confirmStore from '../state/confirm'
 
-import type { Shell } from './bridge'
+
+/* The overlay is drawn by src/chrome/Lightbox.tsx, so the page's own root has
+   to be standing for one to reach the body -- the way src/main.tsx stands it
+   up before anything can ask for an overlay. */
+let unmount = (): void => {}
 
 function wire(): void {
-  const shell: Shell = {
-    T: (key) => key,
-    confirmAsk: () => {},
-    showPage: () => {},
-  }
-  window.RavenShell = shell
+  setTranslator((key) => key)
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
   document.body.innerHTML = ''
 }
 
 const overlay = (): HTMLElement | null => document.querySelector('.lightbox')
 
+beforeEach(() => {
+  unmount = mountPageRoot()
+})
+
 afterEach(() => {
   close()
-  delete window.RavenShell
+  unmount()
+  resetTranslator()
   document.body.innerHTML = ''
 })
 

@@ -5,7 +5,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { XaApp } from './XaPage'
 import * as store from './store'
 
-import type { Shell } from '../../shell/bridge'
+import { domSnapshot } from '../../test/domSnapshot'
+import * as detail from '../../state/detail'
+import { resetSources, setSources, sources } from '../../state/sources'
+
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
 import type { XaActArgs, XaRow, XaSource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -38,9 +44,9 @@ function row(over: Partial<XaRow> = {}): XaRow {
   }
 }
 
-/* The island runs against the same two seams production wires: a fake
-   shell on window.RavenShell (T returns its key, so tests assert catalogue
-   keys, not translations) and a fixture source on window.DS.xa. */
+/* The island runs against the same two seams production wires: a stand-in
+   translator on setTranslator (it returns its key, so tests assert catalogue
+   keys, not translations) and a fixture source on sources.xa. */
 function install(rows: XaRow[], over: Partial<XaSource> = {}) {
   const acts: Array<[string, string, XaActArgs]> = []
   const loads: boolean[] = []
@@ -64,22 +70,13 @@ function install(rows: XaRow[], over: Partial<XaSource> = {}) {
   const toasts: string[] = []
   toastWriter.items = toasts
   const confirms: string[] = []
-  const fakeShell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    /* Records as well as confirms: "no dialog stands between the reader and the
-       switch" is a claim only a spy can carry. */
-    confirmAsk: (title, _b, _l, fn) => {
-      confirms.push(title)
-      fn()
-    },
-    showPage: () => {},
-    closeDetail: () => {
-      const d = document.getElementById('detail')
-      if (d) d.dataset.open = 'false'
-    },
-  }
-  window.RavenShell = fakeShell
-  window.DS = { xa: source }
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((title, _b, _l, fn) => {
+  confirms.push(title)
+  fn()
+  })
+  setSources({ xa: source })
   document.body.innerHTML =
     '<section id="xaPage"><div id="xaBody"></div></section>' +
     '<aside id="detail" data-open="false"><b id="dTitle">—</b><div id="dBody"></div></aside>' +
@@ -187,6 +184,7 @@ afterEach(() => {
     store.sheetDismissed()
   })
   cleanup()
+  resetSources()
 })
 
 describe('xa island', () => {
@@ -838,8 +836,9 @@ describe('xa island', () => {
       expect(document.querySelector('#dBody .sukey')).toBeNull()
     })
 
-    /* Legacy chrome owns the drawer's closers and they only flip #detail's
-       data-open, so the island has to follow the flag. */
+    /* The drawer's closers are the shared store's (Esc, the close button, a
+       click outside, a page switch), and this island hears about a close
+       through the handler it registered there. */
     /* Dropped after the drawer has finished fading, not in the tick the flag
        flipped: the panel takes a fifth of a second to leave, and unmounting the
        card at the start of that made an empty strip the thing that faded. */
@@ -850,7 +849,7 @@ describe('xa island', () => {
         await mount()
         await openCard('claude_code')
         await act(async () => {
-          document.getElementById('detail')!.dataset.open = 'false'
+          detail.close()
         })
         expect(document.querySelector('#dBody .pmdhead')).toBeTruthy()
         await act(async () => {
@@ -872,7 +871,7 @@ describe('xa island', () => {
         await mount()
         await openCard('claude_code')
         await act(async () => {
-          document.getElementById('detail')!.dataset.open = 'false'
+          detail.close()
         })
         await act(async () => {
           await vi.advanceTimersByTimeAsync(100)
@@ -895,7 +894,7 @@ describe('xa island', () => {
         await mount()
         await openCard('claude_code')
         await act(async () => {
-          document.getElementById('detail')!.dataset.open = 'false'
+          detail.close()
         })
         await openCard('hermes')
         await act(async () => {
@@ -1437,4 +1436,22 @@ describe('xa island', () => {
     })
   })
 
+  it('keeps its rendered shape, list', async () => {
+    install([
+      row(),
+      row({ name: 'off_one', configured: true, enabled: false }),
+      row({ name: 'miro', kind: 'openai', configured: false, has_api_key: false }),
+      row({ name: 'codex', configured: false, probe_status: 'missing', probe_detail: 'codex: command not found' }),
+    ])
+    await mount()
+    await screen.findByText('claude_code')
+    expect(domSnapshot(document.getElementById('xaBody')!)).toMatchSnapshot()
+  })
+
+  it('keeps its rendered shape, card', async () => {
+    install([row()])
+    await mount()
+    await openCard('claude_code')
+    expect(domSnapshot(document.getElementById('detail')!)).toMatchSnapshot()
+  })
 })

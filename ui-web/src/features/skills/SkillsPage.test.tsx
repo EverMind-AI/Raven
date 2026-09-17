@@ -5,7 +5,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SkillsApp } from './SkillsPage'
 import * as store from './store'
 
-import type { Shell } from '../../shell/bridge'
+import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
+
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import * as useInTaskModule from '../../features/composer/useInTask'
 import type { HubItem, InstalledSkill, SkillsSource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -25,9 +31,9 @@ function hubItem(over: Partial<HubItem> = {}): HubItem {
   }
 }
 
-/* The island runs against the same two seams production wires: a fake
-   shell on window.RavenShell (T returns its key, so tests assert catalogue
-   keys, not translations) and a fixture source on window.DS.skills. */
+/* The island runs against the same two seams production wires: a stand-in
+   translator on setTranslator (it returns its key, so tests assert catalogue
+   keys, not translations) and a fixture source on sources.skills. */
 function install(items: HubItem[], over: Partial<SkillsSource> = {}, installed: InstalledSkill[] = []) {
   const calls: string[] = []
   const source: SkillsSource = {
@@ -39,19 +45,11 @@ function install(items: HubItem[], over: Partial<SkillsSource> = {}, installed: 
     ...over,
   }
   const shellCalls: Array<[string, unknown]> = []
-  const fakeShell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: (id) => shellCalls.push(['showPage', id]),
-    useInTask: (key, name) => shellCalls.push(['useInTask', `${key}:${name}`]),
-    closeDetail: () => {
-      const el = document.getElementById('detail')
-      if (el) el.dataset.open = 'false'
-      store.dropDrawer()
-    },
-  }
-  window.RavenShell = fakeShell
-  window.DS = { skills: source }
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
+  vi.spyOn(pageStore, 'show').mockImplementation((id) => shellCalls.push(['showPage', id]))
+  vi.spyOn(useInTaskModule, 'useInTask').mockImplementation((key, name) => shellCalls.push(['useInTask', `${key}:${name}`]))
+  setSources({ skills: source })
   document.body.innerHTML =
     '<section id="capsPage" data-open="true"><div id="capsBody"></div></section>' +
     '<aside id="detail" data-open="false"><b id="dTitle"></b><div id="dBody"></div></aside>'
@@ -72,6 +70,7 @@ afterEach(() => {
   })
   cleanup()
   vi.restoreAllMocks()
+  resetSources()
 })
 
 describe('skills island', () => {
@@ -336,5 +335,24 @@ describe('skills island', () => {
     })
     expect(calls).toContain('remove')
     expect(document.getElementById('detail')!.dataset.open).toBe('false')
+  })
+
+  it('keeps its rendered shape, hub search', async () => {
+    install([hubItem(), hubItem({ id: 'sh-sql', name: 'sql-style', quality_score: 0.7 })])
+    await mount()
+    await screen.findByText('code-review-checklist')
+    expect(domSnapshot(document.getElementById('capsBody')!)).toMatchSnapshot()
+  })
+
+  it('keeps its rendered shape, installed list', async () => {
+    install([], {}, [
+      { id: 'sk1', name: 'house-style', one: 'the house voice', src: 'skillhub', hub: true, hubId: 'sh-hs' },
+    ])
+    await mount()
+    await act(async () => {
+      store.toggleView()
+    })
+    await screen.findByText('house-style')
+    expect(domSnapshot(document.getElementById('capsBody')!)).toMatchSnapshot()
   })
 })

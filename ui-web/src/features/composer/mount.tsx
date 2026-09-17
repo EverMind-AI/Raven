@@ -11,7 +11,7 @@ import type { Root } from 'react-dom/client'
  *
  * The roots are created on the first paint rather than at bundle time: this
  * script is assembled AHEAD of the page script (ui-web/build.py), so neither
- * window.RavenShell nor DS.composer exists yet when it evaluates. install()
+ * the shell nor the composer source exists yet when it evaluates. install()
  * therefore only registers listeners -- every handler reads the seams lazily,
  * by which time the page has published them.
  */
@@ -100,9 +100,18 @@ export function drawMeter(): void {
   store.drawMeter()
 }
 
+/* The field's height cap is a share of the window, so it is recomputed on a
+   resize -- registered with the page's other window listeners
+   (state/globalListeners.ts), which is also the one caller that passes it an
+   event it ignores. */
 export function fitField(): void {
   ensure()
   store.fitField()
+}
+
+/* The draft debounce can still be in flight when the tab goes away. */
+export function parkDraftNow(): void {
+  store.parkDraftNow()
 }
 
 export function dockLift(): void {
@@ -180,8 +189,6 @@ export function install(): void {
     ensure()
     store.addFiles(files)
   })
-  /* The debounce above can still be in flight when the tab goes away. */
-  window.addEventListener('beforeunload', () => store.parkDraftNow())
 
   const go = document.getElementById('go')
   if (go) {
@@ -235,12 +242,6 @@ export function install(): void {
     sc.addEventListener('scroll', () => store.scrolled())
   }
 
-  /* A vh-based cap changes with the window, so the height has to be
-     recomputed. */
-  window.addEventListener('resize', () => {
-    ensure()
-    store.fitField()
-  })
   const dock = document.querySelector('.dock')
   if (!dock) return
   /* Catches every reason the dock changes height -- typing, a pasted blob,

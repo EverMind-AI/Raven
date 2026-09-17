@@ -5,7 +5,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BrowserApp } from './BrowserPage'
 import * as store from './store'
 
-import type { Shell } from '../../shell/bridge'
+import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
+
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import { installWsPanel } from '../../test/wsPanel'
+import * as pageStore from '../../state/page'
 import type { BrowserSource, ChromiumSource, LinksSource, UrlRow } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -13,9 +19,9 @@ import type { BrowserSource, ChromiumSource, LinksSource, UrlRow } from './types
 
 const shellCalls: Array<[string, unknown]> = []
 
-/* The island runs against the same two seams production wires up: a fake
-   shell on window.RavenShell (T returns its key, so tests assert catalogue
-   keys, not translations) and a source on window.DS.browser. */
+/* The island runs against the same two seams production wires up: a stand-in
+   translator on setTranslator (it returns its key, so tests assert catalogue
+   keys, not translations) and a source on sources.browser. */
 function wire(source: BrowserSource, lang = 'en'): void {
   shellCalls.length = 0
   document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'
@@ -23,15 +29,16 @@ function wire(source: BrowserSource, lang = 'en'): void {
     configurable: true,
     value: { writeText: (text: string) => { shellCalls.push(['copy', text]); return Promise.resolve() } },
   })
-  const fakeShell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: () => {},
-    showWorkspace: (tab) => shellCalls.push(['showWorkspace', tab]),
-    wsShows: () => true,
-  }
-  window.RavenShell = fakeShell
-  window.DS = { browser: source }
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
+  /* The browser view, standing open: the island only reads frames and tabs
+     while its own view is the one on screen. */
+  installWsPanel({
+    view: () => ({ tab: 'browser', open: true, picked: true }),
+    show: (tab) => { shellCalls.push(['showWorkspace', tab]) },
+  })
+  setSources({ browser: source })
   document.body.innerHTML = '<div class="ws-body" id="wsBody"></div>'
 }
 
@@ -88,6 +95,7 @@ afterEach(() => {
   cleanup()
   store._resetForTests()
   vi.restoreAllMocks()
+  resetSources()
 })
 
 describe('browser island, links shape (the fixture source)', () => {
@@ -118,6 +126,16 @@ describe('browser island, links shape (the fixture source)', () => {
     expect(items).toHaveLength(2)
     items[1]!.fn()
     expect(shellCalls).toContainEqual(['copy', 'https://a.example/x'])
+  })
+
+  it('keeps its rendered shape', () => {
+    links([
+      { url: 'https://api.example.com/docs', kind: 'fetch', at: 'just now' },
+      { url: 'rate limits', kind: 'search', at: 'earlier' },
+    ])
+    mount()
+    screen.getByText('api.example.com/docs')
+    expect(domSnapshot(document.getElementById('wsBody')!)).toMatchSnapshot()
   })
 })
 
@@ -267,5 +285,18 @@ describe('browser island, embedded shape (the rpc source)', () => {
       screen.getByText('gui.plug.retry').click()
     })
     expect(calls.filter(([k]) => k === 'open').length).toBe(asked + 1)
+  })
+
+  it('keeps its rendered shape', async () => {
+    chromium({
+      frame: async () => ({ started: true, url: 'https://example.com/a', title: 'Example' }),
+      tabs: async () => ({
+        started: true,
+        tabs: [{ index: 0, url: 'https://example.com/a', title: 'Example', active: true }],
+      }),
+    })
+    mount()
+    await screen.findByText('Example')
+    expect(domSnapshot(document.getElementById('wsBody')!)).toMatchSnapshot()
   })
 })

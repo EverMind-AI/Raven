@@ -1,7 +1,10 @@
-import { shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
 import { show as toast } from '../../shell/toast'
 
 import type { KbBase, KbDoc, KbHit, KbSettings, KbStatus, KnowledgeSource } from './types'
+import * as page from '../../state/page'
+import { ask as confirmAsk } from '../../state/confirm'
 
 /* What an RPC failure actually said.
  *
@@ -118,11 +121,7 @@ export function getState(): State {
   return state
 }
 
-function source(): KnowledgeSource {
-  const ds = (globalThis as { DS?: { knowledge?: KnowledgeSource } }).DS
-  if (!ds || !ds.knowledge) throw new Error('no knowledge source installed')
-  return ds.knowledge
-}
+const source = (): KnowledgeSource => ds<KnowledgeSource>('knowledge')
 
 export async function load(): Promise<void> {
   let src: KnowledgeSource
@@ -185,10 +184,10 @@ export async function renameBase(base: KbBase, name: string): Promise<void> {
 
 export function remove(base: KbBase): void {
   if (state.busy) return
-  shell().confirmAsk(
-    shell().T('gui.kb.delete'),
-    shell().T('gui.kb.delete_body', { name: base.name, n: base.documents }),
-    shell().T('gui.kb.delete'),
+  confirmAsk(
+    t('gui.kb.delete'),
+    t('gui.kb.delete_body', { name: base.name, n: base.documents }),
+    t('gui.kb.delete'),
     () => {
       set({ busy: true })
       void source()
@@ -485,7 +484,7 @@ export function removePicked(): void {
   const baseId = state.openId
   const rows = pickedDocs()
   if (!baseId || !rows.length) return
-  shell().confirmAsk(
+  confirmAsk(
     t('gui.kb.doc_delete'),
     t('gui.kb.docs_delete_body', { count: rows.length }),
     t('gui.kb.doc_delete'),
@@ -543,7 +542,7 @@ export async function retry(doc: KbDoc): Promise<void> {
 export function removeDoc(doc: KbDoc): void {
   const baseId = state.openId
   if (!baseId) return
-  shell().confirmAsk(
+  confirmAsk(
     t('gui.kb.doc_delete'),
     t('gui.kb.doc_delete_body', { name: doc.source }),
     t('gui.kb.doc_delete'),
@@ -737,12 +736,12 @@ export function forgetHistory(): void {
 }
 
 export function open(): void {
-  shell().showPage('kbPage')
+  page.show('kbPage')
   void load()
 }
 
 export function close(): void {
-  shell().showPage(null)
+  page.show(null)
 }
 
 /* A language flip changes nothing in this state, but every visible string

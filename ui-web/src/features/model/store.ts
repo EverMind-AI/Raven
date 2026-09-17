@@ -7,8 +7,10 @@
  * paints the chosen model in its own tree.
  */
 
-import { ds, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
 import { show as toast } from '../../shell/toast'
+import { sources } from '../../state/sources'
 
 import { offered } from './types'
 
@@ -49,8 +51,8 @@ export const source = (): ModelSource => ds<ModelSource>('model')
 
 /* Installed by the live layer only. The offline demo's chip opens a plain menu
    of its own (demo/150-chrome.js), so the opener below has to be callable and
-   do nothing there rather than throw at a name the page publishes. */
-const installed = (): boolean => !!(window.DS && window.DS.model)
+   do nothing there rather than throw at the name the chrome imports. */
+const installed = (): boolean => !!sources.model
 
 export function subscribe(fn: () => void): () => void {
   subs.add(fn)

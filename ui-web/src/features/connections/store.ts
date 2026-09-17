@@ -1,7 +1,9 @@
-import { ds, shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
 import { show as toast } from '../../shell/toast'
 
 import type { ConnChannel, ConnSource } from './types'
+import * as page from '../../state/page'
 
 /* Page state, outside React on purpose: the legacy shell drives this page
  * imperatively (nav opens it, Esc closes it and its dialog, a language flip
@@ -52,14 +54,8 @@ export async function refresh(initial = false): Promise<void> {
   }
 }
 
-export function open(): void {
-  set({ dialogId: null })
-  shell().showPage('connPage')
-  void refresh(true)
-}
-
 export function close(): void {
-  shell().showPage(null)
+  page.show(null)
 }
 
 export function openDialog(c: ConnChannel): void {

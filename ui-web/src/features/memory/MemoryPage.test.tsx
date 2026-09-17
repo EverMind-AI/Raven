@@ -5,7 +5,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryApp } from './MemoryPage'
 import * as store from './store'
 
-import type { Shell } from '../../shell/bridge'
+import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
+
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
 import type { MemItem, MemStats, MemorySource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -24,9 +29,9 @@ function item(over: Partial<MemItem> = {}): MemItem {
   }
 }
 
-/* The island runs against the same two seams production wires: a fake
-   shell on window.RavenShell (T returns its key, so tests assert catalogue
-   keys, not translations) and a fixture source on window.DS.memory. */
+/* The island runs against the same two seams production wires: a stand-in
+   translator on setTranslator (it returns its key, so tests assert catalogue
+   keys, not translations) and a fixture source on sources.memory. */
 function install(over: Partial<MemorySource> = {}, stats: MemStats | null = null) {
   const calls: string[] = []
   const source: MemorySource = {
@@ -38,17 +43,10 @@ function install(over: Partial<MemorySource> = {}, stats: MemStats | null = null
     ...over,
   }
   const shellCalls: Array<[string, unknown]> = []
-  const fakeShell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: (id) => shellCalls.push(['showPage', id]),
-    closeDetail: () => {
-      const d = document.getElementById('detail')
-      if (d) d.dataset.open = 'false'
-    },
-  }
-  window.RavenShell = fakeShell
-  window.DS = { memory: source }
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
+  vi.spyOn(pageStore, 'show').mockImplementation((id) => shellCalls.push(['showPage', id]))
+  setSources({ memory: source })
   document.body.innerHTML =
     '<section id="memPage"><div id="memBody"></div></section>' +
     '<aside id="detail" data-open="false"><b id="dTitle">—</b><div id="dBody"></div></aside>'
@@ -70,6 +68,7 @@ afterEach(() => {
   })
   cleanup()
   vi.restoreAllMocks()
+  resetSources()
 })
 
 describe('memory island', () => {
@@ -219,5 +218,15 @@ describe('memory island', () => {
       screen.getByText('gui.mem.tab_case').click()
     })
     expect(asked).toContain('agent_case')
+  })
+
+  it('keeps its rendered shape', async () => {
+    install(
+      { list: async () => ({ items: [item(), item({ id: 'm2', subject: 'fixed the flake' })], total: 2 }) },
+      { episodes: 12, profiles: 1, agent_cases: 3, agent_skills: 4 },
+    )
+    await mount()
+    await screen.findByText('shipped the island')
+    expect(domSnapshot(document.getElementById('memBody')!)).toMatchSnapshot()
   })
 })

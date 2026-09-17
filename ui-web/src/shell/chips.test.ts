@@ -1,17 +1,19 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { install, open } from './chips'
+import { onClick, onKey, open } from './chips'
+import { resetSources, setSources } from '../state/sources'
 
 import type { ProseSource, ProseTarget } from './prose'
 
-/* install() binds on the document and never unbinds -- it is the page's, for
-   the page's life. So it is installed once here, and each case reads what the
-   source below recorded. */
+/* Both handlers are the page's, registered once on the document and never
+   taken off (src/state/globalListeners.ts). So they are registered once here,
+   and each case reads what the source below recorded. */
 let seen: ProseTarget[] = []
 let source: ProseSource
 
-install()
+document.addEventListener('click', onClick)
+document.addEventListener('keydown', onKey)
 
 beforeEach(() => {
   seen = []
@@ -20,12 +22,12 @@ beforeEach(() => {
     linkTargetOf: () => null,
     open: (at) => seen.push(at),
   }
-  window.DS = { prose: source }
+  setSources({ prose: source })
 })
 
 afterEach(() => {
   document.body.innerHTML = ''
-  delete window.DS
+  resetSources()
 })
 
 const click = (el: Element): void => {
@@ -120,7 +122,7 @@ describe('the open seam', () => {
   /* A source that renders prose nobody can click says nothing about opening,
      and a click on a chip it drew anyway must not throw. */
   it('does nothing when the source has no opener', () => {
-    window.DS = { prose: { pathOf: () => null, linkTargetOf: () => null } }
+    setSources({ prose: { pathOf: () => null, linkTargetOf: () => null } })
     document.body.innerHTML = '<code class="pth" data-p="a/b.md">b.md</code>'
     expect(() => click(document.querySelector('.pth')!)).not.toThrow()
   })

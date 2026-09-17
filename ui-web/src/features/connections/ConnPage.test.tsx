@@ -3,9 +3,15 @@ import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ConnApp } from './ConnPage'
+import { open } from './nav'
 import * as store from './store'
 
-import type { Shell } from '../../shell/bridge'
+import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
+
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
 import type { ConnChannel, ConnQr, ConnSource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -26,9 +32,9 @@ function chan(over: Partial<ConnChannel> = {}): ConnChannel {
   }
 }
 
-/* The island runs against the same two seams production wires up: a fake
-   shell on window.RavenShell (T returns its key, so tests assert catalogue
-   keys, not translations) and a fixture source on window.DS.conn. */
+/* The island runs against the same two seams production wires up: a stand-in
+   translator on setTranslator (it returns its key, so tests assert catalogue
+   keys, not translations) and a fixture source on sources.conn. */
 function install(rows: ConnChannel[], over: Partial<ConnSource> = {}) {
   const calls: Array<[string, unknown]> = []
   const source: ConnSource = {
@@ -49,20 +55,14 @@ function install(rows: ConnChannel[], over: Partial<ConnSource> = {}) {
     ...over,
   }
   const shellCalls: Array<[string, unknown]> = []
-  const fakeShell: Shell = {
-    T: (key, vars, fallback) =>
-      key.startsWith('gui.connf.') ? (fallback ?? key) : vars ? `${key} ${JSON.stringify(vars)}` : key,
-    /* Confirms immediately: the dialog itself is legacy chrome, not island. */
-    /* Records as well as confirms: "no dialog stands between the reader and the
-       switch" is a claim only a spy can carry. */
-    confirmAsk: (title, _b, _l, fn) => {
-      shellCalls.push(['confirmAsk', title])
-      fn()
-    },
-    showPage: (id) => shellCalls.push(['showPage', id]),
-  }
-  window.RavenShell = fakeShell
-  window.DS = { conn: source }
+  setTranslator((key, vars, fallback) =>
+  key.startsWith('gui.connf.') ? (fallback ?? key) : vars ? `${key} ${JSON.stringify(vars)}` : key)
+  vi.spyOn(confirmStore, 'ask').mockImplementation((title, _b, _l, fn) => {
+  shellCalls.push(['confirmAsk', title])
+  fn()
+  })
+  vi.spyOn(pageStore, 'show').mockImplementation((id) => shellCalls.push(['showPage', id]))
+  setSources({ conn: source })
   document.body.innerHTML =
     '<section id="connPage"><div id="connBody"></div></section>' +
     '<div class="veil" id="connVeil" data-open="false"></div>' +
@@ -152,7 +152,7 @@ function pressOver(under: Element): void {
 async function mount() {
   const view = render(<ConnApp />, { container: document.getElementById('connBody')! })
   await act(async () => {
-    store.open()
+    open()
   })
   return view
 }
@@ -163,6 +163,7 @@ afterEach(() => {
   })
   cleanup()
   vi.restoreAllMocks()
+  resetSources()
 })
 
 describe('connections island', () => {
@@ -1244,5 +1245,25 @@ describe('connections island', () => {
     const body = document.getElementById('connDlgBody')!
     expect(body.querySelector('.suwiz')).toBeNull()
     expect(body.querySelector('.sustate')!.textContent).toContain('gui.conn.st_live')
+  })
+
+  it('keeps its rendered shape, list', async () => {
+    install([
+      chan({ on: true, running: true }),
+      chan({ id: 'telegram', name: 'Telegram' }),
+      chan({ id: 'email', key: 'gui.chan.email' }),
+    ])
+    await mount()
+    await screen.findByText('Slack')
+    expect(domSnapshot(document.getElementById('connBody')!)).toMatchSnapshot()
+  })
+
+  it('keeps its rendered shape, dialog', async () => {
+    install([chan({ fields: [{ key: 'bot_token', required: true }], missing: ['bot_token'] })])
+    await mount()
+    await act(async () => {
+      rowBtn('Slack').click()
+    })
+    expect(domSnapshot(document.getElementById('connVeil')!)).toMatchSnapshot()
   })
 })

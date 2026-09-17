@@ -1,6 +1,9 @@
-import { ds, shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
+import { settingsTab } from '../../state/settingsTab'
 import { show as toast } from '../../shell/toast'
 
+import * as settingsDialog from '../../state/settingsDialog'
 import type {
   ModelCandidate,
   ProviderOp,
@@ -16,16 +19,9 @@ import type {
  * subscribes.
  *
  * The open tab is NOT here: the chrome jumps the dialog to a section by
- * writing the bare `sTab` global before calling drawSettings(), so that slot
- * stays on window (ui-web/src/demo/130-settings.js declares it) and the store
- * syncs from it on every draw.
+ * writing the shared slot (ui-web/src/state/settingsTab.ts) before calling
+ * drawSettings(), and the store syncs from it on every draw.
  */
-
-declare global {
-  interface Window {
-    sTab?: string
-  }
-}
 
 export interface SettingsState {
   tab: string
@@ -112,7 +108,7 @@ function set(patch: Partial<SettingsState>): void {
 
 export const source = (): SettingsSource => ds<SettingsSource>('settings')
 
-const curTab = (): string => (typeof window.sTab === 'string' ? window.sTab : state.tab)
+const curTab = (): string => settingsTab.id ?? state.tab
 
 export async function refresh(): Promise<void> {
   set({ loaded: true })
@@ -144,7 +140,7 @@ export async function open(): Promise<void> {
   lazy = true
   set({ tab: curTab() })
   await refresh()
-  shell().openSet?.()
+  settingsDialog.open()
   /* The counters are read when the tab comes up, the way the legacy usage
      page read them on every draw. The poll only keeps them current after
      that, and only while the dialog stays open. */
@@ -163,7 +159,7 @@ export async function openProviderModels(slug: string): Promise<void> {
 }
 
 export function setTab(id: string): void {
-  window.sTab = id
+  settingsTab.id = id
   /* The drawer belongs to the model page. Left open across a tab change it
      would come back over whatever section is showing, addressed to a provider
      nobody is looking at any more. */
@@ -428,7 +424,7 @@ export function reset(): void {
   lazy = false
   usageBusy = false
   usageAt = 0
-  delete window.sTab
+  settingsTab.id = null
 }
 
 /* One key, one write. A pin is only meaningful as a pair, so the backend takes

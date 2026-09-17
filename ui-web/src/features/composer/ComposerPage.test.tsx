@@ -8,15 +8,25 @@ import * as turn from './turn'
 import * as attachmentCache from '../../shell/attachment-cache'
 import * as tail from '../transcript/tail'
 
+import { Lightbox } from '../../chrome/Lightbox'
+import { close as closeLightbox } from '../../shell/lightbox'
+import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources } from '../../state/sources'
+
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
 import type { ComposerSource, SlashCmd } from './types'
-import type { Shell } from '../../shell/bridge'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const directNotes = vi.hoisted((): Array<[string, string]> => [])
 const toastWriter = vi.hoisted(() => ({ items: [] as string[] }))
-vi.mock('../transcript/mount', () => ({
+/* Partial, not wholesale: the island bag is assembled from every member this
+   module really has. */
+vi.mock('../transcript/mount', async (original) => ({
+  ...(await original<Record<string, unknown>>()),
   note: (label: string, detail: string) => { directNotes.push([label, detail]) },
 }))
 vi.mock('../../shell/toast', () => ({
@@ -80,14 +90,12 @@ function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; cal
     sent: [], halted: 0, notes: directNotes, toasts: [],
   }
   toastWriter.items = calls.toasts
-  const fakeShell: Shell = {
-    T: (key, vars) => {
-      const raw = (WORDS[lang] as Record<string, string>)[key] ?? key
-      return vars ? raw.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : raw
-    },
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: () => {},
-  }
+  setTranslator((key, vars) => {
+  const raw = (WORDS[lang] as Record<string, string>)[key] ?? key
+  return vars ? raw.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : raw
+  })
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   const source: ComposerSource = {
     meter: () => '',
     slash: [],
@@ -99,8 +107,7 @@ function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; cal
     stop: () => { calls.halted += 1 },
     ...over,
   }
-  window.RavenShell = fakeShell
-  window.DS = { composer: source }
+  setSources({ composer: source })
   document.body.innerHTML = DOCK
   return { source, calls }
 }
@@ -152,6 +159,7 @@ afterEach(() => {
   lang = 'zh'
   vi.useRealTimers()
   vi.restoreAllMocks()
+  resetSources()
 })
 
 describe('the send button', () => {
@@ -372,6 +380,16 @@ describe('the queue rows', () => {
     expect(store.queueSnapshot()).toEqual(['second'])
     expect(document.querySelectorAll('#queued .qrow').length).toBe(1)
   })
+
+  it('keeps its rendered shape', () => {
+    /* English fixture words: the snapshot file is new source, and the repo's
+       source-language gate admits no CJK outside its exemption zones. */
+    lang = 'en'
+    wire()
+    store.queueRestore(['first', 'second'])
+    mountQueue()
+    expect(domSnapshot(document.getElementById('queued')!)).toMatchSnapshot()
+  })
 })
 
 describe('the live turn row', () => {
@@ -496,12 +514,21 @@ describe('the attachment tray', () => {
     })
     const img = box.querySelector('.att.img img') as HTMLImageElement
     expect(img).toBeTruthy()
-    act(() => { fireEvent.click(img) })
-    /* The lightbox is a module in this bundle now, not a shell verb, so the
-       click opens the real overlay rather than recording a call. */
-    const shown = document.querySelector('.lightbox img') as HTMLImageElement
-    expect(shown).toBeTruthy()
-    expect(shown.alt).toBe('p.png')
+    /* The overlay is drawn by src/chrome/Lightbox.tsx, so something has to be
+       rendering it for the click below to put one on screen. Its own component
+       rather than the whole page root: this file mocks the transcript's mount
+       partially, and the page root reaches that through the island bag. */
+    render(<Lightbox />)
+    try {
+      act(() => { fireEvent.click(img) })
+      /* The lightbox is a module in this bundle now, not a shell verb, so the
+         click opens the real overlay rather than recording a call. */
+      const shown = document.querySelector('.lightbox img') as HTMLImageElement
+      expect(shown).toBeTruthy()
+      expect(shown.alt).toBe('p.png')
+    } finally {
+      closeLightbox()
+    }
   })
 
   it('removes a chip, hides the tray when the last one goes, and re-deadens send', async () => {
@@ -597,6 +624,17 @@ describe('the attachment tray', () => {
     store.pickFiles(opened)
     expect(opened).not.toHaveBeenCalled()
     expect(calls.toasts).toEqual(['demo: pick a file here'])
+  })
+
+  it('keeps its rendered shape', async () => {
+    lang = 'en'
+    wire({ upload: async () => ({ path: 'uploads/notes.txt', size: 300 }) })
+    const box = mountTray()
+    await act(async () => {
+      store.addFiles([new File(['x'], 'notes.txt', { type: 'text/plain' })])
+      await flush()
+    })
+    expect(domSnapshot(box)).toMatchSnapshot()
   })
 })
 

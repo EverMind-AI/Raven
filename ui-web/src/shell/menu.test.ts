@@ -1,7 +1,13 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { close, install, show } from './menu'
+import { mountPageRoot } from '../test/pageRoot'
+import { close, onPointerDown, show } from './menu'
+
+/* The rows render from src/App.tsx into whichever host the menu was raised in,
+   so the page's own root has to be standing for any of them to appear. It is
+   mounted once, as the page mounts it once, and finds its host per menu. */
+mountPageRoot()
 
 afterEach(() => {
   document.body.innerHTML = ''
@@ -55,10 +61,22 @@ describe('the menu writer', () => {
     expect(document.getElementById('menu')!.dataset.open).toBe('true')
   })
 
+  /* The menu comes down before the action runs, not after: an action whose own
+     job is to raise the next menu would otherwise have it closed underneath it,
+     in the same host. */
+  it('closes before the action runs, so an action may raise the next menu', () => {
+    document.body.innerHTML = '<div id="menu"></div>'
+    const menu = document.getElementById('menu')!
+    show(0, 0, [{ label: 'More', fn: () => show(5, 5, [{ label: 'Inner', fn: () => {} }]) }])
+    ;(menu.querySelector('button') as HTMLButtonElement).click()
+    expect(menu.dataset.open).toBe('true')
+    expect(menu.innerHTML).toBe('<button>Inner</button>')
+  })
+
   it('closes on an outside pointer and stays open for a pointer inside', () => {
     document.body.innerHTML =
       '<div id="menu" data-open="true"><button>Here</button></div><button id="away">Away</button>'
-    install()
+    document.addEventListener('pointerdown', onPointerDown, true)
     document.querySelector('#menu button')!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
     expect(document.getElementById('menu')!.dataset.open).toBe('true')
     document.getElementById('away')!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))

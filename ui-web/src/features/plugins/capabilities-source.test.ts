@@ -1,61 +1,67 @@
 // @vitest-environment happy-dom
-/* The concat adapters around the capabilities islands: the page opens before
+/* The legacy adapters around the capabilities islands: the page opens before
  * its source refreshes, and live extension rows never borrow fixture storage.
  */
 
-// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
-import { readFileSync } from 'node:fs'
-
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const demoSource = readFileSync('src/demo/120-capabilities.js', 'utf8')
-const chromeSource = readFileSync('src/demo/150-chrome.js', 'utf8')
-const fixturePluginsFile = readFileSync('src/demo/153-plugins.js', 'utf8')
-const liveSource = readFileSync('src/live/090-extensions.js', 'utf8')
-const liveSkillsSource = readFileSync('src/live/140-skills.js', 'utf8')
-const livePluginsSource = readFileSync('src/live/150-plugins.js', 'utf8')
+import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
 
-const demoOpen = demoSource.slice(
-  demoSource.indexOf('DS.capabilities ??='),
-  demoSource.indexOf('const openSkills'),
-)
-const manualStart = chromeSource.indexOf("$('#mAdd').onclick")
-const manualAdd = chromeSource.slice(manualStart, chromeSource.indexOf('\n};', manualStart) + 3)
-const fixtureStart = fixturePluginsFile.indexOf('DS.plugins ??=')
-const fixturePluginsSource = fixturePluginsFile.slice(
-  fixtureStart,
-  fixturePluginsFile.indexOf('\n})();', fixtureStart) + 6,
-)
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as pageStore from '../../state/page'
+import * as confirmStore from '../../state/confirm'
+import type { CapabilitiesSource } from '../../state/sources'
 
-interface CapabilitiesSource {
-  loaded(): boolean
-  load(): Promise<boolean>
+/* Narrower than the real PluginsSource: the two verbs the capabilities page
+   reaches for, so a fake here does not have to answer the whole island's. */
+interface PluginsSource {
+  manual(name: string, address: string): Promise<void>
+  rows(): Array<{ name: string }>
 }
 
-function opener(source: CapabilitiesSource): {
+/* The three domains the wiring installs, as this test drives them. `skills` is
+   narrower than SkillsSource: the only verb the capabilities page reads off it
+   is the installed list, and naming the whole interface would mean faking
+   every other verb to say anything about that one. */
+interface Seam {
+  capabilities: CapabilitiesSource
+  skills: { installed(): Array<{ name: string }> }
+  plugins: PluginsSource
+}
+
+async function seam(): Promise<Seam> {
+  const { sources } = await import('../../state/sources')
+  return sources as unknown as Seam
+}
+
+/* `openCaps` with the two verbs it drives registered as decorators -- which is
+   the seam the skill and plugin layers already wrap them through -- so the
+   order it calls them in is readable without the pages being built.
+   `drawCapsBadge` is not in the list: it is a call inside the same part, and it
+   has no body, so nothing outside can see it. `draw` stands immediately before
+   it at all three sites. */
+async function opener(source: CapabilitiesSource): Promise<{
   calls: string[]
   open(tab: string): Promise<void>
   toast: ReturnType<typeof vi.fn>
-} {
+}> {
   const calls: string[] = []
   const toast = vi.fn()
   const skeleton = document.createElement('div')
   skeleton.id = 'skeleton'
-  const build = new Function(
-    'DS', 'extSet', 'showPage', 'drawCaps', 'drawCapsBadge', '$', 'RavenIslands', 'toast',
-    `${demoOpen}\nreturn openCaps;`,
-  ) as (...args: unknown[]) => (tab: string) => Promise<void>
-  const open = build(
-    { capabilities: source },
-    (tab: string) => calls.push(`tab:${tab}`),
-    (page: string) => calls.push(`page:${page}`),
-    () => calls.push('draw'),
-    () => calls.push('badge'),
-    (selector: string) => document.querySelector(selector),
-    { skills: { skeleton } },
-    toast,
-  )
-  return { calls, open, toast }
+  const part = await loadPart(() => import('./nav'), {
+    fakes: {
+      'src/state/page': { show: (page: string | null) => calls.push(`page:${page}`) },
+      'src/state/caps': {
+        extSet: (tab: string) => calls.push(`tab:${tab}`),
+        draw: () => calls.push('draw'),
+      },
+      'src/shell/toast': { show: toast },
+    },
+    islands: { skills: { skeleton } },
+  })
+  ;(await seam()).capabilities = source
+  return { calls, open: part.openCaps, toast }
 }
 
 beforeEach(() => {
@@ -65,16 +71,16 @@ beforeEach(() => {
 describe('the capabilities page source adapter', () => {
   it('draws the fixture page once without showing a loading skeleton', async () => {
     const load = vi.fn(async () => false)
-    const h = opener({ loaded: () => true, load })
+    const h = await opener({ loaded: () => true, load })
     await h.open('skill')
-    expect(h.calls).toEqual(['tab:skill', 'page:capsPage', 'draw', 'badge'])
+    expect(h.calls).toEqual(['tab:skill', 'page:capsPage', 'draw'])
     expect(document.getElementById('skeleton')).toBeNull()
     expect(load).toHaveBeenCalledOnce()
   })
 
   it('shows the page and a skeleton before the first live refresh', async () => {
     let finish!: (value: boolean) => void
-    const h = opener({
+    const h = await opener({
       loaded: () => false,
       load: () => new Promise((resolve) => { finish = resolve }),
     })
@@ -83,17 +89,17 @@ describe('the capabilities page source adapter', () => {
     expect(document.querySelector('#capsBody > #skeleton')).not.toBeNull()
     finish(true)
     await opened
-    expect(h.calls).toEqual(['tab:plugin', 'page:capsPage', 'draw', 'badge'])
+    expect(h.calls).toEqual(['tab:plugin', 'page:capsPage', 'draw'])
   })
 
   it('leaves the skeleton for a real empty state when refresh fails', async () => {
-    const h = opener({
+    const h = await opener({
       loaded: () => false,
       load: async () => { throw new Error('offline') },
     })
     await h.open('plugin')
     expect(h.toast).toHaveBeenCalledWith('加载失败：offline')
-    expect(h.calls).toEqual(['tab:plugin', 'page:capsPage', 'draw', 'badge'])
+    expect(h.calls).toEqual(['tab:plugin', 'page:capsPage', 'draw'])
   })
 })
 
@@ -106,26 +112,25 @@ describe('manual plugin add', () => {
     let finish!: () => void
     const manual = vi.fn(() => new Promise<void>((resolve) => { finish = resolve }))
     const drawCaps = vi.fn()
-    const drawCapsBadge = vi.fn()
     const toast = vi.fn()
-    const build = new Function(
-      '$', 'DS', 'toast', 'T', 'drawCaps', 'drawCapsBadge',
-      `${manualAdd}\nreturn $('#mAdd').onclick;`,
-    ) as (...args: unknown[]) => () => Promise<void>
-    const click = build(
-      (selector: string) => document.querySelector(selector),
-      { plugins: { manual } },
-      toast,
-      (key: string, args?: Record<string, string>) => args?.err || args?.name || key,
-      drawCaps,
-      drawCapsBadge,
-    )
+    const part = await loadPart(() => import('../../state/caps'), {
+      fakes: {
+        'src/shell/toast': { show: toast },
+      },
+    })
+    /* The draw the add asks for afterwards, through the tab renderer the skill
+       layer registers -- the only reachable tab in this case. */
+    part.onDraw({ skill: drawCaps })
+    ;(await seam()).plugins = { manual } as unknown as PluginsSource
     const name = document.querySelector<HTMLInputElement>('#mName')!
     const address = document.querySelector<HTMLInputElement>('#mAddr')!
     name.value = 'CRM'
     address.value = 'npx -y @acme/crm-mcp'
 
-    const pending = click()
+    /* The action button#mAdd calls (src/chrome/CapsPage.tsx), driven here the
+       way the click drives it -- it reads the two fields itself and takes no
+       argument. That the button is wired to it is CapsPage.test.tsx's. */
+    const pending = part.manualAdd()
     expect(manual).toHaveBeenCalledWith('CRM', 'npx -y @acme/crm-mcp')
     expect(name.value).toBe('CRM')
     expect(drawCaps).not.toHaveBeenCalled()
@@ -134,84 +139,67 @@ describe('manual plugin add', () => {
     expect(name.value).toBe('')
     expect(address.value).toBe('')
     expect(drawCaps).toHaveBeenCalledOnce()
-    expect(drawCapsBadge).toHaveBeenCalledOnce()
-  })
-
-  it('keeps fixture additions inside the fixture source', async () => {
-    const DS: Record<string, unknown> = {}
-    const build = new Function('DS', 'PLUGINS', `${fixturePluginsSource}\nreturn DS.plugins;`) as (
-      ds: Record<string, unknown>, plugins: unknown[],
-    ) => { manual(name: string, address: string): Promise<void>; rows(): Array<{ name: string }> }
-    const plugins = build(DS, [])
-
-    await plugins.manual('CRM', 'https://mcp.example.test')
-
-    expect(plugins.rows().map((row) => row.name)).toEqual(['CRM'])
   })
 })
 
 describe('the live extension source', () => {
   it('owns its installed rows and reports when the first load finishes', async () => {
-    const DS: Record<string, unknown> = {}
     const ext = {
       tools: [{ name: 'read_file', description: 'read', mcp_server: false }],
       skills: [{ name: 'review', source: 'local', description: 'review' }],
       plugins: [{ id: 'python', display_name: 'Python', version: '1', enabled: true }],
       mcp: [{ name: 'remote', transport: 'http', enabled: true, state: 'connected', tool_count: 2 }],
     }
-    const rpc = {
-      notify: {} as Record<string, (value: unknown) => void>,
-      call: vi.fn(async (method: string, params?: Record<string, unknown>) => {
-        if (method === 'settings.get') {
-          return { settings: { tools: { disabledTools: [] }, plugins: { disabled: [] } } }
-        }
-        if (method === 'raven.mcp.list') {
-          return { servers: [{ name: 'remote', url: 'https://remote.test', connected: true }] }
-        }
-        if (method === 'raven.mcp.set') {
-          const servers = params?.servers as Array<{ name: string }>
-          ext.mcp.push({ name: servers.at(-1)!.name, transport: 'stdio', enabled: true,
-            state: 'connected', tool_count: 0 })
-          return { ok: true }
-        }
-        return ext
-      }),
-    }
-    const build = new Function(
-      'T', 'rpc', 'toast', 'pmToggle', 'DS', 'LANG', 'showUpNote', 'setMemFault', 'RavenIslands',
-      `${liveSource}\n${liveSkillsSource}\n${livePluginsSource}\nreturn {
-        tools: () => toolsLive,
-      };`,
-    ) as (...args: unknown[]) => {
-      tools(): Array<{ id: string }>
-    }
-    const rows = build(
-      (key: string, _args?: unknown, fallback?: string) => fallback || key,
-      rpc,
-      vi.fn(),
-      vi.fn(),
-      DS,
-      'en',
-      vi.fn(),
-      vi.fn(),
-      { plugins: { event: vi.fn() } },
-    )
-    const capabilities = DS.capabilities as CapabilitiesSource
-    const skills = DS.skills as { installed(): Array<{ name: string }> }
-    const plugins = DS.plugins as {
-      manual(name: string, address: string): Promise<void>
-      rows(): Array<{ name: string }>
-    }
+    const wiring = await loadPart(() => import('../../state/install'), {
+      fakes: {
+        'src/shell/banner': { setFault: vi.fn() },
+        'src/shell/toast': { show: vi.fn() },
+      },
+      islands: { plugins: { event: vi.fn() } },
+    })
+    /* The row builders word their own labels, so the source needs a lookup the
+       way it has one inside the page. Installed on the instance loadPart's reset
+       just produced. */
+    setTranslator((key: string, _vars?: Record<string, unknown> | null, fallback?: string | null) => fallback ?? key)
+    vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+    vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
+    const call = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === 'settings.get') {
+        return { settings: { tools: { disabledTools: [] }, plugins: { disabled: [] } } }
+      }
+      if (method === 'raven.mcp.list') {
+        return { servers: [{ name: 'remote', url: 'https://remote.test', connected: true }] }
+      }
+      if (method === 'raven.mcp.set') {
+        const servers = params?.servers as Array<{ name: string }>
+        ext.mcp.push({ name: servers.at(-1)!.name, transport: 'stdio', enabled: true,
+          state: 'connected', tool_count: 0 })
+        return { ok: true }
+      }
+      return ext
+    })
+    await fakeGateway(call)
+    /* The two objects the wiring adds to rather than replaces belong to the
+       chrome, which this case does not install. */
+    const { setSources } = await import('../../state/sources')
+    setSources({ composer: {}, transcript: {} } as never)
+    wiring.installSources()
+    wiring.installPushes()
+
+    const { capabilities, skills, plugins } = await seam()
 
     expect(capabilities.loaded()).toBe(false)
     await expect(capabilities.load()).resolves.toBe(true)
     expect(capabilities.loaded()).toBe(true)
     expect(skills.installed().map((row) => row.name)).toEqual(['review'])
     expect(plugins.rows().map((row) => row.name)).toEqual(['Python', 'remote'])
-    expect(rows.tools().map((row) => row.id)).toEqual(['read_file'])
+    /* Imported after loadPart's reset, so it is the same module instance the
+       part just installed from. */
+    const { extTools } = await import('./source')
+    expect(extTools().map((row) => row.id)).toEqual(['read_file'])
 
     await plugins.manual('CRM', 'npx -y @acme/crm-mcp')
-    expect(rpc.call).toHaveBeenCalledWith('raven.mcp.set', {
+    expect(call).toHaveBeenCalledWith('raven.mcp.set', {
       servers: [
         { name: 'remote', url: 'https://remote.test', connected: true },
         { name: 'CRM', address: 'npx -y @acme/crm-mcp' },

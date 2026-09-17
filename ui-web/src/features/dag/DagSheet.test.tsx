@@ -7,13 +7,19 @@ import {
   remove as rackRemove,
   _resetForTests as rackReset,
   sync as rackSync,
-} from '../composer/sheets'
+} from '../../state/sheetRack'
 import { back as subBack, openDagNode, _resetForTests as subReset } from '../subagents/store'
 import { advance, forget, resume, run, settle, start, sync, touch, _resetForTests } from './mount'
 import { fold as storeFold } from './store'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
+import { resetSources, setSources } from '../../state/sources'
 
-import type { Shell } from '../../shell/bridge'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as pageStore from '../../state/page'
+import * as confirmStore from '../../state/confirm'
+import { installWsPanel } from '../../test/wsPanel'
+import type { AgentsSource } from '../subagents/types'
+import type { TranscriptSource } from '../transcript/types'
 import type { DagRun } from './types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -21,17 +27,14 @@ import type { DagRun } from './types'
 const opened: Array<[string, string]> = []
 
 function wire(): void {
-  const shell: Shell = {
-    T: (key) => key,
-    confirmAsk: () => {},
-    showPage: () => {},
-  }
-  window.RavenShell = shell
-  window.DS = {
-    transcript: { openDagNode: (runId: string, nodeId: string) => opened.push([runId, nodeId]) },
-    agents: {},
-    subagents: {},
-  }
+  setTranslator((key) => key)
+  installWsPanel()
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
+  setSources({
+    transcript: { openDagNode: (runId: string, nodeId: string) => opened.push([runId, nodeId]) } as unknown as TranscriptSource,
+    agents: {} as unknown as AgentsSource,
+  })
   document.body.innerHTML =
     '<div class="chat"><div class="dock"><div class="sheets" id="sheetRack"></div>'
     + '<div class="dock-in"></div></div></div>'
@@ -69,8 +72,8 @@ beforeEach(() => {
 
 afterEach(() => {
   sessionReset()
-  delete window.RavenShell
-  delete window.DS
+  resetTranslator()
+  resetSources()
   document.body.innerHTML = ''
   vi.useRealTimers()
 })

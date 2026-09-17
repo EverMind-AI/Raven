@@ -1,12 +1,25 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { PlaybooksApp } from './PlaybooksPage'
 import * as store from './store'
 
+import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
+import { mountPageRoot } from '../../test/pageRoot'
+
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import * as detailStore from '../../state/detail'
 import type { PlaybookDetail, PlaybookNode, PlaybookRow, PlaybooksSource } from './types'
-import type { Shell } from '../../shell/bridge'
+
+/* The notices render from src/App.tsx into the standing #toasts host, so the
+   page's own root has to be standing for any of them to appear -- and that root
+   renders the whole page, so a query for one of this island's own elements is
+   scoped to the container it was rendered into. */
+mountPageRoot()
 
 function node(over: Partial<PlaybookNode> & { id: string }): PlaybookNode {
   return {
@@ -55,26 +68,24 @@ function detail(over: Partial<PlaybookDetail> & { name: string }): PlaybookDetai
   }
 }
 
-/* The island runs against the two seams production wires: a fake shell on
-   window.RavenShell (T answers its own key, so assertions name catalogue keys
-   rather than translations) and a fixture source on window.DS.playbooks. */
+/* The island runs against the two seams production wires: a stand-in
+   translator on setTranslator (it answers its own key, so assertions name
+   catalogue keys rather than translations) and a fixture source on
+   sources.playbooks. */
 const pages: (string | null)[] = []
 
 function install(over: Partial<PlaybooksSource> = {}): void {
-  window.RavenShell = {
-    T: (key: string, vars?: Record<string, unknown>) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: (_t: unknown, _b: unknown, _l: unknown, fn: () => void) => fn(),
-    showPage: (id: string | null) => pages.push(id),
-    closeDetail: () => {}
-  } as unknown as Shell
-  window.DS = {
-    ...(window.DS || {}),
+  setTranslator((key: string, vars?: Record<string, unknown> | null) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(detailStore, 'close').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t: unknown, _b: unknown, _l: unknown, fn: () => void) => fn())
+  vi.spyOn(pageStore, 'show').mockImplementation((id: string | null) => pages.push(id))
+  setSources({
     playbooks: {
       list: async () => [row({ name: 'issue-triage' })],
       get: async (name: string) => detail({ name }),
       ...over
     }
-  }
+  })
 }
 
 async function mount() {
@@ -89,7 +100,7 @@ afterEach(() => {
   cleanup()
   store._resetForTests()
   pages.length = 0
-  delete (window as { DS?: unknown }).DS
+  resetSources()
 })
 
 describe('the playbook library', () => {
@@ -122,9 +133,9 @@ describe('the playbook library', () => {
         row({ name: 'release-notes', description: 'what changed in a version' })
       ]
     })
-    await mount()
+    const view = await mount()
     expect(screen.getByText('gui.pb.count {"n":2}')).toBeTruthy()
-    fireEvent.change(document.querySelector('.cfind input') as Element, { target: { value: 'changed' } })
+    fireEvent.change(view.container.querySelector('.cfind input') as Element, { target: { value: 'changed' } })
     /* The total nobody asked for is the less useful of the two answers. */
     expect(screen.getByText('gui.pb.matched {"n":1}')).toBeTruthy()
     expect(screen.queryByText('gui.pb.count {"n":2}')).toBeNull()
@@ -144,9 +155,8 @@ describe('the playbook library', () => {
   it('hands the library back when the detail read fails, and says why', async () => {
     /* The file can go away between the listing and the click. Without this the
        reader is left on the reading placeholder, which has no way back. */
-    const host = document.createElement('div')
-    host.id = 'toasts'
-    document.body.appendChild(host)
+    /* The standing host the page root renders, which is where a notice lands. */
+    const host = document.getElementById('toasts') as HTMLElement
     install({
       get: async () => {
         throw new Error('playbook.md: no such file')
@@ -404,8 +414,8 @@ describe('the playbook library', () => {
         row({ name: 'release-notes', description: 'what changed in a version' })
       ]
     })
-    await mount()
-    fireEvent.change(document.querySelector('.cfind input') as Element, { target: { value: 'changed' } })
+    const view = await mount()
+    fireEvent.change(view.container.querySelector('.cfind input') as Element, { target: { value: 'changed' } })
     expect(screen.queryByText('issue-triage')).toBeNull()
     expect(screen.getByText('release-notes')).toBeTruthy()
   })
@@ -651,6 +661,27 @@ describe('the playbook library', () => {
     expect(pages).toEqual(['pbPage'])
     store.closePage()
     expect(pages).toEqual(['pbPage', null])
+  })
+
+  it('keeps its rendered shape, library', async () => {
+    install({
+      list: async () => [
+        row({ name: 'issue-triage' }),
+        row({ name: 'release-notes', description: 'what changed in a version' })
+      ]
+    })
+    const view = await mount()
+    expect(await screen.findByText('issue-triage')).toBeTruthy()
+    expect(domSnapshot(view.container)).toMatchSnapshot()
+  })
+
+  it('keeps its rendered shape, graph', async () => {
+    install()
+    const view = await mount()
+    fireEvent.click(screen.getByText('issue-triage'))
+    await act(async () => {})
+    expect(document.querySelectorAll('.pbnode')).toHaveLength(2)
+    expect(domSnapshot(view.container)).toMatchSnapshot()
   })
 })
 

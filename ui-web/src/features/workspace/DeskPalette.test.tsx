@@ -14,9 +14,16 @@ import * as seen from './seen'
 import * as workspace from './store'
 
 import { setCurrent } from '../../shell/session'
+/* The wiring main.tsx gets from this import: the desk's file opener is handed
+   to the workspace store here, and `openDelivery` reaches the desk through it. */
+import '../../islands'
+import { resetSources, setSources, sources } from '../../state/sources'
 
-import type { Shell } from '../../shell/bridge'
-import type { InstanceRow } from '../subagents/types'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import { installWsPanel } from '../../test/wsPanel'
+import type { AgentsSource, InstanceRow } from '../subagents/types'
 import type { WorkspaceSource, WsChange } from './types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -46,12 +53,10 @@ const change = (key: string): WsChange => ({
 
 function wire(): void {
   opens.length = 0
-  const fakeShell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: () => {},
-    workspaceSetOpen: () => {},
-  }
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  installWsPanel()
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   const source: WorkspaceSource = {
     shortPath: (p) => p,
     hostPlatform: () => 'mac',
@@ -63,8 +68,7 @@ function wire(): void {
   /* The agents store files its lists under the open conversation and drops an
      answer for any other, so the harness has to be in one. */
   setCurrent('s1')
-  window.RavenShell = fakeShell
-  window.DS = {
+  setSources({
     workspace: source,
     /* The agents tab counts the instances this session started, so the harness
        answers for them the way the live source does. */
@@ -72,11 +76,7 @@ function wire(): void {
       list: async () => [],
       instances: async (key: string) => { asked.push(key); return agentRows },
     },
-  }
-  /* The island bag, as main.tsx installs it: `openDelivery` reaches the desk
-     through it, and a harness without it would exercise the legacy panel
-     path instead of the one production takes. */
-  window.RavenIslands = { workspace: { openFile: desk.openDeskFile } }
+  })
   localStorage.clear()
   document.body.innerHTML = '<div id="split" data-open="true"></div>'
   desk._resetForTests()
@@ -105,9 +105,8 @@ afterEach(() => {
     deliveries.restore([])
     workspace.restore({ changes: [], urls: [], file: null, turn: 0, unseen: 0, deliveries: [] })
   })
-  window.RavenShell = undefined
-  window.DS = undefined
-  window.RavenIslands = undefined
+  resetTranslator()
+  resetSources()
   setCurrent(null)
   agents.reset()
   localStorage.clear()
@@ -236,7 +235,7 @@ describe('a tab with nothing in it', () => {
   })
 
   it('says so in the same shape when the server does not report the work', async () => {
-    window.DS!.agents = { list: async () => [], instances: async () => [], absent: () => true }
+    setSources({ agents: { list: async () => [], instances: async () => [], absent: () => true } as unknown as AgentsSource })
     render(<DeskPalette />)
     await act(async () => { desk.update({ paletteOpen: true, tab: 'agents' }) })
     await act(async () => { await agents.refreshInstances(true) })
@@ -333,7 +332,7 @@ describe('the desk shelf', () => {
   /* The demo shell's source cannot read a file, and a viewer with nothing to
      show is worse than the note it answers with. */
   it('hands the path to a source that cannot read files, opening no pane', async () => {
-    ;(window.DS!.workspace as WorkspaceSource).canBrowse = false
+    ;(sources.workspace as WorkspaceSource).canBrowse = false
     deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/a.md', name: 'a.md', title: 'Comparison' }]))
     await shelf()
     await act(async () => {

@@ -1,13 +1,15 @@
-import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import { shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { show as toast } from '../../shell/toast'
 import { CardSkeleton } from '../../shell/skeleton'
+import * as detail from '../../state/detail'
 import * as store from './store'
 
 import type { Contribution, DetailEntry, InstalledRow, MarketItem, McpSnapshot } from './types'
 import type { CSSProperties, JSX } from 'react'
+import { useInTask } from '../composer/useInTask'
 
 /* The plugin tab is market-first: the page IS the catalog, and what you
    already have lives one level in (the installed button top-right, back
@@ -317,7 +319,7 @@ function McpCard({ row }: { row: InstalledRow }): JSX.Element | null {
               className="mini gold"
               onClick={(e) => {
                 e.stopPropagation()
-                shell().useInTask?.('gui.plug.use_prompt', m.name)
+                useInTask('gui.plug.use_prompt', m.name)
               }}
             >
               {t('gui.hub.use')}
@@ -369,29 +371,10 @@ function PyCard({ row }: { row: InstalledRow }): JSX.Element {
 
 /* ── detail drawer (market entries + installed servers) ──────────── */
 
-/* The drawer renders into the shared #detail chrome through a portal host
-   the island owns: other openers clear #dBody with innerHTML, which only
-   detaches this host -- React keeps rendering into it unharmed. */
+/* The drawer renders into the host the shared dialog keeps for this island
+   (src/state/detail.ts). Keyed by the card it holds, so a different card is a
+   fresh subtree rather than a diff against the last one's. */
 function DrawerHost({ drawer, s }: { drawer: store.Drawer; s: store.PlugState }): JSX.Element {
-  const host = useMemo(() => document.createElement('div'), [])
-  useEffect(() => {
-    const body = document.getElementById('dBody')
-    const detail = document.getElementById('detail')
-    const title = document.getElementById('dTitle')
-    if (!body || !detail) return
-    body.innerHTML = ''
-    if (title) title.textContent = ''
-    body.appendChild(host)
-    detail.dataset.open = 'true'
-    /* This card's body is fetched when it opens, so the panel holds a settled
-       box while it is on its way -- see `.detail[data-fill]`. */
-    detail.dataset.fill = 'true'
-    return () => {
-      host.remove()
-      detail.dataset.open = 'false'
-      delete detail.dataset.fill
-    }
-  }, [host])
   return createPortal(
     drawer.kind === 'progress' ? (
       <Progress s={s} />
@@ -400,7 +383,7 @@ function DrawerHost({ drawer, s }: { drawer: store.Drawer; s: store.PlugState })
     ) : (
       <InstDetail id={drawer.id} />
     ),
-    host,
+    detail.host('plugins'),
   )
 }
 
@@ -462,7 +445,7 @@ function Progress({ s }: { s: store.PlugState }): JSX.Element | null {
               {pg.state === 'done' && (
                 <button
                   className="mini gold"
-                  onClick={() => shell().useInTask?.('gui.plug.use_prompt', pg.name)}
+                  onClick={() => useInTask('gui.plug.use_prompt', pg.name)}
                 >
                   {t('gui.hub.use')}
                 </button>
@@ -825,7 +808,7 @@ function MarketDetail({ id, s }: { id: string; s: store.PlugState }): JSX.Elemen
             ) : !lm || lm.enabled ? (
               <button
                 className="mini gold"
-                onClick={() => shell().useInTask?.('gui.plug.use_prompt', entry.name)}
+                onClick={() => useInTask('gui.plug.use_prompt', entry.name)}
               >
                 {t('gui.hub.use')}
               </button>
@@ -924,7 +907,7 @@ function InstDetail({ id }: { id: string }): JSX.Element | null {
           ) : m.enabled ? (
             <button
               className="mini gold"
-              onClick={() => shell().useInTask?.('gui.plug.use_prompt', m.name)}
+              onClick={() => useInTask('gui.plug.use_prompt', m.name)}
             >
               {t('gui.hub.use')}
             </button>

@@ -1,7 +1,8 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { subscribe as langSubscribe, tag as langTag } from '../../state/lang'
 import * as store from './store'
 
 import type { MemItem, MemKind, MemStats } from './types'
@@ -22,9 +23,10 @@ function memWhen(iso?: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
   const two = (n: number) => String(n).padStart(2, '0')
-  /* applyI18n mirrors LANG onto the document, which is as much of the
-     legacy scope as an island can see. */
-  return document.documentElement.lang.startsWith('zh')
+  /* The page's language declaration, which is the only part of the language the
+     date line cares about. Read here rather than passed in because this is not
+     a component; MemoryApp subscribes to the store for the repaint. */
+  return langTag().startsWith('zh')
     ? `${d.getMonth() + 1}月${d.getDate()}日 ${two(d.getHours())}:${two(d.getMinutes())}`
     : `${d.toLocaleString('en-US', { month: 'short' })} ${d.getDate()} ${two(d.getHours())}:${two(d.getMinutes())}`
 }
@@ -78,18 +80,11 @@ function ArmedDelete({ onFire, style }: { onFire: () => void; style?: CSSPropert
 
 export function MemoryApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.getState)
-  /* Legacy chrome owns the drawer's closers (Esc, #dClose, click-outside)
-     and they only flip #detail's data-open, so the island follows the flag
-     to unmount its portal before another page's opener wipes #dBody. */
-  useEffect(() => {
-    const el = document.getElementById('detail')
-    if (!el) return
-    const ob = new MutationObserver(() => {
-      if (el.dataset.open !== 'true') store.detailDismissed()
-    })
-    ob.observe(el, { attributes: true, attributeFilter: ['data-open'] })
-    return () => ob.disconnect()
-  }, [])
+  /* Subscribed, not read: memWhen above reads the language at render time, and
+     this is what brings the page back for a flip. The legacy whole-page redraw
+     also repaints this island, so the subscription adds nothing a reader can
+     see -- it is what carries the repaint once that redraw is gone. */
+  useSyncExternalStore(langSubscribe, langTag)
   return (
     <>
       <div className="pmhero">
@@ -282,16 +277,10 @@ function Section({ label, text }: { label: string; text: string }): JSX.Element 
 }
 
 /* The detail drawer's content, rendered into the shared #detail dialog the
-   plugin and skill pages also use; the dialog chrome itself (title bar,
-   close button, click-outside) stays legacy. */
+   plugin and skill pages also use. The dialog itself -- its flags, its host and
+   its closers -- is src/state/detail.ts and App.tsx's DetailPanel. */
 function MemDetail({ it }: { it: MemItem }): JSX.Element | null {
   const host = store.detailHost()
-  useEffect(() => {
-    const title = document.getElementById('dTitle')
-    if (title) title.textContent = ''
-    const drawer = document.getElementById('detail')
-    if (drawer) drawer.dataset.open = 'true'
-  }, [it])
   const kindDef = MEM_KINDS.find((k) => k.kind === it.kind) ?? MEM_KINDS[0]!
   const name = it.subject || t(kindDef.tab)
   const metaRows: Array<[string, string]> = []

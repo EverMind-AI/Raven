@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { PANE, cssPx, gripDrag, install, load, paneMax, set } from './panes'
+import { PANE, cssPx, gripDrag, install, load, onResize, paneMax, set } from './panes'
 
 const lifted = vi.hoisted(() => ({ count: 0 }))
 vi.mock('../features/composer/store', () => ({
@@ -236,6 +236,10 @@ describe('the grip as a separator', () => {
     expect(cssPx('--rail')).toBe(300)
   })
 })
+
+/* The re-clamp is registered on the window by the page, once and for its life
+   (src/state/globalListeners.ts), so it goes on once for the file. */
+window.addEventListener('resize', onResize)
 
 describe('installing the panes', () => {
   it('wires both grips and re-clamps them when the window shrinks', () => {

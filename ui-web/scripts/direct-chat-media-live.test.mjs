@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 /* The instance composer's send carries its attachments as `media`, the way the
  * page composer's does.
  *
@@ -6,66 +7,36 @@
  * `target` only, so every ordinary direct chat reached the server with no
  * files whatever the reader attached. The rule that turns the note in the
  * text into the typed field already existed for the page composer (`mediaOf`);
- * this pins that the instance send goes through it, against the assembled
- * live layer rather than a copy of it.
+ * this pins that the instance send goes through it, against the source the page
+ * installs rather than a copy of it.
  */
-
-import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'
 
-const build = readFileSync(new URL('../build.py', import.meta.url), 'utf8')
-const manifest = build.match(/_LIVE_PARTS = \[(.*?)\n\]/s)
-if (!manifest) throw new Error('_LIVE_PARTS is absent from build.py')
-const parts = [...manifest[1].matchAll(/"([^"]+\.js)"/g)].map((m) => m[1])
-const live = parts
-  .map((name) => readFileSync(new URL(`../src/live/${name}`, import.meta.url), 'utf8'))
-  .join('')
-const demo = readFileSync(new URL('../src/demo/060-conversation.js', import.meta.url), 'utf8')
+import { fakeGateway, loadPart } from './module-harness.mjs'
 
-/* From `mark` to the close of the brace it opens, plus the character after it. */
-function braced(source, mark, where) {
-  const start = source.indexOf(mark)
-  if (start < 0) throw new Error(`${mark} is absent from ${where}`)
-  const brace = source.indexOf('{', start)
-  let depth = 0
-  for (let index = brace; index < source.length; index += 1) {
-    if (source[index] === '{') depth += 1
-    else if (source[index] === '}') {
-      depth -= 1
-      if (depth === 0) return source.slice(start, index + 2)
-    }
-  }
-  throw new Error(`${mark} has no closing brace in ${where}`)
+/* `sources.agents.instanceSend` as the page installs it, with the real `mediaOf`
+   and the real note text behind it -- the note is what splits the message. */
+async function sender(calls) {
+  const wiring = await loadPart(() => import('../src/state/install'), {
+    fakes: { 'src/shell/session': { current: () => 's1' } },
+  })
+  await fakeGateway((method, params) => { calls.push([method, params]); return Promise.resolve({}) })
+  const { setSources, sources } = await import('../src/state/sources')
+  /* The two seam objects the chrome builds, which this case does not install. */
+  setSources({ composer: {}, transcript: {} })
+  wiring.installSources()
+  if (!sources.agents?.instanceSend) throw new Error('instanceSend is absent from the page wiring')
+  return sources.agents.instanceSend
 }
 
-/* The `instanceSend` member, to the end of its `.then(...)` chain. */
-function instanceSendMember() {
-  const mark = 'instanceSend: (agent, handle, text) =>'
-  const start = live.indexOf(mark)
-  if (start < 0) throw new Error('instanceSend is absent from the assembled live layer')
-  const end = live.indexOf('.then(() => undefined),', start)
-  if (end < 0) throw new Error('instanceSend does not end in the then-chain the seam expects')
-  return live.slice(start + mark.length, end + '.then(() => undefined)'.length)
-}
+const { I18N } = await import('../src/i18n/t')
+const note = I18N.ui['gui.att.note'].en
 
-describe('the assembled live instance send', () => {
-  const note = '[attachments, saved in the workspace]'
-  function install(calls) {
-    const rpc = { call: (method, params) => { calls.push([method, params]); return Promise.resolve({}) } }
-    const I18N = { ui: { 'gui.att.note': { en: note, zh: '[附件，已存放在工作目录下]' } } }
-    const factory = Function(
-      'rpc', 'I18N', 'sessionCurrent',
-      `${braced(demo, 'function splitAtts(text) {', 'demo/060-conversation.js')}\n` +
-      `${braced(live, 'const mediaOf = (text) => {', 'the assembled live layer')}\n` +
-      `return (agent, handle, text) => ${instanceSendMember()};`,
-    )
-    return factory(rpc, I18N, () => 's1')
-  }
-
+describe('the instance send', () => {
   it('turns the attachment note in the text into the typed media field', async () => {
     const calls = []
-    const send = install(calls)
+    const send = await sender(calls)
 
     await send('hermes', 'chatty', `have a look\n\n${note}\n- uploads/a.txt\n- uploads/b.pdf`)
 
@@ -82,7 +53,7 @@ describe('the assembled live instance send', () => {
 
   it('carries a file-only message, the note alone after its blank line', async () => {
     const calls = []
-    const send = install(calls)
+    const send = await sender(calls)
 
     await send('hermes', 'chatty', `\n\n${note}\n- uploads/a.txt`)
 
@@ -92,7 +63,7 @@ describe('the assembled live instance send', () => {
 
   it('sends a plain line with no media key at all', async () => {
     const calls = []
-    const send = install(calls)
+    const send = await sender(calls)
 
     await send('hermes', 'chatty', '再补一句它的传输层')
 

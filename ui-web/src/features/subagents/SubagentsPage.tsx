@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 
 import { AgentMark, isOwnAgent } from '../../shell/agent-mark'
-import { ds, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
 import { SendGlyph } from '../../shell/ico'
 import { composing, fmtSize } from '../composer/store'
 import { instanceMark, instanceState } from './history'
@@ -13,8 +14,7 @@ import type { AgentRow, InstanceRow, OpenItem, SubagentRow } from './types'
 import type { Attachment, ComposerSource } from '../composer/types'
 import type { JSX } from 'react'
 
-/* Mirrors the glyph the legacy renderer drew with (ICO.up in
-   ui-web/src/demo/100-workspace.js, through its ico() helper). */
+/* The glyph the panel's rows have always been drawn with. */
 function IcoUp(): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
@@ -344,8 +344,8 @@ function Back(): JSX.Element {
 }
 
 /* Its own scroller: the run is a transcript of unknown length and must not
-   push the header it belongs to off the top of the panel. The children are
-   the legacy transcript bridge's, never React's. */
+   push the header it belongs to off the top of the panel. The children are the
+   transcript island's, never this component's. */
 function Stage({ paint }: { paint: (box: HTMLElement) => void }): JSX.Element {
   const box = useRef<HTMLDivElement>(null)
   useEffect(() => {

@@ -4,16 +4,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { TurnClock } from './TurnClock'
 
-import type { Shell } from '../../shell/bridge'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as pageStore from '../../state/page'
+import * as confirmStore from '../../state/confirm'
 import type { InstanceRow } from './types'
 
 function wire(): void {
-  const shell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: () => {},
-    showPage: () => {},
-  }
-  window.RavenShell = shell
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
 }
 
 const row = (over: Partial<InstanceRow> = {}): InstanceRow =>
@@ -23,7 +22,7 @@ const shown = (): string | null => document.querySelector('.pane-turnms')?.textC
 
 afterEach(() => {
   cleanup()
-  delete window.RavenShell
+  resetTranslator()
   vi.useRealTimers()
 })
 

@@ -5,7 +5,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ModelPickerApp } from './ModelPicker'
 import * as store from './store'
 
-import type { Shell } from '../../shell/bridge'
+import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources } from '../../state/sources'
+
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as pageStore from '../../state/page'
+import * as confirmStore from '../../state/confirm'
 import type { ModelSource, Provider } from './types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -62,13 +67,10 @@ function install(over: Partial<ModelSource> = {}, providers = PROVIDERS): Harnes
     },
     ...over,
   }
-  const shell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: () => {},
-    showPage: () => {},
-  }
-  window.RavenShell = shell
-  window.DS = { model: source }
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
+  setSources({ model: source })
   document.body.innerHTML = '<button id="modelChip">chip</button>'
   return h
 }
@@ -97,8 +99,8 @@ const type = (text: string) =>
 afterEach(() => {
   act(() => store._resetForTests())
   cleanup()
-  delete window.RavenShell
-  delete window.DS
+  resetTranslator()
+  resetSources()
   document.body.innerHTML = ''
 })
 describe('the model picker', () => {
@@ -228,6 +230,13 @@ describe('the model picker', () => {
     /* The second provider is filtered out of the columns entirely, so the only
        empty message reachable here is the search one. */
     expect(rows('provs').length).toBe(1)
+  })
+
+  it('keeps its rendered shape', () => {
+    install()
+    const view = mount()
+    openIt()
+    expect(domSnapshot(view.container)).toMatchSnapshot()
   })
 })
 
@@ -444,7 +453,7 @@ describe('the model picker, closing', () => {
 
   it('does nothing at all on a page with no source installed', () => {
     install()
-    delete window.DS
+    resetSources()
     mount()
     expect(() => openIt()).not.toThrow()
     expect(pick()).toBeNull()
@@ -510,6 +519,13 @@ describe('the capability icons', () => {
     /* `use` resolves the first definition of an id, so a second copy would be
        dead markup repeated on every open. */
     expect(document.querySelectorAll('.mpick .model-tag-defs').length).toBe(1)
+  })
+
+  it('keeps its rendered shape', () => {
+    install({}, TAGGED)
+    const view = mount()
+    openIt()
+    expect(domSnapshot(view.container)).toMatchSnapshot()
   })
 })
 

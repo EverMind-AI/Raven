@@ -5,7 +5,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PlugApp } from './PluginsPage'
 import * as store from './store'
 
-import type { Shell } from '../../shell/bridge'
+import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
+
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import * as useInTaskModule from '../../features/composer/useInTask'
+import * as capsStore from '../../state/caps'
 import type { DetailEntry, InstalledRow, MarketItem, PluginsSource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -49,9 +56,9 @@ function entryOf(it: MarketItem, over: Partial<DetailEntry> = {}): DetailEntry {
   }
 }
 
-/* The island runs against the same two seams production wires: a fake shell
-   on window.RavenShell (T returns its key, so tests assert catalogue keys)
-   and a fixture source on window.DS.plugins. */
+/* The island runs against the same two seams production wires: a stand-in
+   translator on setTranslator (it returns its key, so tests assert catalogue
+   keys) and a fixture source on sources.plugins. */
 function install(
   items: MarketItem[],
   rowsArr: InstalledRow[] = [],
@@ -88,19 +95,12 @@ function install(
   }
   const shellCalls: Array<[string, unknown]> = []
   toastWriter.calls = shellCalls
-  const fakeShell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: (id) => shellCalls.push(['showPage', id]),
-    useInTask: (key, name) => shellCalls.push(['useInTask', `${key}:${name}`]),
-    /* Recorded rather than ignored: the call is this island's contract with
-       the legacy caps-page chrome, which owns the tab title, the hero and the
-       installed button. It used to be a no-op here, so all five call sites
-       could be cut with the suite green. */
-    plugRedraw: () => shellCalls.push(['plugRedraw', null]),
-  }
-  window.RavenShell = fakeShell
-  window.DS = { plugins: source }
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
+  vi.spyOn(pageStore, 'show').mockImplementation((id) => shellCalls.push(['showPage', id]))
+  vi.spyOn(useInTaskModule, 'useInTask').mockImplementation((key, name) => shellCalls.push(['useInTask', `${key}:${name}`]))
+  vi.spyOn(capsStore, 'drawIfOpenOnPlugins').mockImplementation(() => shellCalls.push(['plugRedraw', null]))
+  setSources({ plugins: source })
   document.body.innerHTML =
     '<section class="page" id="capsPage" data-open="true"><div id="capsBody"></div></section>' +
     '<aside class="detail" id="detail" data-open="false"><div id="dTitle"></div><div id="dBody"></div></aside>'
@@ -122,6 +122,7 @@ afterEach(() => {
   })
   cleanup()
   vi.restoreAllMocks()
+  resetSources()
 })
 
 describe('plugins island', () => {
@@ -219,7 +220,7 @@ describe('plugins island', () => {
     expect(redraws()).toBe(beforeSearch + 2)
   })
 
-  it('opens the detail drawer from a card and closes with the legacy close path', async () => {
+  it('opens the detail drawer from a card and closes with the shared close path', async () => {
     install([item()])
     await mount()
     await act(async () => {
@@ -298,6 +299,29 @@ describe('plugins island', () => {
     await vi.waitFor(() => {
       expect(calls).toContain('reload')
     })
+  })
+
+  it('keeps its rendered shape, market', async () => {
+    install([item(), item({ id: 'notion', name: 'Notion', verified: false })])
+    await mount()
+    await screen.findByText('websearch')
+    expect(domSnapshot(document.getElementById('capsBody')!)).toMatchSnapshot()
+  })
+
+  it('keeps its rendered shape, installed shelf', async () => {
+    install(
+      [item()],
+      [
+        { id: 'sheets', name: 'sheets', src: 'raven-sheets', ver: '0.9.0', state: 'on' },
+        { id: 'mcp:gh', name: 'gh', m: { name: 'gh', enabled: true, state: 'connected', transport: 'http', tool_count: 3 } },
+      ],
+    )
+    await mount()
+    act(() => {
+      store.toggleView()
+    })
+    await screen.findByText('gui.plug.grp_builtin')
+    expect(domSnapshot(document.getElementById('capsBody')!)).toMatchSnapshot()
   })
 })
 

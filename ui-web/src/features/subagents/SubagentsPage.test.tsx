@@ -15,8 +15,16 @@ import {
 import * as store from './store'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 
-import type { Shell } from '../../shell/bridge'
+import { domSnapshot } from '../../test/domSnapshot'
+import { islands } from '../../islands'
+import { resetSources, setSources, sources } from '../../state/sources'
+
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import { installWsPanel } from '../../test/wsPanel'
+import * as pageStore from '../../state/page'
 import type { JSX } from 'react'
+import type { ComposerSource } from '../composer/types'
 import type { AgentCtx, AgentRow, AgentsSource, DirectTurn, InstanceRow, SubagentRow } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -24,26 +32,23 @@ import type { AgentCtx, AgentRow, AgentsSource, DirectTurn, InstanceRow, Subagen
 
 const paints: Array<{ ctx: unknown; opts?: { key?: string; empty?: string; reset?: boolean } }> = []
 
-/* The island runs against the same two seams production wires up: a fake
-   shell on window.RavenShell (T returns its key, dur a deterministic stamp)
-   and a source on window.DS.agents -- the fixture shape for demo behaviour,
-   list/context/node for live behaviour. */
+/* The island runs against the same two seams production wires up: a stand-in
+   translator on setTranslator (it returns its key) and a source on
+   sources.agents -- the fixture shape for offline behaviour, list/context/node
+   for live behaviour. */
 function wire(source: AgentsSource): void {
   paints.length = 0
-  const fakeShell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: () => {},
-    wsShows: (tab) => tab === 'agents',
-  }
-  window.RavenShell = fakeShell
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  installWsPanel({ view: () => ({ tab: 'agents', open: true, picked: true }) })
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   sessionReset()
   setCurrent('s1')
   source.stagePaint = (box, ctx, opts) => {
     paints.push({ ctx, opts })
     box.appendChild(document.createElement('p'))
   }
-  window.DS = { agents: source }
+  setSources({ agents: source })
   document.body.innerHTML =
     '<span id="wsAgentRun" hidden></span><div class="ws-body" id="wsBody" data-view="agents"></div>'
 }
@@ -107,15 +112,14 @@ afterEach(() => {
   cleanup()
   store._resetForTests()
   sessionReset()
-  window.RavenIslands = undefined
   vi.useRealTimers()
   vi.restoreAllMocks()
+  resetSources()
 })
 
 describe('subagents island, the list', () => {
   it('routes an existing instance opener into the floating workspace', () => {
-    const openAgent = vi.fn()
-    window.RavenIslands = { workspace: { openAgent } }
+    const openAgent = vi.spyOn(islands.workspace, 'openAgent').mockImplementation(() => {})
     const row = inst({ handle: 'resume-me', resumable: true })
     store.openInstance(row)
     /* Second argument is the record this promotion replaces; a row opened
@@ -127,8 +131,7 @@ describe('subagents island, the list', () => {
   })
 
   it('routes a legacy run detail into a workspace record pane', () => {
-    const openAgentRecord = vi.fn()
-    window.RavenIslands = { workspace: { openAgentRecord } }
+    const openAgentRecord = vi.spyOn(islands.workspace, 'openAgentRecord').mockImplementation(() => {})
     const row: AgentRow = { id: 'spawn-1', kind: 'spawn', label: 'legacy task' }
     store.openRow(row)
     expect(openAgentRecord).toHaveBeenCalledWith(row)
@@ -288,18 +291,18 @@ describe('subagents island, the list', () => {
   }
 
   /* The composer seam the roster borrows to get a conversation. Installed after
-     `startable`, which replaces `window.DS` wholesale. Answers the way the live
+     `startable`, which replaces the whole seam. Answers the way the live
      layer's does: a new id, and the session pointer moved onto it. */
   function starter(over?: () => Promise<string>): string[] {
     const made: string[] = []
-    window.DS!.composer = {
+    setSources({ composer: {
       startConversation: over ?? (async () => {
         const id = `made-${made.length + 1}`
         made.push(id)
         setCurrent(id)
         return id
       }),
-    } as unknown as NonNullable<typeof window.DS>['composer']
+    } as unknown as ComposerSource })
     return made
   }
 
@@ -778,6 +781,19 @@ describe('subagents island, the list', () => {
       .toEqual(['assets/agents/claudecode-color.svg', 'assets/agents/raven.svg', null])
     expect(rows.every((r) => !!r.querySelector('.agent-mark'))).toBe(true)
   })
+
+  it('keeps its rendered shape', async () => {
+    instances([
+      inst({ handle: 'live', status: 'running' }),
+      inst({ handle: 'waiting', status: 'idle' }),
+      inst({ handle: 'broke', status: 'failed' }),
+      inst({ handle: 'gone', status: 'interrupted' }),
+      inst({ handle: 'finished', status: 'completed' }),
+    ])
+    await mount()
+    await screen.findByText('live')
+    expect(domSnapshot(document.getElementById('wsBody')!)).toMatchSnapshot()
+  })
 })
 
 /* A run detail is no longer reached from this list -- the panel lists instances
@@ -1082,12 +1098,12 @@ describe('subagents island, an instance detail', () => {
         said.push(text)
       },
     })
-    ;(window.DS as { composer?: unknown }).composer = {
+    setSources({ composer: {
       upload: async (req: { name: string; content_b64: string }) => {
         uploaded.push(`${req.name}:${req.content_b64}`)
         return { path: `uploads/${req.name}`, size: 3 }
       },
-    }
+    } as unknown as ComposerSource })
     await mount()
     await act(async () => {
       ;(await screen.findByText('chatty')).closest('.sarow')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -1135,9 +1151,9 @@ describe('subagents island, an instance detail', () => {
         said.push(text)
       },
     })
-    ;(window.DS as { composer?: unknown }).composer = {
+    setSources({ composer: {
       upload: async (req: { name: string }) => ({ path: `uploads/${req.name}`, size: 3 }),
-    }
+    } as unknown as ComposerSource })
     await mount()
     await act(async () => {
       ;(await screen.findByText('chatty')).closest('.sarow')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -1670,8 +1686,7 @@ describe('subagents island, an instance detail', () => {
        the summary never reached the record row at all; and the pane's own header
        reads `row.node` before `row.label`, so the id would have won even once
        the summary arrived. */
-    const openAgentRecord = vi.fn()
-    window.RavenIslands = { workspace: { openAgentRecord } }
+    const openAgentRecord = vi.spyOn(islands.workspace, 'openAgentRecord').mockImplementation(() => {})
     instances([], { instances: async () => [], node: async () => ({ messages: [] }) })
     await act(async () => {
       store.openDagNode('r1', {
@@ -1700,9 +1715,8 @@ describe('subagents island, an instance detail', () => {
 
   it('promotes that node once, not on every heartbeat after it', async () => {
     const row = inst({ handle: 'h-1', status: 'completed', resumable: true, runId: 'r1', nodeId: 'shape' })
-    const openAgent = vi.fn()
-    const openAgentRecord = vi.fn()
-    window.RavenIslands = { workspace: { openAgent, openAgentRecord } }
+    const openAgent = vi.spyOn(islands.workspace, 'openAgent').mockImplementation(() => {})
+    const openAgentRecord = vi.spyOn(islands.workspace, 'openAgentRecord').mockImplementation(() => {})
     instances([], {
       instances: async () => [row],
       instanceHistory: async () => ({ turns: [] }),
@@ -1794,7 +1808,7 @@ describe('subagents island, an instance detail', () => {
           ],
       }),
     })
-    window.RavenShell!.wsShows = () => false
+    installWsPanel()
 
     render(<InstanceConversation row={row} />, {
       container: document.getElementById('wsBody')!,
@@ -1855,7 +1869,7 @@ describe('subagents island, an instance detail', () => {
           : [{ role: 'assistant', content: 'first' }, { role: 'assistant', content: 'second' }],
       }),
     })
-    window.RavenShell!.wsShows = () => false
+    installWsPanel()
 
     render(<AgentRecordConversation row={row} />, {
       container: document.getElementById('wsBody')!,
@@ -1876,6 +1890,19 @@ describe('subagents island, an instance detail', () => {
 
     expect(paints).toHaveLength(2)
     expect((paints[1]!.ctx as { messages: unknown[] }).messages).toHaveLength(2)
+  })
+
+  it('keeps its rendered shape', async () => {
+    const row = inst({ handle: 'research-a2a-726da8', status: 'completed', resumable: true })
+    await openInstance(row, {
+      instanceHistory: async () => ({
+        turns: [
+          { call_id: 'c1', role: 'user' as const, content: 'investigate the protocol', at_ms: 1000 },
+          { call_id: 'c1', role: 'assistant' as const, content: 'done', at_ms: 2000 },
+        ],
+      }),
+    })
+    expect(domSnapshot(document.getElementById('wsBody')!)).toMatchSnapshot()
   })
 })
 

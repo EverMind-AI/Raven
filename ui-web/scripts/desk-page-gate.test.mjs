@@ -21,8 +21,8 @@ function hidingSelector() {
   return rule[1].trim()
 }
 
-/* `showPage` writes `data-page` on `.app` and `data-open` on the page element
-   (ui-web/src/demo/120-capabilities.js), so both shapes are built here. */
+/* `page.show` writes `data-page` on `.app` and `data-open` on the page element
+   (ui-web/src/state/page.ts), so both shapes are built here. */
 function page(open) {
   document.body.innerHTML =
     `<div class="app" data-page="${open ? 'on' : 'off'}">` +
@@ -42,7 +42,7 @@ describe('the desk against the shell page flag', () => {
   })
 
   it('is shown when nothing has set the flag yet', () => {
-    /* The attribute is written on the first `showPage` call, so before any
+    /* The attribute is written on the first `page.show` call, so before any
        navigation `.app` carries none -- and the desk must not start hidden. */
     document.body.innerHTML = '<div class="app"><div id="split"></div></div><div id="deskHost"></div>'
     expect(document.getElementById('deskHost').matches(hidingSelector())).toBe(false)

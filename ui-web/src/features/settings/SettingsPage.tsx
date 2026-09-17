@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import { shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
 import { show as menuAt } from '../../shell/menu'
 import { KeyInput } from '../../shell/key-input'
 import * as lookStore from '../../shell/look'
@@ -14,18 +15,35 @@ import type { ModelTagFacts } from '../../shell/model-tags'
 import { ModelIcon, ProviderIcon, ProviderLink, ProviderStatus } from '../../shell/provider-mark'
 import { hint as reachHint, text as reachText } from '../../shell/reach'
 import { show as toast } from '../../shell/toast'
-import { open as openConn } from '../connections/store'
-import { count as sessionCount, deleteAll as deleteAllSessions } from '../rail/store'
+import { subscribe as langSubscribe, tag as langTag } from '../../state/lang'
+import { open as openConn } from '../connections/nav'
 import * as store from './store'
 import { ImageModelPicker } from './ImageModelPicker'
 
 import type { SettingsState } from './store'
+import type { RailSource } from '../rail/types'
 import type { EverosSection, ProviderRow, ToolGroup, ToolRow } from './types'
 import type { JSX, ReactNode, RefObject } from 'react'
+import { ask as confirmAsk } from '../../state/confirm'
+import * as settingsDialog from '../../state/settingsDialog'
+
+/* The session list, reached through the seam. `deleteAll` is wrapped because
+   a source that has none is the shape a demo shell can be in, and an
+   optimistic click must not throw out of the confirm. */
+const sessionCount = (): number => ds<RailSource>('sessions').snapshot().rows.length
+const deleteAllSessions = (): void => {
+  try {
+    ds<RailSource>('sessions').deleteAll?.()
+  } catch {
+    /* no source, nothing to delete */
+  }
+}
 
 /* The dialog's contents, transcribed from the legacy drawSettings pages:
    same class names, same DOM shape, ui-web/src/styles/page.css untouched. The
-   dialog frame (#setVeil / #setModal, open and close) stays legacy chrome. */
+   dialog frame is the page's own root (src/App.tsx) over the static #setVeil,
+   and whether it is up is src/state/settingsDialog.ts's; the island reaches
+   both through the shell bridge, as it always has. */
 
 /* Settings is grouped, not one flat strip: the groups answer "what am I
    changing" -- myself, the agent, or the machine it runs on. */
@@ -606,9 +624,12 @@ function Shot({ kind }: { kind: string }): JSX.Element {
 }
 
 function LookPage(): JSX.Element {
+  /* The radio's current value is the page's language declaration, which the
+     lang store owns; subscribing is what moves the dot when the flip lands. */
+  const declared = useSyncExternalStore(langSubscribe, langTag)
   const look = {
     ...lookStore.get(),
-    lang: document.documentElement.lang.toLowerCase().startsWith('zh') ? 'zh' : 'en',
+    lang: declared.toLowerCase().startsWith('zh') ? 'zh' : 'en',
   }
   const setLook = (patch: Partial<lookStore.LookState>): void => {
     lookStore.set(patch)
@@ -751,7 +772,7 @@ function UsagePage({ s }: { s: SettingsState }): JSX.Element {
      which is where the store does them. */
   useEffect(() => {
     const timer = setInterval(() => {
-      if (shell().setIsOpen?.()) void store.usageLoad()
+      if (settingsDialog.isOpen()) void store.usageLoad()
     }, 15000)
     return () => clearInterval(timer)
   }, [])
@@ -1688,7 +1709,7 @@ function ProvPanel({ pv, s }: { pv: ProviderRow; s: SettingsState }): JSX.Elemen
             className="mini ghost danger"
             style={{ justifySelf: 'start' }}
             onClick={() =>
-              shell().confirmAsk(
+              confirmAsk(
                 t('gui.model.disconnect_title'),
                 t('gui.model.disconnect_body', { name: pv.name }),
                 t('gui.model.disconnect_title'),
@@ -2184,7 +2205,6 @@ function DefaultsPage({ s }: { s: SettingsState }): JSX.Element {
 
 function PermPage({ s }: { s: SettingsState }): JSX.Element {
   const raw = s.snap.raw
-  const sh = shell()
   const sb = String(V(raw, 'tools.sandbox.backend', 'none'))
   const sbName = sb === 'none' ? t('gui.set.prm.sb_none') : sb === 'auto' ? t('gui.set.prm.sb_auto') : sb
   return (
@@ -2378,7 +2398,6 @@ function MemoryPage({ s }: { s: SettingsState }): JSX.Element {
 /* ---- proactivity / exec / channel / data ----------------------------- */
 
 function ProactPage(): JSX.Element {
-  const sh = shell()
   return (
     <>
       <Scard>
@@ -2390,7 +2409,7 @@ function ProactPage(): JSX.Element {
         <button
           className="mini ghost"
           onClick={() => {
-            sh.closeSet?.()
+            settingsDialog.close()
             openConn()
           }}
         >
@@ -2422,7 +2441,6 @@ function ExecPage({ s }: { s: SettingsState }): JSX.Element {
 }
 
 function ChannelPage({ s }: { s: SettingsState }): JSX.Element {
-  const sh = shell()
   const raw = s.snap.raw
   const fwd = (V(raw, 'cron.forwardChannels', []) as string[]) || []
   return (
@@ -2454,7 +2472,7 @@ function ChannelPage({ s }: { s: SettingsState }): JSX.Element {
         <button
           className="mini ghost"
           onClick={() => {
-            sh.closeSet?.()
+            settingsDialog.close()
             openConn()
           }}
         >
@@ -2466,7 +2484,6 @@ function ChannelPage({ s }: { s: SettingsState }): JSX.Element {
 }
 
 function DataPage({ s }: { s: SettingsState }): JSX.Element {
-  const sh = shell()
   const cp = s.snap.configPath
   return (
     <>
@@ -2487,8 +2504,10 @@ function DataPage({ s }: { s: SettingsState }): JSX.Element {
           className="mini ghost danger"
           onClick={() =>
             /* A session operation offered from the settings page, so it is
-               the session source's, not this page's. */
-            sh.confirmAsk(t('gui.set.delete_all'), t('gui.set.delete_all_body', { n: sessionCount() }), t('gui.set.delete_all_yes'), () =>
+               the session source's, not this page's -- read straight off the
+               seam rather than through the rail island's store, which is the
+               rail's own and not this page's to reach into. */
+            confirmAsk(t('gui.set.delete_all'), t('gui.set.delete_all_body', { n: sessionCount() }), t('gui.set.delete_all_yes'), () =>
               deleteAllSessions(),
             )
           }

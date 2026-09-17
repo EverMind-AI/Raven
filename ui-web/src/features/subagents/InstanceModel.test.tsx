@@ -4,18 +4,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { InstanceModel } from './InstanceModel'
 import * as store from './store'
+import { resetSources, setSources } from '../../state/sources'
+import { mountPageRoot } from '../../test/pageRoot'
 
-import type { Shell } from '../../shell/bridge'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as pageStore from '../../state/page'
+import * as confirmStore from '../../state/confirm'
 import type { AgentsSource, InstanceRow } from './types'
 
+/* The chip's menu rows render from src/App.tsx into the shared #menu host, so
+   the page's own root has to be standing for them to appear. */
+mountPageRoot()
+
 function wire(over: Partial<AgentsSource> = {}): void {
-  const shell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: () => {},
-    showPage: () => {},
-  }
-  window.RavenShell = shell
-  window.DS = { agents: { list: async () => [], ...over } as AgentsSource }
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
+  setSources({ agents: { list: async () => [], ...over } as AgentsSource })
   document.body.innerHTML = '<div id="menu" data-open="false"></div><div id="toast"></div>'
 }
 
@@ -43,8 +48,8 @@ beforeEach(() => { store._resetForTests() })
 afterEach(() => {
   cleanup()
   store._resetForTests()
-  delete window.RavenShell
-  window.DS = undefined
+  resetTranslator()
+  resetSources()
   document.body.innerHTML = ''
   vi.restoreAllMocks()
 })

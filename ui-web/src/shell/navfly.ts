@@ -16,18 +16,18 @@
  * reads back whether the group stood open, instead of reaching into these rows
  * itself. One writer per element, named.
  *
- * The three openers are imported from the islands that own those pages. They
- * used to go out through the shell, on the grounds that a layer above might
- * rebind them; none of the three ever was. markNew still goes out that way, and
- * deliberately: rail/store already imports this module, so reaching its markNew
- * directly would turn a dependency the shell keeps one-way into an import cycle.
+ * The three openers are imported from the islands that own those pages, and
+ * markNew from the rail's store. That last one and this module import each
+ * other, which is safe only because neither reads the other while it loads:
+ * both edges are calls inside functions, so the binding is resolved when the
+ * reader clicks rather than while the bundle evaluates.
  */
 
-import { open as openConn } from '../features/connections/store'
+import { open as openConn } from '../features/connections/nav'
 import { open as openCron } from '../features/cron/store'
+import { markNew } from '../features/rail/store'
 import { open as openXa } from '../features/xa/store'
-
-import { shell, t } from './bridge'
+import { t } from '../i18n/t'
 
 interface NavRow {
   page: string
@@ -80,7 +80,7 @@ export function draw(): void {
        current mark is the answer to "where am I". */
     b.onclick = () => {
       row.go()
-      shell().markNew?.()
+      markNew()
     }
     box.appendChild(b)
   })
@@ -108,7 +108,7 @@ export function toggle(force?: boolean): void {
   if (open) draw()
   box.dataset.open = String(open)
   document.getElementById('moreBtn')?.setAttribute('aria-expanded', String(open))
-  shell().markNew?.()
+  markNew()
 }
 
 export function install(): void {

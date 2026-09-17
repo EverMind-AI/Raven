@@ -8,18 +8,32 @@
  *
  * Beside the rack rather than in shell/, because it is a tenant of it: one sheet
  * appended to #sheetRack, filed under the conversation that asked. That is also
- * why its opener is published on the composer's bag instead of as a global of
- * its own -- the rack's six names are already there and this is the seventh
- * thing the layers do to that rack.
+ * why its opener sits on the composer's member of the island bag instead of a
+ * member of its own -- the rack's six names are already there and this is the
+ * seventh thing the layers do to that rack.
+ *
+ * What is here is each sheet's own element and the answers it can give; the
+ * markup inside them is src/chrome/ApproveSheet.tsx (the preview variant) and
+ * src/chrome/ApprovalSheet.tsx. The element belongs to this module because the
+ * rack files it under a conversation and styles it as its flex item, and so does
+ * the key handler, which lives as long as the request rather than as long as its
+ * interior: a parked sheet is unmounted and still pending.
  *
  * "The conversation that asked" is a fact the caller has to carry in, not one
  * this module can read: see `owner` on :func:`open`.
  */
 
-import { t } from '../../shell/bridge'
-import { CROSS, ico } from '../../shell/ico'
-import { add as sheetAdd, dropClass, remove as sheetRemove, session } from './sheets'
+import { createElement } from 'react'
+
+import { ApprovalSheet } from '../../chrome/ApprovalSheet'
+import { ApproveSheet } from '../../chrome/ApproveSheet'
+import { t } from '../../i18n/t'
+import * as drafts from '../../state/sheetDrafts'
+import { add as sheetAdd, dropClass, remove as sheetRemove, session } from '../../state/sheetRack'
 import { composing } from './store'
+
+import type { ApprovalControls } from '../../chrome/ApprovalSheet'
+import type { SheetOptionRow } from '../../chrome/SheetRack'
 
 /* The permission gate's approval, keyed so approval.closed can withdraw the
    exact request it retires (a timeout, a teardown, an answer from another
@@ -32,15 +46,6 @@ export interface Approval {
   close(): void
 }
 
-const el = <K extends keyof HTMLElementTagNameMap>(
-  tag: K, cls?: string, text?: string,
-): HTMLElementTagNameMap[K] => {
-  const n = document.createElement(tag)
-  if (cls) n.className = cls
-  if (text != null) n.textContent = text
-  return n
-}
-
 export function open(
   prompt: string, onAllow?: () => void, onDeny?: () => void, owner?: string,
 ): Approval {
@@ -50,7 +55,7 @@ export function open(
      lines of an async page.
 
      `owner` is the conversation the request was raised in, which the caller
-     learns from the frame that raised it (live/070-notify.js). It is not always
+     learns from the frame that raised it (state/session/pipeline.ts). It is not always
      the open one: a turn the reader stepped away from can block on an approval
      at any moment, and filing that under whatever is on screen puts the question
      over a conversation it does not belong to -- while the conversation that
@@ -68,7 +73,8 @@ export function open(
      holding a key handler unregisters it on the way out. */
   dropClass('csheet', key)
 
-  const sheet = el('div', 'csheet perm')
+  const sheet = document.createElement('div')
+  sheet.className = 'csheet perm'
   /* This one asks: the reader cannot get on until they answer it. The rack
      passes that on to whatever else is docked -- see `watchAsking`. */
   sheet.dataset.asks = '1'
@@ -88,48 +94,34 @@ export function open(
      mattering, so neither side is told. */
   const withdraw = (): void => close()
 
-  const head = el('div', 'hd')
-  const x = el('button', 'ic tipdn')
-  x.appendChild(ico(CROSS))
-  x.dataset.tip = t('gui.confirm.deny')
-  x.setAttribute('aria-label', t('gui.confirm.deny'))
-  x.onclick = () => close(onDeny)
-  head.append(el('div', 'q', t('gui.confirm.title')), x)
-  sheet.appendChild(head)
-
-  /* The request itself is the agent's own words about what it wants to do, so
-     it is quoted rather than restated. */
-  const body = el('div', 'body')
-  body.appendChild(el('div', 'what', prompt || ''))
-  const opts: Array<[string, () => void]> = [
-    [t('gui.confirm.allow'), () => close(onAllow)],
-    [t('gui.confirm.deny'), () => close(onDeny)],
+  const opts: SheetOptionRow[] = [
+    { label: t('gui.confirm.allow'), run: () => close(onAllow), go: true },
+    { label: t('gui.confirm.deny'), run: () => close(onDeny) },
   ]
-  opts.forEach(([label, fn], i) => {
-    const b = el('button', 'opt' + (i === 0 ? ' go' : ''))
-    b.append(el('span', 'n', String(i + 1)), el('span', undefined, label))
-    b.onclick = fn
-    body.appendChild(b)
-  })
-  sheet.appendChild(body)
 
   function onKey(e: KeyboardEvent): void {
     /* A sheet parked with another conversation is still listening: the handler
        is on the document, and the rack detaches the element rather than
-       destroying it so a half-typed answer survives a switch. Only the mounted
-       one may be answered from the keyboard, or "1" typed here would allow
-       something another conversation asked. */
+       destroying it so the reader comes back to the same question. Only the
+       mounted one may be answered from the keyboard, or "1" typed here would
+       allow something another conversation asked. */
     if (!sheet.isConnected || composing(e)) return
     if (e.key === 'Escape') { e.preventDefault(); close(onDeny); return }
     const n = Number(e.key)
-    if (n === 1 || n === 2) { e.preventDefault(); opts[n - 1]![1]() }
+    if (n === 1 || n === 2) { e.preventDefault(); opts[n - 1]!.run() }
   }
   document.addEventListener('keydown', onKey, true)
 
   /* The withdrawal handed to the rack, not kept here: the rack sees every exit
      -- including the conversation being deleted, which never reaches this
      module -- and a second copy of who-owns-what could only disagree with it. */
-  sheetAdd(sheet, key, withdraw)
+  sheetAdd(sheet, key, withdraw, createElement(ApproveSheet, {
+    title: t('gui.confirm.title'),
+    deny: t('gui.confirm.deny'),
+    prompt: prompt || '',
+    opts,
+    onDeny: () => close(onDeny),
+  }))
   const first = sheet.querySelector<HTMLElement>('.opt')
   if (first && sheet.isConnected) first.focus()
   return { close: withdraw }
@@ -158,12 +150,21 @@ export function openApproval(
   owner?: string,
 ): Approval {
   const key = owner || session()
+  /* Read before the sweep, written on every keystroke: the note and the prefix
+     the reader is editing have to outlive the elements they are typed into. */
+  const draft = drafts.slot(key, req.approvalId)
   dropClass('csheet', key)
 
-  const sheet = el('div', 'csheet perm')
+  const sheet = document.createElement('div')
+  sheet.className = 'csheet perm'
   sheet.setAttribute('role', 'dialog')
   sheet.setAttribute('aria-modal', 'true')
   sheet.setAttribute('aria-label', t('gui.confirm.title'))
+
+  /* The two fields, once the interior has mounted: what the model is told is
+     what stands in them at the moment an answer is sent, so they are read then
+     rather than mirrored here. */
+  const ctl: ApprovalControls = { note: null, pattern: null }
 
   let answered = false
   const close = (choice?: string, pattern?: string): void => {
@@ -172,62 +173,30 @@ export function openApproval(
     openApprovals.delete(req.approvalId)
     document.removeEventListener('keydown', onKey, true)
     sheetRemove(sheet)
-    if (choice) onChoice(choice, note.value.trim(), pattern)
+    /* The drafts go with the sheet, and only here: this runs on the exits that
+       settle the request, never on the conversation switch they outlive. */
+    drafts.forget(draft)
+    if (choice) onChoice(choice, ctl.note ? ctl.note.value.trim() : '', pattern)
   }
   const withdraw = (): void => close()
   openApprovals.set(req.approvalId, withdraw)
 
-  const head = el('div', 'hd')
-  const x = el('button', 'ic tipdn')
-  x.appendChild(ico(CROSS))
-  x.dataset.tip = t('gui.confirm.deny')
-  x.setAttribute('aria-label', t('gui.confirm.deny'))
-  x.onclick = () => close('deny')
-  head.append(el('div', 'q', `${t('gui.confirm.title')} · ${req.description}`), x)
-  sheet.appendChild(head)
-
-  const body = el('div', 'body')
-  body.appendChild(el('div', 'what', req.command || ''))
-  const note = document.createElement('input')
-  note.className = 'note-in'
-  note.placeholder = t('gui.confirm.note_ph')
-  note.setAttribute('aria-label', t('gui.confirm.note_ph'))
-  body.appendChild(note)
   /* The persisted grant sits after the session one and before the refusals,
      so the two refusals keep the last two numbers whatever was suggested. Its
      prefix is an input the reader may edit; an emptied input saves nothing. */
-  const pattern = document.createElement('input')
-  pattern.className = 'note-in pattern-in'
-  pattern.value = req.suggestedPattern || ''
-  pattern.setAttribute('aria-label', t('gui.confirm.pattern_for'))
-  pattern.title = t('gui.confirm.pattern_for')
   const saveRule = (): void => {
-    const rule = pattern.value.trim()
+    const rule = ctl.pattern ? ctl.pattern.value.trim() : ''
     if (rule) close('allow_always', rule)
   }
-  const opts: Array<[string, () => void, boolean]> = [
-    [t('gui.confirm.allow'), () => close('allow'), true],
-    [t('gui.confirm.allow_session'), () => close('allow_session'), false],
+  const opts: SheetOptionRow[] = [
+    { label: t('gui.confirm.allow'), run: () => close('allow'), go: true },
+    { label: t('gui.confirm.allow_session'), run: () => close('allow_session') },
     ...(req.suggestedPattern
-      ? [[t('gui.confirm.allow_always', { pattern: '' }), saveRule, false] as [string, () => void, boolean]]
+      ? [{ label: t('gui.confirm.allow_always', { pattern: '' }), run: saveRule, rule: true }]
       : []),
-    [t('gui.confirm.deny'), () => close('deny'), false],
-    [t('gui.confirm.deny_stop'), () => close('deny_stop'), false],
+    { label: t('gui.confirm.deny'), run: () => close('deny') },
+    { label: t('gui.confirm.deny_stop'), run: () => close('deny_stop') },
   ]
-  opts.forEach(([label, fn, go], i) => {
-    const b = el('button', 'opt' + (go ? ' go' : ''))
-    b.append(el('span', 'n', String(i + 1)), el('span', undefined, label))
-    if (fn === saveRule) {
-      b.classList.add('rule')
-      b.appendChild(pattern)
-      /* Typing in the prefix must not pick the row, and Enter there saves. */
-      pattern.onclick = (e) => e.stopPropagation()
-      pattern.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); saveRule() } }
-    }
-    b.onclick = fn
-    body.appendChild(b)
-  })
-  sheet.appendChild(body)
 
   function onKey(e: KeyboardEvent): void {
     if (!sheet.isConnected || composing(e)) return
@@ -235,14 +204,28 @@ export function openApproval(
     /* Digits keep working while the note field is focused only when it is
        empty: a typed note starts with whatever the reader types, digits
        included. The prefix field is text from the first key. */
-    if (document.activeElement === pattern) return
-    if (document.activeElement === note && note.value) return
+    if (ctl.pattern && document.activeElement === ctl.pattern) return
+    if (ctl.note && document.activeElement === ctl.note && ctl.note.value) return
     const n = Number(e.key)
-    if (n >= 1 && n <= opts.length) { e.preventDefault(); opts[n - 1]![1]() }
+    if (n >= 1 && n <= opts.length) { e.preventDefault(); opts[n - 1]!.run() }
   }
   document.addEventListener('keydown', onKey, true)
 
-  sheetAdd(sheet, key, withdraw)
+  sheetAdd(sheet, key, withdraw, createElement(ApprovalSheet, {
+    ctl,
+    draft,
+    command: req.command || '',
+    words: {
+      title: `${t('gui.confirm.title')} · ${req.description}`,
+      deny: t('gui.confirm.deny'),
+      notePh: t('gui.confirm.note_ph'),
+      patternFor: t('gui.confirm.pattern_for'),
+    },
+    opts,
+    suggested: req.suggestedPattern,
+    onDeny: () => close('deny'),
+    onSaveRule: saveRule,
+  }))
   const first = sheet.querySelector<HTMLElement>('.opt')
   if (first && sheet.isConnected) first.focus()
   return { close: withdraw }

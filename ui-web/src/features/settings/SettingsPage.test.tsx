@@ -7,8 +7,20 @@ import * as store from './store'
 import * as lookStore from '../../shell/look'
 import * as notifications from '../../shell/notifications'
 
-import type { Shell } from '../../shell/bridge'
+import { domSnapshot } from '../../test/domSnapshot'
+import { resetSources, setSources, sources } from '../../state/sources'
+import { mountPageRoot } from '../../test/pageRoot'
+
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import * as settingsDialogStore from '../../state/settingsDialog'
+import type { RailSource } from '../rail/types'
 import type { SettingsSnapshot, SettingsSource } from './types'
+
+/* The rail filter's menu rows render from src/App.tsx into the shared #menu
+   host, so the page's own root has to be standing for them to appear. */
+mountPageRoot()
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -16,12 +28,22 @@ import type { SettingsSnapshot, SettingsSource } from './types'
 /* The connections page is opened by importing its island, so standing in for
    that module is how the manage button's second half is observed. */
 const connOpens = vi.hoisted(() => ({ n: 0 }))
-vi.mock('../connections/store', () => ({ open: () => { connOpens.n += 1 } }))
+vi.mock('../connections/nav', () => ({ open: () => { connOpens.n += 1 } }))
 
 const toastWriter = vi.hoisted(() => ({ calls: [] as Array<[string, unknown]> }))
-vi.mock('../../shell/toast', () => ({
-  show: (text: string) => { toastWriter.calls.push(['toast', text]) },
-}))
+vi.mock('../../shell/toast', () => {
+  /* The page's own root renders the notices out of this module's store, so a
+     fake standing in for it has to answer the store's half as well -- with
+     nothing, because what this file asserts is the call and not the node. One
+     array, not a fresh one per read: useSyncExternalStore compares snapshots
+     by identity and a new one every time is an endless re-render. */
+  const none: never[] = []
+  return {
+    show: (text: string) => { toastWriter.calls.push(['toast', text]) },
+    subscribe: () => () => {},
+    get: () => none,
+  }
+})
 
 function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
   return {
@@ -51,7 +73,7 @@ function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
       { id: 'read_file', name: 'read', group: 'file', reach: 'local', one: 'reads', on: true },
       { id: 'write_file', name: 'write', group: 'file', reach: 'local', one: 'writes', on: true, danger: true },
       { id: 'web_fetch', name: 'fetch', group: 'net', reach: 'net', one: 'fetches', on: true },
-      { id: 'image_generate', name: 'draw', group: 'net', reach: 'net', one: 'draws', on: false, needs: 'key' },
+      { id: 'image_generate', name: 'draw', group: 'net', reach: 'net', one: 'draws', on: false, needs: { setting: 'image.apiKey' } },
     ],
     ...over,
   }
@@ -65,9 +87,9 @@ function type(field: HTMLInputElement, value: string): void {
   field.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
-/* The island runs against the same two seams production wires up: a fake
-   shell on window.RavenShell (T returns its key, so tests assert catalogue
-   keys, not translations) and a fixture source on window.DS.settings. */
+/* The island runs against the same two seams production wires up: a stand-in
+   translator on setTranslator (it returns its key, so tests assert catalogue
+   keys, not translations) and a fixture source on sources.settings. */
 function install(data: SettingsSnapshot = snap(), over: Partial<SettingsSource> = {}) {
   const calls: Array<[string, unknown]> = []
   const source: SettingsSource = {
@@ -97,27 +119,23 @@ function install(data: SettingsSnapshot = snap(), over: Partial<SettingsSource> 
   }
   const shellCalls: Array<[string, unknown]> = []
   toastWriter.calls = shellCalls
-  const fakeShell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    /* Confirms immediately: the dialog itself is legacy chrome, not island. */
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: (id) => shellCalls.push(['showPage', id]),
-    openSet: () => shellCalls.push(['openSet', null]),
-    closeSet: () => shellCalls.push(['closeSet', null]),
-  }
-  window.RavenShell = fakeShell
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
+  vi.spyOn(pageStore, 'show').mockImplementation((id) => shellCalls.push(['showPage', id]))
+  vi.spyOn(settingsDialogStore, 'open').mockImplementation(() => shellCalls.push(['openSet', null]))
+  vi.spyOn(settingsDialogStore, 'close').mockImplementation(() => shellCalls.push(['closeSet', null]))
   /* The danger card's button is a SESSION operation offered from this page, so
      it goes out through DS.sessions rather than this page's own source. */
   const wiped: Array<null> = []
-  window.DS = {
+  setSources({
     settings: source,
     sessions: {
       snapshot: () => ({ rows: [{}, {}, {}], cur: null, busy: false }),
       replace: () => {},
       open: () => {},
       deleteAll: () => wiped.push(null),
-    },
-  }
+    } as unknown as RailSource,
+  })
   /* `#setModal` is the dialog the add-model drawer portals into: it is
      positioned against that box rather than the window, so a harness without
      it would render the drawer nowhere. */
@@ -150,6 +168,7 @@ afterEach(() => {
   localStorage.clear()
   lookStore.load()
   notifications.setEnabled(false)
+  resetSources()
 })
 
 describe('settings island', () => {
@@ -227,8 +246,7 @@ describe('settings island', () => {
         return null
       },
     })
-    const sh = window.RavenShell!
-    sh.setIsOpen = () => up
+    vi.spyOn(settingsDialogStore, 'isOpen').mockImplementation(() => up)
     /* Mounting the root is what a page load does, Settings untouched. */
     render(<SettingsApp />, { container: document.getElementById('spanels')! })
     await act(async () => {
@@ -239,10 +257,10 @@ describe('settings island', () => {
       await vi.advanceTimersByTimeAsync(45000)
     })
     expect(asked).toBe(0)
-    /* Opening it. The veil goes up inside open(), so the fake follows it. */
-    sh.openSet = () => {
+    /* Opening it. The flag goes up inside open(), so the stand-in follows it. */
+    vi.spyOn(settingsDialogStore, 'open').mockImplementation(() => {
       up = true
-    }
+    })
     await act(async () => {
       await store.open()
     })
@@ -1604,6 +1622,13 @@ describe('settings island', () => {
     expect(live[1]!.querySelector('.tkrow .nlmsg')).toBeNull()
     expect(live[0]!.querySelector('.nlmsg')).toBeNull()
   })
+
+  it('keeps its rendered shape', async () => {
+    install()
+    const view = await mount()
+    expect(screen.getByText('gui.set.nodata')).toBeTruthy()
+    expect(domSnapshot(view.container)).toMatchSnapshot()
+  })
 })
 
 /* The painting model sits with the other defaults now, not folded inside the
@@ -2605,5 +2630,11 @@ describe('the models pane', () => {
     expect(document.querySelector('#spanels .msplit')).toBeTruthy()
     expect(document.querySelector('#spanels .pickm')).toBeNull()
     return h
+  })
+
+  it('keeps its rendered shape', async () => {
+    await openModels()
+    expect(document.querySelector('.mpanel .mtitle')?.textContent).toContain('Anthropic')
+    expect(domSnapshot(document.getElementById('spanels')!)).toMatchSnapshot()
   })
 })

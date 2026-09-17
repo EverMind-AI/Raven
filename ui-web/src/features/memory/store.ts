@@ -1,7 +1,8 @@
-import { ds, shell } from '../../shell/bridge'
-import { dropAfterFade } from '../../shell/detailfade'
+import { ds } from '../../state/sources'
+import * as detail from '../../state/detail'
 
 import type { MemItem, MemKind, MemStats, MemorySource } from './types'
+import * as page from '../../state/page'
 
 /* Page state, outside React on purpose: the legacy shell drives this page
  * imperatively (nav opens it, Esc closes it, a language flip redraws it),
@@ -90,13 +91,13 @@ export function refreshStats(): Promise<void> {
 }
 
 export function open(): void {
-  shell().showPage('memPage')
+  page.show('memPage')
   void refreshStats()
   void load()
 }
 
 export function close(): void {
-  shell().showPage(null)
+  page.show(null)
 }
 
 export function setKind(kind: MemKind): void {
@@ -123,54 +124,34 @@ export function pageBy(delta: number): void {
   void load()
 }
 
-/* The portal's own container inside the shared #dBody. Another page's
-   opener may wipe #dBody at any time (the skills/plugins openers do),
-   which detaches this node but leaves React's tree inside it intact;
-   every open re-adopts it, so the island never reconciles into nodes
-   a legacy wipe orphaned. */
-let host: HTMLDivElement | null = null
+/** Where the card renders: the host the shared drawer keeps for this island. */
 export function detailHost(): HTMLDivElement {
-  if (!host) {
-    host = document.createElement('div')
-    /* Out of the box tree: #dBody is a grid and the sections were its
-       items before this container existed; contents keeps them so. */
-    host.style.display = 'contents'
-  }
-  return host
+  return detail.host('memory')
 }
 
-/* Counts opens of the shared card -- see the xa store: the row object cannot
-   answer which open a pending close belongs to, because reopening the same row
-   hands back the same object. */
-let detailGen = 0
-
 export function openDetail(it: MemItem): void {
-  const body = document.getElementById('dBody')
-  if (body && !body.contains(detailHost())) {
-    body.innerHTML = ''
-    body.appendChild(detailHost())
-  }
-  detailGen += 1
+  detail.open('memory')
   set({ detail: it })
 }
 
 export function closeDetail(): void {
-  shell().closeDetail?.()
-  detailDismissed()
+  detail.close()
 }
 
-/* Called when legacy chrome closed the drawer itself (Esc, the close
-   button, a click outside): only the island state has to follow -- but not
-   until the drawer has finished fading, or the card is gone from inside a
-   panel that is still on screen. */
+/* What this island does when the drawer closes, whoever closed it (Esc, the
+   close button, a click outside, a page switch): drop the card -- but not until
+   the drawer has finished fading, or the card is gone from inside a panel that
+   is still on screen. `gen` is which open the drop belongs to: the item cannot
+   answer that, because reopening the same row hands back the same object. */
 export function detailDismissed(): void {
   if (!state.detail) return
-  const gen = detailGen
-  dropAfterFade(
+  const gen = detail.get().gen
+  detail.dropAfterFade(
     () => set({ detail: null }),
-    () => detailGen !== gen,
+    () => detail.get().gen !== gen,
   )
 }
+detail.onClose('memory', detailDismissed)
 
 export function remove(it: MemItem): void {
   if (busy) return

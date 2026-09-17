@@ -1,6 +1,6 @@
 /* The external-agents page's rows and its DataSource contract. The row is
  * what both sources answer: the fixture in demo/120-capabilities.js and the
- * `subagents.*` mapper in live/240-external-agents.js.
+ * `subagents.*` mapper in features/xa/source.ts.
  *
  * Three facts, deliberately kept apart: `configured` is "Raven knows about
  * it", `enabled` is "Raven may dispatch to it", and `probe_status` is "the

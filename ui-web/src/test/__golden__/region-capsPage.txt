@@ -1,0 +1,24 @@
+section#capsPage.page[data-open=false]
+  header
+    h2#capsTitle[data-i18n=gui.tab.skills]
+  div.work
+    div.wrap
+      div.cbar
+        div.cfind
+          svg.ic
+            circle
+            path
+          input#cq[data-i18n-aria=gui.search]
+        div#cKind.pills[data-i18n-aria=gui.filter_status]
+          button.pill[data-i18n=gui.filter.all][data-k=all]
+          button.pill[data-i18n=gui.filter.on][data-k=on]
+          button.pill[data-i18n=gui.filter.todo][data-k=attn]
+          button.pill[data-i18n=gui.filter.add][data-k=add]
+      div#capsBody
+      details#advAdd.adv
+        summary[data-i18n=gui.adv_add]
+        p[data-i18n=gui.adv_hint]
+        div.row
+          input#mName[data-i18n-ph=gui.adv_name_ph]
+          input#mAddr[data-i18n-ph=gui.adv_addr_ph]
+          button#mAdd.mini[data-i18n=gui.add]

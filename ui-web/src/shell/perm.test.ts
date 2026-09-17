@@ -1,49 +1,47 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import type { Shell } from './bridge'
+import * as store from './perm'
+import { mountPageRoot } from '../test/pageRoot'
+import { resetTranslator, setTranslator } from '../i18n/t'
 
-/* The stored tier is read once at module load, so each case that cares about it
-   has to seed localStorage and then import a fresh copy. resetModules plus a
-   dynamic import is the whole trick. */
-async function load(stored?: string | null): Promise<typeof import('./perm')> {
+/* The stored tier is read when the store is reset, so a case that cares about
+   it seeds localStorage and then asks for the reset. This was resetModules plus
+   a fresh dynamic import, which a store cannot have: <PermChip/> and <PermPop/>
+   render from THIS copy of the module, and a second copy would be a store with
+   nothing subscribed to it. */
+async function load(stored?: string | null): Promise<typeof store> {
   localStorage.clear()
   if (stored != null) localStorage.setItem('raven.perm', stored)
-  const { resetModules } = await import('vitest').then((v) => ({ resetModules: v.vi.resetModules }))
-  resetModules()
-  return import('./perm')
+  store._resetForTests()
+  return store
 }
 
-/* The same three elements page.html carries, in the same nesting and with the
-   same tags: the chip holds the icon slot and the label, the panel holds the
-   list. `.pico` is the svg itself there, not a span around one. The wrapper is
-   `.dock-in` because that is the composer card in page.html, and the card is
-   what the panel has to clear. */
-function markup(): void {
-  document.body.innerHTML = `
-    <div class="dock-in">
-      <button class="chip" id="permChip" aria-expanded="false" aria-haspopup="true">
-        <svg class="pico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-          <path d="M12 3.5 19 6v5.5c0 4-2.9 7.4-7 9-4.1-1.6-7-5-7-9V6l7-2.5Z"/>
-        </svg>
-        <span id="permName"></span>
-      </button>
-      <div class="pop" id="permPop" data-open="false"><div id="permList"></div></div>
-    </div>`
+function wire(): void {
+  setTranslator((key) => key)
 }
+
+/* The chip and the panel are the page root's now (src/chrome/PermChip.tsx,
+   src/chrome/PermPop.tsx), so the fixture is the one band they render into --
+   the composer card comes with them, and the card is what the panel has to
+   open clear of. */
+function markup(): void {
+  document.body.innerHTML = '<div class="dock"></div>'
+}
+
+let unmount = (): void => {}
 
 beforeEach(() => {
-  const shell: Shell = {
-    T: (key) => key,
-    confirmAsk: () => {},
-    showPage: () => {},
-  }
-  window.RavenShell = shell
+  wire()
   markup()
+  unmount = mountPageRoot()
 })
 
 afterEach(() => {
-  delete window.RavenShell
+  unmount()
+  unmount = () => {}
+  store._resetForTests()
+  resetTranslator()
   document.body.innerHTML = ''
   localStorage.clear()
 })
@@ -224,26 +222,22 @@ describe('persisting a pick', () => {
 
   it('commits the chip only after the write is acknowledged', async () => {
     const perm = await load()
-    ;(window as unknown as { persistPermMode?: (m: string) => Promise<boolean> }).persistPermMode = () =>
-      Promise.resolve(true)
+    perm.setPermPersister(() => Promise.resolve(true))
     perm.open()
     rows()[1]!.click()
     await Promise.resolve()
     await Promise.resolve()
     expect(perm.current()).toBe('smart')
-    delete (window as unknown as { persistPermMode?: unknown }).persistPermMode
   })
 
   it('keeps the engine mode on a rejected write', async () => {
     const perm = await load()
-    ;(window as unknown as { persistPermMode?: (m: string) => Promise<boolean> }).persistPermMode = () =>
-      Promise.resolve(false)
+    perm.setPermPersister(() => Promise.resolve(false))
     perm.open()
     rows()[2]!.click()
     await Promise.resolve()
     await Promise.resolve()
     expect(perm.current()).toBe('ask')
     expect(localStorage.getItem('raven.perm')).not.toBe('full')
-    delete (window as unknown as { persistPermMode?: unknown }).persistPermMode
   })
 })

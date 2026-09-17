@@ -323,7 +323,7 @@ export function reset(): void {
  * stream's rows going away: the shelf is session-wide and records what this
  * conversation delivered, sub-agents included, so a reader who closes a panel
  * would otherwise lose the record of work that really happened. Those rows end
- * where the conversation does -- `resetView` (`live/080-overrides.js`) calls
+ * where the conversation does -- `resetView` (`state/session/registry.ts`) calls
  * `wsReset`, and the workspace store's `resetShared` restores an empty registry
  * across every scope. */
 export function dropScope(scope: string): void {

@@ -3,14 +3,16 @@
  * rather than a component -- it has no state, no DOM and no lifecycle, and
  * every caller hands it a string and puts the result somewhere itself.
  *
- * Three seams, all through DS.prose: whether a string is a path that can
- * actually be opened, what a markdown link's local target resolves to, and
+ * Three seams, all through the prose source: whether a string is a path that
+ * can actually be opened, what a markdown link's local target resolves to, and
  * what opening one does. Everything else here is layout. This file only says
  * which strings earn a chip; the click those chips carry belongs to
  * shell/chips.ts, which reads the same source.
  */
 
-import { ds, t } from './bridge'
+import { sources } from '../state/sources'
+import { t } from '../i18n/t'
+import { ds } from '../state/sources'
 
 export interface ProseTarget {
   p: string
@@ -42,10 +44,7 @@ export interface ProseSource {
    workspace's own data source happened to be installed. */
 const NO_PATHS: ProseSource = { pathOf: () => null, linkTargetOf: () => null }
 
-const source = (): ProseSource => {
-  const seam = window.DS as Record<string, unknown> | undefined
-  return (seam && (seam.prose as ProseSource | undefined)) || NO_PATHS
-}
+const source = (): ProseSource => sources.prose || NO_PATHS
 
 const esc = (s: unknown): string =>
   String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string)

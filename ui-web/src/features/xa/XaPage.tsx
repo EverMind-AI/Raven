@@ -3,13 +3,14 @@ import { createPortal } from 'react-dom'
 import { useSyncExternalStore } from 'react'
 
 import { AgentMark, isOwnAgent } from '../../shell/agent-mark'
-import { shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { KeyInput } from '../../shell/key-input'
 import { SetupGroup, SetupRow } from '../../shell/setuprow'
 import * as store from './store'
 
 import type { XaRow } from './types'
 import type { JSX } from 'react'
+import { ask as confirmAsk } from '../../state/confirm'
 
 /* Connect the agents this machine can hand work to. One row per agent; the rows
    are whatever `DS.xa` answers -- the fixture source with no gateway behind the
@@ -150,7 +151,7 @@ function AgentAct({ row, onKey }: { row: XaRow; onKey?: () => void }): JSX.Eleme
          changes a transport, so the entry is removed and added back from the
          preset -- which drops the handles of runs already in flight, and is
          why this one asks first. */
-      shell().confirmAsk?.(
+      confirmAsk(
         t('gui.agent.migrate_do'),
         t('gui.agent.migrate_body', { name: row.name, to: kindText(row.upgrade_to || '') }),
         t('gui.agent.migrate_do'),
@@ -399,12 +400,6 @@ function Editable({
 function AgentCard({ row, testing }: { row: XaRow; testing: boolean }): JSX.Element {
   const dHost = store.detailHost()
   const keyRef = useRef<HTMLInputElement>(null)
-  useEffect(() => {
-    const title = document.getElementById('dTitle')
-    if (title) title.textContent = ''
-    const drawer = document.getElementById('detail')
-    if (drawer) drawer.dataset.open = 'true'
-  }, [row])
   const stage = stageOf(row)
   /* An entry that exists takes the key as an edit; one that does not is written
      from its preset with the key in hand. Either way the reader typed one thing
@@ -553,18 +548,6 @@ function AgentCard({ row, testing }: { row: XaRow; testing: boolean }): JSX.Elem
 
 export function XaApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.getState)
-  /* Legacy chrome owns the drawer's closers (Esc, #dClose, click-outside)
-     and they only flip #detail's data-open, so the island follows the flag
-     to unmount its portal before another page's opener wipes #dBody. */
-  useEffect(() => {
-    const el = document.getElementById('detail')
-    if (!el) return
-    const ob = new MutationObserver(() => {
-      if (el.dataset.open !== 'true') store.sheetDismissed()
-    })
-    ob.observe(el, { attributes: true, attributeFilter: ['data-open'] })
-    return () => ob.disconnect()
-  }, [])
   /* One pass, in the order the groups are drawn in, so a row can only be in
      one of them and a group nobody is in cannot be drawn. The last is the
      catalogue, and the only one that folds. */

@@ -25,7 +25,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { show as menuAt } from '../../shell/menu'
 import { show as toast } from '../../shell/toast'
 import * as store from './store'

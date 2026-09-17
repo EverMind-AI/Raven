@@ -1,4 +1,4 @@
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 
 import type { CronJob } from './types'
 

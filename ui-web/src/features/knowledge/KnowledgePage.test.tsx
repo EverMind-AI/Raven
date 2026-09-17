@@ -5,8 +5,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { KnowledgeApp } from './KnowledgePage'
 import * as store from './store'
 
+import { domSnapshot } from '../../test/domSnapshot'
+import { settingsTab } from '../../state/settingsTab'
+import { resetSources, setSources, sources } from '../../state/sources'
+import { mountPageRoot } from '../../test/pageRoot'
+
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import * as settingsDialogStore from '../../state/settingsDialog'
+import * as detailStore from '../../state/detail'
 import type { KbBase, KbDoc, KbSearch, KnowledgeSource } from './types'
-import type { Shell } from '../../shell/bridge'
+import type { SettingsSource } from '../settings/types'
+
+/* The notices render from src/App.tsx into the standing #toasts host, so the
+   page's own root has to be standing for any of them to appear. */
+mountPageRoot()
 
 function base(over: Partial<KbBase> & { id: string }): KbBase {
   return {
@@ -21,9 +35,9 @@ function base(over: Partial<KbBase> & { id: string }): KbBase {
   }
 }
 
-/* The island runs against the same two seams production wires: a fake shell on
-   window.RavenShell (T returns its key, so tests assert catalogue keys rather
-   than translations) and a fixture source on window.DS.knowledge. */
+/* The island runs against the same two seams production wires: a stand-in
+   translator on setTranslator (it returns its key, so tests assert catalogue
+   keys rather than translations) and a fixture source on sources.knowledge. */
 const pages: (string | null)[] = []
 const opened: number[] = []
 
@@ -58,20 +72,15 @@ function doc(over: Partial<KbDoc> & { id: string }): KbDoc {
 }
 
 function source(over: Partial<KnowledgeSource> = {}): void {
-  const fakeShell = {
-    T: (key: string, vars?: Record<string, unknown>) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    menuAt: () => {},
-    confirmAsk: (_t: unknown, body: unknown, _l: unknown, fn: () => void) => {
-      confirms.push(String(body))
-      fn()
-    },
-    showPage: (id: string | null) => pages.push(id),
-    openSet: () => opened.push(1),
-    closeDetail: () => {},
-  } as unknown as Shell
-  window.RavenShell = fakeShell
-  window.DS = {
-    ...(window.DS || {}),
+  setTranslator((key: string, vars?: Record<string, unknown> | null) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(detailStore, 'close').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t: unknown, body: unknown, _l: unknown, fn: () => void) => {
+  confirms.push(String(body))
+  fn()
+  })
+  vi.spyOn(pageStore, 'show').mockImplementation((id: string | null) => pages.push(id))
+  vi.spyOn(settingsDialogStore, 'open').mockImplementation(() => opened.push(1))
+  setSources({
     knowledge: {
       status: async () => ({ configured: true, model: 'bge-m3' }),
       bases: async () => [],
@@ -83,8 +92,8 @@ function source(over: Partial<KnowledgeSource> = {}): void {
       search: async () => ({ hits: [], search_ms: 0, embed_ms: 0 }),
       removeDoc: async () => {},
       ...over,
-    },
-  }
+    } as KnowledgeSource,
+  })
 }
 
 async function mount() {
@@ -102,7 +111,7 @@ afterEach(() => {
   opened.length = 0
   toastHost().replaceChildren()
   confirms.length = 0
-  delete (window as { DS?: unknown }).DS
+  resetSources()
 })
 
 /* Open one row's action menu. The four operations live behind it now: four
@@ -126,21 +135,21 @@ describe('the knowledge page', () => {
   it('sends an unconfigured reader to the section that configures it', async () => {
     /* The status alone named a state and stopped. The endpoint is set in a
        settings section, and a reader told only its name has to go hunting.
-       Asserted through `window.sTab`, which is what the settings store's
+       Asserted through the shared tab slot, which is what the settings store's
        `setTab` writes and its `open` reads back before lifting the dialog. */
     source({ status: async () => ({ configured: false, model: '' }) })
     /* `open()` refreshes from the settings source; a stub keeps the click from
        rejecting into an unhandled promise. */
-    ;(window.DS as Record<string, unknown>).settings = { load: async () => ({}) }
-    window.sTab = 'usage'
+    setSources({ settings: { load: async () => ({}) } as unknown as SettingsSource })
+    settingsTab.id = 'usage'
     await mount()
     expect(screen.getByText('gui.kb.unconfigured')).toBeTruthy()
     expect(screen.getByText('gui.kb.unconfigured_where')).toBeTruthy()
     await act(async () => {
       screen.getByText('gui.kb.unconfigured_go').click()
     })
-    expect(window.sTab).toBe('memory')
-    /* And the dialog is actually opened. `sTab` alone passes with the open
+    expect(settingsTab.id).toBe('memory')
+    /* And the dialog is actually opened. The slot alone passes with the open
        call deleted, which is a button that aims a dialog nobody raises. */
     expect(opened.length).toBe(1)
   })
@@ -299,9 +308,16 @@ describe('the knowledge page', () => {
 
   it('reports a missing source rather than throwing into the render', async () => {
     source()
-    delete (window as { DS?: unknown }).DS
+    resetSources()
     await mount()
-    expect(screen.getByText('no knowledge source installed')).toBeTruthy()
+    expect(screen.getByText('DS.knowledge is not installed')).toBeTruthy()
+  })
+
+  it('keeps its rendered shape, bases', async () => {
+    source({ bases: async () => [base({ id: 'b1', name: 'handbook', documents: 3 })] })
+    const view = await mount()
+    expect(await screen.findByText('handbook')).toBeTruthy()
+    expect(domSnapshot(view.container)).toMatchSnapshot()
   })
 })
 
@@ -730,6 +746,22 @@ describe('documents and search', () => {
       await slow
     })
     expect(screen.getByText('one')).toBeTruthy()
+  })
+
+  it('keeps its rendered shape, documents', async () => {
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [
+        doc({ id: 'd1', source: 'done.md', status: 'ready', chunk_count: 2 }),
+        doc({ id: 'd3', source: 'broke.md', status: 'failed', error: 'endpoint said 400' }),
+      ],
+    })
+    const view = await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await openRowMenu('done.md')
+    expect(domSnapshot(view.container)).toMatchSnapshot()
   })
 })
 

@@ -60,7 +60,7 @@ export interface HubSearchResult {
   total?: number
 }
 
-/* The DS.skills contract both the fixture source (demo shell) and the rpc
+/* The DS.skills contract both the offline fixture library and the rpc
    source (live layer) implement. The island only ever talks to this.
    install/remove toast their own failures and reject `{handled: true}`;
    search rejections come back raw, because the island renders those in
