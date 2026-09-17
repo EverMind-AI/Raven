@@ -499,8 +499,8 @@ class ImageSearchTool(Tool):
         if provider not in IMAGE_SEARCH_VENDORS:
             raise ValueError(f"unknown image_search provider {provider!r}; one of {sorted(IMAGE_SEARCH_VENDORS)}")
         # A callable is the live form (a reader over the config file), as for web_search.
-        self._api_key_source = api_key if callable(api_key) else None
-        self._init_api_key = None if callable(api_key) else api_key
+        self._api_key_source: "Callable[[], str] | None" = api_key if callable(api_key) else None
+        self._init_api_key: str | None = None if callable(api_key) else api_key
         self.max_results = max_results
         self.proxy = proxy
         self.provider = provider

@@ -880,6 +880,58 @@ def test_the_switched_off_state_reaches_the_json_output(tmp_config: Path, tmp_pa
     assert row["disabled"] is True
 
 
+def _pictures_off_with_a_key(tmp_path: Path) -> None:
+    """A credentialed image_search with `tools.web.search.images` at its default.
+
+    Not `disabledTools`: this is the switch that decides whether the tool is
+    registered at all, and it is off unless a deployment asks for pictures.
+    """
+    cfg = Config()
+    cfg.agents.defaults.model = "anthropic/claude-sonnet-4-5"
+    cfg.agents.defaults.workspace = str(tmp_path / "workspace")
+    cfg.providers.anthropic.api_key = "sk-fake"
+    cfg.tools.web.search.api_key = "sk-serper"
+    save_config(cfg)
+
+
+def test_doctor_names_the_picture_switch_not_the_disabled_list(tmp_config: Path, tmp_path: Path) -> None:
+    """The repair has to be the one that works.
+
+    image_search off by `tools.web.search.images` printed "switched off in
+    tools.disabledTools", a list that need not contain the tool and whose
+    editing cannot turn it on -- the wrong repair, which is the one thing
+    these rows exist to avoid.
+    """
+    _pictures_off_with_a_key(tmp_path)
+
+    result = runner.invoke(app, ["doctor"])
+    row = result.stdout.split("image_search")[-1][:200]
+
+    assert "tools.web.search.images" in row
+    assert "tools.disabledTools" not in row
+
+
+def test_the_picture_switch_reaches_the_json_output(tmp_config: Path, tmp_path: Path) -> None:
+    _pictures_off_with_a_key(tmp_path)
+
+    payload = json.loads(runner.invoke(app, ["doctor", "--json"]).stdout)
+    row = next(c for c in payload["tools"]["capabilities"] if c["tool"] == "image_search")
+
+    assert row["configured"] is True, "the key is set; calling it unconfigured is the wrong repair"
+    assert row["disabled"] is True
+    assert row["disabled_by"] == "tools.web.search.images"
+
+
+def test_the_named_list_still_names_itself(tmp_config: Path, tmp_path: Path) -> None:
+    """The other branch of the same field: a tool off by name reports the list."""
+    _switched_off_search(tmp_path)
+
+    payload = json.loads(runner.invoke(app, ["doctor", "--json"]).stdout)
+    row = next(c for c in payload["tools"]["capabilities"] if c["tool"] == "web_search")
+
+    assert row["disabled_by"] == "tools.disabledTools"
+
+
 @pytest.mark.parametrize("key", [True, False], ids=["keyed", "keyless"])
 def test_the_off_switch_is_named_whether_or_not_a_key_is_set(key: bool, tmp_config: Path, tmp_path: Path) -> None:
     """The cell the first version of this rendering got wrong.

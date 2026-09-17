@@ -23,6 +23,7 @@ from raven.agent.tools.capabilities import (
     Need,
     borrowable_credential,
     configured_from,
+    disabled_by,
     has_credential,
     is_configured,
     is_disabled,
@@ -116,10 +117,14 @@ def test_the_table_names_exactly_the_credential_gated_tools(workspace, tmp_path:
 
     full = _config(tmp_path)
     full.tools.web.search.api_key = "sk-serper"
+    # image_search is gated on a key like web_search, but registered only where
+    # `tools.web.search.images` asks for it, so "everything supplied" has to
+    # turn the switch on too or the tool never appears among the gated ones.
+    full.tools.web.search.images = True
     for attr in _media_attrs():
         getattr(full.tools.media, attr).model = "some/model"
     full.providers.openrouter.api_key = "sk-or-test"
-    loop_full = _loop(workspace, full, search_api_key="sk-serper")
+    loop_full = _loop(workspace, full, search_api_key="sk-serper", image_search=True)
 
     def offered(loop) -> set[str]:
         return {n for n in loop.tools.tool_names if loop.tools.offers_by_name(n)}
@@ -377,17 +382,69 @@ def test_being_offered_matches_the_registry_for_every_capability(cap, workspace,
     """
     config = _config(tmp_path)
     config.tools.web.search.api_key = "sk-serper"
+    config.tools.web.search.images = True
     for attr in _media_attrs():
         getattr(config.tools.media, attr).model = "some/model"
     config.providers.openrouter.api_key = "sk-or-test"
 
-    on = _loop(workspace, config, search_api_key="sk-serper")
+    on = _loop(workspace, config, search_api_key="sk-serper", image_search=True)
     assert is_offered(cap, config) is _on_offer(on, cap.tool)
 
     config.tools.disabled_tools = [cap.tool]
-    off = _loop(workspace, config, search_api_key="sk-serper", disabled_tools=config.tools.disabled_tools)
+    off = _loop(
+        workspace,
+        config,
+        search_api_key="sk-serper",
+        image_search=True,
+        disabled_tools=config.tools.disabled_tools,
+    )
     assert is_offered(cap, config) is _on_offer(off, cap.tool)
     assert _on_offer(off, cap.tool) is False
+
+
+def test_the_picture_switch_reads_as_off_rather_than_unconfigured(workspace, tmp_path: Path) -> None:
+    """A Serper key with `tools.web.search.images` left off.
+
+    The credential gate is satisfied and the loop still holds no image_search,
+    so a table that answered on the key alone would tick a capability the agent
+    does not have -- and would send the deployer to set a key already there.
+    """
+    config = _config(tmp_path)
+    config.tools.web.search.api_key = "sk-serper"
+    loop = _loop(workspace, config, search_api_key="sk-serper")
+    cap = next(c for c in CAPABILITIES if c.tool == "image_search")
+
+    assert _on_offer(loop, "image_search") is False
+    assert is_configured(cap, config) is True
+    assert is_disabled(cap, config) is True
+    assert is_offered(cap, config) is _on_offer(loop, "image_search")
+    # The setting a report must name: `disabledTools` need not contain the
+    # tool, and editing it cannot turn this one on.
+    assert disabled_by(cap, config) == "tools.web.search.images"
+
+
+def test_the_off_switch_each_capability_names_is_the_one_that_undoes_it(workspace, tmp_path: Path) -> None:
+    """Both branches of the field, and the order where both are shut.
+
+    The registration gate is named ahead of the deny list because taking
+    image_search out of `disabledTools` with pictures off restarts into the
+    same missing tool.
+    """
+    config = _config(tmp_path)
+    config.tools.web.search.api_key = "sk-serper"
+    config.tools.web.search.images = True
+    pictures = next(c for c in CAPABILITIES if c.tool == "image_search")
+    search = next(c for c in CAPABILITIES if c.tool == "web_search")
+
+    assert disabled_by(pictures, config) == ""
+    assert disabled_by(search, config) == ""
+
+    config.tools.disabled_tools = ["web_search", "image_search"]
+    assert disabled_by(search, config) == "tools.disabledTools"
+    assert disabled_by(pictures, config) == "tools.disabledTools"
+
+    config.tools.web.search.images = False
+    assert disabled_by(pictures, config) == "tools.web.search.images"
 
 
 def test_a_media_key_added_after_start_surfaces_the_tool(workspace, tmp_path: Path, monkeypatch) -> None:

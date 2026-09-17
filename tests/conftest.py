@@ -12,9 +12,11 @@ import functools
 import os
 import shutil
 import tempfile
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -43,8 +45,23 @@ _IDLE_EXEMPT_MARKERS = ("slow", "production_timing")
 _IDLE_CEILING_S = 0.0
 _IDLE_PROPERTY = "raven_idle_s"
 _WALL_PROPERTY = "raven_wall_s"
-_CLOCKS = pytest.StashKey[tuple[float, float]]()
-_idle_hits: list[tuple[float, float, str]] = []
+_QUEUED_PROPERTY = "raven_queued_s"
+_TASKS = Path("/proc/self/task")
+_THREAD_SELF = Path("/proc/thread-self/schedstat")
+
+
+class _Clocks(NamedTuple):
+    wall: float
+    #: Every CPU second spent on this process's behalf, as ``os.times`` accounts it.
+    cpu_s: float
+    #: Per live thread id, nanoseconds spent queued for a CPU.
+    queues: dict[str, int]
+    #: How many threads had ended by this reading; the window's own are recorded after that.
+    ended: int
+
+
+_CLOCKS = pytest.StashKey[_Clocks]()
+_idle_hits: list[tuple[float, float, float, str]] = []
 
 
 #: Three seconds rather than two, which is where this started. Measured across
@@ -64,7 +81,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--idle-ceiling",
         type=float,
         default=_DEFAULT_IDLE_CEILING_S,
-        help="seconds an unmarked test may spend waiting (wall clock minus CPU) before it is reported; 0 disables",
+        help="seconds an unmarked test may spend waiting (wall clock minus CPU and run-queue wait) before it is reported; 0 disables",
     )
     group.addoption(
         "--idle-ceiling-strict",
@@ -207,16 +224,103 @@ def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool 
     return True if index % n != k - 1 else None
 
 
-def _clocks() -> tuple[float, float]:
-    """The wall clock, and every CPU second spent on this process's behalf.
+def _queued_ns(stat: Path) -> int | None:
+    """Nanoseconds the thread behind a schedstat file spent queued for a CPU; None where the kernel does not say.
 
-    ``os.times`` counts the CPU of children this process has reaped as well as
-    its own, and POSIX makes that recursive, so a subprocess doing real work --
-    a LibreOffice conversion, a browser, eight spawned workers -- lands on the
-    account of the test that waited for it.
+    The second field of ``schedstat``, which Linux keeps under
+    ``CONFIG_SCHED_INFO`` (on in the distribution kernels). A sleeping thread
+    is not on a run queue, so a test that waits on purpose accrues none of it.
     """
+    try:
+        return int(stat.read_text().split()[1])
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def _thread_queues() -> dict[str, int]:
+    """Per live thread of this process, nanoseconds spent queued for a CPU.
+
+    Every thread rather than the one running the test, because the work a test
+    waits on is often done on another: a catalogue read handed to
+    ``asyncio.to_thread`` queues for a CPU on that thread while the test's own
+    thread sleeps.
+    """
+    queues = {}
+    for stat in _TASKS.glob("*/schedstat"):
+        queued = _queued_ns(stat)
+        if queued is not None:
+            queues[stat.parent.name] = queued
+    return queues
+
+
+#: (thread id, nanoseconds queued) of every thread that has ended, in the order
+#: they ended. A thread's account leaves ``/proc`` with it, and the threads that
+#: do a test's work often end inside the test: the event loop a test is given
+#: is closed at its end and takes its executor threads with it. So each thread
+#: writes its own last line here on the way out.
+_ended: list[tuple[str, int]] = []
+_ended_lock = threading.Lock()
+
+
+def _remember_the_ending_thread() -> None:
+    queued = _queued_ns(_THREAD_SELF)
+    if queued is None:
+        return
+    with _ended_lock:
+        _ended.append((str(threading.get_native_id()), queued))
+
+
+def _bootstrap_inner_then_remember(self: threading.Thread) -> None:
+    try:
+        _bootstrap_inner(self)
+    finally:
+        _remember_the_ending_thread()
+
+
+# Every thread passes through ``_bootstrap_inner`` whether or not it overrides
+# ``run``; the guard keeps a second import of this module from wrapping twice.
+if not getattr(threading.Thread._bootstrap_inner, "_raven_remembers", False):
+    _bootstrap_inner = threading.Thread._bootstrap_inner
+    _bootstrap_inner_then_remember._raven_remembers = True  # type: ignore[attr-defined]
+    threading.Thread._bootstrap_inner = _bootstrap_inner_then_remember  # type: ignore[method-assign]
+
+
+def _clocks() -> _Clocks:
     spent = os.times()
-    return time.perf_counter(), spent.user + spent.system + spent.children_user + spent.children_system
+    cpu = spent.user + spent.system + spent.children_user + spent.children_system
+    return _Clocks(time.perf_counter(), cpu, _thread_queues(), len(_ended))
+
+
+def _spent(started: _Clocks, now: _Clocks) -> tuple[float, float, float]:
+    """Wall clock, idle and run-queue wait between two readings.
+
+    Idle is the wall clock minus every CPU second spent on the test's behalf
+    minus the time its threads spent queued for a CPU. Wall clock minus CPU
+    alone cannot tell a sleep from a wait for a CPU, and on a runner carrying
+    four workers, the controller and coverage that wait reached four seconds
+    inside one long test, failing green shards on whichever test was executing
+    when contention peaked.
+
+    ``os.times`` counts the CPU of every thread, ended ones included, and of
+    the children this process has reaped; POSIX makes that recursive, so a
+    subprocess doing real work -- a LibreOffice conversion, a browser, eight
+    spawned workers -- lands on the account of the test that waited for it.
+    The queue time is the scheduler's, per thread: the live ones as read now,
+    the ones that ended inside the window as they wrote it on the way out,
+    each less what it had already accrued at the start. Readings are taken
+    one window at a time, so what a window consumed of the ended list is
+    dropped here.
+    """
+    wall = now.wall - started.wall
+    cpu = now.cpu_s - started.cpu_s
+    with _ended_lock:
+        ended = _ended[started.ended : now.ended]
+        del _ended[: now.ended]
+    queued = 0
+    for tid, waited in (*now.queues.items(), *ended):
+        queued += waited - started.queues.get(tid, 0)
+    queued_s = max(0.0, queued / 1e9)
+    return wall, wall - cpu - queued_s, queued_s
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -230,13 +334,15 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
     """Write the test's idle time onto its teardown report.
 
     Idle is the wall clock of setup, call and teardown minus the CPU anyone
-    spent on the test in that window. It is what the ceiling judges, rather
-    than wall clock, because the class it guards against is a test waiting:
-    on a production backoff, on a timeout it arranged, on a process that
-    answers nothing. A wait costs the same seconds on every machine, where
-    work costs two seconds on a laptop and seven on a CI runner and is not the
-    problem. The report carries the number so the xdist controller, which sees
-    only reports, can judge it.
+    spent on the test in that window, minus the time its threads spent queued
+    for a CPU (:func:`_spent`). It is what the ceiling judges, rather than
+    wall clock, because the class it guards against is a test waiting: on a
+    production backoff, on a timeout it arranged, on a process that answers
+    nothing. A wait costs the same seconds on every machine, where work costs
+    two seconds on a laptop and seven on a CI runner and is not the problem,
+    and neither is a busy runner making the process wait its turn. The report
+    carries the numbers so the xdist controller, which sees only reports, can
+    judge them.
     """
     outcome = yield
     if call.when != "teardown":
@@ -244,12 +350,11 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
     started = item.stash.get(_CLOCKS, None)
     if started is None:
         return
-    now = _clocks()
-    wall = now[0] - started[0]
-    idle = wall - (now[1] - started[1])
+    wall, idle, queued = _spent(started, _clocks())
     report = outcome.get_result()
     report.user_properties.append((_IDLE_PROPERTY, idle))
     report.user_properties.append((_WALL_PROPERTY, wall))
+    report.user_properties.append((_QUEUED_PROPERTY, queued))
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
@@ -267,7 +372,7 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
         return
     if any(marker in report.keywords for marker in _IDLE_EXEMPT_MARKERS):
         return
-    _idle_hits.append((float(idle), float(clocks[_WALL_PROPERTY]), report.nodeid))
+    _idle_hits.append((float(idle), float(clocks[_WALL_PROPERTY]), float(clocks[_QUEUED_PROPERTY]), report.nodeid))
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus: int, config: pytest.Config) -> None:
@@ -277,10 +382,11 @@ def pytest_terminal_summary(terminalreporter, exitstatus: int, config: pytest.Co
     verdict = "failing the session" if strict else "warning only; --idle-ceiling-strict fails it"
     terminalreporter.write_sep(
         "=",
-        f"{len(_idle_hits)} unmarked test(s) waited more than {_IDLE_CEILING_S:g}s (wall clock minus CPU) ({verdict})",
+        f"{len(_idle_hits)} unmarked test(s) waited more than {_IDLE_CEILING_S:g}s "
+        f"(wall clock minus CPU and run-queue wait) ({verdict})",
     )
-    for idle, wall, nodeid in sorted(_idle_hits, reverse=True)[:50]:
-        terminalreporter.write_line(f"{idle:7.2f}s idle of {wall:6.2f}s  {nodeid}")
+    for idle, wall, queued, nodeid in sorted(_idle_hits, reverse=True)[:50]:
+        terminalreporter.write_line(f"{idle:7.2f}s idle of {wall:6.2f}s ({queued:.2f}s queued)  {nodeid}")
     terminalreporter.write_line("mark it slow or production_timing with the reason, or take the wait out of the test")
 
 
