@@ -13,12 +13,19 @@
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
+import { readFileSync, readdirSync } from 'node:fs'
+
 import * as composer from '../features/composer/mount'
 import * as store from '../features/composer/store'
 import { resetShell, setShell } from '../shell/bridge'
 import * as ctx from '../shell/ctxchip'
+import * as perm from '../shell/perm'
+import * as tier from '../shell/tier'
 import * as lang from '../state/lang'
+import { _resetForTests as resetLayers, host } from '../state/portals'
 import { setSources } from '../state/sources'
+import { bodySiblings } from '../test/domSnapshot'
 import { mountPageRoot } from '../test/pageRoot'
 
 import type { ComposerSource } from '../features/composer/types'
@@ -73,10 +80,15 @@ const key = (init: KeyboardEventInit): void => {
   })
 }
 
+/* The two popovers keep their up-or-down in a store rather than on the node
+   (src/shell/perm.ts, src/shell/tier.ts), so it outlives a case's markup and
+   has to be put back by hand between them. */
 beforeEach(() => {
   composer._resetForTests()
   store._resetForTests()
   ctx._resetForTests()
+  perm._resetForTests()
+  tier._resetForTests()
 })
 
 afterEach(() => {
@@ -85,6 +97,8 @@ afterEach(() => {
   composer._resetForTests()
   store._resetForTests()
   ctx._resetForTests()
+  perm._resetForTests()
+  tier._resetForTests()
   resetShell()
   localStorage.clear()
   document.body.innerHTML = ''
@@ -180,18 +194,22 @@ describe('the dock', () => {
     }
   })
 
-  /* Not one click is this component's: the send button and the paperclip belong
-     to the composer store, the two chips to the popover writers the chrome
-     binds, and the model chip to the live layer. A React onClick here would not
-     replace any of those -- it would run BESIDE the imperative handler, and
-     both would fire on one press. React leaves an empty onclick on every
-     element it takes a click of (the trap that makes clicks fire on iOS), so a
-     bare .onclick is what says the element is still the other writer's. */
-  it('takes no click of its own, and leaves each one to the module that owns it', () => {
+  /* Three of the clicks in the band are another module's: the send button and
+     the paperclip belong to the composer store, and the model chip to the live
+     layer. A React onClick beside one of those would not replace it -- it would
+     run BESIDE the imperative handler, and both would fire on one press. React
+     leaves an empty onclick on every element it takes a click of (the trap that
+     makes clicks fire on iOS), so a bare .onclick is what says the element is
+     still the other writer's, and that trap is what says the two chips are this
+     tree's (src/chrome/PermChip.tsx, src/chrome/TierChip.tsx). */
+  it('takes only the two chips, and leaves each other click to the module that owns it', () => {
     render()
-    const IMPERATIVE = ['go', 'attBtn', 'permChip', 'tierChip', 'modelChip']
+    const IMPERATIVE = ['go', 'attBtn', 'modelChip']
     for (const id of IMPERATIVE) expect(el(id).onclick, id).toBe(null)
+    const OWN = ['permChip', 'tierChip']
+    for (const id of OWN) expect(typeof el(id).onclick, id).toBe('function')
     for (const node of dock().querySelectorAll('*')) {
+      if (OWN.includes(node.id)) continue
       expect((node as HTMLElement).onclick, node.id || node.className).toBe(null)
     }
     /* And the two the composer does bind, once it has: the id it reaches for is
@@ -344,5 +362,160 @@ describe('the dock once a language is applied', () => {
         expect(name, sel).not.toMatch(/^data-i18n/)
       }
     }
+  })
+})
+
+/* The two popovers, and the one thing about them a golden of the band cannot
+ * see: where each stands.
+ *
+ * Both are rendered inside the composer card, because that is where the page
+ * was served with them, and both are moved to the body the first time they open
+ * -- once, and never back. The move is not a preference: the card's entrance
+ * animation makes the card a containing block, which re-bases the panel's
+ * `position: fixed` against the card instead of the viewport, so a panel left
+ * in the card is placed off the wrong box.
+ *
+ * Last in the file because one case applies a language, which is module state
+ * for everything after it.
+ */
+describe('the two popovers', () => {
+  interface Panel {
+    readonly open: () => void
+    readonly close: () => void
+    readonly isOpen: () => boolean
+  }
+  const PANELS: ReadonlyArray<{ name: string, pop: string, chip: string, panel: Panel }> = [
+    { name: 'perm', pop: 'permPop', chip: 'permChip', panel: perm },
+    { name: 'tier', pop: 'tierPop', chip: 'tierChip', panel: tier },
+  ]
+
+  it('stands in the composer card until it is opened', () => {
+    render()
+    for (const { name, pop } of PANELS) {
+      expect(el(pop).parentElement!.closest('.dock-in'), name).not.toBe(null)
+    }
+  })
+
+  it('hangs off the body, last of its children, once it opens', () => {
+    render()
+    for (const { name, pop, panel } of PANELS) {
+      panel.open()
+      expect(el(pop).parentElement, name).toBe(document.body)
+      expect(document.body.lastElementChild, name).toBe(el(pop))
+    }
+  })
+
+  /* The move is once, not per open: `close` only takes the panel down. A panel
+     put back in the card between opens would be placed off the card again. */
+  it('stays under the body when it closes', () => {
+    render()
+    for (const { name, pop, panel } of PANELS) {
+      panel.open()
+      panel.close()
+      expect(el(pop).parentElement, name).toBe(document.body)
+      expect(el(pop).dataset.open, name).toBe('false')
+      panel.open()
+      expect(el(pop).parentElement, name).toBe(document.body)
+    }
+  })
+
+  /* `--z-picker` is 46 and both panels set an inline 46, so for these three the
+     DOM order at the body IS the whole of the stacking decision -- the panel a
+     reader just opened has to be the one on top. src/state/portals.ts is where
+     that order is declared. */
+  it('lands after the model picker, which is what breaks the tie at 46', () => {
+    render()
+    resetLayers()
+    try {
+      const picker = host('picker')
+      perm.open()
+      tier.open()
+      const order = bodySiblings()
+      /* The picker's wrapper carries neither id nor class, which is why its
+         signature is a bare tag. */
+      expect(Array.from(document.body.children).indexOf(picker)).toBe(order.indexOf('div'))
+      for (const { name, pop } of PANELS) {
+        const at = order.findIndex((line) => line.startsWith(`div#${pop}.pop`))
+        expect(at, name).toBeGreaterThan(order.indexOf('div'))
+      }
+    } finally {
+      resetLayers()
+    }
+  })
+
+  /* The tier panel's heading and note are written on open, from the catalogue
+     that answered, and neither may carry a key: the built-in ladder is a
+     Session Tier and reaches sub-agents, a deployment's own catalogue is a
+     Session Mode and does not, so a flip walking the document's keys would
+     paint the tier wording back over a mode catalogue's. */
+  it('leaves the tier panel with no key for a language flip to find', () => {
+    render()
+    const pop = el('tierPop')
+    for (const node of [pop, ...pop.querySelectorAll('*')]) {
+      for (const name of node.getAttributeNames()) {
+        expect(name, node.id || node.className).not.toMatch(/^data-i18n/)
+      }
+    }
+  })
+
+  /* A press on the chip has to toggle once. React's delegated click and an
+     imperative .onclick both firing would toggle twice and leave the panel shut
+     -- which is what the chrome's own `$('#permChip').onclick` did until this
+     step moved it into the component. */
+  it('takes exactly one handler per chip, so one press toggles once', () => {
+    render()
+    for (const { name, chip, panel } of PANELS) {
+      act(() => { el(chip).click() })
+      expect(panel.isOpen(), name).toBe(true)
+      act(() => { el(chip).click() })
+      expect(panel.isOpen(), name).toBe(false)
+      /* The onclick property is React's empty trap, not a second handler:
+         calling it is what tells the two apart. */
+      const trap = el(chip).onclick!
+      trap.call(el(chip), new PointerEvent('click'))
+      expect(panel.isOpen(), name).toBe(false)
+    }
+  })
+
+  /* And nothing in the legacy layer takes their click any more: the chrome
+     bound both chips by hand until this step. The case above cannot see such a
+     binding -- the page root is not what the chrome installs into, and re-adding
+     the deleted line leaves it green (measured) -- so the source is where it has
+     to show. The pointerdown that closes the two panels names the same two ids
+     and is not a binding on them (legacy/demo/040-state.js), which is why the
+     line rather than the file is what this reads. */
+  it('is the only place in the tree that takes those two clicks', () => {
+    const dir = 'src/legacy'
+    const files = (readdirSync(dir, { recursive: true }) as string[]).filter((f) => f.endsWith('.js'))
+    expect(files.length).toBeGreaterThan(15)
+    for (const file of files) {
+      const text = readFileSync(`${dir}/${file}`, 'utf8') as string
+      for (const line of text.split('\n')) {
+        if (!line.includes('#permChip') && !line.includes('#tierChip')) continue
+        expect(line, file).not.toMatch(/onclick|addEventListener/)
+      }
+    }
+  })
+
+  /* A panel that has left the card is a child React no longer holds. Safe only
+     because none of the card's children is conditional, so React never
+     reconciles that child list -- a re-render renders on into it and leaves it
+     where it stands. */
+  it('survives a language applied after it left the card', () => {
+    render()
+    perm.open()
+    tier.open()
+    const pops = PANELS.map(({ pop }) => el(pop))
+    /* Not 'en': the describe above leaves that applied, and a flip to the
+       language in force cannot move a key that is read off it. */
+    expect(() => {
+      act(() => { lang.set('zh') })
+    }).not.toThrow()
+    for (const [i, { name, pop }] of PANELS.entries()) {
+      expect(el(pop).parentElement, name).toBe(document.body)
+      expect(el(pop), name).toBe(pops[i])
+      expect(document.querySelectorAll(`#${pop}`), name).toHaveLength(1)
+    }
+    expect(el('slashPop').parentElement!.className).toBe('dock-in')
   })
 })
