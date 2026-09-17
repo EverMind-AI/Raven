@@ -1,10 +1,8 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from 'vitest'
 
-// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
-import { readFileSync } from 'node:fs'
-
 import { clearance } from './popover'
+import { mountPageRoot } from '../test/pageRoot'
 
 /* happy-dom measures every box as zero, so each element that matters here is
    handed the rect it would have on a laid-out page. The numbers are the ones
@@ -15,7 +13,11 @@ function rect(el: Element, top: number, bottom: number): void {
     ({ top, bottom, left: 0, right: 0, width: 0, height: bottom - top, x: 0, y: top } as DOMRect)
 }
 
+let unmount = (): void => {}
+
 afterEach(() => {
+  unmount()
+  unmount = () => {}
   document.body.innerHTML = ''
 })
 
@@ -49,14 +51,15 @@ describe('what an anchored panel has to clear', () => {
   })
 
   it('names a class the composer actually wears', () => {
-    /* The selector is a string here and the card is markup over there, so
-       nothing but this ties them together: rename the wrapper in page.html and
-       every panel silently goes back to clearing its chip -- which is a layout
-       regression no type-checker and no other test can see. Asserted on the
-       element that holds the composer's own field, not on a bare grep, so a
-       `.dock-in` appearing anywhere else would not satisfy it. */
-    const page = readFileSync('src/page.html', 'utf8') as string
-    document.body.innerHTML = page.slice(page.indexOf('<div class="dock-in">'))
+    /* The selector is a string here and the card is an element the page root
+       renders over there, so nothing but this ties them together: rename the
+       wrapper in src/chrome/Dock.tsx and every panel silently goes back to
+       clearing its chip -- which is a layout regression no type-checker and no
+       other test can see. Asserted on the element that holds the composer's own
+       field, not on a bare grep, so a `.dock-in` appearing anywhere else would
+       not satisfy it. */
+    document.body.innerHTML = '<div class="dock"></div>'
+    unmount = mountPageRoot()
     const card = document.querySelector('.dock-in')
     expect(card).not.toBeNull()
     expect(card!.querySelector('#ta')).not.toBeNull()

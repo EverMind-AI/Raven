@@ -1,13 +1,13 @@
 /* The page's own React root: the regions src/page.html used to carry as markup
- * -- the dialog shells, the rail and the capabilities page's chrome -- and the
- * two overlays, the context menu's rows and the notices, that the chrome used
- * to build by hand.
+ * -- the dialog shells, the rail, the composer dock and the capabilities
+ * page's chrome -- and the two overlays, the context menu's rows and the
+ * notices, that the chrome used to build by hand.
  *
  * Every element below is a transcription -- tag, id, class, data-*, role, aria
  * and text exactly as page.html spelled them, attributes in the same order --
  * and the goldens under src/test/__golden__/ are what says so. A region big
  * enough to read on its own gets a file under src/chrome/ (the rail, the
- * capabilities page).
+ * dock, the capabilities page).
  *
  * The containers stay in page.html and the interiors portal into them, which is
  * the mechanism for every region stage C converts: while a container is static
@@ -40,6 +40,7 @@ import { createPortal } from 'react-dom'
 
 import { CapsPage } from './chrome/CapsPage'
 import { ChatTop } from './chrome/ChatTop'
+import { Dock } from './chrome/Dock'
 import { Rail } from './chrome/Rail'
 import * as menu from './shell/menu'
 import * as toast from './shell/toast'
@@ -195,9 +196,9 @@ function Toasts(): JSX.Element {
 /* Each interior into the container page.html still provides. Guarded the way
    the island mounts are: a document without the container renders nothing
    rather than throwing. The rail and the chat column resolve their own
-   containers -- div.app's two columns are the regions with no id -- and the two
-   overlays below find their own host, because theirs is the one that was
-   standing when they were raised. */
+   containers -- div.app's two columns are the regions with no id -- so does the
+   dock, which is nested inside one, and the two overlays below find their own
+   host, because theirs is the one that was standing when they were raised. */
 export function App(): JSX.Element {
   const veilEl = document.getElementById('veil')
   const detailEl = document.getElementById('detail')
@@ -206,6 +207,7 @@ export function App(): JSX.Element {
     <>
       <Rail />
       <ChatTop />
+      <Dock />
       <CapsPage />
       {detailEl ? createPortal(<DetailPanel />, detailEl) : null}
       {setVeilEl ? createPortal(<SettingsModal />, setVeilEl) : null}

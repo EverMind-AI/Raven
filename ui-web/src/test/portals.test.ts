@@ -57,7 +57,9 @@ function goldenBodyKeys(path: string): string[] {
 /** The body as it stands, keyed the way the goldens key it. */
 const bodyKeys = (doc: Document): string[] => bodySiblings(doc).map(keyOf)
 
-/* page.html's two static hosts and the card the two popovers start inside. */
+/* page.html's two static hosts, and the band the composer dock renders into --
+   which is where the two popovers start, so a case that reads them mounts the
+   page root over this (src/chrome/Dock.tsx). */
 function pageMarkup(): Document {
   const html = source('src/page.html')
   const body = html
@@ -168,10 +170,15 @@ describe('the portal table', () => {
 
   it('starts the two popovers inside the composer card', () => {
     const doc = pageMarkup()
-    for (const id of ['permPop', 'tierPop']) {
-      const el = doc.getElementById(id)
-      expect(el, `#${id} is not in page.html`).toBeTruthy()
-      expect(el!.parentElement!.className).toBe('dock-in')
+    const unmount = mountPageRoot()
+    try {
+      for (const id of ['permPop', 'tierPop']) {
+        const el = doc.getElementById(id)
+        expect(el, `#${id} is not rendered`).toBeTruthy()
+        expect(el!.parentElement!.className).toBe('dock-in')
+      }
+    } finally {
+      unmount()
     }
   })
 })

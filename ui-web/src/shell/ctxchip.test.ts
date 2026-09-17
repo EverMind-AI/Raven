@@ -1,32 +1,21 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { resetShell } from './bridge'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+
+import { _resetForTests, draw, set } from './ctxchip'
+import { resetShell, setShell } from './bridge'
+import { mountPageRoot } from '../test/pageRoot'
 
 import type { Shell } from './bridge'
 
-/* Imported per case rather than once for the file. The writer owns its two
-   numbers, and `set` deliberately keeps the window it was last told -- so
-   there is no argument that clears `max` back to nothing, and a shared module
-   would carry one case's window into the next. A fresh module is the only
-   honest way to start from "no window known yet". */
-let draw: (typeof import('./ctxchip'))['draw']
-let set: (typeof import('./ctxchip'))['set']
-
 /* The catalogue's own shape for the tooltip, so the test reads what a reader
    would see rather than a key. */
-async function install(): Promise<void> {
-  const fake: Shell = {
-    T: (key, vars) =>
-      key === 'gui.ctx.tip' && vars
-        ? `context ${vars.used}/${vars.max} ${vars.pct}%`
-        : key,
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: () => {},
-  }
-  /* Through the bridge the fresh module graph above will read, not the one
-     this file imported: the reset gave the module under test a new copy. */
-  const { setShell } = await import('./bridge')
-  setShell(fake)
+const fake: Shell = {
+  T: (key, vars) =>
+    key === 'gui.ctx.tip' && vars
+      ? `context ${vars.used}/${vars.max} ${vars.pct}%`
+      : key,
+  confirmAsk: (_t, _b, _l, fn) => fn(),
+  showPage: () => {},
 }
 
 const chip = (): HTMLElement => document.getElementById('ctxChip') as HTMLElement
@@ -34,22 +23,28 @@ const fg = (): Element => chip().querySelector('.fg') as Element
 const offset = (): number => Number(fg().getAttribute('stroke-dashoffset'))
 const RING = 47.75
 
-beforeEach(async () => {
-  vi.resetModules()
-  ;({ draw, set } = await import('./ctxchip'))
-  await install()
-  /* page.html's own markup for the chip, r included -- the radius is half of
-     the offset arithmetic this file asserts on. */
-  document.body.innerHTML =
-    '<button class="chip ctx" id="ctxChip" hidden>' +
-    '<svg class="ring" viewBox="0 0 20 20" aria-hidden="true">' +
-    '<circle class="bg" cx="10" cy="10" r="7.6"></circle>' +
-    '<circle class="fg" cx="10" cy="10" r="7.6"></circle>' +
-    '</svg></button>'
+let unmount = (): void => {}
+
+/* The chip is the page root's now (src/chrome/CtxChip.tsx), so the markup gives
+   the container page.html carries and the root renders the button into it --
+   radius included, since half the offset arithmetic below is that radius.
+
+   The store's reset is what a fresh document used to do for free: the window it
+   was last told is module state and `set` deliberately keeps it, so there is no
+   argument that clears it back to "no window known yet". */
+beforeEach(() => {
+  _resetForTests()
+  setShell(fake)
+  document.body.innerHTML = '<div class="dock"></div>'
+  unmount = mountPageRoot()
 })
 
 afterEach(() => {
+  unmount()
+  unmount = () => {}
+  _resetForTests()
   resetShell()
+  document.body.innerHTML = ''
 })
 
 describe('the context ring', () => {
