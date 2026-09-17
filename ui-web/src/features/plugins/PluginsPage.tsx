@@ -1,16 +1,16 @@
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
+import { CardSkeleton } from '../../components/Skeleton'
 import { t } from '../../i18n/t'
+import * as detail from '../../state/detail'
 import * as lang from '../../state/lang'
 import { show as toast } from '../../state/toast'
-import { CardSkeleton } from '../../components/Skeleton'
-import * as detail from '../../state/detail'
+import { useInTask } from '../composer/useInTask'
 import * as store from './store'
 
 import type { Contribution, DetailEntry, InstalledRow, MarketItem, McpSnapshot } from './types'
 import type { CSSProperties, JSX } from 'react'
-import { useInTask } from '../composer/useInTask'
 
 /* The plugin tab is market-first: the page IS the catalog, and what you
    already have lives one level in (the installed button top-right, back

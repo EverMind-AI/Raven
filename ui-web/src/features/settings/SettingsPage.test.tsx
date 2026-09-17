@@ -2,19 +2,18 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { SettingsApp } from './SettingsPage'
-import * as store from './store'
-import * as lookStore from '../../state/look'
+import { setTranslator } from '../../i18n/t'
 import * as notifications from '../../lib/notifications'
-
-import { domSnapshot } from '../../test/domSnapshot'
-import { resetSources, setSources, sources } from '../../state/sources'
-import { mountPageRoot } from '../../test/pageRoot'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
+import * as lookStore from '../../state/look'
 import * as pageStore from '../../state/page'
 import * as settingsDialogStore from '../../state/settings'
+import { resetSources, setSources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import { mountPageRoot } from '../../test/pageRoot'
+import { SettingsApp } from './SettingsPage'
+import * as store from './store'
+
 import type { RailSource } from '../rail/types'
 import type { SettingsSnapshot, SettingsSource } from './types'
 

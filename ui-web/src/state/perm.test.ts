@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import * as store from './perm'
-import { mountPageRoot } from '../test/pageRoot'
 import { resetTranslator, setTranslator } from '../i18n/t'
+import { mountPageRoot } from '../test/pageRoot'
+import * as store from './perm'
 
 /* The stored tier is read when the store is reset, so a case that cares about
    it seeds localStorage and then asks for the reset. This was resetModules plus

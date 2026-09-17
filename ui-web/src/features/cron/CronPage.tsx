@@ -1,19 +1,19 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import { SetupGroup, SetupRow } from '../../components/SetupRow'
+import { SetupRow } from '../../components/SetupRow'
 import { SheetFoot, SheetHead, StateLine } from '../../components/SetupSheet'
 import { t } from '../../i18n/t'
+import { ask as confirmAsk } from '../../state/confirm'
 import * as lang from '../../state/lang'
 import { show as menuAt } from '../../state/menu'
+import * as settingsDialog from '../../state/settings'
 import { show as toast } from '../../state/toast'
 import { cronExprHuman, cronWhen } from './humanize'
 import * as store from './store'
 
 import type { CronDraft, CronJob, CronRun } from './types'
 import type { JSX } from 'react'
-import { ask as confirmAsk } from '../../state/confirm'
-import * as settingsDialog from '../../state/settings'
 
 /* The frequencies and the delivery routes the editor offers. Page data, not
    wire data: a job's own kind and expression come from `cron.list`, and these

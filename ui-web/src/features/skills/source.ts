@@ -8,12 +8,12 @@
  * live rows through loadExt so every installed surface answers the change.
  */
 
-import type { SkillsSource } from './types'
-
 import { t } from '../../i18n/t'
-import { show as toast } from '../../state/toast'
 import { gateway } from '../../rpc/gateway'
+import { show as toast } from '../../state/toast'
 import { extIsLoaded, extSkills, loadExt } from '../installed/source'
+
+import type { SkillsSource } from './types'
 
 const skillhubErr = (e: unknown): string => {
   const err = e as { data?: { detail?: string }; message?: string }

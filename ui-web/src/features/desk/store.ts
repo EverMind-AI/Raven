@@ -3,19 +3,19 @@
 import { t } from '../../i18n/t'
 import { slot } from '../../lib/persist'
 import { current as currentSession } from '../../lib/session'
+import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
+import { pane } from '../../state/wsPane'
 import { instanceState } from '../subagents/history'
 import * as agents from '../subagents/store'
 import * as deliveries from '../workspace/deliveries'
-import * as seen from './seen'
-import * as palette from './palette'
 import * as workspace from '../workspace/store'
+import * as palette from './palette'
+import * as seen from './seen'
 
 import type { AgentRow, InstanceRow } from '../subagents/types'
-import type { DeskDuo, DeskPane, DeskSplits, DeskState, DeskTab } from './types'
 import type { WsChange } from '../workspace/types'
-import { pane } from '../../state/wsPane'
-import { makeStore } from '../../state/store'
+import type { DeskDuo, DeskPane, DeskSplits, DeskState, DeskTab } from './types'
 
 /* What a reload needs to put the desk back: what the reader OPENED, in the
    order they opened it, and where the frame put it.

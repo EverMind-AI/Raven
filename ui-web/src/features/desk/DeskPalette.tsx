@@ -2,12 +2,14 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
-import { AgentList } from '../subagents/SubagentsPage'
-import * as agents from '../subagents/store'
 import { t } from '../../i18n/t'
+import * as agents from '../subagents/store'
+import { AgentList } from '../subagents/SubagentsPage'
+import * as deliveries from '../workspace/deliveries'
+import { fileKind } from '../workspace/store'
+import * as workspace from '../workspace/store'
 import { DeskIcon } from './DeskIcon'
 import {
-  anchoredGeometry,
   clampGeometry,
   defaultGeometry,
   DESK_DRAG_THRESHOLD,
@@ -15,13 +17,10 @@ import {
   deskReserve,
   magnetGeometry,
 } from './geometry'
-import * as deliveries from '../workspace/deliveries'
 import * as desk from './store'
-import { fileKind } from '../workspace/store'
-import * as workspace from '../workspace/store'
 
-import type { DeskGeometry, DeskTab } from './types'
 import type { DeliveryRow } from '../workspace/types'
+import type { DeskGeometry, DeskTab } from './types'
 import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent } from 'react'
 
 /* The three tabs, each carrying what is new in it. The bubble is the same thing
@@ -276,7 +275,7 @@ function storedGeometry(): DeskGeometry {
         x: saved.x!, y: saved.y!, w: saved.w!, h: saved.h!, detached: saved.detached === true,
       })
     }
-  } catch {}
+  } catch { /* private mode, or a geometry written by an older shape */ }
   return defaultGeometry()
 }
 
@@ -304,7 +303,7 @@ export function DeskPalette(): JSX.Element | null {
   const pointerCleanup = useRef<(() => void) | null>(null)
   const [geom, setGeom] = useState(storedGeometry)
   useEffect(() => {
-    try { localStorage.setItem(DESK_GEOMETRY_KEY, JSON.stringify(geom)) } catch {}
+    try { localStorage.setItem(DESK_GEOMETRY_KEY, JSON.stringify(geom)) } catch { /* private mode */ }
   }, [geom])
   /* What the chat gives up so the panel is not sitting on the transcript -- see
      `deskReserve` for the overlap this answers and why it is all-or-nothing.

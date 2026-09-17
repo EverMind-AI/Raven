@@ -2,11 +2,11 @@
 
 import { useEffect, useSyncExternalStore } from 'react'
 
+import * as lang from '../../state/lang'
 import * as agents from '../subagents/store'
+import * as workspace from '../workspace/store'
 import { DeskPalette } from './DeskPalette'
 import { DeskFollowToggle, DeskSurface } from './DeskSurface'
-import * as workspace from '../workspace/store'
-import * as lang from '../../state/lang'
 
 import type { JSX } from 'react'
 

@@ -6,9 +6,9 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { resetExtAgentsSeen, extAgentsFetch, extAgentRowOf, extAgentsSource } from './source'
 import { FixtureTransport } from '../../rpc/fixtureTransport'
 import { setGateway } from '../../rpc/gateway'
+import { resetExtAgentsSeen, extAgentsFetch, extAgentRowOf, extAgentsSource } from './source'
 
 import type { ExtAgentRowWire } from './source'
 import type { ExtAgentRow } from './types'

@@ -8,13 +8,13 @@
    an older one notifies the same page state with the JPEG base64 inside it,
    and a page cannot know which it will be sent until one arrives. */
 
+import { open as openUrlOutside } from '../../lib/openUrl'
+import { gateway } from '../../rpc/gateway'
+import { urls as workspaceUrls } from '../workspace/store'
+
 import type { ParamsOf } from '../../rpc/generated'
 import type { BrowserFramePushParams } from '../../rpc/notifications'
 import type { ChromiumSource, FrameHead } from './types'
-
-import { gateway } from '../../rpc/gateway'
-import { urls as workspaceUrls } from '../workspace/store'
-import { open as openUrlOutside } from '../../lib/openUrl'
 
 const b64Blob = (b64: string): Blob => {
   const s = atob(b64)

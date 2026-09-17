@@ -8,9 +8,9 @@
 import { cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { Tooltip } from './Tooltip'
 import { _resetForTests as resetLayers } from '../state/portals'
 import { _resetForTests as resetTip, follow, hide, mount, watch } from '../state/tooltip'
+import { Tooltip } from './Tooltip'
 
 const pill = (): HTMLElement => document.querySelector('.tipp') as HTMLElement
 

@@ -17,7 +17,6 @@
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-
 import { describe, expect, it } from 'vitest'
 
 const SRC = new URL('../../src/', import.meta.url).pathname

@@ -16,28 +16,27 @@
  * Escape without stopping propagation, so one Escape can both deny an approval
  * and interrupt the running turn: that is pinned here with the real sheet.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readFileSync } from 'node:fs'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { openApproval } from '../features/composer/approve'
 import * as turn from '../features/composer/turn'
 import * as connections from '../features/connections/store'
 import * as cron from '../features/cron/store'
+import * as extAgents from '../features/extAgents/store'
 import * as knowledge from '../features/knowledge/store'
 import * as memory from '../features/memory/store'
 import * as playbooks from '../features/playbooks/store'
-import * as extAgents from '../features/extAgents/store'
+import { resetTranslator, setTranslator } from '../i18n/t'
 import { _resetForTests as sessionReset, setCurrent } from '../lib/session'
+import * as escapeOrder from './escapeOrder'
 import * as find from './find'
 import { installEscapeOrder } from './globalListeners'
-import * as escapeOrder from './escapeOrder'
 import * as settingsDialog from './settings'
 import * as sheets from './sheetRack'
 import { resetSources, sources } from './sources'
 
-import { resetTranslator, setTranslator } from '../i18n/t'
 import type { ComposerSource } from '../features/composer/types'
 
 /* The fourteen, in the order Escape reaches them. Each item is the text the

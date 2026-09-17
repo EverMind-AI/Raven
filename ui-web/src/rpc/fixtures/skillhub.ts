@@ -5,9 +5,9 @@
  * same way the real hub does, so the installed shelf answers the change.
  */
 
-import type { ExtFixture } from './ext'
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
 import type { ResultOf } from '../generated'
+import type { ExtFixture } from './ext'
 
 type Item = ResultOf<'skillhub.search'>['items'][number]
 

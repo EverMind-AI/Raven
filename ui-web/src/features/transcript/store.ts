@@ -1,8 +1,10 @@
-import * as dagNodes from '../dag/nodes'
 import { t } from '../../i18n/t'
-import { ds } from '../../state/sources'
+import { I18N } from '../../i18n/t'
 import { formatDuration } from '../../lib/duration'
 import { md } from '../../lib/prose'
+import { ds } from '../../state/sources'
+import { pane } from '../../state/wsPane'
+import * as dagNodes from '../dag/nodes'
 import * as deliveries from '../workspace/deliveries'
 import * as hunks from '../workspace/hunks'
 
@@ -12,8 +14,6 @@ import type {
   DeliveredData, FoldData, HistoryMessage, Hunk, Lane, NoteData, NoteHandle, QaData, Seg,
   SpawnListRow, StatusData, StepData, StepHandle, SubagentStatusLike, TranscriptSource,
 } from './types'
-import { I18N } from '../../i18n/t'
-import { pane } from '../../state/wsPane'
 
 /* Plain external store. The callers that drive the transcript are not React:
  * the replay, the live turn machine and the history reader all push segments,

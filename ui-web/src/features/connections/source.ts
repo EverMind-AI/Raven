@@ -4,14 +4,13 @@
    catalogue's rows. The live layer installs it onto the seam, which replaces
    the fixture source before the first paint. */
 
-import type { ConnectionsSource } from './types'
-
-import { servesChannels } from '../../rpc/capabilities'
 import { t } from '../../i18n/t'
-import { show as toast } from '../../state/toast'
+import { servesChannels } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
-
+import { show as toast } from '../../state/toast'
 import { CHANNELS, chanName } from './catalogue'
+
+import type { ConnectionsSource } from './types'
 
 /* Merged onto the catalogue's own objects rather than into fresh ones: they
    are what `rows()` has always answered with and what the island is already

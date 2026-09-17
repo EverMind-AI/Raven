@@ -2,21 +2,20 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as detailStore from '../../state/detail'
+import * as pageStore from '../../state/page'
+import { settingsTab } from '../../state/settings'
+import * as settingsDialogStore from '../../state/settings'
+import { resetSources, setSources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import { mountPageRoot } from '../../test/pageRoot'
 import { KnowledgeApp } from './KnowledgePage'
 import * as store from './store'
 
-import { domSnapshot } from '../../test/domSnapshot'
-import { settingsTab } from '../../state/settings'
-import { resetSources, setSources, sources } from '../../state/sources'
-import { mountPageRoot } from '../../test/pageRoot'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as confirmStore from '../../state/confirm'
-import * as pageStore from '../../state/page'
-import * as settingsDialogStore from '../../state/settings'
-import * as detailStore from '../../state/detail'
-import type { KbBase, KbDoc, KbSearch, KnowledgeSource } from './types'
 import type { SettingsSource } from '../settings/types'
+import type { KbBase, KbDoc, KbSearch, KnowledgeSource } from './types'
 
 /* The notices render from src/App.tsx into the standing #toasts host, so the
    page's own root has to be standing for any of them to appear. */

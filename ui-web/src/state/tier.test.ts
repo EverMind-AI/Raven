@@ -1,12 +1,12 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import * as session from '../lib/session'
-import * as tier from './tier'
-import { resetSources, setSources } from './sources'
-import { mountPageRoot } from '../test/pageRoot'
-
 import { resetTranslator, setTranslator } from '../i18n/t'
+import * as session from '../lib/session'
+import { mountPageRoot } from '../test/pageRoot'
+import { resetSources, setSources } from './sources'
+import * as tier from './tier'
+
 import type { TierReply, TierSource } from './tier'
 
 /* The chip and the popover are the page root's now (src/chrome/TierChip.tsx,

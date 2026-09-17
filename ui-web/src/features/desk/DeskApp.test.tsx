@@ -2,21 +2,20 @@
 import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import * as turn from '../composer/turn'
-import * as agents from '../subagents/store'
-import { DeskApp } from './DeskApp'
-import * as deliveries from '../workspace/deliveries'
-import * as desk from './store'
-import * as workspace from '../workspace/store'
-
-import { setCurrent } from '../../lib/session'
-import { installDeskHandoff } from '../../test/deskHandoff'
-import { domSnapshot } from '../../test/domSnapshot'
-import { resetSources, setSources } from '../../state/sources'
-
 import { resetTranslator, setTranslator } from '../../i18n/t'
+import { setCurrent } from '../../lib/session'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
+import { resetSources, setSources } from '../../state/sources'
+import { installDeskHandoff } from '../../test/deskHandoff'
+import { domSnapshot } from '../../test/domSnapshot'
+import * as turn from '../composer/turn'
+import * as agents from '../subagents/store'
+import * as deliveries from '../workspace/deliveries'
+import * as workspace from '../workspace/store'
+import { DeskApp } from './DeskApp'
+import * as desk from './store'
+
 import type { InstanceRow } from '../subagents/types'
 import type { WorkspaceSource } from '../workspace/types'
 

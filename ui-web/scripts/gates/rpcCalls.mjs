@@ -11,7 +11,6 @@
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-
 import ts from 'typescript'
 
 /* Every feature's source module and everything under state/ and app/: the

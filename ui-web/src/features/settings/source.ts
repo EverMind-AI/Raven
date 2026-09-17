@@ -9,21 +9,21 @@
    for the visible conversation, which is a settings question rather than the
    chip's own. */
 
-import type { ProviderOp, SettingsSnapshot, SettingsSource, ToolGroup } from './types'
-import type { ParamsOf, ResultOf } from '../../rpc/generated'
-import type { BannerSource } from '../../state/banner'
-
-import { defaultModel, defaultProvider, loadProviders, providers, setDefaultPair, showModel } from '../model/source'
-import { open as openModelPicker } from '../model/store'
-import { extTools, loadExt } from '../installed/source'
-import { draw as drawBanner } from '../../state/banner'
 import { t } from '../../i18n/t'
-import { setFromConfig as setPermMode } from '../../state/perm'
 import { current as sessionCurrent } from '../../lib/session'
-import { show as toast } from '../../state/toast'
 import { gateway } from '../../rpc/gateway'
+import { draw as drawBanner } from '../../state/banner'
+import { setFromConfig as setPermMode } from '../../state/perm'
 import { generation } from '../../state/session/generation'
 import { staging } from '../../state/session/staging'
+import { show as toast } from '../../state/toast'
+import { extTools, loadExt } from '../installed/source'
+import { defaultModel, defaultProvider, loadProviders, providers, setDefaultPair, showModel } from '../model/source'
+import { open as openModelPicker } from '../model/store'
+
+import type { ParamsOf, ResultOf } from '../../rpc/generated'
+import type { BannerSource } from '../../state/banner'
+import type { ProviderOp, SettingsSnapshot, SettingsSource, ToolGroup } from './types'
 
 /* The groups the dialog draws its tool rows under, and their order. Page data
    rather than a fixture: both modes draw the same four, and which one a tool

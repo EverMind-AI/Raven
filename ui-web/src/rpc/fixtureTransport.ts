@@ -1,3 +1,5 @@
+import { RpcError } from './transport'
+
 import type { ParamsOf, ResultOf, RpcMethod } from './generated'
 import type { PushMethod } from './notifications'
 import type {
@@ -8,8 +10,6 @@ import type {
   StateInfo,
   StateListener,
 } from './transport'
-
-import { RpcError } from './transport'
 
 /**
  * A contract answer as a gateway really sends it: a field the contract leaves

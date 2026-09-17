@@ -3,17 +3,17 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { _resetForTests as sheetReset } from '../sheetRack'
 import { run as dagOpen, start as dagStart, _resetForTests as dagReset } from '../../features/dag/mount'
 import { openDeskAgent, openDeskAgentRecord, openDeskFile, openDeskTab, get as deskState, reset as deskLeave, saved as deskSaved, setActive, toggleSolo, updateSplits, _resetForTests as deskReset } from '../../features/desk/store'
-import { installDeskHandoff } from '../../test/deskHandoff'
-import { landing, refreshDag, resume, watch } from './resume'
-import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
 import { reset as agentsLeave, _resetForTests as agentsReset, get as agentsState } from '../../features/subagents/store'
-import { resetSources, setSources } from '../sources'
-
 import { resetTranslator, setTranslator } from '../../i18n/t'
+import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
+import { installDeskHandoff } from '../../test/deskHandoff'
 import { installWsPane } from '../../test/wsPaneHarness'
+import { _resetForTests as sheetReset } from '../sheetRack'
+import { resetSources, setSources } from '../sources'
+import { landing, refreshDag, resume, watch } from './resume'
+
 import type { DagRun } from '../../features/dag/types'
 import type { InstanceRow } from '../../features/subagents/types'
 import type { TranscriptSource } from '../../features/transcript/types'

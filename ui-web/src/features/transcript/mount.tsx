@@ -1,9 +1,9 @@
-import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
+import { createRoot } from 'react-dom/client'
 
-import { AgentStageView, StageView } from './TranscriptPage'
-import * as store from './store'
 import { holdsHost } from '../../state/session/hosts'
+import * as store from './store'
+import { AgentStageView, StageView } from './TranscriptPage'
 
 import type { AgentCtxLike } from './store'
 import type { AnswerData, HistoryMessage, Lane, NoteHandle, StepHandle } from './types'

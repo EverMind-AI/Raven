@@ -7,21 +7,21 @@
  * registry's business and not the rail's own data.
  */
 
-import { hasStillOnDisk } from '../../rpc/capabilities'
-import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
-import { show as toast } from '../../state/toast'
-import { forget as forgetSubscription, switchToDraft } from '../../state/session/registry'
-import { sources } from '../../state/sources'
-import { forget as forgetDagRuns } from '../dag/mount'
-import { redraw as redrawSettings } from '../settings/store'
 import { t } from '../../i18n/t'
 import { $ } from '../../lib/dom'
-import { dropDraft } from '../composer/mount'
+import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
+import { hasStillOnDisk } from '../../rpc/capabilities'
 import { ask as confirmAsk } from '../../state/confirm'
-import { forget as sheetsForget } from '../../state/sheetRack'
+import { forget as forgetSubscription, switchToDraft } from '../../state/session/registry'
 import { open as sessionOpen, replace as sessionReplace, rows as sessionRows } from '../../state/session/rows'
+import { forget as sheetsForget } from '../../state/sheetRack'
+import { sources } from '../../state/sources'
+import { show as toast } from '../../state/toast'
+import { dropDraft } from '../composer/mount'
+import { forget as forgetDagRuns } from '../dag/mount'
+import { redraw as redrawSettings } from '../settings/store'
+import { deleteSession, setArchived } from './source'
 import { draw as sessionDraw, removeSessionRow } from './store'
-import { deleteSession, renamed, setArchived } from './source'
 
 import type { SessRow } from './types'
 

@@ -11,17 +11,17 @@
  * the boot's own wiring (src/app/install.ts).
  */
 
-import { setChipPainter } from '../model/source'
-import * as chip from '../model/chip'
-import { checkVersion, savePermMode, setSettingsChrome } from './source'
-import { t } from '../../i18n/t'
-import { hasUpdateFlag } from '../../rpc/capabilities'
-import { setPermPersister } from '../../state/perm'
-import { current as sessionCurrent } from '../../lib/session'
-import { show as toast } from '../../state/toast'
-import { pick as langPick } from '../../state/lang/pick'
-import { staging } from '../../state/session/staging'
 import { APP_VERSION, appVersionSet, askUpgrade, showUpNote } from '../../app/updates'
+import { t } from '../../i18n/t'
+import { current as sessionCurrent } from '../../lib/session'
+import { hasUpdateFlag } from '../../rpc/capabilities'
+import { pick as langPick } from '../../state/lang/pick'
+import { setPermPersister } from '../../state/perm'
+import { staging } from '../../state/session/staging'
+import { show as toast } from '../../state/toast'
+import * as chip from '../model/chip'
+import { setChipPainter } from '../model/source'
+import { checkVersion, savePermMode, setSettingsChrome } from './source'
 import { redraw as redrawSettings } from './store'
 
 /* The version check the rail-foot notice already does, on demand. No new

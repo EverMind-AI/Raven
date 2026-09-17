@@ -1,8 +1,8 @@
 import { flushSync } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 
-import { SubagentsApp } from './SubagentsPage'
 import * as store from './store'
+import { SubagentsApp } from './SubagentsPage'
 
 import type { Root } from 'react-dom/client'
 

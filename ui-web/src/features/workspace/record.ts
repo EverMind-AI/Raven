@@ -12,11 +12,11 @@
  * the redraw -- is the page's (src/state/ws.ts), not this module's.
  */
 
-import * as hunks from './hunks'
-import { shared as workspaceShared } from './store'
 import { t } from '../../i18n/t'
-import { shortPath } from './source'
 import { pane } from '../../state/wsPane'
+import * as hunks from './hunks'
+import { shortPath } from './source'
+import { shared as workspaceShared } from './store'
 
 import type { WsChange, WsHunk, WsShared } from './types'
 

@@ -2,25 +2,24 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import { setCurrent } from '../../lib/session'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import { resetSources, setSources, sources } from '../../state/sources'
+import { installDeskHandoff } from '../../test/deskHandoff'
+import { installWsPane } from '../../test/wsPaneHarness'
+import * as agents from '../subagents/store'
+import * as deliveries from '../workspace/deliveries'
+import * as workspace from '../workspace/store'
 import { DeskPalette } from './DeskPalette'
 import {
   DESK_COLUMN_FLOOR, DESK_DEFAULT_HEIGHT, DESK_DEFAULT_WIDTH, DESK_DRAG_THRESHOLD,
   DESK_GEOMETRY_KEY, DESK_LAUNCHER_EDGE, DESK_TEXT_GAP,
 } from './geometry'
-import * as agents from '../subagents/store'
-import * as deliveries from '../workspace/deliveries'
-import * as desk from './store'
 import * as seen from './seen'
-import * as workspace from '../workspace/store'
+import * as desk from './store'
 
-import { setCurrent } from '../../lib/session'
-import { installDeskHandoff } from '../../test/deskHandoff'
-import { resetSources, setSources, sources } from '../../state/sources'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as confirmStore from '../../state/confirm'
-import * as pageStore from '../../state/page'
-import { installWsPane } from '../../test/wsPaneHarness'
 import type { InstanceRow, SubagentsSource } from '../subagents/types'
 import type { WorkspaceSource, WsChange } from '../workspace/types'
 

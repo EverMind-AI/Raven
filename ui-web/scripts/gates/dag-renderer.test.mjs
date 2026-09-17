@@ -1,7 +1,6 @@
 /* The CSS contract that makes the compact DAG card content-sized and scroll-free. */
 
 import { readFileSync } from 'node:fs'
-
 import { describe, expect, it } from 'vitest'
 
 const css = readFileSync(new URL('../../src/styles/page.css', import.meta.url), 'utf8')

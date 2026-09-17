@@ -17,12 +17,12 @@
  * against a real serve before.
  */
 
-import type { RpcTransport } from './transport'
-
 import { demoFixtures, deskDemoOverrides, onboardDemoOverrides } from './fixtures'
 import { FixtureTransport } from './fixtureTransport'
 import { OverrideTransport } from './overrideTransport'
 import { WsTransport } from './wsTransport'
+
+import type { RpcTransport } from './transport'
 
 /* Whether this page has a gateway to talk to at all. */
 function liveMode(): boolean {

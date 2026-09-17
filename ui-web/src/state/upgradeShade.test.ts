@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { _resetForTests, open } from './upgradeShade'
-import { mountPageRoot } from '../test/pageRoot'
 import { resetTranslator, setTranslator } from '../i18n/t'
-import * as pageStore from './page'
+import { mountPageRoot } from '../test/pageRoot'
 import * as confirmStore from './confirm'
+import * as pageStore from './page'
+import { _resetForTests, open } from './upgradeShade'
 
 /* The card is drawn by src/chrome/UpgradeShade.tsx, so the page's own root has
    to be standing for one to reach the body (see src/main.tsx). */

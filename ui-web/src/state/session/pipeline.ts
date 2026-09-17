@@ -13,17 +13,17 @@
  * blocked on the answer -- not the one on screen.
  */
 
-import { current as sessionCurrent } from '../../lib/session'
-import { show as toast } from '../toast'
-import { gateway } from '../../rpc/gateway'
-import { t } from '../../i18n/t'
 import { closeApproval as approvalClose, open as approveSheet, openApproval as approvalSheet } from '../../features/composer/approve'
 import { close as clarifyClose, open as clarifySheet } from '../../features/composer/clarify'
 import { drawMeter, goPaint as goState } from '../../features/composer/mount'
-import { draw as sessionDraw } from '../../features/rail/store'
-import { sess } from './rows'
 import { touchSession } from '../../features/rail/source'
+import { draw as sessionDraw } from '../../features/rail/store'
+import { t } from '../../i18n/t'
+import { current as sessionCurrent } from '../../lib/session'
+import { gateway } from '../../rpc/gateway'
+import { show as toast } from '../toast'
 import { bySubscriptionRuntime, dispatchTo, refreshList, viewRuntime } from './registry'
+import { sess } from './rows'
 import { dispatch } from './stages'
 
 import type { TurnEvent as PhaseEvent } from '../../features/composer/turn'

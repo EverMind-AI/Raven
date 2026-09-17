@@ -3,17 +3,17 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import * as agents from '../subagents/store'
-import * as deliveries from '../workspace/deliveries'
-import * as desk from './store'
-import * as workspace from '../workspace/store'
-import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
-import { resetSources, setSources, sources } from '../../state/sources'
-
 import { resetTranslator, setTranslator } from '../../i18n/t'
+import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
+import { resetSources, setSources } from '../../state/sources'
 import { installWsPane } from '../../test/wsPaneHarness'
+import * as agents from '../subagents/store'
+import * as deliveries from '../workspace/deliveries'
+import * as workspace from '../workspace/store'
+import * as desk from './store'
+
 import type { InstanceRow } from '../subagents/types'
 
 /* Recorded rather than ignored: the panel the desk lives in is legacy chrome,

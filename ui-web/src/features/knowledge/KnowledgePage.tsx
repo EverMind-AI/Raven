@@ -3,8 +3,8 @@ import { useSyncExternalStore } from 'react'
 
 import { ProviderIcon, ravenIconPath } from '../../components/ProviderMark'
 import { t } from '../../i18n/t'
-import * as lang from '../../state/lang'
 import { md as mdHtml } from '../../lib/prose'
+import * as lang from '../../state/lang'
 import { open as openSettings, setTab as setSettingsTab } from '../settings/store'
 import * as store from './store'
 

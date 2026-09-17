@@ -28,21 +28,21 @@
  * last, and the guard in front of it is what keeps it off a streaming turn.
  */
 
-import { redraw as redrawSettings } from '../../features/settings/store'
-import { redraw as redrawTranscript } from '../../features/transcript/mount'
-import { draw as drawNavRows } from '../navfly'
 import { drawQueue as queueDraw, turn } from '../../features/composer/mount'
 import { label as modelLabel } from '../../features/model/chip'
 import { draw as sessionDraw } from '../../features/rail/store'
-import { draw as drawCtx } from '../ctxChip'
-import { draw as drawFoot } from '../foot'
-import { draw as drawPerm } from '../perm'
+import { redraw as redrawSettings } from '../../features/settings/store'
+import { redraw as redrawTranscript } from '../../features/transcript/mount'
 import { current as sessionCurrent } from '../../lib/session'
 import * as caps from '../caps'
+import { draw as drawCtx } from '../ctxChip'
 import * as detail from '../detail'
-import * as lang from './store'
+import { draw as drawFoot } from '../foot'
+import { draw as drawNavRows } from '../navfly'
+import { draw as drawPerm } from '../perm'
 import { isDraft } from '../session/registry'
 import { open as sessionOpen, sess } from '../session/rows'
+import * as lang from './store'
 
 export function repaint(): void {
   sessionDraw()

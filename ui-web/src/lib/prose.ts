@@ -11,7 +11,7 @@
  */
 
 import { t } from '../i18n/t'
-import { ds, sources } from '../state/sources'
+import { sources } from '../state/sources'
 
 export interface ProseTarget {
   p: string
@@ -91,6 +91,10 @@ const TASK_RE = /^\[([ xX])\][ \t]+/
    a space would open a visible hole. */
 const BREAK = '<div class="brk"></div>'
 const HARD_BR = /(?:[ \t]{2,}|\\)$/
+/* The class holds the ideographic space itself: a full-width gap between two
+   CJK runs is a character the joint must recognise, not whitespace in the
+   source. */
+// eslint-disable-next-line no-irregular-whitespace
 const CJK = /[　-〿㐀-䶿一-鿿豈-﫿＀-￯]/
 /* The two shapes that keep their own line because a run of them IS the layout:
    an enumerated step, and a bolded lead-in. Glued together they read as one
@@ -200,6 +204,10 @@ export function md(src: string): string {
     t_ = t_.replace(/~~([^~]+)~~/g, '<del>$1</del>')
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/(^|[^\w*])\*([^\s*][^*]*)\*(?![\w*])/g, '$1<em>$2</em>')
+    /* \x01 is the pipeline's own placeholder: a run held out of the markdown
+       pass and put back after it, so it cannot be a character the source
+       carries. */
+    // eslint-disable-next-line no-control-regex
     return link(t_).replace(/\u0001(\d+)\u0001/g, (_, k: string) => held[+k]!)
   }
   const L = src.split('\n')
@@ -258,8 +266,10 @@ export function md(src: string): string {
       /* An escaped pipe stays inside its cell: splitting on the raw character
          tears the row, and a torn row is a wrong table (a regex alternation or
          a shell pipeline in a cell is enough to trigger it). */
+      /* eslint-disable no-control-regex -- \x01 stands in for an escaped pipe */
       const cut = (r: string): string[] => r.replace(/\\\|/g, '\u0001').replace(/^\||\|$/g, '')
         .split('|').map((c) => c.trim().replace(/\u0001/g, '|'))
+      /* eslint-enable no-control-regex */
       const h = cut(l)
       i += 2
       const b: string[][] = []

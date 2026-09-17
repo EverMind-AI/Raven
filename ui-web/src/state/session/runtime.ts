@@ -16,39 +16,39 @@
  * names that used to say which conversation a frame was about.
  */
 
+import { claimDraft as claimComposerDraft } from '../../features/composer/mount'
+import { drawMeter, goPaint as goState, queuePush, queueShift, turn } from '../../features/composer/mount'
+import { reduce } from '../../features/composer/turn'
+import { claimDraft as claimDeskDraft } from '../../features/desk/store'
 import { loadProviders, stagedTier } from '../../features/model/source'
 import { rowPreview, touchSession } from '../../features/rail/source'
+import { draw as sessionDraw } from '../../features/rail/store'
 import { plainTitle } from '../../features/rail/title'
 import { loadPermMode, stagedPerm } from '../../features/settings/source'
-import { wsSetRoot as wsSetRootImpl } from '../../features/workspace/source'
-import { claimDraft as claimComposerDraft } from '../../features/composer/mount'
-import { claimDraft as claimDeskDraft } from '../../features/desk/store'
 import * as transcript from '../../features/transcript/mount'
 import { down as scrollTranscriptDown } from '../../features/transcript/tail'
+import { wsSetRoot as wsSetRootImpl } from '../../features/workspace/source'
 import { currentTurn as wsCurrentTurn } from '../../features/workspace/store'
-import { hasNamingFlag, hasTurnDuration } from '../../rpc/capabilities'
-import { set as setCtx } from '../ctxChip'
-import { show as ntfPush } from '../../lib/notifications'
-import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
-import { load as loadTier } from '../tier'
-import { show as toast } from '../toast'
-import { gateway } from '../../rpc/gateway'
-import { ds, sources } from '../sources'
 import { t } from '../../i18n/t'
 import { $ } from '../../lib/dom'
-import { drawMeter, goPaint as goState, queuePush, queueShift, turn } from '../../features/composer/mount'
-import { draw as sessionDraw } from '../../features/rail/store'
 import { formatDuration as dur } from '../../lib/duration'
+import { show as ntfPush } from '../../lib/notifications'
+import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
+import { hasNamingFlag, hasTurnDuration } from '../../rpc/capabilities'
+import { gateway } from '../../rpc/gateway'
 import { ask as confirmAsk } from '../confirm'
+import { set as setCtx } from '../ctxChip'
+import { ds, sources } from '../sources'
+import { load as loadTier } from '../tier'
+import { show as toast } from '../toast'
 import { ask, noteRow, noteSay, pitch, splitAtts } from './conversation'
-import { rows as sessionRows, sess } from './rows'
-import { reduce } from '../../features/composer/turn'
 import { generation } from './generation'
 import { beginNaming, namingDeclined } from './naming'
 import { get, isActiveRuntime, isDraft as registryIsDraft, mint, subscribe, viewRuntime } from './registry'
+import { rows as sessionRows, sess } from './rows'
 
-import type { SessRow } from '../../features/rail/types'
 import type { TurnEvent, TurnSnapshot } from '../../features/composer/turn'
+import type { SessRow } from '../../features/rail/types'
 import type { Staging } from './staging'
 
 /* The composer island's stores hold the visible conversation's phase and
@@ -299,7 +299,6 @@ export function stop(): void {
   if (!turn.cancellable()) return
   const owner = sessionCurrent()
   turn.dispatch({ type: 'cancel' })
-  const rt = viewRuntime()
   gateway().call('turn.cancel', { session_key: owner as string })
     .then(() => {
       get(owner)?.dispatch({ type: 'idle' })

@@ -1,11 +1,11 @@
 import { t } from '../../i18n/t'
-import { ds } from '../../state/sources'
-import { show as toast } from '../../state/toast'
 import * as detail from '../../state/detail'
+import * as page from '../../state/page'
+import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
+import { show as toast } from '../../state/toast'
 
 import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource } from './types'
-import * as page from '../../state/page'
-import { makeStore } from '../../state/store'
 
 /* Page state, outside React on purpose: the legacy shell drives this page
  * imperatively (the More row opens it, Esc closes it, a language flip

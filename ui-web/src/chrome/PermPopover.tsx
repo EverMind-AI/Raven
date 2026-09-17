@@ -29,8 +29,8 @@
 import { useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import { place } from '../lib/popover'
 import { t } from '../i18n/t'
+import { place } from '../lib/popover'
 import * as lang from '../state/lang'
 import * as perm from '../state/perm'
 

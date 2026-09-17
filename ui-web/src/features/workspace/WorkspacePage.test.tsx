@@ -2,17 +2,16 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { WorkspaceApp } from './WorkspacePage'
-import * as deliveries from './deliveries'
-import * as store from './store'
-
-import { domSnapshot } from '../../test/domSnapshot'
-import { resetSources, setSources, sources } from '../../state/sources'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
+import { setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
+import { resetSources, setSources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
 import { installWsPane } from '../../test/wsPaneHarness'
+import * as deliveries from './deliveries'
+import * as store from './store'
+import { WorkspaceApp } from './WorkspacePage';
+
 import type { WorkspaceSnapshot, WorkspaceSource, WsChange } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */

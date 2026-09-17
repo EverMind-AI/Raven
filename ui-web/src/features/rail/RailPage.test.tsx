@@ -2,21 +2,20 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { RailApp } from './RailPage'
-import * as store from './store'
+import { setTranslator } from '../../i18n/t'
 import {
   _resetForTests as sessionReset,
   current as sessionCurrent,
   onChange,
   setCurrent,
 } from '../../lib/session'
-
-import { domSnapshot } from '../../test/domSnapshot'
-import { resetSources, setSources, sources } from '../../state/sources'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
+import { resetSources, setSources, sources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import { RailApp } from './RailPage'
+import * as store from './store'
+
 import type { MenuItem } from '../../state/menu'
 import type { ToastAction } from '../../state/toast'
 import type { RailSnapshot, RailSource, SessRow } from './types'

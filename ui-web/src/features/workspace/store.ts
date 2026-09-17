@@ -1,19 +1,19 @@
 import { createRoot } from 'react-dom/client'
 
+import { t } from '../../i18n/t'
+import { copy } from '../../lib/clipboard'
+import { md } from '../../lib/prose'
+import { current as currentSession } from '../../lib/session'
+import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
+import { pane } from '../../state/wsPane'
 import * as browser from '../browser/mount'
 import * as agents from '../subagents/mount'
 import * as deliveries from './deliveries'
-import { t } from '../../i18n/t'
-import { ds } from '../../state/sources'
-import { copy } from '../../lib/clipboard'
-import { current as currentSession } from '../../lib/session'
-import { md } from '../../lib/prose'
 
 import type { WorkspaceSnapshot, WorkspaceSource, WsFile, WsShared } from './types'
 import type { ReactElement } from 'react'
 import type { Root } from 'react-dom/client'
-import { pane } from '../../state/wsPane'
-import { makeStore } from '../../state/store'
 
 /* Pane state, outside React on purpose: the callers that drive this pane are
  * not React. The pane's own chrome dispatches every repaint (state/ws.ts's

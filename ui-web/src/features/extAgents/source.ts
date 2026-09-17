@@ -13,11 +13,11 @@
    availability check, which can cost up to ten seconds per entry and would only
    re-measure what the write just changed. */
 
-import type { ExtAgentRow, ExtAgentsSource } from './types'
-import type { ResultOf } from '../../rpc/generated'
-
 import { hasBuildFlag } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
+
+import type { ResultOf } from '../../rpc/generated'
+import type { ExtAgentRow, ExtAgentsSource } from './types'
 
 /** One agent as `subagents.list` sends it. */
 export type ExtAgentRowWire = ResultOf<'subagents.list'>['rows'][number]

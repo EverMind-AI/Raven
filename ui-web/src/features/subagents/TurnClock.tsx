@@ -16,8 +16,8 @@
  * binding commit or a graph-origin write touched the record.
  */
 
-import { formatDuration } from '../../lib/duration'
 import { t } from '../../i18n/t'
+import { formatDuration } from '../../lib/duration'
 import { useTick } from '../../lib/tick'
 
 import type { InstanceRow } from './types'

@@ -2,20 +2,19 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { Lightbox } from '../../chrome/Lightbox'
+import { setTranslator } from '../../i18n/t'
+import * as attachmentCache from '../../lib/attachmentCache'
+import * as confirmStore from '../../state/confirm'
+import { close as closeLightbox } from '../../state/lightbox'
+import * as pageStore from '../../state/page'
+import { resetSources, setSources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import * as tail from '../transcript/tail'
 import { AttTray, QueueList, SlashList, TurnLive } from './ComposerPage'
 import * as store from './store'
-import * as turn from './turn'
-import * as attachmentCache from '../../lib/attachmentCache'
-import * as tail from '../transcript/tail'
+import * as turn from './turn';
 
-import { Lightbox } from '../../chrome/Lightbox'
-import { close as closeLightbox } from '../../state/lightbox'
-import { domSnapshot } from '../../test/domSnapshot'
-import { resetSources, setSources } from '../../state/sources'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as confirmStore from '../../state/confirm'
-import * as pageStore from '../../state/page'
 import type { ComposerSource, SlashCmd } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -506,7 +505,7 @@ describe('the attachment tray', () => {
   })
 
   it('opens an image chip in the viewer, since the square crops it', async () => {
-    const { calls } = wire({ upload: async () => ({ path: 'uploads/p.png', size: 10 }) })
+    wire({ upload: async () => ({ path: 'uploads/p.png', size: 10 }) })
     const box = mountTray()
     await act(async () => {
       store.addFiles([new File(['x'], 'p.png', { type: 'image/png' })])

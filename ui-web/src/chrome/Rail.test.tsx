@@ -8,16 +8,15 @@
  * handed over empty, which row opens what, and that the literals come from the
  * catalogue rather than from a copy in the JSX.
  */
+// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
+import { readFileSync } from 'node:fs'
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
-import { readFileSync } from 'node:fs'
-
 import * as knowledge from '../features/knowledge/store'
 import * as memory from '../features/memory/store'
-import * as nav from '../features/plugins/wire'
 import * as playbooks from '../features/playbooks/store'
+import * as nav from '../features/plugins/wire'
 import * as settings from '../features/settings/store'
 import * as lang from '../state/lang'
 import { mountPageRoot } from '../test/pageRoot'

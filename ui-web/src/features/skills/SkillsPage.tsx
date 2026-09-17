@@ -3,15 +3,15 @@ import { createPortal } from 'react-dom'
 
 import { CardSkeleton } from '../../components/Skeleton'
 import { t } from '../../i18n/t'
-import * as lang from '../../state/lang'
 import { text as reachText } from '../../lib/reach'
 import * as detail from '../../state/detail'
+import * as lang from '../../state/lang'
+import { useInTask } from '../composer/useInTask'
 import * as store from './store'
 
 import type { SkillsState } from './store'
 import type { HubItem } from './types'
 import type { JSX } from 'react'
-import { useInTask } from '../composer/useInTask'
 
 /* The skill tab mirrors the plugin tab exactly: the market IS the page,
    what you already have lives one level in (the installed button top-right

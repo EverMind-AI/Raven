@@ -13,10 +13,10 @@
 
 import { useSyncExternalStore } from 'react'
 
-import * as banner from '../state/banner'
+import { openDetail } from '../features/plugins/store'
 import { openPlugins } from '../features/plugins/wire'
 import { t } from '../i18n/t'
-import { openDetail } from '../features/plugins/store'
+import * as banner from '../state/banner'
 
 import type { JSX } from 'react'
 

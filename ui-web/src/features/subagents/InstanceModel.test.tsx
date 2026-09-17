@@ -2,14 +2,14 @@
 import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { InstanceModel } from './InstanceModel'
-import * as store from './store'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
 import { resetSources, setSources } from '../../state/sources'
 import { mountPageRoot } from '../../test/pageRoot'
+import { InstanceModel } from './InstanceModel'
+import * as store from './store'
 
-import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as pageStore from '../../state/page'
-import * as confirmStore from '../../state/confirm'
 import type { InstanceRow, SubagentsSource } from './types'
 
 /* The chip's menu rows render from src/App.tsx into the shared #menu host, so

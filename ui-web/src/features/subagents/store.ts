@@ -1,14 +1,14 @@
 import { t } from '../../i18n/t'
-import { ds } from '../../state/sources'
 import { formatDuration } from '../../lib/duration'
 import { current as currentSession, onChange as onSessionChange } from '../../lib/session'
+import { ds } from '../../state/sources'
 import { sources } from '../../state/sources'
+import { pane } from '../../state/wsPane'
 import { plainTitle as stripTitle } from '../rail/title'
 import { instanceCtxStatus, toInstanceCtx } from './history'
 
 import type { ComposerSource } from '../composer/types'
 import type { AgentRow, InstanceCtx, InstanceRow, OpenItem, SubagentRow, SubagentsSource } from './types'
-import { pane } from '../../state/wsPane'
 
 /* View state, outside React on purpose: three of the callers that drive this
  * view are not React. The workspace pane mounts and unmounts it per repaint

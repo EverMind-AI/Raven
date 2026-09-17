@@ -25,15 +25,15 @@
 
 import { createElement } from 'react'
 
-import { GateSheet } from './GateSheet'
-import { AskApproveSheet } from './AskApproveSheet'
 import { t } from '../../i18n/t'
 import * as drafts from '../../state/sheetDrafts'
 import { add as sheetAdd, dropClass, remove as sheetRemove, session } from '../../state/sheetRack'
+import { AskApproveSheet } from './AskApproveSheet'
+import { GateSheet } from './GateSheet'
 import { composing } from './store'
 
-import type { ApprovalControls } from './GateSheet'
 import type { SheetOptionRow } from '../../chrome/SheetRack'
+import type { ApprovalControls } from './GateSheet'
 
 /* The permission gate's approval, keyed so approval.closed can withdraw the
    exact request it retires (a timeout, a teardown, an answer from another

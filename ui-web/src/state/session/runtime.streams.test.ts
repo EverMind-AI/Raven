@@ -12,8 +12,8 @@
 import { describe, expect, it } from 'vitest'
 
 import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
-
 import * as turn from '../../features/composer/turn'
+
 import type { SessRow } from '../../features/rail/types'
 import type { Sources } from '../sources'
 

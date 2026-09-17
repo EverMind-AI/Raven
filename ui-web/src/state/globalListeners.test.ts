@@ -18,20 +18,20 @@
  */
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { installGlobalListeners } from './globalListeners'
-import { _resetForTests as resetLayers } from './portals'
-import * as selection from './selection'
-import * as tip from './tooltip'
-import * as updates from '../app/updates'
-import * as contextMenu from './contextMenu'
-import * as shellWindow from './shellWindow'
-import * as browser from '../features/browser/store'
-import * as composer from '../features/composer/mount'
 import * as boot from '../app/boot'
-import * as chips from './proseChips'
-import * as menu from './menu'
+import * as updates from '../app/updates'
 import * as panes from '../chrome/behaviour/panes'
 import * as scrollbars from '../chrome/behaviour/scrollbars'
+import * as browser from '../features/browser/store'
+import * as composer from '../features/composer/mount'
+import * as contextMenu from './contextMenu'
+import { installGlobalListeners } from './globalListeners'
+import * as menu from './menu'
+import { _resetForTests as resetLayers } from './portals'
+import * as chips from './proseChips'
+import * as selection from './selection'
+import * as shellWindow from './shellWindow'
+import * as tip from './tooltip'
 
 /* One row per listener: target, event, phase, the handler itself where another
    module owns it, and who it belongs to in words.

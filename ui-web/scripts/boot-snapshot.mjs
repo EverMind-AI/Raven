@@ -1,3 +1,4 @@
+import { Window } from 'happy-dom'
 // Boots the assembled page in happy-dom and compares the DOM shape it settles
 // into against a golden. This is the gate on the structural switches of the
 // refactor -- concatenated script to modules, one build shape to another --
@@ -23,8 +24,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-
-import { Window } from 'happy-dom'
 
 /** The data attributes whose value is a sentence, not a state. */
 const PHRASE = new Set(['data-tip', 'data-label'])

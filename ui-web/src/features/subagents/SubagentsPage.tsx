@@ -2,17 +2,17 @@ import { useEffect, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 
 import { AgentMark, isOwnAgent } from '../../components/AgentMark'
+import { SendGlyph } from '../../components/Ico'
 import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
 import { ds } from '../../state/sources'
-import { SendGlyph } from '../../components/Ico'
 import { composing, fmtSize } from '../composer/store'
 import { instanceMark, instanceState } from './history'
 import * as store from './store'
 
+import type { Attachment, ComposerSource } from '../composer/types'
 import type { AgentsState } from './store'
 import type { AgentRow, InstanceRow, OpenItem, SubagentRow } from './types'
-import type { Attachment, ComposerSource } from '../composer/types'
 import type { JSX } from 'react'
 
 /* The glyph the panel's rows have always been drawn with. */

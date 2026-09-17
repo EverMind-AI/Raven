@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { clearance } from './popover'
 import { mountPageRoot } from '../test/pageRoot'
+import { clearance } from './popover'
 
 /* happy-dom measures every box as zero, so each element that matters here is
    handed the rect it would have on a laid-out page. The numbers are the ones

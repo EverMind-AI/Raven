@@ -3,14 +3,15 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 
-import { AgentRecordConversation, InstanceConversation } from '../subagents/SubagentsPage'
+import { t } from '../../i18n/t'
 import { InstanceMode } from '../subagents/InstanceMode'
 import { InstanceModel } from '../subagents/InstanceModel'
-import { TurnClock } from '../subagents/TurnClock'
 import * as agents from '../subagents/store'
-import { t } from '../../i18n/t'
-import { ChgDiff, FileView } from '../workspace/WorkspacePage'
+import { AgentRecordConversation, InstanceConversation } from '../subagents/SubagentsPage'
+import { TurnClock } from '../subagents/TurnClock'
 import * as deliveries from '../workspace/deliveries'
+import * as workspace from '../workspace/store'
+import { ChgDiff, FileView } from '../workspace/WorkspacePage'
 import { DeskIcon } from './DeskIcon'
 import { dragProposal, slotRects } from './drag'
 import {
@@ -19,7 +20,6 @@ import {
   workspaceTransitionWidth,
 } from './geometry'
 import * as desk from './store'
-import * as workspace from '../workspace/store'
 
 import type { DeskArrangement, SlotRect } from './drag'
 import type { DeskPane } from './types'

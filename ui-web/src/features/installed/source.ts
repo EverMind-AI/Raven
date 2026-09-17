@@ -13,16 +13,16 @@
  * page toggle a row without knowing there is a config file.
  */
 
-import type { InstalledRow } from '../plugins/types'
-import type { CapabilitiesSource } from '../../state/sources'
+import { t } from '../../i18n/t'
+import { gateway } from '../../rpc/gateway'
+import { show as toast } from '../../state/toast'
+import { toggleMcp } from '../plugins/store'
+
 import type { ResultOf } from '../../rpc/generated'
+import type { CapabilitiesSource } from '../../state/sources'
+import type { InstalledRow } from '../plugins/types'
 import type { ToolRow } from '../settings/types'
 import type { InstalledSkill } from '../skills/types'
-
-import { toggleMcp } from '../plugins/store'
-import { t } from '../../i18n/t'
-import { show as toast } from '../../state/toast'
-import { gateway } from '../../rpc/gateway'
 
 // Display names come from the catalogue; an unknown tool keeps its raw id.
 const toolLabel = (n: string): string => t('tool.' + n, undefined, n)

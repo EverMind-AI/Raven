@@ -19,11 +19,10 @@
 
 import { readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-
 import { describe, expect, it } from 'vitest'
 
-import { names } from './rpcCalls.mjs'
 import { RPC_METHODS } from '../../src/rpc/generated'
+import { names } from './rpcCalls.mjs'
 
 /* The two undeclared names, and the only two allowed. Both are the manual
    plugin-add path in features/plugins/source.ts. */

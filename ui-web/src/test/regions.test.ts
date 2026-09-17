@@ -19,15 +19,14 @@
  * (scripts/boot-snapshot.mjs) and the body's standing order has another
  * (portals.test.ts).
  */
-import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
-import { flushSync } from 'react-dom'
-import { describe, expect, it } from 'vitest'
-
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { env } from 'node:process'
+import { createElement } from 'react'
+import { flushSync } from 'react-dom'
+import { createRoot } from 'react-dom/client'
+import { describe, expect, it } from 'vitest'
 
 import { App } from '../App'
 import { PAGES } from '../state/pages'

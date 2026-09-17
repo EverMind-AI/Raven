@@ -36,9 +36,9 @@
 
 import { useSyncExternalStore } from 'react'
 
-import { Banner } from './Banner'
 import { rename as renameSession } from '../features/rail/store'
 import * as lang from '../state/lang'
+import { Banner } from './Banner'
 
 import type { JSX } from 'react'
 

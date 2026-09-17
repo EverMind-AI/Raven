@@ -16,13 +16,13 @@
  * and its click are this module's.
  */
 
-import type { UpgradeShade } from '../state/upgradeShade'
-
 import { turn } from '../features/composer/mount'
 import { t } from '../i18n/t'
 import { gateway } from '../rpc/gateway'
 import { ask as confirmAsk } from '../state/confirm'
 import { open as upShade } from '../state/upgradeShade'
+
+import type { UpgradeShade } from '../state/upgradeShade'
 
 type UpKind = 'ver' | 'ui'
 

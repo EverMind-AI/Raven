@@ -1,18 +1,19 @@
 import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { flushSync } from 'react-dom'
 
-import * as dag from '../dag/graph'
-import { DagGraph } from '../dag/DagGraph'
-import * as attachmentCache from '../../lib/attachmentCache'
 import { t } from '../../i18n/t'
+import * as attachmentCache from '../../lib/attachmentCache'
 import { copy } from '../../lib/clipboard'
+import { useTick } from '../../lib/tick'
+import * as lightbox from '../../state/lightbox'
 import { open as openChip } from '../../state/proseChips'
+import { ds } from '../../state/sources'
+import { DagGraph } from '../dag/DagGraph'
+import * as dag from '../dag/graph'
 import { getVersion as deliveriesVersion, humanSize, subscribe as deliveriesSubscribe } from '../workspace/deliveries'
 import {
   fileKind, fileURL, openDelivery as wsOpenDelivery, openPath as wsOpenPath,
 } from '../workspace/store'
-import { useTick } from '../../lib/tick'
-import { ds } from '../../state/sources'
 import { releaseUpward } from './overscroll'
 import * as store from './store'
 import * as tail from './tail'
@@ -24,7 +25,6 @@ import type {
   NoteData, QaData, Seg, StatusData, StepData,
 } from './types'
 import type { KeyboardEvent, ReactElement, ReactNode } from 'react'
-import * as lightbox from '../../state/lightbox'
 
 /* The transcript renderer: three voices, three folding depths. Machine work
  * renders as quiet activity rows, never cards; a stretch of consecutive

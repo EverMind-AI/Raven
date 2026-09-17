@@ -30,8 +30,8 @@ import { show as menuAt } from '../../state/menu'
 import { show as toast } from '../../state/toast'
 import * as store from './store'
 
-import type { JSX, MouseEvent } from 'react'
 import type { InstanceRow, SubagentModelChoice } from './types'
+import type { JSX, MouseEvent } from 'react'
 
 interface Held {
   /* This instance's own override, or null -- which is the agent's own choice,

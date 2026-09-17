@@ -10,8 +10,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
-
 import * as turn from '../../features/composer/turn'
+
 import type { Sources } from '../sources'
 
 type Registry = typeof import('./registry')

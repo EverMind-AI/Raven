@@ -1,18 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { useSyncExternalStore } from 'react'
+import { createPortal } from 'react-dom'
 
 import { AgentMark, isOwnAgent } from '../../components/AgentMark'
-import { t } from '../../i18n/t'
-import * as lang from '../../state/lang'
 import { KeyInput } from '../../components/KeyInput'
 import { SetupGroup, SetupRow } from '../../components/SetupRow'
+import { t } from '../../i18n/t'
+import { ask as confirmAsk } from '../../state/confirm'
+import * as lang from '../../state/lang'
 import * as store from './store'
 
 import type { ExtAgentRow } from './types'
 import type { JSX } from 'react'
-import { ask as confirmAsk } from '../../state/confirm'
-
 import './styles.css'
 
 /* Connect the agents this machine can hand work to. One row per agent; the rows

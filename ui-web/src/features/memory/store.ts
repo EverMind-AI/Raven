@@ -1,9 +1,9 @@
-import { ds } from '../../state/sources'
 import * as detail from '../../state/detail'
+import * as page from '../../state/page'
+import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
 
 import type { MemItem, MemKind, MemStats, MemorySource } from './types'
-import * as page from '../../state/page'
-import { makeStore } from '../../state/store'
 
 /* Page state, outside React on purpose: the caller that closes this page is
  * not React -- the Escape order asks the domain's own verb for it
@@ -165,11 +165,4 @@ export function remove(it: MemItem): void {
     .finally(() => {
       busy = false
     })
-}
-
-/* A language flip changes nothing in this state, and every visible string comes
-   from t() -- so the island's own subscription to the language store is the
-   whole redraw, and this verb is what a caller outside React asks for one by. */
-function redraw(): void {
-  set({})
 }

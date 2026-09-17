@@ -1,10 +1,10 @@
 import { t } from '../../i18n/t'
-import { ds } from '../../state/sources'
-import { show as toast } from '../../state/toast'
 import * as detail from '../../state/detail'
+import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
+import { show as toast } from '../../state/toast'
 
 import type { HubDetail, HubItem, InstalledSkill, SkillsSource } from './types'
-import { makeStore } from '../../state/store'
 
 /* Page state, outside React on purpose: two of the callers that drive this
  * tab are not React. The capabilities page dispatches its draw through its own

@@ -1,14 +1,13 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readdirSync, readFileSync } from 'node:fs'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { _resetForTests, add, dropClass, forget, remove, session, get, sync } from './sheetRack'
-import { _resetForTests as sessionReset, setCurrent } from '../lib/session'
 import { resetTranslator, setTranslator } from '../i18n/t'
-import * as pageStore from '../state/page'
+import { _resetForTests as sessionReset, setCurrent } from '../lib/session'
 import * as confirmStore from '../state/confirm'
+import * as pageStore from '../state/page'
+import { _resetForTests, add, dropClass, forget, remove, session, get, sync } from './sheetRack'
 
 
 function wire(): void {

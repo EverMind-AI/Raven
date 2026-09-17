@@ -8,8 +8,8 @@ import { t } from '../../i18n/t'
 import { MARKS, depths, layout, took } from './graph'
 import { trimShared } from './labels'
 
-import type { DagNode, NodeStatus } from './types'
 import type { Dims } from './graph'
+import type { DagNode, NodeStatus } from './types'
 import type { JSX } from 'react'
 
 export type DagSurface = 'card' | 'sheet'

@@ -5,13 +5,13 @@
    servers it lists come from that read, which three pages share. The renderer
    beside this is features/plugins/. */
 
-import type { DetailEntry, PluginsSource } from './types'
-
 import { code as LANG } from '../../i18n/t'
 import { t } from '../../i18n/t'
-import { show as toast } from '../../state/toast'
 import { gateway } from '../../rpc/gateway'
+import { show as toast } from '../../state/toast'
 import { extIsLoaded, extPlugins, loadExt } from '../installed/source'
+
+import type { DetailEntry, PluginsSource } from './types'
 
 const pmText = (v: unknown): string =>
   (v && typeof v === 'object' ? (v as Record<string, string>)[LANG] || (v as Record<string, string>).en || '' : String(v || ''))

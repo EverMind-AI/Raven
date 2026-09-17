@@ -15,9 +15,9 @@
  */
 import { useEffect, useLayoutEffect, useRef } from 'react'
 
-import { SheetHead } from './AskApproveSheet'
 import { SheetOption } from '../../chrome/SheetRack'
 import * as drafts from '../../state/sheetDrafts'
+import { SheetHead } from './AskApproveSheet'
 
 import type { SheetOptionRow } from '../../chrome/SheetRack'
 import type { JSX } from 'react'

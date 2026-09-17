@@ -1,15 +1,15 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import { _resetForTests as draftsReset, read, slot } from '../../state/sheetDrafts'
+import { _resetForTests, forget, sync } from '../../state/sheetRack'
+import { mountPageRoot } from '../../test/pageRoot'
 import { open as approveOpen } from './approve'
 import { close, open } from './clarify'
-import { _resetForTests, forget, sync } from '../../state/sheetRack'
-import { _resetForTests as draftsReset, read, slot } from '../../state/sheetDrafts'
-import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
-import { mountPageRoot } from '../../test/pageRoot'
-import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as pageStore from '../../state/page'
-import * as confirmStore from '../../state/confirm'
 
 
 function wire(): void {

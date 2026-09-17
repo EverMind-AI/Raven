@@ -1,11 +1,11 @@
 import { t } from '../../i18n/t'
+import { ask as confirmAsk } from '../../state/confirm'
+import * as page from '../../state/page'
 import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
 
 import type { KbBase, KbDoc, KbHit, KbSettings, KbStatus, KnowledgeSource } from './types'
-import * as page from '../../state/page'
-import { ask as confirmAsk } from '../../state/confirm'
-import { makeStore } from '../../state/store'
 
 /* What an RPC failure actually said.
  *
@@ -723,12 +723,6 @@ export function open(): void {
 
 export function close(): void {
   page.show(null)
-}
-
-/* A language flip changes nothing in this state, but every visible string
-   comes from t(), so a re-render is the whole redraw. */
-function redraw(): void {
-  set({})
 }
 
 export function _resetForTests(): void {

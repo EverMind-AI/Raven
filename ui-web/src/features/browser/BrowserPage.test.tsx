@@ -2,17 +2,16 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { BrowserApp } from './BrowserPage'
-import * as store from './store'
-
-import { domSnapshot } from '../../test/domSnapshot'
-import { resetSources, setSources, sources } from '../../state/sources'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as lang from '../../state/lang'
+import { setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
-import { installWsPane } from '../../test/wsPaneHarness'
+import * as lang from '../../state/lang'
 import * as pageStore from '../../state/page'
+import { resetSources, setSources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import { installWsPane } from '../../test/wsPaneHarness'
+import { BrowserApp } from './BrowserPage'
+import * as store from './store';
+
 import type { BrowserSource, ChromiumSource, LinksSource, UrlRow } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */

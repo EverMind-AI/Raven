@@ -13,10 +13,9 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } fr
 import { ModelTagDefs, ModelTags } from '../../components/ModelTags'
 import { ProviderIcon, ProviderStatus } from '../../components/ProviderMark'
 import { t } from '../../i18n/t'
-import * as lang from '../../state/lang'
 import { clearance } from '../../lib/popover'
+import * as lang from '../../state/lang'
 import * as store from './store'
-
 import { offered } from './types'
 
 import type { ApiProtocol, Provider } from './types'

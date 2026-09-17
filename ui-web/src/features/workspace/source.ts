@@ -4,12 +4,12 @@
    an answer makes clickable. The live layer installs both sources onto the
    seam, which replaces the fixture ones before the first paint. */
 
-import type { WorkspaceSource } from './types'
-import type { ProseSource, ProseTarget } from '../../lib/prose'
-
 import { current as sessionCurrent } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
 import { changes as workspaceChanges, showFile } from './store'
+
+import type { ProseSource, ProseTarget } from '../../lib/prose'
+import type { WorkspaceSource } from './types'
 
 export function relToWorkspace(p: string | null | undefined): string | null {
   const s = String(p || '')

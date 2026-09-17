@@ -4,9 +4,9 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import * as store from './store'
+import { setTranslator } from '../../i18n/t'
 import { resetSources, setSources } from '../../state/sources'
-import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as store from './store'
 
 
 beforeEach(() => {

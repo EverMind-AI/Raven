@@ -14,22 +14,22 @@
  */
 
 import { liveAnchor, setLiveAnchor } from '../../features/composer/mount'
+import { drawMeter, goPaint as goState, queueRestore, queueSnapshot, turn } from '../../features/composer/mount'
+import { draw as sessionDraw } from '../../features/rail/store'
 import { nudge, stopStream } from '../../features/transcript/mount'
 import { down as scrollTranscriptDown } from '../../features/transcript/tail'
 import { restore as wsRestoreSnapshot, snapshot as wsSnapshot } from '../../features/workspace/store'
-import { draw as drawBanner } from '../banner'
-import { current as sessionCurrent } from '../../lib/session'
-import { drawMeter, goPaint as goState, queueRestore, queueSnapshot, turn } from '../../features/composer/mount'
 import { $ } from '../../lib/dom'
-import { draw as sessionDraw } from '../../features/rail/store'
+import { current as sessionCurrent } from '../../lib/session'
+import { draw as drawBanner } from '../banner'
 import { draw as drawWs, open as wsOpen, restore as wsRestore, view as wsView } from '../ws'
-import { sess } from './rows'
 import { drop as dropHost, hold as holdHost } from './hosts'
 import { adoptRuntime, get, release, viewRuntime } from './registry'
+import { sess } from './rows'
 
-import type { SessionRuntime } from './runtime'
 import type { TurnEvent } from '../../features/composer/turn'
 import type { WorkspaceSnapshot } from '../../features/workspace/types'
+import type { SessionRuntime } from './runtime'
 
 /* A phase event for one conversation, whether or not it is on screen. Here
    rather than with the switch because what becomes of it is the residency

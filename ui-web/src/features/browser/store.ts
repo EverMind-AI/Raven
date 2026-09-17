@@ -1,10 +1,10 @@
 import { t } from '../../i18n/t'
-import { ds } from '../../state/sources'
 import { open as openUrl } from '../../lib/openUrl'
+import { ds } from '../../state/sources'
 import { sources } from '../../state/sources'
+import { pane } from '../../state/wsPane'
 
 import type { BrowserReply, BrowserSource, BrowserTabRow, ChromiumSource, FrameHead } from './types'
-import { pane } from '../../state/wsPane'
 
 /* Page state, outside React on purpose: the panel drives this view imperatively
  * (state/ws.ts mounts and unmounts it per redraw, frames land from the

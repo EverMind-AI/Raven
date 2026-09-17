@@ -16,31 +16,31 @@
  * ./pipeline.ts holds the others' frames rather than applying them.
  */
 
-import { cleanPreview, okOf } from '../../features/transcript/source'
+import { drawMeter, goPaint as goState, turn } from '../../features/composer/mount'
 import * as dagSheet from '../../features/dag/mount'
 import { fromStarted } from '../../features/dag/nodes'
+import { touchSession } from '../../features/rail/source'
+import { draw as sessionDraw } from '../../features/rail/store'
 import { directEvent } from '../../features/subagents/store'
 import * as transcript from '../../features/transcript/mount'
-import { advanceTurn, currentTurn as wsCurrentTurn } from '../../features/workspace/store'
-import { hasToolOk } from '../../rpc/capabilities'
-import { current as sessionCurrent } from '../../lib/session'
-import { show as toast } from '../toast'
-import { ds } from '../sources'
-import { t } from '../../i18n/t'
-import { drawMeter, goPaint as goState, turn } from '../../features/composer/mount'
-import { draw as sessionDraw } from '../../features/rail/store'
-import { session as sheetSession } from '../sheetRack'
-import { ask, noteRow } from './conversation'
+import { cleanPreview, okOf } from '../../features/transcript/source'
 import { wsOnTool, wsOnToolDone } from '../../features/workspace/record'
-import { touchSession } from '../../features/rail/source'
-import { viewRuntime } from './registry'
+import { advanceTurn, currentTurn as wsCurrentTurn } from '../../features/workspace/store'
+import { t } from '../../i18n/t'
+import { current as sessionCurrent } from '../../lib/session'
+import { hasToolOk } from '../../rpc/capabilities'
+import { session as sheetSession } from '../sheetRack'
+import { ds } from '../sources'
+import { show as toast } from '../toast'
+import { ask, noteRow } from './conversation'
 import { namingEnded, settleNaming } from './naming'
+import { viewRuntime } from './registry'
 import {
   drain, ensureStep, finishTurn, flushSay, send, softStop,
 } from './runtime'
 
-import type { SessionRuntime } from './runtime'
 import type { DirectTarget, TurnEvent } from '../../rpc/generated'
+import type { SessionRuntime } from './runtime'
 
 type EventType = TurnEvent['type']
 type Of<T extends EventType> = Extract<TurnEvent, { type: T }>

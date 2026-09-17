@@ -1,10 +1,10 @@
 import { t } from '../../i18n/t'
-import { ds } from '../../state/sources'
 import { settingsTab } from '../../state/settings'
+import * as settingsDialog from '../../state/settings'
+import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
 
-import * as settingsDialog from '../../state/settings'
-import { makeStore } from '../../state/store'
 import type {
   ModelCandidate,
   ProviderOp,

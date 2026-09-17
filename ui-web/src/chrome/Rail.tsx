@@ -41,14 +41,14 @@
 
 import { useSyncExternalStore } from 'react'
 
-import { openPlugins, openSkills } from '../features/plugins/wire'
 import { open as openKnowledge } from '../features/knowledge/store'
 import { open as openMemory } from '../features/memory/store'
 import { openPage as openPlaybooks } from '../features/playbooks/store'
+import { openPlugins, openSkills } from '../features/plugins/wire'
 import { open as openSettings } from '../features/settings/store'
+import { t } from '../i18n/t'
 import * as find from '../state/find'
 import * as foot from '../state/foot'
-import { t } from '../i18n/t'
 import * as lang from '../state/lang'
 import * as navfly from '../state/navfly'
 import * as rail from '../state/rail'

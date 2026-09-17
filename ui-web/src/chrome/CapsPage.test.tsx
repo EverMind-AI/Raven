@@ -11,9 +11,6 @@
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
-import { readFileSync } from 'node:fs'
-
 import * as plugins from '../features/plugins/store'
 import * as skills from '../features/skills/store'
 import { FixtureTransport } from '../rpc/fixtureTransport'
@@ -47,7 +44,6 @@ const field = (): HTMLInputElement => el('cq') as HTMLInputElement
 const bar = (): HTMLElement => document.querySelector('#capsPage .cbar') as HTMLElement
 const kids = (parent: Element): string[] =>
   Array.from(parent.children).map((c) => c.id || (c.getAttribute('class') ?? '') || c.tagName.toLowerCase())
-const source = (rel: string): string => readFileSync(`src/${rel}`, 'utf8') as string
 
 /* Both tabs' installed buttons, created the way the two legacy parts create
    them on install: empty, and only then synced. */

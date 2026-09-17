@@ -9,8 +9,8 @@
  * be kept in step (src/App.test.tsx says the same).
  */
 import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
+import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { App } from '../App'

@@ -1,10 +1,10 @@
 import { t } from '../../i18n/t'
-import { ds } from '../../state/sources'
-import { show as toast } from '../../state/toast'
-import * as detail from '../../state/detail'
-
 import { drawIfOpenOnPlugins } from '../../state/caps'
+import * as detail from '../../state/detail'
+import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
+import { show as toast } from '../../state/toast'
+
 import type {
   DetailEntry,
   InstalledRow,

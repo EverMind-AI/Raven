@@ -4,12 +4,12 @@
    memory source: a page with no engine behind it reads the same calls off the
    fixture transport (ui-web/src/rpc/fixtures/memory.ts). */
 
-import type { MemorySource } from './types'
-import type { ParamsOf } from '../../rpc/generated'
-
 import { t } from '../../i18n/t'
 import { gateway } from '../../rpc/gateway'
 import { show as toast } from '../../state/toast'
+
+import type { ParamsOf } from '../../rpc/generated'
+import type { MemorySource } from './types'
 
 export const memorySource: MemorySource = {
   stats: () => gateway().call('memory.stats', {}),

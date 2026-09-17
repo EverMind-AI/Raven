@@ -14,7 +14,6 @@
 import { describe, expect, it } from 'vitest'
 
 import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
-import { resetTranslator, setTranslator } from '../../i18n/t'
 
 /* One entry of the traffic log: a method name with its params, or a page verb
    with whatever it was handed. */

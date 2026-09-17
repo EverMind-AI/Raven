@@ -2,17 +2,16 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { PluginsApp } from './PluginsPage'
-import * as store from './store'
-
-import { domSnapshot } from '../../test/domSnapshot'
-import { resetSources, setSources, sources } from '../../state/sources'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as useInTaskModule from '../../features/composer/useInTask'
+import { setTranslator } from '../../i18n/t'
+import * as capsStore from '../../state/caps'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
-import * as useInTaskModule from '../../features/composer/useInTask'
-import * as capsStore from '../../state/caps'
+import { resetSources, setSources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import { PluginsApp } from './PluginsPage'
+import * as store from './store';
+
 import type { DetailEntry, InstalledRow, MarketItem, PluginsSource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */

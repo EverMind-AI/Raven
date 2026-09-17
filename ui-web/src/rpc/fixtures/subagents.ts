@@ -10,10 +10,10 @@
  * page chose.
  */
 
-import type { Overrides } from '../overrideTransport'
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
 import type { ResultOf } from '../generated'
 import type { PushMethod } from '../notifications'
+import type { Overrides } from '../overrideTransport'
 
 type Row = ResultOf<'subagents.list'>['rows'][number]
 type InstanceRow = ResultOf<'subagents.instances'>['instances'][number]

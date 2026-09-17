@@ -6,17 +6,17 @@
    writes that can be refused, and the generation ticket that keeps a slow
    answer from repainting a page the reader has left. */
 
-import type { ApiProtocol, ModelSource, Provider } from './types'
-import type { ParamsOf } from '../../rpc/generated'
-import type { TierReply, TierSource } from '../../state/tier'
-
-import { setCurrent } from './store'
-import { open as openSettings, openModels, openProviderModels } from '../settings/store'
 import { t } from '../../i18n/t'
 import { current as sessionCurrent } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
 import { generation } from '../../state/session/generation'
 import { staging } from '../../state/session/staging'
+import { open as openSettings, openModels, openProviderModels } from '../settings/store'
+import { setCurrent } from './store'
+
+import type { ParamsOf } from '../../rpc/generated'
+import type { TierReply, TierSource } from '../../state/tier'
+import type { ApiProtocol, ModelSource, Provider } from './types'
 
 /* Providers the page does not offer. Both are the generic "some endpoint of
    your own" row, and the page answers that question twice over without them:

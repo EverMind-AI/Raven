@@ -1,16 +1,16 @@
+import { SEND, SEND_PX, SEND_STROKE } from '../../components/Ico'
 import { t } from '../../i18n/t'
-import { ds } from '../../state/sources'
 import * as attachmentCache from '../../lib/attachmentCache'
 import { formatDuration } from '../../lib/duration'
-import { SEND, SEND_PX, SEND_STROKE } from '../../components/Ico'
 import { current as currentSession } from '../../lib/session'
+import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
 import { note as transcriptNote } from '../transcript/mount'
 import * as tail from '../transcript/tail'
 import * as turn from './turn'
 
 import type { Attachment, ComposerSource, SlashCmd } from './types'
-import { makeStore } from '../../state/store'
 
 /* Plain external store, same shape as the other islands: the dock is driven
  * by callers that are not React. The turn machine advances the phase, the

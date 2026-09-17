@@ -1,15 +1,15 @@
+import { t } from '../../i18n/t'
+import { setCurrent } from '../../lib/session'
+import { mark as navMark } from '../../state/navfly'
+import { navState } from '../../state/page'
 import { NAV_BUTTONS } from '../../state/pages'
 import { ds } from '../../state/sources'
-import { dropDraft } from '../composer/store'
-import { mark as navMark } from '../../state/navfly'
-import { setCurrent } from '../../lib/session'
+import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
+import { dropDraft } from '../composer/store'
 import { plainTitle } from './title'
 
 import type { RailSnapshot, RailSource, SessRow } from './types'
-import { t } from '../../i18n/t'
-import { navState } from '../../state/page'
-import { makeStore } from '../../state/store'
 
 /* Rail state, outside React on purpose: the page layers redraw the list after
  * mutating the active session source, the live boot holds it on skeletons,

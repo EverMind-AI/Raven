@@ -2,17 +2,16 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { CronApp } from './CronPage'
-import * as store from './store'
-
-import { domSnapshot } from '../../test/domSnapshot'
-import { resetSources, setSources, sources } from '../../state/sources'
-import { mountPageRoot } from '../../test/pageRoot'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
+import { setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as lang from '../../state/lang'
 import * as pageStore from '../../state/page'
+import { resetSources, setSources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import { mountPageRoot } from '../../test/pageRoot'
+import { CronApp } from './CronPage'
+import * as store from './store'
+
 import type { CronJob, CronSource } from './types'
 
 /* The overflow menu's rows render from src/App.tsx into the shared #menu

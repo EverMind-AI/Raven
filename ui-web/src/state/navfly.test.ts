@@ -2,14 +2,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { markNew as railMarkNew } from '../features/rail/store'
-import { MORE_ROWS, _resetForTests, draw, mark, toggle } from './navfly'
-import { resetSources, setSources } from './sources'
-import { mountPageRoot } from '../test/pageRoot'
-
-import { resetTranslator, setTranslator } from '../i18n/t'
-import * as confirmStore from './confirm'
 import * as railStore from '../features/rail/store'
+import { resetTranslator, setTranslator } from '../i18n/t'
+import { mountPageRoot } from '../test/pageRoot'
+import * as confirmStore from './confirm'
+import { MORE_ROWS, _resetForTests, draw, mark, toggle } from './navfly'
 import * as pageStore from './page'
+import { resetSources, setSources } from './sources'
+
 import type { RailSource } from '../features/rail/types'
 
 /* The three openers are direct imports now, so the pages they open are observed

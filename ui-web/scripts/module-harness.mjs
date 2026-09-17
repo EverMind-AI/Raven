@@ -15,7 +15,6 @@
 import { existsSync, readFileSync } from 'node:fs'
 /* Off cwd, not off `import.meta.url`: under happy-dom that is an http URL. */
 import { resolve } from 'node:path'
-
 import { vi } from 'vitest'
 
 const mocked = new Set()

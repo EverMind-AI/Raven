@@ -9,9 +9,8 @@
 
 import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
-import { show as toast } from '../../state/toast'
 import { sources } from '../../state/sources'
-
+import { show as toast } from '../../state/toast'
 import { offered } from './types'
 
 import type { ApiProtocol, ModelSource, Provider } from './types'

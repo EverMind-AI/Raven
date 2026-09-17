@@ -13,24 +13,23 @@
  * themselves, and the body while every overlay is up. The table's own accessor
  * has its own test beside it (src/state/portals.test.ts).
  */
-import { describe, expect, it, vi } from 'vitest'
-
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readFileSync } from 'node:fs'
+import { describe, expect, it, vi } from 'vitest'
 
-import * as menu from '../state/menu'
+import { resetTranslator, setTranslator } from '../i18n/t'
 import * as session from '../lib/session'
-import * as tier from '../state/tier'
-import * as toast from '../state/toast'
-import * as upgrade from '../state/upgradeShade'
 import * as confirm from '../state/confirm'
-import * as tip from '../state/tooltip'
+import * as menu from '../state/menu'
 import { BOOT_BODY_ORDER, LAYERS, PORTALS, _resetForTests as resetLayers, host } from '../state/portals'
 import { resetSources, setSources } from '../state/sources'
+import * as tier from '../state/tier'
+import * as toast from '../state/toast'
+import * as tip from '../state/tooltip'
+import * as upgrade from '../state/upgradeShade'
 import { bodySiblings } from './domSnapshot'
 import { mountPageRoot } from './pageRoot'
 
-import { resetTranslator, setTranslator } from '../i18n/t'
 import type { TierReply, TierSource } from '../state/tier'
 
 const source = (path: string): string => readFileSync(path, 'utf8') as string

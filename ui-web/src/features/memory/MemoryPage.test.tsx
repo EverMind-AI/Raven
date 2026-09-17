@@ -2,16 +2,15 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { MemoryApp } from './MemoryPage'
-import * as store from './store'
-
-import { domSnapshot } from '../../test/domSnapshot'
-import { resetSources, setSources, sources } from '../../state/sources'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
+import { setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as detail from '../../state/detail'
 import * as pageStore from '../../state/page'
+import { resetSources, setSources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import { MemoryApp } from './MemoryPage'
+import * as store from './store';
+
 import type { MemItem, MemStats, MemorySource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */

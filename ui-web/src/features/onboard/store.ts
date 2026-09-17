@@ -1,9 +1,9 @@
 /* The page-scoped opening state for the first-run onboarding island. */
 
 import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
 
 import type { OnboardSource } from './types'
-import { makeStore } from '../../state/store'
 
 export interface OnboardOpening {
   source: OnboardSource | null

@@ -6,8 +6,8 @@
  * case that replays an open into a pane needs the same wiring, and reaching for
  * the page's entry point is not open to it -- src/main.tsx is the whole page.
  */
-import { setAgentPane } from '../features/subagents/store'
 import { openDeskAgent, openDeskAgentRecord, openDeskFile } from '../features/desk/store'
+import { setAgentPane } from '../features/subagents/store'
 import { setDeskOpener } from '../features/workspace/store'
 
 export function installDeskHandoff(): void {

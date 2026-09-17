@@ -8,11 +8,11 @@
  * description.
  */
 
-import type { ExtFixture } from './ext'
+import { code as LANG } from '../../i18n/t'
+
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
 import type { ResultOf } from '../generated'
-
-import { code as LANG } from '../../i18n/t'
+import type { ExtFixture } from './ext'
 
 type Rung = NonNullable<ResultOf<'session.set_mode'>['availableModes']>[number]
 /* What a config value is on the wire: the contract's own JsonValue, which the

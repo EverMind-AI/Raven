@@ -3,7 +3,15 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useSyncExternalStore } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { setTranslator } from '../../i18n/t'
+import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import { resetSources, setSources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import { installWsPane } from '../../test/wsPaneHarness'
 import * as mount_ from './mount'
+import * as store from './store'
 import {
   AgentList,
   AgentRecordConversation,
@@ -11,20 +19,11 @@ import {
   InstanceRowView,
   orderAgentGroups,
   SubagentsApp,
-} from './SubagentsPage'
-import * as store from './store'
-import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
+} from './SubagentsPage';
 
-import { domSnapshot } from '../../test/domSnapshot'
-import { resetSources, setSources, sources } from '../../state/sources'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as confirmStore from '../../state/confirm'
-import { installWsPane } from '../../test/wsPaneHarness'
-import * as pageStore from '../../state/page'
-import type { JSX } from 'react'
 import type { ComposerSource } from '../composer/types'
 import type { AgentCtx, AgentRow, DirectTurn, InstanceRow, SubagentRow, SubagentsSource } from './types'
+import type { JSX } from 'react'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true

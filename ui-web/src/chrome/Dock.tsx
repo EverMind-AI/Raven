@@ -57,13 +57,13 @@
 
 import { useSyncExternalStore } from 'react'
 
+import { t } from '../i18n/t'
+import * as lang from '../state/lang'
 import { CtxChip } from './CtxChip'
 import { PermChip } from './PermChip'
 import { PermPopover } from './PermPopover'
 import { TierChip } from './TierChip'
 import { TierPopover } from './TierPopover'
-import { t } from '../i18n/t'
-import * as lang from '../state/lang'
 
 import type { JSX } from 'react'
 

@@ -7,15 +7,15 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { pmNormEntry } from './source'
+import { setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
 import { mkMcpRow, mkPluginRow, mkSkillRow, mkToolRow } from '../installed/source'
+import { pmNormEntry } from './source'
 import * as plugins from './store'
 
-import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as pageStore from '../../state/page'
-import * as confirmStore from '../../state/confirm'
-import type { DetailEntry } from './types'
 import type { ExtMcpRow, ExtPluginRow, ExtSkillRow, ExtToolRow } from '../installed/source'
+import type { DetailEntry } from './types'
 
 /* The contract's own row shapes, filled in for the fields a case is not about
    -- every builder here reads a handful of them. */

@@ -5,9 +5,9 @@
  * installed shelf and the rail's attention badge both answer the change.
  */
 
-import type { ExtFixture } from './ext'
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
 import type { ResultOf } from '../generated'
+import type { ExtFixture } from './ext'
 
 /* One market entry, in the shape the hub serves and the card reads. `kind` and
    the connection block inside `contributes` are what the card draws the

@@ -7,8 +7,8 @@
  */
 
 
-import { closeDialog, refresh } from './store'
 import * as page from '../../state/page'
+import { closeDialog, refresh } from './store'
 
 export function open(): void {
   closeDialog()

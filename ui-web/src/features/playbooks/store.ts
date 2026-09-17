@@ -10,12 +10,12 @@
  */
 
 import { t } from '../../i18n/t'
+import * as page from '../../state/page'
 import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
 
 import type { PlaybookDetail, PlaybookRow, PlaybooksCredentialsGetResult, PlaybooksSource } from './types'
-import * as page from '../../state/page'
-import { makeStore } from '../../state/store'
 
 export interface PlaybooksState {
   /* null = the list has not been read yet, which is not the same as an empty
@@ -291,12 +291,6 @@ export function openPage(): void {
 
 export function closePage(): void {
   page.show(null)
-}
-
-/* A language flip changes no state here, but every visible string comes from
-   t(), so a re-render is the whole redraw. */
-function redraw(): void {
-  set({})
 }
 
 export function _resetForTests(): void {

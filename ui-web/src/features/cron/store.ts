@@ -1,10 +1,10 @@
 import { t } from '../../i18n/t'
+import * as page from '../../state/page'
 import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
 
 import type { CronDraft, CronJob, CronSource } from './types'
-import * as page from '../../state/page'
-import { makeStore } from '../../state/store'
 
 /* Page state, outside React on purpose: the callers that drive this page are
  * not React. The rail's flyout and the nav open it (state/navfly.ts), the

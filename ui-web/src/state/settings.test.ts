@@ -12,16 +12,16 @@
  * a witness for it.
  */
 import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
+import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from '../App'
-import * as lang from './lang'
-import * as settings from './settings'
 import { resetTranslator, setTranslator } from '../i18n/t'
-import * as pageStore from './page'
 import * as confirmStore from './confirm'
+import * as lang from './lang'
+import * as pageStore from './page'
+import * as settings from './settings'
 
 
 const marks: string[] = []

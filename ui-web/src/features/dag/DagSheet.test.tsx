@@ -2,22 +2,22 @@
 import { act } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
 import {
   add as rackAdd,
   remove as rackRemove,
   _resetForTests as rackReset,
   sync as rackSync,
 } from '../../state/sheetRack'
+import { resetSources, setSources } from '../../state/sources'
+import { installWsPane } from '../../test/wsPaneHarness'
 import { back as subBack, openDagNode, _resetForTests as subReset } from '../subagents/store'
 import { advance, forget, resume, run, settle, start, sync, touch, _resetForTests } from './mount'
-import { fold as storeFold } from './store'
-import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
-import { resetSources, setSources } from '../../state/sources'
+import { fold as storeFold } from './store';
 
-import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as pageStore from '../../state/page'
-import * as confirmStore from '../../state/confirm'
-import { installWsPane } from '../../test/wsPaneHarness'
 import type { SubagentsSource } from '../subagents/types'
 import type { TranscriptSource } from '../transcript/types'
 import type { DagRun } from './types'

@@ -5,6 +5,7 @@
     "moduleResolution": "bundler",
     "strict": true,
     "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
     "noEmit": true,
     "skipLibCheck": true,
     "types": [],

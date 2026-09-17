@@ -1,8 +1,7 @@
-import type { ApiUsageModel, SettingsUsageResult, ToolSetupNeed } from '../../rpc/generated'
-
 /* One provider row of the model panel. Each source owns its provider list;
    the live source shares its fetched rows with the composer's model picker. */
 import type { ModelTagFacts } from '../../components/ModelTags'
+import type { ApiUsageModel, SettingsUsageResult, ToolSetupNeed } from '../../rpc/generated'
 
 export interface ProviderRow {
   id: string

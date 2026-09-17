@@ -8,9 +8,9 @@
  * nothing is exactly what there was no way to look at before).
  */
 
-import type { Overrides } from '../overrideTransport'
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
 import type { ResultOf } from '../generated'
+import type { Overrides } from '../overrideTransport'
 
 type Provider = ResultOf<'model.options'>['providers'][number]
 

@@ -1,6 +1,6 @@
-import type { DirectTurn, InstanceCtx } from './types'
-
 import { hasInstanceTurns } from '../../rpc/capabilities'
+
+import type { DirectTurn, InstanceCtx } from './types'
 
 /* An instance's status words, which are NOT the run list's. The registry writes
    `idle | running | completed | failed | cancelled`, plus `pending` and

@@ -13,7 +13,6 @@ import type { ResultOf } from '../generated'
 type Job = ResultOf<'cron.list'>['jobs'][number]
 type Run = ResultOf<'cron.runs'>['runs'][number]
 
-const MIN = 60000
 const HOUR = 3600000
 const DAY = 86400000
 

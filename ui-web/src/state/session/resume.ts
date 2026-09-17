@@ -28,11 +28,11 @@
  */
 
 import { resume as dagResume, run as dagOpen, saved as dagSaved } from '../../features/dag/mount'
-import * as agents from '../../features/subagents/store'
 import * as desk from '../../features/desk/store'
-import { ds } from '../sources'
+import * as agents from '../../features/subagents/store'
 import { only } from '../../lib/persist'
 import { current, onChange } from '../../lib/session'
+import { ds } from '../sources'
 
 import type { DeskIntent } from '../../features/desk/store'
 import type { AgentRow, InstanceRow } from '../../features/subagents/types'

@@ -15,18 +15,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as composer from '../features/composer/mount'
 import * as store from '../features/composer/store'
+import { resetTranslator, setTranslator } from '../i18n/t'
+import * as confirmStore from '../state/confirm'
 import * as ctx from '../state/ctxChip'
 import * as lang from '../state/lang'
+import * as pageStore from '../state/page'
 import * as perm from '../state/perm'
 import { _resetForTests as resetLayers, host } from '../state/portals'
 import { setSources } from '../state/sources'
 import * as tier from '../state/tier'
 import { bodySiblings } from '../test/domSnapshot'
-import { mountPageRoot } from '../test/pageRoot'
+import { mountPageRoot } from '../test/pageRoot';
 
-import { resetTranslator, setTranslator } from '../i18n/t'
-import * as confirmStore from '../state/confirm'
-import * as pageStore from '../state/page'
 import type { ComposerSource } from '../features/composer/types'
 import type { TierSource } from '../state/tier'
 

@@ -4,11 +4,11 @@ import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
 import { show as menuAt } from '../../state/menu'
 import { show as toast } from '../../state/toast'
+import * as deliveries from './deliveries'
 import {
   RENDERED, appFor, canOpenInApp, copyToClip, extOf, fileURL,
   hostPlatform, mdHtml, openInApp, renderURL, runURL, setAppFor,
 } from './store'
-import * as deliveries from './deliveries'
 import * as store from './store'
 
 import type { MenuItem } from '../../state/menu'

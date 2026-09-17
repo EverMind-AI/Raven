@@ -2,16 +2,15 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ConnectionsApp } from './ConnectionsPage'
-import { open } from './wire'
-import * as store from './store'
-
-import { domSnapshot } from '../../test/domSnapshot'
-import { resetSources, setSources, sources } from '../../state/sources'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
+import { setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
+import { resetSources, setSources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import { ConnectionsApp } from './ConnectionsPage'
+import * as store from './store'
+import { open } from './wire';
+
 import type { ConnChannel, ConnQr, ConnectionsSource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -70,17 +69,6 @@ function install(rows: ConnChannel[], over: Partial<ConnectionsSource> = {}) {
   return { source, calls, shellCalls }
 }
 
-/* Records an apply exactly as the default fake does, for the cases that need
-   their own body as well as the record. */
-function calls_push(
-  calls: Array<[string, unknown]>,
-  c: ConnChannel,
-  patch: Record<string, string>,
-  enable: boolean,
-): void {
-  calls.push(['apply', { id: c.id, patch, enable }])
-}
-
 /* Types into a box the way a reader does: the value, then the event. The card's
    connect is unavailable until every required box has something in it, and a
    value assigned straight onto the node fires nothing and tells the form
@@ -116,19 +104,6 @@ const cardFoot = (): HTMLElement => card().querySelector(':scope > .sufoot')!
 
 const rowActs = (name: string): Array<string | null> =>
   [...rowNamed(name).querySelectorAll('.suact button')].map((b) => b.getAttribute('role') === 'switch' ? 'switch' : b.textContent)
-
-/* The dialog's overflow menu, through the shared #menu host production draws
-   into. */
-async function pickMenu(label: string): Promise<void> {
-  await act(async () => {
-    ;(document.querySelector('#connDlgBody .sumenu') as HTMLElement).click()
-  })
-  const item = [...document.querySelectorAll<HTMLElement>('#menu button')].find((b) => b.textContent === label)
-  expect(item, `menu item ${label}`).toBeTruthy()
-  await act(async () => {
-    item!.click()
-  })
-}
 
 /* A press on the scrim, over `under`.
  *

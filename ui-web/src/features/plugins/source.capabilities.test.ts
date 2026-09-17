@@ -7,11 +7,11 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as pageStore from '../../state/page'
+import { fakeGateway, loadPart } from '../../../scripts/module-harness.mjs'
+import { setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+
 import type { CapabilitiesSource } from '../../state/sources'
 
 /* Narrower than the real PluginsSource: the two verbs the capabilities page

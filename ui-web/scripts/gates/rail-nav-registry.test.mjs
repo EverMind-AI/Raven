@@ -19,7 +19,6 @@
  */
 
 import { readFileSync } from 'node:fs'
-
 import { describe, expect, it } from 'vitest'
 
 const src = (rel) => readFileSync(new URL(`../../src/${rel}`, import.meta.url), 'utf8')

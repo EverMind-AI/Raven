@@ -1,14 +1,14 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { draw, setFault } from './banner'
-import { resetTranslator, setTranslator } from '../i18n/t'
-import * as nav from '../features/plugins/wire'
 import * as plugins from '../features/plugins/store'
+import * as nav from '../features/plugins/wire'
+import { resetTranslator, setTranslator } from '../i18n/t'
+import { mountPageRoot } from '../test/pageRoot'
+import { draw, setFault } from './banner'
 import * as confirmStore from './confirm'
 import * as pageStore from './page'
 import { resetSources, setSources } from './sources'
-import { mountPageRoot } from '../test/pageRoot'
 
 import type { BannerSource } from './banner'
 

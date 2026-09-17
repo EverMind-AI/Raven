@@ -23,8 +23,6 @@
  * push their frames on the injected timer.
  */
 
-import type { FixtureEnv, Fixtures } from '../fixtureTransport'
-
 import { createBrowser } from './browser'
 import { createChannels } from './channels'
 import { createCron } from './cron'
@@ -40,6 +38,8 @@ import { createSettings } from './settings'
 import { createSkillhub } from './skillhub'
 import { createSubagents } from './subagents'
 import { RUNS, createTurn } from './turn'
+
+import type { FixtureEnv, Fixtures } from '../fixtureTransport'
 
 /* Built in dependency order, and only the cross-domain reads are handed over:
    the two hubs and the settings answer share the inventory `ext.list` holds,

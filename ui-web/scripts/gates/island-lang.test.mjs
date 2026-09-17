@@ -16,7 +16,6 @@
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-
 import { describe, expect, it } from 'vitest'
 
 const FEATURES = new URL('../../src/features/', import.meta.url).pathname

@@ -37,8 +37,8 @@
  * leaves for good is the rack's job, through the teardown below.
  */
 
-import { current } from '../lib/session'
 import { dockLift } from '../features/composer/store'
+import { current } from '../lib/session'
 import { makeStore } from './store'
 
 import type { ReactNode } from 'react'

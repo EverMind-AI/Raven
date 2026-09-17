@@ -10,19 +10,19 @@
  * `SessionRuntime` (src/state/session/).
  */
 
-import { busy } from '../composer/turn'
-import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
-import { switchTo } from '../../state/session/registry'
-import { show as toast } from '../../state/toast'
-import { gateway } from '../../rpc/gateway'
 import { t } from '../../i18n/t'
 import { $ } from '../../lib/dom'
+import { current as sessionCurrent } from '../../lib/session'
+import { gateway } from '../../rpc/gateway'
+import { switchTo } from '../../state/session/registry'
 import { replace as sessionReplace, rows as sessionRows, sess } from '../../state/session/rows'
+import { show as toast } from '../../state/toast'
+import { busy } from '../composer/turn'
 import { draw as sessionDraw } from './store'
 import { plainTitle } from './title'
 
-import type { RailSource, SessRow } from './types'
 import type { ResultOf } from '../../rpc/generated'
+import type { RailSource, SessRow } from './types'
 
 const DAY = 86400000
 

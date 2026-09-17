@@ -19,9 +19,9 @@
 
 import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from 'react'
 
+import { CHEVRON_DOWN, CROSS, Glyph } from '../../components/Ico'
 import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
-import { CHEVRON_DOWN, CROSS, Glyph } from '../../components/Ico'
 import { get as subState, subscribe as subSubscribe } from '../subagents/store'
 import { DagGraph } from './DagGraph'
 import { SHEET, ordered, summary } from './graph'

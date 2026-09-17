@@ -7,9 +7,9 @@
    answers an object so it can grow a field beside the list, and the page
    wants the list. */
 
-import type { PlaybooksSource } from './types'
-
 import { gateway } from '../../rpc/gateway'
+
+import type { PlaybooksSource } from './types'
 
 export const playbooksSource: PlaybooksSource = {
   list: () => gateway().call('playbooks.list', {}).then((r) => (r && r.playbooks) || []),
