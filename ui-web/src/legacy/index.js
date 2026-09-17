@@ -23,7 +23,6 @@ import * as demo060conversation from './demo/060-conversation.js'
 import * as demo070transcript from './demo/070-transcript.js'
 import * as demo090composer from './demo/090-composer.js'
 import * as demo100workspace from './demo/100-workspace.js'
-import * as demo110subagents from './demo/110-subagents.js'
 import * as demo120capabilities from './demo/120-capabilities.js'
 import * as demo130settings from './demo/130-settings.js'
 import * as demo140schedule from './demo/140-schedule.js'
@@ -43,7 +42,6 @@ const DEMO = [
   demo070transcript,
   demo090composer,
   demo100workspace,
-  demo110subagents,
   demo120capabilities,
   demo130settings,
   demo140schedule,
