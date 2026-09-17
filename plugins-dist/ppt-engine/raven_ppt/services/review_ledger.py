@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -142,7 +143,13 @@ _OWNERSHIP_REASONS = (
     "模板插画",
     "沿用模板",
     "保持统一",
+    "模板自身",
+    "模板本身",
+    "模板固有",
+    "原版面",
+    "模板第",
     "template's own",
+    "template's page",
     "template design",
     "part of the template",
     "came with the template",
@@ -151,21 +158,38 @@ _OWNERSHIP_REASONS = (
 )
 _DEPICTS = ("depict", "shows", "画的是", "画面是", "内容是", "表现的是", "与本页", "切题", "相关")
 
+# A reason that names room made on the page is a fix, not a claim of ownership.
+_MADE_ROOM = ("填", "铺满", "加高", "放大", "占满", "拉到", "fill", "enlarged", "grew", "extended", "shorten")
+
 REFUSED_FIGURE_REASON = (
     "a template illustration is a placeholder, so whose picture it is does not answer a figure entry; "
     "say what the picture depicts and why that is this page, or replace it with one that is"
 )
+# The template's own page fills the panel this page was cloned from -- three seals down
+# to 85% of the height -- so a clone that stops at two thirds is not the template's
+# proportion. One delivered deck dismissed the same lower-third field twice this way.
+REFUSED_UNDERFILLED_REASON = (
+    "the template's own page fills that panel, so whose composition it is does not answer an underfilled "
+    "entry; grow the load-bearing element or say more until the field is used, or shorten the panel to "
+    "what the page holds"
+)
+REFUSED_KINDS = {"figure": REFUSED_FIGURE_REASON, "underfilled_page": REFUSED_UNDERFILLED_REASON}
 
 
-def dismiss(deck: Project, verdicts: list[dict[str, Any]]) -> tuple[list[str], list[str], list[str]]:
+def dismiss(
+    deck: Project, verdicts: list[dict[str, Any]], house_pages: Iterable[int] = ()
+) -> tuple[list[str], list[str], list[str]]:
     """Close entries the author has looked at and answered; the reason rides on the entry.
 
     Returns what was dismissed, what could not be found, and what was refused. An id
     that is not open -- already fixed, already dismissed, never issued -- is named back
     rather than silently accepted, because a dismissal of nothing looks like a dismissal.
     A `figure` entry dismissed for being the template's own picture is refused: see
-    `_OWNERSHIP_REASONS`.
+    `_OWNERSHIP_REASONS`. Except on `house_pages` -- the deck's cover, index, divider
+    and closing built on the template's own -- where the artwork is the frame the deck
+    was asked to keep, and whose it is answers the entry.
     """
+    kept_art = {int(page) for page in house_pages}
     ledger = load_ledger(deck)
     by_id = {entry.get("id"): entry for entry in ledger["findings"]}
     done: list[str] = []
@@ -178,7 +202,8 @@ def dismiss(deck: Project, verdicts: list[dict[str, Any]]) -> tuple[list[str], l
             unknown.append(ident or "?")
             continue
         reason = str(verdict.get("reason") or "").strip()
-        if entry.get("kind") == "figure" and _only_ownership(reason):
+        kind = str(entry.get("kind") or "")
+        if kind in REFUSED_KINDS and _only_ownership(reason, kind) and int(entry.get("page") or 0) not in kept_art:
             refused.append(ident)
             continue
         entry["status"] = DISMISSED
@@ -189,9 +214,23 @@ def dismiss(deck: Project, verdicts: list[dict[str, Any]]) -> tuple[list[str], l
     return done, unknown, refused
 
 
-def _only_ownership(reason: str) -> bool:
+def _only_ownership(reason: str, kind: str = "figure") -> bool:
     lowered = reason.lower()
-    return any(mark in lowered for mark in _OWNERSHIP_REASONS) and not any(mark in lowered for mark in _DEPICTS)
+    if not any(mark in lowered for mark in _OWNERSHIP_REASONS):
+        return False
+    answers = _MADE_ROOM if kind == "underfilled_page" else _DEPICTS
+    return not any(mark in lowered for mark in answers)
+
+
+def refusal_reasons(deck: Project, refused: Iterable[str]) -> str:
+    """Why each refused dismissal was refused, one sentence per kind, in ledger order."""
+    wanted = set(refused)
+    kinds: list[str] = []
+    for entry in load_ledger(deck)["findings"]:
+        kind = str(entry.get("kind") or "")
+        if entry.get("id") in wanted and kind in REFUSED_KINDS and kind not in kinds:
+            kinds.append(kind)
+    return " / ".join(REFUSED_KINDS[kind] for kind in kinds) or REFUSED_FIGURE_REASON
 
 
 # Which open entries the reply presses on. A reader at low effort writes about three

@@ -79,7 +79,10 @@ class Figure:
         said = self.label or self.kind
         size = f", {self.width_px}x{self.height_px}px" if self.width_px and self.height_px else ""
         concern = f"; {self.concerns[0][:100]}" if self.concerns else ""
-        return f"{self.figure_id} ({said}{size}){self.captions()}{concern}"
+        # The file, because the id is not it: a live program wrote `fig("tiananmen-495f76b2e8.jpg")`
+        # off this line and spent three builds on resolvers before finding `tiananmen.jpg`.
+        where = f", file {self.file}" if self.file else ""
+        return f"{self.figure_id} ({said}{size}{where}){self.captions()}{concern}"
 
     def captions(self) -> str:
         """Both captions this figure carries, each attributed to whoever wrote it.

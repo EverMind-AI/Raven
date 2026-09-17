@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { SkillsApp } from './SkillsPage'
@@ -201,6 +201,84 @@ describe('skills island', () => {
     expect(shellCalls).toContainEqual(['useInTask', 'gui.hub.use_prompt:house-style'])
   })
 
+  it('offers removal on the installed card itself, not only inside the drawer', async () => {
+    /* The reported break: the card's one visible action was "use", and nothing
+       said the card opened a drawer, so a reader who wanted the skill gone had
+       no way to see one and went to the CLI. */
+    const { calls } = install([], {}, [
+      { id: 'sk1', name: 'house-style', one: 'the house voice', src: 'skillhub', hub: true, hubId: 'sh-hs' },
+    ])
+    await mount()
+    await act(async () => {
+      store.toggleView()
+    })
+
+    await act(async () => {
+      screen.getByText('gui.plug.uninstall').click()
+    })
+    expect(calls).not.toContain('remove')
+
+    await act(async () => {
+      screen.getByText('gui.plug.confirm_remove').click()
+    })
+    expect(calls).toContain('remove')
+  })
+
+  it('lets the keyboard finish the two-press removal without opening the drawer', async () => {
+    /* Enter on the button reaches the card's own handler first: keydown bubbles,
+       and the click that stops propagation is synthesised after it. Unguarded,
+       the first press navigated to the drawer, so the second press had nothing
+       to confirm and removal was unreachable from the keyboard. */
+    const { calls } = install([], {}, [
+      { id: 'sk1', name: 'house-style', one: 'the house voice', src: 'skillhub', hub: true, hubId: 'sh-hs' },
+    ])
+    await mount()
+    await act(async () => {
+      store.toggleView()
+    })
+
+    const arm = screen.getByText('gui.plug.uninstall')
+    await act(async () => {
+      arm.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    expect(calls).not.toContain('openDetail')
+
+    await act(async () => {
+      screen.getByText('gui.plug.uninstall').click()
+    })
+    await act(async () => {
+      screen.getByText('gui.plug.confirm_remove').click()
+    })
+    expect(calls).toContain('remove')
+  })
+
+  it('offers no removal for a builtin, which has no bundle to delete', async () => {
+    install([], {}, [{ id: 'sk2', name: 'weather', one: 'the forecast', src: 'builtin' }])
+    await mount()
+    await act(async () => {
+      store.toggleView()
+    })
+    expect(await screen.findByText('weather')).toBeTruthy()
+    expect(screen.queryByText('gui.plug.uninstall')).toBeNull()
+  })
+
+  it('keeps the drawer shut when the remove on the card is pressed', async () => {
+    /* The button sits inside a card that is itself a button; without the
+       propagation guard the first press both arms the remove and opens the
+       drawer over it. */
+    install([], {}, [
+      { id: 'sk1', name: 'house-style', one: 'the house voice', src: 'skillhub', hub: true, hubId: 'sh-hs' },
+    ])
+    await mount()
+    await act(async () => {
+      store.toggleView()
+    })
+    await act(async () => {
+      screen.getByText('gui.plug.uninstall').click()
+    })
+    expect(document.getElementById('detail')!.dataset.open).not.toBe('true')
+  })
+
   it('shows the empty-installed note when nothing is installed', async () => {
     install([])
     await mount()
@@ -245,13 +323,16 @@ describe('skills island', () => {
     await act(async () => {
       ;(await screen.findByText('house-style')).click()
     })
-    const rm = await screen.findByText('gui.plug.uninstall')
+    /* Scoped to the drawer: the card behind it now carries a remove of its
+       own, so an unscoped query matches two. */
+    const drawer = within(document.getElementById('detail')!)
+    const rm = await drawer.findByText('gui.plug.uninstall')
     await act(async () => {
       rm.click()
     })
     expect(calls).not.toContain('remove')
     await act(async () => {
-      screen.getByText('gui.plug.confirm_remove').click()
+      drawer.getByText('gui.plug.confirm_remove').click()
     })
     expect(calls).toContain('remove')
     expect(document.getElementById('detail')!.dataset.open).toBe('false')

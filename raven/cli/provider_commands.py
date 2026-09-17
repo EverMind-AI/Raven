@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from collections.abc import Callable
 from typing import Any
 
 import typer
@@ -57,7 +58,7 @@ _GITHUB_DEVICE_URL = "https://github.com/login/device"
 provider_app = typer.Typer(help="Manage providers")
 
 
-_LOGIN_HANDLERS: dict[str, callable] = {}
+_LOGIN_HANDLERS: dict[str, Callable[..., Any]] = {}
 
 
 def _register_login(name: str):

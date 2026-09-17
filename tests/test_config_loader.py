@@ -71,7 +71,7 @@ def test_legacy_everos_skill_light_relocated_under_agents_defaults(
 ) -> None:
     """Old configs put ``everosSkillLight`` under ``agents.defaults``.
     The migration removes it from that location (the new home is under
-    ``skillForge.everos``; see test_config_raven_loader for the
+    ``skillForge.extraction``; see test_config_raven_loader for the
     receiving side)."""
     p = tmp_path / "config.json"
     _write(
@@ -91,7 +91,7 @@ def test_legacy_everos_skill_light_relocated_under_agents_defaults(
 
 def test_legacy_everos_skill_light_retired_keys_stripped() -> None:
     """everosSkillLight carrying the retired minMessages/minToolCalls must
-    relocate to skillForge.everos with those keys dropped (EverOSConfig is
+    relocate to skillForge.extraction with those keys dropped (ExtractionConfig is
     extra='forbid'), while the surviving fields are kept."""
     from raven.config.loader import _migrate_config
 
@@ -110,11 +110,11 @@ def test_legacy_everos_skill_light_retired_keys_stripped() -> None:
         },
         pop_extension_keys=False,
     )
-    everos = out["skillForge"]["everos"]
-    assert "minMessages" not in everos
-    assert "minToolCalls" not in everos
-    assert everos["maxSkillsTopK"] == 5
-    assert everos["enabled"] is True
+    block = out["skillForge"]["extraction"]
+    assert "minMessages" not in block
+    assert "minToolCalls" not in block
+    assert block["maxSkillsTopK"] == 5
+    assert block["enabled"] is True
 
 
 def test_legacy_everos_skill_light_retired_keys_stripped_snake_case() -> None:
@@ -135,9 +135,9 @@ def test_legacy_everos_skill_light_retired_keys_stripped_snake_case() -> None:
         },
         pop_extension_keys=False,
     )
-    everos = out["skillForge"]["everos"]
-    assert "min_messages" not in everos
-    assert "min_tool_calls" not in everos
+    block = out["skillForge"]["extraction"]
+    assert "min_messages" not in block
+    assert "min_tool_calls" not in block
 
 
 def test_corrupted_json_falls_back_to_defaults(tmp_path: Path) -> None:

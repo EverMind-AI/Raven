@@ -5,6 +5,7 @@
 in ``_shared``. Callers import ``AgentLoop`` from here.
 """
 
-from raven.agent.loop.main import AgentLoop, LoopOutcome
+from raven.agent.loop._shared import LoopOutcome
+from raven.agent.loop.main import AgentLoop
 
 __all__ = ["AgentLoop", "LoopOutcome"]

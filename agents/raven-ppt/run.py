@@ -31,6 +31,7 @@ import importlib.util
 import json
 import os
 import sys
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
@@ -304,7 +305,7 @@ def ignored_providers(defaults: dict, model: str) -> set[str]:
 
 
 def probe_context_window(
-    model: str, api_base: str, api_key: str, served: set[str], ignored: set[str] = frozenset()
+    model: str, api_base: str, api_key: str, served: set[str], ignored: Collection[str] = frozenset()
 ) -> tuple[int, str] | None:
     """The window the serving endpoint reports for ``model``, and where it came from.
 

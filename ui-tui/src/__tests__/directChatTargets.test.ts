@@ -67,7 +67,10 @@ describe('orderedTargets', () => {
 })
 
 describe('cycleTarget', () => {
-  const targets = orderedTargets([row({ agent: 'A', createdAtMs: 1, handle: 'one' }), row({ agent: 'B', createdAtMs: 2, handle: 'two' })], null)
+  const targets = orderedTargets(
+    [row({ agent: 'A', createdAtMs: 1, handle: 'one' }), row({ agent: 'B', createdAtMs: 2, handle: 'two' })],
+    null
+  )
 
   it('steps right from main to the first instance', () => {
     expect(cycleTarget(targets, null, 1)).toEqual({ agent: 'A', handle: 'one' })

@@ -230,8 +230,7 @@ const build = (nodes: readonly DagRunNode[], style: DagGraphLabelStyle): DagGrap
   edges
     .filter(edge => spans(edge) > 1)
     .forEach(edge => {
-      edge.fly =
-        bands * BOX_BAND_HEIGHT + firstFree(flyRows, column.get(edge.source)!, column.get(edge.target)!, true)
+      edge.fly = bands * BOX_BAND_HEIGHT + firstFree(flyRows, column.get(edge.source)!, column.get(edge.target)!, true)
     })
 
   // ── Gutter trunks ────────────────────────────────────────────────
@@ -418,10 +417,7 @@ const build = (nodes: readonly DagRunNode[], style: DagGraphLabelStyle): DagGrap
  * drops the agent name from every box; if that is still too wide, no picture is
  * drawn at all and the caller falls back to naming dependencies in the rows.
  */
-export const layoutDagGraph = (
-  nodes: readonly DagRunNode[],
-  opts: { width: number }
-): DagGraphGeometry | null => {
+export const layoutDagGraph = (nodes: readonly DagRunNode[], opts: { width: number }): DagGraphGeometry | null => {
   if (nodes.length === 0) {
     return null
   }

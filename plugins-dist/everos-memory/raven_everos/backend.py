@@ -39,7 +39,7 @@ from typing import Any, Literal, Protocol
 
 import httpx
 
-from raven.contracts.memory import Memory
+from raven.contracts.memory import BackendHealth, HealthCheck, HealthStatus, Memory
 from raven.plugins import PluginContext
 from raven_everos.server import DEFAULT_EVEROS_BASE_URL
 
@@ -88,6 +88,14 @@ class _Adapter(Protocol):
         project_id: str | None = None,
     ) -> None: ...
 
+    async def get_session(
+        self,
+        session_id: str,
+        *,
+        user_id: str | None,
+        agent_id: str | None,
+    ) -> Any: ...
+
 
 class _NoOpAdapter:
     """Adapter that does nothing. Used as a graceful fallback so callers
@@ -97,6 +105,9 @@ class _NoOpAdapter:
         return None
 
     async def memorize(self, *a: Any, **kw: Any) -> None:
+        return None
+
+    async def get_session(self, *a: Any, **kw: Any) -> Any:
         return None
 
 
@@ -133,12 +144,39 @@ _MEMORIZE_TIMEOUT_S: float = 360.0
 # permanently, and neither is worth a minute of the user's time.
 _RECALL_TIMEOUT_S: float = 4.0
 _STORE_TIMEOUT_S: float = 10.0
+# ...and an append is not flat work: EverOS may carve a boundary out of any
+# add, which runs a model, so the cost follows how much is handed over. A turn
+# passes a handful of messages and lands well inside the floor; a bulk import
+# passes up to a hundred at once and did not, which read as a dead service and
+# failed every source behind it.
+_STORE_TIMEOUT_PER_MESSAGE_S: float = 0.5
 
 # Shutdown's total budget for flushing every session left with buffered-but-
 # unflushed turns. One shared budget for the whole sweep, not per session: the
 # process is already on its way out, and a wedged server must not turn "quit"
 # into a multi-minute hang across N sessions.
 _SHUTDOWN_FLUSH_BUDGET_S: float = 5.0
+
+# What a deletion writes into an episode's ``deprecated_entries`` map. EverOS
+# puts the replacement entry's id there when Reflection merges episodes; a
+# person's delete has no replacement, and the map's value is free text that
+# only this adapter and a human reader ever look at.
+_DELETED_BY: str = "deleted-by-user"
+
+# One page is the whole answer here: a session read is scoped to one call's
+# worth of extraction, not to an account's history.
+_SESSION_PAGE_SIZE: int = 100
+
+# Which array of a ``/get`` body holds each kind. Episodes are the user track
+# and cases the agent track; profiles and skills are deliberately not read back
+# for a session, because they accumulate across calls and describe what an
+# agent *is* rather than what this call did.
+_SESSION_ARRAY: dict[str, str] = {"episode": "episodes", "agent_case": "agent_cases"}
+
+
+def _store_budget(message_count: int) -> float:
+    """What one non-final append may take, for a slice of this size."""
+    return _STORE_TIMEOUT_S + _STORE_TIMEOUT_PER_MESSAGE_S * max(0, message_count)
 
 
 class ServiceState(Enum):
@@ -363,6 +401,43 @@ class _HttpEverosAdapter:
             )
             fr.raise_for_status()
 
+    async def get_session(
+        self,
+        session_id: str,
+        *,
+        user_id: str | None,
+        agent_id: str | None,
+    ) -> Any:
+        """Everything filed under ``session_id`` for one track.
+
+        ``/get`` with a ``session_id`` filter rather than ``/search``: there is
+        no query here and nothing to rank. The endpoint takes exactly one owner
+        per call, so the caller names the track.
+        """
+        owner_key, memory_types = ("user_id", ("episode",)) if user_id else ("agent_id", ("agent_case",))
+        owner_id = user_id or agent_id
+        if not owner_id:
+            return None
+        out: list[dict[str, Any]] = []
+        for memory_type in memory_types:
+            r = await self._client.post(
+                f"{self._base_url}/api/v2/memory/get",
+                json={
+                    owner_key: owner_id,
+                    "memory_type": memory_type,
+                    "filters": {"session_id": session_id},
+                    "page_size": _SESSION_PAGE_SIZE,
+                },
+                headers=self._headers(),
+                timeout=_RECALL_TIMEOUT_S,
+            )
+            r.raise_for_status()
+            data = (r.json() or {}).get("data") or {}
+            for row in data.get(_SESSION_ARRAY[memory_type]) or []:
+                if isinstance(row, dict):
+                    out.append({**row, "_memory_type": memory_type})
+        return out
+
 
 # ---------------------------------------------------------------------------
 # EverosBackend — host's MemoryBackend implementation
@@ -371,6 +446,57 @@ class _HttpEverosAdapter:
 
 def _log_notice(text: str) -> None:
     logging.getLogger(__name__).warning(text)
+
+
+# What is lost by leaving an optional role unconfigured. Stated per role rather
+# than as one blanket "optional": they degrade differently, and a user deciding
+# whether to configure embedding needs to know it costs semantic recall
+# specifically.
+_DEGRADATION_NOTE = {
+    "embedding": "not configured (recall matches keywords, not meaning)",
+    "rerank": "not configured (agent-track recall uses the LLM lane instead of a cross-encoder)",
+    "multimodal": "not configured (images, PDFs and audio stay out of memory)",
+}
+
+
+def _joined(*parts: Any) -> str:
+    """The given fields as one whitespace-normalised line, empties dropped.
+
+    Deliberately uncapped. The reader is a sub-agent whose file tool already
+    handles length, so trimming here would only drop the end of what the
+    sub-agent concluded -- which is where a narrative keeps its findings.
+    """
+    return " - ".join(" ".join(str(p).split()) for p in parts if p and str(p).strip())
+
+
+def _session_text(memory_type: str, row: dict[str, Any]) -> str:
+    """One session row rendered as the line a reader gets.
+
+    Which fields carry the content is EverOS's own shape, so the rendering
+    lives here rather than in the host that asked: the host reads
+    ``Memory.text`` and knows nothing about episodes or cases.
+    """
+    if memory_type == "episode":
+        # ``summary`` is a hard 200-character prefix of ``episode`` (verified
+        # against everos 1.2.1), so it is the fallback, never the choice:
+        # taking it drops the rest of the sentence it cuts mid-word.
+        return _joined(row.get("subject"), row.get("episode") or row.get("summary"))
+    return _joined(row.get("task_intent"), row.get("approach"), row.get("key_insight"))
+
+
+def _owner_override(metadata: dict[str, Any] | None, key: str) -> str:
+    """One per-call owner id from ``store``'s metadata, in either spelling.
+
+    The block reaches here as an agent wrote it in raven's config, which spells
+    its keys in camelCase; the contract documents them in snake_case. Reading
+    only one of the two made the override silently never fire for a real
+    config, filing a sub-agent's memories under the host's own identity --
+    which is where recall for that agent never looks.
+    """
+    if not metadata:
+        return ""
+    camel = key.split("_")[0] + "".join(w.title() for w in key.split("_")[1:])
+    return str(metadata.get(key) or metadata.get(camel) or "")
 
 
 class EverosBackend:
@@ -554,6 +680,15 @@ class EverosBackend:
 
         from raven_everos.server import ProbeVerdict
 
+        if isinstance(exc, httpx.HTTPStatusError):
+            # A status line is proof the service is up and answering; what
+            # failed is this request. Demoting on it turned one unprocessable
+            # payload into a dead backend for the rest of the process -- every
+            # later call short-circuits on the state guard without reaching the
+            # wire, so a single bad record failed every source behind it in the
+            # same import. The state is left exactly as it was: a service that
+            # then does go away still demotes, through timeout or refusal.
+            return
         if isinstance(exc, (httpx.TimeoutException, asyncio.TimeoutError)):
             self._apply_probe(ProbeVerdict.TIMEOUT)
         elif isinstance(exc, httpx.ConnectError):
@@ -606,6 +741,15 @@ class EverosBackend:
         """
         return self._state
 
+    def _host_embedding(self) -> Any:
+        """The host's embedding block, through the service grant.
+
+        Off ``ctx.services`` rather than read from raven's config: a plugin
+        does not open the host's config file, and this endpoint is the host's
+        to hand over.
+        """
+        return getattr(self._services, "embedding", None)
+
     async def start(self) -> None:
         try:
             self._validate_identity()
@@ -625,6 +769,30 @@ class EverosBackend:
                 "then start a new session."
             )
             return
+
+        # Deferred from construction (make_backend) so that building a
+        # backend to ask health() -- raven doctor's path -- stays read-only.
+        # Runs here, once identity is known good, on every start path.
+        from raven_everos.config import (
+            configure_embedding_env,
+            configure_everos_env,
+            ensure_everos_home,
+            everos_owned,
+            everos_root,
+        )
+
+        root = everos_root()
+        configure_everos_env(root)
+        # The host owns the embedding endpoint: one installation, one endpoint,
+        # read by the knowledge base too. Sent down here rather than kept in
+        # everos.toml, the same direction the data root above travels.
+        if configure_embedding_env(self._host_embedding()):
+            self._logger.info("EverosBackend: embedding endpoint taken from the host config")
+        # See tools.py: a root the user manages is read-only, template files
+        # included.
+        if everos_owned():
+            ensure_everos_home(root)
+
         self._logger.info(
             "EverosBackend.start (adapter=%s)",
             type(self._adapter).__name__,
@@ -641,7 +809,6 @@ class EverosBackend:
                 self._adapter = _NoOpAdapter()
                 return
 
-            from raven.config.update_everos import everos_owned
             from raven_everos.server import (
                 EverosBinaryMissingError,
                 EverosNotConfiguredError,
@@ -755,7 +922,7 @@ class EverosBackend:
         the user never configured is a choice they already know about, and
         repeating it every start would be noise.
         """
-        from raven.config.update_everos import everos_owned
+        from raven_everos.config import everos_owned
         from raven_everos.health import probe_capabilities
 
         report = probe_capabilities(base_url)
@@ -767,7 +934,7 @@ class EverosBackend:
             # the only move raven has left on this path, never fired at all.
             self._warn_unowned_recall(base_url, report)
             return
-        from raven.config.update_everos import everos_role_configured
+        from raven_everos.config import everos_role_configured
 
         if not (everos_role_configured("embedding") and report.available("embedding") is False):
             return
@@ -798,6 +965,101 @@ class EverosBackend:
                     "EverosBackend: adapter.aclose failed: %s",
                     e,
                 )
+
+    async def health(self) -> BackendHealth:
+        """What ``raven doctor`` prints and what ``raven import`` gates on.
+
+        Callable before ``start``: doctor asks an instance it never started, so
+        nothing here may read the state machine. What the server says about
+        itself is the only source for a root the user runs -- no root is
+        recorded for one, and its ``everos.toml`` is not Raven's to read.
+        """
+        from raven_everos.config import everos_owned, everos_role_configured, everos_root
+        from raven_everos.health import (
+            DEGRADING_SECTIONS,
+            REQUIRED_SECTIONS,
+            base_url_from_slice,
+            probe_capabilities,
+        )
+        from raven_everos.server import server_log_path
+
+        try:
+            self._validate_identity()
+        except ValueError as e:
+            return BackendHealth(
+                ready=False,
+                checks=[HealthCheck("identity", "missing", f"{e} Fix memory.userId / memory.agentId in config.json.")],
+            )
+
+        checks: list[HealthCheck] = []
+        owned = everos_owned()
+        base_url = base_url_from_slice(self._config)
+        if owned:
+            checks.append(HealthCheck("memories", "ok", str(everos_root())))
+        else:
+            checks.append(
+                HealthCheck(
+                    "memories",
+                    "ok",
+                    "managed by you; Raven reads at the address below and never writes, starts or stops it",
+                )
+            )
+        checks.append(HealthCheck("address", "ok", base_url))
+
+        report = await asyncio.to_thread(probe_capabilities, base_url)
+        sections = (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS)
+        if owned:
+            configured = [s for s in sections if everos_role_configured(s)]
+        else:
+            configured = [s for s in sections if report.available(s) is not None]
+
+        if not report.reachable:
+            hint = "not running (starts on demand)" if owned else "not running; start it yourself and Raven follows"
+            checks.append(HealthCheck("server", "ok", hint))
+            if configured:
+                checks.append(HealthCheck("configured", "ok", ", ".join(configured)))
+            return BackendHealth(ready=False, checks=checks)
+
+        checks.append(HealthCheck("server", "ok", "running"))
+        if not report.reports_capabilities:
+            checks.append(HealthCheck("capabilities", "ok", "not reported by this server (everos < 1.2.1)"))
+            if configured:
+                checks.append(HealthCheck("configured", "ok", ", ".join(configured)))
+            return BackendHealth(ready=True, checks=checks)
+
+        ready = True
+        for section in sections:
+            if section not in configured:
+                if not owned:
+                    # Their server said nothing about this role and their toml is
+                    # not ours to read, so there is no evidence either way --
+                    # reporting it as unconfigured invents one.
+                    continue
+                status: HealthStatus = "degraded" if section in DEGRADING_SECTIONS else "missing"
+                checks.append(HealthCheck(section, status, _DEGRADATION_NOTE.get(section, "not configured")))
+                ready = ready and section not in REQUIRED_SECTIONS
+                continue
+            built = report.available(section)
+            if built is True:
+                checks.append(HealthCheck(section, "ok"))
+            elif built is False and section in REQUIRED_SECTIONS:
+                ready = False
+                checks.append(
+                    HealthCheck(
+                        section, "missing", f"configured, but the server could not build it. Check {server_log_path()}"
+                    )
+                )
+            elif built is False:
+                checks.append(
+                    HealthCheck(
+                        section,
+                        "degraded",
+                        f"configured, but the server could not build it; memory runs degraded. Check {server_log_path()}",
+                    )
+                )
+            else:
+                checks.append(HealthCheck(section, "ok", "not reported"))
+        return BackendHealth(ready=ready, checks=checks)
 
     async def _flush_unflushed_sessions(self) -> None:
         """Give every session with unextracted content one last flush.
@@ -897,7 +1159,9 @@ class EverosBackend:
             return []
         if data is None:
             return []
-        return self._search_data_to_memories(data, owner_type)
+        # The profile row rides outside the server's top_k; the contract bound
+        # applies to the whole list, after sorting.
+        return self._search_data_to_memories(data, owner_type)[:top_k]
 
     async def store(
         self,
@@ -926,10 +1190,15 @@ class EverosBackend:
         """
         if not messages:
             return True
+        # Per-call owners when the caller named them: the host writes on
+        # behalf of a sub-agent that ran elsewhere, and the content is that
+        # agent's. Filing it under this backend's own identity would put it
+        # where recall for that agent never looks. The default identity is
+        # untouched -- this is an override for one call, not a second source.
         payload = self._convert_messages(
             messages,
-            agent_id=self._agent_id,
-            user_id=self._user_id,
+            agent_id=_owner_override(metadata, "agent_id") or self._agent_id,
+            user_id=_owner_override(metadata, "user_id") or self._user_id,
         )
         if not payload:
             # Nothing to write is not a failed write: the conversion drops
@@ -946,7 +1215,12 @@ class EverosBackend:
         if self._state is not ServiceState.READY:
             self._kick_probe()
             return False
-        if metadata and "is_final" in metadata:
+        if metadata and metadata.get("flush"):
+            # The caller is handing over a conversation that has already
+            # ended and will read the result back now. Waiting for the turn
+            # counter would wait for a turn that never comes.
+            is_final = True
+        elif metadata and "is_final" in metadata:
             is_final = bool(metadata["is_final"])
         else:
             # ``attempt`` is the caller's own retry count for this exact
@@ -969,7 +1243,7 @@ class EverosBackend:
         # A per-turn append must not hold a turn open; a final flush is the call
         # that makes EverOS extract, which is what the six-minute budget was
         # sized for. One number for both silently overrode the other.
-        budget = _MEMORIZE_TIMEOUT_S if is_final else _STORE_TIMEOUT_S
+        budget = _MEMORIZE_TIMEOUT_S if is_final else _store_budget(len(payload))
         # Marked before the call, not after: if this is cancelled mid-flight
         # the add may already have landed, and the safe direction is one
         # redundant flush rather than content that is never extracted.
@@ -1017,6 +1291,125 @@ class EverosBackend:
         if is_final:
             self._unflushed.discard(session_id)
         return True
+
+    async def recall_session(
+        self,
+        session_id: str,
+        *,
+        user_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> list[Memory]:
+        """Everything EverOS holds under ``session_id`` for one track.
+
+        Raises nothing: a caller asking what a finished sub-agent left behind
+        is writing an audit trail, and an unreachable service means "nothing to
+        report", not a failed run. Degrades the same way :meth:`recall` does --
+        empty, with a probe kicked so the next look might answer.
+        """
+        if (user_id is None) == (agent_id is None):
+            self._logger.warning(
+                "recall_session needs exactly one of user_id / agent_id (got user_id=%r, agent_id=%r)",
+                user_id,
+                agent_id,
+            )
+            return []
+        if self._adapter is None:
+            return []
+        if self._state is not ServiceState.READY:
+            self._kick_probe()
+            return []
+        try:
+            rows = await self._adapter.get_session(session_id, user_id=user_id, agent_id=agent_id)
+        except Exception as e:  # noqa: BLE001 - an audit trail must not fail a run
+            self._demote_from_exception(e)
+            self._logger.warning(
+                "EverosBackend.recall_session failed (%s); state=%s; returning empty",
+                e,
+                self._state.value,
+            )
+            return []
+        out: list[Memory] = []
+        for row in rows or []:
+            memory_type = str(row.get("_memory_type") or "")
+            text = _session_text(memory_type, row)
+            if text:
+                out.append(
+                    Memory(
+                        text=text,
+                        metadata={"id": row.get("id", ""), "type": memory_type, "session_id": session_id},
+                    )
+                )
+        return out
+
+    async def delete(self, memory_id: str, *, kind: str | None = None) -> bool:
+        """Remove one memory the way EverOS itself removes one.
+
+        Markdown is EverOS's source of truth and LanceDB under ``.index/`` is
+        derived from it -- cascade rebuilds a row from the file whenever the
+        file changes. Deleting the row alone therefore un-deletes itself: the
+        next append to that day's log re-embeds every entry the file still
+        carries, including the one a person asked to forget, and the text was
+        never gone from disk in the first place.
+
+        So only actions EverOS already performs are used here, and only the
+        kinds it performs them for:
+
+        ``episode``     the frontmatter's ``deprecated_entries`` map, which is
+                        how Reflection retires a merged episode. Search filters
+                        ``deprecated_by IS NULL``, and cascade re-applies the
+                        map on every sync, so the entry stays gone across
+                        rebuilds.
+        ``agent_skill`` ``AgentSkillWriter.delete_skill``, the one destructive
+                        operation that writer has.
+
+        ``profile`` and ``agent_case`` return ``False``: EverOS has no
+        entry-level writer for a case log and no deletion at all for a
+        profile. Inventing one here would mean this adapter owning a file
+        format EverOS does not expose, which is how the derived-index bug
+        above was written in the first place.
+        """
+        if not memory_id:
+            return False
+        try:
+            if kind == "episode":
+                return await self._deprecate_episode(memory_id)
+            if kind == "agent_skill":
+                return await self._delete_agent_skill(memory_id)
+        except Exception as e:  # noqa: BLE001 - a failed delete is reported, not raised at a button
+            self._logger.warning("EverosBackend.delete(%s, kind=%s) failed: %s", memory_id, kind, e)
+            return False
+        return False
+
+    async def _deprecate_episode(self, memory_id: str) -> bool:
+        """Mark one episode entry deprecated in the md file that owns it."""
+        from everos.core.persistence import MemoryRoot
+        from everos.infra.persistence.lancedb import episode_repo
+        from everos.infra.persistence.markdown import EpisodeWriter
+
+        row = await episode_repo.get_by_id(memory_id)
+        md_path = getattr(row, "md_path", None) if row else None
+        entry_id = getattr(row, "entry_id", None) if row else None
+        if not (md_path and entry_id):
+            return False
+        root = MemoryRoot.resolve()
+        await EpisodeWriter(root).patch_frontmatter(
+            root.root / md_path,
+            {"deprecated_entries": {entry_id: _DELETED_BY}},
+        )
+        return True
+
+    async def _delete_agent_skill(self, memory_id: str) -> bool:
+        """Remove the skill directory the row names."""
+        from everos.core.persistence import MemoryRoot
+        from everos.infra.persistence.lancedb import agent_skill_repo
+        from everos.infra.persistence.markdown import AgentSkillWriter
+
+        row = await agent_skill_repo.get_by_id(memory_id)
+        owner_id = getattr(row, "owner_id", None) if row else None
+        name = getattr(row, "name", None) if row else None
+        if not (owner_id and name):
+            return False
+        return bool(await AgentSkillWriter(MemoryRoot.resolve()).delete_skill(owner_id, name))
 
     async def feedback(self, signals: dict[str, Any]) -> None:
         """Deliberate no-op pending an upstream everos feedback sink.
@@ -1305,21 +1698,11 @@ def _flatten_profile_list(items: list[Any]) -> list[str]:
 
 def make_backend(ctx: PluginContext) -> EverosBackend:
     """Plugin entry-point factory. Called by :class:`PluginRegistry`
-    after manifest activation. Sync construction only — async setup
-    happens in ``EverosBackend.start()``."""
-    from raven.config.update_everos import (
-        configure_everos_env,
-        ensure_everos_home,
-        everos_owned,
-        everos_root,
-    )
-
-    root = everos_root()
-    configure_everos_env(root)
-    # See tools.py: a root the user manages is read-only, template files
-    # included.
-    if everos_owned():
-        ensure_everos_home(root)
+    after manifest activation. Sync construction only, and read-only:
+    ``raven doctor`` constructs a backend to call ``health()`` without ever
+    starting it, so nothing here may touch disk or the environment. Pointing
+    EverOS at its root and creating its config templates happens in
+    ``EverosBackend.start()`` instead."""
     return EverosBackend(ctx)
 
 

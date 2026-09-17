@@ -40,6 +40,7 @@ from raven.providers.registry import (
     find_by_name,
     names_same_provider,
     normalize_provider_name,
+    split_model_id,
 )
 from raven.utils.atomic_io import atomic_update
 
@@ -1100,6 +1101,68 @@ _HTTP_STATUS_MAP: dict[int, str] = {
 }
 
 
+# Fallback OpenAI-compatible base URLs for providers whose registry
+# ``default_api_base`` is empty (they rely on the SDK's built-in default, which
+# a bare OpenAI client doesn't know). A bare client needs an explicit base_url.
+_PROVIDER_BASE_URL_FALLBACK = {
+    "openai": "https://api.openai.com/v1",
+    "deepseek": "https://api.deepseek.com/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+}
+
+
+def resolve_provider_credentials(name: str, *, config_path: Path | None = None) -> tuple[str, str] | None:
+    """The address and key a request to ``name`` would actually go out on.
+
+    Unredacted, unlike ``list_provider_endpoints``: this answers for a caller
+    that is about to make the call, not for a screen. The selection is the one
+    ``test_provider`` makes -- the first endpoint holding a key, falling back to
+    the first endpoint's address and then to the spec's default -- so a caller
+    reaching a provider through here reaches the address the runtime would.
+
+    ``None`` for a provider whose credential is not a key in the config: an
+    OAuth seat's token is fetched and refreshed by the flow that owns it, and
+    handing out a stale one would be worse than saying nothing. ``None`` too
+    when no key is configured, which reads as "not set up" rather than as an
+    anonymous request to somebody's paid endpoint.
+    """
+    name = canonical_provider_name(name)
+    spec = _provider_spec(name)
+    if spec is not None and spec.is_oauth:
+        return None
+    path = config_path or get_config_path()
+    try:
+        data = read_raw_or_raise(path)
+    except Exception:
+        return None
+    try:
+        cls, _ = _load_provider_endpoints(name, data)
+        instance = cls.model_validate(_raw_section(data, name))
+    except ValidationError:
+        # A hand-edited section with a wrong type is not a reason to raise at a
+        # caller that only asked for an address. Both calls are inside the
+        # guard: the loader validates the section too, so catching only the
+        # second let the same bad config raise from one line higher.
+        cls = _provider_schema_cls(name)
+        instance = cls()
+    endpoints = provider_endpoints(instance)
+    endpoint = next((ep for ep in endpoints if ep.api_key), endpoints[0] if endpoints else None)
+    api_key = endpoint.api_key if endpoint else ""
+    api_base = (
+        (endpoint.api_base if endpoint else None)
+        or (spec.default_api_base if spec else "")
+        # A vendor whose registry entry names no address is not a vendor with
+        # no address: OpenAI and DeepSeek rely on their SDK's built-in default,
+        # which a bare client does not know. Without this, a caller holding a
+        # real key for the most common embedding provider of all was told the
+        # provider had no usable credential.
+        or _PROVIDER_BASE_URL_FALLBACK.get(name, "")
+    )
+    if not api_key or not api_base:
+        return None
+    return str(api_base).rstrip("/"), str(api_key)
+
+
 def test_provider(
     name: str,
     *,
@@ -1721,8 +1784,189 @@ def _probe_codex_catalog(*, timeout_s: float) -> dict[str, Any]:
     }
 
 
+def lend_provider_credentials(provider: str) -> dict[str, str]:
+    """The api_key and base_url of a provider raven is already connected to.
+
+    Only a group this can hand over whole: see the header check below.
+
+    Read through ``provider_endpoints``, which is the one place that knows the
+    precedence a section can be written in -- ``endpoints`` first, then
+    ``api_key_list``, then the flat pair. Reading ``api_key`` off the section
+    instead answers "" for both of the shapes that precedence exists for, so a
+    provider serving traffic every day would be offered as a lender and then
+    refuse to lend.
+
+    This asks a narrower question than ``credential_status``, which owns "is
+    this Provider usable": a provider can be perfectly usable and have nothing
+    to lend, because an OAuth token file and a keyless local address both
+    satisfy usability without a key that means anything anywhere else.
+
+    Copied, not referenced. The alternative -- storing the provider's name and
+    resolving it on every read -- would follow a later key change on its own,
+    but this file is read by EverOS as well as by raven, and a field only raven
+    resolves is a field EverOS reads as an endpoint it cannot reach. `provider`
+    is also already taken there for EverOS's own meaning (`[rerank]` carries
+    one). The CLI's onboarding already copies (see `_resolve_reuse_llm_creds`),
+    so copying is the meaning the file already has.
+
+    Raises:
+        KeyError: no such provider is configured.
+        ValueError: it is configured but has nothing that can be handed over
+            whole -- no key to lend, or a group that authenticates with headers.
+    """
+    from raven.config import load_config
+
+    # `ProvidersConfig.get`, never attribute access: a provider stored under a
+    # hyphenated or camelCase key is invisible to the attribute, and the ones
+    # raven carries no spec for are exactly the ones stored that way. It
+    # canonicalises the name itself. Parsed rather than raw, because the file
+    # spells its fields in camelCase and `provider_endpoints` reads the
+    # schema's names.
+    section = load_config().providers.get(provider)
+    if section is None:
+        raise KeyError(provider)
+
+    # The first endpoint holding a key. A section can offer several, and any one
+    # of them is a key that works against the same address.
+    lent = next((e for e in provider_endpoints(section) if e.api_key), None)
+    if lent is None:
+        raise ValueError(f"{provider} has no api key to lend")
+    # A url/key/header group is reachable only whole. A borrowing section holds a
+    # model, an api_key and a base_url and nothing else, so a group whose
+    # requests only authenticate with a header cannot be expressed here.
+    # Lending the pair without it hands over a credential that will be refused
+    # at the far end and reports a provider serving traffic every day as
+    # unreachable.
+    if lent.extra_headers:
+        raise ValueError(
+            f"{provider} authenticates with headers ({', '.join(sorted(lent.extra_headers))}), "
+            "and this lends an address and a key only"
+        )
+
+    spec = find_by_name(provider)
+    base_url = str(lent.api_base or "") or str(getattr(spec, "default_api_base", "") or "")
+    out = {"api_key": lent.api_key}
+    # A provider with no address of its own leaves the section's own base_url
+    # alone rather than blanking it: the reader may have typed one that works.
+    if base_url:
+        out["base_url"] = base_url
+    return out
+
+
+# Providers whose main model can be reused as a bare-OpenAI-client memory LLM:
+# they speak the OpenAI chat-completions protocol. OAuth providers
+# (github_copilot / openai_codex) and non-OpenAI wire protocols
+# (anthropic / gemini) are excluded.
+_OPENAI_COMPATIBLE_PROVIDERS = {"openrouter", "openai", "deepseek", "custom"}
+
+
+def _resolve_model_provider(model: str) -> str | None:
+    """Best-effort: which configured provider does ``model`` belong to?
+
+    Prefixed models (``openrouter/...`` / ``openai/gpt-4o``) read off the head.
+    A custom endpoint stores its model as a BARE id (e.g. ``qwen-max``) with no
+    prefix, so an unrecognized head falls back to ``"custom"`` when a custom
+    provider is actually configured with a key. Returns ``None`` when no match.
+    """
+    if not model:
+        return None
+    head, _ = split_model_id(model)
+    if head:
+        try:
+            provider_field_specs(head)
+            return head
+        except KeyError:
+            pass
+    # No usable prefix -> could be a bare custom-endpoint model.
+    from raven.config import load_config
+    from raven.providers.auth import credential_status
+
+    custom = load_config().providers.get("custom")
+    if custom is not None and credential_status("custom", custom).ok:
+        return "custom"
+    # A bare id that still matches a known provider head (rare; e.g. a direct
+    # provider's bare default before prefixing) -- accept the head if known.
+    return head if head in _OPENAI_COMPATIBLE_PROVIDERS else None
+
+
+def _bare_openai_settings(main_model: str) -> dict[str, str | None]:
+    """Map a litellm-style main model to bare OpenAI-client settings.
+
+    A bare client posts ``model`` to ``base_url`` with ``api_key``, so:
+      - strip the provider's litellm prefix to the bare model id the upstream
+        endpoint expects (``openrouter/anthropic/claude-x`` -> ``anthropic/claude-x``;
+        a custom endpoint's bare id is used as-is);
+      - resolve the provider's real ``base_url`` (configured ``apiBase`` ->
+        registry ``default_api_base`` -> a known fallback);
+      - carry the provider's stored api_key.
+    """
+    provider = _resolve_model_provider(main_model) or split_model_id(main_model)[0]
+    spec = find_by_name(provider)
+    # Through the ops library, so a section still stored under the provider's
+    # pre-rename name is found -- a raw lookup by the resolved name is not.
+    #
+    # No `if spec` gate: LiteLLM-only vendors have no spec of ours yet their
+    # section holds real credentials, and gating on the spec silently handed the
+    # probe an empty api_key while the main model was working fine.
+    try:
+        _resolved = get_provider_config(provider, redact_secrets=False)
+    except KeyError:
+        _resolved = {}
+    prov_cfg = {"apiKey": _resolved.get("api_key"), "apiBase": _resolved.get("api_base")} if _resolved else {}
+
+    # Strip the routing prefix to the bare model id the upstream endpoint
+    # expects: litellm consumes it, the raw OpenAI client must not see it. Only
+    # a prefix naming this provider is stripped -- a custom endpoint stores a
+    # bare id already, and anything else is part of the vendor's own model id.
+    bare_model = main_model
+    head, rest = split_model_id(main_model)
+    known_prefixes = set(spec.route_names) if spec else {normalize_provider_name(provider)}
+    if spec:
+        known_prefixes.add(normalize_provider_name(spec.model_prefix))
+    if head and head in known_prefixes:
+        bare_model = rest
+
+    base_url = (
+        prov_cfg.get("apiBase")
+        or (getattr(spec, "default_api_base", "") if spec else "")
+        or _PROVIDER_BASE_URL_FALLBACK.get(provider)
+    )
+    return {
+        "model": bare_model,
+        "api_key": prov_cfg.get("apiKey"),
+        "base_url": base_url,
+    }
+
+
+def resolve_main_model(main_model: str) -> dict[str, Any]:
+    """What raven knows about the main chat model, for a plugin to reuse.
+
+    Which provider owns the model, whether that provider speaks the OpenAI
+    chat protocol (``openai_compatible`` -- the only kind a bare OpenAI client
+    can talk to), and the bare ``model`` / ``api_key`` / ``base_url`` a client
+    like that needs. One call rather than four, because a plugin asking any of
+    these is asking about the provider registry, which is host knowledge: this
+    is the whole of it an onboarding screen gets.
+
+    ``provider`` is ``None`` for a model no configured provider claims, and the
+    settings are then whatever the bare head resolves to -- best effort, same
+    as before.
+    """
+    provider = _resolve_model_provider(main_model)
+    out: dict[str, Any] = {
+        "provider": provider,
+        "openai_compatible": bool(main_model) and provider in _OPENAI_COMPATIBLE_PROVIDERS,
+    }
+    if main_model:
+        out.update(_bare_openai_settings(main_model))
+    return out
+
+
 __all__ = [
+    "lend_provider_credentials",
+    "resolve_main_model",
     "provider_field_specs",
+    "resolve_provider_credentials",
     "list_providers",
     "get_provider_config",
     "set_provider_fields",

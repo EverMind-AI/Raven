@@ -40,17 +40,17 @@ from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.registry import AgentRegistry, AgentRow
 from raven.agent.subagent_memory import (
     TRACE_BUDGET_S,
-    EverosIdentity,
-    identity_from_config,
+    MemoryScope,
     prime_from_turn,
     record_memories,
+    scope_from_config,
+    started_backend,
     trace_session_id,
 )
 from raven.config.paths import get_sandbox_dir
 from raven.config.schema import TIER_LADDER, ExecToolConfig
 from raven.context_engine.segments.render import dispatch_language_line
 from raven.contracts.llm_provider import LLMProvider
-from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missing_note
 from raven.observability import semconv
 from raven.providers.binding import ModelBinding, resolve
 from raven.sandbox import SandboxConfig, build_executor
@@ -124,32 +124,13 @@ async def _write_spawn_status(session_key: str | None, agent: str, handle: str, 
         )
 
 
-def _host_everos_base_url() -> str:
-    """The host's own everos service, used by any sub-agent that names none.
-
-    Empty when the plugin is not installed: raven runs no everos then, and the
-    address it would otherwise default to is the plugin's own constant. An
-    agent that named its own address is unaffected -- it never reads this.
-    """
-    if not everos_plugin_installed():
-        logger.warning("Sub-agent memory has no host address: {}", everos_plugin_missing_note())
-        return ""
-    from raven_everos.health import DEFAULT_EVEROS_BASE_URL, configured_base_url
-
-    try:
-        from raven.config.raven import load_raven_config
-
-        return configured_base_url(load_raven_config())
-    except Exception:  # noqa: BLE001 - a missing plugin config must not sink the manager
-        return DEFAULT_EVEROS_BASE_URL
-
-
 async def write_memory_record_for(
     *,
     directory: Path,
     filename: str,
     agent: str,
-    identity: EverosIdentity,
+    backend,
+    scope,
     resolve_session_id,
     instance: str | None = None,
     budget_s: float | None = None,
@@ -163,7 +144,8 @@ async def write_memory_record_for(
     kwargs = {"budget_s": budget_s} if budget_s is not None else {}
     await record_memories(
         agent=agent,
-        identity=identity,
+        backend=backend,
+        scope=scope,
         resolve_session_id=resolve_session_id,
         write=_write,
         instance=instance,
@@ -229,6 +211,7 @@ class SubagentManager:
         web_search_provider: str = "serper",
         web_fetch_provider: str = "jina",
         web_provider_keys: dict[str, str] | None = None,
+        image_search: bool = False,
         max_concurrent: int = 8,
         max_spawns_per_hour: int = 30,
         agents: list | None = None,
@@ -283,6 +266,7 @@ class SubagentManager:
         self.web_search_provider = web_search_provider
         self.web_fetch_provider = web_fetch_provider
         self.web_provider_keys = web_provider_keys
+        self.image_search = image_search
         self.exec_config = exec_config or ExecToolConfig()
         self.restrict_to_workspace = restrict_to_workspace
         self._sandbox_config = sandbox_config
@@ -320,6 +304,9 @@ class SubagentManager:
         # ``set_instance_mode`` for why it is not persisted, and why the host
         # rather than the agent is what holds it.
         self._instance_modes: dict[tuple[str, str, str], str] = {}
+        # And which model, by the same key and on the same terms. Separate from
+        # the modes above because an agent can offer either without the other.
+        self._instance_models: dict[tuple[str, str, str], str] = {}
         # The one agent table this process dispatches against, shared with the DAG
         # tool rather than built twice (see ``AgentRegistry``). The in-process
         # factory is bound after construction because it is a bound method of this
@@ -382,6 +369,7 @@ class SubagentManager:
             web_search_provider=self.web_search_provider,
             web_fetch_provider=self.web_fetch_provider,
             web_provider_keys=self.web_provider_keys,
+            image_search=self.image_search,
             tools_allow=getattr(build, "tools_allow", None),
             skills_allow=getattr(build, "skills_allow", None),
             mcp_allow=getattr(row.config, "mcps", None),
@@ -407,6 +395,7 @@ class SubagentManager:
             web_search_provider=self.web_search_provider,
             web_fetch_provider=self.web_fetch_provider,
             web_provider_keys=self.web_provider_keys,
+            image_search=self.image_search,
             tools_allow=getattr(build, "tools_allow", None),
             skills_allow=getattr(build, "skills_allow", None),
         )
@@ -531,17 +520,35 @@ class SubagentManager:
         """Advertised capabilities of every enabled agent (for the tool descriptions)."""
         return self.registry.meta()
 
-    def everos_identity(self, agent: str | None) -> EverosIdentity | None:
-        """The declared identity for ``agent``, or ``None`` when it declared none.
+    def memory_scope(self, agent: str | None) -> MemoryScope | None:
+        """The declared memory block for ``agent``, or ``None`` when it has none.
 
         Read off the registry row rather than kept in a map of its own: the row
-        holds the config the identity is declared in, so a hot ``apply_agents``
+        holds the config the block is declared in, so a hot ``apply_agents``
         cannot leave the two disagreeing.
         """
         row = self.registry.get(agent or "")
         if row is None:
             return None
-        return identity_from_config(getattr(row.config, "everos", None), _host_everos_base_url())
+        return scope_from_config(getattr(row.config, "memory", None))
+
+    def _memory_backend(self):
+        """A fresh, unstarted memory backend, or ``None`` when there is not one.
+
+        Built here rather than held: this runs off the dispatch path, after a
+        call has already answered, and a record nobody is waiting on must not
+        keep a backend alive for the life of the manager. Its caller owns the
+        ``start`` / ``stop`` pair around the one record (``started_backend``).
+        """
+        from raven.config import load_config
+        from raven.config.raven import load_raven_config
+        from raven.core.plugin_stack import maybe_build_memory_backend
+
+        try:
+            return maybe_build_memory_backend(load_config().workspace_path, load_raven_config())
+        except Exception as exc:  # noqa: BLE001 - an audit trail must not disturb a run
+            logger.warning("Sub-agent memory record: no backend ({})", exc)
+            return None
 
     def _schedule_memory_record(
         self,
@@ -555,56 +562,61 @@ class SubagentManager:
         instance: str | None = None,
         turn: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Record what this call wrote into everos, in the background.
+        """Record what this call wrote into long-term memory, in the background.
 
-        Never awaited by the dispatch path: everos extraction runs an LLM, and a
+        Never awaited by the dispatch path: extraction runs a model, and a
         sub-agent's reply must not wait on the host's bookkeeping. Callers must
         not schedule this for a call that ended via ``CancelledError``: that
         poller would be created after the cancellation sweep took its snapshot,
         leaving it unreapable (see ``cancel_all`` / ``cancel_by_session``).
 
-        ``turn`` is only read for a ``trace`` identity, whose memories nobody
-        wrote -- it is what gets primed. An ``agent`` identity's memories were
-        already written by the sub-agent itself, so its resolver still looks up
-        the session id the registry has on file.
+        ``turn`` is only read for a ``trace`` source, whose memories nobody
+        wrote -- it is what gets handed over. An ``agent`` source's memories
+        were already written by the sub-agent itself, so its resolver still
+        looks up the session id the registry has on file.
         """
-        identity = self.everos_identity(agent)
-        if identity is None:
+        scope = self.memory_scope(agent)
+        if scope is None:
             return
 
-        if identity.source == "trace":
-            # The host owns both the write and the read here, so it mints the
-            # join key instead of resolving one the sub-agent committed.
-            session_id = trace_session_id(agent or "", task_id)
-            rows = turn or []
+        async def _run() -> None:
+            async with started_backend(self._memory_backend(), label="Sub-agent memory record") as backend:
+                if backend is None:
+                    return
+                if scope.source == "trace":
+                    # The host owns both the write and the read here, so it mints
+                    # the join key instead of resolving one the sub-agent committed.
+                    session_id = trace_session_id(agent or "", task_id)
+                    rows = turn or []
 
-            async def _resolve() -> str | None:
-                return session_id
+                    async def _resolve() -> str | None:
+                        return session_id
 
-            async def _prime(sid: str) -> bool:
-                return await prime_from_turn(identity=identity, session_id=sid, turn=rows)
+                    async def _prime(sid: str) -> bool:
+                        return await prime_from_turn(backend=backend, scope=scope, session_id=sid, turn=rows)
 
-            prime, budget = _prime, TRACE_BUDGET_S
-        else:
+                    prime, budget = _prime, TRACE_BUDGET_S
+                else:
 
-            async def _resolve() -> str | None:
-                agent_id = await get_registry().lookup(session_key or "default", agent or "", handle)
-                return f"{identity.session_prefix}{agent_id}" if agent_id else None
+                    async def _resolve() -> str | None:
+                        agent_id = await get_registry().lookup(session_key or "default", agent or "", handle)
+                        return f"{scope.session_prefix}{agent_id}" if agent_id else None
 
-            prime, budget = None, None
+                    prime, budget = None, None
 
-        task = asyncio.create_task(
-            write_memory_record_for(
-                directory=directory,
-                filename=filename,
-                agent=agent or "",
-                identity=identity,
-                resolve_session_id=_resolve,
-                instance=instance,
-                budget_s=budget,
-                prime=prime,
-            )
-        )
+                await write_memory_record_for(
+                    directory=directory,
+                    filename=filename,
+                    agent=agent or "",
+                    backend=backend,
+                    scope=scope,
+                    resolve_session_id=_resolve,
+                    instance=instance,
+                    budget_s=budget,
+                    prime=prime,
+                )
+
+        task = asyncio.create_task(_run())
         self._track_record(task, session_key)
 
     def _track_record(self, task: asyncio.Task, session_key: str | None) -> None:
@@ -859,7 +871,12 @@ class SubagentManager:
         # rather than where the task starts running: it queues behind the
         # concurrency gate and a sandbox boot first, and a switch landing in
         # that window would hand it an endpoint chosen after it was asked for.
-        # A subagent has no model of its own, so it follows its conversation.
+        # This binding is raven's own, for a lane that runs on raven's provider:
+        # such a subagent has no model of its own, so it follows its
+        # conversation. Not a claim about every subagent -- an acp agent brings
+        # its own provider and never reads this, and a person can put one
+        # instance of it on a model of their choosing, which travels as
+        # `session_model` and is pushed over `session/set_config_option`.
         binding = resolve(None, self._fallback)
         # Passed only when there is one, the way `_run_subagent_inner` is called
         # below: the argument is new here, and a caller that replaces this method
@@ -1055,6 +1072,9 @@ class SubagentManager:
                             provider=self.provider,
                             model=self.model,
                             mode=self.resolve_mode(session_key, agent, handle),
+                            **optional_keyword(
+                                backend, "session_model", self.instance_model(session_key, agent, handle)
+                            ),
                             **optional_keyword(backend, "authored_task", text),
                             **kwargs,
                         )
@@ -1223,6 +1243,53 @@ class SubagentManager:
             _TIER_MISS_SEEN.add(seen)
             logger.info("sub-agent {}: tier {!r} not offered; running at {!r}", agent, tier, landed)
         return landed
+
+    def agent_model_choices(self, agent: str) -> tuple[Any, ...]:
+        """The models this agent offers, measured from its own handshake.
+
+        ``raven.acp_client.capabilities.AcpModelChoice`` records, read off the
+        registry row rather than re-probed for the reason ``agent_modes`` gives
+        above: the row is where the measurement already landed.
+
+        Empty for a transport that has no such menu, and for an acp agent that
+        advertises no ``model`` config option -- the two are the same answer here
+        because they are the same fact for a caller: there is nothing to pick
+        from.
+        """
+        row = self.registry.get(agent or "")
+        return () if row is None else tuple(row.caps.model_choices)
+
+    def instance_model(self, session_key: str | None, agent: str, handle: str) -> str | None:
+        """Which model this instance's turns run on, or ``None`` for the agent's own."""
+        return self._instance_models.get((session_key or "", agent, handle))
+
+    def set_instance_model(self, session_key: str | None, agent: str, handle: str, model: str | None) -> str | None:
+        """Put one instance on ``model`` from its next turn on.
+
+        Everything ``set_instance_mode`` says below about where this is held and
+        why it is not persisted applies unchanged: the agent binds the choice to
+        a session id it holds in memory, the pool relaunches that process
+        whenever the launch key changes, and re-asserting on every turn is what
+        repairs it. A raven restart returns every instance to its agent's own
+        model.
+
+        ``None`` clears the override. Raises ``ValueError`` naming what the agent
+        does offer, so a caller is never left guessing at the vocabulary -- the
+        values are opaque provider-qualified ids and guessing at one is how a
+        reader asks for a model the agent will refuse.
+        """
+        key = (session_key or "", agent, handle)
+        if model is None:
+            self._instance_models.pop(key, None)
+            return None
+        offered = [c.value for c in self.agent_model_choices(agent)]
+        if model not in offered:
+            raise ValueError(
+                f"{agent!r} has no model {model!r}" + (f"; it offers {len(offered)}" if offered else "; it offers none")
+            )
+        self._instance_models[key] = model
+        logger.info("Instance {}/{} set to model {}", agent, handle, model)
+        return model
 
     def set_instance_mode(self, session_key: str | None, agent: str, handle: str, mode: str | None) -> str | None:
         """Put one direct-chat instance in ``mode`` from its next turn on.
@@ -1555,6 +1622,11 @@ class SubagentManager:
                             provider=provider,
                             model=model,
                             mode=self.resolve_mode(session_key, agent, origin.get("instance")),
+                            **optional_keyword(
+                                backend,
+                                "session_model",
+                                self.instance_model(session_key, agent, origin.get("instance") or ""),
+                            ),
                             **optional_keyword(backend, "authored_task", origin.get("authored_task")),
                             **({"mcp_grant": mcp_grant} if mcp_grant is not None else {}),
                             **state_kwargs,
@@ -2041,6 +2113,9 @@ Read it against the plan this instance serves. If it reports finished work, resu
         """
         from raven.spine import ChatType, Origin, Source, TurnRequest
 
+        # Wired by set_submit before any announce (see __init__); the announce
+        # path is the only caller and it runs after the gateway has wired it.
+        assert self._submit is not None
         self._submit(
             TurnRequest(
                 origin=Origin.SUBAGENT,

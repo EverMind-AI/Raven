@@ -75,6 +75,7 @@ const SCOPES = [
     ...LEGACY_SCOPES,
     "*",
     "deps",
+    "deps-dev",
   ]),
 ].sort();
 

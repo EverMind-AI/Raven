@@ -124,7 +124,11 @@ describe('InstanceConversation', () => {
     expect(frame).toContain('Conversation · Coder/h1')
     expect(frame).toContain('the task')
     // The rows are the store's: what Direct Chat would show for this instance.
-    expect(getDirectChat().transcripts.get(directKey('Coder', 'h1'))?.map(m => m.text)).toEqual(['the task'])
+    expect(
+      getDirectChat()
+        .transcripts.get(directKey('Coder', 'h1'))
+        ?.map(m => m.text)
+    ).toEqual(['the task'])
     app.unmount()
   })
 
@@ -149,17 +153,13 @@ describe('InstanceConversation', () => {
   it('keeps re-reading while the run works, and reads once more when it lands', async () => {
     setDirectTranscript(directKey('Coder', 'h1'), [{ role: 'user', text: 'earlier' }])
     const { calls, rpc } = answering([])
-    const app = render(
-      <InstanceConversation cols={80} live rpc={rpc} scope="t1" t={DEFAULT_THEME} target={target} />
-    )
+    const app = render(<InstanceConversation cols={80} live rpc={rpc} scope="t1" t={DEFAULT_THEME} target={target} />)
     await vi.advanceTimersByTimeAsync(1000)
     const whileLive = calls.length
     expect(whileLive).toBeGreaterThanOrEqual(3)
     expect(stripAnsi(app.lastFrame() ?? '')).toContain('· live')
 
-    app.rerender(
-      <InstanceConversation cols={80} live={false} rpc={rpc} scope="t1" t={DEFAULT_THEME} target={target} />
-    )
+    app.rerender(<InstanceConversation cols={80} live={false} rpc={rpc} scope="t1" t={DEFAULT_THEME} target={target} />)
     await vi.advanceTimersByTimeAsync(1000)
 
     expect(calls.length).toBe(whileLive + 1)

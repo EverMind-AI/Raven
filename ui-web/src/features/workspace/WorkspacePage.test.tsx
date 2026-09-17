@@ -237,6 +237,124 @@ describe('workspace island', () => {
     expect(frame.getAttribute('sandbox')).toBe('')
   })
 
+  /* A page drawn on a canvas arrives as a rectangle of its own background
+     colour, which reads as a broken file rather than a withheld capability --
+     so the viewer says which it is, beside the frame that cannot say it. */
+  it('says why an HTML preview may look empty', async () => {
+    install(emptyWs({
+      file: { path: '/repo/game.html', kind: 'html', raw: false, text: null, err: null, size: 9, loading: false },
+    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    const note = document.querySelector('.fview .vnote')
+    expect(note).not.toBeNull()
+    expect(note?.textContent || '').toContain('gui.ws.html_no_scripts')
+  })
+
+  /* One grant, both halves: the frame's attribute and the route's header have
+     to agree, so the test asserts the pair rather than either alone. */
+  it('runs an HTML preview only once the reader asks, and then on both halves', async () => {
+    install(emptyWs({
+      file: { path: '/repo/game.html', kind: 'html', raw: false, text: null, err: null, size: 9, loading: false },
+    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+
+    const before = document.querySelector('.fview iframe') as HTMLIFrameElement
+    expect(before.getAttribute('sandbox')).toBe('')
+    expect(before.getAttribute('src') || '').not.toContain('run=1')
+
+    await act(async () => {
+      (screen.getByText('gui.ws.html_run') as HTMLElement).click()
+    })
+
+    const after = document.querySelector('.fview iframe') as HTMLIFrameElement
+    expect(after.getAttribute('sandbox')).toBe('allow-scripts')
+    expect(after.getAttribute('src') || '').toContain('run=1')
+    expect(document.querySelector('.fview .vnote')).toBeNull()
+  })
+
+  /* Opening another file starts read-only: the grant is held as the path it was
+     given for, so there is no flag left set over a page nobody looked at. */
+  it('does not carry a run grant onto the next file', async () => {
+    install(emptyWs({
+      file: { path: '/repo/one.html', kind: 'html', raw: false, text: null, err: null, size: 9, loading: false },
+    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    await act(async () => {
+      (screen.getByText('gui.ws.html_run') as HTMLElement).click()
+    })
+    expect((document.querySelector('.fview iframe') as HTMLIFrameElement).getAttribute('sandbox')).toBe('allow-scripts')
+
+    await act(async () => {
+      store.restore(emptyWs({
+        file: { path: '/repo/two.html', kind: 'html', raw: false, text: null, err: null, size: 9, loading: false },
+      }))
+      store.sync()
+    })
+
+    const next = document.querySelector('.fview iframe') as HTMLIFrameElement
+    expect(next.getAttribute('sandbox')).toBe('')
+    expect(document.querySelector('.fview .vnote')).not.toBeNull()
+  })
+
+  /* Reopening is a fresh view, and a fresh view has not been consented to. The
+     file may have been rewritten between the two opens -- which is the ordinary
+     case here, since the agent is still working -- so a grant that survived
+     would run content nobody agreed to run. */
+  it('asks again when the same path is opened as a new view', async () => {
+    const one = { path: '/repo/game.html', kind: 'html', raw: false, text: null, err: null, size: 9, loading: false, seq: 1 }
+    install(emptyWs({ file: one }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    await act(async () => {
+      (screen.getByText('gui.ws.html_run') as HTMLElement).click()
+    })
+    expect((document.querySelector('.fview iframe') as HTMLIFrameElement).getAttribute('sandbox')).toBe('allow-scripts')
+
+    await act(async () => {
+      store.restore(emptyWs({
+        file: { path: '/repo/other.md', kind: 'md', raw: false, text: 'x', err: null, size: 1, loading: false, seq: 2 },
+      }))
+      store.sync()
+    })
+    await act(async () => {
+      store.restore(emptyWs({ file: { ...one, seq: 3 } }))
+      store.sync()
+    })
+
+    const back = document.querySelector('.fview iframe') as HTMLIFrameElement
+    expect(back.getAttribute('sandbox')).toBe('')
+    expect(back.getAttribute('src') || '').not.toContain('run=1')
+    expect(document.querySelector('.fview .vnote')).not.toBeNull()
+  })
+
+  /* The agent rewriting a file it is still working on replaces the view without
+     any other file in between, which is the path that never passes through a
+     revoke if the grant is keyed by name. */
+  it('asks again when the open file is rewritten in place', async () => {
+    const one = { path: '/repo/game.html', kind: 'html', raw: false, text: null, err: null, size: 9, loading: false, seq: 4 }
+    install(emptyWs({ file: one }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    await act(async () => {
+      (screen.getByText('gui.ws.html_run') as HTMLElement).click()
+    })
+    expect((document.querySelector('.fview iframe') as HTMLIFrameElement).getAttribute('sandbox')).toBe('allow-scripts')
+
+    await act(async () => {
+      store.restore(emptyWs({ file: { ...one, size: 21, seq: 5 } }))
+      store.sync()
+    })
+    expect((document.querySelector('.fview iframe') as HTMLIFrameElement).getAttribute('sandbox')).toBe('')
+  })
+
+  /* The PDF frame runs its viewer's own scripts, so there is nothing withheld
+     to explain and a note there would be noise. */
+  it('says nothing of the sort beside a PDF', async () => {
+    install(emptyWs({
+      file: { path: '/repo/deck.pdf', kind: 'pdf', raw: false, text: null, err: null, size: 9, loading: false },
+    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    expect(document.querySelector('.fview .vnote')).toBeNull()
+  })
+
   /* A deck is its own kind: the page cannot draw one, but the gateway can
      render it as a PDF, and that is what the viewer frames. */
   it('classifies a deck as its own kind and asks the file route for its PDF', () => {

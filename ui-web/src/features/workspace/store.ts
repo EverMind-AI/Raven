@@ -183,6 +183,11 @@ export const fileURL = (p: string): string => {
    the page cannot draw a deck, so it frames what LibreOffice makes of it. */
 export const renderURL = (p: string): string => fileURL(p) + '&render=pdf'
 
+/* The same route, asked to serve the file under a policy that lets its scripts
+   run. One view of one file: the route remembers nothing, so the next request
+   is read-only again unless it asks too. */
+export const runURL = (p: string): string => fileURL(p) + '&run=1'
+
 const TEXT_EXT = new Set(['c', 'cfg', 'conf', 'cpp', 'css', 'diff', 'env', 'go', 'h', 'ini', 'java',
   'js', 'json', 'jsonl', 'jsx', 'kt', 'log', 'lua', 'patch', 'php', 'pl', 'py', 'pyi', 'rb', 'rs',
   'sh', 'sql', 'swift', 'toml', 'ts', 'tsx', 'txt', 'vue', 'yaml', 'yml', 'zsh'])

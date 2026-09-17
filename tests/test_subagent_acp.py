@@ -27,6 +27,7 @@ from loguru import logger
 from raven.acp_client.acp_agent import AcpAgentBackend, AcpEmptyTurnError
 from raven.acp_client.capabilities import (
     AcpMode,
+    AcpModelChoice,
     CapabilitySnapshot,
     SnapshotStore,
     relearn_session_modes,
@@ -40,6 +41,7 @@ from raven.agent.subagent.instances import InstanceRegistry
 from raven.agent.subagent.manager import SubagentManager
 from raven.agent.subagent.probe import probe_one
 from raven.agent.subagent.probe_state import fingerprint
+from raven.agent.subagent.registry import _row_for
 from raven.config.schema import SubagentsConfig, ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 from raven.config.update_subagents import reject_unsupported_acp_fields
 
@@ -166,6 +168,14 @@ async def test_verify_reads_capabilities_from_the_handshake() -> None:
     # must not become one the model would be offered and the agent then refuse.
     assert [m.id for m in snapshot.available_modes] == ["fast", "deep"]
     assert snapshot.available_modes[1].description == "searches longer"
+    # The stable model surface, which is where the agents this host drives put
+    # their menu: one configOptions entry with category "model". The entry beside
+    # it carries a different category and must not be mistaken for it, and the
+    # third choice has no value and must not become an invented id.
+    assert [(c.value, c.name, c.group) for c in snapshot.model_choices] == [
+        ("stub:model-a", "model-a", "Stub"),
+        ("stub:model-b", "model-b", "Stub"),
+    ]
     assert snapshot.auth_methods == ("stub-auth",)
 
 
@@ -331,6 +341,17 @@ def _with_modes(cfg: Any, *modes: AcpMode) -> CapabilitySnapshot:
     )
 
 
+def _with_model_choices(cfg: Any, *choices: AcpModelChoice) -> CapabilitySnapshot:
+    return CapabilitySnapshot(
+        agent="a",
+        fingerprint=snapshot_fingerprint(cfg),
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        model_choices=choices,
+    )
+
+
 def _session_result(*modes: dict[str, str]) -> dict[str, Any]:
     return {"sessionId": "s1", "modes": {"currentModeId": "fast", "availableModes": list(modes)}}
 
@@ -459,6 +480,33 @@ def test_a_failed_rebuild_does_not_reach_the_turn() -> None:
 class _StubProvider:
     def get_default_model(self) -> str:
         return "stub-model"
+
+
+def test_the_model_menu_survives_the_row_and_the_meta_built_back_off_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both halves of the round trip, because the field is invisible either way.
+
+    ``format_agent_listing`` deliberately does not render ``model_choices``, so
+    nothing on screen says whether a conversion dropped it. The only reader is
+    the picker, and the pane hides the whole chip when the menu is empty -- a
+    later edit that loses the field on one of the two paths would take the
+    control off the screen with the suite still green. ``modes`` travels the
+    same two conversions and is already pinned; this is the same assertion for
+    the field beside it.
+    """
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    menu = (
+        AcpModelChoice(value="stub:model-a", name="model-a", group="Stub"),
+        AcpModelChoice(value="stub:model-b", name="model-b", group="Stub"),
+    )
+    SnapshotStore(path=path).record(_with_model_choices(cfg, *menu))
+
+    row = _row_for(cfg)
+    assert row.caps.model_choices == menu, "the config's menu must reach the row"
+    assert row.meta().model_choices == menu, "and the meta built back off that row must carry it"
 
 
 def test_the_relearned_menu_reaches_the_roster_the_clamp_and_picker_read(
@@ -1883,6 +1931,7 @@ async def test_a_cancelled_connect_does_not_leak_the_process(monkeypatch) -> Non
     assert not launched[0].alive, "the agent process is still running after a cancelled connect"
 
 
+@pytest.mark.slow
 async def test_a_connection_that_stopped_speaking_is_dead_and_gets_replaced() -> None:
     """The outage shape measured on a live npx adapter: the worker dies, the
     wrapper pid lives on, and `returncode is None` said "alive" forever -- so
@@ -1931,7 +1980,7 @@ async def test_a_probe_tells_a_wedged_agent_from_a_live_one() -> None:
     deaf = await AcpClient.launch(name="deaf", command=deaf_cfg.command, env=dict(deaf_cfg.env))
     try:
         assert deaf.alive, "the wedge is invisible to liveness -- which is why the probe exists"
-        assert await deaf.probe(2) is False
+        assert await deaf.probe(0.1) is False
     finally:
         await deaf.close()
 
@@ -1947,7 +1996,7 @@ async def test_a_stale_silent_connection_is_replaced_at_acquire(monkeypatch) -> 
     assert first.alive, "the wedged stub completes its handshake; the wedge starts after it"
 
     monkeypatch.setattr(pool_mod, "_STALE_AFTER_S", 0.0)
-    monkeypatch.setattr(pool_mod, "_PROBE_TIMEOUT_S", 2.0)
+    monkeypatch.setattr(pool_mod, "_PROBE_TIMEOUT_S", 0.05)
     second = await get_pool().acquire(name="wedged", command=cfg.command, env=dict(cfg.env))
 
     assert second is not first, "an unresponsive connection must be relaunched, not re-issued"
@@ -3927,6 +3976,177 @@ async def test_close_all_abandons_a_connection_whose_close_hangs() -> None:
     assert closed == ["clean"]
     assert pool._connections == {}
     released.set()
+
+
+# ---- session models --------------------------------------------------------
+
+
+async def test_a_model_reaches_the_session_before_it_is_prompted(tmp_path: Path) -> None:
+    """The channel is ``session/set_config_option`` with ``configId: "model"``.
+    ``session/set_model`` is not in the stable schema, and an agent waiting for
+    it would never be asked to switch."""
+    cfg = stub_config("modeller")
+    backend = build_third_party_backend(cfg)
+
+    reply = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, session_model="stub:model-b")
+
+    connection = await get_pool().acquire(
+        name="modeller", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    assert reply == "pong"
+    assert "session/set_config_option model=stub:model-b" in connection.client.stderr_tail()
+
+
+async def test_no_model_asked_for_sends_no_frame(tmp_path: Path) -> None:
+    """The agent's own choice is the right answer when nothing was requested, and
+    an unrequested frame is a round trip on every single dispatch."""
+    cfg = stub_config("quietmodel")
+    backend = build_third_party_backend(cfg)
+
+    await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    connection = await get_pool().acquire(
+        name="quietmodel", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    assert "session/set_config_option" not in connection.client.stderr_tail()
+
+
+async def test_clearing_a_model_puts_the_session_back_on_the_agents_own(tmp_path: Path) -> None:
+    """The option takes a value and has no "unset", so dropping the host's record
+    restores nothing on its own: the session keeps answering on whatever it was
+    last told while every surface reports the agent's own. The way back is to
+    send the session's own baseline again."""
+    cfg = stub_config("clearmodel")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    backend = AcpAgentBackend(
+        name="clearmodel",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("clearmodel", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+
+    # One handle, so the second turn resumes the SAME remote session -- which is
+    # the only shape this bug has. A fresh session is already on the agent's own
+    # model and needs no restoring.
+    await backend.run(
+        "ping",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        session_key="s",
+        instance="h1",
+        session_model="stub:model-b",
+    )
+    # Then the reader picks "the agent's own", which reaches the backend as no
+    # model at all -- the same shape a dispatch that never asked for one has.
+    await backend.run("ping", task_id="t2", workspace=tmp_path, executor=None, session_key="s", instance="h1")
+
+    connection = await get_pool().acquire(
+        name="clearmodel", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    frames = [ln for ln in connection.client.stderr_tail(4000).splitlines() if "set_config_option" in ln]
+    assert any("model=stub:model-b" in ln for ln in frames), "the switch"
+    # The stub opens every session on model-a, so that is the baseline to restore.
+    assert frames[-1].endswith("model=stub:model-a"), f"the restore, got {frames!r}"
+
+
+async def test_a_refused_restore_is_retried_rather_than_recorded_as_done(tmp_path: Path) -> None:
+    """A refusal must leave this host's record of the session untouched.
+
+    Forgetting the switch on a refused clear is the worst of both: the session
+    stays on the override, nothing is left saying so, and every later turn with
+    no override returns early -- so it is never retried and the control and the
+    session disagree for good.
+    """
+    cfg = stub_config("refuser", mode="refuse_restore")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    backend = AcpAgentBackend(
+        name="refuser",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("refuser", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+    key = {"workspace": tmp_path, "executor": None, "session_key": "s", "instance": "h1"}
+
+    await backend.run("ping", task_id="t1", session_model="stub:model-b", **key)
+    # The clear: the agent refuses to go back.
+    await backend.run("ping", task_id="t2", **key)
+    # And a third turn, still with no override, must try again rather than give up.
+    await backend.run("ping", task_id="t3", **key)
+
+    connection = await get_pool().acquire(
+        name="refuser", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    restores = [ln for ln in connection.client.stderr_tail(6000).splitlines() if "model=stub:model-a" in ln]
+    assert len(restores) == 2, f"the refused restore must be retried, saw {len(restores)}"
+
+
+async def test_a_refused_switch_is_not_recorded_as_a_move(tmp_path: Path) -> None:
+    """The mirror: a set the agent would not take must not leave this host
+    believing it moved the session, or a later clear sends a restore to undo
+    something that never happened."""
+    cfg = stub_config("norefuse", mode="no_models")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    backend = AcpAgentBackend(
+        name="norefuse",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("norefuse", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+    key = {"workspace": tmp_path, "executor": None, "session_key": "s", "instance": "h1"}
+
+    await backend.run("ping", task_id="t1", session_model="stub:model-b", **key)
+    await backend.run("ping", task_id="t2", **key)
+
+    connection = await get_pool().acquire(
+        name="norefuse", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    frames = [ln for ln in connection.client.stderr_tail(6000).splitlines() if "set_config_option" in ln]
+    assert not any("model=stub:model-a" in ln for ln in frames), (
+        f"nothing was moved, so nothing may be restored; saw {frames!r}"
+    )
+
+
+async def test_an_untouched_session_is_never_reset(tmp_path: Path) -> None:
+    """Restoring is for undoing this host's own move. A session it never touched
+    is already on the agent's choice, and a frame saying so is a round trip on
+    every dispatch that never asked for anything."""
+    cfg = stub_config("nevertouched")
+    backend = build_third_party_backend(cfg)
+
+    await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    await backend.run("ping", task_id="t2", workspace=tmp_path, executor=None)
+
+    connection = await get_pool().acquire(
+        name="nevertouched", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    assert "session/set_config_option" not in connection.client.stderr_tail()
+
+
+async def test_an_agent_that_serves_no_model_option_still_runs_the_task(tmp_path: Path) -> None:
+    """Refusing the option is not a reason to fail a task: running it on the
+    agent's own model is a better outcome than not running it at all."""
+    cfg = stub_config("nomodels", mode="no_models")
+    backend = build_third_party_backend(cfg)
+
+    reply = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, session_model="stub:model-b")
+
+    assert reply == "pong"
+
+
+async def test_a_model_the_agent_will_not_write_still_runs_the_task(tmp_path: Path) -> None:
+    """The runtime's own refusal travels with its own code (-32011) rather than
+    as an internal error, and it is still not fatal here: the task runs on what
+    the agent already had."""
+    cfg = stub_config("refusemodel")
+    backend = build_third_party_backend(cfg)
+
+    reply = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, session_model="stub:model-never")
+
+    assert reply == "pong"
 
 
 # ---- session modes ---------------------------------------------------------

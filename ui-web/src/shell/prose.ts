@@ -32,7 +32,20 @@ export interface ProseSource {
   open?(target: ProseTarget): void
 }
 
-const source = (): ProseSource => ds<ProseSource>('prose')
+/* The workspace installs this; islands that only want markdown rendered do not.
+   Missing, the three affordances it backs -- a backticked path becoming a chip,
+   a local link resolving, a click opening it -- simply do not appear, and the
+   prose renders. That is a weaker promise than `ds()` makes elsewhere on
+   purpose: everywhere else a missing source means the caller cannot do its job,
+   while here the job is the markdown and the chips are the extra. Throwing
+   instead would mean the knowledge page could not show a .md file unless the
+   workspace's own data source happened to be installed. */
+const NO_PATHS: ProseSource = { pathOf: () => null, linkTargetOf: () => null }
+
+const source = (): ProseSource => {
+  const seam = window.DS as Record<string, unknown> | undefined
+  return (seam && (seam.prose as ProseSource | undefined)) || NO_PATHS
+}
 
 const esc = (s: unknown): string =>
   String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string)

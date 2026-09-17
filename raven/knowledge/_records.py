@@ -19,6 +19,7 @@ import json
 import os
 import uuid
 from dataclasses import asdict, dataclass, replace
+from dataclasses import fields as dataclass_fields
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -26,6 +27,95 @@ from typing import Any, Literal
 from loguru import logger
 
 DocumentStatus = Literal["pending", "indexing", "ready", "failed"]
+#: Which kind of data source a document arrived through. A folder is not
+#: one of these: the browser walks it and sends the files, so what lands
+#: here is a file like any other.
+DocumentOrigin = Literal["file", "note", "url"]
+
+#: What a knowledge base is configured with until somebody changes it. Named
+#: here, beside the record that holds them, because the handlers that read a
+#: base written before these fields existed have to fall back on the same
+#: numbers -- and three copies of a default are three chances to disagree.
+DEFAULT_TOP_K = 6
+DEFAULT_CHUNK_SIZE = 2048
+DEFAULT_CHUNK_OVERLAP = 215
+DEFAULT_SEPARATOR = "\n\n"
+
+
+#: Where a field this version added is written, rather than beside the record
+#: it belongs to.
+#:
+#: A previous version's loader builds each record by handing every stored key
+#: to a dataclass constructor, and drops the row when one of them is a keyword
+#: that constructor does not take. So writing a new field into the record
+#: itself makes every base and document vanish from a build that is rolled
+#: back -- the records are still on disk, and nothing lists them.
+#:
+#: These two keys are siblings of ``bases`` and ``documents``, and a loader
+#: that does not know them does not read them. What a rollback loses is the
+#: settings, which that build has no use for; what it keeps is every base and
+#: every document, which is the part that cannot be recovered by re-entering
+#: it.
+BASE_EXTRAS = "base_settings"
+DOCUMENT_EXTRAS = "document_origins"
+
+#: The fields a record carried before those keys existed. Stated rather than
+#: derived, because what belongs beside the record is "what the previous
+#: loader accepts", and that is a fact about a build that has shipped -- it
+#: does not change when a field is added here.
+LEGACY_BASE_FIELDS = (
+    "name",
+    "embedding_model",
+    "dimensions",
+    "created_at",
+    "updated_at",
+    "description",
+)
+LEGACY_DOCUMENT_FIELDS = (
+    "base_id",
+    "source",
+    "media_type",
+    "size",
+    "status",
+    "created_at",
+    "updated_at",
+    "chunk_count",
+    "error",
+)
+
+
+def _split(record: Any, legacy: "tuple[str, ...]") -> "tuple[dict[str, Any], dict[str, Any]]":
+    """One record as (what the old schema holds, what this version added).
+
+    A newer field still sitting at its default is left out of the second half:
+    it round-trips to the same value either way, and omitting it means an
+    installation that has changed no setting writes the file the previous
+    build wrote, down to its keys.
+    """
+    fields = {k: v for k, v in asdict(record).items() if k != "id"}
+    known = {k: v for k, v in fields.items() if k in legacy}
+    defaults = {f.name: f.default for f in dataclass_fields(record)}
+    extra = {k: v for k, v in fields.items() if k not in legacy and v != defaults.get(k)}
+    return known, extra
+
+
+def _build(cls: Any, record_id: str, fields: dict, extra: dict | None) -> Any:
+    """One record from its stored halves, or ``None`` when it will not build.
+
+    Keys the dataclass does not take are dropped rather than failing the row.
+    A registry written by a *later* version is the mirror of the case the two
+    keys above exist for, and losing a base because a build after this one
+    added a field would be the same bug in the other direction.
+    """
+    taken = {f.name for f in dataclass_fields(cls)}
+    merged = {**fields, **(extra or {})}
+    unknown = sorted(k for k in merged if k not in taken)
+    if unknown:
+        logger.debug("knowledge: ignoring unknown field(s) {} on {}", ", ".join(unknown), record_id)
+    try:
+        return cls(id=record_id, **{k: v for k, v in merged.items() if k in taken})
+    except TypeError:
+        return None
 
 
 def _now() -> str:
@@ -53,6 +143,27 @@ class KnowledgeBaseRecord:
     created_at: str
     updated_at: str
     description: str = ""
+    #: The settings a reader can change after the base exists. Every one of
+    #: them is defaulted, so a registry written before they existed loads with
+    #: the behaviour it already had.
+    #:
+    #: At most this many chunks come back from one search of this base. A
+    #: property of the base rather than of each call: how much context this
+    #: material is worth is a fact about the material.
+    top_k: int = DEFAULT_TOP_K
+    #: Split on the structure a parser found -- headings, slides, pages --
+    #: rather than on length alone. What ``HeadingAwareChunker`` does, and the
+    #: default because it is the chunker the manager already builds.
+    smart_chunking: bool = True
+    #: Where a plain split is allowed to cut, when smart chunking is off.
+    separator: str = DEFAULT_SEPARATOR
+    #: The size a chunk is aimed at, and how much of the previous one each
+    #: carries, both in tokens.
+    chunk_size: int = DEFAULT_CHUNK_SIZE
+    chunk_overlap: int = DEFAULT_CHUNK_OVERLAP
+    #: Which pre-processing a file goes through on the way in. Empty is
+    #: "don't use", which is the only setting there is so far.
+    file_processing: str = ""
 
 
 @dataclass(frozen=True)
@@ -69,6 +180,14 @@ class KnowledgeDocumentRecord:
     updated_at: str
     chunk_count: int = 0
     error: str = ""
+    #: Which kind of data source this came in as. Defaulted rather than
+    #: required so a registry written before the field existed still loads --
+    #: every document in one is a file, which is what the default says.
+    origin: DocumentOrigin = "file"
+    #: What the origin points back at: the page's URL for a url document, empty
+    #: for the rest. A note keeps its text in the blob like any other document,
+    #: so it needs nothing here.
+    origin_ref: str = ""
 
 
 class RecordStore:
@@ -92,16 +211,20 @@ class RecordStore:
             return
         if not isinstance(raw, dict):
             return
+        base_extra = raw.get(BASE_EXTRAS) or {}
+        doc_extra = raw.get(DOCUMENT_EXTRAS) or {}
         for base_id, fields in (raw.get("bases") or {}).items():
-            try:
-                self._bases[base_id] = KnowledgeBaseRecord(id=base_id, **fields)
-            except TypeError:
+            record = _build(KnowledgeBaseRecord, base_id, fields, base_extra.get(base_id))
+            if record is None:
                 logger.warning("knowledge: dropping malformed base {}", base_id)
+            else:
+                self._bases[base_id] = record
         for doc_id, fields in (raw.get("documents") or {}).items():
-            try:
-                self._documents[doc_id] = KnowledgeDocumentRecord(id=doc_id, **fields)
-            except TypeError:
+            record = _build(KnowledgeDocumentRecord, doc_id, fields, doc_extra.get(doc_id))
+            if record is None:
                 logger.warning("knowledge: dropping malformed document {}", doc_id)
+            else:
+                self._documents[doc_id] = record
         self._requeue_interrupted()
 
     def _requeue_interrupted(self) -> None:
@@ -121,10 +244,20 @@ class RecordStore:
             self._save()
 
     def _save(self) -> None:
+        bases = {b.id: _split(b, LEGACY_BASE_FIELDS) for b in self._bases.values()}
+        documents = {d.id: _split(d, LEGACY_DOCUMENT_FIELDS) for d in self._documents.values()}
         payload = {
-            "bases": {b.id: {k: v for k, v in asdict(b).items() if k != "id"} for b in self._bases.values()},
-            "documents": {d.id: {k: v for k, v in asdict(d).items() if k != "id"} for d in self._documents.values()},
+            "bases": {i: known for i, (known, _) in bases.items()},
+            "documents": {i: known for i, (known, _) in documents.items()},
         }
+        # Only when there is something to put there, so a registry that uses
+        # none of them is byte-for-byte what the older writer produced.
+        base_extra = {i: extra for i, (_, extra) in bases.items() if extra}
+        doc_extra = {i: extra for i, (_, extra) in documents.items() if extra}
+        if base_extra:
+            payload[BASE_EXTRAS] = base_extra
+        if doc_extra:
+            payload[DOCUMENT_EXTRAS] = doc_extra
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._path.with_suffix(self._path.suffix + ".tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -181,6 +314,34 @@ class RecordStore:
         self._save()
         return updated
 
+    def configure_base(self, base_id: str, **settings: object) -> KnowledgeBaseRecord | None:
+        """Write the settings a reader can change after the base exists.
+
+        Only the fields named in ``settings`` move. Narrow like
+        ``rename_base``, and for the same reason: the embedding model and its
+        width are what the collection was built to, so they are not settings.
+        An unknown key is a caller mistake, and silently dropping it would
+        leave a surface reporting a value it never stored.
+        """
+        record = self._bases.get(base_id)
+        if record is None:
+            return None
+        allowed = {
+            "top_k",
+            "smart_chunking",
+            "separator",
+            "chunk_size",
+            "chunk_overlap",
+            "file_processing",
+        }
+        unknown = set(settings) - allowed
+        if unknown:
+            raise ValueError(f"not a knowledge base setting: {', '.join(sorted(unknown))}")
+        updated = replace(record, **settings, updated_at=_now())  # type: ignore[arg-type]
+        self._bases[base_id] = updated
+        self._save()
+        return updated
+
     def delete_base(self, base_id: str) -> bool:
         """Drop a base and every document record under it.
 
@@ -206,6 +367,8 @@ class RecordStore:
         source: str,
         media_type: str,
         size: int,
+        origin: DocumentOrigin = "file",
+        origin_ref: str = "",
     ) -> KnowledgeDocumentRecord:
         now = _now()
         record = KnowledgeDocumentRecord(
@@ -217,6 +380,8 @@ class RecordStore:
             status="pending",
             created_at=now,
             updated_at=now,
+            origin=origin,
+            origin_ref=origin_ref,
         )
         self._documents[record.id] = record
         self._save()
@@ -253,6 +418,37 @@ class RecordStore:
             status=status,
             chunk_count=record.chunk_count if chunk_count is None else chunk_count,
             error=error,
+            updated_at=_now(),
+        )
+        self._documents[document_id] = updated
+        self._save()
+        return updated
+
+    def update_document(
+        self,
+        document_id: str,
+        *,
+        source: str,
+        media_type: str,
+        size: int,
+    ) -> KnowledgeDocumentRecord | None:
+        """Rewrite one document's content fields and send it back to the queue.
+
+        Back to ``pending`` with no chunks: the text this record described is
+        gone, and counting chunks that were embedded from it would report a
+        document that no longer exists.
+        """
+        record = self._documents.get(document_id)
+        if record is None:
+            return None
+        updated = replace(
+            record,
+            source=source,
+            media_type=media_type,
+            size=size,
+            status="pending",
+            chunk_count=0,
+            error="",
             updated_at=_now(),
         )
         self._documents[document_id] = updated

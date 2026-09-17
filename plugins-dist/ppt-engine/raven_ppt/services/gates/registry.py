@@ -718,7 +718,13 @@ def checks() -> dict[str, Callable[[DeckUnderReview], list[Finding]]]:
         "unseparated_blocks": lambda deck: _rendered(deck, lambda words: unseparated_blocks(deck.pptx_path, words)),
         "excessive_whitespace": lambda deck: _rendered(
             deck,
-            lambda words: excessive_whitespace(deck.pptx_path, words, _layout_structural(deck.outline)),
+            lambda words: excessive_whitespace(
+                deck.pptx_path,
+                words,
+                _layout_structural(deck.outline) + _house(deck.outline, deck.prototypes),
+                cloned=_cloned(deck.outline),
+                borrowed=_borrowed_pages(deck.outline),
+            ),
         ),
     }
 
@@ -762,6 +768,44 @@ def _borrowed(outline: Any | None) -> list[Path]:
         if path is not None and path not in found:
             found.append(path)
     return found
+
+
+def _cloned(outline: Any | None) -> list[int]:
+    """The pages the plan builds on a template prototype, whose header rows are the template's."""
+    pages = getattr(outline, "pages", ()) if outline is not None else ()
+    return [int(page.page) for page in pages if getattr(page, "prototype", None) is not None]
+
+
+def _borrowed_pages(outline: Any | None) -> list[int]:
+    """The pages laid out as a reference deck's page, whose group gaps are that layout's."""
+    pages = getattr(outline, "pages", ()) if outline is not None else ()
+    return [int(page.page) for page in pages if getattr(page, "borrowed", "")]
+
+
+def _house(outline: Any | None, prototypes: Path | None) -> list[int]:
+    """The pages built on the template's own cover, index, divider or closing.
+
+    Their air is the frame the deck was asked to keep. Read from the template's role
+    pages rather than from the outline's words, which is what `_layout_structural`
+    does for a deck built without one; a content page cloned from a content prototype
+    is not here, however much of the template's page it kept.
+    """
+    pages = getattr(outline, "pages", ()) if outline is not None else ()
+    if not pages or prototypes is None or not Path(prototypes).is_file():
+        return []
+    try:
+        from raven_ppt.services.template.menu import menu, roles
+
+        furniture = set(roles(menu(Path(prototypes))).values())
+    except Exception:  # noqa: BLE001 -- an unreadable template leaves the outline's words to decide
+        return []
+    return [
+        int(page.page)
+        for page in pages
+        if getattr(page, "prototype", None) is not None
+        and not getattr(page, "borrowed", "")
+        and int(page.prototype) in furniture
+    ]
 
 
 def _layout_structural(outline: Any | None) -> list[int]:

@@ -23,7 +23,7 @@ deck's ink at the size you give, scaled down only if the box is narrower:
 formula(slide, box, r"\mathrm{Attention}(Q,K,V)=\mathrm{softmax}\left(\frac{QK^{T}}{\sqrt{d_k}}\right)V", T, size=20)
 ```
 
-`\frac{}{}`, `\sqrt{}`, `\sum_{i=1}^{n}`, `\int`, `\mathrm{softmax}` for a word set
+`\frac{}{}` (set display-style, full-size halves, on its own), `\sqrt{}`, `\sum_{i=1}^{n}`, `\int`, `\mathrm{softmax}` for a word set
 upright, Greek by name, `\cdot`, `\times`, `\le`. A slash and a `√` sign are not a
 fraction and a root -- a delivered page set the attention formula that way and it read as
 a line of code. The expression carries no CJK: `write` the sentence around it and give

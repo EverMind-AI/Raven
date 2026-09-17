@@ -274,7 +274,10 @@ class WsGateway:
             headers={
                 "Content-Type": content_type_for(path),
                 "Content-Disposition": "inline",
-                "Content-Security-Policy": sandbox_for(path),
+                # The reader asked for this one view to run; the route does not
+                # remember it, so the next request for the same file is read-only
+                # again unless it asks too.
+                "Content-Security-Policy": sandbox_for(path, run=request.query.get("run") == "1"),
                 "X-Content-Type-Options": "nosniff",
                 "Cache-Control": "no-store",
             },
@@ -298,6 +301,82 @@ class WsGateway:
             raise web.HTTPBadRequest(text=f"{path.suffix or path.name} cannot be rendered as a PDF")
         try:
             return await pdf_preview.pdf_for(path, workspace=workspace)
+        except pdf_preview.PdfPreviewUnavailableError as exc:
+            raise web.HTTPServiceUnavailable(text=str(exc)) from None
+        except pdf_preview.PdfPreviewTimeoutError as exc:
+            raise web.HTTPGatewayTimeout(text=str(exc)) from None
+        except pdf_preview.PdfPreviewError as exc:
+            raise web.HTTPInternalServerError(text=str(exc)) from None
+
+    async def handle_knowledge_file(self, request: web.Request) -> web.StreamResponse:
+        """Serve the original upload behind a knowledge document.
+
+        By document id rather than by path, and that is the point rather than a
+        convenience. The blobs sit under raven's state directory, which
+        ``resolve_readable`` refuses because that directory also holds provider
+        credentials and ``serve.json``; an id means nothing the page sends
+        names a location at all, so there is no fence to get wrong here.
+
+        The headers come from the record's own filename, not from the blob: a
+        blob is stored without a suffix, and both helpers read one. Asked about
+        the blob they answer ``application/octet-stream`` and a sandbox with no
+        ``allow-scripts`` -- which serves a PDF as a download, and renders it
+        blank in the frame when it is served anyway.
+
+        ``render=pdf`` answers with a PDF rendering for the office formats,
+        through the same converter and cache the deck viewer uses. Its three
+        status codes are the page's only signal, so they are passed through
+        unchanged.
+        """
+        from raven.rpc import knowledge_preview
+        from raven.rpc.files import MAX_VIEW_BYTES, content_type_for, sandbox_for
+
+        if not self._origin_ok(request):
+            raise web.HTTPForbidden(reason="bad origin")
+        if not self._authorized(request):
+            raise web.HTTPUnauthorized(reason="missing or invalid session")
+
+        try:
+            record, blob = knowledge_preview.resolve(request.query.get("document", ""))
+        except knowledge_preview.DocumentMissingError as exc:
+            raise web.HTTPNotFound(reason=str(exc)) from None
+
+        served = blob
+        # The name the headers are decided from: the upload's own until a
+        # rendering replaces it, and the rendering's after -- a converted PDF is
+        # a real .pdf and gets the allow-scripts the browser's viewer needs.
+        named = knowledge_preview.named(record)
+        if request.query.get("render") == "pdf":
+            if not knowledge_preview.is_renderable(record):
+                raise web.HTTPBadRequest(text=f"{named.suffix or named.name} cannot be rendered as a PDF")
+            served = await self._rendered_knowledge_pdf(record, blob)
+            named = served
+
+        if served.stat().st_size > MAX_VIEW_BYTES:
+            raise web.HTTPRequestEntityTooLarge(max_size=MAX_VIEW_BYTES, actual_size=served.stat().st_size)
+        return web.FileResponse(
+            served,
+            headers={
+                "Content-Type": content_type_for(named),
+                "Content-Disposition": "inline",
+                "Content-Security-Policy": sandbox_for(named),
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "no-store",
+            },
+        )
+
+    async def _rendered_knowledge_pdf(self, record: object, blob: Path) -> Path:
+        """The PDF for one document, or the HTTP error the page can show.
+
+        The same three codes ``_rendered_pdf`` maps, for the same reasons: 503
+        when the host has no LibreOffice, 504 when the render outran its
+        budget, 500 when it ran and wrote nothing. Each carries its message as
+        the body so the viewer can quote it rather than showing an empty frame.
+        """
+        from raven.rpc import knowledge_preview, pdf_preview
+
+        try:
+            return await knowledge_preview.pdf_for(record, blob)  # type: ignore[arg-type]
         except pdf_preview.PdfPreviewUnavailableError as exc:
             raise web.HTTPServiceUnavailable(text=str(exc)) from None
         except pdf_preview.PdfPreviewTimeoutError as exc:
@@ -437,6 +516,7 @@ def build_app(
     app.router.add_post("/auth/exchange", gateway.handle_auth_exchange)
     app.router.add_post("/auth/nonce", gateway.handle_mint_nonce)
     app.router.add_get("/file", gateway.handle_file)
+    app.router.add_get("/knowledge/file", gateway.handle_knowledge_file)
     app.router.add_get("/rpc", gateway.handle_ws)
     app.router.add_get("/oauth/callback", handle_oauth_callback)
 

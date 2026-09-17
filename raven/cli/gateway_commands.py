@@ -31,6 +31,7 @@ from raven.cli._helpers import (
 )
 from raven.core.provider_stack import build_model_routing
 from raven.providers.factory import make_resolving_provider
+from raven.providers.litellm_setup import warm_up_in_background
 from raven.utils import asyncio_runner as bounded_asyncio
 from raven.utils.workspace import sync_workspace_templates
 
@@ -476,6 +477,10 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
 
             with suppress(NotImplementedError, RuntimeError, ValueError):
                 asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, _on_term)
+            # No test runs this closure -- it serves until it is killed -- so
+            # what it schedules is pinned by source in
+            # tests/test_cli_gateway_commands.py instead.
+            warm_up_in_background()  # pragma: no cover
             health_server = None
             gw_teardown = None
             gw_scheduler = None
@@ -636,7 +641,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 # Wire the broker into the mid-turn askers. deep_research goes
                 # through the loop so a tool built later by promotion (a mid-session
                 # enable) inherits the broker too, not just the startup one.
-                if (ask_tool := agent.tools.get("ask_user")) is not None and hasattr(ask_tool, "set_broker"):
+                if callable(getattr(ask_tool := agent.tools.get("ask_user"), "set_broker", None)):
                     ask_tool.set_broker(question_broker)
                 agent.set_deep_research_broker(question_broker)
 
@@ -672,7 +677,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     from raven.rpc.question_broker import RoutingQuestionBroker
 
                     routed_broker = RoutingQuestionBroker(page=page_mount.question_broker, channel=question_broker)
-                    if (ask_tool := agent.tools.get("ask_user")) is not None and hasattr(ask_tool, "set_broker"):
+                    if callable(getattr(ask_tool := agent.tools.get("ask_user"), "set_broker", None)):
                         ask_tool.set_broker(routed_broker)
                     agent.set_deep_research_broker(routed_broker)
                     # Route channel="tui" outbounds from the gateway's own

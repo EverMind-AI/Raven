@@ -115,7 +115,12 @@ def test_reset_clears_key(cfg: Path):
 
 def test_web_search_set_writes_camelcase_under_search(cfg: Path):
     ut.set_web_search({"api_key": "serper-abc"}, config_path=cfg)
-    assert _raw(cfg)["tools"]["web"]["search"] == {"provider": "serper", "apiKey": "serper-abc", "maxResults": 5}
+    assert _raw(cfg)["tools"]["web"]["search"] == {
+        "provider": "serper",
+        "apiKey": "serper-abc",
+        "maxResults": 5,
+        "images": False,
+    }
 
 
 def test_web_search_set_preserves_the_rest_of_tools_web(cfg: Path):
@@ -137,7 +142,7 @@ def test_web_search_set_merges_and_returns_prev(cfg: Path):
     ut.set_web_search({"api_key": "serper-1"}, config_path=cfg)
     prev = ut.set_web_search({"max_results": 8}, config_path=cfg)
     section = _raw(cfg)["tools"]["web"]["search"]
-    assert section == {"provider": "serper", "apiKey": "serper-1", "maxResults": 8}
+    assert section == {"provider": "serper", "apiKey": "serper-1", "maxResults": 8, "images": False}
     assert prev == {"max_results": 5}
 
 

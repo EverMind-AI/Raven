@@ -308,12 +308,43 @@ async def instances_list(
     hidden = {row.name for row in table.rows() if getattr(row, "hidden", False)} if table is not None else set()
     reconciled = [row for row in reconciled if row.get("agent") not in hidden]
     return {
-        "instances": _mark_titles(
-            _mark_resumable(_collapse_dag_rows(_drop_nodes_that_never_ran(reconciled)), manager),
-            _session_dir(agent_loop_factory, session_key),
+        "instances": _mark_turn_start(
+            _mark_titles(
+                _mark_resumable(_collapse_dag_rows(_drop_nodes_that_never_ran(reconciled)), manager),
+                _session_dir(agent_loop_factory, session_key),
+            ),
+            session_key,
         ),
         "pending_handoff_count": handoff.pending_count(session_key) if handoff is not None else 0,
     }
+
+
+def _mark_turn_start(rows: list[dict[str, Any]], session_key: str) -> list[dict[str, Any]]:
+    """Stamp each row that is answering a turn with when that turn began.
+
+    The registry cannot answer this. Its ``updatedAtMs`` is stamped by every
+    write -- a status change, a binding commit, a graph-origin write -- so it
+    dates the row and not the turn, and a clock counting from it would jump
+    whenever anything else touched the record. The running turn's own start is
+    on the activity the backend is collecting, which is the only place it exists.
+
+    ``turn_started_at_ms`` and not ``started_at_ms``: the latter is when
+    collection opened, and a spawn builds its activity before waiting on
+    ``hold_handle``. The two differ by the length of that wait, so publishing it
+    let a spawn queued behind a five-minute turn open its pane claiming five
+    minutes of work it had not done. The slot-taking stamp is the turn.
+
+    Absent rather than zero when nothing is running, and absent is the whole
+    signal: a reader shows a clock when the field is there and nothing when it
+    is not, so an instance that finished between two polls stops counting
+    instead of freezing on its last number.
+    """
+    for row in rows:
+        live = run_activity.live_instance(session_key, str(row.get("agent") or ""), str(row.get("handle") or ""))
+        began = getattr(live, "turn_started_at_ms", None) if live is not None else None
+        if isinstance(began, int) and began > 0:
+            row["turnStartedAtMs"] = began
+    return rows
 
 
 async def instances_create(
@@ -596,10 +627,13 @@ async def instances_forget(
     so forgetting a busy instance stops its turn. The directories here stay
     either way.
 
-    Any mode override held against the handle goes with the row. The manager
-    keys it by ``(session_key, agent, handle)`` and a handle is reusable, so
-    leaving it behind would silently put a later instance of the same name at
-    an effort level nobody chose for it.
+    Every per-instance override held against the handle goes with the row -- the
+    mode and the model both. The manager keys them by ``(session_key, agent,
+    handle)`` and a handle is reusable, so one left behind silently puts a later
+    instance of the same name at an effort level, or on a model, nobody chose
+    for it. Cleared together rather than one at a time: they are keyed the same
+    way and forgotten by the same call, and dropping one while the other leaks
+    is how a pair comes to disagree.
     """
     registry = get_registry()
     session_key = str(params.get("session_key") or "")
@@ -616,8 +650,10 @@ async def instances_forget(
         manager = _manager(agent_loop_factory)
         if manager is not None:
             manager.set_instance_mode(session_key, agent, handle, None)
+            manager.set_instance_model(session_key, agent, handle, None)
             if paired is not None:
                 manager.set_instance_mode(session_key, agent, paired, None)
+                manager.set_instance_model(session_key, agent, paired, None)
     if removed and row is not None and row.get("kind") == "acp" and row.get("agentId"):
         await _delete_acp_session(agent, str(row["agentId"]))
     return {"removed": bool(removed)}
@@ -737,6 +773,73 @@ async def instances_set_mode(
     }
 
 
+async def instances_set_model(
+    params: dict[str, Any],
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict[str, Any]:
+    """Put one instance on a model (``subagents.instance.set_model``).
+
+    The sibling of ``instances_set_mode`` above and shaped the same way, because
+    a reader meets the two as one row of per-instance settings. A direct chat is
+    a continuation, so which model answers it has to be changeable without
+    abandoning the conversation to start another one elsewhere.
+
+    What differs is what it inherits: nothing. A mode falls through to the
+    session's tier, so a cleared instance still runs at something this host
+    chose. A model does not -- cleared, the instance runs on whatever the agent
+    picked for itself, and this host cannot say what that is. The agent reports
+    a ``currentValue`` for the session it opened during a capability probe, and
+    that is the state of a throwaway session rather than a fact about this
+    instance, so reporting it here would name a model this conversation may
+    never have been on. ``null`` therefore means "the agent's own", and is drawn
+    as such.
+
+    Three calls, told apart by which fields are present rather than by a
+    sentinel value, for the reason the mode method records -- an agent is free
+    to offer a model whose id is any string at all:
+
+    - neither field: **report** the override and the menu on offer;
+    - ``clear: true``: drop the override, returning the instance to the agent's own;
+    - ``model: "<value>"``: switch, from the instance's next turn on.
+    """
+    manager = _manager(agent_loop_factory)
+    agent = str(params.get("agent") or "")
+    handle = str(params.get("handle") or "")
+    session_key = str(params.get("session_key") or "")
+    raw = params.get("model")
+    model = str(raw) if isinstance(raw, str) and raw else None
+    reading = model is None and not params.get("clear")
+
+    def menu() -> list[dict[str, Any]]:
+        return [
+            {"value": c.value, "name": c.name, "group": c.group}
+            for c in (manager.agent_model_choices(agent) if manager is not None else ())
+        ]
+
+    if manager is None:
+        # A read degrades to empty and a write does not, for the reason the mode
+        # method states: answering a set with "no models" is a silent no-op, and
+        # the caller would draw the model it asked for over an override that was
+        # never recorded.
+        if reading:
+            return {"model": None, "availableModels": []}
+        raise ConfigValidationError("sub-agents are not configured, so an instance has no model to set")
+    if reading:
+        return {"model": manager.instance_model(session_key, agent, handle), "availableModels": menu()}
+    rows = get_registry().list_instances(session_key)
+    if not any(r.get("agent") == agent and r.get("handle") == handle for r in rows):
+        # Checked only on the write path, as the mode method is: an override held
+        # against a handle that does not exist is stored where nothing will read
+        # it and echoed back as if it had landed.
+        raise ConfigValidationError(f"no instance {agent}/{handle} in this session")
+    try:
+        applied = manager.set_instance_model(session_key, agent, handle, model)
+    except ValueError as exc:
+        raise ConfigValidationError(str(exc)) from exc
+    return {"model": applied, "availableModels": menu()}
+
+
 def register_instance_methods(
     dispatcher: "Dispatcher",
     *,
@@ -762,12 +865,16 @@ def register_instance_methods(
     async def _set_mode(params: dict[str, Any]) -> dict[str, Any]:
         return await instances_set_mode(params, agent_loop_factory=agent_loop_factory)
 
+    async def _set_model(params: dict[str, Any]) -> dict[str, Any]:
+        return await instances_set_model(params, agent_loop_factory=agent_loop_factory)
+
     dispatcher.register("subagents.instances", _list)
     dispatcher.register("subagents.instance.create", _create)
     dispatcher.register("subagents.instance.history", _history)
     dispatcher.register("subagents.instance.forget", _forget)
     dispatcher.register("subagents.instance.steer", _steer)
     dispatcher.register("subagents.instance.set_mode", _set_mode)
+    dispatcher.register("subagents.instance.set_model", _set_model)
 
 
 __all__ = [

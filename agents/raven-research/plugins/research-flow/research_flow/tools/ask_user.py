@@ -30,6 +30,7 @@ from contextvars import ContextVar
 from typing import Any
 
 from raven.agent.tools.ask_user import AskUserTool
+from raven.contracts.tool import ToolResult
 
 # Returned when the model's call reaches execution, which happens whenever the
 # gate declined to hand off. NOT dead code - ``CompositeHook`` halts a phase only
@@ -295,7 +296,7 @@ class DRAskUserTool(AskUserTool):
         questions: list[dict[str, Any]] | None = None,
         outline: list[dict[str, Any]] | None = None,
         **kwargs: Any,
-    ) -> str:
+    ) -> str | ToolResult:
         # Every parameter defaults: with no top-level "required" the registry's
         # validation passes a call carrying only ``outline``, and that is the call
         # that reaches here most often.

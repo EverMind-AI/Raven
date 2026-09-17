@@ -28,13 +28,12 @@ dependencies = [
     "pyyaml>=6.0",
     "prompt-toolkit>=3.0.0",
     "json-repair>=0.30.0",
-    # everos token-aware truncation (text.py). Currently also a
-    # transitive dep of litellm — pinning it directly so the everos
-    # extractor keeps working if upstream ever drops it.
+    # Token-aware truncation. Also a transitive dep of litellm; named here
+    # because the host counts tokens on its own turn path and must not lose
+    # that to someone else's dependency change.
     "tiktoken>=0.7.0,<1.0.0",
     "questionary>=2.0.0,<3.0.0",
     "watchfiles>=0.21,<2.0",
-    "everos[multimodal]==1.2.3",
     "tomli-w>=1.2.0",
     # UTS-46 host mapping for the browser's navigation check. Already present
     # transitively (httpx), declared here because the check is security-load-
@@ -48,10 +47,10 @@ dependencies = [
     # transitive dep (via lancedb) -- pinning it directly so routing keeps
     # working if upstream ever drops it.
     "numpy>=2.0,<3.0",
-    # Image downscale/recompress for read_file (agent/tools/media.py). Reaches
-    # us anyway via everos[multimodal] -> everalgo-parser, but that is a
-    # three-hop transitive path — pinning it directly so reading an image keeps
-    # working if any link in that chain drops it.
+    # Image downscale/recompress for read_file (agent/tools/media.py). Named
+    # directly: it used to arrive three hops away through the memory plugin's
+    # own dependencies, and reading an image is not the memory plugin's to
+    # keep working.
     "pillow>=10.0.0",
     # Rasterises a QR-login channel's scan URL server-side, so the page shows an
     # <img> instead of carrying a QR encoder. Not in the channel extras where it
@@ -60,10 +59,10 @@ dependencies = [
     # its [pil] backend is pillow, already here.
     "qrcode[pil]>=8.0",
     # Embedded vector store behind raven.knowledge -- a knowledge base indexes
-    # and answers from inside the gateway process, so it must not need a server.
-    # Already resolved here as a transitive dep of everos, which keeps its own
-    # memory in it; named directly for the same reason numpy above is, so
-    # retrieval keeps working if that chain ever changes.
+    # and answers from inside the gateway process, so it must not need a
+    # server. Named directly for the same reason numpy above is: it used to
+    # arrive through the memory plugin, and a knowledge base is not the memory
+    # plugin's to keep working.
     "lancedb>=0.33,<1.0",
     "ripgrep-bin>=15.2.0,<16.0.0",
     "aiohttp>=3.13.4",
@@ -286,6 +285,77 @@ ignore = ["DEP002", "DEP004"]
 DEP001 = ["raven_everos", "requests", "cryptography"]
 DEP003 = ["raven_everos", "requests", "cryptography"]
 
+[tool.ty]
+# A call-correctness gate, not a typing-strictness project. Of ty's 133 rules,
+# 110 are live here and this tree satisfies all of them -- measured at zero, or
+# cleared to zero. They answer "is this
+# call, override or annotation self-consistent" -- the class of error a test
+# only finds by executing the line, which is exactly what a bundled plugin's
+# render path or a rarely-taken CLI branch does not do in CI.
+#
+# The other 23: nine switched off below, and fourteen that ship disabled
+# upstream and are left that way (the `unsound-*` family, `division-by-zero`,
+# the `possibly-*` family and friends). Those fourteen are unmeasured, not
+# satisfied -- turning any of them on is its own sized change.
+#
+# The nine below are switched off with their measured backlog, not because they
+# are wrong. Each is a separate piece of work; the number is the count on the
+# commit that added this block, so a later reader can tell progress from drift.
+#
+# Rule levels are pinned by pinning ty itself (dependency-groups, exact version):
+# at 0.0.x the rule set still moves, and a gate whose meaning changes under a
+# transitive bump is not a gate. Bumping it is a reviewed change.
+#
+# Scope note: tests/ is out (113 diagnostics under this same set). Tests are
+# run, so a broken call there fails loudly; unexecuted production code is what
+# this gate is for. Bringing tests in is sized, separate work.
+#
+# Environment note: measured identical with `--extra dev` and with
+# `--all-extras` (1205 both ways), unlike deptry, whose verdict does move with
+# what is installed. The Makefile still uses --all-extras so that turning any
+# resolution-sensitive rule back on does not silently change meaning.
+# The three agent products keep their plugin package beside them rather than in
+# plugins-dist, so their roots are not on the path a plain run sees. ruff has the
+# same list for plugins-dist under [tool.ruff] src, for the same reason.
+[tool.ty.environment]
+extra-paths = [
+    "agents/raven-code/plugins/code-flow",
+    "agents/raven-oncall/plugins/oncall-flow",
+    "agents/raven-research/plugins/research-flow",
+]
+
+[tool.ty.rules]
+# 725: 432 of them are the agent-loop mixins reaching for attributes the host
+# class owns (`Self@<method>` has no attribute ...), and 180 more are attribute
+# access on an optional. Barely any of it is third-party noise -- clearing it
+# means giving the mixins a declared surface, which is a refactor, not a sweep.
+unresolved-attribute = "ignore"    # 725
+# 231: sampled, not enumerated -- loose annotations and unnarrowed unions rather
+# than a single shape.
+invalid-argument-type = "ignore"   # 231
+# 66, and enumerated rather than sampled: 53 are Tool subclasses declaring named
+# parameters against a base of `execute(self, **kwargs: Any)`, which is how a
+# tool publishes its JSON schema -- the pattern, not a defect. 9 are provider
+# wrappers that take `**kwargs` and forward, so the named parameter ty wants is
+# reachable at runtime. 3 rename a parameter (`path` -> `file_path`) together
+# with the `parameters` override that renames the schema key, so the tool and
+# the schema agree. The one left is real and is a kernel contract question:
+# LLMProvider.chat_stream is declared `async def -> AsyncIterator[ChatDelta]`,
+# which types a coroutine returning an iterator, while every implementation is
+# an async generator. Enabling this rule would mean suppressing 65 lines to keep
+# one, so it stays off until that declaration is fixed.
+invalid-method-override = "ignore" #  66
+invalid-assignment = "ignore"      #  33
+not-subscriptable = "ignore"       #  32
+unsupported-operator = "ignore"    #  28
+not-iterable = "ignore"            #  21
+redundant-condition = "ignore"     #   7 (warn by default)
+unsupported-base = "ignore"        #   2 (warn by default)
+
+# Off by default upstream, on here: a bare `# ty: ignore` silences every rule on
+# that line forever, including ones written after it. Suppressions name a rule.
+blanket-ignore-comment = "error"
+
 [tool.ruff]
 line-length = 120
 target-version = "py312"
@@ -429,6 +499,8 @@ markers = [
     "e2e: spawns real subprocesses / drives the full stack (slow); deselected by default, run with '-m e2e' (e.g. tests/tui/autotest)",
     "real_llm: hits a real everos runtime (LLM + embedding); skipped unless EVEROS_LLM__API_KEY / EVEROS_EMBEDDING__MODEL are configured",
     "llm_judge: uses an LLM as a grader for extraction quality (extra cost / non-determinism); opt-in",
+    "slow: real subprocess, tool or render that cannot be faked and still runs in the default selection (e2e does not); exempt from the idle ceiling",
+    "production_timing: proves a timing property or asserts a production delay constant; exempt from the suite's shortening of retry and grace ladders and from the idle ceiling",
 ]
 
 [tool.coverage.run]
@@ -468,6 +540,7 @@ dev = [
     "import-linter>=2.14",
     "json-repair>=0.59.5",
     "jsonschema>=4.23.0",
+    "lxml-stubs>=0.5.1",
     "packaging>=26.1",
     "pexpect>=4.9",
     "pip-audit>=2.10.0",
@@ -478,6 +551,7 @@ dev = [
     "pytest-cov>=7.1.0",
     "pytest-xdist>=3.8.0",
     "ruff==0.15.12",
+    "ty==0.0.80",
 ]
 
 [tool.importlinter]

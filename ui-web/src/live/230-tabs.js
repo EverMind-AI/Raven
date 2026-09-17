@@ -79,6 +79,18 @@ DS.agents = {
       ? { session_key: sessionCurrent(), agent, handle, clear: true }
       : { session_key: sessionCurrent(), agent, handle, mode })
       .then((r) => r || {}),
+  /* The model beside the mode, on the same three-call shape: neither field
+     reports, `clear` drops the override, a value switches. Nothing is inherited
+     here -- cleared means the agent's own choice, which this host cannot name --
+     so there is no second field to read back. */
+  instanceModel: (agent, handle) =>
+    rpc.call('subagents.instance.set_model', { session_key: sessionCurrent(), agent, handle })
+      .then((r) => r || {}),
+  instanceSetModel: (agent, handle, model) =>
+    rpc.call('subagents.instance.set_model', model === null
+      ? { session_key: sessionCurrent(), agent, handle, clear: true }
+      : { session_key: sessionCurrent(), agent, handle, model })
+      .then((r) => r || {}),
   /* The heartbeat, forwarded rather than acted on: a run in flight has to
      move on screen without being reopened, and every judgement about what
      that takes belongs to the island that is drawing it. */
@@ -95,10 +107,13 @@ DS.agents = {
 if (new URLSearchParams(location.search).get('desk-demo') === '1') {
   const now = Date.now();
   const liveRoster = DS.agents.roster;
+  /* Only the two running rows carry `turnStartedAtMs`, and deliberately: absent
+     is what says an instance is answering nothing, so a canvas where every row
+     had one would draw a clock on finished work and hide the rule. */
   const demoInstances = [
-    { sessionKey: 'desk-demo', agent: 'research-raven', handle: 'market-map-a19f', kind: 'playbook', status: 'running', runId: '市场调研', nodeId: '竞品功能调研', createdAtMs: now - 420000, updatedAtMs: now, resumable: true },
+    { sessionKey: 'desk-demo', agent: 'research-raven', handle: 'market-map-a19f', kind: 'playbook', status: 'running', runId: '市场调研', nodeId: '竞品功能调研', createdAtMs: now - 420000, updatedAtMs: now, turnStartedAtMs: now - 96000, resumable: true },
     { sessionKey: 'desk-demo', agent: 'research-raven', handle: 'model-permissions-7c2a', kind: 'playbook', status: 'completed', runId: 'UI 能力核验', nodeId: '整理权限模型差异', createdAtMs: now - 830000, updatedAtMs: now - 220000, resumable: true },
-    { sessionKey: 'desk-demo', agent: 'coding-raven', handle: 'instance-sync-coder12', kind: 'dag', status: 'running', runId: '子智能体列表改造', nodeId: '修复实例状态同步', createdAtMs: now - 190000, updatedAtMs: now, resumable: true },
+    { sessionKey: 'desk-demo', agent: 'coding-raven', handle: 'instance-sync-coder12', kind: 'dag', status: 'running', runId: '子智能体列表改造', nodeId: '修复实例状态同步', createdAtMs: now - 190000, updatedAtMs: now, turnStartedAtMs: now - 23000, resumable: true },
     { sessionKey: 'desk-demo', agent: 'coding-raven', handle: 'history-render-9d0e', kind: 'playbook', status: 'failed', runId: 'UI 回归', nodeId: '验证历史消息渲染', createdAtMs: now - 620000, updatedAtMs: now - 480000, resumable: true },
     { sessionKey: 'desk-demo', agent: 'coding-raven', handle: 'legacy-build-31ab', kind: 'spawn', status: 'completed', nodeId: '旧版构建迁移', createdAtMs: now - 940000, updatedAtMs: now - 720000, resumable: false },
     { sessionKey: 'desk-demo', agent: 'content-raven', handle: 'release-notes-18ca', kind: 'dag', status: 'completed', runId: '发布流程', nodeId: '整理发布说明', createdAtMs: now - 380000, updatedAtMs: now - 140000, resumable: true },

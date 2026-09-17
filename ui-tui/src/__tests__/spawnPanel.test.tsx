@@ -82,10 +82,14 @@ describe('SpawnPanel', () => {
   })
 
   it('follows the newest step of a folded run that is still working', () => {
-    setDagNodeTrace(spawnTraceKey(run().callId!), [
-      say('reading the WHO guidance'),
-      { role: 'assistant', text: '', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{"path":"who.pdf"}' }] }
-    ], false)
+    setDagNodeTrace(
+      spawnTraceKey(run().callId!),
+      [
+        say('reading the WHO guidance'),
+        { role: 'assistant', text: '', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{"path":"who.pdf"}' }] }
+      ],
+      false
+    )
     toggleSpawnTrace(run())
 
     const f = frame(<SpawnPanel run={run()} t={DEFAULT_THEME} width={72} />)

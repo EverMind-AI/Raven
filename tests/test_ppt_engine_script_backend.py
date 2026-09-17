@@ -349,6 +349,26 @@ def test_the_last_page_stops_at_the_save_call() -> None:
     assert "prs.save" not in "".join(lines[blocks[2][0] : end])
 
 
+def test_a_banner_heading_two_blocks_is_named_with_both_lines() -> None:
+    """An edit pasted a block under itself; the deck came out a page longer than its plan
+    and nothing said which block was the extra one."""
+    from raven_ppt.backends.script.blocks import repeated_banners
+
+    lines = [
+        "# SLIDE 1\n",
+        "s = new()\n",
+        "# SLIDE 2\n",
+        "# SLIDE 2 (a second comment line of the same banner)\n",
+        "s = new()\n",
+        "# SLIDE 3\n",
+        "s = new()\n",
+        "# SLIDE 2\n",
+        "s = new()\n",
+    ]
+    assert repeated_banners(lines) == {2: [3, 8]}
+    assert repeated_banners(lines[:7]) == {}, "a banner continued on the next comment line is one banner"
+
+
 def test_banner_blocks_do_not_overlap() -> None:
     lines = DECK.splitlines(keepends=True)
     blocks = page_blocks(lines)

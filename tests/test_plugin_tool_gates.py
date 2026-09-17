@@ -63,7 +63,6 @@ def _discovered(plugin_id: str, gates: list[tuple[str, str]]) -> DiscoveredPlugi
     mf = PluginManifest(
         id=plugin_id,
         version="0.1.0",
-        enabled_by_default=True,
         contributes=Contributes(tool_gates=[ToolGateContribution(name=n, factory=f) for n, f in gates]),
     )
     return DiscoveredPlugin(manifest=mf, source=ManifestOrigin.USER, location=None)
@@ -531,7 +530,7 @@ async def test_a_plugin_gate_is_cast_over_the_built_runtimes_registry(tmp_path: 
     plug = tmp_path / "plugins" / "demogate"
     plug.mkdir(parents=True)
     plug.joinpath("raven-plugin.toml").write_text(
-        '[plugin]\nid = "demogate"\nversion = "1.0"\nenabled_by_default = true\n'
+        '[plugin]\nid = "demogate"\nversion = "1.0"\n'
         "[[plugin.contributes.tool_gates]]\n"
         'name = "demo_gate"\nfactory = "demogate_mod:make"\n'
     )

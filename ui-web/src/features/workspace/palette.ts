@@ -141,11 +141,16 @@ export function write(key: string | null, open: boolean): void {
 
 /* A draft that becomes a conversation takes the draft screen's answer with it.
  *
- * The first message turns the draft into a session in place -- same screen,
- * same composer, an id where there was none -- and without this the desk would
- * open in their face the moment they hit send, because the new conversation has
- * no answer of its own and a conversation's default is open. Only when it has
+ * A promotion turns the draft into a session in place -- same screen, same
+ * composer, an id where there was none -- and without this the desk would open
+ * in their face the moment it happened, because the new conversation has no
+ * answer of its own and a conversation's default is open. Only when it has
  * none, and only once.
+ *
+ * Two things promote now. The first message is one. The other is the roster's
+ * new-instance button, which is pressed FROM the desk -- so carrying the answer
+ * matters more there, not less: the reader had it open, and a conversation that
+ * arrived because of something they did in it must not arrive with it shut.
  *
  * Only a STATED answer. A reader who never touched the desk on the new-task
  * screen has stated nothing, and writing an implicit answer for them here would

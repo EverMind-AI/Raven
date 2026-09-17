@@ -1211,3 +1211,21 @@ async def test_a_playbook_without_carried_servers_hands_over_no_scope():
     tool = FakeDagTool()
     await PlaybookExecutor(dag_tool=tool).execute(_dag_spec(), params={"week_of": "w"})
     assert tool.calls[0]["mcp_scope"] is None
+
+
+async def test_an_entry_that_already_asked_can_say_so_through_load(tmp_path: Path):
+    """``confirmed`` reaches the gate through the runtime, not only the executor.
+
+    The parameter exists for "an entry point that *does* ask", and every such
+    entry arrives through ``load`` -- the one door the model's tool and the
+    command line both use. Without the relay the flag is reachable only by a
+    caller that already holds the executor, which no entry point does.
+    """
+    tool = FakeDagTool()
+    rt = _runtime(tmp_path, [_dag_spec(confirm=True)], dag_tool=tool)
+
+    await rt.load("weekly-feedback", {"week_of": "w32"}, confirmed=True)
+    assert tool.calls[-1]["confirm"] is False, "a caller that asked is not asked again"
+
+    await rt.load("weekly-feedback", {"week_of": "w32"}, confirmed=False)
+    assert tool.calls[-1]["confirm"] is True, "and one that did not still meets the gate"

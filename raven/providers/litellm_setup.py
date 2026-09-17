@@ -17,6 +17,7 @@ records propagating to root, so they still reach the log file sink.
 import logging
 import os
 import sys
+import threading
 
 # litellm attaches its stderr handler to all three (litellm/_logging.py).
 _LITELLM_LOGGERS = ("LiteLLM", "LiteLLM Router", "LiteLLM Proxy")
@@ -107,23 +108,55 @@ def _register_raven_model_rows(litellm) -> None:
         litellm.register_model(missing)
 
 
+#: One initialisation at a time. The levels below are raised for the duration of
+#: the import and put back afterwards, which only holds while a single thread is
+#: doing it: a second caller arriving in that window reads WARNING as the level
+#: to restore, and restores it after the first caller has put the real one back,
+#: leaving litellm's DEBUG and INFO out of the file sink until a restart. The
+#: window is ordinary now that a server warms this up in the background while it
+#: serves, so both callers pass through here.
+_INITIALISING = threading.Lock()
+
+
 def import_litellm():
     """Import litellm with its banner disabled and its terminal handler detached."""
-    _point_oauth_tokens_at_raven()
-    _use_local_model_cost_map()
-    loggers = [logging.getLogger(name) for name in _LITELLM_LOGGERS]
-    prev_levels = [lg.level for lg in loggers]
-    for lg in loggers:
-        lg.setLevel(logging.WARNING)
-    try:
-        import litellm
+    with _INITIALISING:
+        _point_oauth_tokens_at_raven()
+        _use_local_model_cost_map()
+        loggers = [logging.getLogger(name) for name in _LITELLM_LOGGERS]
+        prev_levels = [lg.level for lg in loggers]
+        for lg in loggers:
+            lg.setLevel(logging.WARNING)
+        try:
+            import litellm
 
-        litellm.suppress_debug_info = True
-        _register_raven_model_rows(litellm)
-    finally:
-        for lg, prev in zip(loggers, prev_levels):
-            lg.setLevel(prev)
+            litellm.suppress_debug_info = True
+            _register_raven_model_rows(litellm)
+        finally:
+            for lg, prev in zip(loggers, prev_levels):
+                lg.setLevel(prev)
 
-    _detach_tty_handlers(loggers)
+        _detach_tty_handlers(loggers)
 
-    return litellm
+        return litellm
+
+
+def warm_up_in_background() -> threading.Thread:
+    """Start the litellm import on a daemon thread and return it.
+
+    Every raven import of litellm is deferred, so the first request that needs
+    it pays the import inline: saving a key from the settings page waited 3 to
+    5 s on it. A serving process calls this once at boot. A failure is logged
+    and left alone; the on-demand import reports it to the caller that needs
+    litellm.
+    """
+
+    def warm() -> None:
+        try:
+            import_litellm()
+        except Exception:
+            logging.getLogger(__name__).exception("litellm warm-up failed; the on-demand import will report it")
+
+    thread = threading.Thread(target=warm, name="litellm-warmup", daemon=True)
+    thread.start()
+    return thread

@@ -6,11 +6,16 @@ from typing import Annotated, Any, Literal
 from loguru import logger
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 from pydantic.alias_generators import to_camel
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from raven.config.agent_names import THIRD_PARTY_PRESET_NAMES
 from raven.contracts.path_policy import WORKSPACE_DEFAULT_SENTINEL
 from raven.sandbox.config import SandboxConfig
+
+#: The loop's outer LLM-error retry ladder when the config names none: one wait
+#: per further attempt, 105 s in all. ``RecoveryLimits`` reads the same tuple, so
+#: the fallback the loop uses and the default the config documents cannot drift.
+LLM_ERROR_RETRY_DELAYS_DEFAULT: tuple[float, ...] = (15.0, 30.0, 60.0)
 
 
 class Base(BaseModel):
@@ -247,7 +252,7 @@ class AgentDefaults(Base):
     # retryable error the provider's own short ladder could not clear; one entry per
     # further attempt, per turn. Empty disables it. A long autonomous run wants a
     # longer list than a chat does: set it to minutes for a deck build.
-    llm_error_retry_delays: list[float] = Field(default_factory=lambda: [15.0, 30.0, 60.0])
+    llm_error_retry_delays: list[float] = Field(default_factory=lambda: list(LLM_ERROR_RETRY_DELAYS_DEFAULT))
     # Whether a streamed model call that fails after it has already produced output is
     # asked again (the output is produced twice for whoever watched the stream). Off for
     # a chat; on for an unattended run whose client is a machine, such as a deck build.
@@ -570,6 +575,7 @@ class ProvidersConfig(Base):
         default_factory=ProviderConfig,
         validation_alias=AliasChoices("zai", "zhipu"),
     )
+    bigmodel: ProviderConfig = Field(default_factory=ProviderConfig)  # Zhipu's CN platform
     dashscope: ProviderConfig = Field(default_factory=ProviderConfig)  # Alibaba Cloud Tongyi Qianwen
     # LiteLLM's own names for these two, so a model id and a config section are
     # spelled the same. Configs written before the rename keep loading.
@@ -595,6 +601,50 @@ class ProvidersConfig(Base):
     )
     siliconflow: ProviderConfig = Field(default_factory=ProviderConfig)  # SiliconFlow
     volcengine: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine
+    xai: ProviderConfig = Field(default_factory=ProviderConfig)  # xAI Grok
+    mistral: ProviderConfig = Field(default_factory=ProviderConfig)
+    # LiteLLM's names for these two, so a model id and a config section are
+    # spelled the same. The hyphenated spelling a picker offers also loads.
+    together_ai: ProviderConfig = Field(
+        default_factory=ProviderConfig,
+        validation_alias=AliasChoices("together_ai", "togetherAi", "together-ai", "togetherai"),
+    )
+    fireworks_ai: ProviderConfig = Field(
+        default_factory=ProviderConfig,
+        validation_alias=AliasChoices("fireworks_ai", "fireworksAi", "fireworks-ai", "fireworks"),
+    )
+    perplexity: ProviderConfig = Field(default_factory=ProviderConfig)
+    huggingface: ProviderConfig = Field(default_factory=ProviderConfig)  # HF Inference Providers
+    poe: ProviderConfig = Field(default_factory=ProviderConfig)
+    xiaomi_mimo: ProviderConfig = Field(default_factory=ProviderConfig)
+    baichuan: ProviderConfig = Field(default_factory=ProviderConfig)
+    baidu_cloud: ProviderConfig = Field(default_factory=ProviderConfig)  # Qianfan
+    stepfun: ProviderConfig = Field(default_factory=ProviderConfig)
+    longcat: ProviderConfig = Field(default_factory=ProviderConfig)
+    modelscope: ProviderConfig = Field(default_factory=ProviderConfig)
+    qiniu: ProviderConfig = Field(default_factory=ProviderConfig)
+    # Resale gateways. `ai302` rather than `302ai`: a field name cannot start
+    # with a digit, and the vendor's own spelling still loads as an alias.
+    ai302: ProviderConfig = Field(
+        default_factory=ProviderConfig,
+        validation_alias=AliasChoices("ai302", "302ai"),
+    )
+    dmxapi: ProviderConfig = Field(default_factory=ProviderConfig)
+    burncloud: ProviderConfig = Field(default_factory=ProviderConfig)
+    ocoolai: ProviderConfig = Field(default_factory=ProviderConfig)
+    ppio: ProviderConfig = Field(default_factory=ProviderConfig)
+    lanyun: ProviderConfig = Field(default_factory=ProviderConfig)
+    alayanew: ProviderConfig = Field(default_factory=ProviderConfig)
+    sophnet: ProviderConfig = Field(default_factory=ProviderConfig)
+    tokenhub: ProviderConfig = Field(default_factory=ProviderConfig)
+    xirang: ProviderConfig = Field(default_factory=ProviderConfig)
+    ph8: ProviderConfig = Field(default_factory=ProviderConfig)
+    aionly: ProviderConfig = Field(default_factory=ProviderConfig)
+    radeon_cloud: ProviderConfig = Field(default_factory=ProviderConfig)
+    # Self-hosted servers, reached by address like the three above.
+    gpustack: ProviderConfig = Field(default_factory=ProviderConfig)
+    ovms: ProviderConfig = Field(default_factory=ProviderConfig)  # OpenVINO Model Server
+    cerebras: ProviderConfig = Field(default_factory=ProviderConfig)
     openai_codex: ProviderConfig = Field(default_factory=ProviderConfig)  # OpenAI Codex (OAuth)
     github_copilot: ProviderConfig = Field(default_factory=ProviderConfig)  # Github Copilot (OAuth)
 
@@ -905,7 +955,7 @@ class GatewayConfig(Base):
     page: GatewayPageConfig = Field(default_factory=GatewayPageConfig)
 
 
-WebSearchProvider = Literal["serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl"]
+WebSearchProvider = Literal["serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl", "serply"]
 WebFetchProvider = Literal["jina", "anysearch", "tavily", "exa", "firecrawl"]
 
 #: The bare environment variable each web vendor's tool falls back to when the
@@ -919,6 +969,7 @@ WEB_VENDOR_ENV_VARS: dict[str, str] = {
     "exa": "EXA_API_KEY",
     "brave": "BRAVE_API_KEY",
     "firecrawl": "FIRECRAWL_API_KEY",
+    "serply": "SERPLY_API_KEY",
 }
 
 
@@ -950,6 +1001,7 @@ class WebProvidersConfig(Base):
     exa: WebProviderKey = Field(default_factory=WebProviderKey)
     brave: WebProviderKey = Field(default_factory=WebProviderKey)
     firecrawl: WebProviderKey = Field(default_factory=WebProviderKey)
+    serply: WebProviderKey = Field(default_factory=WebProviderKey)
 
     def key_for(self, vendor: str) -> str:
         """One vendor's configured key, or an empty string for an unknown vendor."""
@@ -968,6 +1020,11 @@ class WebSearchConfig(Base):
     """The Serper key on the pre-vendor layout. Still honoured, read after
     ``tools.web.providers.serper.apiKey``; new writes go to the vendor slot."""
     max_results: int = 5
+    images: bool = False
+    """Whether ``image_search`` is offered beside ``web_search``. Off unless a
+    deployment or a product folder turns it on: the deck lane that places
+    pictures does, in its own ``config.json``; a lane that reads pages keeps the
+    tool face it always had."""
 
 
 class WebFetchConfig(Base):
@@ -1265,58 +1322,45 @@ def _resolve_preset_provenance(name: str, preset: str | None) -> str | None:
     return preset
 
 
-class SubagentEverosConfig(Base):
-    """A sub-agent's everos identity, as the host must address it to read back
-    what that sub-agent wrote.
+class SubagentMemoryConfig(Base):
+    """How the host addresses one sub-agent's memories.
+
+    Opaque to the host except the two keys below: a sub-agent runs in a
+    process of its own, and whatever identifies its memories is the memory
+    backend's vocabulary, not raven's. This block is handed to the backend as
+    it stands -- ``store``'s per-call ``user_id`` / ``agent_id`` override for
+    a trace, and ``recall_session``'s track for the read back. EverOS reads
+    ``user_id`` and ``agent_id``; another backend may want something else, and
+    the host has no business validating either.
 
     Declared rather than discovered. The alternative -- reading the fork's own
     config.json next to its ``run.py`` -- would couple the host to a directory
     convention that lives entirely inside each fork.
+
+    The old ``everos`` spelling still loads. Its ``base_url`` does not: no
+    config, fixture or document ever set one, and honouring it would mean
+    every backend growing a per-call way to address a different server.
     """
 
-    user_id: str | None = None
-    """Owner of this sub-agent's ``episode`` memories.
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra="allow")
 
-    Under ``source="trace"`` this is also a write target, not just where the
-    host reads back from (as under ``source="agent"``): it is the owner
-    ``prime_from_turn`` writes the captured conversation's ``user`` rows under.
-    """
-    agent_id: str | None = None
-    """Owner of this sub-agent's ``agent_case`` memories.
-
-    Under ``source="trace"`` this is also a write target, not just where the
-    host reads back from (as under ``source="agent"``): it is the owner
-    ``prime_from_turn`` writes the captured conversation's ``assistant``/``tool``
-    rows under.
-    """
-    base_url: str | None = None
-    """everos service for this sub-agent. ``None`` takes the host's own."""
-    session_prefix: str = "cli:"
-    """What the fork's launcher prepends to the host-minted id before handing it
-    to its Raven as ``--session``. Configurable because that is a convention
-    living in each fork's run.py, not something the host controls."""
     source: Literal["agent", "trace"] = "agent"
-    """Where this agent's memories come from.
+    """Who writes the memories this record reads back.
 
-    ``agent`` -- the sub-agent runs everos itself and writes them; the host only
-    reads them back. ``trace`` -- nobody wrote anything, so the host hands
-    everos the conversation it captured and lets everos extract from it.
+    ``agent`` -- the sub-agent has a memory backend of its own and writes
+    them; the host only reads them back. ``trace`` -- nobody wrote anything,
+    so the host hands the conversation it captured to its own backend and lets
+    that extract from it.
 
-    Declared rather than derived from ``kind``: a cli entry may be a Raven fork
-    (which writes) or an arbitrary third-party CLI such as codex (which does
-    not), so the kind cannot answer this.
+    Read by the host, not the backend: it decides which of the two paths runs,
+    and both end in contract calls. Declared rather than derived from ``kind``:
+    a cli entry may be a Raven fork (which writes) or an arbitrary third-party
+    CLI such as codex (which does not), so the kind cannot answer this.
     """
-
-    @model_validator(mode="after")
-    def _check_owner_declared(self) -> "SubagentEverosConfig":
-        if not self.user_id and not self.agent_id:
-            raise ValueError("everos needs userId or agentId (it could query nothing otherwise)")
-        # A trace payload splits across both tracks -- the prompt is a `user`
-        # row and the work is `assistant`/`tool` -- so one id alone would write
-        # half of it under an owner nothing reads back.
-        if self.source == "trace" and not (self.user_id and self.agent_id):
-            raise ValueError("everos source 'trace' needs both userId and agentId")
-        return self
+    session_prefix: str = "cli:"
+    """What the fork's launcher prepends to the host-minted id before handing
+    it to its Raven as ``--session``. Read by the host because it mints the id;
+    configurable because the convention lives in each fork's run.py."""
 
 
 class SubagentEngineConfig(Base):
@@ -1463,9 +1507,9 @@ class ThirdPartyCliSubagentConfig(Base):
     env: dict[str, str] = Field(default_factory=dict)
     timeout: int | None = None
     max_output_chars: int = 30000
-    everos: SubagentEverosConfig | None = None
-    """This agent's everos identity, or ``None`` for an agent that writes no
-    everos memory. Declaring it is what turns the Memory record on."""
+    memory: SubagentMemoryConfig | None = Field(default=None, validation_alias=AliasChoices("memory", "everos"))
+    """How the host addresses this agent's memories, or ``None`` for an agent
+    that writes none. Declaring it is what turns the Memory record on."""
     engine: SubagentEngineConfig | None = None
     """The engine wheel this folder's manifest declares, or ``None`` for an
     agent whose whole capability is raven's own. Round-trip retention only:
@@ -1606,9 +1650,9 @@ class ThirdPartyOpenAISubagentConfig(Base):
     max_tokens: int | None = None
     timeout: int | None = None
     max_output_chars: int = 128000
-    everos: SubagentEverosConfig | None = None
-    """This agent's everos identity, or ``None`` for an agent the host records no
-    memory for."""
+    memory: SubagentMemoryConfig | None = Field(default=None, validation_alias=AliasChoices("memory", "everos"))
+    """How the host addresses this agent's memories, or ``None`` for an agent
+    the host records none for."""
 
     @model_validator(mode="before")
     @classmethod
@@ -1899,11 +1943,11 @@ class ThirdPartyAcpSubagentConfig(Base):
     """Per-task ceiling for one ``session/prompt``. ``None`` means no automatic
     limit, matching the cli config: a long task is ended by hand, not a timer."""
     max_output_chars: int = 30000
-    everos: SubagentEverosConfig | None = None
-    """This agent's everos identity, or ``None`` for an agent the host records no
-    memory for. Not in :data:`ACP_UNSUPPORTED_FIELDS` because it declares nothing
-    about the agent -- it is how the *host* addresses that agent's memories, which
-    no ``initialize`` handshake reports."""
+    memory: SubagentMemoryConfig | None = Field(default=None, validation_alias=AliasChoices("memory", "everos"))
+    """How the host addresses this agent's memories, or ``None`` for an agent
+    the host records none for. Not in :data:`ACP_UNSUPPORTED_FIELDS` because it
+    declares nothing about the agent -- it is how the *host* addresses that
+    agent's memories, which no ``initialize`` handshake reports."""
     engine: SubagentEngineConfig | None = None
     """The engine wheel this folder's manifest declares, or ``None`` for an
     agent whose whole capability is raven's own. Round-trip retention only:
@@ -2449,7 +2493,7 @@ class Config(BaseSettings):
 
         return SkillForgeConfig()
 
-    model_config = ConfigDict(
+    model_config = SettingsConfigDict(
         env_prefix="NANOBOT_",
         env_nested_delimiter="__",
         extra="forbid",

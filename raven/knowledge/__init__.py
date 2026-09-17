@@ -9,11 +9,29 @@ question about a document.
 """
 
 from raven.knowledge._chunker import ApproxTokenChunker, ChunkerBase
-from raven.knowledge._embedding import EmbeddingClient, EmbeddingConfig, EmbeddingError, load_embedding_config
+from raven.knowledge._embedding import (
+    EmbeddingClient,
+    EmbeddingConfig,
+    EmbeddingError,
+    SiliconFlowEmbeddingClient,
+    embedding_client,
+    load_embedding_config,
+)
 from raven.knowledge._lancedb import LanceDBVectorStore
-from raven.knowledge._manager import KnowledgeError, KnowledgeManager, StaleBaseError
+from raven.knowledge._manager import (
+    DuplicateBaseNameError,
+    KnowledgeError,
+    KnowledgeManager,
+    SearchOutcome,
+    StaleBaseError,
+    supported_extensions,
+)
 from raven.knowledge._parser import ParserBase, TextParser
 from raven.knowledge._records import (
+    DEFAULT_CHUNK_OVERLAP,
+    DEFAULT_CHUNK_SIZE,
+    DEFAULT_SEPARATOR,
+    DEFAULT_TOP_K,
     KnowledgeBaseRecord,
     KnowledgeDocumentRecord,
     RecordStore,
@@ -31,6 +49,10 @@ from raven.knowledge._types import (
 from raven.knowledge._vector_store import VectorStoreBase
 
 __all__ = [
+    "DEFAULT_CHUNK_OVERLAP",
+    "DEFAULT_CHUNK_SIZE",
+    "DEFAULT_SEPARATOR",
+    "DEFAULT_TOP_K",
     "ApproxTokenChunker",
     "Chunk",
     "ChunkerBase",
@@ -47,9 +69,14 @@ __all__ = [
     "LanceDBVectorStore",
     "ParserBase",
     "RecordStore",
+    "SearchOutcome",
+    "SiliconFlowEmbeddingClient",
     "Section",
+    "DuplicateBaseNameError",
     "StaleBaseError",
     "StructuredTextParser",
+    "embedding_client",
+    "supported_extensions",
     "TextBlock",
     "TextParser",
     "VectorRecord",

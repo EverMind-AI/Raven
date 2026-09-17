@@ -29,6 +29,10 @@ export interface ProviderRow {
   acceptsKey?: boolean
   apiBase?: string
   defaultApiBase?: string
+  /* Addresses this provider serves the same account model from, each with the
+     signup that issues a key for it. Present only where the choice is the
+     reader's; everywhere else the pane offers a host field instead. */
+  platforms?: Array<{ label: string; api_base: string; signup_url: string }>
   env?: string
   warn?: string
   key?: string
@@ -42,6 +46,12 @@ export interface EverosSection {
 
 export interface EverosInfo {
   sections?: Record<string, EverosSection>
+  /* False when this install has no EverOS to configure. The rows used to
+     render "not set" in that case -- indistinguishable from an install where
+     the plugin is present and merely unconfigured -- so a person could fill
+     in a model and a key and have nothing happen. */
+  available?: boolean
+  note?: string | null
 }
 
 export type UsageModelRow = ApiUsageModel

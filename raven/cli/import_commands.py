@@ -21,6 +21,7 @@ from raven.cli._tty_guard import die_if_not_tty
 from raven.config.loader import load_config
 from raven.config.schema import Config
 from raven.core.plugin_stack import (
+    SHIPPED_DEFAULT_BACKEND,
     build_plugin_registry,
     everos_plugin_installed,
     everos_plugin_missing_note,
@@ -35,6 +36,7 @@ from raven.importer.types import Platform, Scanner, ScanResult, SourceKind, Tier
 
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider
+    from raven.contracts.memory import MemoryBackend
     from raven.importer.hermes_user_md import ImportedSections
 
 console = Console()
@@ -102,35 +104,23 @@ class ImportRunResult:
     skill_error: str = ""
 
 
-def _require_memory_service_ready(backend: object) -> None:
+async def _require_memory_service_ready(backend: "MemoryBackend") -> None:
     """Refuse to import when the memory service is not actually there.
 
-    ``backend.start()`` reports through its state rather than raising: a
-    session that cannot reach EverOS degrades and keeps probing, which is right
-    for a session and wrong here, so the state is checked after the start. An
-    import is one deliberate batch, and running it against nothing writes
-    nothing while consuming the source list.
-
-    Backends that do not report a state -- anything other than the everos one
-    -- are left alone rather than locked out.
+    ``backend.start()`` degrades instead of raising, which is right for a
+    session and wrong here: an import is one deliberate batch, and running it
+    against nothing writes nothing while consuming the source list. A backend
+    that offers no diagnostics is left alone rather than locked out.
     """
-    state = getattr(backend, "state", None)
-    if state is None:
+    probe = getattr(backend, "health", None)
+    health = await probe() if probe is not None else None
+    if health is None or health.ready:
         return
-    from raven_everos.backend import ServiceState
-
-    if state is ServiceState.READY:
-        return
-    if state is ServiceState.BAD_IDENTITY:
-        # A config error, not an outage: the server log holds nothing about it,
-        # and start() has already printed the key to edit.
-        console.print("[red]Memory identity is invalid; nothing would be imported.[/red]")
-        console.print("[dim]Fix memory.userId / memory.agentId in your config.json, then: raven import run[/dim]")
-        raise typer.Exit(1)
-    from raven_everos.server import server_log_path
-
-    console.print(f"[red]Memory service is not available ({state.value}); nothing would be imported.[/red]")
-    console.print(f"[dim]Check the server log: {server_log_path()}[/dim]")
+    console.print("[red]Memory service is not ready; nothing would be imported.[/red]")
+    for check in health.checks:
+        if check.status == "ok" and not check.hint:
+            continue
+        console.print(f"[dim]  {check.label}: {check.hint or check.status}[/dim]")
     console.print("[dim]Retry: raven import run[/dim]")
     raise typer.Exit(1)
 
@@ -154,7 +144,7 @@ async def _build_and_run(
         # Two ways to get no backend, and they need different instructions:
         # nobody configured one, or the configured one ships separately and is
         # not installed here. `raven onboard` only fixes the first.
-        if ec_config.memory.backend == "everos" and not everos_plugin_installed():
+        if ec_config.memory.backend == SHIPPED_DEFAULT_BACKEND and not everos_plugin_installed():
             console.print(f"[red]Nothing was imported: {everos_plugin_missing_note()}[/red]")
         else:
             console.print(
@@ -163,10 +153,11 @@ async def _build_and_run(
         raise typer.Exit(1)
 
     await backend.start()
-    # Asked after start rather than caught around it: start reports through the
-    # backend's state now, so an except here would never fire.
-    _require_memory_service_ready(backend)
     try:
+        # Asked after start rather than caught around it: start degrades instead
+        # of raising, so an except here would never fire. Inside the try so the
+        # ``finally`` still stops the backend when the check exits.
+        await _require_memory_service_ready(backend)
         summary = await run_import(items, backend, state, on_progress=on_progress, cancel_path=cancel_path)
         # Both phases below are additive and run after the EverOS pass, so a
         # failure in either is reported without reversing an import that has

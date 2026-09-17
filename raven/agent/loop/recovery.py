@@ -39,9 +39,10 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 
+from raven.config import schema as config_schema
 from raven.contracts.llm_provider import LLMResponse
 
 # In-content thinking markers. Some models (Ollama, certain Qwen gateways) put
@@ -170,7 +171,9 @@ class RecoveryLimits:
     #: ladder is seconds long -- right for a dropped connection, and too short for
     #: a gateway that serves error pages for a few minutes. One measured run had 62
     #: minutes and 23.8M tokens of work behind it when a 40-second outage ended it.
-    llm_error_retry_delays: tuple[float, ...] = (15.0, 30.0, 60.0)
+    llm_error_retry_delays: tuple[float, ...] = field(
+        default_factory=lambda: config_schema.LLM_ERROR_RETRY_DELAYS_DEFAULT
+    )
     #: Whether a streamed call that failed after it had already produced output is
     #: asked again. Off, the turn fails (N-TURNFAILED): a person watching the stream
     #: has seen the words and would see them twice. On, for an unattended agent whose
@@ -210,7 +213,7 @@ def _ladder(configured: object) -> tuple[float, ...]:
     the ladder off, and `or` read it as absent and put the 105 seconds back.
     """
     if configured is None:
-        return (15.0, 30.0, 60.0)
+        return config_schema.LLM_ERROR_RETRY_DELAYS_DEFAULT
     return tuple(float(delay) for delay in configured)
 
 

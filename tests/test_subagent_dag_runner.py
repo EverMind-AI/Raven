@@ -28,6 +28,7 @@ from raven.agent.subagent.mcp_grant import McpGrant, MissingServer
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.config.schema import ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
+from raven.contracts.memory import Memory
 from raven.contracts.tool import ToolResult
 
 #: How long a drain waits for a cancelled background run to finish. Generous
@@ -3586,7 +3587,7 @@ async def test_an_outer_cancellation_reaps_this_runs_memory_pollers(monkeypatch:
     would keep running with nothing left to stop it.
     """
     from raven.agent.subagent import dag_runner as runner_mod
-    from raven.agent.subagent_memory import EverosIdentity
+    from raven.agent.subagent_memory import MemoryScope
 
     poller_started = asyncio.Event()
     poller_cancelled = asyncio.Event()
@@ -3601,7 +3602,7 @@ async def test_an_outer_cancellation_reaps_this_runs_memory_pollers(monkeypatch:
 
     monkeypatch.setattr(runner_mod, "record_memories", _fake_record)
 
-    identity = EverosIdentity(user_id="raven-code", agent_id=None, base_url="http://everos.test", session_prefix="cli:")
+    identity = MemoryScope(block={"user_id": "raven-code"}, session_prefix="cli:")
     blocked = asyncio.Event()
 
     class _Blocking(_FakeExec):
@@ -3628,7 +3629,7 @@ async def test_an_outer_cancellation_reaps_this_runs_memory_pollers(monkeypatch:
             nodes_root="/hist/nodes",
             history_root="/hist",
             subagents_root="/hist",
-            everos_for=lambda name: identity if name == "x" else None,
+            memory_for=lambda name: identity if name == "x" else None,
         )
     )
     await blocked.wait()
@@ -4719,7 +4720,7 @@ async def _run_one_node_dag(
     subagent: str = "x",
     prompt: str = "hi",
     output: str | None = None,
-    everos_for: "Any | None" = None,
+    memory_for: "Any | None" = None,
     instance: str | None = None,
 ) -> DagRunResult:
     """Run a single-node DAG over the real file backend, under `tmp_path`.
@@ -4756,7 +4757,7 @@ async def _run_one_node_dag(
         history_root=str(tmp_path / "hist"),
         subagents_root=str(tmp_path / "hist"),
         session_key="web:sess1",
-        everos_for=everos_for,
+        memory_for=memory_for,
     )
 
 
@@ -4774,15 +4775,15 @@ async def _drain_record_tasks() -> None:
 
 async def test_a_node_leaves_a_memory_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from raven.agent.subagent import dag_runner as runner_mod
-    from raven.agent.subagent_memory import EverosIdentity
+    from raven.agent.subagent_memory import MemoryScope
 
     async def _fake_record(**kwargs: Any) -> None:
         await kwargs["write"]('{"agent": "Raven-Code", "status": "settled", "memories": []}')
 
     monkeypatch.setattr(runner_mod, "record_memories", _fake_record)
 
-    identity = EverosIdentity(user_id="raven-code", agent_id=None, base_url="http://everos.test", session_prefix="cli:")
-    result = await _run_one_node_dag(tmp_path, everos_for=lambda _name: identity)
+    identity = MemoryScope(block={"user_id": "raven-code"}, session_prefix="cli:")
+    result = await _run_one_node_dag(tmp_path, memory_for=lambda _name: identity)
     # The record is scheduled fire-and-forget once the node releases its
     # semaphore slot; run_dag returns without waiting for it, so drain it
     # explicitly before reading what it wrote.
@@ -4791,7 +4792,7 @@ async def test_a_node_leaves_a_memory_record(tmp_path: Path, monkeypatch: pytest
     assert json.loads(written.read_text(encoding="utf-8"))["status"] == "settled"
 
 
-async def test_a_node_without_an_everos_identity_schedules_no_memory_task(
+async def test_a_node_without_a_memory_block_schedules_no_memory_task(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from raven.agent.subagent import dag_runner as runner_mod
@@ -4802,12 +4803,12 @@ async def test_a_node_without_an_everos_identity_schedules_no_memory_task(
         calls.append(kwargs)
 
     monkeypatch.setattr(runner_mod, "record_memories", _fake_record)
-    await _run_one_node_dag(tmp_path, everos_for=lambda _name: None)
+    await _run_one_node_dag(tmp_path, memory_for=lambda _name: None)
     assert not runner_mod._RECORD_TASKS
     assert calls == []
 
 
-async def test_a_node_schedules_no_memory_task_without_everos_for(
+async def test_a_node_schedules_no_memory_task_without_a_memory_lookup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from raven.agent.subagent import dag_runner as runner_mod
@@ -4828,7 +4829,7 @@ async def test_a_node_passes_its_instance_to_the_record(tmp_path: Path, monkeypa
     every stateful node now has one -- minted by the tool when the author named
     none."""
     from raven.agent.subagent import dag_runner as runner_mod
-    from raven.agent.subagent_memory import EverosIdentity
+    from raven.agent.subagent_memory import MemoryScope
 
     seen: dict[str, Any] = {}
 
@@ -4837,11 +4838,135 @@ async def test_a_node_passes_its_instance_to_the_record(tmp_path: Path, monkeypa
         await kwargs["write"]("{}")
 
     monkeypatch.setattr(runner_mod, "record_memories", _fake_record)
-    identity = EverosIdentity(user_id="u", agent_id=None, base_url="http://everos.test", session_prefix="cli:")
-    await _run_one_node_dag(tmp_path, everos_for=lambda _name: identity, instance="audit-a3f9c1")
+    identity = MemoryScope(block={"user_id": "u"}, session_prefix="cli:")
+    await _run_one_node_dag(tmp_path, memory_for=lambda _name: identity, instance="audit-a3f9c1")
     await _drain_record_tasks()
 
     assert seen["instance"] == "audit-a3f9c1"
+
+
+class _LifecycleBackend:
+    """A memory backend that records its own lifecycle, in order.
+
+    `object()` cannot stand in for one: nothing about it fails when the record
+    path hands it to `store` without ever awaiting `start`, and a real adapter
+    answers that with `False` -- the record says "unavailable" while the
+    service was running the whole time. Every call is logged rather than
+    asserted on the spot, because both the prime and the poll swallow whatever
+    a backend raises; the order this leaves behind is the evidence.
+    """
+
+    def __init__(self, memories: list[Memory] | None = None) -> None:
+        self.events: list[str] = []
+        self._memories = memories or []
+
+    async def start(self) -> None:
+        self.events.append("start")
+
+    async def stop(self) -> None:
+        self.events.append("stop")
+
+    async def store(self, session_id: str, messages: list[dict], *, metadata: dict | None = None) -> bool:
+        # Both spellings, as the shipped adapter reads them: raven's config
+        # writes camelCase and the contract documents snake_case, and a fake
+        # that understood only one would hide the mismatch this test is for.
+        meta = metadata or {}
+        owner = f"{meta.get('user_id') or meta.get('userId')}/{meta.get('agent_id') or meta.get('agentId')}"
+        self.events.append(f"store[{owner}]" if "start" in self.events else "store-before-start")
+        return True
+
+    async def recall_session(self, session_id: str, *, user_id=None, agent_id=None) -> list[Memory]:
+        owner = user_id or agent_id
+        self.events.append(f"recall[{owner}]" if "start" in self.events else "recall-before-start")
+        return self._memories if user_id else []
+
+
+async def test_a_dag_node_record_starts_the_backend_before_it_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`maybe_build_memory_backend` hands back a backend nobody started, and an
+    unstarted adapter answers the prime's `store` with `False` -- the record
+    then says "unavailable" while the service was up the whole time.
+
+    The prime and the poll are both real here, against a backend that logs what
+    happened to it: the order -- and the owner each half addressed -- is the
+    assertion.
+    """
+    from raven.agent.subagent import dag_runner as runner_mod
+    from raven.agent.subagent_memory import MemoryScope
+
+    backend = _LifecycleBackend([Memory(text="the readme is missing", metadata={"type": "episode"})])
+    monkeypatch.setattr(runner_mod, "_memory_backend", lambda: backend)
+    # One look, no backoff: the fake answers on the first one, and the trace
+    # budget would otherwise sleep two seconds waiting for a second.
+    monkeypatch.setattr(runner_mod, "TRACE_BUDGET_S", 1.0)
+
+    await _run_one_node_dag(
+        tmp_path,
+        node_id="inspect",
+        subagent="Coder",
+        prompt="read it",
+        output="no readme",
+        memory_for=lambda _name: MemoryScope(
+            block={"user_id": "liv", "agent_id": "coder"},
+            session_prefix="cli:",
+            source="trace",
+        ),
+    )
+    await _drain_record_tasks()
+
+    assert backend.events == ["start", "store[liv/coder]", "recall[liv]", "recall[coder]", "stop"], backend.events
+
+
+async def test_a_dag_node_records_nothing_without_the_memory_plugin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No memory plugin is an ordinary install, not an error. The record path
+    must stop before the prime rather than hand `None` onward."""
+    from raven.agent.subagent import dag_runner as runner_mod
+    from raven.agent.subagent_memory import MemoryScope
+
+    primed: list[str] = []
+
+    async def _fake_prime(*, backend, scope, session_id, turn) -> bool:
+        primed.append(session_id)
+        return True
+
+    monkeypatch.setattr(runner_mod, "prime_from_turn", _fake_prime)
+    monkeypatch.setattr(runner_mod, "_memory_backend", lambda: None)
+
+    await _run_one_node_dag(
+        tmp_path,
+        node_id="inspect",
+        subagent="Coder",
+        prompt="read it",
+        output="no readme",
+        memory_for=lambda _name: MemoryScope(
+            block={"user_id": "liv", "agent_id": "coder"},
+            session_prefix="cli:",
+            source="trace",
+        ),
+    )
+    await _drain_record_tasks()
+
+    assert primed == []
+
+
+def test_a_backend_the_factory_cannot_build_is_no_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A record is written after the node it describes has answered, so a
+    factory that raises must read as "no record" rather than fail the node."""
+    from raven.agent.subagent import dag_runner as runner_mod
+
+    monkeypatch.setattr(
+        "raven.core.plugin_stack.maybe_build_memory_backend",
+        _raising_factory,
+    )
+
+    assert runner_mod._memory_backend() is None
+
+
+def _raising_factory(*_a, **_k):
+    raise RuntimeError("the plugin is not installed")
 
 
 async def test_dag_node_primes_a_trace_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4849,11 +4974,11 @@ async def test_dag_node_primes_a_trace_agent(tmp_path: Path, monkeypatch: pytest
     under the session id the host mints from this run and this node."""
     from raven.agent import subagent_memory as memory_mod
     from raven.agent.subagent import dag_runner as runner_mod
-    from raven.agent.subagent_memory import EverosIdentity
+    from raven.agent.subagent_memory import MemoryScope
 
     primed: list[tuple[str, list[dict]]] = []
 
-    async def _fake_prime(*, identity, session_id, turn, client=None) -> bool:
+    async def _fake_prime(*, backend, scope, session_id, turn) -> bool:
         primed.append((session_id, turn))
         return True
 
@@ -4861,15 +4986,16 @@ async def test_dag_node_primes_a_trace_agent(tmp_path: Path, monkeypatch: pytest
         raise RuntimeError("no live everos in tests")
 
     monkeypatch.setattr(runner_mod, "prime_from_turn", _fake_prime)
+    # The record path builds and starts a backend per record; this process has
+    # none running, and the prime and poll are both faked here anyway.
+    monkeypatch.setattr(runner_mod, "_memory_backend", _LifecycleBackend)
     # The prime lands (faked above), but the poll after it is real: nothing in
     # this test process is listening at the identity's base url, so make the
     # first look fail fast instead of sleeping through the whole poll budget.
     monkeypatch.setattr(memory_mod, "collect_memories", _unavailable_everos)
 
-    identity = EverosIdentity(
-        user_id="liv",
-        agent_id="coder",
-        base_url="http://everos.test",
+    identity = MemoryScope(
+        block={"user_id": "liv", "agent_id": "coder"},
         session_prefix="cli:",
         source="trace",
     )
@@ -4879,7 +5005,7 @@ async def test_dag_node_primes_a_trace_agent(tmp_path: Path, monkeypatch: pytest
         subagent="Coder",
         prompt="read it",
         output="no readme",
-        everos_for=lambda _name: identity,
+        memory_for=lambda _name: identity,
     )
     await _drain_record_tasks()
 
@@ -7023,6 +7149,7 @@ async def test_a_raising_reachability_predicate_fails_the_node_closed(tmp_path) 
     assert elapsed < 10
 
 
+@pytest.mark.production_timing
 async def test_an_unwired_reachability_predicate_still_suspends(tmp_path) -> None:
     """`None` means the host never wired it, which must keep meaning "assume reachable".
 

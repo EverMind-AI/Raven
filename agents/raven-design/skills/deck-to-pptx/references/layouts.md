@@ -70,6 +70,26 @@ Reference, like everything above.
 | Hero image | full bleed, title 28-36pt over a scrim, subtitle 14-16pt |
 | Closing | headline 28-36pt, one line under it, where to go next |
 
+## Compositions the packaged templates use
+
+Nine shapes read off the pages the deck engine keeps as reference layouts (ten templates under
+`raven_ppt/assets/templates`), rendered and measured; the ones the lists above do not already
+have. Shares are of the canvas width `w` and height `h`; the title row sits in the top
+0.16-0.20 on every one of them. Each is a shape to take when the page's content has that
+structure, not a page to reproduce.
+
+| Composition | The shape, with its numbers | Template pages |
+| --- | --- | --- |
+| T1 photo panel, numbered list beside | one photograph **0.40-0.55w**, cut to a circle or a rounded panel, on one side; 2-4 numbered items with a bold label and one line each on the other, each item **0.10-0.12h** apart, a hairline under each | amber 8, amber 13, teal 13 |
+| T2 photo band, cards under | a photograph the full text width, **0.26-0.36h**, at **0.16-0.19h**; three or four cards under it in one row, each **0.21-0.27w**, label and two lines | amber 10, beige 17, warm 14, warm 6 |
+| T3 photo on a slanted plane | the photograph fills one side **0.45-0.55w** full height, its inner edge cut on a diagonal; 3 numbered points stacked on the other side, numerals in the accent | warm 9, gold 7 |
+| T4 object in a ring, labels radiating | one object (photograph, render or icon disc) **0.28-0.32w** centred, in a ring; 4-6 labels around it at two heights each side, each label a pill with one line under it | amber 17, gold 6, gold 15, black 10, black 11, black 13, black 15 |
+| T5 photo strips staggered | three portrait photographs **0.16w x 0.59h**, the middle one dropped **0.14h**, on the right **0.55w**; heading and 3 short paragraphs on the left | black 14 |
+| T6 staircase | 3-4 pills stepping up a diagonal from bottom-left to top-right, each **0.16w**, one step **0.08-0.10h** and **0.2w** on from the last; the label and one line beside each step; the last step may carry a large arrow | mint 9, green 10 |
+| T7 labels along a curve | one curved spine (an S or a rising arc) across the page; 4-6 labels sit on it as pills, alternating above and below, each with one or two lines; the spine is the only line on the page | gold 4, gold 13 |
+| T8 tree | one root pill centred at **0.30h**, two children at **0.50h**, four grandchildren at **0.72h**, joined by elbow connectors; every node a pill **0.14w** with one line under it | green 6 |
+| T9 two chart panels | two white panels **0.43w x 0.40h** side by side at **0.20h**, a titled bar or line chart in each; under them one row of 3-4 columns of caption at 12-14pt, or 3 tinted cards | amber 4, gold 12, gold 20 |
+
 The first and last pages are statements, not information: a picture and few words, aiming
 for a feeling rather than a summary. On a page with no picture, let the type carry it --
 oversized, asymmetric, off the grid if that is what the sentence wants. Unusual is allowed;

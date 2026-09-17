@@ -64,7 +64,7 @@ def resolve_default(named: str | None, profiles: Mapping[str, Any]) -> str:
     two copies of "which mode is the catalogue default" is exactly the pair that stops
     agreeing when one of them learns something.
     """
-    return named if named in profiles else next(iter(profiles), "")
+    return named if named is not None and named in profiles else next(iter(profiles), "")
 
 
 def build_mode_catalogue(config: Any) -> ModeCatalogue:

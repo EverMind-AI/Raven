@@ -40,7 +40,10 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 
-from raven_ppt.services.assets.text_metrics import measurer
+# The module, not the name: text_metrics imports the measure package, which
+# reaches back here through template.house, so a name bound at import time
+# fails whenever text_metrics is the first of the two to load.
+from raven_ppt.services.assets import text_metrics
 from raven_ppt.services.measure.fit import (
     RENDER_DRIFT_HEADROOM,
     LineOverflowError,
@@ -262,9 +265,8 @@ def row_band(shape, size_pt: float | None = None) -> str:
 def _band(width_in: float, font_px: int, lines: int, bold: bool, han: bool) -> tuple[int, int]:
     """How many characters of one script the box takes, at both bounds."""
     room = width_in * 96 / RENDER_DRIFT_HEADROOM
-    return tuple(  # type: ignore[return-value]
-        max(0, int(room * bound // (_em(bold, han) * font_px)) * lines) for bound in BOUNDS
-    )
+    at_bound, at_overshoot = (max(0, int(room * bound // (_em(bold, han) * font_px)) * lines) for bound in BOUNDS)
+    return at_bound, at_overshoot
 
 
 def _em(bold: bool, han: bool) -> float:
@@ -279,7 +281,7 @@ def _em(bold: bool, han: bool) -> float:
     bold 20pt copy in a 2.165in box, and the emboldened reading promises 6.
     """
     probe = _HAN_PROBE if han else _LATIN_PROBE
-    return measurer().width(probe, _PROBE_PX, bold and not han) / _PROBE_PX / len(probe)
+    return text_metrics.measurer().width(probe, _PROBE_PX, bold and not han) / _PROBE_PX / len(probe)
 
 
 def _rows(text: str, width_in: float, font_px: int, bold: bool) -> int:
@@ -293,7 +295,7 @@ def _rows(text: str, width_in: float, font_px: int, bold: bool) -> int:
                 width_in * MEASURED_WIDTH_OVERSHOOT * 96,
                 font_px,
                 bold=bold,
-                measurer=measurer(),
+                measurer=text_metrics.measurer(),
             )
         )
     except LineOverflowError:

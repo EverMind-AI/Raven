@@ -176,8 +176,6 @@ def _render_plugin_table(
             status = "[red]disabled[/red]"
         elif pid in activated_ids:
             status = "[green]activated[/green]"
-        elif not mf.enabled_by_default:
-            status = "[dim]inactive (opt-in)[/dim]"
         else:
             status = "[yellow]not activated[/yellow]"
         backends = ", ".join(c.name for c in mf.contributes.memory_backends) or "(none)"

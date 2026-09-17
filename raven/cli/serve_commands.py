@@ -46,6 +46,7 @@ from typing import Optional
 
 import typer
 
+from raven.providers.litellm_setup import warm_up_in_background
 from raven.rpc.serve_control import SERVE
 from raven.utils import asyncio_runner as bounded_asyncio
 
@@ -291,6 +292,10 @@ async def _serve_main(port: int, open_browser: bool) -> None:
     from raven.rpc.transports.ws import WsGateway, build_app, pick_port
 
     register_console_feature()
+    # This coroutine binds a port and serves until it is killed, so no test
+    # runs it; what it schedules is pinned by source in
+    # tests/test_cli_serve_commands.py instead.
+    warm_up_in_background()  # pragma: no cover
 
     # Declared before anything can emit a span. The page runs on the terminal's
     # channel by design (one session pool), so `channel.id` cannot tell the two
@@ -623,19 +628,14 @@ def _read_web_state() -> Optional[int]:
 
 
 def _pid_alive(pid: int) -> bool:
-    import os
+    """Whether ``pid`` is still running.
 
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # Alive, and owned by somebody else. Not ours to signal, but reporting it
-        # as gone would start a second supervisor beside it.
-        return True
-    except OSError:
-        return False
-    return True
+    Kept as a name here because ``_gateway_page`` imports it and the stop tests
+    patch it; the platform question itself belongs to one place.
+    """
+    from raven.utils.pid import pid_alive
+
+    return pid_alive(pid)
 
 
 def _gateway_holds_the_lock() -> bool:

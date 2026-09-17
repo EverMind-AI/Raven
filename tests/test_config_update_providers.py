@@ -16,6 +16,7 @@ from raven.config.update_providers import (
     add_provider_model,
     copilot_token_dir,
     get_provider_config,
+    lend_provider_credentials,
     list_provider_endpoints,
     list_providers,
     provider_field_specs,
@@ -1669,3 +1670,202 @@ def test_a_sibling_endpoint_that_fails_costs_its_own_models_and_nothing_else(cfg
     assert full["ok"] is True
     assert full["model_ids"] == ["openai/gpt-6"]
     assert full["implied_capabilities"] == {}
+
+
+# ---------------------------------------------------------------------------
+# resolve_provider_credentials
+# ---------------------------------------------------------------------------
+
+
+class TestResolveProviderCredentials:
+    """The address and key a request would actually go out on.
+
+    Unredacted, for a caller about to make the call rather than draw a screen,
+    and the same selection ``test_provider`` makes -- so a caller reaching a
+    provider through here reaches the address the runtime would.
+    """
+
+    def test_a_configured_key_resolves_with_the_specs_address(self, cfg_path: Path) -> None:
+        from raven.config.update_providers import resolve_provider_credentials, set_provider_fields
+
+        set_provider_fields("siliconflow", {"api_key": "sk-live"}, config_path=cfg_path)
+
+        resolved = resolve_provider_credentials("siliconflow", config_path=cfg_path)
+
+        # No address configured, so the spec's default -- the same fallback the
+        # request path takes.
+        assert resolved == ("https://api.siliconflow.cn/v1", "sk-live")
+
+    def test_a_direct_vendor_resolves_on_the_address_a_bare_client_posts_to(self, cfg_path: Path) -> None:
+        """OpenAI and DeepSeek state no default address in the registry, because
+        setup must not ask for one: their requests route through LiteLLM, which
+        knows where they live. That is what ``usable_default_api_base`` answers.
+
+        A caller here is asking a different question -- where do I POST -- and
+        for that the address is known and canonical. Answering ``None`` told a
+        caller holding a real key for the most common embedding provider of all
+        that the provider had no usable credential."""
+        from raven.config.update_providers import resolve_provider_credentials, set_provider_fields
+
+        set_provider_fields("openai", {"api_key": "sk-live"}, config_path=cfg_path)
+
+        assert resolve_provider_credentials("openai", config_path=cfg_path) == (
+            "https://api.openai.com/v1",
+            "sk-live",
+        )
+
+    def test_a_vendor_raven_carries_no_address_for_still_answers_nothing(self, cfg_path: Path) -> None:
+        """The fallback is a short list of canonical addresses, not a guess.
+        A vendor raven has no spec and no entry for has to state its own
+        address, and a key alone is not enough."""
+        from raven.config.update_providers import resolve_provider_credentials, set_provider_fields
+
+        set_provider_fields("deepinfra", {"api_key": "sk-live"}, config_path=cfg_path)
+
+        assert resolve_provider_credentials("deepinfra", config_path=cfg_path) is None
+
+    def test_a_configured_address_wins_over_the_default(self, cfg_path: Path) -> None:
+        from raven.config.update_providers import resolve_provider_credentials, set_provider_fields
+
+        set_provider_fields(
+            "openai", {"api_key": "sk-live", "api_base": "https://proxy.test/v1/"}, config_path=cfg_path
+        )
+
+        resolved = resolve_provider_credentials("openai", config_path=cfg_path)
+
+        # Trailing slash dropped: the caller appends /embeddings, and some
+        # gateways answer 404 to a doubled slash.
+        assert resolved == ("https://proxy.test/v1", "sk-live")
+
+    def test_no_key_is_not_a_credential(self, cfg_path: Path) -> None:
+        """Reads as "not set up" rather than as an anonymous request to
+        somebody's paid endpoint."""
+        from raven.config.update_providers import resolve_provider_credentials
+
+        cfg_path.write_text(json.dumps({"providers": {"openai": {}}}), encoding="utf-8")
+
+        assert resolve_provider_credentials("openai", config_path=cfg_path) is None
+
+    def test_an_oauth_seat_answers_nothing(self, cfg_path: Path) -> None:
+        """Its token is fetched and refreshed by the flow that owns it, and
+        handing out a stale one would be worse than saying nothing."""
+        from raven.config.update_providers import resolve_provider_credentials
+
+        assert resolve_provider_credentials("openai_codex", config_path=cfg_path) is None
+
+    def test_an_unreadable_config_answers_nothing(self, cfg_path: Path) -> None:
+        from raven.config.update_providers import resolve_provider_credentials
+
+        cfg_path.write_text("{not json", encoding="utf-8")
+
+        assert resolve_provider_credentials("openai", config_path=cfg_path) is None
+
+    def test_a_section_that_does_not_validate_falls_back_to_defaults(self, cfg_path: Path) -> None:
+        """A hand-edited section with a wrong type is not a reason to raise at
+        a caller that only wanted an address."""
+        from raven.config.update_providers import resolve_provider_credentials
+
+        cfg_path.write_text(json.dumps({"providers": {"openai": {"apiKey": 17}}}), encoding="utf-8")
+
+        assert resolve_provider_credentials("openai", config_path=cfg_path) is None
+
+
+# lend_provider_credentials: the three documented outcomes
+# ---------------------------------------------------------------------------
+
+
+def _config_with_provider(name: str, api_key: str, api_base: str = ""):
+    from raven.config.schema import Config
+
+    cfg = Config()
+    section = cfg.providers.get(name)
+    section.api_key = api_key
+    if api_base:
+        section.api_base = api_base
+    return cfg
+
+
+def test_borrow_raises_key_error_for_an_unknown_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    import raven.config
+
+    monkeypatch.setattr(raven.config, "load_config", lambda: _config_with_provider("openai", "sk-lend"))
+    with pytest.raises(KeyError):
+        lend_provider_credentials("no-such-vendor")
+
+
+def test_borrow_raises_value_error_when_the_provider_holds_no_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    import raven.config
+
+    monkeypatch.setattr(raven.config, "load_config", lambda: _config_with_provider("openai", ""))
+    with pytest.raises(ValueError):
+        lend_provider_credentials("openai")
+
+
+def test_borrow_copies_the_key_and_the_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    import raven.config
+
+    monkeypatch.setattr(
+        raven.config, "load_config", lambda: _config_with_provider("openai", "sk-lend", "https://api.example.test/v1")
+    )
+    borrowed = lend_provider_credentials("openai")
+    assert borrowed["api_key"] == "sk-lend"
+    assert borrowed["base_url"] == "https://api.example.test/v1"
+
+
+class TestWhatABorrowedCredentialMustCarry:
+    """A url/key/header group is reachable only whole, and an everos section
+    holds a model, an api_key and a base_url. Anything the section cannot hold
+    is not lent at all -- lending the representable part hands over a
+    credential the far end refuses, which reads as a broken provider."""
+
+    @staticmethod
+    def _configure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fields: dict) -> None:
+        from raven.config.loader import set_config_path
+        from raven.config.update_providers import set_provider_fields
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        set_config_path(tmp_path / "config.json")
+        monkeypatch.setattr("raven.config.paths.get_workspace_path", lambda: tmp_path / "ws")
+        set_provider_fields("openai", fields)
+
+    def test_a_header_authenticated_group_is_declined(self, tmp_path, monkeypatch) -> None:
+        self._configure(
+            tmp_path,
+            monkeypatch,
+            {
+                "endpoints": [
+                    {
+                        "label": "tenant",
+                        "apiKey": "relay-key",
+                        "apiBase": "https://relay.internal/v1",
+                        "extraHeaders": {"X-Tenant": "acme"},
+                    }
+                ]
+            },
+        )
+
+        with pytest.raises(ValueError, match="X-Tenant"):
+            lend_provider_credentials("openai")
+
+    def test_flat_headers_reach_an_endpoint_that_names_none(self, tmp_path, monkeypatch) -> None:
+        """``provider_endpoints`` lets an entry inherit the section's flat
+        headers, so the group needs them even though the entry is silent."""
+        self._configure(
+            tmp_path,
+            monkeypatch,
+            {
+                "extra_headers": {"X-Tenant": "acme"},
+                "endpoints": [{"label": "a", "apiKey": "relay-key", "apiBase": "https://relay.internal/v1"}],
+            },
+        )
+
+        with pytest.raises(ValueError, match="X-Tenant"):
+            lend_provider_credentials("openai")
+
+    def test_a_group_with_no_headers_still_lends_key_and_address(self, tmp_path, monkeypatch) -> None:
+        self._configure(tmp_path, monkeypatch, {"api_key": "relay-key", "api_base": "https://relay.internal/v1"})
+
+        assert lend_provider_credentials("openai") == {
+            "api_key": "relay-key",
+            "base_url": "https://relay.internal/v1",
+        }

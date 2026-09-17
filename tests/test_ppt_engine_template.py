@@ -1190,9 +1190,10 @@ def test_replace_picture_swaps_a_photograph_used_as_a_shape_fill(tmp_path: Path)
     """`template_picture` tells an author to replace the template's photograph, and on a
     picture-*filled* shape that advice used to end in `AttributeError: blipFill`: the two
     spellings differ (`p:pic/p:blipFill` against `p:sp/p:spPr/a:blipFill`) and only the
-    first was known. The fill also has no frame to shrink, so the swap crops through the
-    source rectangle instead -- without which the template's own stretch survives and a
-    figure comes out distorted.
+    first was known. The fill also has no frame to shrink, so the swap cuts the picture
+    to the shape's proportions -- in pixels, because a `srcRect` on a shape fill is
+    right in PowerPoint and ignored by LibreOffice, whose render is what the author and
+    the second reader see: a circle came back at 0.67 of round.
     """
     from lxml import etree
     from PIL import Image
@@ -1221,19 +1222,20 @@ def test_replace_picture_swaps_a_photograph_used_as_a_shape_fill(tmp_path: Path)
 
     blip = shape._element.spPr.find(f"{{{namespace}}}blipFill/{{{namespace}}}blip")
     assert blip.get(f"{{{rels}}}embed") != relationship, "the fill points at the new image"
-    crop = shape._element.spPr.find(f"{{{namespace}}}blipFill/{{{namespace}}}srcRect")
-    assert crop is not None, "the source is cropped rather than stretched"
-    assert {side for side in ("l", "r", "t", "b") if crop.get(side)} == {"l", "r"}, (
-        "a 1.78 picture in a 1.33 frame is trimmed on its sides"
+    assert shape._element.spPr.find(f"{{{namespace}}}blipFill/{{{namespace}}}srcRect") is None, (
+        "nothing is left for a renderer to interpret"
     )
+    import io
+
+    with Image.open(io.BytesIO(shape.part.related_part(blip.get(f"{{{rels}}}embed")).blob)) as cut:
+        assert cut.height == 900 and cut.width == 1200, "a 1.78 picture in a 1.33 frame loses its sides, in pixels"
 
 
 def test_replace_picture_drops_the_inset_the_template_fitted_its_own_photo_with(tmp_path: Path) -> None:
-    """The crop is stated against the frame, so a surviving `fillRect` contradicts it.
+    """The cut picture has the frame's proportions, so a surviving `fillRect` would stretch it.
 
-    Measured on `warm_bauhaus_quarterly_review` page 4: the replacement got a 23.9%
-    crop for the frame and kept the template's -32% inset for a box half again as
-    wide, and the two together read as a 1.64x stretch.
+    Measured on `warm_bauhaus_quarterly_review` page 4: the replacement kept the
+    template's -32% inset for a box half again as wide, and read as a 1.64x stretch.
     """
     from lxml import etree
     from PIL import Image
@@ -1264,7 +1266,8 @@ def test_replace_picture_drops_the_inset_the_template_fitted_its_own_photo_with(
     replace_picture(shape, second, fit="cover")
 
     fill = shape._element.spPr.find(f"{{{namespace}}}blipFill")
-    assert fill.find(f"{{{namespace}}}srcRect") is not None, "the crop states the fit"
+    assert fill.find(f"{{{namespace}}}srcRect") is None, "the fit is in the pixels, not stated on the fill"
+    assert fill.find(f"{{{namespace}}}stretch") is not None
     assert fill.find(f"{{{namespace}}}stretch/{{{namespace}}}fillRect") is None, (
         "the template's inset went with the image it was cut for"
     )
@@ -3362,6 +3365,24 @@ def test_replace_text_says_nothing_when_the_copy_is_the_templates_own(tmp_path: 
         warnings.simplefilter("always")
         _say_what_did_not_fit()
     assert not caught, [str(w.message) for w in caught]
+
+
+def test_replace_text_drops_the_scale_a_template_baked_into_its_autofit(tmp_path: Path) -> None:
+    """`fontScale="77500"` is what PowerPoint computed for the template's own copy; left
+    on the shape, a borrowed page drew every line the author wrote at 77% of its size.
+    The autofit itself stays, so the frame still shrinks when the new copy needs it."""
+    from raven_ppt.services.template.compose import _A, _shrinks_to_fit, replace_text
+
+    _, own = _bottom_anchored_title(own_autofit=True)
+    autofit = own.text_frame._txBody.find(f"{{{_A}}}bodyPr/{{{_A}}}normAutofit")
+    autofit.set("fontScale", "77500")
+    autofit.set("lnSpcReduction", "20000")
+
+    replace_text(own, "Buy the cycle.")
+
+    autofit = own.text_frame._txBody.find(f"{{{_A}}}bodyPr/{{{_A}}}normAutofit")
+    assert autofit is not None and _shrinks_to_fit(own), "the frame still fits its copy"
+    assert autofit.get("fontScale") is None and autofit.get("lnSpcReduction") is None
 
 
 def test_replace_text_reports_a_shrink_where_the_frame_itself_autofits(tmp_path: Path) -> None:

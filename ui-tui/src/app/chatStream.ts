@@ -324,7 +324,9 @@ const dispatch = (
       // The smart-mode reviewer runs inside the tool dispatch; without this the
       // running tool row reads as an unexplained pause.
       const phase = (event.payload as { phase?: string } | undefined)?.phase
-      patchUiState({ status: phase === 'started' ? t('gui.perm.reviewing', 'AI is reviewing this action...') : 'running…' })
+      patchUiState({
+        status: phase === 'started' ? t('gui.perm.reviewing', 'AI is reviewing this action...') : 'running…'
+      })
       return
     }
     case 'notice': {
@@ -464,7 +466,9 @@ const onToolStart = (state: InternalState, ev: ToolStartEvent): void => {
   // (query/question/command), skipping numeric flags and raw JSON. See lib/toolArgs.
   turnController.recordToolStart(tool_call_id, name, display ?? argPreview(args))
   const change = changedFile(name, args)
-  if (change) {addUnique(state.artifacts.changes, change)}
+  if (change) {
+    addUnique(state.artifacts.changes, change)
+  }
 }
 
 const onToolComplete = (state: InternalState, ev: ToolCompleteEvent): void => {
@@ -511,7 +515,9 @@ const appendArtifacts = (state: InternalState, appendMessage?: (msg: Msg) => voi
     changes: [...state.artifacts.changes],
     deliveries: [...state.artifacts.deliveries]
   })
-  if (artifact) {appendMessage(artifact)}
+  if (artifact) {
+    appendMessage(artifact)
+  }
 }
 
 const onError = (

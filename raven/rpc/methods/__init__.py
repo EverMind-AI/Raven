@@ -220,12 +220,12 @@ def register_aligned_methods_except_system(
     # memory.* — a read-only view onto the memory engine, which shipped
     # without an RPC surface. (A matching subagent.* view waits for the
     # transcript writer that would give it anything to list.)
-    register_memory_methods(dispatcher)
+    register_memory_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_knowledge_methods(dispatcher)
     # playbooks.* -- read-only view of the two-layer playbook library, so the
     # page can list what is stored and read one whole spec. Registered
     # unconditionally: the library is files on disk, with no engine behind it.
-    register_playbooks_methods(dispatcher)
+    register_playbooks_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     # skillhub.* / plughub.* / plug.* — the catalogue half of two things raven
     # already runs: skills (memory_engine.skill_forge) and plugins
     # (raven.plugins). Registered unconditionally so a network failure reads as a

@@ -556,6 +556,7 @@ class DeepResearchManager:
 
         # _submit is guaranteed set: _deliver is only reached from a task that
         # start() spawned, and start() runs only when can_deliver() was true.
+        assert self._submit is not None  # noqa: S101 - the invariant above, stated to the reader and the checker
         self._submit(
             TurnRequest(
                 origin=Origin.SUBAGENT,

@@ -20,6 +20,7 @@ import type {
 
 import { THINKING_COT_MAX } from '../config/limits.js'
 import { sectionMode } from '../domain/details.js'
+import { t as uiText } from '../i18n/index.js'
 import {
   buildSubagentTree,
   fmtCost,
@@ -408,7 +409,7 @@ function SubagentAccordion({
           onClick={() => setOpenThinking(v => !v)}
           open={openThinking}
           t={t}
-          title="Thinking"
+          title={uiText('gui.panel.thinking')}
         />
       ),
       key: 'thinking',
@@ -435,7 +436,7 @@ function SubagentAccordion({
           onClick={() => setOpenTools(v => !v)}
           open={openTools}
           t={t}
-          title="Tool calls"
+          title={uiText('gui.panel.tool_calls')}
         />
       ),
       key: 'tools',
@@ -470,7 +471,7 @@ function SubagentAccordion({
           onClick={() => setOpenNotes(v => !v)}
           open={openNotes}
           t={t}
-          title="Progress"
+          title={uiText('gui.panel.progress')}
           tone={statusTone}
         />
       ),
@@ -505,7 +506,7 @@ function SubagentAccordion({
           open={openKids}
           suffix={`d${item.depth + 1} · ${aggregate.descendantCount} total`}
           t={t}
-          title="Spawned"
+          title={uiText('gui.panel.spawned')}
         />
       ),
       key: 'subagents',
@@ -980,7 +981,7 @@ export const ToolTrail = memo(function ToolTrail({
           open={openTools}
           suffix={toolTokensLabel}
           t={t}
-          title="Tool calls"
+          title={uiText('gui.panel.tool_calls')}
         />
       ),
       key: 'tools',
@@ -1040,7 +1041,7 @@ export const ToolTrail = memo(function ToolTrail({
           open={openSubagents}
           suffix={suffix}
           t={t}
-          title="Spawn tree"
+          title={uiText('gui.panel.spawn_tree')}
         />
       ),
       key: 'subagents',
@@ -1057,7 +1058,7 @@ export const ToolTrail = memo(function ToolTrail({
           onClick={() => setOpenMeta(v => !v)}
           open={openMeta}
           t={t}
-          title="Activity"
+          title={uiText('gui.panel.activity')}
           tone={metaTone}
         />
       ),

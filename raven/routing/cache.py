@@ -131,8 +131,7 @@ class BenchmarkCache:
 
             # Stale — try API first
             try:
-                await self._do_refresh()
-                return self._data  # type: ignore[return-value]
+                return await self._do_refresh()
             except Exception:
                 logger.warning("API refresh failed, using stale cache")
                 self._data = data
@@ -140,8 +139,7 @@ class BenchmarkCache:
 
         # 3. No cache — try API
         try:
-            await self._do_refresh()
-            return self._data  # type: ignore[return-value]
+            return await self._do_refresh()
         except Exception:
             # 4. Fallback to snapshot
             logger.warning("API unavailable, falling back to snapshot.json")
@@ -167,11 +165,12 @@ class BenchmarkCache:
         except Exception as e:
             logger.warning("Failed to write benchmark cache: {}", e)
 
-    async def _do_refresh(self) -> None:
+    async def _do_refresh(self) -> BenchmarkData:
         data = await build_benchmark_data()
         self._data = data
         self._save_to_disk(data)
         logger.info("Benchmark cache refreshed: {} models", len(data))
+        return data
 
     def _schedule_background_refresh(self) -> None:
         if self._refresh_task and not self._refresh_task.done():

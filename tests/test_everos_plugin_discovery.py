@@ -61,7 +61,6 @@ class TestPackageSurface:
         text = manifest.read_text(encoding="utf-8")
         assert 'id                 = "everos-memory"' in text
         assert "bundled            = false" in text
-        assert "enabled_by_default = true" in text
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +98,6 @@ class TestEntryPointDiscovery:
             'id = "everos-memory"\n'
             'version = "9.9.9"\n'
             "bundled = false\n"
-            "enabled_by_default = true\n"
             "\n"
             "[[plugin.contributes.memory_backends]]\n"
             'name = "everos"\n'

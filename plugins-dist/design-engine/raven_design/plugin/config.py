@@ -244,7 +244,11 @@ class RenderSettings:
             elif kind == "choice":
                 value = _text(raw, key, default)
                 if value not in bounds:
-                    raise ValueError(f"{key} must be one of {', '.join(bounds)}, got {value!r}")
+                    # `bounds` is read per `kind`: choice rows carry their allowed
+                    # set, numeric rows carry (lo, hi), flag rows carry None. The
+                    # column's declared type is that union, so the join is not
+                    # provable here without splitting the table by kind.
+                    raise ValueError(f"{key} must be one of {', '.join(bounds)}, got {value!r}")  # ty: ignore[no-matching-overload]
                 values[attr] = value
         settings = cls(**values)
         # The fork schema's two cross-field refusals, kept as refusals.
@@ -281,6 +285,7 @@ class EngineConfig:
     """The slice, read once at activation."""
 
     enabled: bool = False
+    workdir_per_session: bool = True
     selector: SelectorConfig = SelectorConfig()
     render: RenderSettings = RenderSettings()
     task_state: TaskStateConfig = TaskStateConfig()
@@ -288,11 +293,12 @@ class EngineConfig:
     @classmethod
     def from_slice(cls, raw: dict[str, Any] | None) -> "EngineConfig":
         raw = raw or {}
-        known = {"enabled", "visualDomainSelector", "render", "taskState"}
+        known = {"enabled", "workdirPerSession", "visualDomainSelector", "render", "taskState"}
         if unknown := set(raw) - known:
             raise ValueError(f"unknown design-engine keys: {sorted(unknown)}")
         return cls(
             enabled=_flag(raw, "enabled", False),
+            workdir_per_session=_flag(raw, "workdirPerSession", True),
             selector=SelectorConfig.from_section(_section(raw, "visualDomainSelector")),
             render=RenderSettings.from_section(_section(raw, "render")),
             task_state=TaskStateConfig.from_section(_section(raw, "taskState")),

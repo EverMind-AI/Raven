@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -44,12 +43,13 @@ def tmp_config(tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def no_memory_server(monkeypatch: pytest.MonkeyPatch):
-    """Keep the memory probe away from whatever server the developer is running.
+    """Keep the backend's own health check away from the developer's server.
 
-    `memory.backend` defaults to everos, so without this every test here reaches
-    localhost:18791 and reports whatever that server happens to answer -- a
-    machine whose embedding provider is broken would fail the healthy-exit-0
-    case. Tests that care about capabilities install their own answer.
+    `memory.backend` defaults to everos, so without this every test here builds
+    the real backend, whose `health()` reaches localhost:18791 and reports
+    whatever that server happens to answer -- a machine running one would fail
+    the healthy-exit-0 case. Tests about a particular verdict hand doctor a
+    backend of their own (`_health_backend`).
     """
     from raven_everos import health as _health
 
@@ -102,6 +102,16 @@ def test_doctor_default_healthy_exit0(healthy_config: Path) -> None:
     # Routing section should mention the resolved provider name
     assert "anthropic" in r.stdout.lower()
     assert "Configuration looks healthy" in r.stdout or "All checks passed" in r.stdout
+
+
+def test_doctor_does_not_create_the_everos_home(healthy_config: Path, tmp_path: Path) -> None:
+    """``doctor`` (no ``--fix``) is read-only: constructing the default
+    everos backend to ask ``health()`` must not seed ``everos/`` under the
+    data dir -- that write belongs to ``EverosBackend.start()``, which
+    doctor never calls."""
+    r = runner.invoke(app, ["doctor"])
+    assert r.exit_code == 0, r.stdout
+    assert not (tmp_path / "everos").exists()
 
 
 def test_doctor_unresolved_routing_exit1(tmp_config: Path) -> None:
@@ -220,214 +230,82 @@ def test_doctor_json_with_probe_structure(healthy_config: Path, monkeypatch: pyt
 # --------------------------------------------------------------------------- memory
 
 
-def _capabilities(no_memory_server, **caps: bool) -> None:
-    """Make the memory probe answer as a reachable server with `caps`."""
-    from raven_everos import health as _health
+def _health_backend(monkeypatch, health):
+    """Stand in for the configured backend, whatever it is.
 
-    no_memory_server.setattr(
-        _health,
-        "probe_capabilities",
-        lambda *_a, **_kw: _health.CapabilityReport(reachable=True, capabilities=caps),
+    Every memory scenario doctor used to build out of everos internals now
+    arrives as one ``BackendHealth``, so these tests are about the rendering and
+    the exit code. What the everos backend puts in that object is its own
+    suite's business (``tests/test_everos_backend.py::TestHealth``).
+    """
+
+    class _B:
+        async def health(self):
+            return health
+
+    monkeypatch.setattr("raven.core.plugin_stack.maybe_build_memory_backend", lambda *_a, **_k: _B())
+
+
+def test_a_fault_reaches_the_exit_code(healthy_config, monkeypatch) -> None:
+    """2, not 1: a static check that failed and a subsystem that cannot work
+    are the two codes CI tells apart, and this is the second one."""
+    from raven.contracts.memory import BackendHealth, HealthCheck
+
+    _health_backend(monkeypatch, BackendHealth(ready=False, checks=[HealthCheck("llm", "missing", "could not build")]))
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 2, result.stdout
+    assert "llm" in result.stdout and "missing" in result.stdout
+    assert "cannot work" in result.stdout
+
+
+def test_a_degraded_check_is_reported_without_failing(healthy_config, monkeypatch) -> None:
+    from raven.contracts.memory import BackendHealth, HealthCheck
+
+    _health_backend(
+        monkeypatch, BackendHealth(ready=True, checks=[HealthCheck("embedding", "degraded", "keywords only")])
     )
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    assert "degraded" in result.stdout and "keywords only" in result.stdout
 
 
-def _configured(no_memory_server, *sections: str) -> None:
-    from raven.config import update_everos
+def test_a_status_doctor_does_not_know_is_still_printed(healthy_config, monkeypatch) -> None:
+    """The status vocabulary belongs to the paper, not to this renderer's mark
+    table. A backend a version ahead must cost the reader a plain word, not the
+    whole report."""
+    from raven.contracts.memory import BackendHealth, HealthCheck
 
-    no_memory_server.setattr(update_everos, "everos_role_configured", lambda s: s in sections)
-
-
-def test_the_probe_follows_the_configured_address(healthy_config: Path, no_memory_server) -> None:
-    """Probing the default while the backend reads `plugins.config` reports on a
-    server nobody is using: someone who moved everos off 18791 is told it is not
-    running, by the very check added to make a degraded server visible.
-    """
-    import json as _json
-
-    from raven_everos import health as _health
-
-    raw = _json.loads(healthy_config.read_text())
-    raw.setdefault("plugins", {}).setdefault("config", {})["everos-memory"] = {"base_url": "http://localhost:29999"}
-    healthy_config.write_text(_json.dumps(raw))
-
-    seen: list[str] = []
-
-    def _probe(base_url: str = "", *_a, **_kw):
-        seen.append(base_url)
-        return _health.CapabilityReport(reachable=True, capabilities={"llm": True})
-
-    no_memory_server.setattr(_health, "probe_capabilities", _probe)
-    _configured(no_memory_server, "llm")
-
-    r = runner.invoke(app, ["doctor"])
-
-    assert r.exit_code == 0, r.stdout
-    assert seen == ["http://localhost:29999"], seen
+    _health_backend(monkeypatch, BackendHealth(ready=True, checks=[HealthCheck("llm", "weird", "no idea")]))
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0, result.stdout
+    assert result.exception is None
+    assert "weird" in result.stdout and "no idea" in result.stdout
 
 
-def test_an_unbuilt_multimodal_role_is_reported(healthy_config: Path, no_memory_server) -> None:
-    """multimodal is config surface the wizard writes, so it can fail to build --
-    and while it was absent from DEGRADING_SECTIONS neither consumer looked at it,
-    making the section-name mapping dead code.
-    """
-    _configured(no_memory_server, "llm", "multimodal")
-    _capabilities(no_memory_server, llm=True, multimodal_llm=False)
-
-    r = runner.invoke(app, ["doctor"])
-
-    assert r.exit_code == 0, r.stdout
-    out = " ".join(r.stdout.split())
-    assert "multimodal" in out
-    assert "could not build it" in out
-    # Not "recall runs degraded": an unbuilt multimodal llm costs ingest, and
-    # recall never saw those inputs either way.
-    assert "so memory runs degraded" in out
+def test_a_backend_without_diagnostics_says_so(healthy_config, monkeypatch) -> None:
+    _health_backend(monkeypatch, None)
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+    assert "no diagnostics" in result.stdout
 
 
-def test_doctor_reports_a_reachable_memory_server(healthy_config: Path, no_memory_server) -> None:
-    _configured(no_memory_server, "llm", "embedding")
-    _capabilities(no_memory_server, llm=True, embed=True, rerank=False)
-
-    r = runner.invoke(app, ["doctor"])
-
-    assert r.exit_code == 0, r.stdout
-    assert "Memory" in r.stdout
-    assert "running" in r.stdout
+def test_an_off_contract_answer_is_reported_as_a_fault(healthy_config, monkeypatch) -> None:
+    """A backend that answers something other than ``BackendHealth`` is as
+    broken as one that raises: everything downstream reads ``.ready``."""
+    _health_backend(monkeypatch, "nope")
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 2, result.stdout
+    assert "not BackendHealth" in result.stdout
 
 
-def test_doctor_answers_where_the_memories_are(healthy_config: Path, no_memory_server, tmp_path) -> None:
-    """Nothing used to answer this. The wizard printed the root once while
-    converging and no command showed it again, so a user asking "where are my
-    memories" had to read config.json by hand. Doctor is where that question
-    gets asked."""
-    from raven.config import update_everos as ue
+def test_memory_section_reaches_the_json_output(healthy_config, monkeypatch) -> None:
+    from raven.contracts.memory import BackendHealth, HealthCheck
 
-    _configured(no_memory_server, "llm")
-    _capabilities(no_memory_server, llm=True)
-    no_memory_server.setattr(ue, "everos_root", lambda: tmp_path / "mem-root")
-    no_memory_server.setattr(ue, "everos_owned", lambda: True)
-
-    # The renderer is pinned, not the environment: rich hard-wraps the value
-    # column at the console width and breaks mid-token, so at the default 80 an
-    # 81-character root splits as "mem-roo" + "t" and no tail segment is safe to
-    # assert. Whether it splits follows the tmp_path length, which is why this
-    # passes on a mac -- /tmp resolves to /private/tmp and the eight extra
-    # characters move the wrap point -- and fails on the CI runner. Pinning the
-    # console object is what tests/test_cli_plugin_commands.py does for the same
-    # trap, and it holds whatever the ambient width is.
-    from rich.console import Console
-
-    from raven.cli import doctor_commands
-
-    no_memory_server.setattr(doctor_commands, "console", Console(width=300))
-
-    r = runner.invoke(app, ["doctor"])
-
-    assert r.exit_code == 0, r.stdout
-    assert "Memories:" in r.stdout
-    assert "mem-root" in r.stdout
-    assert "Address:" in r.stdout
-    assert "Managed by you" not in r.stdout
-
-
-def test_doctor_says_when_the_memories_are_not_ravens_to_touch(
-    healthy_config: Path, no_memory_server, tmp_path
-) -> None:
-    """A user-managed root is read-only, and doctor is the one place a user is
-    asking about state rather than being walked through a decision -- so it has to
-    say which of the two situations they are in."""
-    from raven.config import update_everos as ue
-
-    _configured(no_memory_server, "llm")
-    _capabilities(no_memory_server, llm=True)
-    no_memory_server.setattr(ue, "everos_root", lambda: tmp_path / "theirs")
-    no_memory_server.setattr(ue, "everos_owned", lambda: False)
-
-    r = runner.invoke(app, ["doctor"])
-
-    out = " ".join(r.stdout.split())
-    assert "Managed by you" in out
-    assert "never writes, starts or stops it" in out
-    # And it must not name a directory: nothing records where their memories live.
-    assert str(tmp_path / "theirs") not in out
-
-
-def test_an_unbuilt_optional_role_is_reported_without_failing(healthy_config: Path, no_memory_server) -> None:
-    """Without embedding the adapter searches lexically instead of semantically:
-    weaker memory, not broken memory. Worth saying, not worth an exit code."""
-    _configured(no_memory_server, "llm", "embedding")
-    _capabilities(no_memory_server, llm=True, embed=False)
-
-    r = runner.invoke(app, ["doctor"])
-
-    assert r.exit_code == 0, r.stdout
-    assert "could not build it" in r.stdout
-    assert "runs degraded" in r.stdout
-
-
-def test_an_unbuilt_required_role_is_a_failure(healthy_config: Path, no_memory_server) -> None:
-    """Nothing works without the llm, so this one does set the exit code."""
-    _configured(no_memory_server, "llm")
-    _capabilities(no_memory_server, llm=False, embed=True)
-
-    r = runner.invoke(app, ["doctor"])
-
-    assert r.exit_code == 2, r.stdout
-    assert "cannot work" in r.stdout
-
-
-def test_an_unconfigured_optional_role_names_what_it_costs(healthy_config: Path, no_memory_server) -> None:
-    """A user deciding whether to configure embedding needs to know it buys
-    semantic recall specifically, not a vague "better memory"."""
-    _configured(no_memory_server, "llm")
-    _capabilities(no_memory_server, llm=True, embed=True)
-
-    r = runner.invoke(app, ["doctor"])
-
-    assert r.exit_code == 0, r.stdout
-    assert "matches keywords, not meaning" in r.stdout
-
-
-def test_a_missing_optional_role_is_not_a_failure(healthy_config: Path, no_memory_server) -> None:
-    """rerank is optional -- agent-track recall falls back to the LLM lane."""
-    _configured(no_memory_server, "llm", "embedding")
-    _capabilities(no_memory_server, llm=True, embed=True, rerank=False)
-
-    r = runner.invoke(app, ["doctor"])
-
-    assert r.exit_code == 0, r.stdout
-    assert "rerank" in r.stdout
-
-
-def test_a_server_that_reports_no_capabilities_is_not_condemned(healthy_config: Path, no_memory_server) -> None:
-    """Pre-1.2.1 servers answer a bare {"status": "ok"}; reading that silence as
-    "unavailable" would fail a working install."""
-    _configured(no_memory_server, "llm", "embedding")
-    _capabilities(no_memory_server)
-
-    r = runner.invoke(app, ["doctor"])
-
-    assert r.exit_code == 0, r.stdout
-    assert "does not report capabilities" in r.stdout
-
-
-def test_a_server_that_is_not_running_is_not_a_failure(healthy_config: Path) -> None:
-    """Raven starts the server on demand, so "not running" is a normal state."""
-    r = runner.invoke(app, ["doctor"])
-
-    assert r.exit_code == 0, r.stdout
-    assert "not running" in r.stdout
-
-
-def test_memory_section_reaches_the_json_output(healthy_config: Path, no_memory_server) -> None:
-    _configured(no_memory_server, "llm", "embedding")
-    _capabilities(no_memory_server, llm=True, embed=False)
-
-    r = runner.invoke(app, ["doctor", "--json"])
-
-    payload = json.loads(r.stdout)
-    assert payload["memory"]["capabilities"] == {"llm": True, "embed": False}
-    assert payload["memory"]["configured"] == ["llm", "embedding"]
+    _health_backend(monkeypatch, BackendHealth(ready=True, checks=[HealthCheck("server", "ok", "running")]))
+    result = runner.invoke(app, ["doctor", "--json"])
+    memory = json.loads(result.stdout)["memory"]
+    assert memory["health"]["ready"] is True
+    assert memory["health"]["checks"][0] == {"label": "server", "status": "ok", "hint": "running"}
 
 
 # --------------------------------------------------------------------------- config visibility
@@ -513,186 +391,6 @@ def test_doctor_non_object_config_is_invalid(tmp_path: Path) -> None:
     assert "✓" not in config_line, out
     assert "not a JSON object" in config_line, out
     assert code == 1, out
-
-
-def test_doctor_everos_without_embedding_shows_keyword_only(tmp_path: Path) -> None:
-    """The Memory section must say recall is keyword-only when the embedding
-    role is not configured in the user-level everos.toml."""
-    import re
-
-    home = _write_home_config(tmp_path, "everos_nokey", json.dumps({"memory": {"backend": "everos"}}))
-    out, _ = _run_doctor_subprocess(home)
-    out = " ".join(out.split())
-    assert re.search(r"Retrieval:\s*keyword-only", out), out
-    assert "no embedding key" in out, out
-
-
-def test_doctor_everos_with_embedding_shows_semantic(tmp_path: Path) -> None:
-    import re
-
-    home = _write_home_config(tmp_path, "everos_key", json.dumps({"memory": {"backend": "everos"}}))
-    everos_dir = home / ".everos" / "raven"
-    everos_dir.mkdir(parents=True)
-    (everos_dir / "everos.toml").write_text(
-        '[embedding]\nmodel = "m"\napi_key = "sk-x"\nbase_url = "https://api.example.com/v1"\n',
-        encoding="utf-8",
-    )
-    out, _ = _run_doctor_subprocess(home)
-    out = " ".join(out.split())
-    assert re.search(r"Retrieval:\s*semantic", out), out
-
-
-def test_memory_retrieval_reaches_the_json_output(tmp_path: Path) -> None:
-    home = _write_home_config(tmp_path, "everos_json", json.dumps({"memory": {"backend": "everos"}}))
-    import os
-    import subprocess
-    import sys
-
-    # Same reason as _run_doctor_subprocess: a sandbox HOME only decides where
-    # the config is read from while no RAVEN_HOME out-ranks it.
-    env = {k: v for k, v in os.environ.items() if k != "RAVEN_HOME"}
-    env.update({"HOME": str(home), "COLUMNS": "250"})
-    r = subprocess.run(
-        [sys.executable, "-m", "raven", "doctor", "--json"],
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
-        timeout=60,
-        env=env,
-    )
-    payload = json.loads(r.stdout[r.stdout.index("{") :])
-    assert payload["memory"]["retrieval"] == "keyword-only"
-
-
-class TestDoctorDoesNotInventASelfManagedRoot:
-    """A self-managed install records no root, so doctor must not name one.
-
-    ``everos_root()`` answers with a fallback when nothing is recorded, which
-    is right for the code that needs somewhere to write and wrong for the code
-    that reports where the memories are. Printing it labelled "Managed by you"
-    points the user at a directory that is not theirs and has nothing in it.
-
-    The roles are worse than cosmetic. They were read out of that same
-    fabricated root's toml, so an install whose server has embedding
-    configured was told its recall was keyword-only. Doctor cannot read the
-    user's toml -- that is the whole read-only promise -- so what the server
-    reports about itself is the only honest source.
-    """
-
-    @staticmethod
-    def _collect(monkeypatch, *, caps: dict, reachable: bool = True):
-        from raven.cli import doctor_commands as dc
-
-        monkeypatch.setattr("raven.config.update_everos.everos_owned", lambda: False)
-        monkeypatch.setattr("raven.config.update_everos.everos_root", lambda: Path("/fallback/everos"))
-        monkeypatch.setattr(
-            "raven.config.update_everos.everos_role_configured",
-            lambda _s: pytest.fail("read the local toml for a root raven does not own"),
-        )
-        from raven_everos import health as _health
-
-        monkeypatch.setattr(
-            _health,
-            "probe_capabilities",
-            # reports_capabilities is derived from capabilities, not a field.
-            lambda *_a, **_kw: _health.CapabilityReport(reachable=reachable, capabilities=caps),
-        )
-        return dc
-
-    def test_no_root_is_claimed(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        dc = self._collect(monkeypatch, caps={"llm": True, "embed": True})
-        info = dc._probe_memory(SimpleNamespace(memory=SimpleNamespace(backend="everos")))
-
-        assert info.root is None, "named a directory for an install that records none"
-
-    def test_retrieval_follows_what_the_server_reports(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        dc = self._collect(monkeypatch, caps={"llm": True, "embed": True})
-        info = dc._probe_memory(SimpleNamespace(memory=SimpleNamespace(backend="everos")))
-
-        assert info.retrieval == "semantic", "told the user recall was keyword-only while the server has embedding"
-
-    def test_no_embedding_on_the_server_reads_as_keyword_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        dc = self._collect(monkeypatch, caps={"llm": True, "embed": False})
-        info = dc._probe_memory(SimpleNamespace(memory=SimpleNamespace(backend="everos")))
-
-        assert info.retrieval == "keyword-only"
-
-    def test_an_unreachable_server_claims_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Down is not the same as misconfigured. With nothing to ask, doctor
-        has no basis for either answer and must not pick one."""
-        dc = self._collect(monkeypatch, caps={}, reachable=False)
-        info = dc._probe_memory(SimpleNamespace(memory=SimpleNamespace(backend="everos")))
-
-        assert info.root is None
-        assert info.retrieval is None
-
-
-class TestASelfManagedServerCanStillBeBroken:
-    """ "What the server knows about" and "what it built" must not be one list.
-
-    For a not-owned install ``configured`` was the sections the server reports
-    as available, and ``unbuilt`` the subset of those it reports as
-    unavailable. Over one capability map those conditions are mutually
-    exclusive, so ``unbuilt`` -- and with it ``broken`` and the exit code --
-    was structurally always empty. A self-managed server whose LLM failed to
-    build reported healthy, and any CI gating on ``raven doctor`` saw green.
-
-    Raven cannot read their toml to learn what they configured. It does not
-    have to: a server that reports a section as unavailable tried to build it
-    and failed, and that is the same evidence.
-    """
-
-    @staticmethod
-    def _info(monkeypatch, caps: dict):
-        from raven.cli import doctor_commands as dc
-        from raven_everos import health as _health
-
-        monkeypatch.setattr("raven.config.update_everos.everos_owned", lambda: False)
-        monkeypatch.setattr(
-            _health,
-            "probe_capabilities",
-            lambda *_a, **_kw: _health.CapabilityReport(reachable=True, capabilities=caps),
-        )
-        return dc._probe_memory(SimpleNamespace(memory=SimpleNamespace(backend="everos")))
-
-    def test_a_failed_required_role_is_reported_as_broken(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        info = self._info(monkeypatch, {"llm": False, "embed": True})
-
-        assert "llm" in info.unbuilt
-        assert info.broken == ["llm"], "a server that cannot build its LLM reported healthy"
-
-    def test_it_reaches_the_exit_code(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from raven.cli import doctor_commands as dc
-
-        info = self._info(monkeypatch, {"llm": False, "embed": True})
-        report = dc.DoctorReport()
-        # The earlier gates return first; this case is about the memory one.
-        report.paths = SimpleNamespace(config_exists=True, config_valid=True)
-        report.config_loaded = True
-        report.routing = SimpleNamespace(provider="openai")
-        report.memory = info
-
-        assert report.exit_code() == 2, "doctor exited 0 with a memory service that cannot work"
-
-    def test_a_failed_optional_role_costs_quality_not_function(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        info = self._info(monkeypatch, {"llm": True, "embed": False})
-
-        assert "embedding" in info.unbuilt
-        assert info.broken == [], "a missing embedding is a worse memory, not a broken one"
-
-    def test_a_working_server_is_not_accused(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        info = self._info(monkeypatch, {"llm": True, "embed": True})
-
-        assert info.unbuilt == []
-
-    def test_a_role_the_server_says_nothing_about_is_not_claimed_either_way(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """``rerank`` absent from the map is silence, not a failure."""
-        info = self._info(monkeypatch, {"llm": True, "embed": True})
-
-        assert "rerank" not in info.configured
-        assert "rerank" not in info.unbuilt
 
 
 class TestTheInstallationSection:
@@ -1182,6 +880,58 @@ def test_the_switched_off_state_reaches_the_json_output(tmp_config: Path, tmp_pa
     assert row["disabled"] is True
 
 
+def _pictures_off_with_a_key(tmp_path: Path) -> None:
+    """A credentialed image_search with `tools.web.search.images` at its default.
+
+    Not `disabledTools`: this is the switch that decides whether the tool is
+    registered at all, and it is off unless a deployment asks for pictures.
+    """
+    cfg = Config()
+    cfg.agents.defaults.model = "anthropic/claude-sonnet-4-5"
+    cfg.agents.defaults.workspace = str(tmp_path / "workspace")
+    cfg.providers.anthropic.api_key = "sk-fake"
+    cfg.tools.web.search.api_key = "sk-serper"
+    save_config(cfg)
+
+
+def test_doctor_names_the_picture_switch_not_the_disabled_list(tmp_config: Path, tmp_path: Path) -> None:
+    """The repair has to be the one that works.
+
+    image_search off by `tools.web.search.images` printed "switched off in
+    tools.disabledTools", a list that need not contain the tool and whose
+    editing cannot turn it on -- the wrong repair, which is the one thing
+    these rows exist to avoid.
+    """
+    _pictures_off_with_a_key(tmp_path)
+
+    result = runner.invoke(app, ["doctor"])
+    row = result.stdout.split("image_search")[-1][:200]
+
+    assert "tools.web.search.images" in row
+    assert "tools.disabledTools" not in row
+
+
+def test_the_picture_switch_reaches_the_json_output(tmp_config: Path, tmp_path: Path) -> None:
+    _pictures_off_with_a_key(tmp_path)
+
+    payload = json.loads(runner.invoke(app, ["doctor", "--json"]).stdout)
+    row = next(c for c in payload["tools"]["capabilities"] if c["tool"] == "image_search")
+
+    assert row["configured"] is True, "the key is set; calling it unconfigured is the wrong repair"
+    assert row["disabled"] is True
+    assert row["disabled_by"] == "tools.web.search.images"
+
+
+def test_the_named_list_still_names_itself(tmp_config: Path, tmp_path: Path) -> None:
+    """The other branch of the same field: a tool off by name reports the list."""
+    _switched_off_search(tmp_path)
+
+    payload = json.loads(runner.invoke(app, ["doctor", "--json"]).stdout)
+    row = next(c for c in payload["tools"]["capabilities"] if c["tool"] == "web_search")
+
+    assert row["disabled_by"] == "tools.disabledTools"
+
+
 @pytest.mark.parametrize("key", [True, False], ids=["keyed", "keyless"])
 def test_the_off_switch_is_named_whether_or_not_a_key_is_set(key: bool, tmp_config: Path, tmp_path: Path) -> None:
     """The cell the first version of this rendering got wrong.
@@ -1238,15 +988,23 @@ class TestDoctorWithoutTheMemoryPlugin:
 
         payload = json.loads(r.stdout)
         assert payload["memory"]["plugin_missing"] is True
-        assert payload["memory"]["configured"] == []
+        assert payload["memory"]["health"] is None
 
-    def test_an_installed_but_broken_plugin_is_not_called_absent(self) -> None:
-        """A plugin whose own import fails is a bug to fix, not a degrade to
-        report -- swallowing it would hide the fault behind an install hint."""
-        from raven.cli import doctor_commands as dc
+    def test_an_installed_but_broken_plugin_is_not_called_absent(self, healthy_config: Path) -> None:
+        """A plugin whose own import fails is a bug to fix, not an absence to
+        report -- an install hint sends the user to fix what is already there.
 
-        with everos_plugin_broken(), pytest.raises(ImportError):
-            dc._probe_memory(SimpleNamespace(memory=SimpleNamespace(backend="everos")))
+        Doctor no longer imports the plugin, so the fault arrives as a backend
+        that would not build. That still has to be said out loud: passing over
+        it silently is how a broken plugin reads as a backend with nothing to
+        report.
+        """
+        with everos_plugin_broken():
+            r = runner.invoke(app, ["doctor"])
+
+        assert r.exit_code == 2, r.stdout
+        assert "did not build" in r.stdout
+        assert "not installed" not in r.stdout
 
 
 def test_doctor_names_the_libreoffice_it_found(healthy_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1551,3 +1309,78 @@ def test_install_summary_browser_row_ticks_a_complete_download(
     assert "pw-cache" in browser_row
     assert "playwright install" not in browser_row
     assert "install.sh" not in browser_row
+
+
+# --------------------------------------------------------------------------- embedding relocation
+
+
+def _legacy_embedding(monkeypatch, tmp_path: Path, present: bool, base_url: str = "https://legacy.test/v1") -> None:
+    """Point the legacy reader at a file this test owns."""
+    from raven.knowledge import _embedding as emb
+
+    toml = tmp_path / "everos.toml"
+    if present:
+        toml.write_text(
+            f'[embedding]\nmodel = "legacy-model"\nbase_url = "{base_url}"\napi_key = "sk-legacy"\n',
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(emb, "_legacy_everos_config_path", lambda: toml if present else None)
+
+
+def _provider_at(name: str, base_url: str) -> None:
+    """A configured provider answering at ``base_url``, for the pin to name."""
+    from raven.config.update_providers import set_provider_fields
+
+    set_provider_fields(name, {"api_key": "sk-legacy", "api_base": base_url})
+
+
+def test_doctor_offers_to_move_an_embedding_endpoint_it_finds(
+    healthy_config: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A knowledge base indexes documents; it stops working the moment the
+    memory plugin is not the configured backend, which has nothing to do with
+    indexing. The wizard writes raven's block now, so this is for installs
+    configured before it moved."""
+    _legacy_embedding(monkeypatch, tmp_path, present=True)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "embedding endpoint is recorded in EverOS's config" in " ".join(result.stdout.split())
+
+
+def test_doctor_fix_copies_the_endpoint_into_ravens_own_block(
+    healthy_config: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The retired block held an address and a key; the pin names the provider
+    that has them, so the move only lands when one answers at that address."""
+    _provider_at("siliconflow", "https://legacy.test/v1")
+    _legacy_embedding(monkeypatch, tmp_path, present=True)
+
+    runner.invoke(app, ["doctor", "--fix"])
+
+    block = json.loads(healthy_config.read_text(encoding="utf-8"))["embedding"]
+    assert block == {"model": "legacy-model", "provider": "siliconflow"}
+
+
+def test_doctor_fix_leaves_an_endpoint_no_provider_answers_for(
+    healthy_config: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Nowhere for the key to live, and inventing a provider row from a bare URL
+    would be a worse guess than saying nothing."""
+    _legacy_embedding(monkeypatch, tmp_path, present=True, base_url="https://nobody.test/v1")
+
+    runner.invoke(app, ["doctor", "--fix"])
+
+    assert "embedding" not in json.loads(healthy_config.read_text(encoding="utf-8"))
+
+
+def test_doctor_says_nothing_when_there_is_nothing_to_move(
+    healthy_config: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The finding exists to move a value that is somewhere else, not to nag an
+    install that never configured one."""
+    _legacy_embedding(monkeypatch, tmp_path, present=False)
+
+    result = runner.invoke(app, ["doctor"])
+
+    assert "embedding endpoint is recorded" not in " ".join(result.stdout.split())

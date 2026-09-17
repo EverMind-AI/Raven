@@ -71,7 +71,7 @@ from raven.agent.subagent.history import dag_root, nodes_root, session_history_r
 from raven.agent.subagent.instances import mint_handle
 from raven.agent.subagent.prompt_backend import LocalFileBackend
 from raven.agent.subagent.prompt_errors import DagValidationError
-from raven.agent.subagent_memory import EverosIdentity
+from raven.agent.subagent_memory import MemoryScope
 from raven.config.raven import SubagentDagConfig
 from raven.config.schema import MCPServerConfig
 from raven.contracts.tool import Tool, ToolResult
@@ -353,7 +353,7 @@ class SubAgentDagTool(Tool):
         announce_exception: ExceptionAnnouncer | None = None,
         adopt: TaskAdopter | None = None,
         state_for: "Callable[[str, str | None, str], Any] | None" = None,
-        everos_for: "Callable[[str], EverosIdentity | None] | None" = None,
+        memory_for: "Callable[[str], MemoryScope | None] | None" = None,
         mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
         charge: QuotaCharger | None = None,
         ask: "Ask | None" = None,
@@ -388,7 +388,7 @@ class SubAgentDagTool(Tool):
         # declares one leaves a Memory record on the same terms `spawn` and a
         # direct chat do. Injected for the same reason as `state_for`: this
         # tool is built from the same config as the manager but does not own one.
-        self._everos_for = everos_for
+        self._memory_for = memory_for
         # The manager's mode resolution, so a node that names an `instance` runs at
         # the effort level a user set on that instance, on the same terms `spawn`
         # and a direct chat do. Injected for the same reason as `state_for`: this
@@ -1042,7 +1042,7 @@ class SubAgentDagTool(Tool):
         mcp_scope: str | None = None,
         mcp_credential_gaps: "Callable[[], frozenset[str]] | None" = None,
         **kwargs: Any,
-    ) -> str:
+    ) -> str | ToolResult:
         """Run one graph. ``mcp_servers`` is this run's own MCP definitions.
 
         Not a model-facing argument: it is absent from :meth:`parameters`, and
@@ -1074,7 +1074,7 @@ class SubAgentDagTool(Tool):
         background: bool,
         confirm: bool = False,
         task_summary: str = "",
-    ) -> str:
+    ) -> str | ToolResult:
         # Refused whole rather than per node, and ahead of validation, for the
         # same reason validation runs early: a refused graph must cost zero
         # sub-agent dispatches.
@@ -1641,7 +1641,11 @@ class SubAgentDagTool(Tool):
         point) gets that behaviour without configuring anything.
         """
         cfg = self._verdict_config
-        if self._provider_for is None or not cfg.verdict_enabled:
+        # Bound here rather than read off self inside the closure: the guard
+        # below must hold for the call, and an attribute re-read later is a
+        # different value.
+        provider_for = self._provider_for
+        if provider_for is None or not cfg.verdict_enabled:
             return None
 
         async def _judge(
@@ -1650,7 +1654,7 @@ class SubAgentDagTool(Tool):
             # Resolved here, not when this tool was built: the loop's provider is
             # a property over the running turn's binding, so a session that
             # switched model must reach the judge.
-            provider = self._provider_for()
+            provider = provider_for()
             if provider is None:
                 return Verdict(accomplished=True)
             evidence, complete = await self._node_evidence(store, node.id, cfg.evidence_budget_chars)
@@ -1757,7 +1761,7 @@ class SubAgentDagTool(Tool):
                 semaphore=self._gate,
                 session_key=origin.conversation,
                 state_for=self._state_for,
-                everos_for=self._everos_for,
+                memory_for=self._memory_for,
                 mode_for=self._mode_for,
                 capabilities=self._capability_map(),
                 run_id=run_id,

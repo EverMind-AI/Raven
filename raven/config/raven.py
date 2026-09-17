@@ -22,7 +22,7 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 
 from raven.config.loader import (
@@ -752,13 +752,14 @@ class TokenWiseConfig(_Base):
 # they need user-facing knobs.
 
 
-class EverOSConfig(_Base):
-    """Embedded everos extraction pipeline configuration.
+class ExtractionConfig(_Base):
+    """The local pipeline that distils skills out of finished turns.
 
-    When enabled, every completed user→agent turn is funneled into a
-    local pipeline that distills an AgentCase + zero-or-more SkillOps
-    into ``<workspace>/.cache/skills.db``. No external services
-    required (replaces the EverOS HTTP path for skill extraction).
+    Every completed user-agent turn is funnelled into it, and what comes out
+    is an AgentCase plus zero or more SkillOps in ``<workspace>/.cache/skills.db``.
+    It calls no service and needs no plugin -- the name it used to carry
+    (``everos``) came from the HTTP path it replaced, and said the opposite of
+    what is true: this runs whether or not a memory backend is installed.
     """
 
     enabled: bool = False
@@ -817,7 +818,7 @@ class SkillForgeConfig(_Base):
 
     Evolution is handled by the embedded ``everos``
     extraction pipeline, configured via
-    ``skill_forge.everos``. The LLM used by that pipeline
+    ``skill_forge.extraction``. The LLM used by that pipeline
     is selected by ``skill_forge.evolve_model`` (falls back to the
     active agent model when unset).
 
@@ -1068,12 +1069,16 @@ class SkillForgeConfig(_Base):
     retirement_idle_days: int = 90
     """Active skill unused for this long → deprecated."""
 
-    # --- Embedded extraction pipeline (everos) ---
-    everos: EverOSConfig = Field(default_factory=EverOSConfig)
-    """Embedded everos extraction pipeline. Distinct from the
-    SkillForge master switch above: the retrieval/injection path can be
-    enabled (``skill_forge.enabled=True``) without extraction, and vice
-    versa."""
+    # --- Local extraction pipeline ---
+    extraction: ExtractionConfig = Field(
+        default_factory=ExtractionConfig,
+        validation_alias=AliasChoices("extraction", "everos"),
+    )
+    """The local skill-extraction pipeline. Distinct from the SkillForge
+    master switch above: the retrieval/injection path can be enabled
+    (``skill_forge.enabled=True``) without extraction, and vice versa.
+
+    ``everos`` still loads, for a config written before the rename."""
 
     # --- Validators ---
 
@@ -1151,11 +1156,51 @@ class MemoryConfig(_Base):
 
     agent_id: str = "default"
     """Bare agent identity passed as ``backend.recall(agent_id=...)`` by
-    ``EverosSkillSource`` for agent-track skill recall."""
+    ``BackendSkillSource`` for agent-track skill recall."""
 
     memory_top_k: int = 5
     """Top-K passed to ``backend.recall(user_id=user_id)`` per turn for
     the ``# Recalled memory`` block."""
+
+
+class EmbeddingConfig(_Base):
+    """The embedding endpoint this install uses, for everything that embeds.
+
+    One pair, not one per subsystem: a knowledge base and the memory backend
+    both turn text into vectors, and two endpoints would mean two vector
+    spaces that cannot be compared and two places to change when the model
+    moves. Raven holds it; the memory backend is handed it at ``start()``
+    rather than keeping its own copy, which is the same direction the host
+    already sends its data root in.
+
+    ``model`` names what to call and ``provider`` names who serves it -- the
+    same pair every other pin in this file states, and for the same reason: an
+    id does not name a credential. The address and key come from the provider,
+    so rotating a key is one edit in one place and this block never holds a
+    secret.
+
+    Changing ``model`` invalidates every vector already stored under the old
+    one. Nothing here prevents that -- the stores each record what they were
+    built with and refuse or degrade on their own -- but a surface offering the
+    change has to say so first.
+    """
+
+    model: str = ""
+    """Model id as the provider names it, e.g. ``"Qwen/Qwen3-Embedding-4B"``.
+
+    A ``provider/model`` spelling is accepted and the leading segment dropped
+    on the wire: the provider half is stated separately, so carrying it twice
+    would let the two disagree."""
+
+    provider: str = ""
+    """Which configured provider serves ``model``. Its address and key are what
+    the embedding call goes out on."""
+
+    dimensions: int | None = None
+    """Vector width, when the operator pinned one. ``None`` means ask the
+    model, and a pinned value is checked against it rather than trusted --
+    see ``raven.knowledge._manager._width_of`` for why a wrong width is worse
+    than an unknown one."""
 
 
 class HubSourceConfig(_Base):
@@ -1315,6 +1360,38 @@ class TracingConfig(_Base):
 # ---------------------------------------------------------------------------
 
 
+class TranslateConfig(_Base):
+    """The model translation runs on, as a pair.
+
+    A pin with no caller yet: the scenario it serves is still being built, and
+    the setting ships ahead of it so the choice is already recorded when it
+    lands. Unset means the conversation's model, the same as every other pin,
+    so an unconfigured install behaves exactly as it did before this existed.
+    """
+
+    model: str | None = None
+    """Model for the translation call. None inherits the session's own model."""
+
+    provider: str | None = None
+    """Which configured provider serves ``model``. Both halves, for the reason
+    stated on every pin: an id alone does not name a credential."""
+
+
+class KnowledgeConfig(_Base):
+    """Knowledge-base settings that are not the embedding endpoint.
+
+    The endpoint moved to the top-level ``embedding`` block, which the memory
+    backend reads too: a knowledge base and a memory store that embed with
+    different models cannot be compared, and two places to change it is one
+    place to forget. The two keys that used to live here are migrated there.
+
+    Which model a given base was built with is not configuration at all -- it
+    is recorded on the base, checked on every search, and the manager refuses
+    rather than returning neighbours that mean nothing. See
+    ``raven.knowledge._records``.
+    """
+
+
 class SessionTitleConfig(_Base):
     """The model call that names a new session.
 
@@ -1335,6 +1412,15 @@ class SessionTitleConfig(_Base):
     """Model for the naming call. None inherits the session's own model. Set a
     cheaper tier here: the task is one short line of output and does not need
     the model answering the conversation."""
+
+    provider: str | None = None
+    """Which configured provider serves ``model``.
+
+    The other half of the pin, for the reason every subsystem pin states both:
+    an id alone is ambiguous the moment a gateway is configured, and a bare id
+    sent on the conversation's key is the mis-pairing the pin exists to avoid.
+    Unset lets a configured gateway take the id, and only without one is the
+    vendor guessed from it."""
 
     timeout_seconds: float = 8.0
     """Wall clock for the call. Past this the fallback title stands. Chosen
@@ -1486,6 +1572,8 @@ class RavenConfig(_Base):
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     tracing: TracingConfig = Field(default_factory=TracingConfig)
     session_title: SessionTitleConfig = Field(default_factory=SessionTitleConfig)
+    translate: TranslateConfig = Field(default_factory=TranslateConfig)
+    knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     subagent_dag: SubagentDagConfig = Field(default_factory=SubagentDagConfig)
     subagent_questions: SubagentQuestionsConfig = Field(default_factory=SubagentQuestionsConfig)
     eval_engine: EvalEngineConfig = Field(default_factory=EvalEngineConfig)
@@ -1493,6 +1581,7 @@ class RavenConfig(_Base):
     # Plugin system + memory backend.
     plugins: PluginsConfig = Field(default_factory=PluginsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
 
     # The full base config (agents, channels, providers, tools, routing).
     # Kept as a nested field so we can round-trip the JSON with the base loader.

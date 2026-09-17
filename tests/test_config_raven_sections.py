@@ -329,13 +329,9 @@ class TestLoaderIntegration:
         )
         cfg = load_raven_config(path)
         assert cfg.plugins.disabled == ["mem0-memory"]
-        # ``mode`` never had a reader and is dropped on load; ``root`` / ``owned``
-        # are recorded in its place so every caller reads one recorded decision
-        # instead of re-deriving it.
-        everos_slice = cfg.plugins.config["everos-memory"]
-        assert "mode" not in everos_slice
-        assert everos_slice["root"]
-        assert isinstance(everos_slice["owned"], bool)
+        # A plugin's slice reaches the plugin exactly as it was written: the
+        # host loader does not reshape keys it has no reader for.
+        assert cfg.plugins.config["everos-memory"] == {"mode": "embedded"}
         assert cfg.memory.backend == "everos"
         assert cfg.memory.user_id == "alice"
         assert cfg.memory.memory_top_k == 10

@@ -89,6 +89,13 @@ def grouped(findings: Iterable[Finding]) -> dict[str, Any]:
     return {"for_you": [_entry(finding) for finding in findings]} if findings else {}
 
 
+# Findings whose detail is the measurement behind the message and nothing the author acts
+# on: the message already names the boxes and the sizes. In one run 34 of the 41 detail
+# blobs a build reply carried were these two kinds, six hundred characters each, and every
+# one restated its own sentence as numbers.
+_DETAIL_STAYS_INTERNAL = frozenset({"type_floor", "title_row"})
+
+
 def _entry(finding: Finding) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "kind": finding.kind,
@@ -97,7 +104,7 @@ def _entry(finding: Finding) -> dict[str, Any]:
     }
     if finding.page is not None:
         entry["page"] = finding.page
-    if finding.detail:
+    if finding.detail and finding.kind not in _DETAIL_STAYS_INTERNAL:
         entry["detail"] = dict(finding.detail)
     return entry
 

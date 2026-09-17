@@ -262,6 +262,43 @@ def test_the_effect_reference_python_pptx_writes_is_the_one_this_corrects() -> N
     assert style.find(f"{_A}effectRef").get("idx") != NO_EFFECT
 
 
+def test_an_outline_that_names_no_colour_goes_back_to_no_line(tmp_path: Path) -> None:
+    """Reading `shape.line.color` is enough to turn `<a:noFill/>` into an empty
+    `<a:solidFill/>`, and that renders as a default stroke: a live program probed
+    every shape of two borrowed pages for a colour to recolour and boxed every
+    heading and body in thin blue. A fill that names its colour is a designer's line
+    and stays.
+    """
+    from lxml import etree
+
+    namespace = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    probed = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1))
+    probed.text_frame.text = "蓟城·燕都"
+    line = etree.SubElement(probed._element.spPr, f"{{{namespace}}}ln")
+    etree.SubElement(line, f"{{{namespace}}}noFill")
+    _ = probed.line.color  # the getter alone rewrites the fill
+    assert probed._element.spPr.find(f"{{{namespace}}}ln/{{{namespace}}}solidFill") is not None
+    drawn = slide.shapes.add_textbox(Inches(1), Inches(3), Inches(4), Inches(1))
+    drawn.text_frame.text = "kept"
+    drawn.line.color.rgb = __import__("pptx.dml.color", fromlist=["RGBColor"]).RGBColor(0xA6, 0x3A, 0x28)
+    built = tmp_path / "deck.pptx"
+    presentation.save(str(built))
+
+    changed = tidy(built)
+
+    assert [line for line in changed if "colourless outline" in line] == [
+        f"p1: took a colourless outline off {probed.name!r}, which rendered as a default stroke"
+    ]
+    after = Presentation(str(built))
+    lines = {shape.text_frame.text: shape._element.spPr.find(f"{{{namespace}}}ln") for shape in after.slides[0].shapes}
+    assert lines["蓟城·燕都"].find(f"{{{namespace}}}noFill") is not None
+    assert lines["蓟城·燕都"].find(f"{{{namespace}}}solidFill") is None
+    assert lines["kept"].find(f"{{{namespace}}}solidFill/{{{namespace}}}srgbClr").get("val") == "A63A28"
+
+
 def test_a_deck_with_nothing_to_correct_is_not_rewritten(tmp_path: Path) -> None:
     presentation = Presentation()
     slide = presentation.slides.add_slide(presentation.slide_layouts[6])

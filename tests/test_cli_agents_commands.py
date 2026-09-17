@@ -157,7 +157,7 @@ def test_the_generated_folder_is_valid_compilable_and_token_free(raven_home: Pat
     row = json.loads((target / "subagent.json").read_text(encoding="utf-8"))
     validated = ThirdPartyAcpSubagentConfig.model_validate(row)
     assert validated.name == "Demo-Agent"
-    assert validated.everos and validated.everos.user_id == "demo-agent"
+    assert validated.memory and validated.memory.model_dump(exclude_none=True)["userId"] == "demo-agent"
     assert "{PYTHON}" in row["command"] and "{SUBAGENT_DIR}" in row["command"]
 
     for rel in generated:
@@ -224,7 +224,7 @@ def test_display_overrides_the_derived_display_name(raven_home: Path) -> None:
     assert r.exit_code == 0, r.output
     row = json.loads((raven_home / "agents" / "demo-agent" / "subagent.json").read_text(encoding="utf-8"))
     assert row["name"] == "Demo Deluxe"
-    assert row["everos"]["userId"] == "demo-agent"
+    assert row["memory"]["userId"] == "demo-agent"
 
 
 def test_register_pins_the_resolved_row_into_the_host_roster(raven_home: Path) -> None:
