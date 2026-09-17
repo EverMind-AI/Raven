@@ -311,7 +311,7 @@ def test_the_templates_own_copy_is_never_contradicted() -> None:
     """The calibration, and the one result a wrong band cannot survive.
 
     The designer's own copy is the ground truth: over the ten bundled templates'
-    1,116 boxes with a size on a run, 993 sit inside the conservative bound and 121
+    1,110 boxes with a size on a run, 989 sit inside the conservative bound and 121
     between the bounds. The only two past the generous bound are `gold_panel` page 2's
     0.031in decorative brackets, which carry one glyph each and are marks rather than
     copy. A band that contradicts a real copy box is wrong by construction, because
@@ -346,7 +346,7 @@ def test_the_templates_own_copy_is_never_contradicted() -> None:
                     between += 1
                 else:
                     contradicted.append((path.stem, number, text[:12], count, low, high, found.is_copy))
-    assert (inside, between) == (993, 121)
+    assert (inside, between) == (989, 121)
     assert [name for name, _, _, _, _, _, is_copy in contradicted if is_copy] == []
     assert len(contradicted) == 2
 
@@ -375,5 +375,5 @@ def test_the_band_costs_what_it_was_budgeted() -> None:
         entries = menu(path)
         pages += len(entries)
         bands += sum(len(entry.capacity) for entry in entries)
-    assert pages == 211
+    assert pages == 210
     assert bands / pages < 130
