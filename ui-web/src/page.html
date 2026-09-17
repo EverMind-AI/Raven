@@ -49,40 +49,23 @@
         <!-- The session header belongs to the chat column, not the whole main
              pane: spanning both columns would leave a band of empty header
              above the workspace, which then reads as detached from the top. -->
-        <div class="top">
-          <h1 id="title">新任务</h1>
-          <button class="ghost-ic tipdn" id="renameBtn" data-i18n-tip="gui.rename_session" data-i18n-aria="gui.rename_session">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true">
-              <path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M14.5 6.5 17.5 9.5"/>
-            </svg>
-          </button>
-          <span class="spacer"></span>
-          <button class="ghost-ic wstog tipdn" id="wsBtn" aria-expanded="false" data-i18n-tip="gui.expand_ws" data-i18n-aria="gui.expand_ws">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-              <rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15"/>
-            </svg>
-            <span class="bdg" id="wsBdg" hidden>2</span>
-          </button>
-        </div>
+        <!-- The interiors of the four containers below render from
+             src/chrome/ChatTop.tsx; only the containers are static markup.
+             #stage and #flash are shared ground: the transcript island and the
+             composer append their own hosts into #stage, so React hands both
+             over empty. -->
+        <div class="top"></div>
 
-        <div class="scroll" id="scroll">
-          <div id="bannerHost"></div>
-          <div class="flash" id="flash"></div>
-          <div class="col" id="stage"></div>
-        </div>
-        <button class="backpill" id="backpill" hidden>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5v13M6.5 12.5l5.5 5.5 5.5-5.5"/></svg>
-        </button>
+        <div class="scroll" id="scroll"></div>
+        <button class="backpill" id="backpill" hidden></button>
         <!-- The workspace seam, hung off the chat rather than the panel: the panel
              clips its own overflow, so a grip inside it could only be grabbed
-             from one side. -->
+             from one side. Empty, and staying static: there is no interior to
+             render, and shell/panes.ts drags it by id. -->
         <div class="grip" id="wsGrip" role="separator" aria-orientation="vertical"
              data-i18n-title="gui.resize_ws" data-i18n-aria="gui.resize_ws"></div>
 
-        <div id="brand" aria-hidden="true">
-          <span class="mk"></span>
-          <span class="wl">Raven Agent</span>
-        </div>
+        <div id="brand" aria-hidden="true"></div>
 
         <div class="dock">
           <!-- Behind the composer on purpose: this one is drawn as a torso
