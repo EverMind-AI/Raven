@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client'
 
 import { App } from './App'
 import * as composer from './features/composer/mount'
-import * as sheets from './features/composer/sheets'
+import * as sheets from './state/sheetRack'
 import * as dagSheet from './features/dag/mount'
 import { ConnApp } from './features/connections/ConnPage'
 import { installLinkTrap } from './features/browser/store'

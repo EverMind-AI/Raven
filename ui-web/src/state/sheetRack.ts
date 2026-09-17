@@ -1,13 +1,20 @@
 /* The sheet rack: session-scoped bookkeeping for everything that docks above
  * the composer.
  *
- * Part of the composer island rather than a writer of its own, for three
- * reasons that all point the same way. The rack it fills (`#sheetRack`) sits
- * inside `.dock`, one node above the composer card in the same markup. Every
- * mutation here ends in `dockLift()`, which is already the composer's. And by
- * the rule `shell/lightbox.ts` states -- one node appended to a host is a
- * writer, a container plus a list is an island -- a static container plus a Map
- * of element sets is the second thing.
+ * State rather than a writer, for the reason `shell/lightbox.ts` states -- one
+ * node appended to a host is a writer, a container plus a list is not -- and
+ * the list is what is here: which conversation each sheet belongs to, what it
+ * renders, and who is waiting on the reader. The rack it fills (`#sheetRack`)
+ * sits inside `.dock`, one node above the composer card in the same markup, and
+ * every mutation here still ends in `dockLift()`, which is the composer's.
+ *
+ * A sheet's own element is the host its tenant hands over, not something React
+ * renders: `.dock .sheets > *` styles that element as the flex item and
+ * `data-sess` is written on it, so a wrapper around it would take both, and the
+ * rack's child list is mixed -- the dag sheet is a host with a root of its own.
+ * The interior is a component (src/chrome/SheetRack.tsx portals each view into
+ * the host it belongs to), so this module keeps the DOM order it always had:
+ * newest first, the same insertBefore, and the caret undisturbed by a sync.
  *
  * What docks here -- a clarify question, an approval request, a dag graph --
  * belongs to the conversation it was raised in. Each used to be appended
@@ -19,7 +26,9 @@
  * A sheet is filed under a session key on arrival and mounted only while that
  * session is open. Detached rather than destroyed, and the element is kept: the
  * question is still pending on the server, so coming back has to show the same
- * sheet -- with the reader's half-typed answer in it -- not a fresh one.
+ * sheet -- not a fresh one that replays its entrance. Its interior is unmounted
+ * while it is parked, which is why what the reader typed into it lives in
+ * state/sheetDrafts.ts rather than in the input.
  *
  * A detached sheet's document-level key handler is still live, which is the one
  * thing this scoping does not fix on its own. Each handler checks
@@ -28,8 +37,12 @@
  * leaves for good is the rack's job, through the teardown below.
  */
 
-import { current } from '../../shell/session'
-import { dockLift } from './store'
+import { flushSync } from 'react-dom'
+
+import { current } from '../shell/session'
+import { dockLift } from '../features/composer/store'
+
+import type { ReactNode } from 'react'
 
 const SHEETS = new Map<string, Set<HTMLElement>>()
 
@@ -89,6 +102,62 @@ export function watchAsking(fn: (key: string, asking: number) => void): () => vo
   return () => WATCHERS.delete(fn)
 }
 
+/* The interior of each sheet whose conversation is open, for <SheetRack/>.
+ *
+ * A tenant that renders its sheet from a component hands the view over with the
+ * host; one that fills its host itself (the dag sheet, which roots a tree of its
+ * own in it) hands over no view and is absent from here. What is rendered is
+ * therefore the open conversation's views -- a parked sheet's interior is
+ * unmounted, which is what "not rendered" means for the conversation the reader
+ * is not looking at. */
+export interface RackSheet {
+  readonly id: string
+  readonly el: HTMLElement
+  readonly view: ReactNode
+}
+
+const VIEWS = new WeakMap<HTMLElement, RackSheet>()
+let shown: readonly RackSheet[] = []
+let made = 0
+const listeners = new Set<() => void>()
+
+/** The interiors to render, for useSyncExternalStore. */
+export function sheets(): readonly RackSheet[] {
+  return shown
+}
+
+export function subscribe(fn: () => void): () => void {
+  listeners.add(fn)
+  return () => {
+    listeners.delete(fn)
+  }
+}
+
+/* Recomputed from the buckets rather than tracked alongside them, so the one
+   record of who is where cannot disagree with itself. The same array comes back
+   when nothing moved, which is what useSyncExternalStore requires, and the
+   commit is synchronous because the callers below go on to read the DOM: the
+   sheet's own focus call, `dockLift`'s measurement, and a tenant reaching for
+   its first option are all one statement later. */
+function paint(): void {
+  const here = session()
+  const next: RackSheet[] = []
+  for (const [key, bucket] of SHEETS) {
+    if (key !== here) continue
+    for (const el of bucket) {
+      const sheet = VIEWS.get(el)
+      if (sheet) next.push(sheet)
+    }
+  }
+  const same = next.length === shown.length && next.every((s, i) => shown[i] === s)
+  if (same) return
+  shown = next
+  if (!listeners.size) return
+  flushSync(() => {
+    for (const fn of [...listeners]) fn()
+  })
+}
+
 /* A draft is not a session yet -- the session pointer is null until the first
    message lands -- but a question can be asked during its first turn, so it
    needs a key of its own rather than sharing one with every other draft-less
@@ -99,14 +168,18 @@ export const session = (): string => current() || '(draft)'
 
 const rack = (): HTMLElement => document.querySelector<HTMLElement>('#sheetRack') || document.body
 
-export function add(el: HTMLElement, key?: string, teardown?: () => void): void {
+export function add(el: HTMLElement, key?: string, teardown?: () => void, view?: ReactNode): void {
   const k = key || session()
   el.dataset.sess = k
   if (teardown) TEARDOWN.set(el, teardown)
+  if (view !== undefined) VIEWS.set(el, { id: `sheet${++made}`, el, view })
   let bucket = SHEETS.get(k)
   if (!bucket) SHEETS.set(k, (bucket = new Set()))
   bucket.add(el)
   told(k)
+  /* Filled before it is docked, the way a tenant that built its own sheet handed
+     over a finished one. */
+  paint()
   /* First child, not last: sheets are flow content, and the newest belongs on
      top of the stack, above the field it interrupts. */
   if (k === session()) {
@@ -123,6 +196,8 @@ export function remove(el: HTMLElement): void {
     if (!bucket.size) SHEETS.delete(el.dataset.sess as string)
   }
   el.remove()
+  VIEWS.delete(el)
+  paint()
   /* Dropped from the map before it is run, because a teardown typically ends in
      the tenant's own close, which calls back in here. Clearing the entry first
      makes that second pass find nothing rather than recurse. */
@@ -148,6 +223,9 @@ export function dropClass(cls: string, key?: string): void {
    everything else -- including sheets raised while the reader was away. */
 export function sync(): void {
   const here = session()
+  /* Before the elements move, so a sheet coming back is filled before it is
+     docked and one being parked is emptied before it leaves. */
+  paint()
   SHEETS.forEach((bucket, key) => bucket.forEach((el) => {
     if (key === here) {
       if (!el.isConnected) {
@@ -168,6 +246,7 @@ export function forget(key: string): void {
 /* Test seam only: the Map outlives a test file's DOM. */
 export function _resetForTests(): void {
   SHEETS.clear()
+  paint()
   /* Not the watchers. One is registered when its island's module loads, which
      happens once for a whole test file, so clearing them here would unwire the
      first reset and leave every test after it watching nothing. A test that adds

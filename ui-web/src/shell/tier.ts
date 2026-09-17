@@ -326,7 +326,7 @@ function tick(): SVGSVGElement {
 
 /* Test seam: the module's state outlives a test file's DOM. */
 /* Test seam: the module's state outlives a test file's DOM. Watchers are NOT
-   cleared, for the reason `composer/sheets` gives -- one is registered when its
+   cleared, for the reason `state/sheetRack` gives -- one is registered when its
    own module loads, which happens once per test file, so clearing them would
    unwire the first reset and leave every case after it listening to nothing. */
 /* Test seam for a listener's side of the contract: the tier moving without a

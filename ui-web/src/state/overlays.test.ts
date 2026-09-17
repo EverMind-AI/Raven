@@ -22,7 +22,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { readFileSync } from 'node:fs'
 
 import { openApproval } from '../features/composer/approve'
-import * as sheets from '../features/composer/sheets'
 import * as turn from '../features/composer/turn'
 import { islands } from '../islands'
 import { resetShell, setShell } from '../shell/bridge'
@@ -31,6 +30,7 @@ import { _resetForTests as sessionReset, setCurrent } from '../shell/session'
 import { installEscapeChain } from './globalListeners'
 import * as overlays from './overlays'
 import * as settingsDialog from './settingsDialog'
+import * as sheets from './sheetRack'
 import { resetSources, sources } from './sources'
 
 import type { ComposerSource } from '../features/composer/types'

@@ -12,7 +12,7 @@
 import { createRoot } from 'react-dom/client'
 
 import { t } from '../../shell/bridge'
-import { add as sheetAdd, askingIn, remove as sheetRemove, watchAsking } from '../composer/sheets'
+import { add as sheetAdd, askingIn, remove as sheetRemove, watchAsking } from '../../state/sheetRack'
 import { Sheet } from './DagSheet'
 import { fromSnapshot } from './nodes'
 import * as store from './store'
@@ -42,8 +42,8 @@ const onAsking = (key: string, asking: number): void => {
 
 /* Registered at module scope because that is this island's whole lifecycle --
    one island, page lifetime, no mount to hang it off. The unsubscribe is kept
-   anyway so the test seam can drop and re-arm it: `sheets.ts` deliberately
-   keeps watchers across its own reset, so without this the isolation between
+   anyway so the test seam can drop and re-arm it: `state/sheetRack.ts`
+   deliberately keeps watchers across its own reset, so without this the isolation between
    test files would rest on vitest handing each one a fresh module registry --
    true today, and not something this file should depend on. */
 let unwatch = watchAsking(onAsking)

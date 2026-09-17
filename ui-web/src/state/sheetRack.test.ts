@@ -4,11 +4,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readdirSync, readFileSync } from 'node:fs'
 
-import { _resetForTests, add, dropClass, forget, remove, session, sync } from './sheets'
-import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
-import { resetShell, setShell } from '../../shell/bridge'
+import { _resetForTests, add, dropClass, forget, remove, session, sheets, sync } from './sheetRack'
+import { _resetForTests as sessionReset, setCurrent } from '../shell/session'
+import { resetShell, setShell } from '../shell/bridge'
 
-import type { Shell } from '../../shell/bridge'
+import type { Shell } from '../shell/bridge'
 
 function wire(): void {
   const shell: Shell = {
@@ -170,6 +170,32 @@ describe('the sheet rack', () => {
     expect(mounted()).toEqual([])
     sync()
     expect(mounted()).toEqual([])
+  })
+
+  /* What <SheetRack/> subscribes to. The same array has to come back while
+     nothing has moved, or useSyncExternalStore re-renders on every read. */
+  it('hands out the same list of interiors until one changes', () => {
+    const first = sheets()
+    add(sheet())
+    /* A sheet with no interior of its own -- the graph's kind -- is not in it. */
+    expect(sheets()).toBe(first)
+
+    const withView = sheet()
+    add(withView, undefined, undefined, 'an interior')
+    const second = sheets()
+    expect(second.map((s) => s.view)).toEqual(['an interior'])
+    expect(sheets()).toBe(second)
+
+    /* Parked with another conversation, its interior is not rendered. */
+    setCurrent('b')
+    sync()
+    expect(sheets()).toEqual([])
+    setCurrent('a')
+    sync()
+    expect(sheets().map((s) => s.el)).toEqual([withView])
+
+    remove(withView)
+    expect(sheets()).toEqual([])
   })
 
   /* The one claim the cases above cannot see. "Every mutation here ends in
