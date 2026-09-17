@@ -65,9 +65,9 @@ def deliver(project, published: Path, digest: str, pages: int, *, destination: P
     the destination holding the last good deck rather than a half-built one; and the
     write is atomic for the same reason the publish is -- a user has the file open.
 
-    The PDF the publish put beside the deck rides along when there is one; the web
-    surface previews a PDF and only downloads a .pptx, and a copy is what it costs.
-    It rides along only where its own name is free (`destination.sidecar_for`, which
+    A `preview` rides along when the caller hands one; the build stage hands none
+    since the deliverable became the deck alone, and the web surface renders a deck
+    it is shown by itself. Where one is handed it rides along only where its own name is free (`destination.sidecar_for`, which
     derives both paths and answers that one question): the deliverable is the file the user named and replacing it
     is the request, while the preview is this engine's convenience and an existing
     `intro.pdf` beside a delivered `intro.pptx` is a file the user has. Nothing on

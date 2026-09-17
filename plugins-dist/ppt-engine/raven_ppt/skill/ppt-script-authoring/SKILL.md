@@ -19,9 +19,9 @@ of topics: each content page performs one narrative job and makes one primary cl
 
 Write audience-facing titles that state the point. Open with the context, question
 or stakes that make the deck worth sitting through. Close by resolving that opening
-— a decision, an implication, a next question. A separate closing page is optional:
-add one when the user asks for it, otherwise let the last content page carry the
-conclusion.
+— a decision, an implication, a next question — on the last content page. The
+template's closing page ends the deck after it, as its cover opens it: both are the
+house frame and carry no argument of their own.
 
 Pack the evidence before allocating pages. A page carries one claim and the developed
 support that claim takes, and what makes the support developed is that it is more than
@@ -122,8 +122,7 @@ page handing its own work back to the reader.
 **What a finished page owes is written down, and it is what the review at the end judges
 by: [deck/build/references/design-requirements.md](deck/build/references/design-requirements.md).
 Open it now, before the first page.** Seven short sections -- room, edges, marks, figures,
-tables, type, the claim -- each decidable from the render alone. Two of them decide most
-of what a delivered deck gets wrong, so they are here as well:
+tables, type, the claim -- each decidable from the render alone. Two of them are here as well:
 
 - **A blank region has two kinds and they have different answers.** A shape bigger than
   what it holds is fixed by measuring (`card_size`, `text_size`, `picture_size`,
@@ -159,7 +158,11 @@ not mention your file.
 template: `ppt_prepare` binds the one the user gave, and binds a bundled default when
 the user gave none. The build directory then holds one theme, named after that file —
 so `THEMES` has exactly one entry and its face is the template's own. Take that entry
-by iteration; a theme id typed into `THEMES[...]` is a `KeyError`.
+by iteration; a theme id typed into `THEMES[...]` is a `KeyError`. Where the renders
+show a ground or an accent the file does not declare, state what you see once with
+`ppt_template(palette=...)` before the build, and every page and every derived tint
+follow from it; a `T["background"] = ...` in the program changes one run's pages and
+records nothing.
 
 **Only three roles are read off the file** -- the ground, the ink and its first accent.
 `surface`, `accent_soft`, `accent_ink`, `grid` and `muted` are mixed from those three.
@@ -228,11 +231,14 @@ You do not compute that, and you should not work around it: a `write` you place 
 plane yourself is yours to colour, and `theme["background"]` is the ink on a saturated
 one.
 
-**`accent` fills; `accent_ink` writes.** `accent_soft` is the accent mixed towards
-the background, so a pale accent cannot be read on its own tint. The theme carries
-`accent_ink` for this: the same hue, dark enough to write with, or the accent itself
-where that already reads. Fills, markers and bars take `accent`; a number or heading
-in the accent's colour takes `accent_ink`, by that name or as `theme["accent_ink"]`.
+**`accent` fills; `accent_ink` writes — on the page's own ground.** `accent_soft` is
+the accent mixed towards the background, so a pale accent cannot be read on its own
+tint. The theme carries `accent_ink` for this: the same hue, dark enough to write with
+on the ground and on `accent_soft`, or the accent itself where that already reads.
+Fills, markers and bars take `accent`; a number or heading in the accent's colour takes
+`accent_ink`, by that name or as `theme["accent_ink"]`. On a plane of `accent` or a
+page whose ground is saturated, `accent_ink` is a dark on a dark — a deep red heading
+on a red page measured 1.09:1 — so type there is `theme["background"]`, the light ink.
 
 **A paragraph set in one weight and one grey says nothing is more important than
 anything else.** A reader scanning a slide takes the emphasised words first and reads
@@ -502,9 +508,8 @@ and the first five pages, then `mode="append"` for five pages at a time, with
 `ppt_build(draft=true)` in the same reply as each append -- the calls in one reply run in
 the order you list them, so the write and the build together are one turn: a draft builds
 what exists, measures it and hands back the renders without holding a part-written deck to
-the agreed length and without publishing. Four appends and four drafts is a twenty-page deck; a measured run that
-appended two pages at a time through thirty `exec` heredocs spent thirty-seven minutes of
-model time on the appending alone. Use `write_file`, not `exec`, to write the program. Drop `draft` when the deck is whole and you want the gates. A twenty-page
+the agreed length and without publishing. Four appends and four drafts is a twenty-page deck.
+Use `write_file`, not `exec`, to write the program. Drop `draft` when the deck is whole and you want the gates. A twenty-page
 program sent in one call is cut before it arrives, and a draft shows you a page while
 there are three rather than twenty.
 
@@ -512,7 +517,8 @@ It runs in the build directory with python-pptx and Pillow and reads its paths f
 environment: `PPT_OUTPUT` (save there and nowhere else); `PPT_FIGURES_DIR` (the figures
 ingest extracted, and the only way to one — take
 `FIGURES = os.environ["PPT_FIGURES_DIR"]` in the setup and write `f"{FIGURES}/fig2.png"`
-wherever a page places a figure; there is no `figures` directory under `deck/build`);
+wherever a page places a figure, with the name the figure list gives after `file` — the id
+before it is the catalogue's key, not a file; there is no `figures` directory under `deck/build`);
 and, with a template bound, two paths that are not interchangeable — `PPT_TEMPLATE` is
 the template with its example pages **removed**, the deck you build into
 (`prs = Presentation(os.environ['PPT_TEMPLATE'])`), and `PPT_TEMPLATE_SOURCE` is the
@@ -632,9 +638,7 @@ nor in a reference this page links is one you should not be calling. The drawing
 Import them by name. What follows is the whole set this page and its references call, so
 a snippet copied from either has its import here; take the lines the page you are drawing
 needs, and an import you never call costs nothing. A name used in an example and absent
-from every import line is a name an author cannot reach: two of one live build's five
-failures were `NameError: name 'Run' is not defined` and the same for `card_size`, each
-one a round spent guessing which module it came from.
+from every import line is a `NameError` at build time, so the import travels with the snippet.
 
 ```python
 from ppt_theme import THEMES, rgb
@@ -920,7 +924,9 @@ pitch and the size the template drew, and that tuple is exactly what `place` tak
 computing a position without it is guessing at coordinates the page already holds.
 
 `ppt_theme` gives `THEMES` and `rgb`. `ppt_icons` gives `add_icon(slide, name, left,
-top, size, colour, width_pt=1.75)`, `swap_icon(slide, shape, name, colour=None)`, `find_icons(term)` and `ICON_NAMES`.
+top, size, colour, width_pt=None)` -- the pen is a twelfth of the side, the icons' own
+2-on-24 weight, unless `width_pt` fixes it -- `swap_icon(slide, shape, name, colour=None)`,
+`find_icons(term)` and `ICON_NAMES`.
 
 **Repeated units, in detail.** A content page is usually one small group repeated, and
 each repeat is written like any other line: `replace_text(slide, "the words that unit
@@ -960,9 +966,9 @@ special is needed -- `replace_text` is keyed on words and does not care which ru
 sits in -- but check `units(slide)` whenever the render shows more repeated cards than you
 wrote, because that is the page telling you there are slots you have not reached.
 
-**Some pages have no run at all that `units` can see.** Measured on one bundled template's
-page 5: the three content cards are not detected as a repeating unit, so `units(slide)`
-returns only the three icon badges beside them. `replace_text` reaches the cards anyway,
+**Some pages have no run at all that `units` can see.** Content cards drawn as loose
+shapes are not detected as a repeating unit, so `units(slide)` may return only the icon
+badges beside them. `replace_text` reaches the cards anyway,
 because it asks the page what it says rather than how it repeats. This is the reason the
 route is words-first (§12, and the note under `remove_unit`): on such a page only
 `remove_unit` needs a run, and only if you are cutting slots.
@@ -1014,13 +1020,11 @@ and `replace_picture(..., "cover")` crops whatever does not fit: a 16:9 picture 
 banner strip keeps its middle third, a 16:9 picture in a portrait column keeps a
 sliver. Choose the ratio nearest the frame (3:2 or 4:3 for a photo frame, 9:16 or 3:4
 for a column, 16:9 for a wide band) and say in the prompt where the subject sits, so
-what the crop keeps is the subject. A measured deck put a 16:9 generation in an
-11.9x1.9in band and kept 28% of it.
+what the crop keeps is the subject.
 
 Plan every picture the deck will generate and ask for them in one call --
 `ppt_generate_image(prompts=[{prompt, filename}, ...])` makes them at the same time and
-ingests them once; nine pictures one call each cost a measured run sixteen minutes of
-waiting. Generate with `ppt_generate_image` only after both paths find no suitable existing
+ingests them once. Generate with `ppt_generate_image` only after both paths find no suitable existing
 visual; a generated image illustrates a concept and never replaces evidence. Ask at the
 shape of the region it will sit in — `aspect_ratio` takes `16:9`, `4:3`, `3:2`, `1:1`,
 `2:3`, `3:4`, `9:16` or `21:9` and defaults to `16:9`, so a portrait strip gets a landscape
@@ -1037,12 +1041,14 @@ A cover does not need a figure. Its job is the title, who wrote it and where, an
 paper's Figure 1 pressed into its corner is smaller than the page it will get later.
 
 **The cover and the closing page keep the template's composition.** Their title block,
-chips, marks and rules are the design; the illustration or photograph beside them is the
-placeholder. Put the page's picture into that slot -- `replace_picture(layout_pictures(slide)[0],
+chips, marks and rules are the design; a photograph or illustration in its own frame
+beside them is the placeholder. Put the page's picture into that slot -- `replace_picture(layout_pictures(slide)[0],
 image, "cover")` when the slot is on the layout, `replace_picture(shape_at(slide, n), image)` when
 it is on the page --
 and never drop the layout's art to make room for a full-bleed photograph (`drop_shape` refuses a
-layout shape): a live cover did exactly that and came out as black type on a washed skyline.
+layout shape). Where the layout's picture is the whole page -- border, ground and
+illustration in one bitmap, as the bundled templates draw their covers -- it is the frame
+itself: keep it, and the second reader is told so.
 What goes into the slot is decided by what the template put there, and the template can be
 anyone's -- a bundled one, or a deck the user uploaded. Look at the slot in the render before
 you ask for a picture: a slot that holds a photograph takes a photograph; a slot that holds a
@@ -1312,10 +1318,6 @@ a band of white along its bottom edge. Three calls spend it, all of them before 
   fills comes back unchanged, and so does one the run overruns -- growing it would put type
   through the safe margin, and an overrun is `take`'s to refuse with both numbers.
 
-Measured on one delivered deck: eleven of the eighteen pages an independent reader could
-read ended their content between 60% and 70% down, and four more were two columns that
-stopped at different heights.
-
 **Spread components, never running copy.** The gap between two cards is air; the gap
 between two paragraphs is a break in a thought, and three sentences pulled 1.9in apart
 stop reading as one column at all -- rendered and compared, it is worse than leaving them
@@ -1367,8 +1369,11 @@ answers how many inches the whole plan runs over, or 0.0. Take that off the band
 can give it up -- the ones whose content is not the page's claim -- before the first
 `take`. This is the most common way a build script dies.
 
-**Give a content page its foot.** `page(footer=True)` then `footer(slide, frame.footer,
-T, note=...)` on every page that is not the cover, a divider or the closing. Two things
+**Give a content page its foot -- on the pages you compose.** With a template bound the
+foot follows the template: where its own pages carry none, add none, and a photograph's
+source lives in the figure catalogue, not in a credit line squeezed onto the page.
+`page(footer=True)` then `footer(slide, frame.footer,
+T, note=...)` on every composed page that is not the cover, a divider or the closing. Two things
 come of it and neither is the number: a body that ends two thirds down an otherwise
 blank page reads as unfinished, and a rule across the foot is what says the page ends
 there because it was meant to. The number is a `slidenum` field, so inserting a page
@@ -1451,8 +1456,8 @@ from being a void.** `rest()` hands back everything still unspoken for, so a tin
 drawn on it is as tall as whatever the bands above happened to leave -- and this one holds
 one line. `said.h` is already in hand two lines up, which is the point of measuring: the
 band is cut to the sentence, and room left over stays unpainted rather than being covered.
-Copied without that, this fragment is the commonest void in a delivered deck -- one run put
-it on three pages, each a colour panel four times the height of the copy inside it. Reach
+Copied without that, this fragment is a colour panel several times the height of the copy
+inside it. Reach
 for `rest()` when what goes in the band is sized to the band by construction -- a
 `picture_fit` filling it, a table with `weights` -- and never for a plane with a sentence
 on it.
@@ -1518,7 +1523,7 @@ python3 -c "import json;print([n for n in json.load(open('deck/build/icons.json'
 
 **A guessed name is not free.** `add_icon` raises `LookupError` on a name that is not
 there, and a raise ends the whole script -- every page after it goes unwritten and the
-build round is spent. One run guessed `wave-sine` and lost a round to it. The refusal
+build round is spent. The refusal
 does name the nearest three, which is why guessing feels cheap; it is cheap only if the
 guess was the last thing the script did.
 
@@ -1570,8 +1575,7 @@ own; 6 of 17 read as "drawn by hand and ugly", and the six were exactly the comp
 **Even a page you compose starts on the template's page.** Clone the nearest example,
 `remove_unit` the units the page does not need, and draw into the region that frees -- the
 header row, the panels, the marks and the ground stay the template's, and only the body
-is yours. A page drawn from primitives alone carries none of them, and on a live deck the
-six pages a reader singled out as drawn by hand were exactly the six composed that way.
+is yours. A page drawn from primitives alone carries none of them, and reads as drawn by hand.
 `ppt_template(pages=[n])` gives the example's real geometry to draw against.
 
 **`ppt_template(project=..., pages=[4, 5])` reads an example page back as the python-pptx
@@ -1645,12 +1649,9 @@ template that is the card the chart was drawn in, and the card is the arrangemen
 page was cloned for. `keep=("the words a shape shows",)` or `keep=(7,)` spares one, and
 `share=` (half by default) decides how much of a shape has to be inside the box to go.
 
-Do not write the sweep yourself. One live program wrote two -- one keyed on whether a
-shape's text was Chinese, the other on whether the shape was bigger than 1.0x0.7in -- and
-on the page it ran on those kept all ten arrows (1.27x0.68in, under the height bar), all
-five number labels ("01".."05", not Chinese) and every connector, because a horizontal
-rule is 0.00in tall and a vertical one 0.00in wide. Two charts came out drawn on top of
-the arrows. Neither sweep could take a region, which is the whole of what went wrong.
+Do not write the sweep yourself: a sweep keyed on a shape's language or size keeps the
+arrows, the number labels and every connector (a rule is 0.00in tall), and the chart goes
+on top of them. Only a region takes everything in it.
 
 ```python
 slide = clone_page(prs, prototype(tpl, 4))
@@ -1735,9 +1736,7 @@ from another bundled template before composing.** `ppt_template` lists them unde
 `borrowable_pages`, each by template, page and arrangement -- an S-curve of five pills, a
 ring of six labels around a hub, a photograph beside a numbered list. A borrowed page lands
 on this deck's own layout of the same name and its theme colours resolve to this deck's,
-so what comes across is the arrangement and nothing of the source's look: measured on four
-such clones rendered beside their sources, every fill on the reference pages is a theme
-colour or white.
+so what comes across is the arrangement and nothing of the source's look.
 
 ```python
 from ppt_template import bundled, clone_page, prototype, replace_text
@@ -1758,18 +1757,16 @@ Everything above about a cloned page holds for a borrowed one -- `replace_text` 
 `remove_unit` for the slots the content does not fill, whatever you replace in neither
 still says the source template's example copy, and its photographs are placeholders.
 
-**Two things do not follow the deck, and ppt_template names both against the pages they
-are true of.** A picture is a bitmap, so a reference page whose drawings are painted in
-its own template's accents arrives in those accents whatever deck it lands in --
-`replace_picture` them out. And a page's ink is stated on its runs while its cards take
-the deck's palette, so a label that reads in the template it was cut from can arrive on
-a colour that cannot show it: measured over 486 clones of these pages into the ten
-bundled templates, 89 came out with copy under the 2:1 the build refuses, in every one
-of the ten -- on a pale accent, on a 60/40 tint of one, on the near-white second plane
-and on the page ground itself. ppt_template names the pairs your deck cannot show; reset
-those labels in its ink, or fill the card with one of its darker colours. Everything else
--- fills, type, geometry, the filling ports -- comes across in this deck's palette, and
-over those 486 clones nothing else did not.
+**Colours follow the deck; two things do not, and ppt_template names both.** Every fill,
+line and run that refers to a theme colour resolves to this deck's theme the moment the
+page is cloned -- do not walk the page's shapes to recolour them, there is nothing to
+find, and on python-pptx merely reading `shape.line.color` puts an outline on every shape
+it touches. What does not follow: a picture is a bitmap, so an illustration painted in
+the source template's accents arrives in those accents -- `replace_picture` it out; and
+a label whose colour read on the source's card can land on a tint of this deck's that
+cannot show it -- ppt_template lists those pairs, and the build refuses the page under
+2:1 as `unreadable`, naming the label. Answer that by writing the label in this deck's
+ink or filling its card darker, one line each, and leave the rest of the page alone.
 
 ### The pages you compose
 
@@ -1921,10 +1918,7 @@ defined inside an earlier one.
 build in one reply.** A build's reply lists every finding on every page it showed; answer
 all of them -- one `edit_file` per page named -- and then `ppt_build`, all in the same
 reply: tool calls run in the order listed, so the edits and the build cost one turn where a
-reply per call costs two. One build per finding was the measured shape of a slow run:
-twenty-three builds of forty seconds for one deck, most of them to see a single fix land;
-and a run that sent every edit and every build as its own reply spent 32 of its 72
-iterations on that alternation alone.
+reply per call costs two. One build per finding is the shape of a slow run.
 
 **Name the pages you changed when a page is wrong.** `ppt_build(slides=[7])` rebuilds and
 hands back page 7 alone: edit that page's block, look at it, fix it, look again. A sweep tells you twelve pages have something wrong; a short loop tells you what.
@@ -1978,8 +1972,7 @@ picture it is comes back as `refused`, and the entry stays open.
 **One page at a time, and a verdict on a kind is not a judgement.** The entries already
 carry their kind; what makes the list worth having is that each one names a page. "Most of
 these are whitespace on the table pages, and the cover art is the template's, so keeping
-them" answers eighteen pages without opening one -- a live run wrote exactly that, made two
-edits, and published. If you are going to leave an entry, open its page, say what you saw
+them" answers eighteen pages without opening one. If you are going to leave an entry, open its page, say what you saw
 there, and name the page when you say it. Dismissing a kind is how a list of eighteen
 becomes a list of two without anything being read, and the ones a category sweeps away are
 the ones the reviewer could see and you could not.
@@ -1987,10 +1980,9 @@ the ones the reviewer could see and you could not.
 **Why a second reader rather than more looking.** You wrote these pages, and a region you
 filled on purpose reads to you as a decision already made -- so a warning against it is
 one you have already answered. The reviewer has none of that: it did not choose the
-layout, and it is not told your program, only the plan. On a delivered deck that cleared
-every gate with nothing blocking on any of its 18 pages, it came back with 45 entries,
-among them a colour panel stretched to four times the height of the two lines in it and a
-table whose right edge stopped at 56% of a band whose card row above it ran to 94%.
+layout, and it is not told your program, only the plan -- so it sees the colour panel
+four times the height of its two lines, and the table that stops well short of the band
+its card row fills, which cleared every gate.
 
 **When the pages read right, stop.** A build nothing refuses has delivered the deck, and
 after `ppt_review` there is no further pass, no stage that rearranges the pages once the
@@ -2002,11 +1994,8 @@ through -- and had read back to you -- and would not change is finished.
 the deck's own name -- on any build, a draft included; it is kept for the deck, and every
 build that publishes writes `out/` and copies the same bytes there, the first time and on
 every revision after. The reply comes back with `delivered_to` and the slide count, and
-those are the words to give the user. Two files land, not one: the deck's PDF preview is
-written beside it under the same stem -- but only where nothing holds that `.pdf` name
-already. A file there is the user's own and is left untouched, the preview stays under
-`out/`, and the reply says so in `delivered_pdf_kept_back`; pass that on, because it is
-the user's directory and they are the one who knows what that file was. A copy you make
+those are the words to give the user. One file lands: the `.pptx`. The render under
+`out/` is the engine's own preview and is not delivered or handed over. A copy you make
 with `exec` is recorded nowhere, is not the deliverable, and is called out as such.
 
 ## 11. The order is enforced, not suggested

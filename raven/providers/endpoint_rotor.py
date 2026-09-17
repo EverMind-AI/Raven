@@ -262,7 +262,8 @@ class EndpointRotorProvider(LLMProvider):
             "All endpoints exhausted, returning the last error. Tried: {}",
             ", ".join(f"{label} [{category}]" for label, category in tried),
         )
-        return last_response  # type: ignore[return-value]  # order always non-empty
+        assert last_response is not None  # noqa: S101 - the order is never empty, so the loop above always ran
+        return last_response
 
     async def chat(
         self,

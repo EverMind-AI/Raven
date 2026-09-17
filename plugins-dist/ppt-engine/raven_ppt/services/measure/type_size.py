@@ -415,7 +415,21 @@ _SLOT_CHARS = 4
 # holding them to the body floor put the same finding on seven pages of one deck --
 # "来源：TarViS 原论文（CVPR 2023）" at 11pt, which is legible, deliberate and 24
 # characters long, so no length rule could tell it from copy.
-_CAPTION_MARKERS = ("来源", "资料来源", "注：", "图", "表", "source:", "figure", "fig.", "table", "note:")
+_CAPTION_MARKERS = (
+    "来源",
+    "资料来源",
+    "数据来源",
+    "注：",
+    "图",
+    "表",
+    "source:",
+    "sources:",
+    "data source",
+    "figure",
+    "fig.",
+    "table",
+    "note:",
+)
 # And the band at the foot of a page where those live. A body block starts higher than
 # this on every page measured; below it a line is furniture.
 _FOOTER_BAND = 0.9

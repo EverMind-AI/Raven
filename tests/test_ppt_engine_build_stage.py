@@ -263,6 +263,17 @@ async def test_the_route_decides_which_warning_kinds_refuse_delivery(project: Pr
 
 
 @pytest.mark.asyncio
+async def test_a_draft_is_not_asked_how_many_of_its_pages_show_evidence(project: Project) -> None:
+    """ "Only 6 of 8 content pages show anything" on a 20-page plan counts pages not written
+    yet; every draft of one run carried it, and the finished build is where it is answered."""
+    evidence = _warning("evidence")
+    draft = await _stage(project, findings=[evidence]).run(project, draft=True)
+    assert [f.kind for f in draft.findings] == []
+    finished = await _stage(project, findings=[evidence]).run(project)
+    assert [f.kind for f in finished.findings] == ["evidence"]
+
+
+@pytest.mark.asyncio
 async def test_a_draft_is_measured_and_not_published(project: Project) -> None:
     """A half-written program is an accepted intermediate state: it is measured and
     handed back, and it is not held to a length nobody has finished writing to."""

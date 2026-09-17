@@ -23,6 +23,7 @@ dependencies = [
     "everos[multimodal]==1.2.3",
     "httpx>=0.28.0,<1.0.0",
     "loguru>=0.7.3,<1.0.0",
+    "tomli-w>=1.2.0",
 ]
 
 # The one line that makes this package findable: PluginDiscovery._scan_entry_points

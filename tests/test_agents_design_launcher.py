@@ -1,6 +1,8 @@
 """Verify Design host inheritance, engine configuration and tool availability."""
 
 import json
+import os
+import shlex
 import stat
 import sys
 from pathlib import Path
@@ -60,7 +62,10 @@ UNGATED = {"ask_user", "find_skill", "tool_call", "tool_search"}
 
 #: The host image section makes image_generate available in the grounded render.
 VENDORED_TOOL_FACE = FORK_CONFIG_INTENT | ENGINE_TOOLS | UNGATED | {"image_generate"}
-KEY_GATED = {"web_search"}
+#: Both ride the same vendor key: `image_search` is what a real logo, product
+#: shot or photograph of a real place is found with, and the lane registers it
+#: exactly when it registers `web_search`.
+KEY_GATED = {"web_search", "image_search"}
 
 #: Trunk-born names the fork face never had and this product still holds out;
 #: every one by a config row (the w96 ledger discipline). The three that left
@@ -186,8 +191,13 @@ def test_the_config_ports_the_forks_leaves_onto_the_trunk_schema():
     ours = json.loads((RUN_PY.parent / "config.json").read_text())
     fork = json.loads((FORK / "config.json").read_text())
 
-    for leaf in ("contextWindowTokens", "maxToolIterations", "llmCallTimeout"):
+    for leaf in ("contextWindowTokens", "llmCallTimeout"):
         assert ours["agents"]["defaults"][leaf] == fork["agents"]["defaults"][leaf], leaf
+    # The one leaf that left the fork's value: the baseline (high) cap is 400
+    # here against the fork's 150, raised with medium once decks below the top
+    # tier were built on this lane -- a 20-page build, render and read loop
+    # did not fit the fork's budget.
+    assert ours["agents"]["defaults"]["maxToolIterations"] == 400 != fork["agents"]["defaults"]["maxToolIterations"]
     assert ours["language"] == fork["language"] == "zh"
     assert "providers" not in ours
     assert not {"model", "provider", "reasoningEffort"} & ours["agents"]["defaults"].keys()
@@ -294,20 +304,20 @@ def test_only_medium_names_an_effort_and_the_other_tiers_inherit_the_hosts(groun
     assert list(modes) == ["medium", "high", "max"]
     assert data["acp"]["defaultMode"] == "high"
     assert {m: (e["maxToolIterations"], e["reasoningEffort"]) for m, e in modes.items()} == {
-        "medium": (60, "low"),
-        "high": (150, "high"),
-        "max": (300, "high"),
+        "medium": (400, "low"),
+        "high": (400, "high"),
+        "max": (400, "high"),
     }
     # The overlay carries the cap it changed and not the effort: the effort is
     # the trunk's own knob, dispensed off the entry, and a copy in the diff the
     # engine reads would be a second place to change it.
-    assert modes["medium"]["overlay"]["agents"]["defaults"] == {"maxToolIterations": 60}
+    assert modes["medium"]["overlay"]["agents"]["defaults"] == {"maxToolIterations": 400}
     # And the trunk reads them as the loop will enforce them.
     catalogue = build_mode_catalogue(load_config(grounded.render_config(RUN_PY.parent / "config.json")))
     assert catalogue.default == "high"
-    assert (catalogue.get("max").max_iterations, catalogue.get("max").reasoning_effort) == (300, "high")
-    assert (catalogue.get("high").max_iterations, catalogue.get("high").reasoning_effort) == (150, "high")
-    assert (catalogue.get("medium").max_iterations, catalogue.get("medium").reasoning_effort) == (60, "low")
+    assert (catalogue.get("max").max_iterations, catalogue.get("max").reasoning_effort) == (400, "high")
+    assert (catalogue.get("high").max_iterations, catalogue.get("high").reasoning_effort) == (400, "high")
+    assert (catalogue.get("medium").max_iterations, catalogue.get("medium").reasoning_effort) == (400, "low")
 
 
 # --- the render: keys, fallbacks, the image waterfall --------------------------
@@ -348,6 +358,10 @@ def test_optional_keys_fall_back_per_slot_to_the_host_config(grounded, tmp_path)
     )
     data = _render(grounded)
     assert data["tools"]["web"]["search"]["apiKey"] == "host-serper"
+    # The host's slot arrives whole, and this lane alone switches the picture
+    # search on: `tools.web.search.images` is off by default so the lanes that
+    # read pages keep their tool face.
+    assert data["tools"]["web"]["search"]["images"] is True
 
 
 def test_own_image_key_is_ignored(grounded, monkeypatch):
@@ -564,6 +578,67 @@ def test_the_exec_lane_is_installed_ravens_acp_with_no_chdir(grounded, tmp_path,
     assert Path(calls["argv"][5]).parent == tmp_path / "state"
     assert calls["rendered_alive"]
     assert "cwd" not in calls
+
+
+def test_the_memory_address_follows_the_hosts_everos_server(grounded, tmp_path):
+    """The product config names the stock EverOS port; a host running its own server
+    elsewhere is followed, and a host naming none leaves the stock address alone."""
+    _host_config(
+        tmp_path, {"plugins": {"config": {"everos-memory": {"base_url": "http://localhost:18962", "port": 18962}}}}
+    )
+    data = _render(grounded)
+    assert data["plugins"]["config"]["everos-memory"]["base_url"] == "http://localhost:18962"
+    assert data["memory"] == {"backend": "everos", "userId": "raven-design", "agentId": "raven-design", "memoryTopK": 5}
+
+    _host_config(tmp_path, {})
+    data = _render(grounded)
+    assert data["plugins"]["config"]["everos-memory"]["base_url"] == "http://localhost:18791"
+
+
+def test_the_build_interpreter_is_a_shim_on_the_exec_path(grounded, tmp_path):
+    """`raven-python` runs this interpreter -- the one with python-pptx and
+    raven_ppt -- from a shell wrapper under the state root, and the rendered
+    exec config appends its directory to PATH. A wrapper and not a symlink:
+    CPython resolves a symlinked venv python back to the base interpreter
+    and loses the venv with it. Appended, so `python3` stays the machine's."""
+    import stat
+    import subprocess
+
+    data = _render(grounded)
+    bin_dir = tmp_path / "state" / "bin"
+    assert data["tools"]["exec"]["pathAppend"] == str(bin_dir)
+    assert data["tools"]["exec"]["timeout"] == 600
+
+    shim = bin_dir / grounded.INTERPRETER_SHIM
+    assert shim.read_text().splitlines() == ["#!/bin/sh", f'exec {shlex.quote(sys.executable)} "$@"']
+    assert shim.stat().st_mode & stat.S_IXUSR
+    probe = subprocess.run([str(shim), "-c", "import sys; print(sys.executable)"], capture_output=True, text=True)
+    assert probe.returncode == 0 and probe.stdout.strip() == sys.executable
+    # cmd.exe cannot run a shell script, so the same command resolves to a .cmd
+    # twin there through PATHEXT; it quotes the interpreter and passes the arguments on.
+    twin = bin_dir / grounded.INTERPRETER_SHIM_CMD
+    assert twin.read_bytes() == f'@echo off\r\n"{sys.executable}" %*\r\n'.encode()
+
+
+def test_an_operators_own_path_append_stays_ahead_of_the_shim(grounded, tmp_path):
+    source = tmp_path / "config.json"
+    config = json.loads((RUN_PY.parent / "config.json").read_text())
+    config["tools"]["exec"]["pathAppend"] = "/opt/house/bin"
+    source.write_text(json.dumps(config))
+
+    data = json.loads(grounded.render_config(source).read_text())
+    assert data["tools"]["exec"]["pathAppend"] == os.pathsep.join(["/opt/house/bin", str(tmp_path / "state" / "bin")])
+
+
+def test_the_shim_is_rewritten_for_the_interpreter_that_launches(grounded, tmp_path):
+    bin_dir = tmp_path / "state" / "bin"
+    bin_dir.mkdir(parents=True)
+    stale = bin_dir / grounded.INTERPRETER_SHIM
+    stale.write_text('#!/bin/sh\nexec "/old/venv/bin/python" "$@"\n')
+
+    _render(grounded)
+    assert "/old/venv" not in stale.read_text()
+    assert sys.executable in stale.read_text()
 
 
 # --- identity: host-generic, empirically ---------------------------------------

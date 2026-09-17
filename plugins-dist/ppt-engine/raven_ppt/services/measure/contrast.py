@@ -645,7 +645,8 @@ def _ground(arr: Any, ink: tuple[int, int, int] | None = None) -> tuple[int, int
         else int(min(candidates, key=lambda code: int(np.argmax(codes == code))))
     )
     held = flat[codes == winner].astype(np.float64)
-    return tuple(int(round(float(value))) for value in held.sum(axis=0) / held.shape[0])
+    red, green, blue = (int(round(float(value))) for value in held.sum(axis=0) / held.shape[0])
+    return red, green, blue
 
 
 def _states_a_fill(frame: Any) -> bool:

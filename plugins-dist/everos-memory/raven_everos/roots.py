@@ -73,7 +73,7 @@ class RootState:
 
 
 def _describe(root: Path) -> RootState:
-    from raven.config.update_everos import role_configured_in
+    from raven_everos.config import role_configured_in
 
     data = _read_toml(root)
     api = data.get("api") or {}

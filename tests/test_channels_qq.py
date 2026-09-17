@@ -49,6 +49,26 @@ def _group_msg(mid="m1", content="hello"):
 # ── parsing ────────────────────────────────────────────────────────────
 
 
+async def test_the_bot_factory_hands_back_a_client_not_the_class():
+    """``start()`` assigns the factory's return straight to ``self._client`` and
+    then awaits ``self._client.start(...)``, so handing back the class would fail
+    at the first connect rather than here. The factory cannot declare
+    ``type[botpy.Client]`` either: the local subclass takes no constructor
+    arguments while the base one requires ``intents``.
+
+    Async because ``botpy.Client.__init__`` calls ``asyncio.get_event_loop()``,
+    which raises when no loop is current -- the state an earlier test leaves
+    behind on CI. Under ``asyncio_mode = "auto"`` this body runs inside a loop,
+    so the call is answered by that loop instead of by ambient state."""
+    import botpy
+
+    from raven.channels.adapters.qq.channel import _make_bot
+
+    bot = _make_bot(MagicMock())
+
+    assert isinstance(bot, botpy.Client)
+
+
 def test_clean_content():
     assert qp.clean_content(SimpleNamespace(content="  hi  ")) == "hi"
     assert qp.clean_content(SimpleNamespace(content="")) == ""
@@ -434,6 +454,27 @@ def test_send_swallows_api_error():
 
 
 # ── contract conformance ───────────────────────────────────────────────
+
+
+async def test_start_hands_the_bot_it_built_to_the_connect_loop(monkeypatch) -> None:
+    """``start()`` is where the factory's return becomes ``self._client`` and then
+    the thing the connect loop awaits. The factory has its own test; this covers
+    the seam between them, which is the line a wrong return type lands on."""
+    from raven.channels.adapters.qq import channel as channel_mod
+
+    ch = _channel()
+    bot = MagicMock()
+
+    async def _connect(**kwargs):
+        ch._running = False  # one pass through the loop, then fall out
+
+    bot.start = AsyncMock(side_effect=_connect)
+    monkeypatch.setattr(channel_mod, "_make_bot", lambda owner: bot)
+
+    await ch.start()
+
+    assert ch._client is bot
+    bot.start.assert_awaited_once_with(appid="a", secret="s")
 
 
 def test_qq_satisfies_channel_contract():

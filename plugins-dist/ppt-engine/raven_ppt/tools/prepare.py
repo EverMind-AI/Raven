@@ -232,28 +232,14 @@ def _asks(plan: Any, state: Any, script: str) -> list[str]:
         # subject's logo, four its name, nothing the material named -- and 47% of
         # the pool came back as one social card, in nine of the ten decks.
         asks.append(
-            f"get the {len(plan.errands)} item(s) under gather from what the material cites, reading "
-            "before sweeping. web_fetch on a cited URL returns the page itself, and a page's own words "
-            "are material -- on a deck about whoever wrote it, the most direct material there is. "
-            "Where the material names a source without linking it -- a paper, a benchmark, a release -- "
-            "web_search finds it, and reading it is this step's business even though choosing pictures "
-            "is not. The fetched pages also show their pictures: take each image link with the words "
-            "printed beside it -- words no search result carries -- and pass them to ppt_fetch as its "
-            "caption; that is the only way the source's own words reach the catalogue. "
-            "A listing that shows a bare position label and no caption is telling you the page gave its "
-            "pictures no words at all -- those arrive with nothing but their pixels, so look at them with "
-            "ppt_figure_inspect before you choose, because the ranking cannot tell a page's decoration "
-            "from its evidence and inspection can. A paper cited as an abstract keeps its figures in the "
-            "PDF, captions and all -- ppt_fetch that and the ingest reads them off the page. Then search "
-            "wider than the citations, because a pool is what the outline gets to choose from and what a "
-            "material links is not it. Search the things the material names, not only what the deck "
-            "is called -- its own name and its logo are one picture, and the pages have to show "
-            "everything else it talks about. Whether the deck ends up with enough to stand on is "
-            "yours to judge: you are the one who has read the material and knows how many of its "
-            "pages will have to show something. ppt_image_search returns each candidate "
-            "with its pixel size and the page it came from. This establishes what there is to choose "
-            "from; which picture a page needs is decided against the outline. ppt_fetch what you "
-            "will use, then call ppt_prepare again"
+            f"get the {len(plan.errands)} item(s) under gather, reading before sweeping: web_fetch a cited "
+            "URL for the page's own words, take its pictures with the words printed beside them and pass "
+            "those to ppt_fetch as the caption -- a listing with a bare position label and no caption is a "
+            "picture that arrived with only its pixels, so ppt_figure_inspect it before choosing. Then "
+            "search wider than the citations, for the things the material names and not only what the deck "
+            "is called; ppt_image_search returns each candidate with its size and the page it came from. "
+            "Which picture a page needs is decided against the outline, and whether the pool is enough is "
+            "yours to judge. ppt_fetch what you will use, then call ppt_prepare again"
         )
     if state.template is None and state.unbound_templates:
         asks.append(

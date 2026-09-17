@@ -44,7 +44,7 @@ from raven.agent.subagent.presets import (
 from raven.agent.subagent.spawn_tool import SpawnTool
 from raven.config.schema import (
     ACP_UNSUPPORTED_FIELDS,
-    SubagentEverosConfig,
+    SubagentMemoryConfig,
     SubagentsConfig,
     ThirdPartyAcpSubagentConfig,
     ThirdPartyCliSubagentConfig,
@@ -3887,78 +3887,79 @@ async def test_the_old_agent_keyword_still_names_the_agent(monkeypatch: pytest.M
     assert captured["agent"] == "claude_code"
 
 
-def test_cli_agent_accepts_a_declared_everos_identity() -> None:
+def test_cli_agent_accepts_a_declared_memory_block() -> None:
     cfg = ThirdPartyCliSubagentConfig(
         name="Raven-Code",
         command="run.py --session {agent_id}",
         resume_command="run.py --session {agent_id}",
+        memory={"userId": "raven-code", "agentId": "raven-code"},
+    )
+    assert cfg.memory is not None
+    assert cfg.memory.session_prefix == "cli:"
+    # The owner ids are the backend's vocabulary and travel to it untouched.
+    assert cfg.memory.model_dump(exclude_none=True)["userId"] == "raven-code"
+
+
+def test_the_old_everos_spelling_still_loads() -> None:
+    """Configs written before the block was named for what it addresses."""
+    cfg = ThirdPartyCliSubagentConfig(
+        name="Raven-Code",
+        command="run.py",
         everos={"userId": "raven-code", "agentId": "raven-code"},
     )
-    assert cfg.everos is not None
-    assert cfg.everos.user_id == "raven-code"
-    assert cfg.everos.agent_id == "raven-code"
-    assert cfg.everos.base_url is None
-    assert cfg.everos.session_prefix == "cli:"
+    assert cfg.memory is not None
+    assert cfg.memory.model_dump(exclude_none=True)["agentId"] == "raven-code"
 
 
-def test_cli_agent_without_an_everos_block_declares_none() -> None:
+def test_cli_agent_without_a_memory_block_declares_none() -> None:
     cfg = ThirdPartyCliSubagentConfig(name="Coder", command="claude-acp")
-    assert cfg.everos is None
+    assert cfg.memory is None
 
 
-def test_an_everos_block_naming_no_owner_is_rejected() -> None:
-    with pytest.raises(ValidationError, match="userId or agentId"):
-        ThirdPartyCliSubagentConfig(
-            name="Raven-Code",
-            command="run.py",
-            everos={"baseUrl": "http://localhost:18791"},
-        )
-
-
-class TestEverosSource:
-    """`everos.source` says whether the agent writes its own memories."""
+class TestSubagentMemorySource:
+    """``memory.source`` says whether the agent writes its own memories."""
 
     def test_source_defaults_to_agent(self) -> None:
-        cfg = SubagentEverosConfig(agent_id="raven-code")
+        cfg = SubagentMemoryConfig.model_validate({"agentId": "raven-code"})
         assert cfg.source == "agent"
 
-    def test_trace_source_accepted_with_both_owners(self) -> None:
-        cfg = SubagentEverosConfig(user_id="liv", agent_id="coder", source="trace")
+    def test_trace_source_is_accepted(self) -> None:
+        cfg = SubagentMemoryConfig.model_validate({"userId": "liv", "agentId": "coder", "source": "trace"})
         assert cfg.source == "trace"
 
-    def test_trace_source_needs_both_owners(self) -> None:
-        # Extraction writes a `user` row and `assistant`/`tool` rows, which land
-        # on two different owners; one id alone silently drops half the payload.
-        with pytest.raises(ValidationError, match="trace"):
-            SubagentEverosConfig(agent_id="coder", source="trace")
-        with pytest.raises(ValidationError, match="trace"):
-            SubagentEverosConfig(user_id="liv", source="trace")
-
-    def test_agent_source_still_needs_only_one_owner(self) -> None:
-        assert SubagentEverosConfig(agent_id="raven-code").agent_id == "raven-code"
-        assert SubagentEverosConfig(user_id="liv").user_id == "liv"
-
     def test_unknown_source_rejected(self) -> None:
+        """One of the two keys the host reads, so it is still typed here."""
         with pytest.raises(ValidationError):
-            SubagentEverosConfig(agent_id="coder", source="guess")
+            SubagentMemoryConfig.model_validate({"agentId": "coder", "source": "guess"})
+
+    def test_owner_keys_pass_through_unvalidated(self) -> None:
+        """Which keys identify a memory is the backend's vocabulary, so the
+        host stopped judging them. A trace still needs both owners -- extraction
+        writes a `user` row and `assistant`/`tool` rows, landing on two
+        different owners -- and that is enforced where the write happens; see
+        tests/test_subagent_memory.py::TestPrimeFromTurn.
+        """
+        cfg = SubagentMemoryConfig.model_validate({"source": "trace", "mem0Space": "shared"})
+
+        assert cfg.model_dump(exclude_none=True)["mem0Space"] == "shared"
 
 
-class TestAcpEverosIdentity:
+class TestAcpMemoryBlock:
     """An acp entry may declare an everos identity."""
 
-    def test_acp_accepts_everos(self) -> None:
+    def test_acp_accepts_a_memory_block(self) -> None:
         cfg = ThirdPartyAcpSubagentConfig(
             name="Coder",
             command="hermes acp",
-            everos={"userId": "liv", "agentId": "coder", "source": "trace"},
+            memory={"userId": "liv", "agentId": "coder", "source": "trace"},
         )
-        assert cfg.everos is not None
-        assert cfg.everos.agent_id == "coder"
-        assert cfg.everos.source == "trace"
+        assert cfg.memory is not None
+        assert cfg.memory.source == "trace"
+        assert cfg.memory.model_dump(exclude_none=True)["agentId"] == "coder"
 
-    def test_acp_everos_defaults_to_none(self) -> None:
+    def test_acp_memory_defaults_to_none(self) -> None:
         cfg = ThirdPartyAcpSubagentConfig(name="Coder", command="hermes acp")
-        assert cfg.everos is None
+        assert cfg.memory is None
 
     def test_everos_is_not_an_unsupported_acp_field(self) -> None:
         # The seven in ACP_UNSUPPORTED_FIELDS are declarations the `initialize`
@@ -3966,7 +3967,7 @@ class TestAcpEverosIdentity:
         # which no handshake reports.
         assert "everos" not in ACP_UNSUPPORTED_FIELDS
 
-    def test_openai_accepts_everos(self) -> None:
+    def test_openai_accepts_a_memory_block(self) -> None:
         # The openai backend calls turn_rows.rows on both its streaming and
         # buffered paths, the same builder acp uses, so its turn is as
         # extractable as an acp one.
@@ -3974,16 +3975,16 @@ class TestAcpEverosIdentity:
             name="Researcher",
             base_url="http://127.0.0.1:8000/v1",
             model="mirothinker",
-            everos={"userId": "liv", "agentId": "researcher", "source": "trace"},
+            memory={"userId": "liv", "agentId": "researcher", "source": "trace"},
         )
-        assert cfg.everos is not None
-        assert cfg.everos.source == "trace"
+        assert cfg.memory is not None
+        assert cfg.memory.source == "trace"
 
-    def test_openai_everos_defaults_to_none(self) -> None:
+    def test_openai_memory_defaults_to_none(self) -> None:
         cfg = ThirdPartyOpenAISubagentConfig(
             name="Researcher", base_url="http://127.0.0.1:8000/v1", model="mirothinker"
         )
-        assert cfg.everos is None
+        assert cfg.memory is None
 
     def test_acp_everos_does_not_warn(self, caplog: pytest.LogCaptureFixture) -> None:
         with caplog.at_level("WARNING"):

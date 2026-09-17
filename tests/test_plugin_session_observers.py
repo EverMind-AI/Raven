@@ -59,7 +59,6 @@ def _discovered(plugin_id: str, observers: list[tuple[str, str]]) -> DiscoveredP
     mf = PluginManifest(
         id=plugin_id,
         version="0.1.0",
-        enabled_by_default=True,
         contributes=Contributes(
             session_observers=[SessionObserverContribution(name=n, factory=f) for n, f in observers]
         ),
@@ -260,7 +259,7 @@ async def test_a_plugin_observer_rides_the_built_runtime_and_hears_a_delete(tmp_
     plug = tmp_path / "plugins" / "demoobs"
     plug.mkdir(parents=True)
     plug.joinpath("raven-plugin.toml").write_text(
-        '[plugin]\nid = "demoobs"\nversion = "1.0"\nenabled_by_default = true\n'
+        '[plugin]\nid = "demoobs"\nversion = "1.0"\n'
         "[[plugin.contributes.session_observers]]\n"
         'name = "demo_observer"\nfactory = "demoobs_mod:make"\n'
     )

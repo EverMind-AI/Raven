@@ -240,3 +240,14 @@ def test_taste_kinds_are_answered_in_the_reply_and_not_carried(tmp_path: Path) -
 )
 def test_a_headline_has_to_be_on_the_page_it_was_read_from(headline: str, text: str, on_page: bool) -> None:
     assert _headline_on_page(headline, text) is on_page
+
+
+def test_layout_picture_is_said_once_per_deck(tmp_path: Path) -> None:
+    """The finding names every layout whose artwork the pages on it show, and ends by
+    saying an illustration is the design and stays. It carries no page, and it came back
+    word for word on ten of ten builds of one delivered deck."""
+    project = _project(tmp_path)
+    first = quiet.quiet(project, [_finding("layout_picture", None), _finding("box_overflow", 2)])
+    second = quiet.quiet(project, [_finding("layout_picture", None), _finding("box_overflow", 2)])
+    assert [f.kind for f in first] == ["layout_picture", "box_overflow"]
+    assert [f.kind for f in second] == ["box_overflow"]

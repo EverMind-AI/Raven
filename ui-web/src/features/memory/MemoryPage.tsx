@@ -95,7 +95,16 @@ export function MemoryApp(): JSX.Element {
       <div className="pmhero">
         <h3>{t('gui.mem.hero')}</h3>
       </div>
-      {s.phase === 'down' ? <div className="empty-note">{t('gui.mem.down')}</div> : <MemBody s={s} />}
+      {s.phase === 'down' ? (
+        <div className="empty-note">{t('gui.mem.down')}</div>
+      ) : s.note ? (
+        /* Not a failure and not an empty store: this install keeps its
+           memories somewhere this page does not read. Saying so beats four
+           zeros, which a reader takes for loss. */
+        <div className="empty-note">{s.note}</div>
+      ) : (
+        <MemBody s={s} />
+      )}
       {s.detail ? <MemDetail it={s.detail} /> : null}
     </>
   )

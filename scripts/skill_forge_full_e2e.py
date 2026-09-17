@@ -44,10 +44,9 @@ def _load_dotenv(path: Path) -> None:
 
 _load_dotenv(_REPO_ROOT / ".env")
 
-from raven.context_engine.base import AssemblyContext
-from raven.memory_engine.base import TokenBudget
-
 from raven.context_engine.segments.skills import SkillsSegmentBuilder
+from raven.contracts.assembled import TokenBudget
+from raven.contracts.context import AssemblyContext
 from raven.memory_engine.skill_forge import (
     LLMGateFilter,
     LocalSkillSource,

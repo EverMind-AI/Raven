@@ -46,6 +46,12 @@ export interface EverosSection {
 
 export interface EverosInfo {
   sections?: Record<string, EverosSection>
+  /* False when this install has no EverOS to configure. The rows used to
+     render "not set" in that case -- indistinguishable from an install where
+     the plugin is present and merely unconfigured -- so a person could fill
+     in a model and a key and have nothing happen. */
+  available?: boolean
+  note?: string | null
 }
 
 export type UsageModelRow = ApiUsageModel

@@ -700,6 +700,28 @@ def test_header_rows_that_are_too_far_apart_are_reported(tmp_path: Path) -> None
     assert "loose_header" in {finding.detail["region"] for finding in findings}
 
 
+def test_a_cloned_page_keeps_the_templates_own_air(tmp_path: Path) -> None:
+    """43 of 107 gate findings on one deck were this check on pages built on a template
+    prototype -- the template's header spacing, panel depth and bottom margin -- and the
+    author dismissed every one. A page the plan clones is the designer's to fill."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from raven_ppt.services.measure.rendered import excessive_whitespace
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    slide.shapes.add_textbox(Inches(1), Inches(0.20), Inches(8), Inches(0.35)).text = "title"
+    slide.shapes.add_textbox(Inches(1), Inches(0.95), Inches(8), Inches(0.30)).text = "explanation"
+    deck = tmp_path / "cloned-header.pptx"
+    presentation.save(str(deck))
+    words = [_word("title", 72, 18, 150, 38), _word("explanation", 72, 72, 180, 90)]
+
+    assert excessive_whitespace(deck, words) != []
+    assert excessive_whitespace(deck, words, cloned=[1]) == []
+
+
 def test_a_label_broken_one_character_short_is_reported(tmp_path: Path) -> None:
     """Four of eight labels on one delivered agenda page read "为什么要统 / 一". The words
     do not collide, the copy fits the box's height, the type is the right size, and the
@@ -976,3 +998,157 @@ def test_a_band_the_full_width_of_the_page_is_still_a_card(tmp_path: Path) -> No
     assert len(held) == 1
     assert held[0].width / 72 >= 13.333 * GROUND_WIDTH_SHARE
     assert held[0].height / 72 < 7.5 * GROUND_HEIGHT_SHARE
+
+
+def test_a_unit_set_smaller_beside_its_figure_is_not_an_orphan(tmp_path: Path) -> None:
+    """A metric card sets "2183.2" at 20pt and " 万人" at 13pt in one paragraph, and the
+    render puts both on one baseline. Their tops differ by more than `SAME_LINE_PT`,
+    so grouped by tops the unit was a second line of two characters -- eight
+    `orphan_line` findings on one delivered deck, all of them units sitting exactly
+    where the author set them."""
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+
+    from raven_ppt.services.measure.rendered import orphan_lines
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(3.0), Inches(0.6))
+    paragraph = box.text_frame.paragraphs[0]
+    figure = paragraph.add_run()
+    figure.text, figure.font.size = "2183.2", Pt(20)
+    unit = paragraph.add_run()
+    unit.text, unit.font.size = " 万人", Pt(13)
+    deck = tmp_path / "figure-and-unit.pptx"
+    presentation.save(str(deck))
+
+    # One baseline at 96pt: the 20pt figure's top is 6pt above the 13pt unit's.
+    words = [_word("2183.2", 76, 76, 140, 96), _word("万人", 144, 82, 170, 96)]
+
+    assert orphan_lines(deck, words) == []
+
+
+def test_a_short_second_line_under_a_label_is_still_an_orphan(tmp_path: Path) -> None:
+    """The next line down shares no height with the line above it, so the baseline
+    reading changes nothing about a label the box really did break."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from raven_ppt.services.measure.rendered import orphan_lines
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(1.2), Inches(0.8))
+    box.text_frame.paragraphs[0].text = "常住人口万人"
+    deck = tmp_path / "broken-label.pptx"
+    presentation.save(str(deck))
+
+    words = [_word("常住人口", 76, 76, 150, 94), _word("万人", 76, 98, 112, 116)]
+
+    found = orphan_lines(deck, words)
+
+    assert [finding.kind for finding in found] == ["orphan_line"]
+    assert found[0].detail["orphan"] == "万人"
+
+
+def _page_with_a_ground_panel(tmp_path: Path, name: str, *, body_ends_in: float):
+    """A title band over a full-width panel that runs to the page's bottom edge, and
+    body copy inside the panel down to ``body_ends_in``."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    slide.shapes.add_textbox(Inches(1), Inches(0.20), Inches(8), Inches(0.35)).text = "title"
+    slide.shapes.add_textbox(Inches(1), Inches(0.95), Inches(8), Inches(0.30)).text = "explanation"
+    from pptx.dml.color import RGBColor
+    from pptx.enum.shapes import MSO_SHAPE
+
+    panel = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(1.25), Inches(13.333), Inches(6.25))
+    panel.fill.solid()
+    panel.fill.fore_color.rgb = RGBColor(0xB0, 0x50, 0x3C)
+    panel.line.fill.background()
+    slide.shapes.add_textbox(Inches(1), Inches(1.9), Inches(8), Inches(body_ends_in - 1.9)).text = "body"
+    deck = tmp_path / f"{name}.pptx"
+    presentation.save(str(deck))
+    words = [
+        _word("title", 72, 18, 150, 38),
+        _word("explanation", 72, 72, 180, 90),
+        _word("body", 72, 140, 400, body_ends_in * 72),
+    ]
+    return deck, words
+
+
+def test_a_cloned_page_still_has_its_body_read(tmp_path: Path) -> None:
+    """The first exemption left cloned pages out altogether. On the next deck every one
+    of twenty pages had a prototype, the check went silent, and a page cloned from a
+    three-seal panel shipped with its lower third empty while the author told the
+    reader the proportions were the template's. The header rows are the template's;
+    whether the body fills the panel is the question."""
+    from raven_ppt.services.measure.rendered import excessive_whitespace
+
+    deck, words = _page_with_a_ground_panel(tmp_path, "cloned-short-body", body_ends_in=4.4)
+
+    regions = {finding.detail["region"] for finding in excessive_whitespace(deck, words, cloned=[1])}
+
+    assert "trailing_body" in regions
+    assert "loose_header" not in regions
+
+
+def test_a_ground_panel_does_not_finish_the_page(tmp_path: Path) -> None:
+    """The panel is full width, most of the page tall and runs off the bottom edge, so
+    read as body content it reached the boundary and no trailing field was ever
+    measured. Copy that reaches down through it is what finishes the page."""
+    from raven_ppt.services.measure.rendered import excessive_whitespace
+
+    short, short_words = _page_with_a_ground_panel(tmp_path, "ground-short", body_ends_in=4.4)
+    full, full_words = _page_with_a_ground_panel(tmp_path, "ground-full", body_ends_in=6.6)
+
+    assert "trailing_body" in {f.detail["region"] for f in excessive_whitespace(short, short_words, cloned=[1])}
+    assert "trailing_body" not in {f.detail["region"] for f in excessive_whitespace(full, full_words, cloned=[1])}
+
+
+def test_a_body_centred_on_its_page_is_not_a_run_that_ran_out(tmp_path: Path) -> None:
+    """A quotation page sets its copy in the middle with as much air above as below.
+    Three designer pages across the bundled templates are composed that way, and each
+    reported both a leading and a trailing field."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from raven_ppt.services.measure.rendered import excessive_whitespace
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    slide.shapes.add_textbox(Inches(2), Inches(3.6), Inches(9), Inches(1.0)).text = "the quotation, centred"
+    deck = tmp_path / "centred.pptx"
+    presentation.save(str(deck))
+    # The body runs 1.25in to 6.9in; copy at 3.7in to 4.5in leaves 2.45in above and 2.4in below.
+    words = [_word("the quotation, centred", 150, 266, 700, 324)]
+
+    assert excessive_whitespace(deck, words) == []
+
+
+def test_a_borrowed_page_keeps_its_layouts_gap_between_groups(tmp_path: Path) -> None:
+    """A reference deck's timeline sets its chevrons over its cards with a field between;
+    laid out as that page, the gap is the layout's. Read as a composed page it was
+    reported on every build of one deck."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    from raven_ppt.services.measure.rendered import excessive_whitespace
+
+    presentation = Presentation()
+    presentation.slide_width, presentation.slide_height = Inches(13.333), Inches(7.5)
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    slide.shapes.add_textbox(Inches(1), Inches(1.5), Inches(11), Inches(0.6)).text = "chevrons"
+    slide.shapes.add_textbox(Inches(1), Inches(4.2), Inches(11), Inches(2.4)).text = "cards"
+    deck = tmp_path / "borrowed-timeline.pptx"
+    presentation.save(str(deck))
+    words = [_word("chevrons", 72, 110, 860, 150), _word("cards", 72, 305, 860, 470)]
+
+    assert "between_groups" in {f.detail["region"] for f in excessive_whitespace(deck, words)}
+    assert "between_groups" not in {f.detail["region"] for f in excessive_whitespace(deck, words, borrowed=[1])}

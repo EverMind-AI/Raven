@@ -6,6 +6,10 @@ instance, and pytest will run every cross-adapter contract assertion
 against it. This is how the design's promise "extensible in theory ->
 actually runs" turns into something CI can enforce.
 
+The assertions cover the full ``MemoryBackend`` Protocol, including
+``health()``: a backend may answer ``None`` (no diagnostics) or a
+``BackendHealth`` whose ``checks`` are all ``HealthCheck`` instances.
+
 Why a base class and not a fixture: subclassing keeps the test names
 visible to test runners (``test_recall_returns_memory_list``) and
 makes it obvious which backend a failure belongs to (e.g. the failure
@@ -24,7 +28,7 @@ from __future__ import annotations
 
 import pytest
 
-from raven.contracts.memory import Memory, MemoryBackend
+from raven.contracts.memory import BackendHealth, HealthCheck, Memory, MemoryBackend
 
 
 class MemoryBackendContractTests:
@@ -137,6 +141,29 @@ class MemoryBackendContractTests:
             top_k=5,
         )
         assert isinstance(hits, list)
+
+    async def test_health_is_none_or_backend_health(self, backend) -> None:
+        h = await backend.health()
+        if h is None:
+            return
+        assert isinstance(h, BackendHealth)
+        assert isinstance(h.ready, bool)
+        for c in h.checks:
+            assert isinstance(c, HealthCheck)
+            assert c.status in ("ok", "degraded", "missing")
+
+    async def test_delete_reports_a_bool_and_tolerates_an_unknown_id(self, backend) -> None:
+        """A backend that cannot delete says so; it does not raise.
+
+        The caller is a person clicking a button, and the two answers it has to
+        tell apart are "gone" and "this cannot be removed here". An exception
+        is neither, and an id nothing matches is the ordinary shape of a second
+        click on a row someone else already removed.
+        """
+        answer = await backend.delete("no-such-id-9d1f", kind="no-such-kind")
+
+        assert isinstance(answer, bool)
+        assert answer is False
 
 
 class LifecycleContractTests:

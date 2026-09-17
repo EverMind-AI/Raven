@@ -3043,6 +3043,50 @@ export interface SubagentsInstanceSetModeResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsInstanceSetModelParams".
+ */
+export interface SubagentsInstanceSetModelParams {
+  session_key: string;
+  agent: string;
+  handle: string;
+  /**
+   * The opaque provider-qualified id the agent offered. Never a display name: the two differ and the agent takes only the id back.
+   */
+  model?: string;
+  /**
+   * Drop this instance's override, returning it to the agent's own model. model wins when both are given, matching set_mode: naming one is a statement, clearing is the absence of one.
+   */
+  clear?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsInstanceSetModelResult".
+ */
+export interface SubagentsInstanceSetModelResult {
+  /**
+   * This instance's override, or null when it follows the agent's own model.
+   */
+  model?: string | null;
+  /**
+   * The menu the agent advertised, measured from its own handshake rather than declared here.
+   */
+  availableModels?: {
+    /**
+     * The id the agent takes back.
+     */
+    value: string;
+    /**
+     * What the agent asked to be shown, usually far shorter than the value.
+     */
+    name?: string;
+    /**
+     * The agent's own bucketing, a provider typically. Empty when it offered none.
+     */
+    group?: string;
+  }[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SessionSetModeParams".
  */
 export interface SessionSetModeParams {
@@ -3810,6 +3854,14 @@ export interface SettingsEverosResult {
     [k: string]: EverosSection;
   };
   config_path: string;
+  /**
+   * Whether this install has an EverOS to configure at all. False leaves sections empty and note set.
+   */
+  available: boolean;
+  /**
+   * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
+   */
+  note?: string | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4081,6 +4133,10 @@ export interface MemoryStatsResult {
   profiles: number;
   agent_cases: number;
   agent_skills: number;
+  /**
+   * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
+   */
+  note?: string | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4107,6 +4163,10 @@ export interface MemoryListResult {
   total: number;
   page: number;
   page_size: number;
+  /**
+   * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
+   */
+  note?: string | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

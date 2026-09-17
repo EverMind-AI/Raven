@@ -1,4 +1,4 @@
-.PHONY: help install install-deps lint lint-python lint-imports lint-deps lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui build-core check-commits check-pr-title check-large-files check-source-language check-core-wheel fetch-templates verify-templates beta ci clean coverage coverage-shard coverage-combine coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate docker-build docker-up docker-down
+.PHONY: help install install-deps lint lint-python lint-imports lint-deps lint-types lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui build-core check-commits check-pr-title check-large-files check-source-language check-core-wheel fetch-templates verify-templates beta ci clean coverage coverage-shard coverage-combine coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate docker-build docker-up docker-down
 
 PYTHON ?= python3
 PYTHON_VERSION ?= 3.12
@@ -59,7 +59,7 @@ install: install-deps
 	npm ci --prefix ui-tui
 	npm ci --prefix bridge
 
-lint: lint-python lint-imports lint-deps lint-ui lint-tui lint-bridge
+lint: lint-python lint-imports lint-deps lint-types lint-ui lint-tui lint-bridge
 
 lint-python:
 	uv run --frozen --python $(PYTHON_VERSION) --extra dev ruff check $(PYTHON_LINT_TARGETS)
@@ -70,6 +70,14 @@ lint-deps:
 
 lint-imports:
 	uv run --frozen --python $(PYTHON_VERSION) lint-imports
+
+# Call correctness, not typing strictness -- which rules are on, and the backlog
+# behind each one that is off, are in [tool.ty] in pyproject.toml. The target
+# roster is read from PYTHON_LINT_TARGETS so it cannot drift from ruff's; tests
+# are filtered out there because they are executed, and the gate is for code
+# that is not.
+lint-types:
+	uv run --frozen --python $(PYTHON_VERSION) --all-extras ty check $(filter-out tests,$(PYTHON_LINT_TARGETS))
 
 lint-ui:
 	npm run gen:check --prefix ui-web

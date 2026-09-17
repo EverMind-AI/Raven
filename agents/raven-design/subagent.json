@@ -1,7 +1,7 @@
 {
   "name": "Raven-Design",
   "kind": "acp",
-  "description": "A full visual design agent that creates, edits, diagnoses and reviews visual artifacts. Use it whenever the deliverable is looked at rather than read -- brand identity, diagrams, charts, illustrations, icons, slide decks, and the look of interfaces and web pages. IMPORTANT: hand it the user's request in the user's own words. Do not fill in what the user did not say -- audience, medium, language, style, structure -- and do not answer for them: it asks the user itself for what it needs and records what they answer.",
+  "description": "A full visual design agent that creates, edits, diagnoses and reviews visual artifacts. Use it whenever the deliverable is looked at rather than read -- brand identity, diagrams, charts, illustrations, icons, slide decks, and the look of interfaces and web pages. IMPORTANT: hand it the user's request in the user's own words. Do not fill in what the user did not say -- audience, medium, language, style, structure -- and do not answer for them: it fills what is left from what it remembers of the user and its own defaults, asks only for what those do not settle, and records what they answer.",
   "owns": "owns visual design and slide decks: any visual or rendered deliverable. Do not produce one yourself.",
   "enabled": true,
   "routes": [
@@ -9,7 +9,10 @@
       "to": "Raven-PPT",
       "owes": ".pptx",
       "noteFile": "route-raven-ppt.md",
-      "needs": ["image_generation", "image_search"],
+      "needs": [
+        "image_generation",
+        "image_search"
+      ],
       "minTier": "max"
     }
   ],

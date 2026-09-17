@@ -341,7 +341,7 @@ class WriteFileTool(_FsTool):
             "mode=append to continue one you have already begun."
         )
 
-    async def execute(self, path: str, content: str, mode: str = "overwrite", **kwargs: Any) -> str:
+    async def execute(self, path: str, content: str, mode: str = "overwrite", **kwargs: Any) -> str | ToolResult:
         if mode not in ("overwrite", "append"):
             return f"Error: unknown mode '{mode}' for write_file. Use 'overwrite' or 'append'."
         # An empty append is refused rather than treated as a no-op: it is what
@@ -491,7 +491,7 @@ class EditFileTool(_FsTool):
         new_text: str,
         replace_all: bool = False,
         **kwargs: Any,
-    ) -> str:
+    ) -> str | ToolResult:
         try:
             fp = self._resolve(path)
             if not fp.exists():

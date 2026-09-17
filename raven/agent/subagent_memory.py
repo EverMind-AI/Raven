@@ -1,71 +1,79 @@
-"""What a sub-agent wrote into everos during one call.
+"""What a sub-agent wrote into long-term memory during one call.
 
-A sub-agent running on the everos memory backend writes into a store the host
-never sees. The host holds the call's prompt and output; everos holds what the
-sub-agent concluded from it. This module joins the two.
+A sub-agent runs in a process of its own, with a memory the host never sees.
+The host holds the call's prompt and output; the memory backend holds what the
+sub-agent concluded from it. This module joins the two, through the contract
+and nothing else -- it used to speak EverOS's HTTP API directly, which made an
+audit trail for every sub-agent depend on one backend being the one installed.
 
 The join needs no cooperation from the sub-agent: every Raven fork passes the
-host-minted ``{agent_id}`` through to its own Raven as ``--session cli:<id>``,
-and that session id lands on every memory everos extracts from the call. The
-host mints that id and keeps it in ``InstanceRegistry``, so one filtered read
-of ``/api/v2/memory/get`` answers "what did this sub-agent write here".
+host-minted ``{agent_id}`` through to its own Raven as ``--session <prefix><id>``,
+and that session id lands on every memory the backend extracts from the call.
+The host mints that id and keeps it in ``InstanceRegistry``, so one
+``recall_session`` answers "what did this sub-agent write here".
 
 The file this produces is read by *another sub-agent*, not by a human auditor,
 so it carries text and nothing else. Identity, session id, timings and item ids
 are diagnostics: they go to the log, where they cost a reader nothing.
 
-A sub-agent that does not run everos writes nothing to read back. For those, the
-host hands everos the conversation it already captured (``prime_from_turn``) and
-lets everos extract from it, then reads the result through the same poll. The
-record names which of the two happened, because a memory the agent wrote and a
-memory the host synthesised from its transcript are not equally strong evidence.
+A sub-agent with no memory of its own writes nothing to read back. For those,
+the host hands its own backend the conversation it already captured and lets it
+extract (``source="trace"``). The record names which of the two happened,
+because a memory the agent wrote and a memory the host synthesised from its
+transcript are not equally strong evidence.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import httpx
 from loguru import logger
 
-from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missing_note
+if TYPE_CHECKING:
+    from raven.contracts.memory import MemoryBackend
 
-_PAGE_SIZE = 100
-_HTTP_TIMEOUT_S = 30.0
-_FLUSH_TIMEOUT_S = 360.0
-"""Budget for `prime_from_turn`'s flush call, not the plain `add` before it.
+# One look's ceiling. The poll's own budget bounds the whole sequence; this
+# stops a single stalled look from spending all of it.
+_LOOK_TIMEOUT_S = 30.0
 
-Flush is what triggers extraction -- it runs an LLM -- and everos itself
-budgets 360s for exactly this call (`_MEMORIZE_TIMEOUT_S` in
-`plugins-dist/everos-memory/raven_everos/backend.py`). `add` is a plain append and keeps
-the module's regular `_HTTP_TIMEOUT_S`.
-"""
-
-# episode is user-owned, agent_case is agent-owned; the endpoint takes exactly
-# one owner per call, so each is asked for separately.
+# Episodes are the user track, cases the agent track; the contract takes one
+# track per call, so each is asked for separately.
 #
-# profile and agent_skill are deliberately absent. They accumulate across calls
-# -- they describe what a sub-agent *is*, not what it just did -- so including
-# them would dilute the one signal the reader came for.
-_OWNED: tuple[tuple[str, str, str], ...] = (
-    ("user_id", "episode", "episodes"),
-    ("agent_id", "agent_case", "agent_cases"),
-)
+# Profiles and skills are deliberately absent. They accumulate across calls --
+# they describe what a sub-agent *is*, not what it just did -- so including
+# them would dilute the one signal the reader came for. The backend decides
+# what a track contains; this module only names which track it is asking.
+_TRACKS: tuple[str, ...] = ("user_id", "agent_id")
 
 
 @dataclass(frozen=True)
-class EverosIdentity:
-    """How the host addresses one sub-agent's memories."""
+class MemoryScope:
+    """How the host addresses one sub-agent's memories.
 
-    user_id: str | None
-    agent_id: str | None
-    base_url: str
-    session_prefix: str
+    ``block`` is the agent's ``memory`` config as written, handed to the
+    backend untouched: which keys identify a memory is the backend's
+    vocabulary. ``source`` and ``session_prefix`` are read here because the
+    host mints the join key and chooses which of the two paths runs.
+    """
+
+    block: dict[str, Any]
     source: str = "agent"
+    session_prefix: str = "cli:"
+
+    @property
+    def user_id(self) -> str | None:
+        value = self.block.get("user_id") or self.block.get("userId")
+        return str(value) if value else None
+
+    @property
+    def agent_id(self) -> str | None:
+        value = self.block.get("agent_id") or self.block.get("agentId")
+        return str(value) if value else None
 
 
 @dataclass(frozen=True)
@@ -76,29 +84,28 @@ class MemoryItem:
     text: str
 
 
-def identity_from_config(cfg: Any, default_base_url: str) -> EverosIdentity | None:
-    """Read a sub-agent's declared everos identity, or ``None`` if it has none.
+def scope_from_config(cfg: Any) -> MemoryScope | None:
+    """Read a sub-agent's declared memory block, or ``None`` if it has none.
 
     Args:
-        cfg (`SubagentEverosConfig | None`):
+        cfg (`SubagentMemoryConfig | None`):
             The agent's declared block.
-        default_base_url (`str`):
-            The host's own everos base url, used when the block names none.
 
     Returns:
-        `EverosIdentity | None`:
-            The identity, or ``None`` when nothing was declared.
+        `MemoryScope | None`:
+            The scope, or ``None`` when nothing was declared.
     """
     if cfg is None:
         return None
-    base = (getattr(cfg, "base_url", None) or default_base_url).rstrip("/")
-    return EverosIdentity(
-        user_id=getattr(cfg, "user_id", None),
-        agent_id=getattr(cfg, "agent_id", None),
-        base_url=base,
-        session_prefix=getattr(cfg, "session_prefix", "cli:"),
-        source=getattr(cfg, "source", "agent"),
-    )
+    block = cfg.model_dump(exclude_none=True) if hasattr(cfg, "model_dump") else dict(cfg)
+    if block.pop("base_url", None) or block.pop("baseUrl", None):
+        # Never had a user: no config, fixture or document set one. Honouring
+        # it would mean every backend growing a per-call way to address a
+        # different server, for a key nobody writes.
+        logger.warning("Sub-agent memory: baseUrl is no longer supported and was ignored")
+    source = str(block.pop("source", None) or "agent")
+    prefix = str(block.pop("session_prefix", None) or block.pop("sessionPrefix", None) or "cli:")
+    return MemoryScope(block=block, source=source, session_prefix=prefix)
 
 
 TRACE_BUDGET_S = 360.0
@@ -127,66 +134,100 @@ def trace_session_id(agent: str, call_id: str) -> str:
     return f"trace:{agent}:{call_id}"
 
 
+@asynccontextmanager
+async def started_backend(backend: "MemoryBackend | None", *, label: str) -> AsyncIterator["MemoryBackend | None"]:
+    """``backend``, started for the length of one record and stopped after it.
+
+    The host's factory hands back a backend nobody has started, and a record
+    runs off the dispatch path where no started one is in reach. Handing an
+    unstarted backend to ``record_memories`` records "unavailable" without ever
+    attempting the write -- the shipped EverOS adapter's first ``store`` only
+    schedules its readiness probe and answers ``False`` -- and leaves the
+    adapter's HTTP client open once per record.
+
+    Yields ``None`` when there is no backend or it will not start, which is the
+    case every caller already handles as "no record to write".
+    """
+    if backend is None:
+        yield None
+        return
+    try:
+        await backend.start()
+    except Exception as exc:  # noqa: BLE001 - a record must never fail the call it describes
+        logger.warning("{}: backend did not start ({})", label, exc)
+        yield None
+        return
+    try:
+        yield backend
+    finally:
+        try:
+            await backend.stop()
+        except Exception:  # noqa: BLE001 - same
+            logger.opt(exception=True).debug("{}: backend stop failed", label)
+
+
 async def prime_from_turn(
     *,
-    identity: EverosIdentity,
+    backend: "MemoryBackend",
+    scope: MemoryScope,
     session_id: str,
     turn: list[dict[str, Any]],
-    client: httpx.AsyncClient | None = None,
 ) -> bool:
-    """Hand one call's conversation to everos and make it extract from it.
+    """Hand one call's conversation to the backend and make it extract now.
 
     Returns whether the conversation landed. ``False`` rather than raising: the
     caller's next move is to record ``unavailable``, not to fail a run.
 
-    everos extracts on ``flush``, not on ``add`` (see ``EverosBackend.store``),
-    so both calls are made here and each must land for anything to be readable.
+    ``flush`` is set because this conversation has already finished -- waiting
+    for the backend's own cadence would wait for a turn that never comes, and
+    the read back happens immediately after. The owner ids travel with it: the
+    content is the sub-agent's, and filing it under the host's identity would
+    put it where recall for that agent never looks.
     """
-    if not identity.user_id or not identity.agent_id:
+    if not scope.user_id or not scope.agent_id:
         # A missing owner must not fall back to a shared default: that would
         # write this sub-agent's memories into the host's own track instead.
-        missing = "user_id" if not identity.user_id else "agent_id"
+        missing = "user_id" if not scope.user_id else "agent_id"
         logger.warning("Trace for {} has no {} declared; nothing written", session_id, missing)
         return False
     if not turn:
         return False
-    if not everos_plugin_installed():
-        # The read path below needs only httpx, so an agent that writes its own
-        # memories still reads back; priming is the half that needs the plugin's
-        # message shapes, and its absence is a status, not a failure.
-        logger.warning("Trace for {} was not written: {}", session_id, everos_plugin_missing_note())
-        return False
-    from raven_everos.backend import convert_messages
-
-    payload = convert_messages(
-        _monotonic(turn),
-        agent_id=identity.agent_id,
-        user_id=identity.user_id,
-    )
-    if not payload:
-        return False
-    owned = client is None
-    http = client or httpx.AsyncClient(timeout=httpx.Timeout(_HTTP_TIMEOUT_S))
     try:
-        add_response = await http.post(
-            f"{identity.base_url}/api/v2/memory/add",
-            json={"session_id": session_id, "messages": payload},
-            timeout=_HTTP_TIMEOUT_S,
+        landed = await backend.store(
+            session_id,
+            _monotonic(turn),
+            metadata={"flush": True, **scope.block},
         )
-        add_response.raise_for_status()
-        flush_response = await http.post(
-            f"{identity.base_url}/api/v2/memory/flush",
-            json={"session_id": session_id},
-            timeout=_FLUSH_TIMEOUT_S,
-        )
-        flush_response.raise_for_status()
-    except Exception as exc:  # noqa: BLE001 - an unwritten trace is a status, not a failure
-        logger.warning("Trace for {} could not be written to {}: {}", session_id, identity.base_url, exc)
+    except Exception as exc:  # noqa: BLE001 - an audit trail must not fail a run
+        logger.warning("Trace for {} could not be written: {}", session_id, exc)
         return False
-    finally:
-        if owned:
-            await http.aclose()
-    return True
+    return landed is not False
+
+
+def _as_ms_epoch(value: Any) -> int | None:
+    """Milliseconds since the epoch, for the clock shapes a turn row carries.
+
+    Reimplemented rather than borrowed from the memory plugin: ordering the
+    rows of a captured conversation is the host's own arithmetic, and reaching
+    into a plugin for it made this module unusable without that plugin.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        ms = int(value)
+        # A ten-digit value is seconds; anything longer is already ms. The
+        # boundary is the year 2001 in ms and the year 33658 in seconds, so no
+        # real timestamp is ambiguous.
+        return ms * 1000 if ms < 100_000_000_000 else ms
+    if isinstance(value, str):
+        from datetime import datetime
+
+        text = value.strip().replace("Z", "+00:00")
+        try:
+            return int(datetime.fromisoformat(text).timestamp() * 1000)
+        except ValueError:
+            return None
+    return None
 
 
 def _monotonic(turn: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -199,79 +240,46 @@ def _monotonic(turn: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     if len(turn) < 2:
         return turn
-    from raven_everos.backend import as_ms_epoch
-
-    stamps = [ms for row in turn[1:] if (ms := as_ms_epoch(row.get("timestamp")))]
-    first = as_ms_epoch(turn[0].get("timestamp"))
+    stamps = [ms for row in turn[1:] if (ms := _as_ms_epoch(row.get("timestamp")))]
+    first = _as_ms_epoch(turn[0].get("timestamp"))
     if not stamps or first is None or first <= min(stamps):
         return turn
     return [{**turn[0], "timestamp": min(stamps) - 1}, *turn[1:]]
 
 
-def _joined(*parts: Any) -> str:
-    """The given fields as one whitespace-normalised line, empties dropped.
-
-    Deliberately uncapped. The reader is a sub-agent whose file tool already
-    handles length, so trimming here would only drop the end of what the
-    sub-agent concluded -- which is where a narrative keeps its findings.
-    """
-    return " - ".join(" ".join(str(p).split()) for p in parts if p and str(p).strip())
-
-
-def _text_of(memory_type: str, row: dict) -> str:
-    if memory_type == "episode":
-        # `summary` is a hard 200-character prefix of `episode` (verified against
-        # everos 1.2.1), so it is the fallback, never the choice: taking it drops
-        # the rest of the sentence it cuts mid-word.
-        return _joined(row.get("subject"), row.get("episode") or row.get("summary"))
-    return _joined(row.get("task_intent"), row.get("approach"), row.get("key_insight"))
-
-
 async def collect_memories(
-    client: httpx.AsyncClient,
-    identity: EverosIdentity,
+    backend: "MemoryBackend",
+    scope: MemoryScope,
     session_id: str,
 ) -> list[MemoryItem]:
-    """Every memory everos holds for this identity under ``session_id``.
+    """Every memory the backend holds under ``session_id``, both tracks.
 
-    Raises whatever httpx raises: the caller decides what an unreachable everos
-    means for the record.
+    Raises whatever the backend raises: the caller decides what an unreachable
+    memory service means for the record.
 
     Args:
-        client (`httpx.AsyncClient`):
-            Client to talk to everos with.
-        identity (`EverosIdentity`):
+        backend (`MemoryBackend`):
+            The configured memory backend.
+        scope (`MemoryScope`):
             Whose memories to read.
         session_id (`str`):
             The join key, already prefixed.
 
     Returns:
         `list[MemoryItem]`:
-            Items with usable text, episodes first.
+            Items with usable text, the user track first.
     """
     items: list[MemoryItem] = []
-    for owner_key, memory_type, data_key in _OWNED:
-        owner_id = getattr(identity, owner_key)
+    for track in _TRACKS:
+        owner_id = getattr(scope, track)
         if not owner_id:
             continue
-        response = await client.post(
-            f"{identity.base_url}/api/v2/memory/get",
-            json={
-                owner_key: owner_id,
-                "memory_type": memory_type,
-                "filters": {"session_id": session_id},
-                "page_size": _PAGE_SIZE,
-            },
-            timeout=_HTTP_TIMEOUT_S,
-        )
-        response.raise_for_status()
-        data = (response.json() or {}).get("data") or {}
-        for row in data.get(data_key) or []:
-            if not isinstance(row, dict):
+        for memory in await backend.recall_session(session_id, **{track: owner_id}):
+            text = " ".join(str(memory.text or "").split())
+            if not text:
                 continue
-            text = _text_of(memory_type, row)
-            if text:
-                items.append(MemoryItem(type=memory_type, text=text))
+            kind = str((memory.metadata or {}).get("type") or track)
+            items.append(MemoryItem(type=kind, text=text))
     return items
 
 
@@ -299,22 +307,22 @@ def _delays(budget_s: float) -> list[float]:
 
 
 async def _poll(
-    client: httpx.AsyncClient,
-    identity: EverosIdentity,
+    backend: "MemoryBackend",
+    scope: MemoryScope,
     session_id: str,
     budget_s: float,
 ) -> tuple[list[MemoryItem], str]:
     """Look until the result stops growing, or the budget is spent.
 
-    everos extracts asynchronously (it runs an LLM), so the first look after a
+    A backend extracts asynchronously -- it runs a model -- so the first look after a
     call usually finds nothing. Growth stopping is the signal that extraction
     finished, which is why this cannot just take one snapshot.
 
     ``budget_s`` bounds the whole poll, not merely the sleeps between looks.
     The first look always runs in full -- a budget of zero still means "look
     once" -- but every look after it is itself capped to whatever of the
-    budget remains, so an everos that accepts the connection and then stalls
-    cannot keep this alive for however long a single HTTP call's own timeout
+    budget remains, so a backend that accepts the call and then stalls
+    cannot keep this alive for however long its own transport timeout
     allows. A look that runs out of its share of the budget, or fails
     outright, returns whatever was already found rather than losing it (see
     ``record_memories``'s own docstring on why ``unavailable`` means nothing
@@ -324,7 +332,7 @@ async def _poll(
     deadline = loop.time() + budget_s
     found: list[MemoryItem] = []
     for index, delay in enumerate(_delays(budget_s)):
-        look_timeout = _HTTP_TIMEOUT_S
+        look_timeout = _LOOK_TIMEOUT_S
         if index > 0:
             remaining = deadline - loop.time()
             if remaining <= 0:
@@ -334,13 +342,13 @@ async def _poll(
                 remaining = deadline - loop.time()
                 if remaining <= 0:
                     break
-            look_timeout = min(_HTTP_TIMEOUT_S, remaining)
+            look_timeout = min(_LOOK_TIMEOUT_S, remaining)
         try:
-            current = await asyncio.wait_for(collect_memories(client, identity, session_id), timeout=look_timeout)
+            current = await asyncio.wait_for(collect_memories(backend, scope, session_id), timeout=look_timeout)
         except asyncio.TimeoutError:
             break
         except Exception as exc:  # noqa: BLE001 - a transient failure keeps what was already found
-            logger.warning("Memory poll for {} at {} failed mid-poll: {}", session_id, identity.base_url, exc)
+            logger.warning("Memory poll for {} failed mid-poll: {}", session_id, exc)
             return (found, SETTLED) if found else ([], UNAVAILABLE)
         if current and len(current) == len(found):
             return current, SETTLED
@@ -351,11 +359,11 @@ async def _poll(
 async def record_memories(
     *,
     agent: str,
-    identity: EverosIdentity,
+    backend: "MemoryBackend",
+    scope: MemoryScope,
     resolve_session_id: Callable[[], Awaitable[str | None]],
     write: Callable[[str], Awaitable[None]],
     budget_s: float = _DEFAULT_BUDGET_S,
-    client: httpx.AsyncClient | None = None,
     instance: str | None = None,
     prime: Callable[[str], Awaitable[bool]] | None = None,
 ) -> None:
@@ -371,7 +379,9 @@ async def record_memories(
     Args:
         agent (`str`):
             The sub-agent's configured name, recorded verbatim.
-        identity (`EverosIdentity`):
+        backend (`MemoryBackend`):
+            The configured memory backend.
+        scope (`MemoryScope`):
             Whose memories to read.
         resolve_session_id (`Callable[[], Awaitable[str | None]]`):
             Yields the join key, or ``None`` when this call has none (a
@@ -380,9 +390,8 @@ async def record_memories(
         write (`Callable[[str], Awaitable[None]]`):
             Receives the record's JSON text.
         budget_s (`float`):
-            How long to keep looking for a memory everos has not extracted yet.
-        client (`httpx.AsyncClient | None`):
-            Injected in tests; otherwise one is built and closed here.
+            How long to keep looking for a memory the backend has not
+            extracted yet.
         instance (`str | None`):
             The call's instance handle, recorded when it had one. Unlike the
             identity and session id, this is something the reader can act on:
@@ -395,53 +404,46 @@ async def record_memories(
             Returning ``False`` -- or raising -- records ``unavailable`` without
             polling. ``None`` reads whatever is already there.
     """
-    owned = client is None
-    http = client or httpx.AsyncClient(timeout=httpx.Timeout(_HTTP_TIMEOUT_S))
     try:
+        session_id = await resolve_session_id()
+    except Exception as exc:  # noqa: BLE001 - a failing resolver gives no join key
+        logger.warning("Memory record for {} could not resolve session id: {}", agent, exc)
+        return
+    if not session_id:
+        logger.debug("Memory record for {} skipped: no instance id to join on", agent)
+        return
+    primed = True
+    if prime is not None:
         try:
-            session_id = await resolve_session_id()
-        except Exception as exc:  # noqa: BLE001 - a failing resolver gives no join key
-            logger.warning("Memory record for {} could not resolve session id: {}", agent, exc)
-            return
-        if not session_id:
-            logger.debug("Memory record for {} skipped: no instance id to join on", agent)
-            return
-        primed = True
-        if prime is not None:
-            try:
-                primed = bool(await prime(session_id))
-            except Exception as exc:  # noqa: BLE001 - an unwritten trace is a status
-                logger.warning("Memory record for {} could not prime everos: {}", agent, exc)
-                primed = False
-        if not primed:
-            # Nothing landed, so nothing can have been extracted. Polling would
-            # spend the whole budget confirming an absence already known.
+            primed = bool(await prime(session_id))
+        except Exception as exc:  # noqa: BLE001 - an unwritten trace is a status
+            logger.warning("Memory record for {} could not prime memory: {}", agent, exc)
+            primed = False
+    if not primed:
+        # Nothing landed, so nothing can have been extracted. Polling would
+        # spend the whole budget confirming an absence already known.
+        items, status = [], UNAVAILABLE
+    else:
+        try:
+            items, status = await _poll(backend, scope, session_id, budget_s)
+        except Exception as exc:  # noqa: BLE001 - an unreachable service is a status, not a failure
+            logger.warning("Memory record for {} could not read memory: {}", agent, exc)
             items, status = [], UNAVAILABLE
-        else:
-            try:
-                items, status = await _poll(http, identity, session_id, budget_s)
-            except Exception as exc:  # noqa: BLE001 - an unreachable everos is a status, not a failure
-                logger.warning("Memory record for {} could not read everos at {}: {}", agent, identity.base_url, exc)
-                items, status = [], UNAVAILABLE
-        payload = {
-            "agent": agent,
-            **({"instance": instance} if instance else {}),
-            "source": identity.source,
-            "status": status,
-            "memories": [{"type": item.type, "text": item.text} for item in items],
-        }
-        logger.debug(
-            "Memory record for {} ({}): {} item(s) under {} at {}",
-            agent,
-            status,
-            len(items),
-            session_id,
-            identity.base_url,
-        )
-        try:
-            await write(json.dumps(payload, ensure_ascii=False, indent=2))
-        except Exception as exc:  # noqa: BLE001 - see the docstring
-            logger.warning("Memory record for {} could not be written: {}", agent, exc)
-    finally:
-        if owned:
-            await http.aclose()
+    payload = {
+        "agent": agent,
+        **({"instance": instance} if instance else {}),
+        "source": scope.source,
+        "status": status,
+        "memories": [{"type": item.type, "text": item.text} for item in items],
+    }
+    logger.debug(
+        "Memory record for {} ({}): {} item(s) under {}",
+        agent,
+        status,
+        len(items),
+        session_id,
+    )
+    try:
+        await write(json.dumps(payload, ensure_ascii=False, indent=2))
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        logger.warning("Memory record for {} could not be written: {}", agent, exc)

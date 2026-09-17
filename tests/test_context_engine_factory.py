@@ -6,7 +6,7 @@ list, assembling the ``SkillsSegmentBuilder``'s SkillForgeRouter from:
 
 - Local (always),
 - Mass (when ``mass.endpoint`` is set),
-- Everos (when a backend is supplied).
+- the memory backend (when one is supplied).
 
 With no backend the engine still constructs (recall lane yields [],
 router runs Local-only). AgentLoop always delegates skill selection to
@@ -35,7 +35,7 @@ from raven.config.raven import (
 )
 from raven.config.schema import SubagentsConfig
 from raven.context_engine import ContextAssembler
-from raven.context_engine.factory import build_context_engine
+from raven.context_engine.factory import _build_router, build_context_engine
 from raven.context_engine.segments import (
     IdentitySegmentBuilder,
     MemorySegmentBuilder,
@@ -45,7 +45,7 @@ from raven.context_engine.segments.curator import CuratorSegmentBuilder
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.context import AssemblyContext
 from raven.memory_engine.skill_forge import (
-    EverosSkillSource,
+    BackendSkillSource,
     HubSkillSource,
     LocalSkillSource,
 )
@@ -191,13 +191,13 @@ class TestSkillForgeRouterAssembly:
         types, _ = _router_sources(_build_engine(tmp_path, backend=_FakeBackend()))
         assert LocalSkillSource in types
 
-    def test_everos_source_present_when_backend(self, tmp_path: Path) -> None:
+    def test_backend_source_present_when_backend(self, tmp_path: Path) -> None:
         types, _ = _router_sources(_build_engine(tmp_path, backend=_FakeBackend()))
-        assert EverosSkillSource in types
+        assert BackendSkillSource in types
 
-    def test_everos_source_absent_without_backend(self, tmp_path: Path) -> None:
+    def test_backend_source_absent_without_backend(self, tmp_path: Path) -> None:
         types, _ = _router_sources(_build_engine(tmp_path, backend=None))
-        assert EverosSkillSource not in types
+        assert BackendSkillSource not in types
 
     def test_hub_source_omitted_when_endpoint_unset(self, tmp_path: Path) -> None:
         types, _ = _router_sources(_build_engine(tmp_path, backend=_FakeBackend(), hub_endpoint=None))
@@ -228,8 +228,18 @@ class TestSkillForgeRouterAssembly:
         )
         assert _memory_builder(engine)._user_id == "alice"
         _, sources = _router_sources(engine)
-        everos = next(s for s in sources if isinstance(s, EverosSkillSource))
+        everos = next(s for s in sources if isinstance(s, BackendSkillSource))
         assert everos._agent_id == "robo"
+
+    def test_router_names_the_backend_source_after_memory_backend(self, tmp_path: Path) -> None:
+        router = _build_router(
+            builder=ContextBuilder(workspace=tmp_path),
+            backend=_FakeBackend(),
+            memory_config=MemoryConfig(backend="acme", agent_id="a"),
+            skill_forge_router_config=SkillForgeRouterConfig(weights={"local": 1.0, "acme": 0.7}),
+        )
+        names = {s.name: s.weight for s in router._sources}
+        assert names["acme"] == 0.7
 
 
 # ---------------------------------------------------------------------------

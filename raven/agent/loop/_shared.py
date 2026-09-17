@@ -59,7 +59,14 @@ from raven.agent.tools.media_gen import (
 from raven.agent.tools.message import MessageTool
 from raven.agent.tools.registry import ToolRegistry
 from raven.agent.tools.shell import ExecTool
-from raven.agent.tools.web import WebFetchTool, WebSearchTool, resolve_vendor_key
+from raven.agent.tools.web import (
+    SEARCH_PROVIDERS,
+    ImageSearchTool,
+    WebFetchTool,
+    WebSearchTool,
+    image_search_vendor,
+    resolve_vendor_key,
+)
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.llm_provider import LLMProvider, LLMResponse
 from raven.contracts.tool import SKIPPED_AFTER_BLOCKED_CALL, Continuation, ToolOutput
@@ -531,16 +538,13 @@ def _withdrawn_image_note(source: dict[str, Any], *, index: int, total: int, rea
     when = f" at iteration {iteration}" if iteration is not None else ""
     again = f"ask {tool} for it again" if tool else "ask for it again"
     if reason == "refused":
-        why = f"{_REFUSED} this request's pictures as too large, so they came out; work from the text beside them."
+        why = f"{_REFUSED} this request's pictures as too large."
     elif reason == "context":
         why = f"{_ELIDED} to fit the context window."
     elif reason == "budget":
         why = f"{_OUTGREW} outgrew their byte budget, so only the {keep} newest image-bearing result(s) keep theirs."
     elif keep == 0:
-        why = (
-            f"{_REFUSED} this turn's pictures as too large, so none are kept in context now; "
-            "work from the text beside them."
-        )
+        why = f"{_REFUSED} this turn's pictures as too large, so none are kept in context now."
     else:
         why = f"{_SEEN} when it arrived; only the {keep} newest image-bearing result(s) keep their pictures."
     return f"[image no longer in context: {what}{origin}{when}. {why} To see it again, {again}]"

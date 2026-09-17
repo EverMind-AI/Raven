@@ -11,6 +11,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from raven.cli._theme import POINTER, QMARK
@@ -25,6 +26,7 @@ from raven.cli.import_commands import (
     import_app,
 )
 from raven.config.schema import Config
+from raven.contracts.memory import BackendHealth, HealthCheck
 from raven.importer.hermes_user_md import ImportedSections
 from raven.importer.orchestrator import ImportSummary
 from raven.importer.skills import DiscoveredSkill, SkillOrigin
@@ -661,6 +663,9 @@ class TestBuildAndRunHermesOrdering:
             async def stop(self) -> None:
                 calls.append("stop")
 
+            async def health(self):
+                return None
+
         summary = ImportSummary(total=1, submitted=1, skipped=0, failed=0, errors=())
 
         async def _fake_run_import(*_args: object, **_kwargs: object) -> ImportSummary:
@@ -696,6 +701,9 @@ class TestBuildAndRunHermesOrdering:
 
             async def stop(self) -> None:
                 calls.append("stop")
+
+            async def health(self):
+                return None
 
         cancelled = ImportSummary(total=4, submitted=1, skipped=0, failed=0, errors=(), cancelled=True)
 
@@ -733,6 +741,9 @@ class TestBuildAndRunHermesOrdering:
             async def stop(self) -> None:
                 calls.append("stop")
 
+            async def health(self):
+                return None
+
         summary = ImportSummary(total=1, submitted=1, skipped=0, failed=0, errors=())
 
         async def _fake_run_import(*_args: object, **_kwargs: object) -> ImportSummary:
@@ -754,6 +765,39 @@ class TestBuildAndRunHermesOrdering:
         assert result.summary is summary
         assert "bad byte" in result.profile_error
         assert calls == ["start", "run_import", "stop"]
+
+
+class TestBuildAndRunReadinessGate:
+    async def test_a_backend_that_is_not_ready_still_gets_stopped(self, tmp_path: Path) -> None:
+        """The readiness check has to sit inside the ``try``: it exits the
+        command, and a backend that was started and never stopped leaves its
+        connections behind.
+        """
+        calls: list[str] = []
+
+        class _FakeBackend:
+            async def start(self) -> None:
+                calls.append("start")
+
+            async def stop(self) -> None:
+                calls.append("stop")
+
+            async def health(self) -> BackendHealth:
+                return BackendHealth(ready=False, checks=[HealthCheck("server", "missing", "not running")])
+
+        async def _fake_run_import(*_args: object, **_kwargs: object) -> ImportSummary:
+            calls.append("run_import")
+            raise AssertionError("run_import must not be reached when the backend is not ready")
+
+        state = ImportState(path=tmp_path / "state.json")
+        with (
+            patch("raven.cli.import_commands.maybe_build_memory_backend", return_value=_FakeBackend()),
+            patch("raven.cli.import_commands.run_import", new=_fake_run_import),
+            pytest.raises(typer.Exit),
+        ):
+            await _build_and_run([], state)
+
+        assert calls == ["start", "stop"], calls
 
 
 class TestInstallHermesSkills:
@@ -805,6 +849,9 @@ class TestBuildAndRunHermesSkills:
             async def stop(self) -> None:
                 calls.append("stop")
 
+            async def health(self):
+                return None
+
         summary = ImportSummary(total=1, submitted=1, skipped=0, failed=0, errors=())
 
         async def _fake_run_import(*_args: object, **_kwargs: object) -> ImportSummary:
@@ -839,6 +886,9 @@ class TestBuildAndRunHermesSkills:
 
             async def stop(self) -> None:
                 calls.append("stop")
+
+            async def health(self):
+                return None
 
         summary = ImportSummary(total=1, submitted=1, skipped=0, failed=0, errors=())
 
@@ -989,50 +1039,79 @@ class TestImportRefusesToRunWithoutMemory:
     """
 
     def test_a_backend_that_is_not_ready_stops_the_run(self) -> None:
+        import asyncio
+
         import typer
 
         from raven.cli.import_commands import _require_memory_service_ready
-        from raven_everos.backend import ServiceState
+        from raven.contracts.memory import BackendHealth, HealthCheck
 
         class _NotReady:
-            state = ServiceState.FAILED
+            async def health(self):
+                return BackendHealth(ready=False, checks=[HealthCheck("server", "ok", "not running")])
 
         with pytest.raises(typer.Exit):
-            _require_memory_service_ready(_NotReady())
+            asyncio.run(_require_memory_service_ready(_NotReady()))
 
     def test_a_bad_identity_does_not_send_the_user_to_the_server_log(self, capsys: pytest.CaptureFixture) -> None:
         """The service is fine; the config is not. Its log holds nothing about
-        this, and start() already printed the key to edit."""
+        this, and the backend already names the key to edit."""
+        import asyncio
+
         import typer
 
         from raven.cli.import_commands import _require_memory_service_ready
-        from raven_everos.backend import ServiceState
+        from raven.contracts.memory import BackendHealth, HealthCheck
 
         class _BadIdentity:
-            state = ServiceState.BAD_IDENTITY
+            async def health(self):
+                return BackendHealth(ready=False, checks=[HealthCheck("identity", "missing", "Fix memory.userId")])
 
         with pytest.raises(typer.Exit):
-            _require_memory_service_ready(_BadIdentity())
+            asyncio.run(_require_memory_service_ready(_BadIdentity()))
 
         out = " ".join(capsys.readouterr().out.split())
         assert "server log" not in out
         assert "memory.userId" in out
 
     def test_a_ready_backend_passes(self) -> None:
+        import asyncio
+
         from raven.cli.import_commands import _require_memory_service_ready
-        from raven_everos.backend import ServiceState
+        from raven.contracts.memory import BackendHealth
 
         class _Ready:
-            state = ServiceState.READY
+            async def health(self):
+                return BackendHealth(ready=True, checks=[])
 
-        _require_memory_service_ready(_Ready())
+        asyncio.run(_require_memory_service_ready(_Ready()))
 
-    def test_a_backend_with_no_state_is_allowed(self) -> None:
-        """Only the everos backend reports a state. A third-party backend that
-        does not must not be locked out of importing."""
+    def test_a_backend_with_no_diagnostics_is_allowed(self) -> None:
+        """``health()`` may answer ``None``. A backend that offers no
+        diagnostics must not be locked out of importing."""
+        import asyncio
+
         from raven.cli.import_commands import _require_memory_service_ready
 
-        _require_memory_service_ready(object())
+        class _Silent:
+            async def health(self):
+                return None
+
+        asyncio.run(_require_memory_service_ready(_Silent()))
+
+    def test_a_backend_without_a_health_method_is_allowed(self) -> None:
+        """``health`` arrived after the Protocol shipped. A backend built
+        before it has no diagnostics to offer, which is the same answer as
+        ``None`` -- not a reason to refuse the import."""
+        import asyncio
+
+        from raven.cli.import_commands import _require_memory_service_ready
+
+        class _Older:
+            async def store(self, *_a, **_kw):
+                return True
+
+        asyncio.run(_require_memory_service_ready(_Older()))
 
     async def test_a_missing_plugin_is_not_an_unconfigured_backend(
         self, tmp_path: Path, capsys: pytest.CaptureFixture
