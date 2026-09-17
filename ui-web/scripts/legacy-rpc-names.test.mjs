@@ -40,7 +40,7 @@ const sourceModules = () => readdirSync(resolve(process.cwd(), 'src/features'), 
   })
 
 const FILES = [
-  ...['demo', 'live'].flatMap((layer) => partNames(layer).map((name) => `legacy/${layer}/${name}`)),
+  ...['demo'].flatMap((layer) => partNames(layer).map((name) => `legacy/${layer}/${name}`)),
   ...sourceModules(),
   'state/boot.ts',
   'state/connection.ts',

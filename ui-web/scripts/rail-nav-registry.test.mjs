@@ -16,12 +16,12 @@ import { readFileSync } from 'node:fs'
 
 import { describe, expect, it } from 'vitest'
 
-const caps = readFileSync(new URL('../src/legacy/demo/120-capabilities.js', import.meta.url), 'utf8')
+const pages = readFileSync(new URL('../src/state/page.ts', import.meta.url), 'utf8')
 const rail = readFileSync(new URL('../src/features/rail/store.ts', import.meta.url), 'utf8')
 
 function navOf() {
-  const block = caps.match(/const NAV_OF = \{(.*?)\n\};/s)
-  if (!block) throw new Error('NAV_OF is absent from demo/120-capabilities.js')
+  const block = pages.match(/const NAV_OF = \{(.*?)\n\}/s)
+  if (!block) throw new Error('NAV_OF is absent from state/page.ts')
   const out = new Map()
   for (const line of block[1].split('\n')) {
     const named = line.match(/^\s*(\w+)\s*:\s*'([^']+)'/)

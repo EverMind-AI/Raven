@@ -9,10 +9,10 @@
  *
  * The sheet's interior is React's now (src/App.tsx), so the question is state
  * here and the buttons call back in. What stays imperative is the flag on the
- * container, because div#veil is static markup in src/page.html until the end
- * of stage C: the Escape order reads that attribute to decide the sheet is
- * what an Escape should take back (state/overlays.ts), and the CSS shows the
- * sheet from it.
+ * container, because src/App.tsx renders div#veil with the flag the page is
+ * served with and never writes it again: the Escape order reads that attribute
+ * to decide the sheet is what an Escape should take back (state/overlays.ts),
+ * and the CSS shows the sheet from it.
  *
  * The question is committed synchronously, and that is a contract rather than a
  * detail. The flag goes up AFTER the text lands, the way the legacy verb wrote

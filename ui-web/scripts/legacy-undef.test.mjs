@@ -31,7 +31,7 @@ import { partNames } from './legacy-part.mjs'
 const url = (p) => new URL(`../${p}`, import.meta.url)
 /* The parts, in the order src/legacy/index.js installs them -- which is also
    where partNames checks that every file on disk is installed. */
-const FILES = ['demo', 'live'].flatMap((layer) =>
+const FILES = ['demo'].flatMap((layer) =>
   partNames(layer).map((name) => `${layer}/${name}`),
 )
 const texts = new Map(FILES.map((rel) => [rel, readFileSync(url(`src/legacy/${rel}`), 'utf8')]))

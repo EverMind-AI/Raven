@@ -30,8 +30,10 @@ import * as panes from './shell/panes'
 import * as scrollbars from './shell/scrollbars'
 import * as session from './shell/session'
 import { plugHost, skillsHost, skillsSkeletonHost } from './islands'
+import * as settingsChrome from './features/settings/chrome'
 import { installLegacy } from './legacy/index.js'
 import { boot } from './state/boot'
+import * as langEffects from './state/langEffects'
 import { setGateway } from './state/gateway'
 import { installGlobalListeners } from './state/globalListeners'
 import * as portals from './state/portals'
@@ -152,6 +154,13 @@ setGateway(chooseTransport())
    install() steps reach for the chrome this file has just wired and for the
    island roots mounted above, and the boot below reaches for them. */
 installLegacy()
+
+/* What the live layer's last part installed, in the order it installed it: the
+   whole-page redraw a language pick asks for, then the settings transport and
+   the model chip. Here rather than inside the list above because the list is
+   what is left of a concatenated script and this is not. */
+langEffects.install()
+settingsChrome.install()
 
 /* The page's own boot: the seam, the pushes, the actions, then everything a
    first frame needs from the gateway (state/boot.ts). */

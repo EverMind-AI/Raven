@@ -27,11 +27,12 @@
  */
 
 import { busy as turnBusy } from '../features/composer/turn'
-import { closeCaps, closeXa } from '../legacy/demo/120-capabilities.js'
+import { closeXa } from '../legacy/demo/120-capabilities.js'
 import { closeCron, closeKb, closeMem } from '../legacy/demo/140-schedule.js'
 import { closeConn, connCloseDialog } from '../legacy/demo/145-connections.js'
 import { closePb } from '../legacy/demo/154-playbooks.js'
 import { close as closeImage, isOpen as imageOpen } from '../shell/lightbox'
+import * as caps from './caps'
 import * as detail from './detail'
 import * as settingsDialog from './settingsDialog'
 import { sources } from './sources'
@@ -69,7 +70,7 @@ export const ORDER: readonly Overlay[] = [
   { id: '#memPage', isOpen: flagged('memPage'), close: closeMem },
   { id: '#pbPage', isOpen: flagged('pbPage'), close: closePb },
   { id: '#kbPage', isOpen: flagged('kbPage'), close: closeKb },
-  { id: '#capsPage', isOpen: flagged('capsPage'), close: closeCaps },
+  { id: '#capsPage', isOpen: flagged('capsPage'), close: caps.close },
   { id: '#xaPage', isOpen: flagged('xaPage'), close: closeXa },
   { id: '#connPage', isOpen: flagged('connPage'), close: closeConn },
   { id: 'setIsOpen()', isOpen: settingsDialog.isOpen, close: settingsDialog.close },

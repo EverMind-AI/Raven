@@ -9,10 +9,6 @@ import { islands } from '../../islands'
 
 function openPb() { islands.playbooks.open(); }
 function closePb() { islands.playbooks.close(); }
-function drawPb() {
-  /* A language flip re-renders #pbBody with the new catalogue. */
-  islands.playbooks.redraw();
-}
 
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
@@ -20,4 +16,4 @@ export function install() {
 
 }
 
-export { openPb, closePb, drawPb }
+export { openPb, closePb }

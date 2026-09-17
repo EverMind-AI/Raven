@@ -2,19 +2,20 @@
 /* A golden per top-level region of the page, taken from the markup that ships
  * today.
  *
- * Stage C moves every one of these nineteen regions out of src/page.html and
- * into App.tsx, one PR at a time. The promise is that the DOM does not move: an
- * element's tag, id, classes, data-* attributes and the order of its children
- * all stay as they are. So the golden is written once, here, off page.html --
- * and each later step changes only where the test gets the markup from, never
- * the golden text. A region whose owner changed and whose shape changed with it
+ * Stage C moved every one of these nineteen regions out of src/page.html and
+ * into App.tsx, one PR at a time. The promise was that the DOM does not move:
+ * an element's tag, id, classes, data-* attributes and the order of its children
+ * all stay as they are. So the golden was written once, here, off page.html --
+ * and each step changed only where the test got the markup from, never the
+ * golden text. A region whose owner changed and whose shape changed with it
  * fails on the region it broke, by name.
  *
- * The markup is read and parsed rather than booted: no script runs, so what is
- * pinned is the skeleton the document is served with, before any island or
- * writer has touched it -- plus the page's own root (App.tsx), which renders
- * synchronously in main.tsx and is part of that skeleton for the regions whose
- * interiors have moved into it. The boot-time shape has its own gate
+ * Sixteen of the nineteen are App.tsx's now; page.html carries the two
+ * pre-JavaScript shells and the onboarding host. The markup is read and parsed
+ * rather than booted: no script runs, so what is pinned is the skeleton the
+ * document is served with, before any island or writer has touched it -- plus
+ * the page's own root, which renders synchronously in main.tsx and is the rest
+ * of that skeleton. The boot-time shape has its own gate
  * (scripts/boot-snapshot.mjs) and the body's standing order has another
  * (portals.test.ts).
  */
@@ -85,14 +86,12 @@ function pageBody(): string {
   return html.slice(open + '<body>'.length, close).replace(/<script[\s\S]*?<\/script>/g, '')
 }
 
-/* Where each region's markup comes from: page.html for the sixteen regions it
-   still carries, and App.tsx for the interiors of the three it no longer does
-   (#detail, #setVeil, #veil -- C2). The C3..C13 steps move more of page.html
-   into App.tsx the same way and the goldens above do not change with it.
+/* Where each region's markup comes from: page.html for the three it still
+   carries, and App.tsx for the sixteen it no longer does.
 
-   The root is detached and every region portals into the container page.html
-   provides, which is how the page itself renders them (src/main.tsx): a root AT
-   a container would clear the markup written just above. flushSync, so the
+   The root is detached and the regions reach the body through one portal, which
+   is how the page itself renders them (src/main.tsx): a root AT the body would
+   clear the markup written just above instead of joining it. flushSync, so the
    commit has happened by the time the assertions read the document. */
 function render(): Document {
   document.body.innerHTML = pageBody()

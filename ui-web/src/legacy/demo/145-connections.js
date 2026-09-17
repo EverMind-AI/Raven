@@ -4,17 +4,13 @@
    entrance) and the two point in opposite directions.
 
    The renderer is the connections island (ui-web/src/features/connections/);
-   what remains here is its shell face -- the names the Esc handler and the
-   live layer's redrawAll still call. The More flyout opens the page by
-   importing the island (shell/navfly.ts); it does not come through here. */
+   what remains here is its shell face -- the two names the Escape order still
+   calls. The More flyout opens the page by importing the island
+   (shell/navfly.ts); it does not come through here. */
 
 import { islands } from '../../islands'
 
 function closeConn() { islands.connections.close(); }
-function drawConn() {
-  /* A language flip re-renders #connBody with the new catalogue. */
-  islands.connections.redraw();
-}
 /* Esc and the veil both land here; unmounting the dialog is also what stops
    the island's scan poll, so no close path can leave a timer running. */
 function connCloseDialog() { islands.connections.closeDialog(); }
@@ -24,4 +20,4 @@ function connCloseDialog() { islands.connections.closeDialog(); }
 export function install() {
 }
 
-export { closeConn, drawConn, connCloseDialog }
+export { closeConn, connCloseDialog }

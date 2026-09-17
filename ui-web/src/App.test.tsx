@@ -1,13 +1,15 @@
 // @vitest-environment happy-dom
 /* The page's own root: what it renders, and where.
  *
- * The shape of each interior is pinned by the region goldens
- * (src/test/regions.test.ts), which is why nothing here re-states it. What is
- * here is what those goldens cannot see: that the root adds nothing at the
- * body, that each interior lands inside the container src/page.html still
- * provides, that the three shared grounds are handed over empty, and -- since a
- * golden records only tag, id, class and data-* -- that the roles, the labels
- * and the literals are still on the markup.
+ * The shape of each region is pinned by the region goldens
+ * (src/test/regions.test.ts) and the body's standing order by the boot goldens
+ * and src/test/portals.test.ts, which is why nothing here re-states either.
+ * What is here is what those goldens cannot see: that the sixteen regions the
+ * root renders land at the body in that order, that the shared grounds are
+ * handed over empty, and -- since a golden records only tag, id, class and
+ * data-* -- that the roles, the labels and the literals are on the markup, that
+ * a language pick writes the keyed attributes no golden can hold, and that a
+ * re-render does not undo the flags another store writes.
  */
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -15,19 +17,42 @@ import { flushSync } from 'react-dom'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { App } from './App'
+import { T } from './i18n/t'
+import { setShell } from './shell/bridge'
 import * as detail from './state/detail'
+import * as lang from './state/lang'
+import * as page from './state/page'
+import { BOOT_BODY_ORDER } from './state/portals'
+import { bodySiblings } from './test/domSnapshot'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-/* The three containers page.html carries, as it carries them, plus a fourth
-   region the root has nothing to do with. */
-const MARKUP =
-  '<div class="app"></div>' +
-  '<aside class="detail" id="detail" data-open="false"></aside>' +
-  '<div class="veil setveil" id="setVeil" data-open="false"></div>' +
-  '<div class="veil" id="veil" data-open="false"></div>' +
-  '<div class="toasts" id="toasts"></div>'
+/* Opening a page re-marks the rail, which asks the shell for the page
+   registry; nothing here is about either. */
+setShell({
+  T: (key) => key,
+  confirmAsk: () => {},
+  showPage: () => {},
+  navState: () => ({ pages: [], btnOf: () => undefined }),
+})
+
+/* What page.html still carries: the two pre-JavaScript shells and the one empty
+   host another root mounts into. The root renders everything else, appended
+   after them, which is what a portal at the body does. */
+const MARKUP = '<div id="splash"></div><div id="onb" hidden></div><div id="noJs"></div>'
+
+/* The regions this root renders: the body's standing order minus #onb, which is
+   markup, and minus the four layers appended while the page installs. */
+const RENDERED = BOOT_BODY_ORDER.slice(1, -4)
+
+/* The key BOOT_BODY_ORDER files an element under: its id, or its classes when it
+   has none -- read off a signature line, the way src/test/portals.test.ts reads
+   it, so a golden's line and a live element reduce the same way. */
+const keyOf = (line: string): string => {
+  const [, tag = '', id, classes = ''] = /^([a-z]+)(?:#([\w-]+))?((?:\.[^.[]+)*)/.exec(line) ?? []
+  return id ? `${tag}#${id}` : `${tag}${classes}`
+}
 
 function render(markup: string = MARKUP): void {
   document.body.innerHTML = markup
@@ -40,18 +65,17 @@ afterEach(() => {
 })
 
 describe('the page root', () => {
-  it('leaves the body with exactly the regions the markup gave it', () => {
+  it('appends its regions after the shells the markup carries, in the boot order', () => {
     render()
-    expect(Array.from(document.body.children).map((el) => el.id || el.className)).toEqual([
-      'app',
-      'detail',
-      'setVeil',
-      'veil',
-      'toasts',
+    expect(bodySiblings().map(keyOf)).toEqual([
+      'div#splash',
+      'div#onb',
+      'div#noJs',
+      ...RENDERED,
     ])
   })
 
-  it('portals one interior into each container, and nothing into the rest', () => {
+  it('renders the dialog interiors inside their own veils, and nothing in the standing hosts', () => {
     render()
     const child = (id: string): string | undefined =>
       document.getElementById(id)?.firstElementChild?.className
@@ -62,7 +86,9 @@ describe('the page root', () => {
     expect(document.getElementById('veil')!.children).toHaveLength(1)
     expect(child('veil')).toBe('sheet')
     expect(document.getElementById('toasts')!.children).toHaveLength(0)
-    expect(document.querySelector('.app')!.children).toHaveLength(0)
+    expect(document.getElementById('menu')!.children).toHaveLength(0)
+    expect(document.getElementById('jobVeil')!.children).toHaveLength(0)
+    expect(document.getElementById('connVeil')!.children).toHaveLength(0)
   })
 
   it('renders every id the chrome and the islands reach for, once each', () => {
@@ -71,6 +97,9 @@ describe('the page root', () => {
       'cfTitle', 'cfBody', 'cfNo', 'cfYes',
       'dTitle', 'dClose', 'dBody',
       'setModal', 'snav', 'snavList', 'setTitle', 'setSub', 'setClose', 'spanels',
+      'railShow', 'split', 'jobVeil', 'connVeil', 'menu', 'toasts',
+      'capsPage', 'xaPage', 'connPage', 'memPage', 'pbPage', 'kbPage', 'cronPage',
+      'xaBody', 'connBody', 'memBody', 'pbBody', 'kbBody', 'cronBody',
     ]) {
       expect(document.querySelectorAll(`#${id}`), id).toHaveLength(1)
     }
@@ -78,18 +107,22 @@ describe('the page root', () => {
 
   /* Shared ground: the four detail-drawer openers append their own host under
      #dBody, the settings island portals its nav into #snavList and roots its
-     panels in #spanels. React owning any of those child lists would tear down
-     what the other side put there. */
-  it('hands the three shared grounds over empty', () => {
+     panels in #spanels, and each module page's body is the root of its own
+     island. React owning any of those child lists would tear down what the
+     other side put there. */
+  it('hands the shared grounds over empty', () => {
     render()
-    for (const id of ['dBody', 'snavList', 'spanels']) {
+    for (const id of [
+      'dBody', 'snavList', 'spanels',
+      'xaBody', 'connBody', 'memBody', 'pbBody', 'kbBody', 'cronBody',
+    ]) {
       expect(document.getElementById(id)!.childNodes, id).toHaveLength(0)
     }
   })
 
-  /* The five keys state/lang.ts's passes rewrite inside these three regions.
-     Attributes rather than t() calls on purpose: the store applies a language
-     by walking the document (see App.tsx). */
+  /* The keys the markup was served with. Inert markers now -- nothing walks
+     them (state/lang.ts) -- and kept because they are the record of which
+     phrase each line of chrome speaks, and the region goldens hold them. */
   it('keeps the language keys on the markup', () => {
     render()
     const key = (id: string, attr: string): string | null =>
@@ -99,16 +132,18 @@ describe('the page root', () => {
     expect(key('setClose', 'data-i18n-aria')).toBe('gui.close')
     expect(key('setClose', 'data-i18n-tip')).toBe('gui.close')
     expect(key('setModal', 'data-i18n-aria')).toBe('gui.page.set')
+    expect(key('detail', 'data-i18n-aria')).toBe('gui.cap_detail')
+    expect(key('railShow', 'data-i18n-tip')).toBe('gui.expand_rail')
+    expect(key('xaPage', 'data-i18n-aria')).toBe('gui.page.agents')
     expect(document.querySelector('.wm')!.getAttribute('data-i18n')).toBe('gui.page.set')
   })
 
   /* The two things the region goldens drop: they record tag, id, class and
      data-*, so a deleted role, a deleted aria-label or a blanked literal all
      pass them. The exact literals are proven once per step by the boot dump
-     (my_docs/temp/20260917_ui_web_c2_regions_html_*.txt) rather than copied
-     here -- the repo's source is English and the markup's Chinese belongs in
-     one place -- so what is pinned here is that each of them still carries
-     one. */
+     (my_docs/temp/20260917_ui_web_c14_*.txt) rather than copied here -- the
+     repo's source is English and the markup's Chinese belongs in one place --
+     so what is pinned here is that each of them still carries one. */
   it('keeps the dialog roles and the labels that are not data-*', () => {
     render()
     const sheet = document.querySelector('.sheet')!
@@ -118,6 +153,11 @@ describe('the page root', () => {
     const modal = document.getElementById('setModal')!
     expect(modal.getAttribute('role')).toBe('dialog')
     expect(modal.getAttribute('aria-modal')).toBe('true')
+    const drawer = document.getElementById('detail')!
+    expect(drawer.getAttribute('role')).toBe('dialog')
+    expect(drawer.getAttribute('aria-modal')).toBe('true')
+    expect(document.getElementById('menu')!.getAttribute('role')).toBe('menu')
+    expect(document.getElementById('toasts')!.getAttribute('aria-live')).toBe('polite')
     expect(document.getElementById('dClose')!.getAttribute('aria-label')).not.toBe(null)
     for (const svg of document.querySelectorAll('.dx svg, .icb svg')) {
       expect(svg.getAttribute('aria-hidden')).toBe('true')
@@ -130,12 +170,67 @@ describe('the page root', () => {
     for (const id of ['cfTitle', 'cfNo', 'cfYes', 'dTitle', 'setTitle']) {
       expect(document.getElementById(id)!.textContent, id).not.toBe('')
     }
+    for (const sel of ['#xaPage h2', '#connPage h2', '#memPage h2', '#pbPage h2', '#kbPage h2', '#cronPage h2']) {
+      expect(document.querySelector(sel)!.textContent, sel).not.toBe('')
+    }
     expect(document.querySelector('.wm')!.textContent).not.toBe('')
   })
 
-  it('renders nothing when the page has no containers to render into', () => {
-    render('<div class="app"></div>')
-    expect(document.body.innerHTML).toBe('<div class="app"></div>')
+  /* The served page carries no aria-label, no title and no data-tip on any of
+     these: applyI18n was the only writer of them and it ran only on a pick, so
+     a page nobody has picked for has none. */
+  it('carries no keyed attribute before a language is applied', () => {
+    render()
+    expect(document.getElementById('railShow')!.getAttribute('aria-label')).toBe(null)
+    expect(document.getElementById('railShow')!.dataset.tip).toBe(undefined)
+    expect(document.getElementById('detail')!.getAttribute('aria-label')).toBe(null)
+    expect(document.getElementById('setModal')!.getAttribute('aria-label')).toBe(null)
+    expect(document.getElementById('setClose')!.dataset.tip).toBe(undefined)
+    expect(document.getElementById('xaPage')!.getAttribute('aria-label')).toBe(null)
+    expect(document.getElementById('wsGrip')!.getAttribute('title')).toBe(null)
+  })
+})
+
+/* Last in the file on purpose: applying a language is module state for
+   everything after it. What the passes over the document used to write on the
+   served markup, the regions render -- so this is the whole of what replaced
+   them, one case per kind of attribute. */
+describe('the page root once a language is applied', () => {
+  it('writes the text, the placeholder, the label, the tooltip and the title', () => {
+    render()
+    act(() => {
+      lang.set('en')
+    })
+    expect(document.querySelector('#xaPage h2')!.textContent).toBe(T('gui.page.agents'))
+    expect(document.getElementById('xaPage')!.getAttribute('aria-label')).toBe(T('gui.page.agents'))
+    expect(document.getElementById('railShow')!.dataset.tip).toBe(T('gui.expand_rail'))
+    expect(document.getElementById('railShow')!.getAttribute('aria-label')).toBe(T('gui.expand_rail'))
+    expect(document.getElementById('wsGrip')!.getAttribute('title')).toBe(T('gui.resize_ws'))
+    expect(document.getElementById('detail')!.getAttribute('aria-label')).toBe(T('gui.cap_detail'))
+    expect(document.getElementById('setModal')!.getAttribute('aria-label')).toBe(T('gui.page.set'))
+    expect((document.getElementById('sfind') as HTMLInputElement).placeholder).toBe(T('gui.search_sessions'))
+    expect(document.getElementById('cfNo')!.textContent).toBe(T('gui.cancel'))
+  })
+
+  /* The flags another store writes on a region this root renders. A pick
+     re-renders all seven sections, and React diffs against the props it
+     rendered last rather than against the document -- so a value it never
+     changes is a value it never writes again, which is what lets
+     state/page.ts stay the one writer of the seven open flags. */
+  it('keeps the open flag the page store wrote through a re-render', () => {
+    render()
+    act(() => {
+      page.show('cronPage')
+    })
+    expect(document.getElementById('cronPage')!.dataset.open).toBe('true')
+    act(() => {
+      lang.set('zh')
+    })
+    expect(document.getElementById('cronPage')!.dataset.open).toBe('true')
+    act(() => {
+      page.show(null)
+    })
+    expect(document.getElementById('cronPage')!.dataset.open).toBe('false')
   })
 })
 

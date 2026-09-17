@@ -3,7 +3,7 @@
  * The 48 parts were one concatenated script whose order was load-bearing, and
  * ES modules do not honour that order: each evaluates when the graph first
  * reaches it, depth first. The layers also contained cycles -- 14 files in
- * demo/, 6 in live/ -- so inside one, a module could be evaluated before the
+ * demo/ -- so inside one, a module could be evaluated before the
  * cycle-mate it reads had run at all.
  *
  * So the order was taken out of the evaluation: a module body may only
@@ -32,7 +32,7 @@ import { partNames } from './legacy-part.mjs'
 const url = (p) => new URL(`../${p}`, import.meta.url)
 /* The parts, in the order src/legacy/index.js installs them -- which is also
    where partNames checks that every file on disk is installed. */
-const FILES = ['demo', 'live'].flatMap((layer) =>
+const FILES = ['demo'].flatMap((layer) =>
   partNames(layer).map((name) => `${layer}/${name}`),
 )
 /* What the conversion to modules let a top-level initialiser read. Not trusted
@@ -174,8 +174,10 @@ describe('the conversion leaf list', () => {
   })
 
   it('finds the cycles the layers are known to have', () => {
-    /* One knot left in demo/, and it is chrome reading chrome: the
-       capabilities page and its skills tab.
+    /* None left. The last knot was chrome reading chrome -- the capabilities
+       page and its skills tab -- and it broke when the draw both of them
+       entered through became src/state/caps.ts's own `draw`, so the page no
+       longer reads the tab that reads it.
 
        It was one knot of 14 while the offline data lived in the layer. The
        live knot was 13 while every part that speaks to the gateway imported
@@ -192,7 +194,7 @@ describe('the conversion leaf list', () => {
        when the record the hooks write moved to features/workspace/record.ts,
        so the panel no longer reads the part that reads it. */
     const sizes = [...new Set([...sccOf.values()].filter((c) => c.length > 1))].map((c) => c.length).sort((a, b) => b - a)
-    expect(sizes).toEqual([2])
+    expect(sizes).toEqual([])
   })
 })
 

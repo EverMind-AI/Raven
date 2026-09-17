@@ -17,7 +17,8 @@
  * what stage C reproduces is the measurement, not the intent.
  *
  * Three kinds are distinguished, because each breaks differently:
- *   static   -- page.html already has it at the body; the writer only fills it.
+ *   static   -- at the body from the page root's first commit, and the writer
+ *               only fills it (src/App.tsx renders it with no children).
  *   reparent -- born inside a page, moved to the body on first open, and never
  *               moved back.
  *   append   -- created at runtime and appended to the body.

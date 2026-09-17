@@ -6,13 +6,9 @@
  * (islands) and src/shell/ (behaviour modules). Every element below is a
  * transcription -- tag, id, class, data-*, role, aria, the svg path data and
  * the text exactly as page.html spelled them, attributes in the same order --
- * and src/test/__golden__/region-app.txt is what says so. The containers stay
- * in page.html until the end of stage C and these portal into them, one portal
- * per container, so the order React commits is the order written here (see
- * src/App.tsx for why the root is detached). div.dock is the fifth child of
- * .chat and is still page.html's, which is why this cannot be one portal of
- * five children into .chat: a portal appends, so the dock would end up above
- * the header.
+ * and src/test/__golden__/region-app.txt is what says so. The containers are
+ * here too now: src/App.tsx renders div.chat and this is the first five of its
+ * six children, with the composer dock (src/chrome/Dock.tsx) sixth.
  *
  * What this does NOT own, though it renders the elements:
  *   - h1#title's text. Seven modules write it -- features/rail/source.ts and
@@ -22,11 +18,14 @@
  *     literal here is what the page is served with and this never changes it,
  *     so React never writes it again: it diffs against the props it rendered
  *     last rather than against the document.
- *   - #wsBtn's aria-expanded, tooltip and label, and #wsBdg's count and hidden
- *     (legacy/demo/100-workspace.js's setWs and bumpWs).
+ *   - #wsBtn's aria-expanded, and #wsBdg's count and hidden (state/ws.ts's
+ *     setOpen and bump). Its tooltip and label have two writers, which is the
+ *     behaviour: state/ws.ts names them for the state the pane is in, and the
+ *     keyed value below is written on a language pick -- so a pick puts the
+ *     word for "expand" back on an open pane's toggle, exactly as the document
+ *     pass did.
  *   - #backpill's hidden, tooltip and label, and its click
- *     (features/composer/store.ts's pillPaint, features/composer/mount.tsx) --
- *     all on the container, which is static markup.
+ *     (features/composer/store.ts's pillPaint, features/composer/mount.tsx).
  *   - #flash and #stage's children. #stage is shared ground: the transcript
  *     island appends a lane host into it and the composer appends the live
  *     turn's, each keeping its position by identity, so React owning that child
@@ -35,7 +34,6 @@
  */
 
 import { useSyncExternalStore } from 'react'
-import { createPortal } from 'react-dom'
 
 import { Banner } from './Banner'
 import { renameTitle } from '../legacy/demo/050-rail.js'
@@ -56,6 +54,8 @@ function Header(): JSX.Element {
         id="renameBtn"
         data-i18n-tip="gui.rename_session"
         data-i18n-aria="gui.rename_session"
+        data-tip={lang.attr('gui.rename_session')}
+        aria-label={lang.attr('gui.rename_session')}
         onClick={() => renameTitle()}
       >
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true">
@@ -69,6 +69,8 @@ function Header(): JSX.Element {
         aria-expanded="false"
         data-i18n-tip="gui.expand_ws"
         data-i18n-aria="gui.expand_ws"
+        data-tip={lang.attr('gui.expand_ws')}
+        aria-label={lang.attr('gui.expand_ws')}
       >
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><path d="M14.5 4.5v15" />
@@ -92,43 +94,42 @@ function Scroll(): JSX.Element {
   )
 }
 
-/* Each interior into the container page.html still provides, guarded the way
-   the island mounts are: a document without the container renders nothing
-   rather than throwing.
+/* The first five children of div.chat, in the order page.html had them.
  *
- * The language subscription is the region's, not each component's: the four
- * interiors carry keys the document pass rewrites, and this is what will draw
- * them from the catalogue once that pass is gone. It is also what makes the
- * agreement measurable today -- a flip re-renders all four, and the values the
- * writers above put on these elements have to survive that.
+ * The language subscription is the region's, not each component's: the five
+ * interiors carry keys and this is what draws them from the catalogue on a
+ * pick. It is also what makes the agreement measurable -- a flip re-renders all
+ * five, and the values the writers above put on these elements have to survive
+ * that.
  */
 export function ChatTop(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
-  const top = document.querySelector('.chat > .top')
-  const scroll = document.getElementById('scroll')
-  const pill = document.getElementById('backpill')
-  const brand = document.getElementById('brand')
   return (
     <>
-      {top ? createPortal(<Header />, top) : null}
-      {scroll ? createPortal(<Scroll />, scroll) : null}
-      {pill
-        ? createPortal(
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5v13M6.5 12.5l5.5 5.5 5.5-5.5" /></svg>,
-            pill
-          )
-        : null}
-      {brand
-        ? createPortal(
-            <>
-              {/* Empty until there is artwork to put in it: #brand .mk:empty
-                  hides the slot, so the emptiness is what the rule reads. */}
-              <span className="mk" />
-              <span className="wl">Raven Agent</span>
-            </>,
-            brand
-          )
-        : null}
+      <div className="top"><Header /></div>
+      <div className="scroll" id="scroll"><Scroll /></div>
+      <button className="backpill" id="backpill" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5.5v13M6.5 12.5l5.5 5.5 5.5-5.5" /></svg>
+      </button>
+      {/* The workspace seam, hung off the chat rather than the panel: the panel
+          clips its own overflow, so a grip inside it could only be grabbed from
+          one side. No interior at all, and dragged by id from shell/panes.ts. */}
+      <div
+        className="grip"
+        id="wsGrip"
+        role="separator"
+        aria-orientation="vertical"
+        data-i18n-title="gui.resize_ws"
+        data-i18n-aria="gui.resize_ws"
+        title={lang.attr('gui.resize_ws')}
+        aria-label={lang.attr('gui.resize_ws')}
+      />
+      <div id="brand" aria-hidden="true">
+        {/* Empty until there is artwork to put in it: #brand .mk:empty hides
+            the slot, so the emptiness is what the rule reads. */}
+        <span className="mk" />
+        <span className="wl">Raven Agent</span>
+      </div>
     </>
   )
 }

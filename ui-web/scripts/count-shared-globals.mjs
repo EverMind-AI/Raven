@@ -91,7 +91,7 @@
 //
 //   node ui-web/scripts/count-shared-globals.mjs         # report + assert
 //   node ui-web/scripts/count-shared-globals.mjs --list  # name every strand
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 
@@ -102,17 +102,22 @@ const EXPECTED_VERBS = 18
 const src = join(fileURLToPath(new URL('..', import.meta.url)), 'src')
 // The concatenated layers live under src/legacy; shell/bridge.ts does not.
 const legacy = join(src, 'legacy')
-const read = (dir) =>
-  readdirSync(join(legacy, dir))
+/* A layer that is gone contributes nothing, which is the end state this ratchet
+   was counting down to: the live layer is no longer a directory, so its half of
+   every count below is vacuously zero and the demo half is the only one left to
+   read. */
+const listing = (dir) =>
+  (existsSync(join(legacy, dir)) ? readdirSync(join(legacy, dir)) : [])
     .filter((f) => f.endsWith('.js'))
     .sort()
+
+const read = (dir) =>
+  listing(dir)
     .map((f) => readFileSync(join(legacy, dir, f), 'utf8'))
     .join('\n')
 
 const parts = (dir) =>
-  readdirSync(join(legacy, dir))
-    .filter((f) => f.endsWith('.js'))
-    .sort()
+  listing(dir)
     .map((f) => [f, readFileSync(join(legacy, dir, f), 'utf8')])
 
 const demo = read('demo')

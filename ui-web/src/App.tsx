@@ -1,49 +1,49 @@
-/* The page's own React root: the regions src/page.html used to carry as markup
- * -- the dialog shells, the rail, the composer dock and the capabilities
- * page's chrome -- and the two overlays, the context menu's rows and the
- * notices, that the chrome used to build by hand -- and the interiors of the
- * sheets that dock above the composer.
+/* The page. Every region src/page.html used to carry as markup is rendered
+ * from here: the shell's two columns, the seven module pages, the dialog
+ * shells, the context menu's rows, the notices, the interiors of the sheets
+ * that dock above the composer, and the four layers that belong to no page at
+ * all.
  *
  * Every element below is a transcription -- tag, id, class, data-*, role, aria
  * and text exactly as page.html spelled them, attributes in the same order --
  * and the goldens under src/test/__golden__/ are what says so. A region big
- * enough to read on its own gets a file under src/chrome/ (the rail, the
- * dock, the capabilities page).
+ * enough to read on its own gets a file under src/chrome/: the rail, the chat
+ * column, the composer dock, the workspace pane, the capabilities page.
  *
- * The containers stay in page.html and the interiors portal into them, which is
- * the mechanism for every region stage C converts: while a container is static
- * markup, the order React commits into it is the order these portals are
- * written, so an interior cannot end up appended after something the page put
- * there first. React clears a container it is given as a ROOT (measured: a root
- * at document.body deletes #splash, #noJs and every static region on its first
- * commit), which is why the root in main.tsx is a detached element and
- * everything here is a portal.
+ * ONE portal, at the body, and the whole tree inside it. React clears a
+ * container it is given as a ROOT -- measured: a root at document.body deletes
+ * everything the document was served with on its first commit -- so the root in
+ * main.tsx is a detached element and this is a portal into the body it renders.
+ * A portal appends, which is what puts these regions after the two shells
+ * page.html still carries and before the four runtime layers that are appended
+ * during install; state/portals.ts is where that body-level order is declared,
+ * because two steps of the `--z` ladder are ties decided by it alone.
  *
- * Language. The static markup carries data-i18n* keys rather than t() calls,
- * and state/lang.ts applies a language by walking the document and rewriting
- * them. A component that renders one of those keyed literals therefore has two
- * writers, and it takes its literal through lang.text(key, literal) -- the same
- * key, the same catalogue -- so the two agree on every value in both
- * directions. The literals with no key (#cfTitle, #cfYes, #setTitle) have
- * nothing to look up: each is owned by whoever writes it afterwards (the
- * confirm store, the settings island), and a re-render cannot undo that,
- * because React diffs against the props it rendered last rather than against
- * the document.
+ * Language. Each region renders its words through lang.text(key, literal) and
+ * its keyed attributes through lang.attr(key), which is applyI18n's five passes
+ * read from the other end: the literal the page was served with until a pick
+ * lands, the catalogue's text afterwards. The data-i18n* keys stay on the
+ * elements -- they are what says which phrase a line of chrome speaks, and the
+ * region goldens record them -- but nothing reads them any more (see
+ * state/lang.ts). The literals with no key (#cfTitle, #cfYes, #setTitle,
+ * #title) have nothing to look up: each is owned by whoever writes it
+ * afterwards, and a re-render cannot undo that, because React diffs against the
+ * props it rendered last rather than against the document.
  *
- * The last four belong to no page at all: the hover pill, the full-size image,
- * the upgrade card and the failure bars. Three of them portal straight to the
- * body, which is where they have always been appended -- each is
- * `position: fixed` over the whole window, so a wrapper would take the inset --
- * and the pill portals into the one layer state/portals.ts stands at the body
- * for it. Where each of them sits among the body's children is what decides
- * which covers which for the two deliberate ties on the `--z` ladder, so that
- * order is declared once, there.
+ * Flags this renders but does not own, for the same reason: `data-open` on the
+ * seven pages and the veils, `hidden` on button#railShow, `data-rail` and
+ * `data-page` on div.app, `data-open` / `data-full` on #split. Each is rendered
+ * as the value the page is served with and written afterwards by the one store
+ * that owns it (state/page.ts, state/rail.ts, state/ws.ts) -- which is also
+ * what keeps the order those writes land in.
  *
  * Not here, and not later: #splash and #noJs. Both are pre-JavaScript shells --
  * the splash is the literal first frame, painted while this bundle is still
  * being evaluated, and #noJs is what a reader gets when it never runs -- so
  * neither can be something React puts on screen. They stay in page.html and are
- * taken down at boot (state/splash.ts, legacy/demo/010-kernel.js).
+ * taken down at boot (state/splash.ts, legacy/demo/010-kernel.js). #onb stays
+ * with them because a portal can only append: rendered from here it would land
+ * after #noJs instead of between the two.
  */
 import { useEffect, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
@@ -68,11 +68,11 @@ import * as settings from './state/settingsDialog'
 import type { JSX } from 'react'
 
 /* A veil's own click, for the three dialogs that close when the reader clicks
-   beside them. The veil IS the container, which src/page.html still renders, so
-   this cannot be an onClick; the guard is what the legacy handlers had -- the
-   panel is a child, so a click inside it is not a click on the scrim. Every
-   handler passed in is a module function, so the listener is registered once
-   and not on every render. */
+   beside them. The veil IS the region, and the panel inside it is a child, so
+   a click on the scrim is a click on the veil itself -- which is the guard the
+   legacy handlers had. A listener rather than an onClick because every handler
+   passed in is a module function, so it is registered once and not on every
+   render. */
 function useScrim(id: string, close: () => void): void {
   useEffect(() => {
     const el = document.getElementById(id)
@@ -97,13 +97,15 @@ function ConfirmSheet(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   useScrim('veil', cancel)
   return (
-    <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="cfTitle">
-      <header id="cfTitle">{s.title ?? '确认'}</header>
-      <div className="body" id="cfBody">{s.body}</div>
-      <footer>
-        <button className="btn" id="cfNo" data-i18n="gui.cancel" onClick={cancel}>{lang.text('gui.cancel', '取消')}</button>
-        <button className="btn bad" id="cfYes" onClick={() => confirm.answer(true)}>{s.label ?? '确认'}</button>
-      </footer>
+    <div className="veil" id="veil" data-open="false">
+      <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="cfTitle">
+        <header id="cfTitle">{s.title ?? '确认'}</header>
+        <div className="body" id="cfBody">{s.body}</div>
+        <footer>
+          <button className="btn" id="cfNo" data-i18n="gui.cancel" onClick={cancel}>{lang.text('gui.cancel', '取消')}</button>
+          <button className="btn bad" id="cfYes" onClick={() => confirm.answer(true)}>{s.label ?? '确认'}</button>
+        </footer>
+      </div>
     </div>
   )
 }
@@ -118,54 +120,79 @@ function ConfirmSheet(): JSX.Element {
    so the emptiness is load-bearing and no card ever puts the dash back. */
 function DetailPanel(): JSX.Element {
   const s = useSyncExternalStore(detail.subscribe, detail.get)
+  useSyncExternalStore(lang.subscribe, lang.get)
   useScrim('detail', detail.close)
   return (
-    <div className="dpanel">
-      <header>
-        <b id="dTitle">{s.title ?? '—'}</b>
-        <button className="dx" id="dClose" data-i18n-aria="gui.close" aria-label="关闭" onClick={() => detail.close()}>
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
-        </button>
-      </header>
-      <div className="body" id="dBody" />
-    </div>
+    <aside
+      className="detail"
+      id="detail"
+      data-open="false"
+      role="dialog"
+      aria-modal="true"
+      data-i18n-aria="gui.cap_detail"
+      aria-label={lang.attr('gui.cap_detail')}
+    >
+      <div className="dpanel">
+        <header>
+          <b id="dTitle">{s.title ?? '—'}</b>
+          <button className="dx" id="dClose" data-i18n-aria="gui.close" aria-label={lang.text('gui.close', '关闭')} onClick={() => detail.close()}>
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+        </header>
+        <div className="body" id="dBody" />
+      </div>
+    </aside>
   )
 }
 
-/* The settings dialog's frame. #snavList and #spanels render empty for the same
-   reason as #dBody: the settings island portals its nav into the first and
-   roots its panels in the second.
-
-   #setTitle is the island's: it writes the section's name there on every draw.
-   The literal below is what the page is served with, and is why this component
-   must not render a value of its own for it. */
+/* The settings dialog. A dialog, not a place: it is something you adjust and
+   dismiss, and taking over the whole window made a two-second change feel like
+   leaving the session behind.
+ *
+ * #snavList and #spanels render empty for the same reason as #dBody: the
+ * settings island portals its nav into the first and roots its panels in the
+ * second.
+ *
+ * #setTitle is the island's: it writes the section's name there on every draw.
+ * The literal below is what the page is served with, and is why this component
+ * must not render a value of its own for it. */
 function SettingsModal(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   useScrim('setVeil', settings.close)
   return (
-    <div className="smodal" id="setModal" role="dialog" aria-modal="true" data-i18n-aria="gui.page.set">
-      <nav className="snav" id="snav">
-        {/* A block row with one inline child, so the whitespace page.html had
-            around it is reproduced: it collapses at both line edges either way,
-            but the rule that makes it harmless is the line edge, not a flex or
-            grid parent (.snav .brandrow, src/styles/page.css:3667). */}
-        <div className="brandrow">
-          {' '}
-          <span className="wm" data-i18n="gui.page.set">{lang.text('gui.page.set', '设置')}</span>{' '}
-        </div>
-        <div className="snavlist" id="snavList" />
-      </nav>
-      <div className="sbody">
-        <header className="shd">
-          <div className="ttl">
-            <h3 id="setTitle">设置</h3>
-            <p className="sub" id="setSub" />
+    <div className="veil setveil" id="setVeil" data-open="false">
+      <div className="smodal" id="setModal" role="dialog" aria-modal="true" data-i18n-aria="gui.page.set" aria-label={lang.attr('gui.page.set')}>
+        <nav className="snav" id="snav">
+          {/* A block row with one inline child, so the whitespace page.html had
+              around it is reproduced: it collapses at both line edges either way,
+              but the rule that makes it harmless is the line edge, not a flex or
+              grid parent (.snav .brandrow, src/styles/page.css:3667). */}
+          <div className="brandrow">
+            {' '}
+            <span className="wm" data-i18n="gui.page.set">{lang.text('gui.page.set', '设置')}</span>{' '}
           </div>
-          <button className="icb" id="setClose" data-i18n-tip="gui.close" data-i18n-aria="gui.close" onClick={() => settings.close()}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
-          </button>
-        </header>
-        <div className="spanels" id="spanels" />
+          <div className="snavlist" id="snavList" />
+        </nav>
+        <div className="sbody">
+          <header className="shd">
+            <div className="ttl">
+              <h3 id="setTitle">设置</h3>
+              <p className="sub" id="setSub" />
+            </div>
+            <button
+              className="icb"
+              id="setClose"
+              data-i18n-tip="gui.close"
+              data-i18n-aria="gui.close"
+              data-tip={lang.attr('gui.close')}
+              aria-label={lang.attr('gui.close')}
+              onClick={() => settings.close()}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+            </button>
+          </header>
+          <div className="spanels" id="spanels" />
+        </div>
       </div>
     </div>
   )
@@ -173,7 +200,8 @@ function SettingsModal(): JSX.Element {
 
 /* The context menu's rows, in the host they were raised in (shell/menu.ts). The
    flag and the position are the store's, because they belong to div#menu, which
-   page.html still renders; what is here is the row list it had built by hand. */
+   this file renders as an empty region; what is here is the row list the writer
+   used to build by hand. */
 function ContextMenu(): JSX.Element | null {
   const s = useSyncExternalStore(menu.subscribe, menu.get)
   if (!s.host) return null
@@ -209,28 +237,114 @@ function Toasts(): JSX.Element {
   return <>{live.map((t) => createPortal(<Notice t={t} />, t.host, String(t.id)))}</>
 }
 
-/* Each interior into the container page.html still provides. Guarded the way
-   the island mounts are: a document without the container renders nothing
-   rather than throwing. The rail, the chat column and the workspace pane
-   resolve their own containers -- div.app's two columns are the regions with no
-   id -- so does the dock, which is nested inside one, the two overlays below
-   find their own host, because theirs is the one that was standing when they
-   were raised, and each sheet in the rack portals into the element the rack
-   filed it under. */
-export function App(): JSX.Element {
-  const veilEl = document.getElementById('veil')
-  const detailEl = document.getElementById('detail')
-  const setVeilEl = document.getElementById('setVeil')
+/* The way back when the rail is collapsed. It sits out here rather than in the
+   chat header because that header opens a stacking context of its own (.top is
+   positioned with a z-index), which capped this button below the full-page
+   modules no matter how high its own z-index went -- collapsing the rail inside
+   技能 / 插件 / 记忆 then covered the only control that brings it back, with no
+   way left to reach another module.
+
+   `hidden` is state/rail.ts's: it shows exactly while the rail does not. */
+function RailShow(): JSX.Element {
+  useSyncExternalStore(lang.subscribe, lang.get)
   return (
+    <button
+      className="ghost-ic tipdn"
+      id="railShow"
+      data-i18n-tip="gui.expand_rail"
+      data-i18n-aria="gui.expand_rail"
+      hidden
+      data-tip={lang.attr('gui.expand_rail')}
+      aria-label={lang.attr('gui.expand_rail')}
+    >
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+        <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><path d="M9.5 4.5v15" />
+      </svg>
+    </button>
+  )
+}
+
+/* One of the six module pages whose whole interior is a heading and the empty
+   box its island roots itself in. The seventh, the capabilities page, serves two
+   modules and has a file of its own (src/chrome/CapsPage.tsx).
+
+   The heading is drawn and then hidden (`.page > header h2{display:none}`,
+   src/styles/page.css): the strip stays for breathing room and the scroll fade,
+   and each page's own hero says the name bigger. It is still the page's
+   accessible name through the aria-label above, which is why the two keys can
+   differ (the memory page is announced by its hero's phrase). */
+function ModulePage({ id, aria, head, literal, body }: {
+  readonly id: string
+  readonly aria: string
+  readonly head: string
+  readonly literal: string
+  readonly body: string
+}): JSX.Element {
+  useSyncExternalStore(lang.subscribe, lang.get)
+  return (
+    <section className="page" id={id} data-open="false" data-i18n-aria={aria} aria-label={lang.attr(aria)}>
+      <header>
+        <h2 data-i18n={head}>{lang.text(head, literal)}</h2>
+      </header>
+      <div className="work">
+        <div className="wrap" id={body} />
+      </div>
+    </section>
+  )
+}
+
+/* The whole body, in the order page.html served it. Every parent transcribed
+   here drops the whitespace the markup had between its children, because every
+   one of them is a flex or a grid container or has none but block-level
+   children (div.app, div.main, #split, .chat, .page, .page > header, .page
+   .work and #capsPage's .wrap -- src/styles/page.css:227, 632, 2258, 2276,
+   2896, 2911, 2929, 2930): a text node of pure whitespace is not a flex or grid
+   item and does not paint between blocks, so dropping it moves no pixel.
+   button#railShow's glyph is the same case (`.ghost-ic{display:grid}`,
+   page.css:292), and whitespace inside an <svg> never paints at all. */
+export function App(): JSX.Element {
+  return createPortal(
     <>
-      <Rail />
-      <ChatTop />
-      <Dock />
-      <WsPane />
+      <div className="app">
+        <Rail />
+        <div className="main">
+          <div className="split" id="split">
+            {/* The session header belongs to the chat column, not the whole main
+                pane: spanning both columns would leave a band of empty header
+                above the workspace, which then reads as detached from the top. */}
+            <div className="chat">
+              <ChatTop />
+              <Dock />
+            </div>
+            {/* the workspace: what the agent is touching right now */}
+            <WsPane />
+          </div>
+        </div>
+      </div>
+      <RailShow />
       <CapsPage />
-      {detailEl ? createPortal(<DetailPanel />, detailEl) : null}
-      {setVeilEl ? createPortal(<SettingsModal />, setVeilEl) : null}
-      {veilEl ? createPortal(<ConfirmSheet />, veilEl) : null}
+      <ModulePage id="xaPage" aria="gui.page.agents" head="gui.page.agents" literal="子智能体" body="xaBody" />
+      {/* NOT a capability. A plugin is "what it can touch"; an entrance is
+          "where you find it". Same brand can be both (Slack plugin vs Slack
+          entrance) and the two point in opposite directions. */}
+      <ModulePage id="connPage" aria="gui.page.conn" head="gui.page.conn" literal="入口" body="connBody" />
+      <ModulePage id="memPage" aria="gui.mem.hero" head="gui.nav.mem" literal="记忆" body="memBody" />
+      <ModulePage id="pbPage" aria="gui.nav.pb" head="gui.nav.pb" literal="剧本" body="pbBody" />
+      <ModulePage id="kbPage" aria="gui.nav.kb" head="gui.nav.kb" literal="知识库" body="kbBody" />
+      <ModulePage id="cronPage" aria="gui.page.cron" head="gui.page.cron" literal="定时" body="cronBody" />
+      {/* The new-job sheet renders here from the cron island
+          (src/features/cron/CronPage.tsx); only the veil is this file's. */}
+      <div className="veil" id="jobVeil" data-open="false" />
+      <DetailPanel />
+      <SettingsModal />
+      <ConfirmSheet />
+      {/* One entry's credentials. Its own veil rather than the confirm dialog's:
+          disconnecting from inside it raises that one, and a dialog cannot be
+          both the thing asking and the thing asked. The sheet renders here from
+          the connections island (src/features/connections/ConnPage.tsx). */}
+      <div className="veil" id="connVeil" data-open="false" />
+      <div className="menu" id="menu" data-open="false" role="menu" />
+      <div className="toasts" id="toasts" aria-live="polite" />
       <ContextMenu />
       <Toasts />
       <SheetRack />
@@ -238,6 +352,7 @@ export function App(): JSX.Element {
       <Lightbox />
       <UpgradeShade />
       <FailureBars />
-    </>
+    </>,
+    document.body
   )
 }

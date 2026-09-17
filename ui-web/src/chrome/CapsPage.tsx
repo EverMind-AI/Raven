@@ -1,5 +1,5 @@
-/* The capabilities page's chrome: the title, the filter bar and the manual-add
- * fold that src/page.html used to carry as markup.
+/* The capabilities page: the section src/page.html used to carry as markup --
+ * the heading, the filter bar, the shared body and the manual-add fold.
  *
  * One section serves two modules -- the skill market and the plugin market --
  * and what is here is everything around the body they share: the heading, the
@@ -12,22 +12,18 @@
  * in the same order -- and src/test/__golden__/region-capsPage.txt is what says
  * so.
  *
- * THREE portals, not one. #capsBody sits between .cbar and details.adv inside
- * .wrap, and it is shared ground: the two islands attach their own hosts under
- * it and the tab draws clear it with innerHTML, so React must not own that
- * child list (see src/App.tsx for why a portal cannot leave a static sibling in
- * place). So .wrap, .work, the section, and the three containers below stay in
- * page.html until stage C14, and this renders their interiors.
+ * The whole region, containers and all -- .wrap is a real child list now, which
+ * is what lets the hero be a rendered first child rather than a node inserted
+ * before the bar, and the section's aria-label, the fold's `hidden` and the
+ * bar's `display` be rendered values rather than three writes by id.
  *
- * What this does NOT own, though it renders the elements:
- *   - #capsBody's children (the islands) and the three elements whose own
- *     attributes a draw writes: #capsPage[aria-label], #advAdd[hidden] and
- *     .cbar's display. Each is a container rather than a rendered node, so
- *     state/caps.ts writes it by hand and stays its one writer.
- *   - #pageHero, which is inserted before .cbar by the same store: it is a
- *     child of .wrap, so it cannot join a portal's list yet.
- * React diffs against the props it rendered last rather than against the
- * document, so none of those can be undone by a re-render here.
+ * What this does NOT own, though it renders the element: #capsBody's children.
+ * It is shared ground -- the two islands attach their own hosts under it and
+ * each tab's draw clears it with innerHTML -- so React hands that box over
+ * empty and never owns its child list. `data-open` is the same kind of thing
+ * one level up: state/page.ts writes it on all seven sections, and what is
+ * rendered here is the value the page is served with, which React then never
+ * writes again because it diffs against its own last props.
  *
  * #cq is deliberately uncontrolled, like the rail's search field: a component
  * owning it would re-render a text field the reader is typing into. Its two
@@ -38,7 +34,6 @@
  */
 
 import { useEffect, useRef, useSyncExternalStore } from 'react'
-import { createPortal } from 'react-dom'
 
 import { composing } from '../features/composer/store'
 import { islands } from '../islands'
@@ -115,7 +110,7 @@ function Search(): JSX.Element {
         <circle cx="11" cy="11" r="7" /><path d="M20 20l-4.3-4.3" />
       </svg>
       {' '}
-      <input id="cq" placeholder={s.search ?? '搜索'} data-i18n-aria="gui.search" ref={field} />
+      <input id="cq" placeholder={s.search ?? '搜索'} data-i18n-aria="gui.search" aria-label={lang.attr('gui.search')} ref={field} />
       {' '}
     </div>
   )
@@ -144,7 +139,7 @@ function FilterBar(): JSX.Element {
   return (
     <>
       <Search />
-      <div className="pills" id="cKind" role="group" data-i18n-aria="gui.filter_status" hidden={s.pillsHidden}>
+      <div className="pills" id="cKind" role="group" data-i18n-aria="gui.filter_status" aria-label={lang.attr('gui.filter_status')} hidden={s.pillsHidden}>
         {PILLS.map((pill) => (
           <button
             key={pill.k}
@@ -184,20 +179,35 @@ function ManualAdd(): JSX.Element {
   )
 }
 
-/* The three interiors, each into the container page.html still provides.
-   Guarded the way the island mounts are: a document without them renders
-   nothing rather than throwing. */
-export function CapsPage(): JSX.Element | null {
-  const page = document.getElementById('capsPage')
-  if (!page) return null
-  const header = page.querySelector('header')
-  const bar = page.querySelector('.cbar')
-  const adv = document.getElementById('advAdd')
+/* The section, in the order page.html had it. Two modules, one heading, one
+   filter bar and one shared body between them.
+
+   The heading is drawn and then hidden (`.page > header h2{display:none}`,
+   src/styles/page.css:2922): the strip stays for breathing room and the scroll
+   fade, and the hero right below says the name bigger. */
+export function CapsPage(): JSX.Element {
+  const s = useSyncExternalStore(caps.subscribe, caps.get)
   return (
-    <>
-      {header ? createPortal(<Title />, header) : null}
-      {bar ? createPortal(<FilterBar />, bar) : null}
-      {adv ? createPortal(<ManualAdd />, adv) : null}
-    </>
+    <section className="page" id="capsPage" data-open="false" aria-label={s.label ?? undefined}>
+      <header>
+        <Title />
+      </header>
+      <div className="work">
+        <div className="wrap">
+          {s.hero === null ? null : (
+            <div className="pmhero" id="pageHero" hidden={!s.hero}>
+              {s.hero ? <h3>{s.hero}</h3> : null}
+            </div>
+          )}
+          <div className="cbar" style={s.bar === null ? undefined : { display: s.bar }}>
+            <FilterBar />
+          </div>
+          <div id="capsBody" />
+          <details className="adv" id="advAdd" hidden={s.advHidden}>
+            <ManualAdd />
+          </details>
+        </div>
+      </div>
+    </section>
   )
 }

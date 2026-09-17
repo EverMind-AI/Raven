@@ -14,7 +14,9 @@ import type { PlaybookDetail, PlaybookNode, PlaybookRow, PlaybooksSource } from 
 import type { Shell } from '../../shell/bridge'
 
 /* The notices render from src/App.tsx into the standing #toasts host, so the
-   page's own root has to be standing for any of them to appear. */
+   page's own root has to be standing for any of them to appear -- and that root
+   renders the whole page, so a query for one of this island's own elements is
+   scoped to the container it was rendered into. */
 mountPageRoot()
 
 function node(over: Partial<PlaybookNode> & { id: string }): PlaybookNode {
@@ -130,9 +132,9 @@ describe('the playbook library', () => {
         row({ name: 'release-notes', description: 'what changed in a version' })
       ]
     })
-    await mount()
+    const view = await mount()
     expect(screen.getByText('gui.pb.count {"n":2}')).toBeTruthy()
-    fireEvent.change(document.querySelector('.cfind input') as Element, { target: { value: 'changed' } })
+    fireEvent.change(view.container.querySelector('.cfind input') as Element, { target: { value: 'changed' } })
     /* The total nobody asked for is the less useful of the two answers. */
     expect(screen.getByText('gui.pb.matched {"n":1}')).toBeTruthy()
     expect(screen.queryByText('gui.pb.count {"n":2}')).toBeNull()
@@ -152,9 +154,8 @@ describe('the playbook library', () => {
   it('hands the library back when the detail read fails, and says why', async () => {
     /* The file can go away between the listing and the click. Without this the
        reader is left on the reading placeholder, which has no way back. */
-    const host = document.createElement('div')
-    host.id = 'toasts'
-    document.body.appendChild(host)
+    /* The standing host the page root renders, which is where a notice lands. */
+    const host = document.getElementById('toasts') as HTMLElement
     install({
       get: async () => {
         throw new Error('playbook.md: no such file')
@@ -412,8 +413,8 @@ describe('the playbook library', () => {
         row({ name: 'release-notes', description: 'what changed in a version' })
       ]
     })
-    await mount()
-    fireEvent.change(document.querySelector('.cfind input') as Element, { target: { value: 'changed' } })
+    const view = await mount()
+    fireEvent.change(view.container.querySelector('.cfind input') as Element, { target: { value: 'changed' } })
     expect(screen.queryByText('issue-triage')).toBeNull()
     expect(screen.getByText('release-notes')).toBeTruthy()
   })

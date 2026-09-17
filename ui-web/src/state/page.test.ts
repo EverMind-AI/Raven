@@ -6,6 +6,10 @@
  * order is part of the contract: the seven flags, the scroll reset, the app
  * mark, the rail mark and the overlay closes all happen first, and only then
  * does each subscriber run, in the order it registered.
+ *
+ * The seven sections are src/App.tsx's markup now, and it renders each with the
+ * flag the page is served with; this store is still the one that writes it, and
+ * the markup below is what each case drives it against.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -14,7 +18,6 @@ const PAGES = ['capsPage', 'xaPage', 'connPage', 'memPage', 'pbPage', 'kbPage', 
 
 interface Fresh {
   page: typeof import('./page')
-  caps: typeof import('../legacy/demo/120-capabilities.js')
   islands: (typeof import('../islands'))['islands']
 }
 
@@ -25,12 +28,11 @@ interface Fresh {
 async function fresh(): Promise<Fresh> {
   vi.resetModules()
   const page = await import('./page')
-  const caps = await import('../legacy/demo/120-capabilities.js')
   const { islands } = await import('../islands')
   vi.spyOn(islands.rail, 'markNew').mockImplementation(() => {})
   vi.spyOn(islands.connections, 'closeDialog').mockImplementation(() => {})
   vi.spyOn(islands.cron, 'closeSheet').mockImplementation(() => {})
-  return { page, caps, islands }
+  return { page, islands }
 }
 
 /* The page as show() reaches it: the shell mark, the seven sections with their
@@ -136,17 +138,5 @@ describe('the subscribers', () => {
     off()
     page.show(null)
     expect(calls).toBe(1)
-  })
-})
-
-/* The name the chrome, the shell bridge and both layers above still call. */
-describe('the legacy showPage shell', () => {
-  it('drives the store', async () => {
-    const { page, caps } = await fresh()
-    caps.showPage('cronPage')
-    expect(page.get()).toBe('cronPage')
-    expect(flags()).toEqual(onlyOpen('cronPage'))
-    caps.showPage(null)
-    expect(page.get()).toBeNull()
   })
 })

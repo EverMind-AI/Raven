@@ -34,14 +34,9 @@ import type { Shell } from '../shell/bridge'
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-/* The chat column page.html carries, down to the three elements the composer's
-   install() reaches for beside the dock. */
-const MARKUP = `
-  <div class="chat">
-    <div class="scroll" id="scroll"><div class="col" id="stage"></div></div>
-    <button class="backpill" id="backpill" hidden></button>
-    <div class="dock"></div>
-  </div>`
+/* Nothing: the page root renders the chat column, the band and the three
+   elements the composer's install() reaches for beside it. */
+const MARKUP = ''
 
 let unmount = (): void => {}
 let sent: string[] = []
@@ -105,7 +100,7 @@ afterEach(() => {
 })
 
 describe('the dock', () => {
-  it('portals the four children into the band, in the order page.html had them', () => {
+  it('renders the band with the four children page.html had, in order', () => {
     render()
     expect(Array.from(dock().children).map((child) => child.id || child.className)).toEqual([
       'crew crew-back',

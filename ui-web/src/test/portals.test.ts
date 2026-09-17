@@ -59,9 +59,9 @@ function goldenBodyKeys(path: string): string[] {
 /** The body as it stands, keyed the way the goldens key it. */
 const bodyKeys = (doc: Document): string[] => bodySiblings(doc).map(keyOf)
 
-/* page.html's two static hosts, and the band the composer dock renders into --
-   which is where the two popovers start, so a case that reads them mounts the
-   page root over this (src/chrome/Dock.tsx). */
+/* What page.html still carries, which is the two pre-JavaScript shells and the
+   onboarding host. Every other region is the page root's, so a case that reads
+   one mounts that root over this. */
 function pageMarkup(): Document {
   const html = source('src/page.html')
   const body = html
@@ -71,18 +71,34 @@ function pageMarkup(): Document {
   return document
 }
 
+/* The page as it stands once the root has rendered and the two shells are gone,
+   which is the state the boot goldens record. */
+function bootedPage(): { doc: Document; unmount: () => void } {
+  const doc = pageMarkup()
+  doc.getElementById('splash')!.remove()
+  doc.getElementById('noJs')!.remove()
+  return { doc, unmount: mountPageRoot() }
+}
+
 describe('the portal table', () => {
   it('lists thirteen hosts and no two of them twice', () => {
     expect(PORTALS).toHaveLength(13)
     expect(new Set(PORTALS.map((p) => p.selector)).size).toBe(13)
   })
 
-  it('places the two static hosts at the body in the markup itself', () => {
-    const doc = pageMarkup()
-    for (const id of ['menu', 'toasts']) {
-      const el = doc.getElementById(id)
-      expect(el, `#${id} is not in page.html`).toBeTruthy()
-      expect(el!.parentElement).toBe(doc.body)
+  /* Standing hosts: at the body from the page root's first commit, and the
+     writer only fills them. Where they sit among the body's children is what
+     decides the two ties, which is why they are in the table at all. */
+  it('places the two standing hosts at the body, the page root having rendered', () => {
+    const { doc, unmount } = bootedPage()
+    try {
+      for (const id of ['menu', 'toasts']) {
+        const el = doc.getElementById(id)
+        expect(el, `#${id} is not rendered`).toBeTruthy()
+        expect(el!.parentElement).toBe(doc.body)
+      }
+    } finally {
+      unmount()
     }
   })
 
@@ -119,6 +135,7 @@ describe('the portal table', () => {
       resetLayers()
       tip.mount()
       unmount = mountPageRoot()
+      void doc
       const shade = upgrade.open()
       shade.say('Working')
       const order = bodySiblings(doc)
@@ -157,15 +174,15 @@ describe('the portal table', () => {
     }
   })
 
-  /* The page's own root renders into the containers page.html provides and
-     adds nothing beside them: it is detached, and a root AT the body would
-     clear the regions instead of joining them (see src/main.tsx). */
-  it('leaves the body order untouched when the page root renders', () => {
-    const doc = pageMarkup()
-    const before = bodySiblings(doc)
-    const unmount = mountPageRoot()
+  /* The page's own root appends its regions to the body, after the three
+     things page.html still carries: it is a portal, and a root AT the body
+     would clear that markup instead of joining it (see src/main.tsx). Two of
+     the three are taken down at boot, which leaves #onb and the sixteen
+     regions -- the golden's whole static half. */
+  it('renders the page regions at the body, in the boot golden order', () => {
+    const { doc, unmount } = bootedPage()
     try {
-      expect(bodySiblings(doc)).toEqual(before)
+      expect(bodyKeys(doc)).toEqual(BOOT_BODY_ORDER.slice(0, -4))
     } finally {
       unmount()
     }
@@ -181,14 +198,14 @@ describe('the portal table', () => {
        overlays a second time into the same hosts. */
     let unmount = (): void => {}
     try {
-      const doc = pageMarkup()
       /* The two pre-JavaScript shells are taken down at boot, which is why the
          golden's static half is seventeen regions rather than nineteen. */
+      const doc = pageMarkup()
       doc.getElementById('splash')!.remove()
       doc.getElementById('noJs')!.remove()
+      unmount = mountPageRoot()
       resetLayers()
       for (const layer of LAYERS) host(layer)
-      unmount = mountPageRoot()
       expect(bodyKeys(doc)).toEqual([...BOOT_BODY_ORDER])
       menu.show(10, 12, [{ label: 'Rename', fn: () => {} }, '-', { label: 'Delete', bad: true, fn: () => {} }])
       toast.show('one')
@@ -210,8 +227,7 @@ describe('the portal table', () => {
   })
 
   it('starts the two popovers inside the composer card', () => {
-    const doc = pageMarkup()
-    const unmount = mountPageRoot()
+    const { doc, unmount } = bootedPage()
     try {
       for (const id of ['permPop', 'tierPop']) {
         const el = doc.getElementById(id)
