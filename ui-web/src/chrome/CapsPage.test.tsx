@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readFileSync } from 'node:fs'
 
-import { islands } from '../islands'
+import { islands } from '../features/registry'
 import { FixtureTransport } from '../rpc/fixtureTransport'
 import { setGateway } from '../rpc/gateway'
 import * as caps from '../state/caps'

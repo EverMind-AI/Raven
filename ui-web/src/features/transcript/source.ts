@@ -9,7 +9,7 @@
  * in src/state/session/.
  */
 
-import { islands } from '../../islands'
+import { islands } from '../registry'
 import { has } from '../../rpc/capabilities'
 import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
 import { show as toast } from '../../state/toast'

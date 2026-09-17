@@ -37,7 +37,7 @@
 import { useSyncExternalStore } from 'react'
 
 import { Banner } from './Banner'
-import { islands } from '../islands'
+import { islands } from '../features/registry'
 import * as lang from '../state/lang'
 
 import type { JSX } from 'react'

@@ -9,7 +9,7 @@ import type { ParamsOf, ResultOf } from '../../rpc/generated'
 import type { RailSource } from '../rail/types'
 
 import { cronExprHuman } from './humanize'
-import { islands } from '../../islands'
+import { islands } from '../registry'
 import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
 import { setCurrent as sessionSet } from '../../lib/session'

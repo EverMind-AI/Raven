@@ -16,7 +16,7 @@ import * as store from './store'
 import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
 
 import { domSnapshot } from '../../test/domSnapshot'
-import { islands } from '../../islands'
+import { islands } from '../registry'
 import { resetSources, setSources, sources } from '../../state/sources'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'

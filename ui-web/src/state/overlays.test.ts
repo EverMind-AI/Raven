@@ -23,7 +23,7 @@ import { readFileSync } from 'node:fs'
 
 import { openApproval } from '../features/composer/approve'
 import * as turn from '../features/composer/turn'
-import { islands } from '../islands'
+import { islands } from '../features/registry'
 import { _resetForTests as sessionReset, setCurrent } from '../lib/session'
 import * as find from './find'
 import { installEscapeChain } from './globalListeners'

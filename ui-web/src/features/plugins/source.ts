@@ -18,7 +18,7 @@ import type { ResultOf } from '../../rpc/generated'
 import type { ToolRow } from '../settings/types'
 import type { InstalledSkill, SkillsSource } from '../skills/types'
 
-import { islands } from '../../islands'
+import { islands } from '../registry'
 import { code as LANG } from '../../i18n/t'
 import { t } from '../../i18n/t'
 import { show as toast } from '../../state/toast'

@@ -16,7 +16,7 @@ import * as workspace from './store'
 import { setCurrent } from '../../lib/session'
 /* The wiring main.tsx gets from this import: the desk's file opener is handed
    to the workspace store here, and `openDelivery` reaches the desk through it. */
-import '../../islands'
+import '../registry'
 import { resetSources, setSources, sources } from '../../state/sources'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'

@@ -10,8 +10,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { islands } from '../features/registry'
 import { T } from '../i18n/t'
-import { islands } from '../islands'
 import * as lang from '../state/lang'
 import { mountPageRoot } from '../test/pageRoot'
 import * as ws from './ws'

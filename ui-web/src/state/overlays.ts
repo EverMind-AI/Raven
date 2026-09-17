@@ -27,7 +27,7 @@
  */
 
 import { busy as turnBusy } from '../features/composer/turn'
-import { islands } from '../islands'
+import { islands } from '../features/registry'
 import * as caps from './caps'
 import * as detail from './detail'
 import { close as closeImage, isOpen as imageOpen } from './lightbox'

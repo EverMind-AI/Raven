@@ -12,8 +12,8 @@ import type { ParamsOf } from '../../rpc/generated'
 import type { BrowserFramePushParams } from '../../rpc/notifications'
 import type { ChromiumSource, FrameHead } from './types'
 
-import { islands } from '../../islands'
 import { gateway } from '../../rpc/gateway'
+import { islands } from '../registry'
 
 const b64Blob = (b64: string): Blob => {
   const s = atob(b64)

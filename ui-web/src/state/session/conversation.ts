@@ -7,8 +7,8 @@
  * the three verbs the session runtime and its stages drive the island by.
  */
 
+import { islands } from '../../features/registry'
 import { I18N } from '../../i18n/t'
-import { islands } from '../../islands'
 
 import type { NoteHandle } from '../../features/transcript/types'
 

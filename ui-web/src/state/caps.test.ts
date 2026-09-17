@@ -212,7 +212,7 @@ describe('the two draws the dispatch reaches', () => {
   beforeEach(async () => {
     views.skill = 'market'
     views.plugin = 'market'
-    const { islands } = await import('../islands')
+    const { islands } = await import('../features/registry')
     Object.assign(islands.skills, {
       view: () => views.skill,
       attach: (box: Element) => box.appendChild(skillHost),

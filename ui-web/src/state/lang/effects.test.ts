@@ -102,7 +102,7 @@ describe('the language repaint', () => {
      has not loaded throws instead, and the redraw carries on. */
   it('carries on past a page whose island has not loaded', async () => {
     const h = await harness()
-    const { islands } = await import('../../islands')
+    const { islands } = await import('../../features/registry')
     for (const name of ['cron', 'memory', 'playbooks'] as const) {
       vi.spyOn(islands[name], 'redraw').mockImplementation(() => { throw new Error('not loaded') })
     }

@@ -30,8 +30,8 @@
  * `code`).
  */
 
+import { islands } from '../features/registry'
 import { T } from '../i18n/t'
-import { islands } from '../islands'
 
 import { resetTranslator, setTranslator } from '../i18n/t'
 import type { DeskTab } from '../features/workspace/deskTypes'

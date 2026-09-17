@@ -8,7 +8,7 @@ import { run as dagOpen, start as dagStart, _resetForTests as dagReset } from '.
 import { openDeskAgent, openDeskAgentRecord, openDeskFile, openDeskTab, getState as deskState, reset as deskLeave, saved as deskSaved, setActive, toggleSolo, updateSplits, _resetForTests as deskReset } from '../features/workspace/deskStore'
 /* The wiring main.tsx gets from this import: the subagents panel's pane
    openers are handed to it here, so replaying an open lands in a real pane. */
-import '../islands'
+import '../features/registry'
 import { landing, refreshDag, resume, watch } from './resume'
 import { _resetForTests as sessionReset, setCurrent } from './session'
 import { reset as agentsLeave, _resetForTests as agentsReset, getState as agentsState } from '../features/subagents/store'

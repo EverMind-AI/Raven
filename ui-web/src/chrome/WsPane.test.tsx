@@ -12,7 +12,7 @@
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { islands } from '../islands'
+import { islands } from '../features/registry'
 import * as lang from '../state/lang'
 import * as ws from '../state/ws'
 import { mountPageRoot } from '../test/pageRoot'

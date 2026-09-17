@@ -33,7 +33,7 @@ import {
   proseSource, setHostPlatformReader, setShortener, workspaceSource,
 } from '../features/workspace/source'
 import { xaSource } from '../features/xa/source'
-import { islands } from '../islands'
+import { islands } from '../features/registry'
 import { setFault as setMemFault } from '../state/banner'
 import { show as toast } from '../state/toast'
 import { current as sessionCurrent } from '../lib/session'

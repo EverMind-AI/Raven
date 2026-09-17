@@ -10,8 +10,8 @@
  * the splash and the credential this page cannot mint.
  */
 
+import { islands } from '../features/registry'
 import { T } from '../i18n/t'
-import { islands } from '../islands'
 import { gateway } from '../rpc/gateway'
 import { show as failureBar } from '../state/failureBar'
 import { open as upShade } from '../state/upgradeShade'

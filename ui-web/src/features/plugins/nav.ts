@@ -9,11 +9,11 @@
  * grid reads as "this install has no skills" rather than "this is loading".
  */
 
-import { islands } from '../../islands'
 import * as caps from '../../state/caps'
 import * as page from '../../state/page'
 import { sources } from '../../state/sources'
 import { show as toast } from '../../state/toast'
+import { islands } from '../registry'
 
 export async function openCaps(tab: caps.Tab): Promise<void> {
   caps.extSet(tab)

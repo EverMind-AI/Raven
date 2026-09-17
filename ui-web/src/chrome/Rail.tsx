@@ -42,7 +42,7 @@
 import { useSyncExternalStore } from 'react'
 
 import { openPlugins, openSkills } from '../features/plugins/nav'
-import { islands } from '../islands'
+import { islands } from '../features/registry'
 import * as find from '../state/find'
 import * as lang from '../state/lang'
 import * as rail from '../state/rail'

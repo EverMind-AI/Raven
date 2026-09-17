@@ -41,7 +41,7 @@ function requireModule(module) {
  * @param fakes exports to replace, keyed by the module's path from ui-web
  *   (`'src/state/toast'`). What is not named keeps the real implementation, and
  *   a key that names no module throws rather than standing in for nothing.
- * @param islands members of the island bag (src/islands.ts) to stand in for,
+ * @param islands members of the island bag (src/features/registry.ts) to stand in for,
  *   assigned over the real ones one MEMBER at a time: a case names the verbs it
  *   is about and the rest of that island answers as it really does. Assigned
  *   rather than mocked, and taken from the module the reset above just gave the
@@ -63,7 +63,7 @@ export async function loadPart(importPart, { fakes = {}, islands = {} } = {}) {
   }
   const part = await importPart()
   if (Object.keys(islands).length) {
-    const bag = (await import('../src/islands')).islands
+    const bag = (await import('../src/features/registry')).islands
     for (const [name, members] of Object.entries(islands)) Object.assign(bag[name], members)
   }
   return part

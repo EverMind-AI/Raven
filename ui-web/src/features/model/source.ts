@@ -10,7 +10,7 @@ import type { ApiProtocol, ModelSource, Provider } from './types'
 import type { ParamsOf } from '../../rpc/generated'
 import type { TierReply, TierSource } from '../../state/tier'
 
-import { islands } from '../../islands'
+import { islands } from '../registry'
 import { t } from '../../i18n/t'
 import { current as sessionCurrent } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'

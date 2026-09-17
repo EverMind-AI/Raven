@@ -7,9 +7,9 @@
 import type { WorkspaceSource } from './types'
 import type { ProseSource, ProseTarget } from '../../lib/prose'
 
-import { islands } from '../../islands'
 import { current as sessionCurrent } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
+import { islands } from '../registry'
 
 export function relToWorkspace(p: string | null | undefined): string | null {
   const s = String(p || '')

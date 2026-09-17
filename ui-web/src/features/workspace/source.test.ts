@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   hostIsLocal, liveLinkTargetOf, livePathOf, relToWorkspace, relToWsRoot, setShortener, wsSetRoot,
 } from './source'
-import { islands } from '../../islands'
+import { islands } from '../registry'
 
 const local = (hostname: string): void => {
   vi.spyOn(globalThis, 'location', 'get').mockReturnValue({ hostname } as Location)

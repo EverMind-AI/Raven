@@ -13,7 +13,7 @@
  * host off `#stage` and files it on the runtime; coming back puts it back.
  */
 
-import { islands } from '../../islands'
+import { islands } from '../../features/registry'
 import { draw as drawBanner } from '../banner'
 import { current as sessionCurrent } from '../../lib/session'
 import { drawMeter, goPaint as goState, queueRestore, queueSnapshot, turn } from '../../features/composer/mount'

@@ -16,7 +16,7 @@ import { useSyncExternalStore } from 'react'
 import * as banner from '../state/banner'
 import { openPlugins } from '../features/plugins/nav'
 import { t } from '../i18n/t'
-import { islands } from '../islands'
+import { islands } from '../features/registry'
 
 import type { JSX } from 'react'
 

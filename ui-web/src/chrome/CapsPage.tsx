@@ -36,7 +36,7 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 
 import { composing } from '../features/composer/store'
-import { islands } from '../islands'
+import { islands } from '../features/registry'
 import * as caps from '../state/caps'
 import * as lang from '../state/lang'
 

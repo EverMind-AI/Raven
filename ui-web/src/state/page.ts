@@ -15,7 +15,7 @@
  * each subscriber in turn.
  */
 
-import { islands } from '../islands'
+import { islands } from '../features/registry'
 import * as caps from './caps'
 import * as detail from './detail'
 

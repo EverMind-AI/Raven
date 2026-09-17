@@ -87,7 +87,7 @@ function set(p: Partial<AgentsState>): void {
 export const source = (): AgentsSource => ds<AgentsSource>('agents')
 
 /* Where a pane opened from this panel goes: the floating desk, when the page
-   has one. Handed in (src/islands.ts) rather than imported from
+   has one. Handed in (src/features/registry.ts) rather than imported from
    features/workspace/deskStore, which is what the island bag used to stand in
    for: the desk imports this store back and subscribes to it as it evaluates,
    so an import in this direction would run that subscription against a

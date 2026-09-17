@@ -292,7 +292,7 @@ export function relToWorkspace(p: string): string | null {
   return s.replace(/^\.\//, '')
 }
 
-/* The desk's file opener, handed in by src/islands.ts for the same reason the
+/* The desk's file opener, handed in by src/features/registry.ts for the same reason the
    subagents panel takes its pane opener that way: features/workspace/deskStore
    imports this module back. Null leaves the legacy panel path below, which is
    what a page without a desk has. */

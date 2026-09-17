@@ -1,6 +1,6 @@
 /* The language store, under the name every region already imports.
  *
- * The store and nothing else. `./effects` imports src/islands.ts and an
+ * The store and nothing else. `./effects` imports src/features/registry.ts and an
  * island's own store imports the language, so a barrel that also carried the
  * effects would close SettingsPage -> lang -> effects -> islands ->
  * features/settings/store into a cycle that runs while those modules are

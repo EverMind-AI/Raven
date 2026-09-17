@@ -21,7 +21,7 @@ import { pick as langPick } from '../../state/lang/pick'
 import { staging } from '../../state/session/staging'
 import { sources } from '../../state/sources'
 import { APP_VERSION, appVersionSet, askUpgrade, showUpNote } from '../../app/updates'
-import { islands } from '../../islands'
+import { islands } from '../registry'
 
 import type { ComposerSource } from '../composer/types'
 

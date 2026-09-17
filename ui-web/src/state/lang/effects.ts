@@ -20,7 +20,7 @@
  * last, and the guard in front of it is what keeps it off a streaming turn.
  */
 
-import { islands } from '../../islands'
+import { islands } from '../../features/registry'
 import { drawQueue as queueDraw, turn } from '../../features/composer/mount'
 import { label as modelLabel } from '../../features/model/chip'
 import { draw as sessionDraw } from '../../features/rail/store'

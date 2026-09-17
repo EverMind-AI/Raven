@@ -17,7 +17,7 @@
  */
 
 import { cleanPreview, okOf } from '../../features/transcript/source'
-import { islands } from '../../islands'
+import { islands } from '../../features/registry'
 import { hasToolOk } from '../../rpc/capabilities'
 import { current as sessionCurrent } from '../../lib/session'
 import { show as toast } from '../toast'
