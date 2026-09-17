@@ -1101,6 +1101,33 @@ def test_the_reply_presses_only_what_costs_a_reader_something_and_what_repeats()
 
 
 @pytest.mark.asyncio
+async def test_on_the_templates_own_cover_the_artwork_is_the_frame_and_ownership_answers(tmp_path, monkeypatch) -> None:
+    """The bundled covers are one page-size bitmap -- border, ground and illustration --
+    and no call replaces a carriage out of it. A reader told it was a placeholder asked
+    twice for it to go, and the dismissal rule refused the only true answer."""
+    from raven_ppt.services import review_ledger
+    from raven_ppt.tools import review as review_module
+
+    _deck(tmp_path, pages=1)
+    monkeypatch.setattr(review_module, "_house_pages", lambda deck: {1})
+    tool = PptReviewTool(tmp_path, Views(1), composer=Composer(_FIGURE))
+    ident = _payload(await tool.execute(project="ws"))["open_findings"]["pages"]["1"][0]["id"]
+
+    accepted = _payload(
+        await tool.execute(project="ws", dismiss=[{"id": ident, "reason": "模板自带的封面版画，保持统一"}])
+    )
+    assert accepted["dismissed"] == [ident] and "refused" not in accepted
+    assert review_ledger.open_findings(Project(workspace=tmp_path, slug="ws")) == []
+
+    from raven_ppt.contracts.outline import PagePlan
+
+    told = review_module._said(1, PagePlan(page=1, claim="cover", prototype=1), house=True)
+    assert "house frame" in told and "placeholders" not in told
+    plain = review_module._said(3, PagePlan(page=3, claim="a page", prototype=6))
+    assert "placeholders" in plain and "house frame" not in plain
+
+
+@pytest.mark.asyncio
 async def test_a_figure_dismissed_for_being_the_templates_own_is_refused(tmp_path) -> None:
     """A live run kept a whiteboard-meeting illustration on eight of fifteen pages of an
     elderly-care deck and dismissed every entry about it as "the template's own". Whose
@@ -1176,3 +1203,78 @@ async def test_a_draft_shorter_than_the_outline_is_not_held_to_the_outlines_clai
     read, _ = await tool._read(deck, renders, [1, 2], words={1: "one", 2: "two"})
     assert all(problem["kind"] != "claim" for problems in read.values() for problem in problems)
     assert all("Planned claim" not in shown for shown in composer.shown), "no plan was handed over"
+
+
+def test_the_reader_is_told_which_pictures_are_the_decks_own() -> None:
+    """A reader that took the author's fetched photographs for the template's stock
+    illustrations asked whether they depicted the subject; the plan already names them."""
+    from raven_ppt.contracts.outline import PagePlan
+    from raven_ppt.tools.review import _said
+
+    placed = PagePlan(
+        page=4, claim="the palace is the largest surviving complex", figures=("gugong-1a2b", "tiantan-6a3c")
+    )
+    said = _said(4, placed)
+    assert "deck's own evidence" in said and "gugong-1a2b, tiantan-6a3c" in said
+    assert "page N" not in said, "the label's disclaimer is in the brief, not repeated per page"
+
+    bare = _said(5, PagePlan(page=5, claim="a claim with no pictures"))
+    assert "deck's own evidence" not in bare
+
+
+_UNDERFILLED = (
+    '{"reads": "three columns in the upper half of a red panel", "problems": [{"kind": "underfilled_page", '
+    '"where": "the lower third of the panel", "what": "nothing below the three short columns", '
+    '"fix": "grow the photograph and the columns down through the panel"}]}'
+)
+
+
+@pytest.mark.asyncio
+async def test_an_underfilled_page_dismissed_as_the_templates_composition_is_refused(tmp_path) -> None:
+    """A page cloned from a three-seal panel shipped with its lower third empty; the
+    reader said so twice and the author answered twice that the red panel was the
+    template's own composition, in the template's own proportion. The template's page
+    fills that panel. Room made on the page is an answer; whose panel it is is not."""
+    from raven_ppt.services import review_ledger
+
+    deck = _deck(tmp_path, pages=1)
+    tool = PptReviewTool(tmp_path, Views(1), composer=Composer(_UNDERFILLED))
+    await tool.execute(project="ws")
+    # Not a pressing kind, so the reply lists it under `others`; the ledger has the id.
+    ident = review_ledger.open_findings(deck)[0]["id"]
+
+    refused = _payload(
+        await tool.execute(
+            project="ws",
+            dismiss=[
+                {"id": ident, "reason": "整页为模板自身红色满幅面板设计，三栏落于上部，与模板第4页原版面比例一致"}
+            ],
+        )
+    )
+    assert refused["dismissed"] == [] and refused["refused"] == [ident]
+    assert "fills that panel" in refused["next_step"] and "placeholder" not in refused["next_step"]
+    assert review_ledger.open_findings(deck)[0]["id"] == ident
+
+    accepted = _payload(
+        await tool.execute(
+            project="ws",
+            dismiss=[{"id": ident, "reason": "模板自身的面板比例，但已放大照片至面板底部，三栏正文加高铺满下沿"}],
+        )
+    )
+    assert accepted["dismissed"] == [ident] and accepted["open_findings"]["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_on_a_house_page_an_underfilled_entry_may_be_the_templates(tmp_path, monkeypatch) -> None:
+    from raven_ppt.services import review_ledger
+    from raven_ppt.tools import review as review_module
+
+    deck = _deck(tmp_path, pages=1)
+    monkeypatch.setattr(review_module, "_house_pages", lambda deck: {1})
+    tool = PptReviewTool(tmp_path, Views(1), composer=Composer(_UNDERFILLED))
+    await tool.execute(project="ws")
+    ident = review_ledger.open_findings(deck)[0]["id"]
+
+    accepted = _payload(await tool.execute(project="ws", dismiss=[{"id": ident, "reason": "模板自身的章节页构图"}]))
+
+    assert accepted["dismissed"] == [ident] and "refused" not in accepted

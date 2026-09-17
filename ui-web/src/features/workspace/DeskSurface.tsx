@@ -5,6 +5,8 @@ import { createPortal, flushSync } from 'react-dom'
 
 import { AgentRecordConversation, InstanceConversation } from '../subagents/SubagentsPage'
 import { InstanceMode } from '../subagents/InstanceMode'
+import { InstanceModel } from '../subagents/InstanceModel'
+import { TurnClock } from '../subagents/TurnClock'
 import * as agents from '../subagents/store'
 import { t } from '../../shell/bridge'
 import { ChgDiff, FileView } from './WorkspacePage'
@@ -87,7 +89,11 @@ function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
           : null}
         <span className="pane-spacer" />
         {/* Live instances only. A record is a run that already happened, and the
-            mode it ran under is not a thing a reader can still change. */}
+            model and mode it ran under are not things a reader can still
+            change -- nor is it still running, so neither is there a clock to
+            draw. */}
+        {pane.kind === 'agent' ? <TurnClock row={row!} /> : null}
+        {pane.kind === 'agent' ? <InstanceModel row={row!} /> : null}
         {pane.kind === 'agent' ? <InstanceMode row={row!} /> : null}
         <button
           className="pane-fullscreen"

@@ -145,6 +145,16 @@ CAPABILITIES: tuple[Capability, ...] = (
         env_var="SERPER_API_KEY",
         obtain_from="https://serper.dev",
     ),
+    Capability(
+        tool="image_search",
+        summary="Search the web for pictures",
+        need=Need.NEW_ACCOUNT,
+        # Serper's slot by default; ``resolve`` swaps in the selected vendor's when
+        # that vendor has an image surface.
+        config_path="tools.web.providers.serper.apiKey",
+        env_var="SERPER_API_KEY",
+        obtain_from="https://serper.dev",
+    ),
 )
 
 
@@ -160,6 +170,11 @@ def resolve(cap: Capability, config: "Config") -> Capability:
         from raven.agent.tools.web import SEARCH_PROVIDERS
 
         spec = SEARCH_PROVIDERS[config.tools.web.search.provider]
+        return replace(cap, config_path=spec.config_path, env_var=spec.env_var, obtain_from=spec.signup)
+    if cap.tool == "image_search":
+        from raven.agent.tools.web import SEARCH_PROVIDERS, image_search_vendor
+
+        spec = SEARCH_PROVIDERS[image_search_vendor(config.tools.web.search.provider, config.tools.web.vendor_key)]
         return replace(cap, config_path=spec.config_path, env_var=spec.env_var, obtain_from=spec.signup)
     if cap.tool == "web_fetch":
         from raven.agent.tools.web import FETCH_PROVIDERS
@@ -194,24 +209,48 @@ def is_configured(cap: Capability, config: "Config") -> bool:
 
         return _OpenRouterMediaTool.is_configured(_resolved_media(cap, config))
 
-    from raven.agent.tools.web import WebSearchTool
+    from raven.agent.tools.web import ImageSearchTool, WebSearchTool, image_search_vendor
 
+    if cap.tool == ImageSearchTool.name:
+        vendor = image_search_vendor(config.tools.web.search.provider, config.tools.web.vendor_key)
+        return ImageSearchTool.is_configured(config.tools.web.vendor_key(vendor), vendor)
     provider = config.tools.web.search.provider
     return WebSearchTool.is_configured(config.tools.web.vendor_key(provider), provider)
 
 
+def disabled_by(cap: Capability, config: "Config") -> str:
+    """Which setting switched this tool off, or ``""`` when none did.
+
+    The path and not merely a flag, because the row reporting the off state has
+    to name the setting that undoes it. Two switches reach here, because the
+    loop reads two. ``tools.disabledTools`` is applied after registration
+    (``AgentLoop._apply_disabled_tools``) and covers any tool by name.
+    ``tools.web.search.images`` decides whether ``image_search`` is registered
+    at all (``wiring.py``).
+
+    The registration gate is named first where both are shut. It is the one the
+    deny list cannot override: an operator who takes ``image_search`` out of
+    ``tools.disabledTools`` while the switch is off restarts into the same
+    missing tool, which is the circle these rows exist to prevent.
+    """
+    from raven.agent.tools.web import ImageSearchTool
+
+    if cap.tool == ImageSearchTool.name and not config.tools.web.search.images:
+        return "tools.web.search.images"
+    if cap.tool in (config.tools.disabled_tools or []):
+        return "tools.disabledTools"
+    return ""
+
+
 def is_disabled(cap: Capability, config: "Config") -> bool:
-    """Whether the deployment has switched this tool off by name.
+    """Whether the deployment has switched this tool off.
 
     A separate state from unconfigured, and reported as one: a switched-off
     tool usually has its credential set, and calling it unconfigured would send
-    the deployer to set a key that is already there.
-
-    ``tools.disabledTools`` is applied after registration
-    (``AgentLoop._apply_disabled_tools``), so this is the only thing standing
-    between a satisfied credential gate and a tool the agent actually holds.
+    the deployer to set a key that is already there. :func:`disabled_by` says
+    which switch did it, and is what a report should render.
     """
-    return cap.tool in (config.tools.disabled_tools or [])
+    return bool(disabled_by(cap, config))
 
 
 def is_offered(cap: Capability, config: "Config") -> bool:
@@ -276,7 +315,11 @@ def configured_from(cap: Capability, config: "Config") -> str:
         # Name the slot that actually holds the key: the vendor slot first, then
         # the pre-vendor Serper leaf a config written before the vendor layout
         # still carries.
+        from raven.agent.tools.web import image_search_vendor
+
         provider = config.tools.web.search.provider
+        if cap.tool == "image_search":
+            provider = image_search_vendor(provider, config.tools.web.vendor_key)
         if config.tools.web.providers.key_for(provider):
             return f"tools.web.providers.{provider}.apiKey"
         if provider == "serper" and config.tools.web.search.api_key:

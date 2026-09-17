@@ -37,6 +37,11 @@ if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
 
 _HTTP_TIMEOUT_S = 15.0
+# The backend contribution whose store this page reads. Named once: the page
+# is EverOS-shaped down to its four tabs, so every check for "is this page
+# looking at the right store" has to mean the same thing.
+_EVEROS_BACKEND = "everos"
+
 _USER_KINDS = ("episode", "profile")
 _AGENT_KINDS = ("agent_case", "agent_skill")
 _KINDS = _USER_KINDS + _AGENT_KINDS
@@ -122,15 +127,46 @@ def _project(kind: str, row: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _unavailable_note() -> str | None:
+    """Why this page has nothing to show, in a sentence, or ``None``.
+
+    Two ways to arrive at an empty memory browser that are not a failure and
+    that a person cannot tell apart from one: the plugin is not installed, and
+    the plugin is installed but is not what ``memory.backend`` names. Both used
+    to render as four zeros or a retry button, which reads as "your memories
+    are gone" rather than "this page is not where they are".
+    """
+    from raven.config.raven import load_raven_config
+
+    if not everos_plugin_installed():
+        return everos_plugin_missing_note()
+    try:
+        backend = load_raven_config().memory.backend
+    except Exception:  # noqa: BLE001 - an unreadable config is not this page's to report
+        return None
+    if backend == _EVEROS_BACKEND:
+        return None
+    if not backend:
+        return "Long-term memory is turned off, so there is nothing stored to browse."
+    return (
+        f"Long-term memory runs on {backend!r}, and this page reads EverOS's store only. "
+        "Nothing here is what recall uses."
+    )
+
+
 async def memory_stats(params: dict) -> dict:
     """``memory.stats`` — never raises; the page opens even when EverOS is down."""
     del params
-    if not everos_plugin_installed():
-        # Same shape as an unreachable server, because it is the same answer to
-        # the page's question: no counts, and nothing it can do about it here.
-        logger.warning("memory.stats: {}", everos_plugin_missing_note())
+    note = _unavailable_note()
+    if note is not None:
+        # Same shape as an unreachable server plus the one thing that shape
+        # could never carry: why. Without it the page says zero and leaves the
+        # reader to guess between "not installed", "not the configured
+        # backend", and "your memories are gone".
+        logger.warning("memory.stats: {}", note)
         return {
             "ok": False,
+            "note": note,
             "base_url": "",
             "episodes": 0,
             "profiles": 0,
@@ -155,6 +191,7 @@ async def memory_stats(params: dict) -> dict:
             ok = False
     return {
         "ok": ok,
+        "note": None,
         "base_url": base_url,
         "episodes": counts["episode"],
         "profiles": counts["profile"],
@@ -167,8 +204,12 @@ async def memory_list(params: dict) -> dict:
     kind = str(params.get("kind") or "")
     if kind not in _KINDS:
         raise ConfigValidationError(f"unknown memory kind: {kind!r}")
-    if not everos_plugin_installed():
-        raise InternalError(everos_plugin_missing_note())
+    note = _unavailable_note()
+    if note is not None:
+        # An empty page carrying the reason, not an error. This is not a
+        # failure -- there is simply no EverOS store to list here -- and a
+        # retry button offers an action that cannot help.
+        return {"items": [], "total": 0, "page": 1, "page_size": 0, "note": note}
     page = max(1, int(params.get("page") or 1))
     page_size = min(100, max(1, int(params.get("page_size") or 20)))
     q = str(params.get("q") or "").strip()
@@ -184,7 +225,7 @@ async def memory_list(params: dict) -> dict:
             )
             rows = (payload.get("data") or {}).get(_KIND_FIELD[kind]) or []
             items = [_project(kind, r) for r in rows]
-            return {"items": items, "total": len(items), "page": 1, "page_size": page_size}
+            return {"items": items, "total": len(items), "page": 1, "page_size": page_size, "note": None}
         payload = await _post(
             base_url,
             "/api/v1/memory/get",
@@ -195,6 +236,7 @@ async def memory_list(params: dict) -> dict:
         items = [_project(kind, r) for r in rows]
         return {
             "items": items,
+            "note": None,
             "total": int(data.get("total_count", len(items))),
             "page": page,
             "page_size": page_size,
@@ -205,70 +247,67 @@ async def memory_list(params: dict) -> dict:
         raise InternalError(f"everos unreachable: {e}") from e
 
 
-def _esc(value: str) -> str:
-    return value.replace("'", "''")
+def _memory_backend(agent_loop_factory):
+    """The backend this deployment is running, for a call that is not a turn.
+
+    The live loop's own instance when the gateway has one, so a delete goes
+    through the object that has the service running; otherwise one built the
+    way ``raven doctor`` builds it, since the browser answers in processes
+    that never assembled a loop.
+    """
+    from raven.config.raven import load_raven_config
+
+    loop = agent_loop_factory() if agent_loop_factory is not None else None
+    backend = getattr(loop, "backend", None) if loop is not None else None
+    if backend is not None:
+        return backend
+
+    from raven.config import load_config
+    from raven.core.plugin_stack import maybe_build_memory_backend
+
+    return maybe_build_memory_backend(load_config().workspace_path, load_raven_config())
 
 
-async def _delete_in_process(kind: str, mem_id: str) -> int:
-    """Delete one row via EverOS's own repository layer (see module doc)."""
-    from raven.config.update_everos import configure_everos_env, ensure_everos_home
+async def memory_delete(params: dict, *, agent_loop_factory=None) -> dict:
+    """Remove one memory through the backend that owns it.
 
-    configure_everos_env()
-    ensure_everos_home()
-    from everos.infra.persistence.lancedb import (
-        agent_case_repo,
-        agent_skill_repo,
-        atomic_fact_repo,
-        episode_repo,
-        foresight_repo,
-        user_profile_repo,
-    )
-
-    repo = {
-        "episode": episode_repo,
-        "profile": user_profile_repo,
-        "agent_case": agent_case_repo,
-        "agent_skill": agent_skill_repo,
-    }[kind]
-
-    removed = 1
-    if kind == "episode":
-        # One store → one memcell → episode / facts / foresight family.
-        # Removing the episode alone would leave orphaned derived rows that
-        # recall can still surface, so the family goes together.
-        row = await repo.get_by_id(mem_id)
-        parent_id = getattr(row, "parent_id", None) if row else None
-        await repo.delete(f"id = '{_esc(mem_id)}'")
-        if parent_id:
-            for child in (atomic_fact_repo, foresight_repo):
-                try:
-                    await child.delete(f"parent_id = '{_esc(parent_id)}'")
-                except Exception as e:  # noqa: BLE001 — family cleanup is best-effort
-                    logger.warning("memory.delete: cascade on {} failed: {}", child, e)
-    else:
-        await repo.delete(f"id = '{_esc(mem_id)}'")
-    return removed
-
-
-async def memory_delete(params: dict) -> dict:
+    ``kind`` travels to the backend as the opaque string the listing handed
+    out. The host does not know how any backend stores a memory, and the one
+    time it acted as though it did -- deleting the row out of EverOS's index
+    while its markdown, the source of truth, kept the text -- the memory came
+    back on the next rebuild of that file, after the user had been told it was
+    gone.
+    """
     kind = str(params.get("kind") or "")
     mem_id = str(params.get("id") or "")
     if kind not in _KINDS:
         raise ConfigValidationError(f"unknown memory kind: {kind!r}")
     if not mem_id:
         raise ConfigValidationError("id is required")
+
+    backend = _memory_backend(agent_loop_factory)
+    if backend is None:
+        raise InternalError(
+            everos_plugin_missing_note() if not everos_plugin_installed() else "no memory backend is configured"
+        )
     try:
-        removed = await _delete_in_process(kind, mem_id)
-    except Exception as e:  # noqa: BLE001 — surface as a typed RPC error
+        removed = await backend.delete(mem_id, kind=kind)
+    except Exception as e:  # noqa: BLE001 - surface as a typed RPC error
         raise InternalError(f"delete failed: {e}") from e
+    if not removed:
+        raise InternalError(f"this backend cannot delete a {kind} memory")
     logger.info("memory.delete: removed {} {}", kind, mem_id)
-    return {"ok": True, "removed": removed}
+    return {"ok": True, "removed": 1}
 
 
-def register_memory_methods(dispatcher: "Dispatcher") -> None:
+def register_memory_methods(dispatcher: "Dispatcher", *, agent_loop_factory=None) -> None:
     dispatcher.register("memory.stats", memory_stats)
     dispatcher.register("memory.list", memory_list)
-    dispatcher.register("memory.delete", memory_delete)
+
+    async def _delete(params: dict) -> dict:
+        return await memory_delete(params, agent_loop_factory=agent_loop_factory)
+
+    dispatcher.register("memory.delete", _delete)
 
 
 __all__ = [

@@ -19,7 +19,7 @@ from raven.utils.atomic_io import atomic_replace, atomic_update
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 7
+CURRENT_CONFIG_VERSION = 8
 
 # The generation that introduced each run-once migration. Each is gated on its
 # own floor rather than on "is this config current", because those are not the
@@ -40,6 +40,7 @@ _LEGACY_LEAVES_MIGRATION = 4
 _PHANTOM_KNOBS_MIGRATION = 5
 _VENDORED_TREE_MIGRATION = 6
 _RESEARCH_RENAME_MIGRATION = 7
+_EMBEDDING_HOME_MIGRATION = 8
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -87,6 +88,10 @@ EXTENSION_KEYS = (
     "eval_engine",
     "translate",
     "knowledge",
+    # Raven's own embedding endpoint, used by the knowledge base. Same
+    # consequence as sessionTitle above if omitted: a config carrying the
+    # block would fail base Config validation instead of being read.
+    "embedding",
 )
 
 # Paths already warned about as malformed in this process; repeated
@@ -368,6 +373,8 @@ def _persist_migrations(path: Path, from_version: int = 0) -> None:
             if from_version < _RESEARCH_RENAME_MIGRATION:
                 changed = _migrate_research_rename(raw) or changed
                 rename_pending = _research_rename_pending(raw)
+            if from_version < _EMBEDDING_HOME_MIGRATION:
+                changed = _migrate_embedding_home(raw) or changed
         if not changed:
             return None, True
         return json.dumps(raw, indent=2, ensure_ascii=False), True
@@ -873,6 +880,75 @@ def _migrate_legacy_leaves(data: dict[str, Any], *, notify: bool = False) -> boo
     return changed
 
 
+def _migrate_embedding_home(data: dict, *, notify: bool = False) -> bool:
+    """Move the endpoint and the extraction block to the names they earned.
+
+    Two renames, one generation, because they are the same edit seen twice: a
+    setting filed under whoever happened to read it first.
+
+    ``knowledge.embedding{Model,Provider}`` becomes the top-level ``embedding``
+    block. One endpoint, because a knowledge base and the memory store that
+    embed with different models cannot be compared, and two places to change it
+    is one place to forget.
+
+    ``skillForge.everos`` becomes ``skillForge.extraction``. The block
+    configures the local pipeline that distils skills out of finished turns; it
+    calls no service and needs no plugin, and the old name said the opposite.
+
+    Moved rather than read through an alias: both models forbid extras, so a
+    config still carrying the old spelling would fail to load at all.
+    """
+    import logging as _logging
+
+    _log = _logging.getLogger(__name__)
+    changed = False
+
+    for know_key in ("knowledge", "knowledge_config"):
+        know = data.get(know_key) if isinstance(data, dict) else None
+        if not isinstance(know, dict):
+            continue
+        moved: dict[str, Any] = {}
+        for old, new_name in (
+            ("embeddingModel", "model"),
+            ("embedding_model", "model"),
+            ("embeddingProvider", "provider"),
+            ("embedding_provider", "provider"),
+        ):
+            value = know.pop(old, None)
+            if value is not None and new_name not in moved:
+                moved[new_name] = value
+        if not moved:
+            continue
+        changed = True
+        block = data.setdefault("embedding", {})
+        if not isinstance(block, dict):
+            if notify:
+                _log.info("Migrated: dropped %s.embedding* (an embedding block was already set)", know_key)
+            continue
+        for key, value in moved.items():
+            block.setdefault(key, value)
+        if notify:
+            _log.info("Migrated: %s.embedding* -> embedding.%s", know_key, "/".join(sorted(moved)))
+
+    for sf_key in ("skillForge", "skill_forge"):
+        forge = data.get(sf_key) if isinstance(data, dict) else None
+        if not isinstance(forge, dict):
+            continue
+        legacy_block = forge.pop("everos", None)
+        if legacy_block is None:
+            continue
+        changed = True
+        if "extraction" in forge:
+            if notify:
+                _log.info("Migrated: dropped %s.everos (extraction was already set)", sf_key)
+        else:
+            forge["extraction"] = legacy_block
+            if notify:
+                _log.info("Migrated: %s.everos -> %s.extraction", sf_key, sf_key)
+
+    return changed
+
+
 def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version: int = CURRENT_CONFIG_VERSION) -> dict:  # noqa: C901 (cc 46: pre-existing, above the ceiling)
     """Migrate old config formats to current.
 
@@ -912,7 +988,7 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version
     if "restrictToWorkspace" in exec_cfg and "restrictToWorkspace" not in tools:
         tools["restrictToWorkspace"] = exec_cfg.pop("restrictToWorkspace")
     # Relocate any legacy ``agents.defaults.{everos,everosSkillLight,
-    # everos_skill_light}`` block to ``skillForge.everos`` (the current
+    # everos_skill_light}`` block to ``skillForge.extraction`` (the current
     # home for the embedded extraction pipeline). The retired plain
     # ``agents.defaults.everos`` block from the EverOS-HTTP era is also
     # dropped — old configs may still carry it but the runtime no
@@ -927,7 +1003,7 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version
         if dropped_everos is not None:
             _log.info("Migrated: dropped agents.defaults.everos (retired)")
         if legacy_esl is not None:
-            # Strip retired everosSkillLight keys that EverOSConfig
+            # Strip retired everosSkillLight keys that ExtractionConfig
             # (extra='forbid') no longer accepts; the per-turn gate is now
             # sourced from skill_forge.detect_min_tool_calls. snake_case and
             # camelCase both, since user configs may use either.
@@ -951,11 +1027,14 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version
                 sf_key = "skillForge"
                 data[sf_key] = {}
             skill_forge = data[sf_key]
-            if "everos" not in skill_forge:
-                skill_forge["everos"] = legacy_esl
+            if "extraction" not in skill_forge and "everos" not in skill_forge:
+                skill_forge["extraction"] = legacy_esl
                 _log.info(
-                    "Migrated: agents.defaults.everosSkillLight → skillForge.everos",
+                    "Migrated: agents.defaults.everosSkillLight -> skillForge.extraction",
                 )
+
+    if from_version < _EMBEDDING_HOME_MIGRATION:
+        _migrate_embedding_home(data, notify=True)
 
     # Same for the session-title gate, which changed both name and unit:
     # ``min_input_chars`` counted code points, ``min_input_width`` counts
@@ -1051,33 +1130,6 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version
                             "hydrates Hub bodies)",
                             legacy_key,
                         )
-
-    # Bring ``plugins.config["everos-memory"]`` onto the current shape: record
-    # which EverOS root is in use and whether raven owns it, and drop the dead
-    # ``mode`` key. Both new fields are decisions rather than derivable facts, so
-    # leaving them absent would mean re-deriving them at every call site --
-    # including the ones that decide whether writing to that root is allowed.
-    #
-    # Read-time normalisation only: this is a pure dict transform apart from one
-    # existence check, and it must stay that way. Reading everos.toml or probing
-    # a port here would put IO on every config load. The shape persists the next
-    # time anything writes the config.
-    plugins = data.get("plugins")
-    if isinstance(plugins, dict):
-        slice_ = (plugins.get("config") or {}).get("everos-memory")
-        if isinstance(slice_, dict):
-            if slice_.pop("mode", None) is not None:
-                _log.info("Migrated: dropped plugins.config.everos-memory.mode (no reader)")
-            from raven.config.update_everos import fallback_everos_root, root_is_raven_owned
-
-            if "root" not in slice_:
-                # Not ``everos_root()``: that re-reads whatever config path is
-                # globally current, which is not necessarily the file being
-                # migrated here.
-                slice_["root"] = str(fallback_everos_root())
-                _log.info("Migrated: recorded everos-memory.root = %s", slice_["root"])
-            if "owned" not in slice_:
-                slice_["owned"] = root_is_raven_owned(slice_["root"])
 
     # ── Pop extension keys before base Config validates ──────────────
     if pop_extension_keys:

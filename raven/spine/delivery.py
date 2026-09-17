@@ -206,9 +206,11 @@ class DeliveryHub:
         if channel not in self._outlets:
             logger.warning("no outlet for channel {!r}; dropping {}", channel, type(out).__name__)
             return
-        if isinstance(out, StreamDelta):
+        if isinstance(out, StreamDelta) and out.conversation_id is not None:
             # Remember the channel this stream rides so a later close_stream (driven
-            # by a sourceless lifecycle event) can route its marker here.
+            # by a sourceless lifecycle event) can route its marker here. A delta
+            # with no conversation_id cannot be closed by id either, so remembering
+            # it under None would only shadow the next stream's entry.
             self._stream_channel.setdefault(out.conversation_id, channel)
         queue = self._queues.get(channel)
         if queue is None:
@@ -245,7 +247,8 @@ class DeliveryHub:
         if not (isinstance(outlet, SupportsStreaming) and outlet.capabilities.streaming):
             return
         chat_id = ev.source.chat_id
-        self._open_streams.setdefault(ev.conversation_id, chat_id)  # first delta opens the stream
+        if ev.conversation_id is not None:
+            self._open_streams.setdefault(ev.conversation_id, chat_id)  # first delta opens the stream
         await outlet.send_stream_chunk(chat_id, ev.conversation_id, ev.delta, done=False)
 
     async def _close_stream_chunk(self, outlet: Outlet, conversation_id: str) -> None:

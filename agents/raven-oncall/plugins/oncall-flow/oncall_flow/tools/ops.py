@@ -1159,8 +1159,8 @@ class OpsTuneStatusTool(Tool):
                 try:
                     budget_spent = await backend.spent_minutes()
                     budget_remaining = await backend.remaining_minutes()
-                    if hasattr(backend, "unmeasured_spend"):
-                        budget_unmeasured = backend.unmeasured_spend() or {}
+                    if callable(unmeasured_spend := getattr(backend, "unmeasured_spend", None)):
+                        budget_unmeasured = unmeasured_spend() or {}
                 except Exception as exc:  # noqa: BLE001 -- an unread spend is reported, not raised
                     # Separate try from the reconcile: a host that cannot answer the
                     # spend must not also cost the trial statuses, and a spend that

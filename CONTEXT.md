@@ -425,7 +425,7 @@ _Avoid_: "provider" unqualified — that is the LLM Provider in this vocabulary;
 
 **Web Search Provider** / **Web Fetch Provider** (`agent/tools/web.py`, `SEARCH_PROVIDERS` / `FETCH_PROVIDERS`):
 Which interchangeable backend each web tool calls: `tools.web.search.provider` selects
-`serper` (default), `anysearch`, `serpapi`, `tavily`, `exa`, `brave` or `firecrawl`, and
+`serper` (default), `anysearch`, `serpapi`, `tavily`, `exa`, `brave`, `firecrawl` or `serply`, and
 `tools.web.fetch.provider` selects `jina` (default), `anysearch`, `tavily`, `exa` or
 `firecrawl`. Every endpoint is a literal in the tool, so a selection names a vendor and
 never a URL. `web_search` is registered whatever the config holds and *withheld* from the
@@ -1220,8 +1220,8 @@ Moving the endpoint or rotating the key does not make a base stale.
 
 **Plugin** (`plugins/`):
 A component declared by a `raven-plugin.toml` manifest (`[plugin]`: `id`, `version`, optional
-`bundled` / `enabled_by_default`). It contributes capabilities via
-`[[plugin.contributes.<kind>]]` arrays — currently `memory_backends`, `tools`, `hooks`, `services`, `tool_gates` and `session_observers` —
+`bundled`). It contributes capabilities via
+`[[plugin.contributes.<kind>]]` arrays — currently `memory_backends`, `tools`, `hooks`, `services`, `tool_gates`, `session_observers` and `onboard` —
 each naming a `factory` (`module:callable`). The host passes the user's
 `plugins.config["<id>"]` dict verbatim to the factory as `PluginContext.config`. A `hooks`
 contribution returns an `AgentHook` the assembly root appends to the loop's chain: it is how
@@ -1239,8 +1239,8 @@ factory returning `None`. The wheel carries its own shelf of such plugins,
 one announce path while the tools ride the plugin contract.
 
 **Plugin Registry** (`plugins/registry.py`):
-The `PluginRegistry` discovers manifests, activates those not in `plugins.disabled` (respecting
-`enabled_by_default`), resolves each `module:callable` factory by dynamic import, and registers
+The `PluginRegistry` discovers manifests, activates those not in `plugins.disabled`,
+resolves each `module:callable` factory by dynamic import, and registers
 contributions into per-kind tables — deduping plugins by `id` and contributions by `name`
 (`PluginConflictError` on collision). `build_memory_backend()` / `build_tool()` construct a
 contribution with a fresh `PluginContext`.

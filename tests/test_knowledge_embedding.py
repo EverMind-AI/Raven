@@ -1,5 +1,9 @@
-"""Tests for reading the embedding endpoint out of the EverOS config, and for
-the client that calls it."""
+"""Tests for resolving the embedding endpoint, and for the client that calls it.
+
+Raven's own ``embedding`` section is the answer; the EverOS config file is a
+fallback for an operator who has not moved the values across. Both layers are
+exercised here, plus the case where neither is configured.
+"""
 
 from __future__ import annotations
 
@@ -23,21 +27,40 @@ from raven.knowledge._embedding import (
 
 
 @pytest.fixture
-def everos_root(tmp_path, monkeypatch):
-    """The recorded root, not the environment variable.
+def raven_config(tmp_path, monkeypatch):
+    """A config file this test owns, aimed at by ``load_raven_config``."""
+    from raven.config.loader import get_config_path, set_config_path
 
-    raven writes ``EVEROS_ROOT`` from the root it recorded rather than reading
-    it, so a test that sets the variable is testing a path the product does not
-    take -- and did not notice this module reading a different file than raven
-    itself uses.
+    path = tmp_path / "config.json"
+    path.write_text("{}", encoding="utf-8")
+    before = get_config_path()
+    set_config_path(path)
+    yield path
+    set_config_path(before)
+
+
+def _write_config(path, **sections) -> None:
+    path.write_text(json.dumps(sections), encoding="utf-8")
+
+
+@pytest.fixture
+def everos_root(tmp_path, raven_config):
+    """A legacy EverOS root, recorded the way raven records it.
+
+    Through ``plugins.config["everos-memory"]["root"]`` rather than the
+    plugin's own helper: the fallback reads the recorded root with plain
+    tomllib, because importing the plugin here would put a knowledge base back
+    at the mercy of whether the memory plugin is installed.
     """
     root = tmp_path / "everos"
     root.mkdir()
-    monkeypatch.setattr("raven.config.update_everos.everos_root", lambda: root)
+    _write_config(raven_config, plugins={"config": {"everos-memory": {"root": str(root)}}})
     # Set too, and to somewhere else on purpose: the read must not fall back to
     # it now that the recorded root is the answer.
-    monkeypatch.setenv("EVEROS_ROOT", str(tmp_path / "not-this-one"))
-    return root
+    monkeypatch_env = pytest.MonkeyPatch()
+    monkeypatch_env.setenv("EVEROS_ROOT", str(tmp_path / "not-this-one"))
+    yield root
+    monkeypatch_env.undo()
 
 
 def _write(root, body: str) -> None:
@@ -52,28 +75,29 @@ api_key = "sk-test"
 """
 
 
-class TestTheRavenPinDecidesWhenItIsSet:
-    """``knowledge.embeddingModel`` + ``embeddingProvider``, resolved.
+class TestTheConfiguredPinIsTheOnlySource:
+    """``embedding.model`` + ``embedding.provider``, resolved through the provider.
 
-    The pin is somebody's deliberate pick against a provider they can see; the
-    EverOS endpoint is what the memory backend happened to leave behind. Both
-    exist, so which one wins is the whole of this.
+    One source, deliberately. The endpoint used to be inherited from the memory
+    backend's file, which meant a knowledge base stopped working when that
+    plugin was not installed -- for a subsystem that never speaks to the memory
+    service. Reading it there at all is gone; an install that only ever had it
+    in that file is migrated once, by ``raven doctor --fix``.
     """
 
     @staticmethod
     def _pin(monkeypatch, *, model, provider, credentials):
-        from raven.config.raven import KnowledgeConfig, RavenConfig
+        from raven.config.raven import EmbeddingConfig, load_raven_config
 
-        config = RavenConfig()
-        config.knowledge = KnowledgeConfig(embedding_model=model, embedding_provider=provider)
+        config = load_raven_config()
+        config.embedding = EmbeddingConfig(model=model or "", provider=provider or "")
         monkeypatch.setattr("raven.config.raven.load_raven_config", lambda: config)
         monkeypatch.setattr(
             "raven.config.update_providers.resolve_provider_credentials",
             lambda name, **_: credentials,
         )
 
-    def test_a_complete_pin_is_used_over_the_everos_endpoint(self, everos_root, monkeypatch) -> None:
-        _write(everos_root, _FULL)
+    def test_a_complete_pin_resolves_through_its_provider(self, raven_config, monkeypatch) -> None:
         self._pin(
             monkeypatch,
             model="openai/text-embedding-3-large",
@@ -83,159 +107,63 @@ class TestTheRavenPinDecidesWhenItIsSet:
 
         config = load_embedding_config()
 
-        # The wire id, not the stored spelling: the provider half already said
-        # whose credential this is, so the prefix has done its job.
-        assert config.model == "text-embedding-3-large"
         assert config.base_url == "https://api.openai.com/v1"
         assert config.api_key == "sk-pinned"
+        # Only the leading provider segment comes off: the vendor's own id may
+        # itself contain a slash.
+        assert config.model == "text-embedding-3-large"
 
-    def test_half_a_pin_leaves_the_everos_endpoint_answering(self, everos_root, monkeypatch) -> None:
-        """A model with no provider is not a pin. Reading it as one would send
-        the id to whatever address happened to be configured."""
-        _write(everos_root, _FULL)
-        self._pin(monkeypatch, model="openai/text-embedding-3-large", provider=None, credentials=None)
+    def test_half_a_pin_is_no_configuration(self, raven_config, monkeypatch) -> None:
+        """A model with nobody to serve it cannot be called, and guessing the
+        provider from the id is how two subsystems end up on different ones."""
+        self._pin(monkeypatch, model="text-embedding-3-large", provider=None, credentials=None)
 
-        assert load_embedding_config().api_key == "sk-test"
+        assert load_embedding_config() is None
 
-    def test_a_pin_whose_provider_has_no_key_falls_back(self, everos_root, monkeypatch) -> None:
-        """Reported, then the endpoint that does work. A knowledge base that
-        stops answering because a picker was pointed at an empty account is a
-        worse outcome than one still on its old endpoint."""
-        _write(everos_root, _FULL)
+    def test_a_provider_with_no_key_is_no_configuration(self, raven_config, monkeypatch) -> None:
         self._pin(monkeypatch, model="openai/text-embedding-3-large", provider="openai", credentials=None)
 
-        assert load_embedding_config().api_key == "sk-test"
+        assert load_embedding_config() is None
 
-    def test_an_unreadable_config_leaves_the_everos_endpoint_answering(self, everos_root, monkeypatch) -> None:
-        """A config raven cannot parse is reported at debug and stepped over.
-        Raising here would take the knowledge base down with the config."""
-        _write(everos_root, _FULL)
+    def test_an_unreadable_config_is_not_an_error(self, raven_config, monkeypatch) -> None:
+        """A config raven cannot parse is stepped over at debug. Raising here
+        would take the knowledge base down with the config."""
 
         def _boom():
             raise RuntimeError("config is not readable")
 
         monkeypatch.setattr("raven.config.raven.load_raven_config", _boom)
 
-        assert load_embedding_config().api_key == "sk-test"
+        assert load_embedding_config() is None
 
-    def test_a_real_resolver_answer_is_what_gets_used(self, everos_root, monkeypatch) -> None:
+    def test_nothing_is_inherited_from_the_memory_backend(self, everos_root, raven_config, monkeypatch) -> None:
+        """The file is on disk and complete, and it is not consulted.
+
+        This is the whole point of the move: with no pin, a knowledge base
+        behaves the same whether or not a memory plugin is installed --
+        unconfigured, and saying so.
+        """
+        _write(everos_root, _FULL)
+        self._pin(monkeypatch, model=None, provider=None, credentials=None)
+
+        assert load_embedding_config() is None
+
+    def test_a_real_resolver_answer_is_what_gets_used(self, raven_config, monkeypatch) -> None:
         """Through the resolver itself rather than a stand-in, so the pair this
         actually sends is the one a request would go out on."""
-        from raven.config.raven import KnowledgeConfig, RavenConfig
+        from raven.config.raven import EmbeddingConfig, load_raven_config
         from raven.config.update_providers import set_provider_fields
 
-        cfg = everos_root.parent / "config.json"
-        set_provider_fields("siliconflow", {"api_key": "sk-sf"}, config_path=cfg)
-        # Patched where the resolver reads it: update_providers imported the
-        # name, so rebinding it on the loader would not reach this call.
-        monkeypatch.setattr("raven.config.update_providers.get_config_path", lambda: cfg)
-        config = RavenConfig()
-        config.knowledge = KnowledgeConfig(embedding_model="siliconflow/BAAI/bge-m3", embedding_provider="siliconflow")
+        set_provider_fields("siliconflow", {"api_key": "sk-sf"})
+        config = load_raven_config()
+        config.embedding = EmbeddingConfig(model="siliconflow/BAAI/bge-m3", provider="siliconflow")
         monkeypatch.setattr("raven.config.raven.load_raven_config", lambda: config)
 
         resolved = load_embedding_config()
 
         assert resolved.base_url == "https://api.siliconflow.cn/v1"
         assert resolved.api_key == "sk-sf"
-        # Only the leading provider segment comes off: the vendor's own id may
-        # itself contain a slash.
         assert resolved.model == "BAAI/bge-m3"
-
-    def test_no_pin_at_all_is_the_behaviour_every_install_had(self, everos_root, monkeypatch) -> None:
-        _write(everos_root, _FULL)
-        self._pin(monkeypatch, model=None, provider=None, credentials=None)
-
-        assert load_embedding_config().model == "text-embedding-3-small"
-
-
-def test_a_base_model_keeps_its_namespace_when_a_provider_is_resolved(monkeypatch) -> None:
-    """``BAAI/bge-large-zh-v1.5`` is one model id, not a provider and a model.
-
-    The configured pin is stored as ``provider/model`` and has its first
-    segment stripped on the way out; a base records what already went on the
-    wire, and stripping that again asks the endpoint for a model nobody
-    serves.
-    """
-    monkeypatch.setattr(
-        "raven.config.update_providers.resolve_provider_credentials",
-        lambda provider: ("https://api.siliconflow.cn/v1", "key"),
-    )
-
-    config = embedding_config_for("siliconflow", "BAAI/bge-large-zh-v1.5", 1024)
-
-    assert config is not None
-    assert config.model == "BAAI/bge-large-zh-v1.5"
-    assert config.provider == "siliconflow"
-    assert config.dimensions == 1024
-
-
-def test_a_provider_with_no_credentials_resolves_to_nothing(monkeypatch) -> None:
-    """The caller decides what that means: one base skipped, not a failed
-    search."""
-    monkeypatch.setattr(
-        "raven.config.update_providers.resolve_provider_credentials",
-        lambda provider: None,
-    )
-
-    assert embedding_config_for("siliconflow", "BAAI/bge-large-zh-v1.5") is None
-    assert embedding_config_for("", "some-model") is None
-
-
-def test_the_configured_endpoint_is_read(everos_root) -> None:
-    _write(everos_root, _FULL)
-    config = load_embedding_config()
-
-    assert config.model == "text-embedding-3-small"
-    assert config.api_key == "sk-test"
-    assert config.dimensions is None  # unpinned: ask the model, never guess
-
-
-def test_the_trailing_slash_is_dropped(everos_root) -> None:
-    """The request appends /embeddings, so a kept slash sends //embeddings and
-    some gateways answer 404 to that."""
-    _write(everos_root, _FULL)
-    assert load_embedding_config().base_url == "https://embed.test/v1"
-
-
-def test_a_width_in_the_config_wins_over_the_default(everos_root) -> None:
-    _write(everos_root, _FULL + "dimensions = 3072\n")
-    assert load_embedding_config().dimensions == 3072
-
-
-def test_a_nonsense_width_is_treated_as_unpinned(everos_root) -> None:
-    _write(everos_root, _FULL + "dimensions = 0\n")
-    assert load_embedding_config().dimensions is None
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        "",
-        "[embedding]\nmodel = 'm'\n",
-        "[embedding]\nmodel = 'm'\nbase_url = 'https://x/v1'\n",
-        "[embedding]\nbase_url = 'https://x/v1'\napi_key = 'k'\n",
-    ],
-    ids=["empty", "model-only", "no-key", "no-model"],
-)
-def test_an_incomplete_section_is_no_configuration_at_all(everos_root, body) -> None:
-    """Half a config cannot embed. Returning it would defer the failure to the
-    first upload, which is where it is hardest to read."""
-    _write(everos_root, body)
-    assert load_embedding_config() is None
-
-
-def test_a_missing_file_is_not_an_error(everos_root) -> None:
-    """A deployment with no embedding configured is one with no knowledge
-    bases, which is an ordinary state -- not a failed start."""
-    assert load_embedding_config() is None
-
-
-def test_unparseable_toml_is_not_an_error(everos_root) -> None:
-    _write(everos_root, "[embedding\nmodel =")
-    assert load_embedding_config() is None
-
-
-# ── the client ────────────────────────────────────────────────────
 
 
 @pytest.fixture
@@ -391,31 +319,6 @@ async def test_a_pinned_width_is_reported_without_a_call(mock_transport) -> None
 
     assert client.declared_dimensions == 3072
     assert calls == []
-
-
-def test_the_recorded_root_wins_over_the_environment(tmp_path, monkeypatch) -> None:
-    """The bug this replaced: reading EVEROS_ROOT made one installation answer
-    two different things -- the recorded root once the memory backend had
-    exported the variable, a hardcoded ~/.everos/raven before that. On the
-    deployment it was found on those were two files with two endpoints, one of
-    them keyless."""
-    recorded = tmp_path / "recorded"
-    recorded.mkdir()
-    _write(recorded, _FULL)
-    ambient = tmp_path / "ambient"
-    ambient.mkdir()
-    _write(ambient, _FULL.replace("text-embedding-3-small", "wrong-model"))
-
-    monkeypatch.setattr("raven.config.update_everos.everos_root", lambda: recorded)
-    monkeypatch.setenv("EVEROS_ROOT", str(ambient))
-
-    config = load_embedding_config()
-
-    assert config is not None
-    assert config.model == "text-embedding-3-small"
-
-
-# ── SiliconFlow ───────────────────────────────────────────────────
 
 
 def _config(base_url: str = "https://api.siliconflow.cn/v1", model: str = "BAAI/bge-large-zh-v1.5"):
@@ -581,6 +484,42 @@ async def test_a_plain_endpoint_is_left_alone(mock_transport) -> None:
     assert sent[0][0] == text
 
 
+# --------------------------------------------------------------------------- resolution order
+
+
+def test_a_base_model_keeps_its_namespace_when_a_provider_is_resolved(monkeypatch) -> None:
+    """``BAAI/bge-large-zh-v1.5`` is one model id, not a provider and a model.
+
+    The configured pin is stored as ``provider/model`` and has its first
+    segment stripped on the way out; a base records what already went on the
+    wire, and stripping that again asks the endpoint for a model nobody
+    serves.
+    """
+    monkeypatch.setattr(
+        "raven.config.update_providers.resolve_provider_credentials",
+        lambda provider: ("https://api.siliconflow.cn/v1", "key"),
+    )
+
+    config = embedding_config_for("siliconflow", "BAAI/bge-large-zh-v1.5", 1024)
+
+    assert config is not None
+    assert config.model == "BAAI/bge-large-zh-v1.5"
+    assert config.provider == "siliconflow"
+    assert config.dimensions == 1024
+
+
+def test_a_provider_with_no_credentials_resolves_to_nothing(monkeypatch) -> None:
+    """The caller decides what that means: one base skipped, not a failed
+    search."""
+    monkeypatch.setattr(
+        "raven.config.update_providers.resolve_provider_credentials",
+        lambda provider: None,
+    )
+
+    assert embedding_config_for("siliconflow", "BAAI/bge-large-zh-v1.5") is None
+    assert embedding_config_for("", "some-model") is None
+
+
 # -- batching ------------------------------------------------------
 
 
@@ -668,16 +607,3 @@ async def test_a_batch_of_one_that_is_refused_gives_up(mock_transport) -> None:
 
     with pytest.raises(EmbeddingError, match="batch size"):
         await client.embed(["only one"])
-
-
-async def test_the_batch_size_in_the_everos_file_is_read(everos_root) -> None:
-    """The operator already stated it there; discovering it again costs a
-    failed request."""
-    _write(
-        everos_root,
-        '[embedding]\nmodel = "m"\nbase_url = "https://e/v1"\napi_key = "k"\nbatch_size = 10\n',
-    )
-
-    config = load_embedding_config()
-
-    assert config is not None and config.batch_size == 10

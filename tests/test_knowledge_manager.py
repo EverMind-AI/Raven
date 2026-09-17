@@ -391,40 +391,20 @@ async def test_one_unreachable_base_does_not_take_the_others_down(manager, endpo
     assert "no endpoint serves it" in outcome.by_keyword[stranded.id]
 
 
-async def test_a_base_older_than_the_pin_goes_back_to_the_endpoint_it_came_from(
-    manager, endpoints, monkeypatch
-) -> None:
-    """A base built before raven had an embedding pin came through the EverOS
-    endpoint, and that file still names the model and the address. Reaching for
-    it is what keeps such a base searchable with no setting to fill in -- the
-    alternative is asking today's provider for a model it never served."""
+async def test_a_base_with_no_provider_falls_back_to_the_configured_endpoint(manager, endpoints) -> None:
+    """The last thing left to try for a base written before providers were
+    recorded. Raven no longer reads the memory backend's own config for an
+    older endpoint: a knowledge base that needs the memory plugin installed to
+    answer is one that stops working when it is not.
+    """
     base, _ = await _ready_base(manager)
     manager.stub.model = "a-different-model"
-    inherited = endpoints.serve("stub-embed")
-    monkeypatch.setattr(
-        "raven.knowledge._manager.everos_embedding_config",
-        lambda: EmbeddingConfig(model="stub-embed", base_url="https://inherited/v1", api_key="k"),
-    )
+    served = endpoints.serve("stub-embed")
 
     hits = (await manager.search([base.id], "alpha", top_k=1)).hits
 
-    assert hits and inherited.calls == [["alpha"]]
-
-
-async def test_the_inherited_endpoint_is_not_used_for_a_model_it_does_not_name(manager, endpoints, monkeypatch) -> None:
-    """It is the right endpoint only because it names this base's model; for
-    any other, it is just a second endpoint to guess with."""
-    base, _ = await _ready_base(manager)
-    manager.stub.model = "a-different-model"
-    monkeypatch.setattr(
-        "raven.knowledge._manager.everos_embedding_config",
-        lambda: EmbeddingConfig(model="something-else", base_url="https://inherited/v1", api_key="k"),
-    )
-
-    client = manager._client_for(base)
-
-    assert client.model == "stub-embed", "still the base's own model"
-    assert endpoints.built[-1].base_url != "https://inherited/v1", "but not through that endpoint"
+    assert hits and served.calls == [["alpha"]], "asked for the base's own model"
+    assert endpoints.built[-1].model == "stub-embed"
 
 
 async def test_a_base_can_be_pointed_at_the_provider_that_still_serves_it(manager, endpoints) -> None:

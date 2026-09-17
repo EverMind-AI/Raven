@@ -25,7 +25,6 @@ from raven.knowledge._embedding import (
     asking_for,
     embedding_client,
     embedding_config_for,
-    everos_embedding_config,
     load_embedding_config,
 )
 from raven.knowledge._naive_chunker import NaiveChunker
@@ -239,11 +238,10 @@ class KnowledgeManager:
         - the base recorded its provider: that provider's endpoint, asked for
           the base's model, because a model id does not name a credential;
         - the base recorded a model but no provider (every base written before
-          the field existed): the EverOS endpoint when that is what still
-          names this model, since a base older than the pin was built through
-          it and the file is the only record of where its vectors came from;
-          otherwise today's endpoint, asked for the base's model, which is the
-          last thing left to try.
+          the field existed): today's endpoint, asked for the base's model,
+          which is the last thing left to try. Whether it still serves that
+          model is not knowable from here -- if it does not, the embed fails
+          and the base answers by keyword instead.
         """
         configured = self._client()
         if base.embedding_model == configured.model:
@@ -261,16 +259,13 @@ class KnowledgeManager:
                     f"through {base.embedding_provider!r}, which has no usable credentials now; "
                     "restore that provider or rebuild the base"
                 )
-            # No provider was ever recorded. The endpoint the memory backend
-            # configured is where a base older than raven's own pin came from,
-            # so it is tried first -- and only when it still names this base's
-            # model, which is what makes it the right endpoint rather than
-            # merely another one.
-            inherited = everos_embedding_config()
-            if inherited is not None and inherited.model == base.embedding_model:
-                config = inherited
-            else:
-                config = asking_for(self._endpoint(), base.embedding_model, base.dimensions or None)
+            # No provider was ever recorded, so the only endpoint there is to
+            # try is the configured one, asked for this base's model. Reading
+            # the memory backend's own file for an older endpoint is not an
+            # option any more: raven stopped inheriting it, because a knowledge
+            # base that needs the memory plugin installed to answer is a
+            # knowledge base that stops working when it is not.
+            config = asking_for(self._endpoint(), base.embedding_model, base.dimensions or None)
         client = embedding_client(config)
         self._clients[(base.embedding_provider, base.embedding_model)] = client
         return client

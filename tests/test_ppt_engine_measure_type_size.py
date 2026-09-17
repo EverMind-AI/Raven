@@ -892,3 +892,40 @@ def test_an_optional_slot_left_empty_everywhere_is_furniture_and_holds_no_positi
     assert [finding.kind for finding in found] == ["row_type_drift"]
     assert found[0].detail["slot_at"] == 1
     assert found[0].detail["sizes_pt"] == [14.0, 20.0]
+
+
+def test_a_source_line_that_names_its_data_is_a_caption_too(tmp_path: Path) -> None:
+    """ "数据来源：北京市统计局《…》" at 12pt sat at 88% of the page height -- above the
+    footer band -- and did not start with "来源", so it was held to the 14pt body
+    floor on two pages of one delivered deck, on every one of ten builds."""
+    from raven_ppt.services.measure.type_size import Span, type_findings
+
+    deck = _deck(
+        tmp_path,
+        [
+            ("数据来源：北京市统计局《北京市 2024 年国民经济和社会发展统计公报》", 0.7, 6.55, 8.0, 0.3),
+            ("这一段是页面的正文，长度足够被当作正文而不是标记来判断", 1.0, 2.0, 6.0, 1.0),
+        ],
+    )
+    spans = [
+        Span(
+            page=1,
+            size_pt=12.0,
+            text="数据来源：北京市统计局《北京市 2024 年国民经济和社会发展统计公报》",
+            x0=52,
+            y0=473,
+            x1=520,
+            y1=487,
+        ),
+        Span(
+            page=1,
+            size_pt=17.0,
+            text="这一段是页面的正文，长度足够被当作正文而不是标记来判断",
+            x0=75,
+            y0=150,
+            x1=460,
+            y1=170,
+        ),
+    ]
+
+    assert type_findings(deck, spans) == []

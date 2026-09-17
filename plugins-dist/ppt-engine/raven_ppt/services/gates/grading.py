@@ -264,6 +264,9 @@ WHOLE_DECK_ONLY = frozenset(
         "symmetry_habit",
         # A part-written deck has not broken the agreed length; it has not reached it.
         "page_budget",
+        # "6 of 8 content pages show anything" on a 20-page plan counts the pages not
+        # written yet; the stage exempts drafts from it too.
+        "evidence",
         # Same argument, and already draft-exempt: pages the outline has not mapped yet.
         "page_mapping",
         # "Nearly all your pages are alike" is false of four pages out of a planned

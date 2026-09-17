@@ -78,6 +78,26 @@ class AcpMode:
 
 
 @dataclass(frozen=True)
+class AcpModelChoice:
+    """One model an agent offers, from the ``model`` entry of its config options.
+
+    ``value`` is the opaque id the agent takes back; ``name`` is what it asked
+    to be shown, which is usually far shorter (``claude-opus-5`` against
+    ``openrouter/openrouter/anthropic/claude-opus-5``). ``group`` is the
+    agent's own bucketing -- a provider, typically -- kept because a flat list
+    of forty ids is not a menu anyone reads.
+
+    Carried whole for the reason ``AcpMode`` is: reducing it to the id alone
+    puts a choice in front of a reader on a spelling the agent never meant them
+    to see.
+    """
+
+    value: str
+    name: str = ""
+    group: str = ""
+
+
+@dataclass(frozen=True)
 class CapabilitySnapshot:
     """One handshake's worth of measured facts about an acp agent."""
 
@@ -113,6 +133,14 @@ class CapabilitySnapshot:
     which is also why a third-party agent leaving this false changes nothing."""
     prompt_modalities: tuple[str, ...] = ()
     available_models: tuple[str, ...] = ()
+    """The ids ``models.availableModels`` advertises. Older material: the agents
+    this host drives answer with ``configOptions`` instead, so this is usually
+    empty and ``model_choices`` below is what a menu is built from."""
+    model_choices: tuple[AcpModelChoice, ...] = ()
+    """The models ``session/set_config_option`` can switch a session between.
+
+    Measured rather than declared, for the reason ``available_modes`` gives:
+    a row naming its own would drift the first time the agent's list changed."""
     available_modes: tuple[AcpMode, ...] = ()
     """The profiles ``session/set_mode`` can switch a session between.
 
@@ -153,6 +181,7 @@ class CapabilitySnapshot:
             "sessionMcp": self.session_mcp,
             "promptModalities": list(self.prompt_modalities),
             "availableModels": list(self.available_models),
+            "modelChoices": [{"value": c.value, "name": c.name, "group": c.group} for c in self.model_choices],
             "availableModes": [
                 {"id": m.id, "name": m.name, "description": m.description} for m in self.available_modes
             ],
@@ -185,6 +214,16 @@ class CapabilitySnapshot:
             value = row.get(key)
             return tuple(v for v in value if isinstance(v, str)) if isinstance(value, list) else ()
 
+        def _choices(key: str) -> tuple[AcpModelChoice, ...]:
+            value = row.get(key)
+            if not isinstance(value, list):
+                return ()
+            return tuple(
+                AcpModelChoice(value=c["value"], name=str(c.get("name") or ""), group=str(c.get("group") or ""))
+                for c in value
+                if isinstance(c, dict) and isinstance(c.get("value"), str) and c["value"]
+            )
+
         def _modes(key: str) -> tuple[AcpMode, ...]:
             value = row.get(key)
             if not isinstance(value, list):
@@ -213,6 +252,7 @@ class CapabilitySnapshot:
             session_mcp=bool(row.get("sessionMcp")),
             prompt_modalities=_strs("promptModalities"),
             available_models=_strs("availableModels"),
+            model_choices=_choices("modelChoices"),
             available_modes=_modes("availableModes"),
             auth_methods=_strs("authMethods"),
             elapsed_ms=int(row.get("elapsedMs") or 0),
@@ -348,6 +388,7 @@ class _Handshake:
     prompt_modalities: tuple[str, ...] = ()
     auth_methods: tuple[str, ...] = ()
     available_models: tuple[str, ...] = ()
+    model_choices: tuple["AcpModelChoice", ...] = ()
     available_modes: tuple["AcpMode", ...] = ()
     warnings: list[str] = field(default_factory=list)
 
@@ -423,6 +464,78 @@ def _read_session_models(result: Any) -> tuple[str, ...]:
     if not isinstance(models, list):
         return ()
     return tuple(str(m["modelId"]) for m in models if isinstance(m, dict) and isinstance(m.get("modelId"), str))
+
+
+def _read_session_model_choices(result: Any) -> tuple[AcpModelChoice, ...]:
+    """The models a ``session/new`` result offers, from its config options.
+
+    The stable surface is ``configOptions[]`` with one entry carrying
+    ``category: "model"`` -- NOT ``models.availableModels``, which is older
+    material that the agents this host actually drives do not send. Reading the
+    old key alone is how a survey of live handshakes came back empty while every
+    one of them was advertising a full menu.
+
+    The entry's ``options`` are either choices or groups of choices, and both
+    shapes are taken: the agent decides whether its list is worth bucketing.
+
+    ``currentValue`` is deliberately not recorded, for the reason
+    ``_read_session_modes`` gives about ``currentModeId`` -- it is the state of
+    the throwaway session this probe opened, not a fact about the agent, and
+    storing it would advertise a default the next session need not start in.
+
+    Same tolerance as the mode reader: an entry without a string ``value`` is
+    dropped rather than guessed at, because an invented id is one a reader would
+    be offered and the agent would then refuse.
+    """
+    options = _dict(result).get("configOptions")
+    if not isinstance(options, list):
+        return ()
+    entry = next(
+        (o for o in options if isinstance(o, dict) and o.get("category") == "model"),
+        None,
+    )
+    if entry is None:
+        return ()
+
+    def choices(items: Any, group: str) -> list[AcpModelChoice]:
+        if not isinstance(items, list):
+            return []
+        out: list[AcpModelChoice] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            nested = item.get("options")
+            if isinstance(nested, list):
+                out.extend(choices(nested, str(item.get("name") or item.get("group") or "")))
+                continue
+            value = item.get("value")
+            if isinstance(value, str) and value:
+                out.append(AcpModelChoice(value=value, name=str(item.get("name") or ""), group=group))
+        return out
+
+    return tuple(choices(entry.get("options"), ""))
+
+
+def read_session_current_model(result: Any) -> str:
+    """The model a session response says that session is on right now.
+
+    The sibling of :func:`_read_session_model_choices`, reading ``currentValue``
+    off the same ``category: "model"`` entry -- and deliberately NOT stored on a
+    capability snapshot, for the reason the choices reader gives: on a probe it
+    is the state of a throwaway session rather than a fact about the agent.
+
+    It IS a fact about the session that reported it, though, which is what makes
+    it worth reading on a live route in: it is the model that session had before
+    this host touched it, and therefore the only value a clear can restore. Empty
+    when the agent reported none, which a caller must read as "cannot restore"
+    rather than as a model.
+    """
+    options = _dict(result).get("configOptions")
+    if not isinstance(options, list):
+        return ""
+    entry = next((o for o in options if isinstance(o, dict) and o.get("category") == "model"), None)
+    current = _dict(entry).get("currentValue")
+    return current if isinstance(current, str) else ""
 
 
 def _read_session_modes(result: Any) -> tuple[AcpMode, ...]:
@@ -533,6 +646,7 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
             session_mcp=hs.session_mcp,
             prompt_modalities=hs.prompt_modalities,
             available_models=hs.available_models,
+            model_choices=hs.model_choices,
             available_modes=hs.available_modes,
             auth_methods=hs.auth_methods,
             elapsed_ms=int((time.monotonic() - started) * 1000),
@@ -581,6 +695,7 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
                 return done("attention", f"connected, but session/new failed: {exc}{suffix}", handshake)
 
         handshake.available_models = _read_session_models(session)
+        handshake.model_choices = _read_session_model_choices(session)
         handshake.available_modes = _read_session_modes(session)
         caps = ", ".join(
             [
@@ -593,7 +708,7 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
         detail = (
             f"connected to {label} over ACP v{handshake.protocol_version}"
             f"; sessions: {caps or 'one-shot only'}"
-            f"; models: {len(handshake.available_models)}"
+            f"; models: {len(handshake.model_choices) or len(handshake.available_models)}"
             + (f"; modes: {', '.join(m.id for m in handshake.available_modes)}" if handshake.available_modes else "")
         )
         return done("ready", detail, handshake)

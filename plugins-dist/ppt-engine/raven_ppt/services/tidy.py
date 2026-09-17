@@ -44,6 +44,14 @@ line, fill and font references the page is designed out of. The layout helpers d
 delete the element, because every caller there sets all three explicitly; run over
 a whole deck that is not known, so only the defect goes.
 
+*Accidental outlines.* python-pptx's `LineFormat.color` getter converts the line to a
+solid fill before it answers, so a program that only *reads* `shape.line.color` -- to
+find a colour to recolour, say -- leaves `<a:ln><a:solidFill/></a:ln>` on every shape
+it looked at, and a solid fill that names no colour renders as a default stroke: a
+delivered deck came back with a thin blue box around every heading and body on its two
+borrowed pages, and the second reader did not report them. No template writes that
+element; a designer who wants a line names its colour.
+
 Run over the whole deck rather than at the point each shape is drawn, because the
 author writes the program: `table()` and `preset()` from the layout helpers get it
 right, and a page that reached for `add_table` or `add_shape` directly gets the same
@@ -78,6 +86,7 @@ def tidy(pptx_path: Path) -> tuple[str, ...]:
     for number, slide in enumerate(presentation.slides, start=1):
         changed.extend(_empty_placeholders(number, slide))
         changed.extend(_shape_styles(number, slide))
+        changed.extend(_accidental_outlines(number, slide))
         changed.extend(_tables(number, slide))
     if changed:
         presentation.save(str(pptx_path))
@@ -122,6 +131,26 @@ def _shape_styles(number: int, slide) -> list[str]:
                 reference.set("idx", NO_EFFECT)
                 cleared.append(f"p{number}: took the theme's drop shadow off {shape.name!r}")
     return cleared
+
+
+def _accidental_outlines(number: int, slide) -> list[str]:
+    """A line whose solid fill names no colour goes back to no line at all."""
+    from lxml import etree
+
+    restored: list[str] = []
+    for shape in iter_shapes(slide.shapes):
+        properties = getattr(getattr(shape, "_element", None), "spPr", None)
+        line = properties.find(f"{_A}ln") if properties is not None else None
+        if line is None:
+            continue
+        for fill in line.findall(f"{_A}solidFill"):
+            if len(fill):
+                continue
+            line.replace(fill, etree.SubElement(line, f"{_A}noFill"))
+            restored.append(
+                f"p{number}: took a colourless outline off {shape.name!r}, which rendered as a default stroke"
+            )
+    return restored
 
 
 def _tables(number: int, slide) -> list[str]:

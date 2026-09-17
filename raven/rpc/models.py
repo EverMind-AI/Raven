@@ -230,6 +230,16 @@ class InstanceRow(_Strict):
             "instance that came from no orchestration, so its presence is what says the row has a source."
         ),
     )
+    turn_started_at_ms: int | None = Field(
+        default=None,
+        alias="turnStartedAtMs",
+        description=(
+            "When the turn this instance is answering right now began. Absent when it is answering "
+            "none, so presence is what says the instance is working and the number is what says "
+            "for how long. Not `updatedAtMs`, which every registry write stamps -- a binding "
+            "commit and a graph-origin write move it too, so it dates the row and not the turn."
+        ),
+    )
 
 
 class TranscriptToolCall(_Strict):
@@ -2266,6 +2276,44 @@ class SubagentsInstanceSetModeResult(_Strict):
     )
 
 
+class SubagentModelChoice(_Strict):
+    """One model an agent offers, as its own handshake advertised it."""
+
+    value: str = Field(..., description="The id the agent takes back.")
+    name: str = Field("", description="What the agent asked to be shown, usually far shorter than the value.")
+    group: str = Field("", description="The agent's own bucketing, a provider typically. Empty when it offered none.")
+
+
+class SubagentsInstanceSetModelParams(_Strict):
+    session_key: str
+    agent: str
+    handle: str
+    model: str | None = Field(
+        None,
+        description=(
+            "The opaque provider-qualified id the agent offered. Never a display name: the two differ and "
+            "the agent takes only the id back. Omit it to report without changing."
+        ),
+    )
+    clear: bool = Field(
+        False,
+        description=(
+            "Drop this instance's override, returning it to the agent's own model. Ignored when model is given."
+        ),
+    )
+
+
+class SubagentsInstanceSetModelResult(_Strict):
+    model: str | None = Field(
+        None, description="This instance's override, or null when it follows the agent's own model."
+    )
+    available_models: list[SubagentModelChoice] = Field(
+        default_factory=list,
+        alias="availableModels",
+        description="Everything this agent offers, so one reply is enough to draw the control.",
+    )
+
+
 class SessionSetModeParams(_Strict):
     session_key: str
     mode: str | None = Field(None, description="The tier id to switch to. Omit it to report without changing.")
@@ -2972,6 +3020,17 @@ class SettingsEverosParams(_Strict):
 class SettingsEverosResult(_Strict):
     sections: dict[str, EverosSection]
     config_path: str
+    available: bool = Field(
+        description="Whether this install has an EverOS to configure at all. False leaves sections empty and note set.",
+    )
+    note: str | None = Field(
+        default=None,
+        description=(
+            "Why this page has nothing to show, when that is not a failure: the memory "
+            "plugin is not installed, or it is installed but is not what memory.backend "
+            "names. Null when the store was actually consulted."
+        ),
+    )
 
 
 class SettingsEverosSetParams(_Strict):
@@ -3180,6 +3239,14 @@ class MemoryStatsResult(_Strict):
     profiles: int
     agent_cases: int
     agent_skills: int
+    note: str | None = Field(
+        default=None,
+        description=(
+            "Why this page has nothing to show, when that is not a failure: the memory "
+            "plugin is not installed, or it is installed but is not what memory.backend "
+            "names. Null when the store was actually consulted."
+        ),
+    )
 
 
 class MemoryItem(_Strict):
@@ -3213,6 +3280,14 @@ class MemoryListResult(_Strict):
     total: int
     page: int
     page_size: int
+    note: str | None = Field(
+        default=None,
+        description=(
+            "Why this page has nothing to show, when that is not a failure: the memory "
+            "plugin is not installed, or it is installed but is not what memory.backend "
+            "names. Null when the store was actually consulted."
+        ),
+    )
 
 
 class MemoryDeleteParams(_Strict):
@@ -4145,6 +4220,48 @@ class PlaybooksDeleteResult(_Strict):
     )
 
 
+class PlaybooksCreateParams(_Strict):
+    name: str
+    workflow: str = Field(
+        ...,
+        description=(
+            "The whole procedure in plain language: steps in order, what each produces and "
+            "consumes, per-run parameters, trigger phrases, and any MCP server a step needs. "
+            "The generator sees only this text."
+        ),
+    )
+    skills: list[str] | None = None
+
+
+class PlaybooksCreateResult(_Strict):
+    name: str
+    created: bool = Field(
+        ...,
+        description=(
+            "Whether a playbook now exists. False only when the generation failed, in which case `errors` says why."
+        ),
+    )
+    path: str = Field(..., description="Where the file landed; empty when nothing was created.")
+    notes: list[str] = Field(
+        ...,
+        description=(
+            "The composer's own open questions -- assumptions it made and gaps it could not "
+            "close. Written into the file's prose for review and returned here so a client need "
+            "not read the file back."
+        ),
+    )
+    errors: list[str] = Field(
+        ...,
+        description=("Why the composer could not produce a valid playbook. Non-empty exactly when `created` is false."),
+    )
+    adopted: bool = Field(
+        ...,
+        description=(
+            "Whether the live library loaded the new file, so it is usable in this process without a restart."
+        ),
+    )
+
+
 class PlaybooksRunParams(_Strict):
     name: str
     session_key: str = Field(
@@ -4358,6 +4475,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "playbooks.validate": (PlaybooksValidateParams, PlaybooksValidateResult),
     "playbooks.delete": (PlaybooksDeleteParams, PlaybooksDeleteResult),
     "playbooks.run": (PlaybooksRunParams, PlaybooksRunResult),
+    "playbooks.create": (PlaybooksCreateParams, PlaybooksCreateResult),
     # plughub.* / plug.* / skillhub.* — the market
     "plughub.search": (PlughubSearchParams, PlughubSearchResult),
     "plughub.detail": (PlughubDetailParams, PlughubDetailResult),
@@ -4483,6 +4601,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "subagents.instance.forget": (SubagentsInstanceForgetParams, SubagentsInstanceForgetResult),
     "subagents.instance.steer": (SubagentsInstanceSteerParams, SubagentsInstanceSteerResult),
     "subagents.instance.set_mode": (SubagentsInstanceSetModeParams, SubagentsInstanceSetModeResult),
+    "subagents.instance.set_model": (SubagentsInstanceSetModelParams, SubagentsInstanceSetModelResult),
     # system.*
     "system.hello": (SystemHelloParams, SystemHelloResult),
     "system.ping": (SystemPingParams, SystemPingResult),

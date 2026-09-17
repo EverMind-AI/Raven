@@ -24,6 +24,7 @@ class ToolWiring:
     web_search_provider: str = "serper"
     web_fetch_provider: str = "jina"
     web_provider_keys: dict[str, str] | None = None
+    image_search: bool = False
     restrict_to_workspace: bool = False
     disabled_tools: list[str] | None = None
     tool_search_config: Any = None

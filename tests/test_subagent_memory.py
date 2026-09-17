@@ -1,4 +1,9 @@
-"""The Memory record: what a sub-agent wrote into everos for one call."""
+"""The Memory record: what a sub-agent left in long-term memory for one call.
+
+The module speaks the MemoryBackend contract and nothing else, so the double
+here is a backend, not a transport. What a row looks like on the wire, and how
+it renders, belongs to whichever backend is installed and is tested with it.
+"""
 
 from __future__ import annotations
 
@@ -7,137 +12,63 @@ import json
 import time
 from collections.abc import Callable
 
-import httpx
 import pytest
 
 from raven.agent import subagent_memory as subagent_memory_mod
 from raven.agent.subagent_memory import (
-    EverosIdentity,
-    MemoryItem,
+    MemoryScope,
     collect_memories,
-    identity_from_config,
     prime_from_turn,
     record_memories,
+    scope_from_config,
     trace_session_id,
 )
-from raven.config.schema import SubagentEverosConfig
-from tests._everos_presence import everos_plugin_absent
+from raven.config.schema import SubagentMemoryConfig
+from raven.contracts.memory import Memory
 
 
-class _MockEverOS:
-    """Canned /memory/get responses, keyed by the memory_type asked for."""
+class _FakeBackend:
+    """A memory backend that records what it was asked and answers canned rows.
+
+    Rows are keyed by track, which is the only distinction the contract makes:
+    the host names a track and reads ``Memory.text``, and everything about how
+    a backend stores or renders a memory stays behind that.
+    """
 
     def __init__(self) -> None:
-        self.requests: list[dict] = []
-        self.rows: dict[str, list[dict]] = {"episode": [], "agent_case": []}
-        self.status = 200
+        self.reads: list[tuple[str, str | None, str | None]] = []
+        self.writes: list[tuple[str, list[dict], dict | None]] = []
+        self.rows: dict[str, list[Memory]] = {"user_id": [], "agent_id": []}
+        self.raises: Exception | None = None
+        self.store_answer: bool = True
 
-    def handler(self, request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content.decode("utf-8"))
-        self.requests.append(body)
-        if self.status != 200:
-            return httpx.Response(self.status, json={"detail": "boom"})
-        kind = body["memory_type"]
-        key = {"episode": "episodes", "agent_case": "agent_cases"}[kind]
-        return httpx.Response(200, json={"request_id": "t", "data": {key: self.rows[kind]}})
+    async def recall_session(self, session_id, *, user_id=None, agent_id=None):
+        self.reads.append((session_id, user_id, agent_id))
+        if self.raises is not None:
+            raise self.raises
+        return list(self.rows["user_id" if user_id else "agent_id"])
 
-    def client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(transport=httpx.MockTransport(self.handler))
+    async def store(self, session_id, messages, *, metadata=None):
+        self.writes.append((session_id, list(messages), metadata))
+        if self.raises is not None:
+            raise self.raises
+        return self.store_answer
 
 
-def _identity(**kw) -> EverosIdentity:
-    return EverosIdentity(
-        user_id=kw.get("user_id", "raven-code"),
-        agent_id=kw.get("agent_id", "raven-code"),
-        base_url="http://everos.test",
-        session_prefix="cli:",
+def _memory(text: str, kind: str = "episode") -> Memory:
+    return Memory(text=text, metadata={"type": kind})
+
+
+def _scope(**kw) -> MemoryScope:
+    block = {
+        "user_id": kw.get("user_id", "raven-code"),
+        "agent_id": kw.get("agent_id", "raven-code"),
+    }
+    return MemoryScope(
+        block={k: v for k, v in block.items() if v},
         source=kw.get("source", "agent"),
+        session_prefix="cli:",
     )
-
-
-def test_identity_defaults_the_base_url_to_the_hosts() -> None:
-    cfg = SubagentEverosConfig(user_id="raven-code")
-    identity = identity_from_config(cfg, "http://localhost:18791")
-    assert identity is not None
-    assert identity.base_url == "http://localhost:18791"
-    assert identity.agent_id is None
-
-
-def test_identity_keeps_its_own_base_url_when_declared() -> None:
-    cfg = SubagentEverosConfig(agent_id="raven-code", base_url="http://elsewhere:9/")
-    identity = identity_from_config(cfg, "http://localhost:18791")
-    assert identity is not None
-    assert identity.base_url == "http://elsewhere:9"
-
-
-def test_no_config_means_no_identity() -> None:
-    assert identity_from_config(None, "http://localhost:18791") is None
-
-
-@pytest.mark.asyncio
-async def test_an_episode_becomes_one_item_of_its_summary() -> None:
-    mock = _MockEverOS()
-    mock.rows["episode"] = [{"id": "e1", "summary": "Audited the checkout read-only."}]
-    async with mock.client() as client:
-        items = await collect_memories(client, _identity(), "cli:abc")
-    assert items == [MemoryItem(type="episode", text="Audited the checkout read-only.")]
-
-
-@pytest.mark.asyncio
-async def test_a_case_joins_its_intent_and_insight() -> None:
-    mock = _MockEverOS()
-    mock.rows["agent_case"] = [
-        {"id": "c1", "task_intent": "Fix the flaky test", "key_insight": "It raced on the index lock."}
-    ]
-    async with mock.client() as client:
-        items = await collect_memories(client, _identity(user_id=None), "cli:abc")
-    assert items == [MemoryItem(type="agent_case", text="Fix the flaky test - It raced on the index lock.")]
-
-
-@pytest.mark.asyncio
-async def test_the_query_carries_the_session_id_and_one_owner_per_call() -> None:
-    mock = _MockEverOS()
-    async with mock.client() as client:
-        await collect_memories(client, _identity(), "cli:abc")
-    assert len(mock.requests) == 2
-    for body in mock.requests:
-        assert body["filters"] == {"session_id": "cli:abc"}
-        assert ("user_id" in body) != ("agent_id" in body)
-    assert {b["memory_type"] for b in mock.requests} == {"episode", "agent_case"}
-
-
-@pytest.mark.asyncio
-async def test_only_the_declared_owner_is_queried() -> None:
-    mock = _MockEverOS()
-    async with mock.client() as client:
-        await collect_memories(client, _identity(agent_id=None), "cli:abc")
-    assert [b["memory_type"] for b in mock.requests] == ["episode"]
-
-
-@pytest.mark.asyncio
-async def test_profile_and_skill_are_never_queried() -> None:
-    mock = _MockEverOS()
-    async with mock.client() as client:
-        await collect_memories(client, _identity(), "cli:abc")
-    assert not {b["memory_type"] for b in mock.requests} & {"profile", "agent_skill"}
-
-
-@pytest.mark.asyncio
-async def test_an_item_with_no_usable_text_is_dropped() -> None:
-    mock = _MockEverOS()
-    mock.rows["episode"] = [{"id": "e1", "summary": "   "}]
-    async with mock.client() as client:
-        items = await collect_memories(client, _identity(agent_id=None), "cli:abc")
-    assert items == []
-
-
-@pytest.mark.asyncio
-async def test_an_http_error_propagates_to_the_caller() -> None:
-    mock = _MockEverOS()
-    mock.status = 500
-    async with mock.client() as client:
-        with pytest.raises(httpx.HTTPStatusError):
-            await collect_memories(client, _identity(), "cli:abc")
 
 
 def _sink() -> tuple[list[str], Callable]:
@@ -149,30 +80,114 @@ def _sink() -> tuple[list[str], Callable]:
     return written, write
 
 
-async def _key(value: str | None = "cli:abc"):
-    return value
+async def _key() -> str:
+    return "cli:abc"
 
 
-async def _true() -> bool:
-    return True
+# --------------------------------------------------------------------------- scope
+
+
+def test_no_config_means_no_scope() -> None:
+    assert scope_from_config(None) is None
+
+
+def test_the_block_reaches_the_backend_unread() -> None:
+    """Which keys identify a memory is the backend's vocabulary. The host reads
+    two: which path to run, and how the fork prefixes its session id."""
+    scope = scope_from_config(
+        SubagentMemoryConfig.model_validate(
+            {"userId": "u", "agentId": "a", "source": "trace", "sessionPrefix": "x:", "mem0Space": "s"}
+        )
+    )
+
+    assert scope is not None
+    assert scope.source == "trace" and scope.session_prefix == "x:"
+    assert scope.block == {"userId": "u", "agentId": "a", "mem0Space": "s"}
+    assert (scope.user_id, scope.agent_id) == ("u", "a")
+
+
+def test_source_defaults_to_agent() -> None:
+    scope = scope_from_config(SubagentMemoryConfig.model_validate({"userId": "u"}))
+
+    assert scope is not None and scope.source == "agent"
+
+
+def test_a_declared_base_url_is_dropped_with_a_warning() -> None:
+    """No config, fixture or document ever set one, and honouring it would mean
+    every backend growing a per-call way to address a different server."""
+    scope = scope_from_config(SubagentMemoryConfig.model_validate({"userId": "u", "baseUrl": "http://elsewhere"}))
+
+    assert scope is not None
+    assert "baseUrl" not in scope.block and "base_url" not in scope.block
+
+
+# --------------------------------------------------------------------------- reading back
+
+
+@pytest.mark.asyncio
+async def test_both_tracks_are_asked_for_separately() -> None:
+    """The contract takes one track per call, so each declared owner is its own
+    question."""
+    backend = _FakeBackend()
+    backend.rows["user_id"] = [_memory("Ran the audit.")]
+    backend.rows["agent_id"] = [_memory("Fixed the tokenizer.", "agent_case")]
+
+    items = await collect_memories(backend, _scope(), "cli:abc")
+
+    assert backend.reads == [("cli:abc", "raven-code", None), ("cli:abc", None, "raven-code")]
+    assert [i.text for i in items] == ["Ran the audit.", "Fixed the tokenizer."]
+
+
+@pytest.mark.asyncio
+async def test_only_the_declared_owner_is_asked() -> None:
+    backend = _FakeBackend()
+    backend.rows["agent_id"] = [_memory("Fixed the tokenizer.", "agent_case")]
+
+    await collect_memories(backend, _scope(user_id=None), "cli:abc")
+
+    assert backend.reads == [("cli:abc", None, "raven-code")]
+
+
+@pytest.mark.asyncio
+async def test_a_memory_with_no_usable_text_is_dropped() -> None:
+    backend = _FakeBackend()
+    backend.rows["user_id"] = [_memory("   "), _memory("Ran the audit.")]
+
+    items = await collect_memories(backend, _scope(agent_id=None), "cli:abc")
+
+    assert [i.text for i in items] == ["Ran the audit."]
+
+
+@pytest.mark.asyncio
+async def test_a_backend_failure_propagates_to_the_caller() -> None:
+    """The caller decides what an unreachable memory service means for the
+    record; this function does not get to swallow it."""
+    backend = _FakeBackend()
+    backend.raises = RuntimeError("service down")
+
+    with pytest.raises(RuntimeError):
+        await collect_memories(backend, _scope(), "cli:abc")
+
+
+# --------------------------------------------------------------------------- the record
 
 
 @pytest.mark.asyncio
 async def test_a_found_memory_is_recorded_as_settled() -> None:
-    mock = _MockEverOS()
-    mock.rows["episode"] = [{"id": "e1", "summary": "Ran the audit."}]
+    backend = _FakeBackend()
+    backend.rows["user_id"] = [_memory("Ran the audit.")]
     written, write = _sink()
-    async with mock.client() as client:
-        await record_memories(
-            agent="Raven-Code",
-            identity=_identity(agent_id=None),
-            resolve_session_id=lambda: _key(),
-            write=write,
-            budget_s=0.0,
-            client=client,
-        )
-    payload = json.loads(written[0])
-    assert payload == {
+
+    await record_memories(
+        agent="Raven-Code",
+        backend=backend,
+        scope=_scope(agent_id=None),
+        resolve_session_id=lambda: _key(),
+        write=write,
+        budget_s=0.0,
+    )
+
+    assert json.loads(written[0]) == {
         "agent": "Raven-Code",
         "source": "agent",
         "status": "settled",
@@ -182,653 +197,477 @@ async def test_a_found_memory_is_recorded_as_settled() -> None:
 
 @pytest.mark.asyncio
 async def test_nothing_found_within_the_budget_is_pending() -> None:
-    mock = _MockEverOS()
     written, write = _sink()
-    async with mock.client() as client:
-        await record_memories(
-            agent="Raven-Code",
-            identity=_identity(),
-            resolve_session_id=lambda: _key(),
-            write=write,
-            budget_s=0.0,
-            client=client,
-        )
-    payload = json.loads(written[0])
-    assert payload["status"] == "pending"
-    assert payload["memories"] == []
+
+    await record_memories(
+        agent="Raven-Code",
+        backend=_FakeBackend(),
+        scope=_scope(agent_id=None),
+        resolve_session_id=lambda: _key(),
+        write=write,
+        budget_s=0.0,
+    )
+
+    assert json.loads(written[0])["status"] == "pending"
 
 
 @pytest.mark.asyncio
-async def test_an_unreachable_everos_is_unavailable_not_a_raise() -> None:
-    mock = _MockEverOS()
-    mock.status = 500
+async def test_an_unreachable_backend_is_unavailable_not_a_raise() -> None:
+    backend = _FakeBackend()
+    backend.raises = RuntimeError("service down")
     written, write = _sink()
-    async with mock.client() as client:
-        await record_memories(
-            agent="Raven-Code",
-            identity=_identity(),
-            resolve_session_id=lambda: _key(),
-            write=write,
-            budget_s=0.0,
-            client=client,
-        )
+
+    await record_memories(
+        agent="Raven-Code",
+        backend=backend,
+        scope=_scope(),
+        resolve_session_id=lambda: _key(),
+        write=write,
+        budget_s=0.0,
+    )
+
     assert json.loads(written[0])["status"] == "unavailable"
 
 
 @pytest.mark.asyncio
 async def test_no_join_key_writes_no_file_at_all() -> None:
-    mock = _MockEverOS()
+    """There is nothing truthful to say about a call with no session id."""
     written, write = _sink()
-    async with mock.client() as client:
-        await record_memories(
-            agent="Raven-Code",
-            identity=_identity(),
-            resolve_session_id=lambda: _key(None),
-            write=write,
-            budget_s=0.0,
-            client=client,
-        )
+
+    async def _none() -> None:
+        return None
+
+    await record_memories(
+        agent="Raven-Code",
+        backend=_FakeBackend(),
+        scope=_scope(),
+        resolve_session_id=_none,
+        write=write,
+        budget_s=0.0,
+    )
+
     assert written == []
-    assert mock.requests == []
 
 
 @pytest.mark.asyncio
 async def test_polling_stops_once_the_result_stops_growing(monkeypatch) -> None:
-    # The cost of this case was one real backoff step between the two polls, and
-    # the assertion is on how many polls happen, not on how far apart they are.
     monkeypatch.setattr("raven.agent.subagent_memory._BACKOFF_S", (0.01, 0.02, 0.04))
-    mock = _MockEverOS()
-    mock.rows["episode"] = [{"id": "e1", "summary": "First."}]
+    backend = _FakeBackend()
+    backend.rows["user_id"] = [_memory("First.")]
     written, write = _sink()
-    async with mock.client() as client:
-        await record_memories(
-            agent="Raven-Code",
-            identity=_identity(agent_id=None),
-            resolve_session_id=lambda: _key(),
-            write=write,
-            budget_s=5.0,
-            client=client,
-        )
-    # One poll finds it, a second confirms it stopped growing. No third.
-    assert len(mock.requests) == 2
+
+    await record_memories(
+        agent="Raven-Code",
+        backend=backend,
+        scope=_scope(agent_id=None),
+        resolve_session_id=lambda: _key(),
+        write=write,
+        budget_s=5.0,
+    )
+
+    # One look finds it, a second confirms it stopped growing. No third.
+    assert len(backend.reads) == 2
     assert json.loads(written[0])["status"] == "settled"
 
 
 @pytest.mark.asyncio
 async def test_a_failing_write_never_raises_at_the_caller() -> None:
-    mock = _MockEverOS()
+    """An audit trail written after the call already answered must not disturb
+    anything by failing."""
 
     async def write(_: str) -> None:
         raise OSError("read-only file system")
 
-    async with mock.client() as client:
-        await record_memories(
-            agent="Raven-Code",
-            identity=_identity(),
-            resolve_session_id=lambda: _key(),
-            write=write,
-            budget_s=0.0,
-            client=client,
-        )
+    await record_memories(
+        agent="Raven-Code",
+        backend=_FakeBackend(),
+        scope=_scope(),
+        resolve_session_id=lambda: _key(),
+        write=write,
+        budget_s=0.0,
+    )
 
 
 @pytest.mark.asyncio
 async def test_a_failing_resolver_never_raises_at_the_caller() -> None:
-    mock = _MockEverOS()
     written, write = _sink()
 
-    async def failing_resolver() -> str | None:
-        raise RuntimeError("registry unavailable")
+    async def _boom() -> str:
+        raise RuntimeError("registry gone")
 
-    async with mock.client() as client:
-        await record_memories(
-            agent="Raven-Code",
-            identity=_identity(),
-            resolve_session_id=failing_resolver,
-            write=write,
-            budget_s=0.0,
-            client=client,
-        )
+    await record_memories(
+        agent="Raven-Code",
+        backend=_FakeBackend(),
+        scope=_scope(),
+        resolve_session_id=_boom,
+        write=write,
+        budget_s=0.0,
+    )
+
     assert written == []
-    assert mock.requests == []
 
 
 @pytest.mark.asyncio
-async def test_a_transient_error_after_growth_keeps_what_was_already_found(monkeypatch) -> None:
-    """`unavailable` means nothing was ever read, not that reading stopped.
+async def test_a_transient_failure_after_growth_keeps_what_was_found(monkeypatch) -> None:
+    monkeypatch.setattr("raven.agent.subagent_memory._BACKOFF_S", (0.01,))
+    backend = _FakeBackend()
+    backend.rows["user_id"] = [_memory("First.")]
+    written, write = _sink()
 
-    A poll whose first two looks saw the result still growing and whose third
-    hit a 502 used to discard the two already-collected items and report
-    `unavailable`. It must report `settled` with what it already had instead.
-    """
-    monkeypatch.setattr(subagent_memory_mod, "_BACKOFF_S", (0.01, 0.01, 0.01, 0.01))
-
+    real = backend.recall_session
     calls = {"n": 0}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    async def flaky(session_id, **kw):
         calls["n"] += 1
-        if calls["n"] == 1:
-            rows = [{"id": "e1", "summary": "First."}]
-        elif calls["n"] == 2:
-            rows = [{"id": "e1", "summary": "First."}, {"id": "e2", "summary": "Second."}]
-        else:
-            return httpx.Response(502, json={"detail": "boom"})
-        return httpx.Response(200, json={"request_id": "t", "data": {"episodes": rows}})
+        if calls["n"] > 1:
+            raise RuntimeError("dropped")
+        return await real(session_id, **kw)
 
-    written, write = _sink()
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        await record_memories(
-            agent="Raven-Code",
-            identity=_identity(agent_id=None),
-            resolve_session_id=lambda: _key(),
-            write=write,
-            budget_s=1.0,
-            client=client,
-        )
+    backend.recall_session = flaky  # type: ignore[method-assign]
+
+    await record_memories(
+        agent="Raven-Code",
+        backend=backend,
+        scope=_scope(agent_id=None),
+        resolve_session_id=lambda: _key(),
+        write=write,
+        budget_s=5.0,
+    )
+
     payload = json.loads(written[0])
     assert payload["status"] == "settled"
-    assert payload["memories"] == [
-        {"type": "episode", "text": "First."},
-        {"type": "episode", "text": "Second."},
-    ]
+    assert [m["text"] for m in payload["memories"]] == ["First."]
 
 
 @pytest.mark.asyncio
 async def test_a_stalled_look_is_cut_off_by_the_remaining_budget() -> None:
-    """`budget_s` bounds the whole poll, not just the sleeps between looks.
+    """``budget_s`` bounds the whole poll, not just the sleeps between looks.
 
-    A look that runs past its share of the remaining budget must be cut off
-    rather than allowed to run to its own, much longer, HTTP timeout -- or a
-    stalled everos keeps a recorder alive for minutes past what the budget says.
+    The first look always runs in full -- a budget of zero still means "look
+    once" -- but a later one that runs past its share of the remaining budget
+    must be cut off rather than left to its own, much longer, timeout, or a
+    stalled backend keeps a recorder alive for minutes past what the budget
+    says.
     """
-
+    backend = _FakeBackend()
     calls = {"n": 0}
 
-    async def handler(request: httpx.Request) -> httpx.Response:
+    async def first_answers_then_stalls(session_id, **kw):
         calls["n"] += 1
         if calls["n"] == 1:
-            return httpx.Response(200, json={"data": {"episodes": [{"id": "e1", "summary": "First."}]}})
+            return [_memory("First.")]
         await asyncio.sleep(2.0)
-        return httpx.Response(200, json={"data": {"episodes": []}})
+        return []
 
+    backend.recall_session = first_answers_then_stalls  # type: ignore[method-assign]
     written, write = _sink()
+
     started = time.monotonic()
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        await record_memories(
-            agent="Raven-Code",
-            identity=_identity(agent_id=None),
-            resolve_session_id=lambda: _key(),
-            write=write,
-            budget_s=1.0,
-            client=client,
-        )
+    await record_memories(
+        agent="Raven-Code",
+        backend=backend,
+        scope=_scope(agent_id=None),
+        resolve_session_id=lambda: _key(),
+        write=write,
+        budget_s=1.0,
+    )
     elapsed = time.monotonic() - started
-    # 1s of slack over a 1s budget, not the 1.5s over 3s this replaced: the bound
-    # is on wall time, so the margin that matters is absolute, and scaling it down
-    # with the budget is what would turn a slow case into an intermittent one.
+
+    # 1s of slack over a 1s budget: the bound is on wall time, so the margin
+    # that matters is absolute, and scaling it down with the budget is what
+    # would turn a slow case into an intermittent one.
     assert elapsed < 2.0, "a stalled look must not be allowed to run past the budget"
     payload = json.loads(written[0])
     assert payload["status"] == "settled"
     assert payload["memories"] == [{"type": "episode", "text": "First."}]
 
 
-# --- the record carries everos's complete text, not its truncated prefix -----
-#
-# everos's `summary` is a hard 200-character cut of `episode`, mid-word, and its
-# `approach` says how a case was solved. An earlier revision recorded `summary`
-# alone and dropped both `episode` and `approach`, so the file opened a sentence
-# it never finished. Verified against live everos 1.2.1: `summary` is a literal
-# prefix of `episode`.
-
-
-@pytest.mark.asyncio
-async def test_an_episode_carries_its_subject_and_full_text() -> None:
-    mock = _MockEverOS()
-    mock.rows["episode"] = [
-        {
-            "id": "e1",
-            "subject": "Audit of the checkout",
-            "summary": "It began by reading every tracked file and then",
-            "episode": "It began by reading every tracked file and then reported the findings in full.",
-        }
-    ]
-    async with mock.client() as client:
-        items = await collect_memories(client, _identity(agent_id=None), "cli:abc")
-    assert items == [
-        MemoryItem(
-            type="episode",
-            text="Audit of the checkout - It began by reading every tracked file and then reported the findings in full.",
-        )
-    ]
-
-
-@pytest.mark.asyncio
-async def test_a_case_carries_its_approach_too() -> None:
-    mock = _MockEverOS()
-    mock.rows["agent_case"] = [
-        {
-            "id": "c1",
-            "task_intent": "Fix the flaky test",
-            "approach": "Serialised the two writers behind the index lock",
-            "key_insight": "It raced on the index lock",
-        }
-    ]
-    async with mock.client() as client:
-        items = await collect_memories(client, _identity(user_id=None), "cli:abc")
-    assert items == [
-        MemoryItem(
-            type="agent_case",
-            text=("Fix the flaky test - Serialised the two writers behind the index lock - It raced on the index lock"),
-        )
-    ]
-
-
-@pytest.mark.asyncio
-async def test_long_text_is_no_longer_capped() -> None:
-    mock = _MockEverOS()
-    mock.rows["episode"] = [{"id": "e1", "subject": "s", "episode": "x" * 4000}]
-    async with mock.client() as client:
-        items = await collect_memories(client, _identity(agent_id=None), "cli:abc")
-    # The reader is a sub-agent whose file tool handles length; truncating here
-    # only loses the end of what the sub-agent actually concluded.
-    assert items[0].text == "s - " + "x" * 4000
-
-
-@pytest.mark.asyncio
-async def test_an_episode_falls_back_when_a_field_is_missing() -> None:
-    mock = _MockEverOS()
-    mock.rows["episode"] = [{"id": "e1", "summary": "only a summary survived"}]
-    async with mock.client() as client:
-        items = await collect_memories(client, _identity(agent_id=None), "cli:abc")
-    assert items == [MemoryItem(type="episode", text="only a summary survived")]
-
-
-# --- the record names the instance, when the call had one --------------------
-#
-# Every stateful sub-agent now has one (minted when the caller named none), and
-# it is the handle a reader passes back as spawn's `instance` to continue that
-# same conversation -- actionable, unlike the identity and session id, which
-# stay in the log.
-
-
 @pytest.mark.asyncio
 async def test_the_record_names_the_instance() -> None:
-    mock = _MockEverOS()
-    mock.rows["episode"] = [{"id": "e1", "subject": "s", "episode": "did the thing"}]
+    """Unlike the identity and session id, this is something the reader can act
+    on: passing it back as ``spawn``'s ``instance`` continues the same
+    conversation."""
     written, write = _sink()
-    async with mock.client() as client:
-        await record_memories(
-            agent="Raven-Code",
-            identity=_identity(agent_id=None),
-            resolve_session_id=lambda: _key(),
-            write=write,
-            budget_s=0.0,
-            client=client,
-            instance="audit-a3f9c1",
-        )
-    payload = json.loads(written[0])
-    assert payload["instance"] == "audit-a3f9c1"
-    assert list(payload) == ["agent", "instance", "source", "status", "memories"]
+
+    await record_memories(
+        agent="Raven-Code",
+        backend=_FakeBackend(),
+        scope=_scope(),
+        resolve_session_id=lambda: _key(),
+        write=write,
+        budget_s=0.0,
+        instance="inst-1",
+    )
+
+    assert json.loads(written[0])["instance"] == "inst-1"
 
 
 @pytest.mark.asyncio
 async def test_a_call_with_no_instance_omits_the_key() -> None:
-    mock = _MockEverOS()
+    """A key that is always present but usually empty costs every reader a
+    check."""
     written, write = _sink()
-    async with mock.client() as client:
-        await record_memories(
-            agent="Raven-Code",
-            identity=_identity(),
-            resolve_session_id=lambda: _key(),
-            write=write,
-            budget_s=0.0,
-            client=client,
+
+    await record_memories(
+        agent="Raven-Code",
+        backend=_FakeBackend(),
+        scope=_scope(),
+        resolve_session_id=lambda: _key(),
+        write=write,
+        budget_s=0.0,
+    )
+
+    assert "instance" not in json.loads(written[0])
+
+
+@pytest.mark.asyncio
+async def test_the_record_names_its_source() -> None:
+    """A memory the agent wrote and one the host synthesised from its
+    transcript are not equally strong evidence."""
+    written, write = _sink()
+
+    await record_memories(
+        agent="Raven-Code",
+        backend=_FakeBackend(),
+        scope=_scope(source="trace"),
+        resolve_session_id=lambda: _key(),
+        write=write,
+        budget_s=0.0,
+    )
+
+    assert json.loads(written[0])["source"] == "trace"
+
+
+# --------------------------------------------------------------------------- priming
+
+
+class TestPrimeFromTurn:
+    """The host hands its own backend a conversation nobody wrote memories for."""
+
+    @pytest.mark.asyncio
+    async def test_the_turn_is_stored_with_flush_and_its_owners(self) -> None:
+        """``flush`` because the conversation has already ended -- waiting for
+        the backend's cadence would wait for a turn that never comes -- and the
+        owners because the content is the sub-agent's, not the host's."""
+        backend = _FakeBackend()
+
+        assert await prime_from_turn(
+            backend=backend,
+            scope=_scope(),
+            session_id="cli:abc",
+            turn=[{"role": "user", "content": "do it"}],
         )
-    payload = json.loads(written[0])
-    # Omitted rather than null: a key that is always there but usually empty
-    # costs every reader a check and tells it nothing.
-    assert "instance" not in payload
-    assert list(payload) == ["agent", "source", "status", "memories"]
 
-
-def test_identity_carries_source() -> None:
-    cfg = SubagentEverosConfig(user_id="liv", agent_id="coder", source="trace")
-    identity = identity_from_config(cfg, "http://127.0.0.1:8080")
-    assert identity is not None
-    assert identity.source == "trace"
-
-
-def test_identity_source_defaults_to_agent() -> None:
-    cfg = SubagentEverosConfig(agent_id="raven-code")
-    identity = identity_from_config(cfg, "http://127.0.0.1:8080")
-    assert identity is not None
-    assert identity.source == "agent"
-
-
-class TestPrime:
-    """`prime` hands everos a conversation before the first read."""
+        session_id, messages, metadata = backend.writes[0]
+        assert session_id == "cli:abc"
+        assert [m["content"] for m in messages] == ["do it"]
+        assert metadata["flush"] is True
+        assert metadata["user_id"] == "raven-code" and metadata["agent_id"] == "raven-code"
 
     @pytest.mark.asyncio
-    async def test_prime_runs_before_the_first_poll(self) -> None:
-        order: list[str] = []
+    async def test_an_empty_turn_writes_nothing(self) -> None:
+        backend = _FakeBackend()
 
-        async def _prime(session_id: str) -> bool:
-            order.append(f"prime:{session_id}")
-            return True
-
-        def _handler(request: httpx.Request) -> httpx.Response:
-            order.append("read")
-            return httpx.Response(200, json={"data": {"episodes": []}})
-
-        written, write = _sink()
-        async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as client:
-            await record_memories(
-                agent="Coder",
-                identity=_identity(source="trace"),
-                resolve_session_id=lambda: _key("trace:Coder:c1"),
-                write=write,
-                prime=_prime,
-                budget_s=0.0,
-                client=client,
-            )
-        assert order[0] == "prime:trace:Coder:c1"
-        assert "read" in order
+        assert await prime_from_turn(backend=backend, scope=_scope(), session_id="s", turn=[]) is False
+        assert backend.writes == []
 
     @pytest.mark.asyncio
-    async def test_prime_returning_false_skips_the_poll(self) -> None:
-        reads = 0
+    async def test_a_missing_owner_writes_nothing(self) -> None:
+        """A missing owner must not fall back to a shared default: that would
+        write this sub-agent's memories into the host's own track."""
+        for scope in (_scope(user_id=None), _scope(agent_id=None)):
+            backend = _FakeBackend()
 
-        def _handler(request: httpx.Request) -> httpx.Response:
-            nonlocal reads
-            reads += 1
-            return httpx.Response(200, json={"data": {"episodes": []}})
-
-        async def _prime(session_id: str) -> bool:
-            return False
-
-        written, write = _sink()
-        async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as client:
-            await record_memories(
-                agent="Coder",
-                identity=_identity(source="trace"),
-                resolve_session_id=lambda: _key("trace:Coder:c1"),
-                write=write,
-                prime=_prime,
-                client=client,
+            landed = await prime_from_turn(
+                backend=backend,
+                scope=scope,
+                session_id="s",
+                turn=[{"role": "user", "content": "x"}],
             )
-        # Nothing landed, so nothing can have been extracted: polling would
-        # spend the whole budget confirming an absence already known.
-        assert reads == 0
-        assert json.loads(written[0])["status"] == "unavailable"
+
+            assert landed is False
+            assert backend.writes == []
 
     @pytest.mark.asyncio
-    async def test_prime_raising_is_caught(self) -> None:
-        reads = 0
+    async def test_a_refused_write_is_false_not_an_exception(self) -> None:
+        backend = _FakeBackend()
+        backend.store_answer = False
 
-        def _handler(request: httpx.Request) -> httpx.Response:
-            nonlocal reads
-            reads += 1
-            return httpx.Response(500)
-
-        async def _prime(session_id: str) -> bool:
-            raise RuntimeError("everos refused the write")
-
-        written, write = _sink()
-        async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as client:
-            await record_memories(
-                agent="Coder",
-                identity=_identity(source="trace"),
-                resolve_session_id=lambda: _key("trace:Coder:c1"),
-                write=write,
-                prime=_prime,
-                client=client,
+        assert (
+            await prime_from_turn(
+                backend=backend,
+                scope=_scope(),
+                session_id="s",
+                turn=[{"role": "user", "content": "x"}],
             )
-        # A poll that ran at all would hit this same 500 transport and also
-        # convert to "unavailable", so the status alone cannot tell skipped
-        # from ran-and-failed; the read count is what actually pins it.
-        assert reads == 0
-        assert json.loads(written[0])["status"] == "unavailable"
+            is False
+        )
 
     @pytest.mark.asyncio
-    async def test_no_prime_leaves_the_existing_path_alone(self) -> None:
-        def _handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json={"data": {"episodes": [{"subject": "s", "episode": "e"}]}})
+    async def test_a_raising_backend_is_false_not_an_exception(self) -> None:
+        """The caller's next move is to record ``unavailable``, not to fail a
+        run."""
+        backend = _FakeBackend()
+        backend.raises = RuntimeError("service down")
 
-        written, write = _sink()
-        async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as client:
-            await record_memories(
-                agent="Raven-Code",
-                identity=_identity(source="agent"),
-                resolve_session_id=lambda: _key(),
-                write=write,
-                budget_s=0.0,
-                client=client,
+        assert (
+            await prime_from_turn(
+                backend=backend,
+                scope=_scope(),
+                session_id="s",
+                turn=[{"role": "user", "content": "x"}],
             )
-        record = json.loads(written[0])
-        assert record["status"] == "settled"
-        assert record["source"] == "agent"
-        assert record["memories"] == [{"type": "episode", "text": "s - e"}]
+            is False
+        )
 
     @pytest.mark.asyncio
-    async def test_record_names_its_source(self) -> None:
-        def _handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json={"data": {"episodes": [{"subject": "s", "episode": "e"}]}})
+    async def test_the_prompt_is_never_timestamped_after_the_work(self) -> None:
+        """``append_turn`` stamps the user row when the turn ends, so its clock
+        is later than the work it caused; a consumer sorting by timestamp would
+        read the prompt as the last thing that happened."""
+        backend = _FakeBackend()
 
-        written, write = _sink()
-        async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as client:
-            await record_memories(
-                agent="Coder",
-                identity=_identity(source="trace"),
-                resolve_session_id=lambda: _key("trace:Coder:c1"),
-                write=write,
-                prime=lambda _s: _true(),
-                budget_s=0.0,
-                client=client,
-            )
-        assert json.loads(written[0])["source"] == "trace"
+        await prime_from_turn(
+            backend=backend,
+            scope=_scope(),
+            session_id="s",
+            turn=[
+                {"role": "user", "content": "ask", "timestamp": "2026-09-15T10:00:09Z"},
+                {"role": "assistant", "content": "work", "timestamp": "2026-09-15T10:00:05Z"},
+            ],
+        )
+
+        _, messages, _ = backend.writes[0]
+        # Only the first row moves, and only backwards: it is rewritten to an
+        # epoch just before the earliest of the rest.
+        assert subagent_memory_mod._as_ms_epoch(messages[0]["timestamp"]) < subagent_memory_mod._as_ms_epoch(
+            messages[1]["timestamp"]
+        )
 
 
 class TestTraceSessionId:
     def test_id_is_its_own_namespace(self) -> None:
-        # Not the configured session_prefix: that documents itself as a fork
-        # launcher's convention, and stamping `cli:` on an acp agent's memories
-        # would name a transport that was never involved.
-        assert trace_session_id("Coder", "c1") == "trace:Coder:c1"
+        assert trace_session_id("Raven-Code", "t1").startswith("trace:")
 
     def test_id_is_unique_per_call(self) -> None:
-        assert trace_session_id("Coder", "c1") != trace_session_id("Coder", "c2")
+        assert trace_session_id("a", "t1") != trace_session_id("a", "t2")
 
 
 class TestMonotonic:
-    """`_monotonic` only moves the first row's clock, and only when it would sort last."""
-
     def test_an_already_ordered_turn_passes_through_untouched(self) -> None:
         turn = [
-            {"role": "user", "content": "read it", "timestamp": "2026-08-20T09:50:00.000000"},
-            {"role": "assistant", "content": "step one", "timestamp": "2026-08-20T09:51:00.000000"},
-            {"role": "assistant", "content": "step two", "timestamp": "2026-08-20T09:50:30.000000"},
+            {"role": "user", "content": "a", "timestamp": "2026-09-15T10:00:00Z"},
+            {"role": "assistant", "content": "b", "timestamp": "2026-09-15T10:00:05Z"},
         ]
-        result = subagent_memory_mod._monotonic(turn)
-        assert result[0]["timestamp"] == "2026-08-20T09:50:00.000000"
-        assert result[1]["timestamp"] == "2026-08-20T09:51:00.000000"
-        assert result[2]["timestamp"] == "2026-08-20T09:50:30.000000"
+
+        assert subagent_memory_mod._monotonic(turn) == turn
+
+    def test_a_single_row_turn_passes_through(self) -> None:
+        turn = [{"role": "user", "content": "a"}]
+
+        assert subagent_memory_mod._monotonic(turn) == turn
 
 
-class TestPrimeFromTurn:
-    """The turn reaches everos as a conversation under this agent's identity."""
+class TestStartedBackend:
+    """The record path owns the backend's lifecycle, and survives it failing.
 
-    @pytest.mark.asyncio
-    async def test_posts_add_then_flush(self) -> None:
-        seen: list[tuple[str, dict]] = []
+    A record is an audit trail written after the call it describes has already
+    answered, so nothing here may reach the caller as an exception -- but a
+    backend that never started must also not be written to, and one that was
+    started must be stopped whatever the record did.
+    """
 
-        def _handler(request: httpx.Request) -> httpx.Response:
-            seen.append((request.url.path, json.loads(request.content)))
-            return httpx.Response(200, json={})
+    async def test_no_backend_yields_nothing_to_write_to(self) -> None:
+        async with subagent_memory_mod.started_backend(None, label="test") as backend:
+            assert backend is None
 
-        async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as client:
-            landed = await prime_from_turn(
-                identity=_identity(source="trace", user_id="liv", agent_id="coder"),
-                session_id="trace:Coder:c1",
-                turn=[
-                    {"role": "user", "content": "read it", "timestamp": "2026-08-20T09:53:46.693637"},
-                    {"role": "assistant", "content": "reading", "timestamp": "2026-08-20T09:51:56.109124"},
-                ],
-                client=client,
-            )
-        assert landed is True
-        assert [path for path, _ in seen] == ["/api/v2/memory/add", "/api/v2/memory/flush"]
-        body = seen[0][1]
-        assert body["session_id"] == "trace:Coder:c1"
-        # Distinct ids so this fails if user/agent routing is inverted or dropped.
-        assert [m["sender_id"] for m in body["messages"]] == ["liv", "coder"]
+    async def test_a_backend_that_will_not_start_is_never_written_to(self) -> None:
+        events: list[str] = []
 
-    @pytest.mark.asyncio
-    async def test_prompt_is_never_timestamped_after_the_work(self) -> None:
-        # append_turn stamps the user row when the turn ends, so its clock is
-        # later than the work it caused. List order is right; the clock is not.
-        # A consumer that sorts by timestamp would read the prompt last.
-        sent: list[dict] = []
+        class _WontStart:
+            async def start(self) -> None:
+                events.append("start")
+                raise RuntimeError("no service")
 
-        def _handler(request: httpx.Request) -> httpx.Response:
-            sent.append(json.loads(request.content))
-            return httpx.Response(200, json={})
+            async def stop(self) -> None:
+                events.append("stop")
 
-        async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as client:
-            await prime_from_turn(
-                identity=_identity(source="trace"),
-                session_id="trace:Coder:c1",
-                turn=[
-                    {"role": "user", "content": "read it", "timestamp": "2026-08-20T09:53:46.693637"},
-                    {"role": "assistant", "content": "reading", "timestamp": "2026-08-20T09:51:56.109124"},
-                ],
-                client=client,
-            )
-        stamps = [m["timestamp"] for m in sent[0]["messages"]]
-        assert stamps == sorted(stamps)
-        assert stamps[0] < stamps[1]
+        async with subagent_memory_mod.started_backend(_WontStart(), label="test") as backend:
+            assert backend is None, "a failed start must not hand the caller a backend"
 
-    @pytest.mark.asyncio
-    async def test_empty_turn_writes_nothing(self) -> None:
-        calls = 0
+        # Not stopped: nothing was opened, and a `stop` after a failed `start`
+        # is the one call an adapter is least likely to have made safe.
+        assert events == ["start"]
 
-        def _handler(request: httpx.Request) -> httpx.Response:
-            nonlocal calls
-            calls += 1
-            return httpx.Response(200, json={})
+    async def test_a_failing_stop_does_not_lose_the_record(self) -> None:
+        did_the_work = False
 
-        async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as client:
-            landed = await prime_from_turn(identity=_identity(source="trace"), session_id="s", turn=[], client=client)
-        assert landed is False
-        assert calls == 0
+        class _WontStop:
+            async def start(self) -> None:
+                return None
 
-    @pytest.mark.asyncio
-    async def test_a_turn_that_converts_to_nothing_writes_nothing(self) -> None:
-        calls = 0
+            async def stop(self) -> None:
+                raise RuntimeError("socket already gone")
 
-        def _handler(request: httpx.Request) -> httpx.Response:
-            nonlocal calls
-            calls += 1
-            return httpx.Response(200, json={})
+        async with subagent_memory_mod.started_backend(_WontStop(), label="test") as backend:
+            assert backend is not None
+            did_the_work = True
 
-        async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as client:
-            landed = await prime_from_turn(
-                identity=_identity(source="trace"),
-                session_id="s",
-                turn=[{"role": "system", "content": "dropped"}],
-                client=client,
-            )
-        assert landed is False
-        assert calls == 0
+        assert did_the_work
 
-    @pytest.mark.asyncio
-    async def test_a_missing_plugin_is_a_status_not_a_crash(self) -> None:
-        """Priming needs the plugin's message shapes; reading back does not.
 
-        The record this returns to says ``unavailable``, which is the truth. A
-        traceback here would instead take down a background writer nobody asked
-        to be blocking.
-        """
-        calls = 0
+class TestRecordFailureModes:
+    """A prime or a poll that fails is a status in the record, never a raise."""
 
-        def _handler(request: httpx.Request) -> httpx.Response:
-            nonlocal calls
-            calls += 1
-            return httpx.Response(200, json={})
+    async def test_a_prime_that_raises_records_unavailable_without_polling(self) -> None:
+        backend = _FakeBackend()
+        backend.rows["user_id"] = [_memory("something extracted")]
+        written, write = _sink()
 
-        with everos_plugin_absent():
-            async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as client:
-                landed = await prime_from_turn(
-                    identity=_identity(source="trace", user_id="liv", agent_id="coder"),
-                    session_id="trace:Coder:c1",
-                    turn=[{"role": "user", "content": "hi"}],
-                    client=client,
-                )
-        assert landed is False
-        assert calls == 0
+        async def _prime(_session_id: str) -> bool:
+            raise RuntimeError("everos refused the handover")
 
-    @pytest.mark.asyncio
-    async def test_a_failed_write_is_false_not_an_exception(self) -> None:
-        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(500, json={}))) as client:
-            landed = await prime_from_turn(
-                identity=_identity(source="trace"),
-                session_id="s",
-                turn=[{"role": "user", "content": "hi"}],
-                client=client,
-            )
-        assert landed is False
+        await record_memories(
+            agent="Coder",
+            backend=backend,
+            scope=_scope(source="trace"),
+            resolve_session_id=_key,
+            write=write,
+            prime=_prime,
+        )
 
-    @pytest.mark.asyncio
-    async def test_a_failed_flush_is_false_even_though_add_landed(self) -> None:
-        # add and flush are two independent calls now; a flush failure must not
-        # be masked by an add that already succeeded.
-        def _handler(request: httpx.Request) -> httpx.Response:
-            if request.url.path == "/api/v2/memory/add":
-                return httpx.Response(200, json={})
-            return httpx.Response(500, json={})
+        record = json.loads(written[0])
+        assert record["status"] == "unavailable"
+        assert record["memories"] == []
+        # Nothing landed, so nothing can have been extracted: spending the
+        # budget confirming an absence already known is the bug this guards.
+        assert backend.reads == []
 
-        async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as client:
-            landed = await prime_from_turn(
-                identity=_identity(source="trace"),
-                session_id="s",
-                turn=[{"role": "user", "content": "hi"}],
-                client=client,
-            )
-        assert landed is False
+    async def test_a_poll_that_raises_records_unavailable(self) -> None:
+        backend = _FakeBackend()
+        backend.raises = RuntimeError("connection refused")
+        written, write = _sink()
 
-    @pytest.mark.asyncio
-    async def test_a_missing_user_id_writes_nothing(self) -> None:
-        calls = 0
+        await record_memories(
+            agent="Coder",
+            backend=backend,
+            scope=_scope(),
+            resolve_session_id=_key,
+            write=write,
+            budget_s=0.0,
+        )
 
-        def _handler(request: httpx.Request) -> httpx.Response:
-            nonlocal calls
-            calls += 1
-            return httpx.Response(200, json={})
+        record = json.loads(written[0])
+        assert record["status"] == "unavailable"
+        assert record["memories"] == []
 
-        async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as client:
-            landed = await prime_from_turn(
-                identity=_identity(source="trace", user_id=None),
-                session_id="s",
-                turn=[{"role": "user", "content": "hi"}],
-                client=client,
-            )
-        assert landed is False
-        assert calls == 0
 
-    @pytest.mark.asyncio
-    async def test_a_missing_agent_id_writes_nothing(self) -> None:
-        calls = 0
+class TestAsMsEpoch:
+    """Timestamps arrive in whatever shape the turn log wrote them."""
 
-        def _handler(request: httpx.Request) -> httpx.Response:
-            nonlocal calls
-            calls += 1
-            return httpx.Response(200, json={})
+    def test_an_unparseable_string_is_no_timestamp_rather_than_a_raise(self) -> None:
+        assert subagent_memory_mod._as_ms_epoch("last tuesday") is None
 
-        async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as client:
-            landed = await prime_from_turn(
-                identity=_identity(source="trace", agent_id=None),
-                session_id="s",
-                turn=[{"role": "user", "content": "hi"}],
-                client=client,
-            )
-        assert landed is False
-        assert calls == 0
+    def test_a_shape_with_no_clock_in_it_is_no_timestamp(self) -> None:
+        assert subagent_memory_mod._as_ms_epoch({"when": 1}) is None
+        assert subagent_memory_mod._as_ms_epoch(None) is None

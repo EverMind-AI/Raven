@@ -120,6 +120,28 @@ class TestMaybeBuildBackend:
         )
         assert backend is None
 
+    def test_a_missing_backend_is_said_out_loud(self, tmp_path: Path, capsys) -> None:
+        cfg = _config(memory_backend="ghost")
+        backend = maybe_build_memory_backend(tmp_path, cfg, registry=PluginRegistry())
+        assert backend is None
+        err = capsys.readouterr().err
+        assert "memory.backend" in err and "ghost" in err
+
+    def test_the_shipped_default_missing_names_what_to_install(self, tmp_path: Path, capsys) -> None:
+        """The commonest way to reach that line is an install without the plugin.
+
+        Naming only the backends that ARE installed leaves such a reader with
+        nothing to do; doctor and the wizard both answer it in one sentence, and
+        a turn is the surface that actually reaches this code.
+        """
+        from tests._everos_presence import everos_plugin_absent
+
+        with everos_plugin_absent():
+            backend = maybe_build_memory_backend(tmp_path, _config(memory_backend="everos"), registry=PluginRegistry())
+
+        assert backend is None
+        assert "everos-memory" in capsys.readouterr().err
+
 
 # ---------------------------------------------------------------------------
 # Per-plugin config slice resolution
@@ -245,7 +267,7 @@ class TestConfiguredDirs:
         root = tmp_path / "plugins"
         (root / "shelf").mkdir(parents=True)
         (root / "shelf" / "raven-plugin.toml").write_text(
-            '[plugin]\nid = "shelf"\nversion = "0.1.0"\nenabled_by_default = true\n',
+            '[plugin]\nid = "shelf"\nversion = "0.1.0"\n',
             encoding="utf-8",
         )
         assert "shelf" in build_plugin_registry(_config(dirs=[str(root)])).activated_ids()
@@ -420,3 +442,110 @@ def test_build_plugin_tools_stamps_the_contributing_plugin(tmp_path):
     tools = build_plugin_tools(tmp_path, cfg, registry=_Reg(), provider=None)
     assert len(tools) == 1
     assert tools[0].contributed_by == "plug-a"
+
+
+class _OnboardReg:
+    """A registry stand-in contributing one onboard step."""
+
+    def __init__(self, step) -> None:
+        self._step = step
+
+    def onboard_names(self):
+        return ["everos"]
+
+    def onboard_plugin_id(self, name):
+        return None
+
+    def activated_ids(self):
+        return []
+
+    def manifest_for(self, plugin_id):
+        return None
+
+    def build_onboard_step(self, name, *, config, services):
+        if isinstance(self._step, Exception):
+            raise self._step
+        return self._step
+
+
+def test_build_onboard_steps_yields_every_activated_step(tmp_path):
+    from raven.core.plugin_stack import build_onboard_steps
+
+    step = object()
+    assert build_onboard_steps(tmp_path, _config(), registry=_OnboardReg(step)) == [("everos", step)]
+
+
+def test_build_onboard_steps_skips_a_raising_factory(tmp_path, caplog):
+    from raven.core.plugin_stack import build_onboard_steps
+
+    with caplog.at_level("WARNING"):
+        assert build_onboard_steps(tmp_path, _config(), registry=_OnboardReg(RuntimeError("boom"))) == []
+    assert "boom" in caplog.text
+
+
+def test_build_onboard_steps_hands_each_plugin_its_own_config_slice(tmp_path):
+    """[mrbot] Two plugins, differently named: A owns backend 'a-backend'
+    (no onboard screen), B owns both backend and onboard 'b-backend'. B's
+    onboard step must receive plugins.config['B'], never A's slice --
+    exercises the fix (resolve via the onboard entry's own plugin id)
+    directly, independent of the cross-owner case activation now refuses."""
+    import sys as _sys
+    import types
+
+    from raven.core.plugin_stack import build_onboard_steps
+    from raven.plugins import (
+        Contributes,
+        DiscoveredPlugin,
+        ManifestOrigin,
+        MemoryBackendContribution,
+        OnboardContribution,
+        PluginManifest,
+        PluginRegistry,
+    )
+
+    mod = types.ModuleType("_test_onboard_slice_owner")
+    mod.make_backend_a = lambda ctx: "a"
+    mod.make_backend_b = lambda ctx: "b"
+    mod.make_onboard_step_b = lambda ctx: ("step-b", ctx.config)
+    _sys.modules["_test_onboard_slice_owner"] = mod
+    try:
+        mf_a = PluginManifest(
+            id="A",
+            version="0.1",
+            contributes=Contributes(
+                memory_backends=[
+                    MemoryBackendContribution(name="a-backend", factory="_test_onboard_slice_owner:make_backend_a"),
+                ],
+            ),
+        )
+        mf_b = PluginManifest(
+            id="B",
+            version="0.1",
+            contributes=Contributes(
+                memory_backends=[
+                    MemoryBackendContribution(name="b-backend", factory="_test_onboard_slice_owner:make_backend_b"),
+                ],
+                onboard=[
+                    OnboardContribution(name="b-backend", factory="_test_onboard_slice_owner:make_onboard_step_b"),
+                ],
+            ),
+        )
+        reg = PluginRegistry()
+        reg.activate(
+            [
+                DiscoveredPlugin(manifest=mf_a, source=ManifestOrigin.USER, location=None),
+                DiscoveredPlugin(manifest=mf_b, source=ManifestOrigin.USER, location=None),
+            ]
+        )
+        cfg = _config(
+            plugin_config={
+                "A": {"marker": "a-slice"},
+                "B": {"marker": "b-slice"},
+            }
+        )
+        steps = build_onboard_steps(tmp_path, cfg, registry=reg)
+        assert [name for name, _ in steps] == ["b-backend"]
+        _step_name, received_config = steps[0][1]
+        assert received_config == {"marker": "b-slice"}
+    finally:
+        _sys.modules.pop("_test_onboard_slice_owner", None)

@@ -62,6 +62,27 @@ def page_blocks(lines: list[str]) -> dict[int, tuple[int, int]]:
     return blocks
 
 
+def repeated_banners(lines: list[str]) -> dict[int, list[int]]:
+    """Banner numbers that head more than one block, each with the 1-based lines they start on.
+
+    An edit that pasted a block under itself left `# SLIDE 11` heading two blocks and
+    the deck one page longer than its plan; the author found it by counting the stdout
+    dumps against `slides`. A banner repeated on the next comment line is one banner.
+    """
+    heads: dict[int, list[int]] = {}
+    previous: int | None = None
+    for index, line in enumerate(lines, start=1):
+        match = _MARKER.match(line)
+        number = int(match.group(1)) if match else None
+        if number is not None and number != previous:
+            heads.setdefault(number, []).append(index)
+        if not _blank(line) and not _comment(line):
+            previous = None
+        elif number is not None:
+            previous = number
+    return {number: starts for number, starts in heads.items() if len(starts) > 1}
+
+
 def broken_page(script: str, stderr: str) -> int | None:
     """The page whose block a failed build died in, or None.
 

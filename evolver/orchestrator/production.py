@@ -20,6 +20,7 @@ semantic steps, so this module supplies the real ones:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -141,7 +142,7 @@ def make_llm_backend(
     *,
     train_task_ids: list[str],
     vanilla_node: HarnessNode,
-    test_task_ids: list[str] = (),
+    test_task_ids: Sequence[str] = (),
     k: int = 3,
     max_tokens: int = 1024,
     cull_sigma_mult: float = 1.5,
@@ -447,7 +448,9 @@ def build_evolution_orchestrator(
     backend: EvalBackend,
     gate_policy,
     diagnose_of: Callable[[HarnessNode], tuple[Any, Optional[dict]]],
-    design_of: Callable[[Callable[[HarnessNode], str], dict], Any],
+    # Three parameters, matching the docstring below and every real implementation:
+    # the chain resolver, the cross-round history, and the GSME archive renderer.
+    design_of: Callable[[Callable[[HarnessNode], str], dict, Callable[[], str]], Any],
     baseline_of: Callable[[], Any],
     files_of: Callable[[Any], dict[str, bytes]],
     deletions_of: Optional[Callable[[Any], list[str]]] = None,

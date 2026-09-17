@@ -115,7 +115,10 @@ class PageSource:
         `imports=False` leaves the import lines to a caller that states them once
         for several pages, instead of once per page.
         """
-        head = [f"# page {self.index} of the template, layout {self.layout!r}"]
+        # Numbered as the menu, `pages_read` and `prototype(tpl, N)` number it: a
+        # zero-based label here sent an author through forty lines of reconciling
+        # "page 6" against the menu's page 7 before it could trust either.
+        head = [f"# page {self.index + 1} of the template, layout {self.layout!r}"]
         if imports:
             head += [f"# {line}" for line in _needed_imports(self.source)]
         if self.unredrawable:

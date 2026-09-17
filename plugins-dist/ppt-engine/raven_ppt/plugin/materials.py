@@ -380,14 +380,11 @@ def describe(
     else:
         text = (
             "\n\n# No material staged for this run\n"
-            "Nothing was named, so this deck's material has to be gathered rather than "
-            "read: web_search for the sources, ppt_image_search for the pictures, "
-            "web_fetch on the URLs they cite -- take each image link with the words its "
-            "page printed beside it -- and ppt_fetch what you will use, "
-            "so the ingest reads it in. Fetch into the project rather than placing anything "
-            "straight onto a page: what this deck never ingested is what its provenance "
-            "checks cannot see, and on a run with no staged material that is everything. "
-            "What you still cannot verify is a guess, and it is presented as one."
+            "Nothing was named, so this deck's material has to be gathered rather than read: "
+            "web_search for the sources, web_fetch the pages they cite, ppt_image_search for what "
+            "those do not show, and ppt_fetch what you will use so the ingest reads it in -- what the "
+            "deck never ingested, its provenance checks cannot see. What you still cannot verify is "
+            "presented as a guess."
         )
     if standing:
         return text + stands

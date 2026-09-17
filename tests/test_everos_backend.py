@@ -10,6 +10,7 @@ embedding services that the test environment doesn't have).
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -144,6 +145,41 @@ class TestConstruction:
     def test_make_backend_factory(self, tmp_path: Path) -> None:
         b = make_backend(_ctx(tmp_path))
         assert isinstance(b, EverosBackend)
+
+
+class TestMakeBackendIsReadOnly:
+    """``raven doctor`` constructs a backend only to call ``health()``,
+    never ``start()`` -- so ``make_backend`` must touch neither disk nor the
+    environment. Creating the EverOS home and pointing it at ``EVEROS_ROOT``
+    happens in ``start()`` instead, on every start path including one built
+    with a fake (non-HTTP) adapter.
+    """
+
+    def test_construction_creates_no_home_and_sets_no_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from raven.config.paths import get_data_dir
+
+        monkeypatch.delenv("EVEROS_ROOT", raising=False)
+
+        make_backend(_ctx(tmp_path))
+
+        assert not (get_data_dir() / "everos").exists()
+        assert "EVEROS_ROOT" not in os.environ
+
+    async def test_start_creates_the_home_with_the_fake_adapter_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from raven.config.paths import get_data_dir
+
+        monkeypatch.delenv("EVEROS_ROOT", raising=False)
+
+        b = _backend(tmp_path)
+        await b.start()
+
+        home = get_data_dir() / "everos"
+        assert os.environ["EVEROS_ROOT"] == str(home)
+        assert (home / "everos.toml").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -321,9 +357,9 @@ class TestAUserManagedRootIsReadOnly:
 
     @staticmethod
     def _not_owned(monkeypatch: pytest.MonkeyPatch) -> None:
-        from raven.config import update_everos
+        from raven_everos import config as ue
 
-        monkeypatch.setattr(update_everos, "everos_owned", lambda: False)
+        monkeypatch.setattr(ue, "everos_owned", lambda: False)
 
     async def test_an_unreachable_server_is_not_started_for_us(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
@@ -371,25 +407,36 @@ class TestAUserManagedRootIsReadOnly:
         assert b._state is ServiceState.READY
         assert NOTICES == []
 
-    def test_the_factory_drops_no_templates_into_it(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_the_factory_drops_no_templates_into_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         self._not_owned(monkeypatch)
-        from raven.config import update_everos
+        from raven_everos import config as ue
 
         seeded: list[int] = []
-        monkeypatch.setattr(update_everos, "ensure_everos_home", lambda *_a, **_kw: seeded.append(1))
+        monkeypatch.setattr(ue, "ensure_everos_home", lambda *_a, **_kw: seeded.append(1))
+        monkeypatch.setattr(
+            "raven_everos.server.probe_health",
+            lambda _u, **_kw: ProbeVerdict.REFUSED,
+        )
 
-        make_backend(_ctx(tmp_path))
+        b = EverosBackend(_ctx(tmp_path))
+        await b.start()
 
         assert seeded == [], "wrote template files into a root the user manages"
 
-    def test_an_owned_root_still_gets_its_templates(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from raven.config import update_everos
+    async def test_an_owned_root_still_gets_its_templates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from raven_everos import config as ue
 
-        monkeypatch.setattr(update_everos, "everos_owned", lambda: True)
+        monkeypatch.setattr(ue, "everos_owned", lambda: True)
         seeded: list[int] = []
-        monkeypatch.setattr(update_everos, "ensure_everos_home", lambda *_a, **_kw: seeded.append(1))
+        monkeypatch.setattr(ue, "ensure_everos_home", lambda *_a, **_kw: seeded.append(1))
 
-        make_backend(_ctx(tmp_path))
+        b = EverosBackend(_ctx(tmp_path))
+        with patch("raven_everos.server.ensure_everos_server", new=AsyncMock()):
+            await b.start()
 
         assert seeded == [1]
 
@@ -409,9 +456,9 @@ class TestStartWarnsWhenRecallCannotWork:
 
     @staticmethod
     def _configured(monkeypatch: pytest.MonkeyPatch, *sections: str) -> None:
-        from raven.config import update_everos
+        from raven_everos import config as ue
 
-        monkeypatch.setattr(update_everos, "everos_role_configured", lambda s: s in sections)
+        monkeypatch.setattr(ue, "everos_role_configured", lambda s: s in sections)
 
     async def test_the_probe_runs_off_the_event_loop(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The probe and the config read behind it are blocking IO, and start()
@@ -666,6 +713,21 @@ class TestUserSearchConversion:
         hits = await b.recall("q", user_id="x", top_k=5)
         scores = [h.score for h in hits]
         assert scores == sorted(scores, reverse=True)
+
+    async def test_top_k_truncation_keeps_the_profile(self, tmp_path: Path) -> None:
+        adapter = _FakeAdapter(
+            search_response=_user_search_data(
+                episodes=[
+                    SimpleNamespace(id=f"e{i}", session_id="s", summary=f"fact {i}", episode="", score=0.5)
+                    for i in range(5)
+                ],
+                profiles=[SimpleNamespace(id="prof1", profile_data={"name": "Alice"}, score=None)],
+            )
+        )
+        b = _backend(tmp_path, adapter=adapter)
+        hits = await b.recall("q", user_id="alice", top_k=2)
+        assert len(hits) == 2
+        assert [h.metadata["type"] for h in hits] == ["profile", "episode"]
 
 
 # ---------------------------------------------------------------------------
@@ -1963,9 +2025,9 @@ class TestTheDegradationWarningOnASelfManagedServer:
         from raven_everos.backend import EverosBackend
         from raven_everos.server import ProbeVerdict
 
-        monkeypatch.setattr("raven.config.update_everos.everos_owned", lambda: False)
+        monkeypatch.setattr("raven_everos.config.everos_owned", lambda: False)
         monkeypatch.setattr(
-            "raven.config.update_everos.everos_role_configured",
+            "raven_everos.config.everos_role_configured",
             lambda _s: pytest.fail("read the local toml for a root raven does not own"),
         )
         monkeypatch.setattr("raven_everos.server.probe_health", lambda _u, **_kw: ProbeVerdict.OK)
@@ -2207,3 +2269,578 @@ async def test_a_write_failed_by_our_own_stop_does_not_demote_the_service(tmp_pa
     assert await b.store("s1", messages) is False
 
     assert b._state is ServiceState.READY
+
+
+class TestHealth:
+    """What raven doctor and raven import read off the backend."""
+
+    def _patch(self, monkeypatch, *, owned=True, configured=(), report=None):
+        from raven_everos import config as ue
+        from raven_everos import health
+
+        monkeypatch.setattr(ue, "everos_owned", lambda: owned)
+        monkeypatch.setattr(ue, "everos_root", lambda: Path("/root/everos"))
+        monkeypatch.setattr(ue, "everos_role_configured", lambda s: s in configured)
+        monkeypatch.setattr(health, "probe_capabilities", lambda _u: report or health.CapabilityReport(reachable=False))
+
+    async def test_a_server_that_is_not_running_is_not_a_fault(self, tmp_path, monkeypatch):
+        self._patch(monkeypatch, configured=("llm",))
+        h = await _backend(tmp_path).health()
+        assert h.ready is False
+        assert not [c for c in h.checks if c.status == "missing"]
+        assert any(c.label == "server" and "starts on demand" in (c.hint or "") for c in h.checks)
+
+    async def test_an_unbuilt_required_role_is_a_fault(self, tmp_path, monkeypatch):
+        from raven_everos.health import CapabilityReport
+
+        self._patch(
+            monkeypatch,
+            configured=("llm", "embedding"),
+            report=CapabilityReport(reachable=True, capabilities={"llm": False, "embed": True}),
+        )
+        h = await _backend(tmp_path).health()
+        assert h.ready is False
+        assert [c.label for c in h.checks if c.status == "missing"] == ["llm"]
+
+    async def test_an_unbuilt_optional_role_costs_quality_not_function(self, tmp_path, monkeypatch):
+        from raven_everos.health import CapabilityReport
+
+        self._patch(
+            monkeypatch,
+            configured=("llm", "embedding"),
+            report=CapabilityReport(reachable=True, capabilities={"llm": True, "embed": False}),
+        )
+        h = await _backend(tmp_path).health()
+        assert h.ready is True
+        assert not [c for c in h.checks if c.status == "missing"]
+        assert any(c.label == "embedding" and c.status == "degraded" for c in h.checks)
+
+    async def test_an_unbuilt_multimodal_role_is_reported(self, tmp_path, monkeypatch):
+        """Pins the ``multimodal`` -> ``multimodal_llm`` capability key: the
+        section name and the key the server answers with differ, so a report
+        that says the role failed must still reach the ``multimodal`` check."""
+        from raven_everos.health import CapabilityReport
+
+        self._patch(
+            monkeypatch,
+            configured=("llm", "multimodal"),
+            report=CapabilityReport(reachable=True, capabilities={"llm": True, "multimodal_llm": False}),
+        )
+        h = await _backend(tmp_path).health()
+        assert h.ready is True
+        assert not [c for c in h.checks if c.status == "missing"]
+        assert any(c.label == "multimodal" and c.status == "degraded" for c in h.checks)
+
+    async def test_a_self_managed_server_reports_only_what_it_says(self, tmp_path, monkeypatch):
+        from raven_everos.health import CapabilityReport
+
+        self._patch(
+            monkeypatch,
+            owned=False,
+            report=CapabilityReport(reachable=True, capabilities={"llm": True, "embed": False}),
+        )
+        h = await _backend(tmp_path).health()
+        labels = {c.label for c in h.checks}
+        assert "rerank" not in labels and "multimodal" not in labels
+        assert any(c.label == "memories" and "managed by you" in (c.hint or "") for c in h.checks)
+
+    async def test_a_server_that_reports_no_capabilities_is_not_condemned(self, tmp_path, monkeypatch):
+        from raven_everos.health import CapabilityReport
+
+        self._patch(monkeypatch, configured=("llm",), report=CapabilityReport(reachable=True, capabilities={}))
+        h = await _backend(tmp_path).health()
+        assert h.ready is True
+        assert not [c for c in h.checks if c.status == "missing"]
+        assert any(c.label == "capabilities" for c in h.checks)
+
+    async def test_a_bad_identity_is_a_config_fault_not_a_server_one(self, tmp_path, monkeypatch):
+        self._patch(monkeypatch)
+        h = await _backend(tmp_path, user_id="../x").health()
+        assert h.ready is False
+        assert h.checks[0].label == "identity" and h.checks[0].status == "missing"
+        assert "server log" not in (h.checks[0].hint or "")
+
+    async def test_the_probe_follows_the_configured_address(self, tmp_path, monkeypatch):
+        """Probing the default while the backend reads its own slice reports on
+        a server nobody is using: someone who moved everos off 18791 is told it
+        is not running."""
+        from raven_everos import health
+
+        asked: list[str] = []
+        self._patch(monkeypatch, configured=("llm",))
+        monkeypatch.setattr(
+            health,
+            "probe_capabilities",
+            lambda url: asked.append(url) or health.CapabilityReport(reachable=False),
+        )
+
+        h = await _backend(tmp_path, base_url="http://localhost:29999").health()
+
+        assert asked == ["http://localhost:29999"]
+        assert any(c.label == "address" and c.hint == "http://localhost:29999" for c in h.checks)
+
+    async def test_a_running_server_with_its_roles_built_is_reported_as_such(self, tmp_path, monkeypatch):
+        from raven_everos.health import CapabilityReport
+
+        self._patch(
+            monkeypatch,
+            configured=("llm", "embedding"),
+            report=CapabilityReport(reachable=True, capabilities={"llm": True, "embed": True}),
+        )
+        h = await _backend(tmp_path).health()
+        assert h.ready is True
+        assert any(c.label == "server" and c.hint == "running" for c in h.checks)
+        assert any(c.label == "embedding" and c.status == "ok" for c in h.checks)
+
+    async def test_a_check_names_where_the_memories_are(self, tmp_path, monkeypatch):
+        """ "Where are my memories" is answered here, so nobody has to read
+        config.json by hand."""
+        self._patch(monkeypatch, configured=("llm",))
+        h = await _backend(tmp_path).health()
+        assert any(c.label == "memories" and c.hint == "/root/everos" for c in h.checks)
+
+    async def test_an_unconfigured_optional_role_names_what_it_costs(self, tmp_path, monkeypatch):
+        """Per role rather than one blanket "optional": they degrade
+        differently, and someone weighing up embedding needs to know it costs
+        semantic recall specifically. Never a fault."""
+        from raven_everos.health import CapabilityReport
+
+        self._patch(
+            monkeypatch,
+            configured=("llm",),
+            report=CapabilityReport(reachable=True, capabilities={"llm": True, "embed": True, "rerank": False}),
+        )
+        h = await _backend(tmp_path).health()
+        assert h.ready is True
+        notes = {c.label: (c.status, c.hint) for c in h.checks}
+        assert notes["embedding"] == ("degraded", "not configured (recall matches keywords, not meaning)")
+        assert notes["rerank"][0] == "degraded"
+        assert notes["multimodal"][1] == "not configured (images, PDFs and audio stay out of memory)"
+
+    async def test_a_self_managed_root_is_never_read_from_disk(self, tmp_path, monkeypatch):
+        """No root is recorded for a root the user runs, so ``everos_root()``
+        would answer with a fallback -- a directory that is not theirs and holds
+        none of their memories -- and the roles read out of that directory's toml
+        would describe an install nobody is using."""
+        from raven_everos import config as ue
+        from raven_everos.health import CapabilityReport
+
+        self._patch(monkeypatch, owned=False, report=CapabilityReport(reachable=True, capabilities={"llm": True}))
+        monkeypatch.setattr(
+            ue,
+            "everos_role_configured",
+            lambda _s: pytest.fail("read the local toml for a root raven does not own"),
+        )
+
+        h = await _backend(tmp_path).health()
+
+        assert not any("/root/everos" in (c.hint or "") for c in h.checks)
+
+    async def test_a_self_managed_server_that_cannot_build_its_llm_is_a_fault(self, tmp_path, monkeypatch):
+        """ "What the server knows about" and "what it built" must not be one
+        list: over one capability map those conditions are mutually exclusive,
+        which left the fault list structurally empty and reported a server that
+        could not build its LLM as healthy."""
+        from raven_everos.health import CapabilityReport
+
+        self._patch(
+            monkeypatch,
+            owned=False,
+            report=CapabilityReport(reachable=True, capabilities={"llm": False, "embed": True}),
+        )
+        h = await _backend(tmp_path).health()
+        assert h.ready is False
+        assert [c.label for c in h.checks if c.status == "missing"] == ["llm"]
+
+    async def test_a_self_managed_server_that_is_down_says_who_starts_it(self, tmp_path, monkeypatch):
+        """Raven starts the server it owns on demand and never touches one it
+        does not, so "not running" needs two different sentences."""
+        self._patch(monkeypatch, owned=False)
+        h = await _backend(tmp_path).health()
+        assert h.ready is False
+        assert any(c.label == "server" and "start it yourself" in (c.hint or "") for c in h.checks)
+
+
+@pytest.mark.asyncio
+class TestTheHostOwnsTheEmbeddingEndpoint:
+    """One installation, one embedding endpoint.
+
+    The knowledge base reads the same block, so the backend takes it from the
+    host rather than keeping a second copy in everos.toml -- two copies of one
+    endpoint is two things to rotate, and the knowledge base used to read this
+    one out of the plugin's file, which made a feature with nothing to do with
+    memory fail whenever the plugin was absent.
+    """
+
+    @staticmethod
+    def _env_keys(monkeypatch) -> None:
+        for key in (
+            "EVEROS_EMBEDDING__MODEL",
+            "EVEROS_EMBEDDING__BASE_URL",
+            "EVEROS_EMBEDDING__API_KEY",
+            "EVEROS_EMBEDDING__DIMENSIONS",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
+    async def test_a_configured_host_endpoint_reaches_everos(self, monkeypatch) -> None:
+        import os
+
+        from raven_everos.config import configure_embedding_env
+
+        self._env_keys(monkeypatch)
+        block = SimpleNamespace(model="m1", base_url="https://e.test/v1", api_key="sk-1", dimensions=1024)
+
+        assert configure_embedding_env(block) is True
+        assert os.environ["EVEROS_EMBEDDING__MODEL"] == "m1"
+        assert os.environ["EVEROS_EMBEDDING__BASE_URL"] == "https://e.test/v1"
+        assert os.environ["EVEROS_EMBEDDING__API_KEY"] == "sk-1"
+        assert os.environ["EVEROS_EMBEDDING__DIMENSIONS"] == "1024"
+
+    async def test_everos_keeps_an_endpoint_of_its_own(self, monkeypatch, tmp_path) -> None:
+        """The host's block is a default to fall back on, not a takeover.
+
+        An operator who wrote ``[embedding]`` into everos.toml chose that
+        endpoint for memory specifically; reusing the host's is a convenience
+        they are entitled to decline. Env beats the file in EverOS's own source
+        order, so deferring has to happen here or the choice is unreachable.
+        """
+        import os
+
+        self._env_keys(monkeypatch)
+        own_toml = tmp_path / "everos.toml"
+        own_toml.write_text(
+            '[embedding]\nmodel = "its-own"\nbase_url = "https://own.test/v1"\napi_key = "sk-own"\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("raven_everos.config.get_everos_config_path", lambda: own_toml)
+        from raven_everos.config import configure_embedding_env
+
+        block = SimpleNamespace(model="host", base_url="https://host.test/v1", api_key="sk-host", dimensions=None)
+
+        assert configure_embedding_env(block) is False
+        assert "EVEROS_EMBEDDING__MODEL" not in os.environ
+
+    async def test_a_template_placeholder_is_not_a_choice(self, monkeypatch, tmp_path) -> None:
+        """The shipped template seeds a ``<...>`` model name. Treating that as
+        "EverOS has its own" would leave a fresh install with no endpoint while
+        the host had one to give."""
+        import os
+
+        self._env_keys(monkeypatch)
+        own_toml = tmp_path / "everos.toml"
+        own_toml.write_text('[embedding]\nmodel = "<pick-a-model>"\n', encoding="utf-8")
+        monkeypatch.setattr("raven_everos.config.get_everos_config_path", lambda: own_toml)
+        from raven_everos.config import configure_embedding_env
+
+        block = SimpleNamespace(model="host", base_url="https://host.test/v1", api_key="sk-host", dimensions=None)
+
+        assert configure_embedding_env(block) is True
+        assert os.environ["EVEROS_EMBEDDING__MODEL"] == "host"
+
+    async def test_a_half_filled_block_sets_nothing(self, monkeypatch) -> None:
+        """All three strings or none: a model with no key cannot embed, and a
+        partial override would shadow a working everos.toml with a broken one."""
+        import os
+
+        from raven_everos.config import configure_embedding_env
+
+        self._env_keys(monkeypatch)
+        block = SimpleNamespace(model="m1", base_url="", api_key="sk-1", dimensions=None)
+
+        assert configure_embedding_env(block) is False
+        assert "EVEROS_EMBEDDING__MODEL" not in os.environ
+
+    async def test_no_host_block_sets_nothing(self, monkeypatch) -> None:
+        import os
+
+        from raven_everos.config import configure_embedding_env
+
+        self._env_keys(monkeypatch)
+
+        assert configure_embedding_env(None) is False
+        assert "EVEROS_EMBEDDING__MODEL" not in os.environ
+
+    async def test_an_unpinned_width_is_left_to_the_model(self, monkeypatch) -> None:
+        """A wrong width sizes the collection to something no vector fits, so
+        an absent one is never invented here."""
+        import os
+
+        from raven_everos.config import configure_embedding_env
+
+        self._env_keys(monkeypatch)
+        block = SimpleNamespace(model="m1", base_url="https://e.test/v1", api_key="sk-1", dimensions=None)
+
+        assert configure_embedding_env(block) is True
+        assert "EVEROS_EMBEDDING__DIMENSIONS" not in os.environ
+
+
+@pytest.mark.asyncio
+class TestDeleteChangesTheSourceOfTruth:
+    """Markdown is EverOS's source of truth; ``.index/`` is derived from it.
+
+    A delete that only removed the index row un-deleted itself: cascade
+    re-embeds every entry the file still carries on the next append, so the
+    memory came back after the user had been told it was gone. These run
+    against real files under a temporary root, with no writer mocked -- a fake
+    writer would happily record a call this bug also made.
+    """
+
+    @staticmethod
+    def _root(tmp_path, monkeypatch):
+        monkeypatch.setenv("EVEROS_ROOT", str(tmp_path))
+        return tmp_path
+
+    @staticmethod
+    def _episode_log(root):
+        directory = root / "default_app" / "default_project" / "users" / "u1" / "episodes"
+        directory.mkdir(parents=True)
+        path = directory / "episode-2026-09-15.md"
+        path.write_text(
+            "---\n"
+            "id: episode_log_u1_2026-09-15\n"
+            "type: episode_daily\n"
+            "file_type: episode_daily\n"
+            "schema_version: 1\n"
+            "user_id: u1\n"
+            "track: user\n"
+            "date: '2026-09-15'\n"
+            "entry_count: 2\n"
+            "---\n"
+            "<!-- entry:ep_keep -->\n## ep_keep\nkeep me\n<!-- /entry:ep_keep -->\n"
+            "<!-- entry:ep_drop -->\n## ep_drop\ndrop me\n<!-- /entry:ep_drop -->\n",
+            encoding="utf-8",
+        )
+        return path
+
+    async def test_an_episode_is_retired_in_the_file_that_owns_it(self, tmp_path, monkeypatch) -> None:
+        root = self._root(tmp_path, monkeypatch)
+        path = self._episode_log(root)
+        backend = _backend(SimpleNamespace())
+        row = SimpleNamespace(
+            md_path="default_app/default_project/users/u1/episodes/episode-2026-09-15.md",
+            entry_id="ep_drop",
+        )
+        monkeypatch.setattr(
+            "everos.infra.persistence.lancedb.episode_repo.get_by_id",
+            AsyncMock(return_value=row),
+        )
+
+        assert await backend.delete("u1_ep_drop", kind="episode") is True
+
+        body = path.read_text(encoding="utf-8")
+        assert "deprecated_entries" in body and "ep_drop" in body
+        # Search filters `deprecated_by IS NULL`, and cascade re-applies the map
+        # on every sync -- so the entry stays gone across rebuilds without the
+        # adapter rewriting a file format EverOS owns.
+        assert "keep me" in body and "drop me" in body
+
+    async def test_a_skill_is_removed_from_disk(self, tmp_path, monkeypatch) -> None:
+        """The one destructive operation EverOS's skill writer has, used as it
+        is. A skill is a directory, not an entry in a log, so retiring it the
+        way an episode is retired would leave it on disk and recallable."""
+        from everos.core.persistence import MemoryRoot
+        from everos.infra.persistence.markdown.mds import AgentSkillFrontmatter
+
+        self._root(tmp_path, monkeypatch)
+        root = MemoryRoot.resolve()
+        skill_dir = (
+            root.agents_dir("default", "default")
+            / "a1"
+            / AgentSkillFrontmatter.SKILLS_CONTAINER_NAME
+            / AgentSkillFrontmatter.skill_dir_name("tokenizer edge cases")
+        )
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("body", encoding="utf-8")
+        backend = _backend(SimpleNamespace())
+        monkeypatch.setattr(
+            "everos.infra.persistence.lancedb.agent_skill_repo.get_by_id",
+            AsyncMock(return_value=SimpleNamespace(owner_id="a1", name="tokenizer edge cases")),
+        )
+
+        assert await backend.delete("a1_tokenizer", kind="agent_skill") is True
+        assert not skill_dir.exists()
+
+    async def test_a_skill_row_that_names_nothing_removes_nothing(self, tmp_path, monkeypatch) -> None:
+        self._root(tmp_path, monkeypatch)
+        backend = _backend(SimpleNamespace())
+        monkeypatch.setattr(
+            "everos.infra.persistence.lancedb.agent_skill_repo.get_by_id",
+            AsyncMock(return_value=None),
+        )
+
+        assert await backend.delete("nope", kind="agent_skill") is False
+
+    async def test_an_id_nothing_matches_changes_no_file(self, tmp_path, monkeypatch) -> None:
+        root = self._root(tmp_path, monkeypatch)
+        path = self._episode_log(root)
+        before = path.read_text(encoding="utf-8")
+        backend = _backend(SimpleNamespace())
+        monkeypatch.setattr(
+            "everos.infra.persistence.lancedb.episode_repo.get_by_id",
+            AsyncMock(return_value=None),
+        )
+
+        assert await backend.delete("no-such-id", kind="episode") is False
+        assert path.read_text(encoding="utf-8") == before
+
+    async def test_a_kind_everos_cannot_remove_says_so_and_touches_nothing(self, tmp_path, monkeypatch) -> None:
+        """EverOS has no entry-level writer for a case log and no deletion at
+        all for a profile. Inventing one here would put this adapter back in
+        the business of owning a file format EverOS does not expose."""
+        root = self._root(tmp_path, monkeypatch)
+        path = self._episode_log(root)
+        before = path.read_text(encoding="utf-8")
+        backend = _backend(SimpleNamespace())
+
+        assert await backend.delete("p1", kind="profile") is False
+        assert await backend.delete("c1", kind="agent_case") is False
+        assert path.read_text(encoding="utf-8") == before
+
+
+@pytest.mark.asyncio
+class TestRecallSession:
+    """Reading back what one finished call left behind.
+
+    An exact filter, not a search: the host asks after a sub-agent has run in a
+    process of its own, and there is no query to rank by.
+    """
+
+    @staticmethod
+    def _ready(adapter):
+        from raven_everos.backend import EverosBackend, ServiceState
+
+        ctx = MagicMock()
+        ctx.config = {"base_url": "http://localhost:18791"}
+        ctx.services.agent_id = "default"
+        ctx.services.user_id = "default"
+        ctx.logger = MagicMock()
+        b = EverosBackend(ctx, adapter=adapter)
+        b._state = ServiceState.READY
+        return b
+
+    async def test_one_track_per_call_reaches_the_adapter(self) -> None:
+        adapter = MagicMock()
+        adapter.get_session = AsyncMock(return_value=[])
+        backend = self._ready(adapter)
+
+        await backend.recall_session("cli:abc", user_id="u1")
+
+        adapter.get_session.assert_awaited_once_with("cli:abc", user_id="u1", agent_id=None)
+
+    async def test_rows_become_memories_with_their_kind(self) -> None:
+        adapter = MagicMock()
+        adapter.get_session = AsyncMock(
+            return_value=[
+                {"id": "e1", "_memory_type": "episode", "subject": "Audit", "episode": "Ran the audit."},
+                {
+                    "id": "c1",
+                    "_memory_type": "agent_case",
+                    "task_intent": "fix the tokenizer",
+                    "key_insight": "contractions are one token",
+                },
+            ]
+        )
+        backend = self._ready(adapter)
+
+        out = await backend.recall_session("cli:abc", agent_id="a1")
+
+        assert [m.metadata["type"] for m in out] == ["episode", "agent_case"]
+        assert out[0].text == "Audit - Ran the audit."
+        assert "contractions are one token" in out[1].text
+
+    async def test_both_tracks_or_neither_is_a_caller_bug(self) -> None:
+        adapter = MagicMock()
+        adapter.get_session = AsyncMock(return_value=[])
+        backend = self._ready(adapter)
+
+        assert await backend.recall_session("s") == []
+        assert await backend.recall_session("s", user_id="u", agent_id="a") == []
+        adapter.get_session.assert_not_awaited()
+
+    async def test_an_unreachable_service_is_empty_not_a_raise(self) -> None:
+        """A caller writing an audit trail gets "nothing to report", not a
+        failed run."""
+        import httpx
+
+        adapter = MagicMock()
+        adapter.get_session = AsyncMock(side_effect=httpx.ReadTimeout("hung"))
+        backend = self._ready(adapter)
+
+        assert await backend.recall_session("s", user_id="u") == []
+
+
+@pytest.mark.asyncio
+class TestStoreConventions:
+    """The two metadata keys the contract asks every backend to honour."""
+
+    @staticmethod
+    def _ready(adapter):
+        from raven_everos.backend import EverosBackend, ServiceState
+
+        ctx = MagicMock()
+        ctx.config = {"base_url": "http://localhost:18791"}
+        ctx.services.agent_id = "host-agent"
+        ctx.services.user_id = "host-user"
+        ctx.logger = MagicMock()
+        b = EverosBackend(ctx, adapter=adapter)
+        b._state = ServiceState.READY
+        return b
+
+    async def test_flush_extracts_now_rather_than_on_the_next_turn(self) -> None:
+        """The caller is handing over a conversation that has already ended and
+        will read the result back immediately."""
+        adapter = MagicMock()
+        adapter.memorize = AsyncMock(return_value=None)
+        backend = self._ready(adapter)
+        backend._flush_every_turns = 100
+
+        await backend.store("s", [{"role": "user", "content": "x"}], metadata={"flush": True})
+
+        assert adapter.memorize.await_args.kwargs["is_final"] is True
+
+    async def test_the_owners_a_real_config_produces_are_honoured(self) -> None:
+        """The block reaches store as an agent wrote it in raven's config, and
+        raven's config spells its keys in camelCase.
+
+        Reading only the contract's snake_case made the override silently never
+        fire for a real config: every sub-agent's memories went under the
+        host's own identity, where recall for that agent never looks. A
+        hand-built metadata dict hid it, which is why this one is built the way
+        the product builds it.
+        """
+        from raven.agent.subagent_memory import scope_from_config
+        from raven.config.schema import SubagentMemoryConfig
+
+        scope = scope_from_config(
+            SubagentMemoryConfig.model_validate({"userId": "liv", "agentId": "coder", "source": "trace"})
+        )
+        adapter = MagicMock()
+        adapter.memorize = AsyncMock(return_value=None)
+        backend = self._ready(adapter)
+        captured: dict = {}
+        backend._convert_messages = lambda messages, *, agent_id, user_id: (
+            captured.update(  # type: ignore[method-assign]
+                agent_id=agent_id, user_id=user_id
+            )
+            or [{"role": "user", "content": "x"}]
+        )
+
+        await backend.store("s", [{"role": "user", "content": "x"}], metadata={"flush": True, **scope.block})
+
+        assert captured == {"user_id": "liv", "agent_id": "coder"}
+
+    async def test_per_call_owners_do_not_change_the_backends_identity(self) -> None:
+        """The content is a sub-agent's; filing it under the host would put it
+        where recall for that agent never looks. The default identity stays the
+        one the host granted."""
+        adapter = MagicMock()
+        adapter.memorize = AsyncMock(return_value=None)
+        backend = self._ready(adapter)
+
+        await backend.store(
+            "s",
+            [{"role": "user", "content": "x"}],
+            metadata={"user_id": "sub-user", "agent_id": "sub-agent"},
+        )
+
+        assert (backend._user_id, backend._agent_id) == ("host-user", "host-agent")

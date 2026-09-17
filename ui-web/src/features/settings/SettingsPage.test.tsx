@@ -484,6 +484,19 @@ describe('settings island', () => {
     expect(tz.value).toBe('Asia/Shanghai')
   })
 
+  it('says the plugin is missing instead of four rows that read unset', async () => {
+    /* "not set" is what a present-but-unconfigured install looks like too, so
+       a person could fill in a model and a key here and have nothing happen. */
+    const note = 'the everos-memory distribution is not installed'
+    install(snap({ everos: { available: false, note, sections: {} } }))
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.memory').click()
+    })
+    expect(screen.getByText(note)).toBeTruthy()
+    expect(screen.queryByText('gui.set.unset')).toBeNull()
+  })
+
   it('saves an everos role through the source and folds the editor', async () => {
     const { calls } = install()
     await mount()
@@ -1667,8 +1680,8 @@ describe('default model pins', () => {
       [
         'set',
         {
-          key: 'knowledge',
-          value: { embeddingModel: 'text-embedding-3-large', embeddingProvider: 'openai' },
+          key: 'embedding',
+          value: { model: 'text-embedding-3-large', provider: 'openai' },
         },
       ],
     ])
@@ -1681,7 +1694,7 @@ describe('default model pins', () => {
      failing at all. A refused write now leaves the config untouched because
      there was only ever one. */
   it('leaves the stored pin untouched when the write is refused', async () => {
-    const data = pinsnap({ raw: { knowledge: { embeddingModel: 'openai/old', embeddingProvider: 'openai' } } })
+    const data = pinsnap({ raw: { embedding: { model: 'openai/old', provider: 'openai' } } })
     const calls: Array<[string, unknown]> = []
     install(data, {
       set: async (key, value) => {
@@ -1704,8 +1717,8 @@ describe('default model pins', () => {
       [
         'set',
         {
-          key: 'knowledge',
-          value: { embeddingModel: 'text-embedding-3-large', embeddingProvider: 'openai' },
+          key: 'embedding',
+          value: { model: 'text-embedding-3-large', provider: 'openai' },
         },
       ],
     ])

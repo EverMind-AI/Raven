@@ -92,7 +92,7 @@ class TestEverosExecutable:
 @pytest.fixture
 def everos_toml(tmp_path, monkeypatch):
     """Redirect the EverOS config read/write to a throwaway root raven owns."""
-    import raven.config.update_everos as ue
+    from raven_everos import config as ue
 
     root = tmp_path / ".everos"
     monkeypatch.setattr(ue, "everos_root", lambda: root)
@@ -1039,10 +1039,10 @@ class TestTheWrittenAddressIsVerified:
         (root / "everos.toml").write_text('[api]\nhost = "127.0.0.1"\nport = 8000\n')
 
         monkeypatch.setattr(_server, "_everos_executable", lambda: "/bin/true")
-        monkeypatch.setattr("raven.config.update_everos.everos_root", lambda: root)
+        monkeypatch.setattr("raven_everos.config.everos_root", lambda: root)
         # A write that silently does not take: the readback is the only thing
         # standing between this and a server bound to 8000 while raven probes 18791.
-        monkeypatch.setattr("raven.config.update_everos.set_everos_api", lambda **kw: None)
+        monkeypatch.setattr("raven_everos.config.set_everos_api", lambda **kw: None)
 
         with pytest.raises(RuntimeError, match="did not take effect"):
             _server._start_server_if_unlocked("http://localhost:18791")
@@ -1195,8 +1195,8 @@ class TestAnUnwritableRootFailsAsAStartFailure:
         (root / "everos.toml").write_text('[api]\nhost = "127.0.0.1"\nport = 8000\n')
         root.chmod(0o555)
         monkeypatch.setattr(_server, "_everos_executable", lambda: "/bin/true")
-        monkeypatch.setattr("raven.config.update_everos.everos_root", lambda: root)
-        monkeypatch.setattr("raven.config.update_everos.everos_owned", lambda: True)
+        monkeypatch.setattr("raven_everos.config.everos_root", lambda: root)
+        monkeypatch.setattr("raven_everos.config.everos_owned", lambda: True)
         try:
             with pytest.raises(RuntimeError) as caught:
                 _server._start_server_if_unlocked("http://localhost:18791")
@@ -1260,3 +1260,44 @@ class TestFindingTheHolderWithoutLsof:
         monkeypatch.setattr(_server, "_read_pidfile", lambda: None)
 
         assert _server._lock_holder_pid(tmp_path / "ome.db.lock", tmp_path) == 222
+
+
+class TestChildEnv:
+    """What the spawned server is handed, which is the only thing it reads."""
+
+    def test_an_endpoint_everos_already_has_is_left_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Whoever already supplied one -- a started backend, or an operator's
+        own exported variables -- `host_embedding_env` answers empty for, so
+        there is nothing here to overwrite and no guard needed against it."""
+        monkeypatch.setenv("EVEROS_EMBEDDING__MODEL", "already-supplied")
+        monkeypatch.setattr("raven_everos.config.host_embedding_env", dict)
+
+        assert everos_server._child_env()["EVEROS_EMBEDDING__MODEL"] == "already-supplied"
+
+    def test_a_fragment_is_replaced_whole_rather_than_topped_up(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Three variables from two sources is the one outcome worth avoiding:
+        it is neither operator's endpoint and fails in a way that names
+        neither."""
+        monkeypatch.setenv("EVEROS_EMBEDDING__MODEL", "half-an-endpoint")
+        monkeypatch.delenv("EVEROS_EMBEDDING__BASE_URL", raising=False)
+        monkeypatch.setattr(
+            "raven_everos.config.host_embedding_env",
+            lambda: {
+                "EVEROS_EMBEDDING__MODEL": "ravens/model",
+                "EVEROS_EMBEDDING__BASE_URL": "https://ravens/v1",
+                "EVEROS_EMBEDDING__API_KEY": "sk-raven",
+            },
+        )
+
+        env = everos_server._child_env()
+        assert env["EVEROS_EMBEDDING__MODEL"] == "ravens/model"
+        assert env["EVEROS_EMBEDDING__BASE_URL"] == "https://ravens/v1"
+
+    def test_a_port_inherited_from_ravens_own_environment_is_dropped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """EverOS resolves env above the toml, so an inherited EVEROS_API__PORT
+        would outrank the [api] section that is meant to be the sole authority
+        on where a server for this root listens."""
+        monkeypatch.setenv("EVEROS_API__PORT", "9999")
+        monkeypatch.setattr("raven_everos.config.host_embedding_env", dict)
+
+        assert "EVEROS_API__PORT" not in everos_server._child_env()

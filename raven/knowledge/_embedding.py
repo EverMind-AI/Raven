@@ -1,14 +1,15 @@
 """Where a knowledge base gets its vectors.
 
-The endpoint is the one the operator already configured for EverOS memory
-(``~/.everos/raven/everos.toml``, ``[embedding]``): an OpenAI-compatible base
-URL, a key and a model. Reusing it means a knowledge base needs no second
-credential and no picker fed from a provider catalogue.
+An OpenAI-compatible base URL, a key and a model, read from raven's own
+``embedding`` config section. A knowledge base indexes and answers inside the
+gateway process and never speaks to the memory service, so its endpoint is
+raven's to hold.
 
-Reading that file is *not* the same as depending on the EverOS service. Only
-the three strings are taken; the request goes straight to the embedding
-endpoint. The service is a separate process and has spent whole days
-unresponsive, and a knowledge base must not be able to fail for that reason.
+It was EverOS's to hold, read straight out of ``everos.toml``. That made a
+feature with nothing to do with memory fail whenever the memory plugin was
+absent, uninstalled or simply not the configured backend -- with no message
+naming the cause. The reader below still falls back to that file so an
+operator who has not moved the values keeps working, and says so once.
 """
 
 from __future__ import annotations
@@ -44,17 +45,15 @@ class EmbeddingConfig:
     """Who serves the model, when that is known.
 
     Recorded so a base can be re-embedded later through the same provider: a
-    model id does not name a credential, and the base URL a query has to go out
-    on is the provider's, not something derivable from the model. Empty for the
-    endpoint inherited from the EverOS file, which names no provider."""
+    model id does not name a credential, and the address a query has to go out
+    on is the provider's, not something derivable from the model."""
 
     batch_size: int | None = None
     """How many inputs the endpoint accepts in one call, when it is known.
 
-    Stated by the operator (the EverOS file carries ``batch_size``) rather than
-    discovered, because the discovery costs a failed request. ``None`` means
-    use the default and let the endpoint correct it -- see
-    :data:`_DEFAULT_BATCH`."""
+    Stated by the operator rather than discovered, because the discovery costs
+    a failed request. ``None`` means use the default and let the endpoint
+    correct it -- see :data:`_DEFAULT_BATCH`."""
 
     dimensions: int | None = None
     """The vector width, when the operator pinned one.
@@ -68,78 +67,155 @@ class EmbeddingConfig:
     """
 
 
-def everos_config_path() -> Path:
-    """Where raven keeps the EverOS config: the root raven recorded.
+def _legacy_everos_config_path() -> Path | None:
+    """Where an EverOS config would be, for an install that has not moved yet.
 
-    Through ``everos_root`` rather than off ``EVEROS_ROOT``, which raven
-    deliberately treats as an output. It *writes* that variable from
-    ``plugins.config["everos-memory"]["root"]`` so the choice is a recorded
-    decision, and its own module says why reading it back as an input is not
-    safe: a root inherited from an ambient environment and never written down
-    is silent data loss, because the memories stay on disk while raven reports
-    none.
+    Three places, in the order the memory plugin itself resolves them, and with
+    plain ``tomllib`` rather than by importing the plugin -- or a knowledge base
+    would again be unusable exactly where the plugin is not installed:
 
-    Reading it as an input made this module answer two different things for one
-    installation -- the recorded root once the memory backend had booted and
-    exported the variable, and a hardcoded ``~/.everos/raven`` before that or in
-    a process that never boots it. On the deployment this was found on, those
-    were two different files with two different endpoints, one of them keyless.
+    1. the root raven recorded in ``plugins.config["everos-memory"]["root"]``;
+    2. the machine-wide legacy location, when this is the default installation
+       -- that path is not derived from the config directory, so an instance
+       running from a moved config must not adopt the default install's root;
+    3. the current default under the data directory.
 
-    ``everos_root`` already covers the install that has never written the file:
-    it falls back on its own.
+    ``None`` when none of them holds a file. An install that predates root
+    recording reaches (2), which is the case this fallback exists for: before
+    it, such an install lost its knowledge-base endpoint entirely while a valid
+    file sat on disk.
     """
-    from raven.config.update_everos import everos_root
+    from raven.config.paths import get_data_dir
+    from raven.config.raven import load_raven_config
+    from raven.home import get_config_path
 
-    return everos_root() / "everos.toml"
+    candidates: list[Path] = []
+    try:
+        slice_ = (load_raven_config().plugins.config or {}).get("everos-memory") or {}
+    except Exception as exc:  # noqa: BLE001 - an unreadable config is not this module's to report
+        logger.warning("knowledge: cannot read raven config: {}", exc)
+        slice_ = {}
+    if slice_.get("root"):
+        candidates.append(Path(str(slice_["root"])).expanduser())
+    if get_config_path() == Path.home() / ".raven" / "config.json":
+        candidates.append(Path.home() / ".everos" / "raven")
+    candidates.append(get_data_dir() / "everos")
+
+    for root in candidates:
+        if (root / "everos.toml").is_file():
+            return root / "everos.toml"
+    return None
 
 
-def _pinned_embedding_config() -> EmbeddingConfig | None:
-    """The embedding pair configured in raven's own config, resolved.
+def _provider_serving(base_url: str) -> str | None:
+    """Which configured provider answers at ``base_url``, if any.
 
-    ``knowledge.embeddingModel`` names the model and
-    ``knowledge.embeddingProvider`` names who serves it, and the provider's own
-    address and key are what the call goes out on -- the same pair every other
-    subsystem pin states, for the same reason: a model id does not name a
-    credential.
+    The migration's one hard part: the retired block stored an address, the
+    block replacing it names a provider, and only the configured providers can
+    say which of them is that address. Compared on the host and path with a
+    trailing slash removed, because the two spellings are the same endpoint and
+    the config may hold either.
+    """
+    try:
+        from raven.config.update_providers import list_providers, resolve_provider_credentials
+    except Exception:  # noqa: BLE001 - nothing to match against
+        return None
+    want = base_url.rstrip("/")
+    for row in list_providers():
+        name = str(row.get("name") or "")
+        if not name:
+            continue
+        try:
+            resolved = resolve_provider_credentials(name)
+        except Exception:  # noqa: BLE001 - one unusable provider must not stop the search
+            continue
+        if resolved and resolved[0].rstrip("/") == want:
+            return name
+    return None
 
-    ``None`` whenever the pair cannot be completed, which hands the caller back
-    to the EverOS endpoint rather than failing. An install that never sets this
-    behaves exactly as it did before the block existed.
+
+def endpoint_is_ravens_own() -> bool:
+    """Whether raven's own block names the endpoint every reader uses.
+
+    Both halves or neither: the block records a model and the provider that
+    serves it, and a model alone resolves to nothing -- so a config carrying
+    only one of them has not adopted the endpoint, whatever it looks like on a
+    settings page.
     """
     try:
         from raven.config.raven import load_raven_config
-        from raven.config.update_providers import resolve_provider_credentials
-    except Exception:
+
+        pin = load_raven_config().embedding
+    except Exception:  # noqa: BLE001 - an unreadable config has adopted nothing
+        return False
+    return bool(pin.model and pin.provider)
+
+
+def adopt_legacy_endpoint(raw: dict) -> bool:
+    """Rewrite the memory backend's endpoint as an ``embedding`` pin, in ``raw``.
+
+    Mutates the caller's already-loaded config dict rather than writing a file:
+    ``raven doctor --fix`` applies several corrections in one atomic write, and
+    a second writer here would race it.
+
+    The retired block held an address and a key; the pin names a provider and
+    lets it hold those. So this only lands when a configured provider already
+    answers at that address -- otherwise there is nowhere for the key to live,
+    and inventing a provider row from a bare URL would be a worse guess than
+    saying nothing. ``False`` then, and doctor says what to pick instead.
+    """
+    legacy = read_legacy_embedding()
+    if legacy is None:
+        return False
+    provider = _provider_serving(legacy.base_url)
+    if provider is None:
+        logger.warning(
+            "knowledge: the EverOS endpoint at {} is not served by any configured provider, so it "
+            "cannot be written as a pin; choose an embedding model in settings instead",
+            legacy.base_url,
+        )
+        return False
+    block = raw.setdefault("embedding", {})
+    block["model"] = legacy.model
+    block["provider"] = provider
+    block.pop("baseUrl", None)
+    block.pop("base_url", None)
+    block.pop("apiKey", None)
+    block.pop("api_key", None)
+    if legacy.dimensions:
+        block["dimensions"] = legacy.dimensions
+    return True
+
+
+def read_legacy_embedding() -> "EmbeddingConfig | None":
+    """The ``[embedding]`` section of the EverOS config, or ``None``."""
+    path = _legacy_everos_config_path()
+    if path is None or not path.is_file():
         return None
     try:
-        pin = load_raven_config().knowledge
-    except Exception as exc:
-        logger.debug("knowledge: cannot read the embedding pin ({}); using the everos endpoint", exc)
+        with path.open("rb") as handle:
+            section = dict(tomllib.load(handle).get("embedding") or {})
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        logger.warning("knowledge: cannot read {}: {}", path, exc)
         return None
-    model, provider = pin.embedding_model, pin.embedding_provider
-    if not model or not provider:
+    model, base_url, api_key = section.get("model"), section.get("base_url"), section.get("api_key")
+    if not (model and base_url and api_key):
         return None
-    resolved = resolve_provider_credentials(provider)
-    if resolved is None:
-        logger.warning(
-            "knowledge: embedding provider {!r} has no usable credentials; using the everos endpoint instead",
-            provider,
-        )
-        return None
-    base_url, api_key = resolved
-    # The provider half already said whose credential this is, so the stored
-    # `provider/model` spelling has served its purpose: what goes on the wire is
-    # the vendor's own id, which is the tail.
-    wire_model = model.split("/", 1)[1] if "/" in model else model
-    return EmbeddingConfig(model=wire_model, base_url=base_url, api_key=api_key, provider=provider, dimensions=None)
+    dimensions = section.get("dimensions")
+    return EmbeddingConfig(
+        model=str(model),
+        base_url=str(base_url).rstrip("/"),
+        api_key=str(api_key),
+        dimensions=int(dimensions) if isinstance(dimensions, int) and dimensions > 0 else None,
+    )
 
 
 def asking_for(config: EmbeddingConfig, model: str, dimensions: int | None = None) -> EmbeddingConfig:
     """The same endpoint, asked for a different model.
 
     For a base built before the configured pin moved: the address and the
-    credential are still the ones in hand, and only the model has to follow
-    the base. Lives here rather than at the call site because an endpoint's
+    credential are still the ones in hand, and only the model has to follow the
+    base. Lives here rather than at the call site because an endpoint's
     credential is this module's business -- ``providers.auth`` owns who is
     configured, and no other module should be handling a key to restate one.
     """
@@ -150,85 +226,84 @@ def embedding_config_for(provider: str, model: str, dimensions: int | None = Non
     """The endpoint a named provider serves a named model on.
 
     What a knowledge base needs to be searched with the model it was built
-    with, once today's configured pin has moved on: the base recorded who
-    served it, and the credential for that provider is still resolvable from
-    the same place the pin resolves from.
+    with, once the configured pin has moved on: the base recorded who served
+    it, and the credential for that provider is still resolvable from the same
+    place the pin resolves from.
 
-    ``None`` when the provider has no usable credentials any more -- the
-    caller decides whether that means skipping one base or failing.
-
-    The model is used exactly as given. Unlike the configured pin, which is
-    stored as ``provider/model`` and has its first segment stripped on the way
-    out, this one is already the id that went on the wire -- and stripping a
-    namespace that belongs to the model would rewrite
-    ``BAAI/bge-large-zh-v1.5`` into a model no endpoint serves.
+    ``None`` when the provider has no usable credentials any more -- the caller
+    decides whether that means one base answering by keyword or a failure.
     """
     if not provider or not model:
         return None
     try:
         from raven.config.update_providers import resolve_provider_credentials
-    except Exception:
+        from raven.providers.wire import wire_model
+    except Exception:  # noqa: BLE001 - an import failure here is not this module's to report
         return None
     try:
         resolved = resolve_provider_credentials(provider)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - an unreadable config must not take the base down
         logger.debug("knowledge: cannot resolve provider {!r} ({})", provider, exc)
         return None
     if resolved is None:
         return None
     base_url, api_key = resolved
-    return EmbeddingConfig(model=model, base_url=base_url, api_key=api_key, provider=provider, dimensions=dimensions)
-
-
-def everos_embedding_config() -> EmbeddingConfig | None:
-    """The endpoint the memory backend configured, ignoring raven's own pin.
-
-    Separate from :func:`load_embedding_config` because it answers a different
-    question. That one asks what to build a new base with; this one asks where
-    a base built before the pin existed came from -- and for a base carrying a
-    model the pin does not name, this file is the only record of the endpoint
-    that produced its vectors.
-    """
-    path = everos_config_path()
-    if not path.is_file():
-        return None
-    try:
-        with path.open("rb") as handle:
-            section = dict(tomllib.load(handle).get("embedding") or {})
-    except (OSError, tomllib.TOMLDecodeError) as exc:
-        logger.warning("knowledge: cannot read {}: {}", path, exc)
-        return None
-
-    model, base_url, api_key = section.get("model"), section.get("base_url"), section.get("api_key")
-    if not (model and base_url and api_key):
-        return None
-    dimensions = section.get("dimensions")
-    batch_size = section.get("batch_size")
     return EmbeddingConfig(
-        model=str(model),
-        base_url=str(base_url).rstrip("/"),
-        api_key=str(api_key),
-        batch_size=int(batch_size) if isinstance(batch_size, int) and batch_size > 0 else None,
-        dimensions=int(dimensions) if isinstance(dimensions, int) and dimensions > 0 else None,
+        model=wire_model(model, client_provider=provider),
+        base_url=base_url.rstrip("/"),
+        api_key=api_key,
+        provider=provider,
+        dimensions=dimensions,
     )
 
 
 def load_embedding_config() -> EmbeddingConfig | None:
-    """The configured embedding endpoint, or ``None`` when there is not one.
+    """The configured embedding endpoint, resolved, or ``None``.
 
-    ``None`` rather than a raise: a deployment with no embedding configured is
-    a deployment with no knowledge bases, which is an ordinary state. The
-    caller turns it into "configure this first", not into a failed start.
+    One source: the ``embedding`` block names a model and a provider, and the
+    provider's own address and key are what the call goes out on. ``None``
+    rather than a raise -- a deployment with no embedding configured is a
+    deployment with no knowledge bases, which is an ordinary state, and the
+    caller turns it into "configure this first" rather than a failed start.
 
-    Raven's own pin wins when it is complete. It is the choice somebody made in
-    settings, against a provider they can see; the EverOS file is the endpoint
-    inherited from the memory backend, and staying on it after a deliberate
-    pick would make the picker a control that changes nothing.
+    Nothing is inherited from the memory backend any more. An install whose
+    endpoint only ever lived in ``everos.toml`` is migrated once, by
+    ``raven doctor --fix``; reading that file on every call is what made a
+    knowledge base stop working when the memory plugin was not installed.
     """
-    pinned = _pinned_embedding_config()
-    if pinned is not None:
-        return pinned
-    return everos_embedding_config()
+    try:
+        from raven.config.raven import load_raven_config
+        from raven.config.update_providers import resolve_provider_credentials
+        from raven.providers.wire import wire_model
+    except Exception:  # noqa: BLE001 - an import failure here is not this module's to report
+        return None
+
+    try:
+        pin = load_raven_config().embedding
+    except Exception as exc:  # noqa: BLE001 - an unreadable config must not take the knowledge base down
+        logger.debug("knowledge: cannot read the embedding endpoint ({}); nothing is configured", exc)
+        return None
+
+    model, provider = pin.model, pin.provider
+    if not model or not provider:
+        return None
+
+    resolved = resolve_provider_credentials(provider)
+    if resolved is None:
+        logger.warning(
+            "knowledge: embedding provider {!r} has no usable credential, so nothing can be embedded until it has one",
+            provider,
+        )
+        return None
+
+    base_url, api_key = resolved
+    return EmbeddingConfig(
+        model=wire_model(model, client_provider=provider),
+        base_url=base_url.rstrip("/"),
+        api_key=api_key,
+        provider=provider,
+        dimensions=pin.dimensions if pin.dimensions and pin.dimensions > 0 else None,
+    )
 
 
 #: Inputs per request when nothing says otherwise. Endpoints disagree by two

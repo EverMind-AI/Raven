@@ -1033,6 +1033,10 @@ export interface InstanceRow {
    * What the graph this instance belongs to was dispatched for. Absent, not empty, for an instance that came from no orchestration, so its presence is what says the row has a source.
    */
   runTitle?: string;
+  /**
+   * When the turn this instance is answering right now began. Absent when it is answering none, so presence is what says the instance is working and the number is what says for how long. Not updatedAtMs, which every registry write stamps: a binding commit and a graph-origin write move it too, so it dates the row and not the turn.
+   */
+  turnStartedAtMs?: number;
 }
 /**
  * One row of one instance's conversation. Preferred source is the instance's own log, which is written turn by turn and holds what the run did on the way; a conversation with no log falls back to its record directories, where a turn is a pair of files.
@@ -3039,6 +3043,50 @@ export interface SubagentsInstanceSetModeResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsInstanceSetModelParams".
+ */
+export interface SubagentsInstanceSetModelParams {
+  session_key: string;
+  agent: string;
+  handle: string;
+  /**
+   * The opaque provider-qualified id the agent offered. Never a display name: the two differ and the agent takes only the id back.
+   */
+  model?: string;
+  /**
+   * Drop this instance's override, returning it to the agent's own model. model wins when both are given, matching set_mode: naming one is a statement, clearing is the absence of one.
+   */
+  clear?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsInstanceSetModelResult".
+ */
+export interface SubagentsInstanceSetModelResult {
+  /**
+   * This instance's override, or null when it follows the agent's own model.
+   */
+  model?: string | null;
+  /**
+   * The menu the agent advertised, measured from its own handshake rather than declared here.
+   */
+  availableModels?: {
+    /**
+     * The id the agent takes back.
+     */
+    value: string;
+    /**
+     * What the agent asked to be shown, usually far shorter than the value.
+     */
+    name?: string;
+    /**
+     * The agent's own bucketing, a provider typically. Empty when it offered none.
+     */
+    group?: string;
+  }[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SessionSetModeParams".
  */
 export interface SessionSetModeParams {
@@ -3806,6 +3854,14 @@ export interface SettingsEverosResult {
     [k: string]: EverosSection;
   };
   config_path: string;
+  /**
+   * Whether this install has an EverOS to configure at all. False leaves sections empty and note set.
+   */
+  available: boolean;
+  /**
+   * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
+   */
+  note?: string | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4077,6 +4133,10 @@ export interface MemoryStatsResult {
   profiles: number;
   agent_cases: number;
   agent_skills: number;
+  /**
+   * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
+   */
+  note?: string | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4103,6 +4163,10 @@ export interface MemoryListResult {
   total: number;
   page: number;
   page_size: number;
+  /**
+   * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
+   */
+  note?: string | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4349,6 +4413,51 @@ export interface PlaybooksRunResult {
    * The executor's own answer, verbatim. For a dispatched graph this is the receipt the run id is read out of.
    */
   reply: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksCreateParams".
+ */
+export interface PlaybooksCreateParams {
+  /**
+   * Short kebab-case name; becomes the library directory name. Must not already exist in either layer.
+   */
+  name: string;
+  /**
+   * The whole procedure in plain language: steps in order, what each produces and consumes, per-run parameters, trigger phrases, and any MCP server a step needs. The generator sees only this text.
+   */
+  workflow: string;
+  /**
+   * Skill names to pin to specific steps, when the caller named some.
+   */
+  skills?: string[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksCreateResult".
+ */
+export interface PlaybooksCreateResult {
+  name: string;
+  /**
+   * Whether a playbook now exists. False only when the generation failed, in which case `errors` says why.
+   */
+  created: boolean;
+  /**
+   * Where the file landed; empty when nothing was created.
+   */
+  path: string;
+  /**
+   * The composer's own open questions -- assumptions it made and gaps it could not close. Written into the file's prose for review and returned here so a client need not read the file back.
+   */
+  notes: string[];
+  /**
+   * Why the composer could not produce a valid playbook. Non-empty exactly when `created` is false.
+   */
+  errors: string[];
+  /**
+   * Whether the live library loaded the new file, so it is usable in this process without a restart.
+   */
+  adopted: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

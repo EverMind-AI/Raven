@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING
 from raven.rpc import pdf_preview
 
 if TYPE_CHECKING:
-    from raven.knowledge._types import KnowledgeDocumentRecord
+    from raven.knowledge._records import KnowledgeDocumentRecord
 
 
 class DocumentMissingError(LookupError):

@@ -104,6 +104,17 @@ describe('memory island', () => {
     expect(screen.queryByText('gui.mem.tab_episode')).toBeNull()
   })
 
+  it('says why the page is empty instead of showing an empty stat band', async () => {
+    /* No memory plugin, or one the config does not name: not a failure, and
+       four zeros read as "your memories are gone" rather than "they are not
+       kept here". */
+    const note = 'Long-term memory runs on mem0, and this page reads EverOS only.'
+    install({ list: async () => ({ items: [], total: 0, note }) })
+    await mount()
+    expect(await screen.findByText(note)).toBeTruthy()
+    expect(screen.queryByText('gui.mem.tab_episode')).toBeNull()
+  })
+
   it('renders a live failure inline with its detail and recovers on retry', async () => {
     let failed = false
     install({

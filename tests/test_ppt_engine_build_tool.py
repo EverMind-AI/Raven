@@ -934,6 +934,38 @@ async def test_what_the_script_warned_about_reaches_the_author_on_a_successful_b
 
 
 @pytest.mark.asyncio
+async def test_a_warning_already_carried_by_an_earlier_receipt_is_counted_not_repeated(project: Project) -> None:
+    """Six receipts of one run carried the same four replace_picture warnings, six hundred
+    characters each, for calls the author had looked at and kept. The line number moves
+    with every edit above the call and is not what makes it the same warning; a traceback
+    is not a warning and comes back whole every time."""
+    deck = project.build_dir / "deck.pptx"
+    deck.parent.mkdir(parents=True, exist_ok=True)
+    deck.write_bytes(b"PK")
+    warning = (
+        "deck/build/build.py:{line}: UserWarning: '图片 14' held a cut-out illustration on the page's own ground\n"
+    )
+    source = "  replace_picture(pics[0], IMG['tanghulu'], 'cover')\n"
+    traceback_text = (
+        'Traceback (most recent call last):\n  File "build.py", line 9\nLookupError: expected 4 slot bodies\n'
+    )
+
+    def result(stderr: str) -> StageResult:
+        return StageResult(ok=True, data={"outcome": BuildOutcome(ok=True, pptx_path=deck, pages=1, stderr=stderr)})
+
+    first = _body(await _tool(project, result(warning.format(line=346) + source)).execute(project="tarvis"))
+    assert "held a cut-out illustration" in first["warnings"] and "replace_picture(pics[0]" in first["warnings"]
+
+    second = _body(
+        await _tool(project, result(warning.format(line=352) + source + traceback_text)).execute(project="tarvis")
+    )
+    assert "1 warning(s) unchanged since an earlier build of this deck" in second["warnings"]
+    assert "'图片 14' held a cut-out illustration" in second["warnings"], "named, in a few words"
+    assert "replace_picture(pics[0]" not in second["warnings"], "the source line went with the warning"
+    assert "LookupError: expected 4 slot bodies" in second["warnings"], "a traceback is never folded"
+
+
+@pytest.mark.asyncio
 async def test_a_reply_with_findings_asks_for_the_edits_and_the_build_together(project: Project) -> None:
     """The shape of the next reply, said where the author reads it: a run spent 32 of
     72 iterations sending one edit and one build as separate replies."""
@@ -1290,13 +1322,13 @@ async def test_the_delivered_path_and_the_slide_count_are_words_the_author_repea
     project: Project, tmp_path: Path
 ) -> None:
     delivered = tmp_path / "handoff" / "ravenx-intro.pptx"
-    result = _ok(project, pages=12, delivered_to=str(delivered), delivered_pdf=str(delivered.with_suffix(".pdf")))
+    result = _ok(project, pages=12, delivered_to=str(delivered), pdf_path=str(project.exports_dir / "deck.pdf"))
 
     body = _body(await _tool(project, result).execute(project="tarvis"))
 
     assert body["ok"] is True and body["delivered_to"] == str(delivered)
     assert body["next_step"].startswith(f"tell the user in these terms: the deck is at {delivered} and has 12 slides")
-    assert f"its PDF preview is {delivered.with_suffix('.pdf')}" in body["next_step"]
+    assert "PDF" not in body["next_step"] and "pdf_path" not in body, "the deliverable is the deck alone"
     assert body["pptx_path"] in body["next_step"], "out/ is still named as the engine's own copy"
 
 

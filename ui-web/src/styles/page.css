@@ -2833,6 +2833,21 @@ textarea:focus, textarea:focus-visible,
 .fview .binote .binacts { display: flex; flex-wrap: wrap; gap: 7px; }
 .fview .vspin { padding: 22px 16px; font-size: 12px; color: var(--faint); }
 .fview .verr { padding: 18px 16px; font-size: 12.5px; color: var(--clay); line-height: 1.6; }
+/* Not .verr: nothing failed here. A withheld capability is worth saying plainly
+   and worth not dressing as an error, or the reader starts debugging the file. */
+.fview .vnote {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+  background: var(--raised);
+  border-bottom: 1px solid var(--line);
+}
+.fview .vnote-run { flex: none; }
 
 /* ── switch ────────────────────────────────────────────────────────── */
 .swi {
@@ -5051,6 +5066,16 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 :root[data-theme="light"] .agent-mark img { color-scheme: light; }
 .agent-kind { flex: none; padding: 1px 6px; border: 1px solid var(--line-soft); border-radius: 999px;
   background: var(--surface); color: var(--muted); font: 8.5px/1.45 var(--mono); text-transform: lowercase; }
+/* Beside the mode chip in a pane header, in the tabular mono the other elapsed
+   numbers use -- a proportional font makes a per-second clock jitter sideways
+   as its digits change width. */
+.pane-turnms { flex: none; font-family: var(--mono); font-size: 10.5px; color: var(--faint);
+  font-variant-numeric: tabular-nums; }
+/* The model chip wears the effort chip's clothes -- they are one row of
+   per-instance settings -- but caps its width: a provider-qualified id is the
+   honest fallback when an agent names no short form, and one of those would push
+   the header's own buttons off the end. */
+.pane-imodel { max-width: 168px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-headrow { display: flex; align-items: center; min-width: 0; }
 .agent-headrow .agent-head { flex: 1; min-width: 0; }
 /* Standing, not revealed on hover: this is the only way to start a conversation

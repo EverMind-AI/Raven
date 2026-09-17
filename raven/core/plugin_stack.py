@@ -49,12 +49,25 @@ if TYPE_CHECKING:
     from raven.config.raven import RavenConfig
     from raven.contracts.llm_provider import LLMProvider
     from raven.contracts.memory import MemoryBackend
+    from raven.contracts.onboard import OnboardStep
     from raven.plugins.discover import DiscoveredPlugin
 
 logger = logging.getLogger(__name__)
 
 EVEROS_PLUGIN_DISTRIBUTION = "everos-memory"
 """The distribution that contributes the ``everos`` memory backend."""
+
+SHIPPED_DEFAULT_BACKEND = "everos"
+"""The value ``memory.backend`` carries when nobody has chosen one.
+
+Named rather than compared inline, because the three places that test for it
+are not treating this backend as special -- they are answering "the default
+names something that is not here", which is the commonest way an install
+reaches those lines and the only one where the reader did not pick the name
+themselves. A reader who wrote a backend name into their config already knows
+what they asked for; a reader who never touched it needs to be told what the
+default was and where it went.
+"""
 
 _EVEROS_PLUGIN_PACKAGE = "raven_everos"
 
@@ -207,6 +220,7 @@ def maybe_build_memory_backend(
         user_id=config.memory.user_id,
         agent_id=config.memory.agent_id,
         notify=notify,
+        embedding=config.embedding,
     )
     try:
         backend = registry.build_memory_backend(
@@ -222,6 +236,25 @@ def maybe_build_memory_backend(
             "entry-point group. Continuing without a plugin backend.",
             name,
         )
+        # Said to the user, not only to the log: a backend the config names and
+        # nothing provides is the hardest "no memory" to diagnose. Through the
+        # host's notifier when it lent one, else plain stderr -- this layer
+        # renders through no terminal toolkit.
+        message = (
+            f"Long-term memory is off: memory.backend={name!r} but no installed plugin provides it "
+            f"(installed: {', '.join(registry.memory_backend_names()) or 'none'})."
+        )
+        # The shipped default names a backend that ships separately, so the
+        # commonest way to reach this line is an install that simply lacks the
+        # distribution. Saying only which backends are installed leaves that
+        # reader with nothing to do; doctor and the wizard already answer it in
+        # one sentence, and this is the surface a turn actually reaches.
+        if name == SHIPPED_DEFAULT_BACKEND and not everos_plugin_installed():
+            message = f"{message} {everos_plugin_missing_note()}"
+        if notify is not None:
+            notify(message)
+        else:
+            print(message, file=sys.stderr)
         return None
     except Exception as e:
         # Factory raised during construction: log and degrade rather
@@ -346,6 +379,38 @@ def build_plugin_tools(
             pass
         tools.append(tool)
     return tools
+
+
+def build_onboard_steps(
+    workspace: Path,
+    config: "RavenConfig",
+    *,
+    registry: PluginRegistry | None = None,
+) -> list[tuple[str, "OnboardStep"]]:
+    """Every activated plugin's onboard screen as ``(name, step)``, in registry order."""
+    if registry is None:
+        registry = build_plugin_registry(config)
+    services = ServiceLocator(
+        workspace=workspace,
+        user_id=config.memory.user_id,
+        agent_id=config.memory.agent_id,
+    )
+    slices = config.plugins.config
+    steps = []
+    for name in registry.onboard_names():
+        # Resolved from the onboard entry's own plugin id, not the
+        # memory_backends reverse-lookup: two different plugins can
+        # contribute onboard/backend pairs with the same name (they only
+        # collide, and fail activation, when the SAME name lands twice in
+        # the SAME slot), so answering through the backend side would let
+        # one plugin's onboard step receive another plugin's config slice.
+        plugin_id = registry.onboard_plugin_id(name)
+        plugin_slice = (plugin_id and slices.get(plugin_id)) or slices.get(name) or {}
+        try:
+            steps.append((name, registry.build_onboard_step(name, config=plugin_slice, services=services)))
+        except Exception as e:
+            logger.warning("onboard step %r factory raised (%s); skipping it.", name, e)
+    return steps
 
 
 def build_plugin_hooks(
@@ -597,6 +662,7 @@ def _plugin_id_for_backend(
 
 
 __all__ = [
+    "build_onboard_steps",
     "build_plugin_hooks",
     "build_plugin_registry",
     "build_plugin_tools",
