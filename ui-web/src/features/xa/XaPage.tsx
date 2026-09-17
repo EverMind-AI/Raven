@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useSyncExternalStore } from 'react'
 
-import { AgentMark, isOwnAgent } from '../../shell/agent-mark'
+import { AgentMark, isOwnAgent } from '../../components/AgentMark'
 import { t } from '../../i18n/t'
-import { KeyInput } from '../../shell/key-input'
-import { SetupGroup, SetupRow } from '../../shell/setuprow'
+import { KeyInput } from '../../components/KeyInput'
+import { SetupGroup, SetupRow } from '../../components/SetupRow'
 import * as store from './store'
 
 import type { XaRow } from './types'

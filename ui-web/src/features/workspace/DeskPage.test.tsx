@@ -9,10 +9,10 @@ import * as deliveries from './deliveries'
 import * as desk from './deskStore'
 import * as workspace from './store'
 
-import { setCurrent } from '../../shell/session'
+import { setCurrent } from '../../lib/session'
 /* The wiring main.tsx gets from this import: the desk's file opener is handed
    to the workspace store here, and `openDelivery` reaches the desk through it. */
-import '../../islands'
+import '../registry'
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources } from '../../state/sources'
 

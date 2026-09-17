@@ -5,8 +5,8 @@
  * renders page.html's body plus this root) and by both boot goldens, so nothing
  * here re-states it. What is here is what a golden of tags, ids, classes and
  * data-* cannot see: the roles and flags that are not data-*, the elements
- * handed over empty because another writer owns them, which row opens what, and
- * that the literals come from the catalogue rather than from a copy in the JSX.
+ * handed over empty, which row opens what, and that the literals come from the
+ * catalogue rather than from a copy in the JSX.
  */
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 
 import * as nav from '../features/plugins/nav'
-import { islands } from '../islands'
+import { islands } from '../features/registry'
 import * as lang from '../state/lang'
 import { mountPageRoot } from '../test/pageRoot'
 
@@ -109,11 +109,12 @@ describe('the rail', () => {
     }
   })
 
-  /* Shared ground and other modules' values: the rail island roots itself in
-     #list, shell/navfly.ts builds the rows inside #moreFly and re-decides their
-     marks, features/rail/store.ts writes aria-current over the nav buttons, and
-     shell/foot.ts writes the two slots in the door. React owning any of them
-     would tear down what the other side put there. */
+  /* Shared ground, and values nothing has answered yet: the rail island roots
+     itself in #list, so React must not own that child list; the fold's rows and
+     the two slots in the door are rendered from stores that hold nothing until
+     a boot step or a reader asks (state/navfly.ts, state/foot.ts); and the
+     aria-current over the nav buttons is written from outside React
+     (features/rail/store.ts), which is why none of them carries one here. */
   it('hands the list, the fold and the foot slots over empty', () => {
     render()
     for (const id of ['list', 'moreFly', 'meSub', 'meKbd']) {
@@ -160,7 +161,7 @@ describe('the rail', () => {
   /* A React onClick leaves no trace on the element -- the root delegates every
      click -- so the count that matters is over the source. The new-task row's
      action belongs to the session rather than to the chrome that carries it, so
-     state/install.ts's installActions() binds it by id. */
+     app/install.ts's installActions() binds it by id. */
   it('leaves the new-task row exactly one handler, in the module that owns the action', () => {
     render()
     /* React leaves an empty onclick on every element it takes a click of (the
@@ -169,7 +170,7 @@ describe('the rail', () => {
        than replace it. */
     expect(el('newBtn').onclick).toBe(null)
     expect(el('skillBtn').onclick).not.toBe(null)
-    const wiring = source('state/install.ts')
+    const wiring = source('app/install.ts')
     expect([...wiring.matchAll(/\$\('#newBtn'\)!?\.onclick/g)]).toHaveLength(1)
     const tag = /<button[^>]*id="newBtn"[^>]*>/.exec(source('chrome/Rail.tsx'))
     expect(tag?.[0]).not.toMatch(/onClick/)
@@ -178,7 +179,7 @@ describe('the rail', () => {
 
 /* Last in the file on purpose: applying a language is module state for
    everything after it. Same agreement as the two dialogs' -- the pass
-   state/lang.ts makes over the document's data-i18n attributes, and the
+   state/lang/store.ts makes over the document's data-i18n attributes, and the
    component rendering the same key through lang.text -- so the rail cannot come
    back in the served language once a flip has moved it. A re-render alone would
    not show it: React diffs against the props it rendered last, so a literal it

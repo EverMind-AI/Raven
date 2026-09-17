@@ -22,7 +22,7 @@ async function opener(calls: unknown[][], run: unknown) {
      around the module under test. */
   const wiring = await loadPart(async () => {
     await import('./source')
-    return import('../../state/install')
+    return import('../../app/install')
   }, {
     fakes: {
       'src/state/wsPanel': {
@@ -31,10 +31,10 @@ async function opener(calls: unknown[][], run: unknown) {
       'src/state/sheetRack': {
         session: () => 'a',
       },
-      'src/shell/dom': {
+      'src/lib/dom': {
         $: looseQuery(),
       },
-      'src/shell/session': { current: () => 'a' },
+      'src/lib/session': { current: () => 'a' },
       'src/features/dag/open': {
         dagOpenNode: (runId: string, node: { id: string }) => calls.push(['node', runId, node.id]),
       },
@@ -74,7 +74,7 @@ async function nodeHarness({ rows = [{ kind: 'spawn', agent: 'raven', label: 'qc
   const calls: unknown[][] = []
   const wiring = await loadPart(async () => {
     await import('./source')
-    return import('../../state/install')
+    return import('../../app/install')
   }, {
     fakes: {
       'src/state/wsPanel': {
@@ -85,7 +85,7 @@ async function nodeHarness({ rows = [{ kind: 'spawn', agent: 'raven', label: 'qc
           draw: () => calls.push(['drawWs']),
         }),
       },
-      'src/shell/session': { current: () => 's1' },
+      'src/lib/session': { current: () => 's1' },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
     },
     islands: {

@@ -2,10 +2,10 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
+import { KeyInput } from '../../components/KeyInput'
+import { ModelTagDefs, ModelTags } from '../../components/ModelTags'
+import { ProviderIcon, ProviderLink, ProviderStatus } from '../../components/ProviderMark'
 import { t } from '../../i18n/t'
-import { KeyInput } from '../../shell/key-input'
-import { ModelTagDefs, ModelTags } from '../../shell/model-tags'
-import { ProviderIcon, ProviderLink, ProviderStatus } from '../../shell/provider-mark'
 import * as store from './store'
 
 import type { OnboardProvider, OnboardSource } from './types'

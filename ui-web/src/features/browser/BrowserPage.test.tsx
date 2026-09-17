@@ -10,7 +10,7 @@ import { resetSources, setSources, sources } from '../../state/sources'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
-import { installWsPanel } from '../../test/wsPanel'
+import { installWsPanel } from '../../test/wsPanelHarness'
 import * as pageStore from '../../state/page'
 import type { BrowserSource, ChromiumSource, LinksSource, UrlRow } from './types'
 

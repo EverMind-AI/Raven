@@ -10,7 +10,7 @@
  * own those values wrote into them imperatively.
  *
  * The banner's two shapes are pinned where they were before they became a
- * component (src/shell/banner.test.ts, ten cases, unchanged).
+ * component (src/state/banner.test.ts, ten cases, unchanged).
  */
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readFileSync } from 'node:fs'
 
-import { islands } from '../islands'
+import { islands } from '../features/registry'
 import * as lang from '../state/lang'
 import { mountPageRoot } from '../test/pageRoot'
 

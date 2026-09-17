@@ -9,8 +9,8 @@
  * chrome it opens is the workspace's, not the graph's.
  */
 
-import { islands } from '../../islands'
 import { panel } from '../../state/wsPanel'
+import { islands } from '../registry'
 
 export function dagOpenNode(runId: string, n: { id: string; summary?: string | null }): void {
   islands.subagents.openDagNode(runId, n)

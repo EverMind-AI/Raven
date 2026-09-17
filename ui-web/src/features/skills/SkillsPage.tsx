@@ -1,9 +1,9 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
+import { CardSkeleton } from '../../components/Skeleton'
 import { t } from '../../i18n/t'
-import { text as reachText } from '../../shell/reach'
-import { CardSkeleton } from '../../shell/skeleton'
+import { text as reachText } from '../../lib/reach'
 import * as detail from '../../state/detail'
 import * as store from './store'
 

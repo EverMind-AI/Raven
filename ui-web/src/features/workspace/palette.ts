@@ -12,7 +12,7 @@ the desk stays out of the way where it was put away and stays up where it was
 wanted -- rather than one global flag that made the last conversation's decision
 for every other one.
 
-`localStorage`, unlike the layout notes in shell/persist.ts: this is a
+`localStorage`, unlike the layout notes in lib/persist.ts: this is a
 preference the reader stated, not a record of what was on screen, and it has to
 survive the tab being closed to mean what they meant by it.
 */

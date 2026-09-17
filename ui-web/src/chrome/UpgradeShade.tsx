@@ -1,4 +1,4 @@
-/* The upgrade card over the page (shell/upgrade.ts).
+/* The upgrade card over the page (state/upgradeShade.ts).
  *
  * A portal at the body, like the other two overlays that belong to no page:
  * `.upshade` is the full-window shade itself, so a wrapper around it would take
@@ -11,7 +11,7 @@
 import { useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import * as upgrade from '../shell/upgrade'
+import * as upgrade from '../state/upgradeShade'
 
 import type { JSX } from 'react'
 

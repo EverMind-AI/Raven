@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { nativeCtxOk, onContextMenu } from './contextMenu'
 
-import type { MenuItem } from '../shell/menu'
+import type { MenuItem } from './menu'
 
 type Declaring = Element & { _ctx?: () => Array<MenuItem | '-'> }
 

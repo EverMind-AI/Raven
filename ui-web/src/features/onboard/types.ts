@@ -1,6 +1,6 @@
 /* The first-run setup flow's DataSource contract. */
 
-import type { ModelTagFacts } from '../../shell/model-tags'
+import type { ModelTagFacts } from '../../components/ModelTags'
 
 export interface OnboardProvider {
   slug: string

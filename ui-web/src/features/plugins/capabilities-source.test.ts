@@ -56,7 +56,7 @@ async function opener(source: CapabilitiesSource): Promise<{
         extSet: (tab: string) => calls.push(`tab:${tab}`),
         draw: () => calls.push('draw'),
       },
-      'src/shell/toast': { show: toast },
+      'src/state/toast': { show: toast },
     },
     islands: { skills: { skeleton } },
   })
@@ -115,7 +115,7 @@ describe('manual plugin add', () => {
     const toast = vi.fn()
     const part = await loadPart(() => import('../../state/caps'), {
       fakes: {
-        'src/shell/toast': { show: toast },
+        'src/state/toast': { show: toast },
       },
     })
     /* The draw the add asks for afterwards, through the tab renderer the skill
@@ -150,10 +150,10 @@ describe('the live extension source', () => {
       plugins: [{ id: 'python', display_name: 'Python', version: '1', enabled: true }],
       mcp: [{ name: 'remote', transport: 'http', enabled: true, state: 'connected', tool_count: 2 }],
     }
-    const wiring = await loadPart(() => import('../../state/install'), {
+    const wiring = await loadPart(() => import('../../app/install'), {
       fakes: {
-        'src/shell/banner': { setFault: vi.fn() },
-        'src/shell/toast': { show: vi.fn() },
+        'src/state/banner': { setFault: vi.fn() },
+        'src/state/toast': { show: vi.fn() },
       },
       islands: { plugins: { event: vi.fn() } },
     })

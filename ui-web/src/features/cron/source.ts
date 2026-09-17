@@ -9,12 +9,12 @@ import type { ParamsOf, ResultOf } from '../../rpc/generated'
 import type { RailSource } from '../rail/types'
 
 import { cronExprHuman } from './humanize'
-import { islands } from '../../islands'
+import { islands } from '../registry'
 import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
-import { setCurrent as sessionSet } from '../../shell/session'
-import { show as toast } from '../../shell/toast'
-import { gateway } from '../../state/gateway'
+import { setCurrent as sessionSet } from '../../lib/session'
+import { show as toast } from '../../state/toast'
+import { gateway } from '../../rpc/gateway'
 
 /** One job as `cron.list` sends it. */
 export type CronJobWire = ResultOf<'cron.list'>['jobs'][number]

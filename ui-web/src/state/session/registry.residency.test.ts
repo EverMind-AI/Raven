@@ -72,9 +72,9 @@ async function harness(): Promise<{
         /* The island's own phase machine, which is what is under test here. */
         turn,
       },
-      'src/shell/dom': { $: looseQuery() },
-      'src/shell/session': { current: () => current },
-      'src/shell/banner': { draw: vi.fn() },
+      'src/lib/dom': { $: looseQuery() },
+      'src/lib/session': { current: () => current },
+      'src/state/banner': { draw: vi.fn() },
       /* What a buffered frame means, which is the pipeline's and not the
          residency rule's. */
       'src/state/session/runtime': { drain: drainQueue },
@@ -255,8 +255,8 @@ describe('forgetting a conversation subscription', () => {
     await loadPart(async () => { await import('./runtime'); return import('./registry') }, {
       fakes: {
         'src/i18n/t': { T: (key: string) => key },
-        'src/shell/dom': { $: looseQuery() },
-        'src/shell/session': { current: () => 'a' },
+        'src/lib/dom': { $: looseQuery() },
+        'src/lib/session': { current: () => 'a' },
       },
     })
     const registry = (await import('./registry')) as Registry
@@ -290,8 +290,8 @@ describe('forgetting a conversation subscription', () => {
     await loadPart(async () => { await import('./runtime'); return import('./registry') }, {
       fakes: {
         'src/i18n/t': { T: (key: string) => key },
-        'src/shell/dom': { $: looseQuery() },
-        'src/shell/session': { current: () => 'a' },
+        'src/lib/dom': { $: looseQuery() },
+        'src/lib/session': { current: () => 'a' },
       },
     })
     const registry = (await import('./registry')) as Registry

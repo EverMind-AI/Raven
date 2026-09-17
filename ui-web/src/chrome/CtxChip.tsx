@@ -1,7 +1,7 @@
 /* The composer's context ring: one chip in the bar under the field.
  *
  * A file of its own rather than a few lines of <Dock/>, because what it renders
- * is the whole of a store (src/shell/ctxchip.ts) -- the showing, the two warmth
+ * is the whole of a store (src/state/ctxChip.ts) -- the showing, the two warmth
  * classes, the dash left to go and the one sentence the hover pill and the
  * accessible name share. Every one of those used to be a write by id.
  *
@@ -12,7 +12,7 @@
 
 import { useSyncExternalStore } from 'react'
 
-import * as ctx from '../shell/ctxchip'
+import * as ctx from '../state/ctxChip'
 
 import type { JSX } from 'react'
 

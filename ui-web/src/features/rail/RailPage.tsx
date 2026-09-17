@@ -2,16 +2,16 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
 import * as page from '../../state/page'
-import { show as toast } from '../../shell/toast'
-import { current, setCurrent } from '../../shell/session'
+import { show as toast } from '../../state/toast'
+import { current, setCurrent } from '../../lib/session'
 import { open as openCron } from '../cron/store'
 import * as store from './store'
 import { plainTitle } from './title'
 
-import type { MenuItem } from '../../shell/menu'
+import type { MenuItem } from '../../state/menu'
 import type { SessRow } from './types'
 import type { JSX, KeyboardEvent, MouseEvent } from 'react'
-import { term as findTerm } from '../../shell/find'
+import { term as findTerm } from '../../state/find'
 
 /* The row's context/⋯ menu. Opening and acting on a session go through the
    source, while the current pointer is page-scoped modern state, so
@@ -327,7 +327,7 @@ export function RailApp(): JSX.Element | null {
   }
   const snap = s.snap
   if (!snap) return null
-  /* Not a snapshot field: the search row owns the term (shell/find.ts), and
+  /* Not a snapshot field: the search row owns the term (state/find.ts), and
      neither the demo nor the live source can produce it. */
   const query = findTerm()
   const hit = (x: SessRow): boolean =>

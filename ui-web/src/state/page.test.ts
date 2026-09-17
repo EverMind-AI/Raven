@@ -18,7 +18,7 @@ const PAGES = ['capsPage', 'xaPage', 'connPage', 'memPage', 'pbPage', 'kbPage', 
 
 interface Fresh {
   page: typeof import('./page')
-  islands: (typeof import('../islands'))['islands']
+  islands: (typeof import('../features/registry'))['islands']
 }
 
 /* Fresh module state per case: the store holds which page is open and a set of
@@ -28,7 +28,7 @@ interface Fresh {
 async function fresh(): Promise<Fresh> {
   vi.resetModules()
   const page = await import('./page')
-  const { islands } = await import('../islands')
+  const { islands } = await import('../features/registry')
   vi.spyOn(islands.rail, 'markNew').mockImplementation(() => {})
   vi.spyOn(islands.connections, 'closeDialog').mockImplementation(() => {})
   vi.spyOn(islands.cron, 'closeSheet').mockImplementation(() => {})

@@ -20,9 +20,9 @@
  * target, which is what lets a right-click on any part of a row reach the row.
  */
 
-import { show as menuAt } from '../shell/menu'
+import { show as menuAt } from './menu'
 
-import type { MenuItem } from '../shell/menu'
+import type { MenuItem } from './menu'
 
 type Declaring = Element & { _ctx?: () => Array<MenuItem | '-'> }
 

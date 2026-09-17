@@ -3,12 +3,14 @@
 The browser front-end (`ui-web/`, React + TypeScript, one page). Renders the chat
 transcript, the rail and the module pages; talks to the Runtime only over the RPC
 protocol. Assembled into a single `dist/index.html` by `build.py`, which inlines
-the stylesheet and the one JavaScript chunk Vite builds.
+the stylesheet and the one JavaScript chunk Vite builds. Which directory holds
+what -- `app`, `rpc`, `state`, `chrome`, `features`, `components`, `lib` -- is
+the Layout table in `README.md`; what follows is the vocabulary.
 
 ## Language
 
 **Gateway**:
-The page's one data entry point, `gateway()` (`src/state/gateway.ts`): the
+The page's one data entry point, `gateway()` (`src/rpc/gateway.ts`): the
 `RpcTransport` every call and every push goes through. Held in one module slot,
 installed once by `src/main.tsx` before anything can ask for it.
 _Avoid_: "the socket" for this -- a socket is one of the two things that can be
@@ -18,14 +20,15 @@ behind it.
 An implementation of `RpcTransport` (`src/rpc/transport.ts`): the WebSocket to a
 real raven (`WsTransport`), the offline fixture library (`FixtureTransport`), or
 a canvas layered over either (`OverrideTransport`). Which one this page got is
-decided once, from the URL, by `chooseTransport()` (`src/state/transport.ts`).
+decided once, from the URL, by `chooseTransport()`
+(`src/rpc/chooseTransport.ts`).
 
 **Source**:
 `features/<domain>/source.ts` -- everything one domain knows about speaking to
 the gateway, plus the pure functions that map an answer into the shape that
 domain's renderer reads. One per domain; the renderer beside it never calls the
 gateway itself. Installed onto the `sources` seam (`src/state/sources.ts`) by
-the page's wiring (`src/state/install.ts`), which is the only module that
+the page's wiring (`src/app/install.ts`), which is the only module that
 assigns those members.
 
 **Fixtures**:
@@ -75,7 +78,8 @@ One entry of `STAGES` (`src/state/session/stages.ts`): the names of the
 `TurnEvent` kinds it handles, and what each does to the runtime it is given.
 The table is applied in order and is exhaustive over `TurnEvent['type']` --
 `assertNever` makes a new member a compile error, and
-`scripts/pipeline-coverage.test.mjs` holds the union of `handles` equal to it.
+`scripts/gates/pipeline-coverage.test.mjs` holds the union of `handles` equal
+to it.
 An event the page deliberately does not render still has a stage, with an empty
 body.
 
@@ -119,9 +123,29 @@ the docked sheets register run ahead of it, and two of them do not stop
 propagation, so one Escape can both deny an approval and interrupt the turn
 behind it.
 
+**Menu**:
+`src/state/menu.ts` plus `<ContextMenu/>` (`src/App.tsx`) -- the one context
+menu the whole page shares: a single standing `div#menu`, with the rows of
+whatever raised it portaled into it. The store holds the host it was raised in
+and those rows; `data-open` and the `left` / `top` are written on the element,
+because the placement is measured after the rows are in it and a menu measured
+empty would be placed as if it had none. The host is remembered rather than
+looked up again, so a region redrawn under an open menu takes down the rows the
+reader is pointing at rather than a fresh host.
+_Avoid_: "menu" for the model picker or for the dock's chips -- each of those
+opens a popover of its own.
+
+**Right-click rule**:
+`src/state/contextMenu.ts` -- which menu a right-click gets: the host's own
+inside a text field or over a real selection, this page's over a surface that
+declares actions, and nothing anywhere else. One document listener rather than
+a handler per surface, and a surface declares its actions as a function on
+`_ctx`, so the rows are built from what is true when the gesture happens rather
+than from what was true when the surface was drawn.
+
 **Language store**:
-`src/state/lang.ts` -- the page's language, the catalogue behind it, and the
-one notification a pick sends. Two groups hear it: `subscribe` is what a
+`src/state/lang/store.ts` -- the page's language, the catalogue behind it, and
+the one notification a pick sends. Two groups hear it: `subscribe` is what a
 component reads through `useSyncExternalStore`, so every region re-renders its
 own words, and `onApplied` is for everything that is drawn rather than
 rendered. `text(key, literal)` and `attr(key)` answer the served literal (and
@@ -129,13 +153,15 @@ rendered. `text(key, literal)` and `attr(key)` answer the served literal (and
 served markup stand as the first frame.
 
 **Language repaint**:
-`src/state/langEffects.ts` -- the eighteen steps a pick asks of everything that
-draws itself rather than rendering: five chrome writers, eight islands, the
-capabilities page's own draw, the shared drawer, the composer's queue and one
-conversation reload. Subscribed once, from `src/main.tsx`, through
-`lang.onApplied`, so it runs after the rendered half has committed. The order
-is pinned by `src/state/langEffects.test.ts`; the reload is last because it
-rebuilds the conversation from disk.
+`src/state/lang/effects.ts` -- the eighteen steps a pick asks of everything
+that draws itself rather than rendering: nine island redraws, the rail's own
+draw and the capabilities page's, three stores whose draw commits a field their
+component renders (the permission chip, the rail foot, the context ring), the
+model label -- the one step left that writes an element by id -- the composer's
+queue, the shared drawer and one conversation reload. Subscribed once, from
+`src/main.tsx`, through `lang.onApplied`, so it runs after the rendered half
+has committed. The order is pinned by `src/state/lang/effects.test.ts`; the
+reload is last because it rebuilds the conversation from disk.
 
 **Inert marker**:
 A `data-i18n`, `data-i18n-ph`, `data-i18n-tip`, `data-i18n-aria` or
@@ -161,7 +187,7 @@ it call for call. A control's own handler is not here: that belongs with the
 control.
 
 **Island bag**:
-`src/islands.ts` -- one object naming every verb a page-wide writer spends on an
-island. Read at call time, so it is also the seam a case stands in for
-(`vi.spyOn` on a bag, or `scripts/module-harness.mjs`'s `islands` option). A
-member with no reader does not belong in it.
+`src/features/registry.ts` -- one object naming every verb a page-wide writer
+spends on an island. Read at call time, so it is also the seam a case stands in
+for (`vi.spyOn` on a bag, or `scripts/module-harness.mjs`'s `islands` option).
+A member with no reader does not belong in it.

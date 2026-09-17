@@ -14,10 +14,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readFileSync } from 'node:fs'
 
-import { islands } from '../islands'
+import { islands } from '../features/registry'
 import { FixtureTransport } from '../rpc/fixtureTransport'
+import { setGateway } from '../rpc/gateway'
 import * as caps from '../state/caps'
-import { setGateway } from '../state/gateway'
 import * as lang from '../state/lang'
 import { resetSources, setSources } from '../state/sources'
 import { mountPageRoot } from '../test/pageRoot'
@@ -356,7 +356,7 @@ describe('the capabilities page chrome', () => {
 
 /* Last in the file on purpose: applying a language is module state for
    everything after it. Same agreement as the rail's and the two dialogs' --
-   the pass state/lang.ts makes over the document's data-i18n attributes, and
+   the pass state/lang/store.ts makes over the document's data-i18n attributes, and
    the component rendering the same key through lang.text -- so the page cannot
    come back in the served language once a flip has moved it. */
 describe('the capabilities page chrome once a language is applied', () => {

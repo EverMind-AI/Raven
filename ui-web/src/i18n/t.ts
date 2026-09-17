@@ -10,7 +10,7 @@
  * T() has always meant "the current one". `code` is only half of that fact:
  * which column of the catalogue to read, English until a pick arrives. The
  * other half -- whether a pick has been applied to the page at all -- is
- * src/state/lang.ts's `applied`, and that module is this one's only writer.
+ * src/state/lang/store.ts's `applied`, and that module is this one's only writer.
  *
  * `t` is the same lookup behind one indirection, and the islands call it rather
  * than T. It was a verb on the strangler bridge for years -- an island read its
@@ -39,7 +39,7 @@ const I18N = {
 
 let code: Lang = 'en'
 
-/* Moves the column T reads. src/state/lang.ts calls this as one step of
+/* Moves the column T reads. src/state/lang/store.ts calls this as one step of
    applying a language, which is also what writes <html lang> and repaints the
    static markup; nothing else may call it, or the page would answer in one
    language and be marked up in the other. */

@@ -23,7 +23,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { flushSync } from 'react-dom'
 
 import { SheetOption } from './SheetRack'
-import { CHEVRON_DOWN, CROSS, Glyph } from '../shell/ico'
+import { CHEVRON_DOWN, CROSS, Glyph } from '../components/Ico'
 import { composing } from '../features/composer/store'
 import * as drafts from '../state/sheetDrafts'
 

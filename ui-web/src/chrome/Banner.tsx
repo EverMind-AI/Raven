@@ -1,7 +1,7 @@
 /* The notice standing above the transcript, rendered inside #bannerHost (the
  * scroller's first ground, src/chrome/ChatTop.tsx).
  *
- * Which notice stands is src/shell/banner.ts's: a memory fault beats an
+ * Which notice stands is src/state/banner.ts's: a memory fault beats an
  * unconfigured capability, and whichever wins draws alone. This is the pair of
  * shapes that decision picks between.
  *
@@ -13,10 +13,10 @@
 
 import { useSyncExternalStore } from 'react'
 
-import * as banner from '../shell/banner'
+import * as banner from '../state/banner'
 import { openPlugins } from '../features/plugins/nav'
 import { t } from '../i18n/t'
-import { islands } from '../islands'
+import { islands } from '../features/registry'
 
 import type { JSX } from 'react'
 

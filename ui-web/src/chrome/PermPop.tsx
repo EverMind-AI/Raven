@@ -2,7 +2,7 @@
  *
  * WHERE this renders is the one thing it does not decide. The panel is a child
  * of the composer card here, which is where the page is served with it, and
- * shell/perm.ts's open moves the node to the body the first time it opens --
+ * state/perm.ts's open moves the node to the body the first time it opens --
  * once, and never back: the card's entrance animation makes the card a
  * containing block, which re-bases the panel's position: fixed against the card
  * instead of the viewport. React renders on into a child it no longer holds,
@@ -30,9 +30,9 @@
 import { useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import * as perm from '../shell/perm'
-import { place } from '../shell/popover'
+import { place } from '../lib/popover'
 import * as lang from '../state/lang'
+import * as perm from '../state/perm'
 
 import type { JSX } from 'react'
 

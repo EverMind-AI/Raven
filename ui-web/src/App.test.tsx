@@ -118,7 +118,7 @@ describe('the page root', () => {
   })
 
   /* The keys the markup was served with. Inert markers now -- nothing walks
-     them (state/lang.ts) -- and kept because they are the record of which
+     them (state/lang/store.ts) -- and kept because they are the record of which
      phrase each line of chrome speaks, and the region goldens hold them. */
   it('keeps the language keys on the markup', () => {
     render()

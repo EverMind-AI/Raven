@@ -12,9 +12,11 @@
  * a node rebuilt per render would lose both.
  *
  * Literals go through lang.text(key, literal) where the markup carries a key;
- * the four that carry none (#permName, #envName, #tierName, #modelName) are
- * rendered as the page serves them, because each is owned by whoever writes it
- * afterwards.
+ * the four that carry none (#permName, #envName, #tierName, #modelName) carry
+ * none because each is the property of whoever fills it. Two of the four are
+ * their owner's store now (./PermChip.tsx, ./TierChip.tsx, each falling back to
+ * the served word until that store's first paint); the other two are rendered
+ * as the page serves them and written over by hand.
  *
  * Four of the children are files of their own, because each renders the whole
  * of a store: the context ring (./CtxChip.tsx) and the two chips with the

@@ -10,10 +10,10 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
+import { ModelTagDefs, ModelTags } from '../../components/ModelTags'
+import { ProviderIcon, ProviderStatus } from '../../components/ProviderMark'
 import { t } from '../../i18n/t'
-import { ModelTagDefs, ModelTags } from '../../shell/model-tags'
-import { clearance } from '../../shell/popover'
-import { ProviderIcon, ProviderStatus } from '../../shell/provider-mark'
+import { clearance } from '../../lib/popover'
 import * as store from './store'
 
 import { offered } from './types'

@@ -8,7 +8,7 @@ import * as deliveries from './deliveries'
 import * as desk from './deskStore'
 import * as workspace from './store'
 
-import { setCurrent } from '../../shell/session'
+import { setCurrent } from '../../lib/session'
 import { resetSources, setSources, sources } from '../../state/sources'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'

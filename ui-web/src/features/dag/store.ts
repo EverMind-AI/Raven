@@ -11,7 +11,7 @@
  * doing" rather than two that have to be held in step.
  */
 
-import { slot } from '../../shell/persist'
+import { slot } from '../../lib/persist'
 
 import type { DagRun } from './types'
 
@@ -23,11 +23,11 @@ const listeners = new Set<() => void>()
    were watching, and whether they had folded it. Not what a reload NEEDS -- a
    sheet comes back from the run ids the transcript carries when there is no note
    at all, which is the case for a graph that started while the reader was in
-   another conversation (see `dagToRead` in shell/resume.ts). What only this can
+   another conversation (see `dagToRead` in lib/resume.ts). What only this can
    say is which of several runs was wanted, and the fold.
 
    The graph is not in here on purpose -- it is read back from `dag.get`, the
-   only source that can say what the nodes are doing now (see shell/persist.ts). */
+   only source that can say what the nodes are doing now (see lib/persist.ts). */
 interface Kept {
   run: string
   folded: boolean

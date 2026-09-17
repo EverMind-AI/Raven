@@ -68,16 +68,16 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
            its answer, and the decisions under test read them. */
         turn,
       },
-      'src/shell/duration': { formatDuration: (ms: number) => `${ms}ms` },
+      'src/lib/duration': { formatDuration: (ms: number) => `${ms}ms` },
       'src/i18n/t': { T: (key: string) => key },
-      'src/shell/dom': { $: looseQuery() },
-      'src/shell/session': { current: () => 's1', setCurrent: (id: string | null) => log.push(['pointer', id]) },
+      'src/lib/dom': { $: looseQuery() },
+      'src/lib/session': { current: () => 's1', setCurrent: (id: string | null) => log.push(['pointer', id]) },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
-      'src/shell/toast': { show: (text: string) => log.push(['toast', text]) },
-      'src/shell/ctxchip': { set: () => {} },
-      'src/shell/notifications': { show: () => {} },
-      'src/shell/banner': { draw: () => {} },
-      'src/shell/tier': { load: () => {} },
+      'src/state/toast': { show: (text: string) => log.push(['toast', text]) },
+      'src/state/ctxChip': { set: () => {} },
+      'src/lib/notifications': { show: () => {} },
+      'src/state/banner': { draw: () => {} },
+      'src/state/tier': { load: () => {} },
       'src/features/workspace/record': { wsOnHistory: () => {} },
       'src/features/rail/source': { rowPreview: (t: string) => t, touchSession: () => {} },
     },
@@ -111,7 +111,7 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
   })
   const { setSources } = await import('../sources')
   setSources({ composer: { slash: [] }, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
-  const part = await import('../install')
+  const part = await import('../../app/install')
   part.installActions()
   /* A turn is running on the open conversation, which is what a send records:
      the phase reducer is only reached for the conversation the page shows. */

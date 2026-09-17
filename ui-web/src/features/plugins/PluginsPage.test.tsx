@@ -19,7 +19,7 @@ import type { DetailEntry, InstalledRow, MarketItem, PluginsSource } from './typ
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const toastWriter = vi.hoisted(() => ({ calls: [] as Array<[string, unknown]> }))
-vi.mock('../../shell/toast', () => ({
+vi.mock('../../state/toast', () => ({
   show: (text: string) => { toastWriter.calls.push(['toast', text]) },
 }))
 

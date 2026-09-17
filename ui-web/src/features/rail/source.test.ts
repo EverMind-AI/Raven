@@ -41,7 +41,7 @@ async function harness({ rows = [] as Row[], cur = null as string | null } = {})
       'src/i18n/t': {
         T: label,
       },
-      'src/shell/dom': {
+      'src/lib/dom': {
         $: looseQuery(),
       },
     },
@@ -217,10 +217,10 @@ async function refreshHarness({
       'src/i18n/t': {
         T: label,
       },
-      'src/shell/dom': {
+      'src/lib/dom': {
         $: looseQuery(),
       },
-      'src/shell/session': { current: () => cur },
+      'src/lib/session': { current: () => cur },
       'src/features/rail/leave': {
         leaveDeletedSession: (id: string) => { log.push(['leaveDeleted', id]); return Promise.resolve() },
       },
@@ -275,7 +275,7 @@ describe('re-reading the session list', () => {
 
   it('keeps the stale list when the read fails', async () => {
     const h = await refreshHarness({ rows: [{ id: 'a' }] })
-    const { setGateway } = await import('../../state/gateway')
+    const { setGateway } = await import('../../rpc/gateway')
     const transport = await import('../../rpc/fixtureTransport')
     const broken = new transport.FixtureTransport({})
     broken.call = () => Promise.reject(new Error('not connected'))

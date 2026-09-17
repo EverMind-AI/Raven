@@ -5,7 +5,7 @@ import { open as approveOpen, openApproval } from '../features/composer/approve'
 import { open as clarifyOpen } from '../features/composer/clarify'
 import { _resetForTests, add, forget, sync } from '../state/sheetRack'
 import { _resetForTests as draftsReset } from '../state/sheetDrafts'
-import { _resetForTests as sessionReset, setCurrent } from '../shell/session'
+import { _resetForTests as sessionReset, setCurrent } from '../lib/session'
 import { mountPageRoot } from '../test/pageRoot'
 import { resetTranslator, setTranslator } from '../i18n/t'
 

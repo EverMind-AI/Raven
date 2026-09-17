@@ -1,6 +1,6 @@
 import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
-import { show as toast } from '../../shell/toast'
+import { show as toast } from '../../state/toast'
 import * as detail from '../../state/detail'
 
 import { drawIfOpenOnPlugins } from '../../state/caps'

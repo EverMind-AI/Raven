@@ -1,6 +1,6 @@
 import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
-import { open as openUrl } from '../../shell/open-url'
+import { open as openUrl } from '../../lib/openUrl'
 import { sources } from '../../state/sources'
 
 import type { BrowserReply, BrowserSource, BrowserTabRow, ChromiumSource, FrameHead } from './types'

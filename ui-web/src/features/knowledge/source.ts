@@ -6,8 +6,8 @@
 
 import type { KnowledgeSource } from './types'
 
-import { refusalBySize as uploadRefusalBySize } from '../../shell/upload'
-import { gateway } from '../../state/gateway'
+import { refusalBySize as uploadRefusalBySize } from '../../lib/upload'
+import { gateway } from '../../rpc/gateway'
 
 export const knowledgeSource: KnowledgeSource = {
   status: () => gateway().call('knowledge.status', {}),

@@ -14,7 +14,7 @@ import type { Overrides } from '../overrideTransport'
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
 import type { ResultOf } from '../generated'
 
-import { islands } from '../../islands'
+import { islands } from '../../features/registry'
 
 type Row = ResultOf<'subagents.list'>['rows'][number]
 type InstanceRow = ResultOf<'subagents.instances'>['instances'][number]

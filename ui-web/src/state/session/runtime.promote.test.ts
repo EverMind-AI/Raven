@@ -49,7 +49,7 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
      the order that keeps one module graph: the fakes are installed around the
      modules the first import reaches, and one it did not is loaded afterwards
      without them. */
-  await loadPart(async () => { await import('./runtime'); return import('../install') }, {
+  await loadPart(async () => { await import('./runtime'); return import('../../app/install') }, {
     fakes: {
       'src/state/caps': { draw: () => {} },
       'src/state/page': { show: () => {} },
@@ -80,11 +80,11 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
         turn: { dispatch: () => {}, busy: () => false, snapshot: () => ({}), restore: () => {} },
       },
       'src/i18n/t': { T: (key: string) => key },
-      'src/shell/dom': { $: looseQuery() },
-      'src/shell/banner': { draw: () => {} },
-      'src/shell/tier': { load: () => {} },
-      'src/shell/session': { current: () => current, setCurrent: (id: string | null) => { current = id; log.push(`pointer:${String(id)}`) } },
-      'src/shell/toast': { show: (text: string) => log.push(`toast:${text}`) },
+      'src/lib/dom': { $: looseQuery() },
+      'src/state/banner': { draw: () => {} },
+      'src/state/tier': { load: () => {} },
+      'src/lib/session': { current: () => current, setCurrent: (id: string | null) => { current = id; log.push(`pointer:${String(id)}`) } },
+      'src/state/toast': { show: (text: string) => log.push(`toast:${text}`) },
       'src/features/workspace/record': { wsOnHistory: () => {} },
       'src/features/rail/source': { rowPreview: (t: string) => t, touchSession: (id: string) => log.push(`touch:${id}`) },
       'src/state/session/residency': { park: () => {}, resume: () => {} },

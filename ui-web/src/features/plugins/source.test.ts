@@ -8,7 +8,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { mkMcpRow, mkPluginRow, mkSkillRow, mkToolRow, pmNormEntry } from './source'
-import { islands } from '../../islands'
+import { islands } from '../registry'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as pageStore from '../../state/page'

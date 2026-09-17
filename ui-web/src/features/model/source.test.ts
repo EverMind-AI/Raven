@@ -70,14 +70,14 @@ async function live({ session = null, answers = null }: Options = {}) {
         current: () => '',
         setCurrent: (m: string) => calls.push(['modelSet', m]),
       },
-      'src/shell/dom': {
+      'src/lib/dom': {
         $: looseQuery(),
       },
-      'src/shell/session': { current: () => session, setCurrent: () => {} },
-      'src/shell/banner': { draw: () => {} },
-      'src/shell/toast': { show: (text: string) => calls.push(['toast', text]) },
-      'src/shell/tier': { load: () => {} },
-      'src/shell/perm': { setFromConfig: (m: string) => calls.push(['setPermMode', m]) },
+      'src/lib/session': { current: () => session, setCurrent: () => {} },
+      'src/state/banner': { draw: () => {} },
+      'src/state/toast': { show: (text: string) => calls.push(['toast', text]) },
+      'src/state/tier': { load: () => {} },
+      'src/state/perm': { setFromConfig: (m: string) => calls.push(['setPermMode', m]) },
       'src/state/session/residency': { park: () => {} },
     },
     islands: {

@@ -2,7 +2,7 @@
 
 The roster draws a brand mark per agent, chosen by preset key. The preset list
 lives in Python and the mark table lives in
-``ui-web/src/shell/agent-mark.tsx``, so nothing in either language can notice
+``ui-web/src/components/AgentMark.tsx``, so nothing in either language can notice
 when they disagree: adding a preset leaves its row wearing the generic glyph,
 and renaming a file leaves a row addressing a 404. Both are invisible in
 review and neither breaks a build.
@@ -32,7 +32,7 @@ from pathlib import Path
 from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
 
 _ROOT = Path(__file__).resolve().parents[1]
-_TABLE = _ROOT / "ui-web" / "src" / "shell" / "agent-mark.tsx"
+_TABLE = _ROOT / "ui-web" / "src" / "components" / "AgentMark.tsx"
 _ASSETS = _ROOT / "ui-web" / "src" / "assets" / "agents"
 
 _ENTRY = re.compile(

@@ -3,7 +3,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { setCurrent } from '../../shell/session'
+import { setCurrent } from '../../lib/session'
 import * as deliveries from './deliveries'
 import * as workspace from './store'
 import { resetSources, setSources } from '../../state/sources'

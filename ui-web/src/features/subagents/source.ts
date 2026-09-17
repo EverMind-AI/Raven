@@ -12,11 +12,11 @@
  * is what the island's empty state reads to tell the two apart.
  */
 
-import { islands } from '../../islands'
+import { current as sessionCurrent } from '../../lib/session'
 import { gone, has } from '../../rpc/capabilities'
-import { current as sessionCurrent } from '../../shell/session'
-import { gateway } from '../../state/gateway'
+import { gateway } from '../../rpc/gateway'
 import { mediaOf } from '../../state/session/runtime'
+import { islands } from '../registry'
 
 import type { AgentCtxLike } from '../transcript/store'
 import type { AgentsSource } from './types'

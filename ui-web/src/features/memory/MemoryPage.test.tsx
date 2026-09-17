@@ -10,6 +10,7 @@ import { resetSources, setSources, sources } from '../../state/sources'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
+import * as detail from '../../state/detail'
 import * as pageStore from '../../state/page'
 import type { MemItem, MemStats, MemorySource } from './types'
 
@@ -62,8 +63,9 @@ async function mount() {
 }
 
 afterEach(() => {
+  /* Close through the drawer, not the island's closer alone; see XaPage.test.tsx. */
   act(() => {
-    store.detailDismissed()
+    detail.close()
     store.setKind('episode')
   })
   cleanup()

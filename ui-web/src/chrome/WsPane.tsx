@@ -2,8 +2,8 @@
  * the chat.
  *
  * One file per region of the page, under src/chrome/ -- beside src/features/
- * (islands, each with its own root and its own data) and src/shell/ (behaviour
- * modules that own listeners and measurements rather than markup).
+ * (islands, each with its own root and its own data), src/state/ and src/chrome/behaviour/ (the modules that own
+ * listeners and measurements rather than markup).
  *
  * Every element below is a transcription -- tag, id, class, data-*, role, aria,
  * the svg path data and the text exactly as page.html spelled them, attributes
@@ -12,7 +12,7 @@
  * children of #split.
  *
  * Literals go through lang.text(key, literal): the served markup carries
- * data-i18n* keys and state/lang.ts applies a language by walking the document
+ * data-i18n* keys and state/lang/store.ts applies a language by walking the document
  * and rewriting them, so a component rendering one of those keyed literals has
  * two writers and has to read the same catalogue to agree with the other one.
  *
@@ -38,7 +38,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react'
 import { composing } from '../features/composer/store'
-import { islands } from '../islands'
+import { islands } from '../features/registry'
 import * as lang from '../state/lang'
 import * as ws from '../state/ws'
 

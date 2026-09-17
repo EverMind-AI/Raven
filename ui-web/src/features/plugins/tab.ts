@@ -13,7 +13,7 @@
 
 import { view as skillView } from '../skills/tab'
 import { T } from '../../i18n/t'
-import { islands } from '../../islands'
+import { islands } from '../registry'
 import * as caps from '../../state/caps'
 import * as page from '../../state/page'
 import { sources } from '../../state/sources'
