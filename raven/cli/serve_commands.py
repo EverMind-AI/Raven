@@ -628,19 +628,14 @@ def _read_web_state() -> Optional[int]:
 
 
 def _pid_alive(pid: int) -> bool:
-    import os
+    """Whether ``pid`` is still running.
 
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # Alive, and owned by somebody else. Not ours to signal, but reporting it
-        # as gone would start a second supervisor beside it.
-        return True
-    except OSError:
-        return False
-    return True
+    Kept as a name here because ``_gateway_page`` imports it and the stop tests
+    patch it; the platform question itself belongs to one place.
+    """
+    from raven.utils.pid import pid_alive
+
+    return pid_alive(pid)
 
 
 def _gateway_holds_the_lock() -> bool:
