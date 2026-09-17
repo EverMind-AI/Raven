@@ -461,9 +461,11 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             model=lambda: self.model,
             context_window_tokens=lambda: self.context_window_tokens,
             system_prompt=lambda skills: self.context.build_system_prompt(skills),
-            # The window's mid-turn moves read these two live for the reason the
-            # rest are callables: a hot config apply replaces the compaction
-            # settings, and the ceiling follows the model a request goes out under.
+            # Callables like the rest, but for one reason rather than two: the
+            # ceiling follows the model a request goes out under, which moves
+            # under a live ``/model`` switch. The compaction settings are fixed
+            # at construction today; the callable keeps the seam uniform and
+            # costs a lambda.
             compaction=lambda: self._compaction,
             output_ceiling=self._wire_output_ceiling,
         )

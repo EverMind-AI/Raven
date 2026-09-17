@@ -74,11 +74,6 @@ class AssemblyContext:
     budget: TokenBudget
     prefix: AssembledPrefix | None = None
     can_see_images: bool = True
-    # Carried through from ``TurnContext``: what this dispatch's playbook asked
-    # of the turn. Empty on every turn that carried none, which is the string
-    # every reader already appends to no effect.
-    task_brief: str = ""
-    task_done_when: str = ""
     describe_tool: str | None = None
     surface: str | None = None
     """Which front end the turn came from, when the connection declared one.
@@ -89,6 +84,15 @@ class AssemblyContext:
     """
     scent_text: str = ""
     """Pull-mode skill hint for this turn; rendered into the user envelope."""
+    # Carried through from ``TurnContext``: what this dispatch's playbook asked
+    # of the turn. Empty on every turn that carried none, which is the string
+    # every reader already appends to no effect. Appended last, like the pair on
+    # ``TurnContext``: this is the object every out-of-tree ``SegmentBuilder``
+    # is handed, and the dataclass takes positional arguments, so a field
+    # inserted mid-list would rebind somebody's tenth argument rather than
+    # failing loudly.
+    task_brief: str = ""
+    task_done_when: str = ""
 
 
 @dataclass

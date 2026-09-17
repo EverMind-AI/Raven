@@ -234,6 +234,9 @@ def window_images(
         live = sum(wire_image_bytes(p) for i in bearing for p in messages[i]["content"])
         if live <= budget:
             return 0, 0
+    # ``max`` because a negative keep would slice from the other end and
+    # withdraw the newest pictures instead of the oldest.
+    keep = max(0, keep)
     stale = bearing[:-keep] if keep else bearing
     pictures = 0
     for i in stale:

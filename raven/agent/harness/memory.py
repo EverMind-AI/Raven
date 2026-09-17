@@ -162,16 +162,19 @@ class DefaultMemory:
         state: WindowState,
         model: str | None,
     ) -> ShrinkResult:
-        if pressure is WindowPressure.PROACTIVE:
+        if pressure == WindowPressure.PROACTIVE:
             return await self._compact_ahead(messages, state, model)
-        if pressure is WindowPressure.STANDING:
+        if pressure == WindowPressure.STANDING:
             return self._standing_window(messages, state)
-        if pressure is WindowPressure.OVERFLOW:
+        if pressure == WindowPressure.OVERFLOW:
             return await self._on_overflow(messages, state, model)
-        if pressure is WindowPressure.TOOL_IMAGES_REFUSED:
+        if pressure == WindowPressure.TOOL_IMAGES_REFUSED:
             return self._on_tool_images_refused(messages, state)
-        if pressure is WindowPressure.IMAGES_TOO_LARGE:
+        if pressure == WindowPressure.IMAGES_TOO_LARGE:
             return self._on_images_too_large(messages, state)
+        # ``==`` rather than ``is`` above: ``WindowPressure`` is a ``str`` Enum,
+        # so the documented string a config, an event payload or a replacement
+        # shell hands over compares equal to the member but is not it.
         raise ValueError(f"unknown window pressure {pressure!r}")
 
     async def _summarize_head(
@@ -259,7 +262,7 @@ class DefaultMemory:
             messages,
             state.image_window,
             budget=state.image_budget,
-            reason="budget" if state.image_budget else "superseded",
+            reason="budget" if state.image_budget is not None else "superseded",
         )
         if windowed:
             logger.info(

@@ -403,17 +403,24 @@ class ToolRegistry:
         evaluation is meant to be loud -- but a replacement that raises must
         cost its own judgement rather than the turn, which is the same bargain
         the plugin gates beside it are held to.
+
+        A registry nobody handed a role to still asks one. Most of the ten
+        registries this tree builds take no provider -- the curator's own tool
+        set among them, and it dispatches inside the turn's ``charter_scope``
+        -- so an absent provider means "nobody chose a role here", not "this
+        dispatch carries no playbook". The default role is what the module-level
+        helper this method replaced already was.
         """
-        if self._verifier_provider is None:
-            return []
         try:
             # Imported in the call, and not for style: ``raven.agent.subagent``
             # pulls its manager on package import, whose backends import this
             # module -- so naming the charter at the top of this file closes a
             # cycle. import-linter reads direction and cannot see this one.
+            from raven.agent.harness import DefaultAction
             from raven.agent.subagent.charter import prior_calls
 
-            return list(self._verifier_provider().judge(name, params, prior_calls()))
+            role = self._verifier_provider() if self._verifier_provider is not None else DefaultAction()
+            return list(role.judge(name, params, prior_calls()))
         except Exception:  # noqa: BLE001 - a role that raises must not cost the turn
             logger.warning("tools: the Action role raised judging {!r}; taking no opinion from it", name)
             return []

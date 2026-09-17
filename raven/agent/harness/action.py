@@ -23,7 +23,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from raven.contracts.harness import ActionRequest
+from raven.contracts.harness import ActionModule, ActionRequest
 
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMResponse
@@ -75,4 +75,18 @@ class DefaultAction:
         )
 
 
-__all__ = ["DefaultAction"]
+def bind(action: DefaultAction) -> ActionModule:
+    """Admit a built Action role, naming a missing member at assembly rather
+    than as an AttributeError inside somebody's turn.
+
+    The same guard the Memory role gets, and for a sharper reason: the tool
+    registry catches whatever ``judge`` raises and answers with no opinion, so
+    a role missing that method would not fail loudly -- it would quietly let
+    every call a dispatch's playbook refuses through.
+    """
+    if not isinstance(action, ActionModule):
+        raise TypeError(f"{type(action).__name__} cannot serve as the Action role: it must provide decide and judge")
+    return action
+
+
+__all__ = ["DefaultAction", "bind"]

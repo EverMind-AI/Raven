@@ -19,6 +19,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from raven.agent.harness.action import DefaultAction
+from raven.agent.harness.action import bind as bind_action
 from raven.agent.harness.capability import DefaultCapability
 from raven.agent.harness.memory import DefaultMemory
 from raven.agent.harness.memory import bind as bind_memory
@@ -56,7 +57,7 @@ def default_harness_modules(
         memory=bind_memory(memory),
         planning=DefaultPlanning(),
         capability=DefaultCapability(registry_provider),
-        action=DefaultAction(),
+        action=bind_action(DefaultAction()),
     )
 
 

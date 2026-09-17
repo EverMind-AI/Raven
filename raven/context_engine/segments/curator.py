@@ -173,10 +173,12 @@ class CuratorSegmentBuilder:
             describe_tool=ctx.describe_tool,
             channel=ctx.channel,
             chat_id=ctx.chat_id,
-            # Carried through, not dropped: this turn is rebuilt from the
-            # assembly context and handed back to the engine, so a field the
-            # rebuild forgets is a field the curator's own assembly silently
-            # lacks.
+            # Carried through because this rebuild is partial on purpose: the
+            # curator reads ``current_message`` off the turn it is handed and
+            # nothing else, so the pair reaches no renderer here. It is the
+            # assembly context that carries the brief to the identity. Kept in
+            # step anyway, so that a later curator reading more of the turn
+            # finds the same turn the rest of the assembly saw.
             task_brief=ctx.task_brief,
             task_done_when=ctx.task_done_when,
         )

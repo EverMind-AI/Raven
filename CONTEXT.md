@@ -97,6 +97,20 @@ messages through, Capability reports `ToolRegistry.get_definitions`, and Action 
 one streaming-or-retrying call.
 Frozen per Generation: the tool array is the prompt-cache prefix, so the set a turn runs on
 cannot move between two of its model calls.
+
+**Window Shrink** (`agent/window/`, paper `contracts/harness.py:MemoryModule.shrink`):
+How a Turn's transcript is made to fit again after it is assembled. The Memory role is
+asked under a **WindowPressure** -- `PROACTIVE` (the last billed reading crossed the
+compaction trigger), `STANDING` (the standing image window, every iteration), `OVERFLOW`
+(the provider refused the request as too long), `TOOL_IMAGES_REFUSED` (the endpoint
+refused a picture inside a tool result), `IMAGES_TOO_LARGE` (the request's pictures
+outgrew their byte budget) -- and answers with a **ShrinkResult**: the message list to go
+on with, and whether anything was given up. **WindowState** is the turn's own bookkeeping
+the shell carries between those calls: the standing image window's width, the last billed
+context size, and the retry budgets that bound how many elisions, head summaries and
+picture withdrawals one turn may pay for. The policy is Memory's; the mechanism -- noticing
+the refusal, re-entering the Iteration, bounding the retries -- stays with the Agent Loop,
+which is why `agent/window/` holds only the pure pieces both sides read.
 _Avoid_: treating the four as four architecture layers — they are L3 strategy roles the L2
 shell calls. And saying Action owns the loop: the shell keeps iteration accounting, hook
 phases, tool execution and approval, the three in-turn recoveries, persistence and event
@@ -1426,8 +1440,8 @@ the directory name is provisional by ruling. One ruled edge: `trajectory` (L3)
 reaches `config.admission` for the door vocabulary and builds a loop by hand for replay --
 legal, because it is a harness over recorded runs, not an entrance. One package holds two
 seats: in `agent/`, `agent/loop` is the L2 harness shell every entrance runs, and its
-siblings -- `tools`, `subagent`, `context`, `hook`, `personalizer`,
-`workdir` -- are L3 cargo the loop consumes; the "cargo does not import the loop shell"
+siblings -- `tools`, `subagent`, `context`, `hook`, `personalizer`, `workdir`,
+`window` -- are L3 cargo the loop consumes; the "cargo does not import the loop shell"
 import-linter contract keeps the two seats apart in the shared directory, which is why
 the package is not split physically (ruled 2026-08-30). The one exception the target
 tree always named: the ACP client family -- the client, the `acp_agent` backend that

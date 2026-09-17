@@ -4,20 +4,28 @@ Factory-loop tier: Versioned with the factory loop, not frozen for every
 loop — a replacement loop may ship its own strategy vocabulary and version
 this paper with it. Only the ``contract`` tier is a cross-loop promise.
 
-The four roles name the strategy *decisions* a turn makes, not four layers
-and not the loop itself. Memory assembles the window the model sees, Planning
-may prepare turn guidance, Capability picks the tool definitions one iteration
-exposes, and Action produces one usable model response and judges a call
-against the dispatch's playbook. Everything else the turn does -- iteration
-accounting, hook phases, tool execution and approval,
-the three in-loop recoveries, persistence and event order -- stays with the
-L2 shell, which is what makes these four replaceable at all.
+The four roles name the strategy *decisions* a turn makes, not four layers and
+not the loop itself. Memory assembles the window the model sees and decides how
+a transcript is made to fit again mid-turn, Planning may prepare turn guidance,
+Capability picks the tool definitions one iteration exposes, and Action produces
+one usable model response and judges a call against the dispatch's playbook.
+Everything else the turn does -- iteration accounting, hook phases, tool
+execution and approval, persistence and event order -- stays with the L2 shell,
+which is what makes these four replaceable at all.
+
+The in-loop recoveries are split along that line rather than sitting on one
+side of it. Memory answers *what to give up* (see ``shrink``); the shell owns
+the *mechanism* -- noticing the refusal, re-entering the iteration, and
+bounding how many times a turn may pay for it. A replacement that answers
+``shrink`` with an unchanged transcript therefore does not merely decline a
+policy: the shell's ``changed`` test never fires, and an overflow the loop
+could have recovered from ends the turn.
 
 _Avoid_: reading ``ActionModule`` as "the loop". The shell owns retries, tool
-execution and events; Action owns one model decision and the playbook's
-verdict on a call. And reading Memory as
-the memory engine: Memory here is the turn's *window*, which the context
-engine owns; long-term recall is a different organ behind its own paper.
+execution and events; Action owns one model decision and the playbook's verdict
+on a call. And reading Memory as the memory engine: Memory here is the turn's
+*window*, which the context engine owns; long-term recall is a different organ
+behind its own paper.
 """
 
 from __future__ import annotations
