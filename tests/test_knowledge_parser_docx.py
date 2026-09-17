@@ -421,3 +421,21 @@ def test_the_parser_claims_only_the_word_media_type():
     assert DocxParser.supported_media_types == [
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ]
+
+
+def test_a_paragraph_survives_chunking_whole() -> None:
+    """The element spans the parser records are what the chunker cuts on, so a
+    paragraph is never half in one chunk and half in the next. End to end,
+    because the guarantee is only worth anything if both halves agree on where
+    the paragraphs are."""
+    from raven.knowledge._structure import HeadingAwareChunker
+
+    paragraphs = [f"Paragraph {n}. " + " ".join(f"word{i}" for i in range(60)) for n in range(6)]
+    body = _p("Handbook", style="Heading1") + "".join(_p(text) for text in paragraphs)
+
+    sections = _parse(body)
+    chunks = asyncio.run(HeadingAwareChunker(chunk_size=200, overlap=20).chunk(sections))
+
+    assert len(chunks) > 1, "the document is too big for one chunk, so this is a real test"
+    for paragraph in paragraphs:
+        assert sum(paragraph in chunk.text for chunk in chunks) == 1, paragraph[:24]

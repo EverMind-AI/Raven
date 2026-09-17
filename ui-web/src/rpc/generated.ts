@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 177 methods, 97 component schemas.
+// 181 methods, 97 component schemas.
 
 /* eslint-disable */
 /**
@@ -1440,6 +1440,14 @@ export interface KnowledgeBase {
   chunk_size?: number;
   chunk_overlap?: number;
   file_processing?: string;
+  /**
+   * Tokens of the prose around a table to carry into the chunk that holds it. Zero is off.
+   */
+  table_context_size?: number;
+  /**
+   * Tokens of the prose around a figure to carry into the chunk that holds it. Zero is off.
+   */
+  image_context_size?: number;
 }
 /**
  * One uploaded document and where its indexing got to.
@@ -1624,6 +1632,18 @@ export interface KnowledgeChunk {
    * The headings the piece sits under, outermost first.
    */
   heading_path?: string[];
+  /**
+   * What addresses this piece. Derived from its text, so it survives a rebuild of the same document. Empty on rows written before ids existed, which can be read but not acted on until the document is reindexed.
+   */
+  chunk_id?: string;
+  /**
+   * Whether this piece may be retrieved. A disabled piece is never searched and never reaches the agent.
+   */
+  enabled?: boolean;
+  /**
+   * Whether a person wrote this piece. It is deleted with every other piece when the document is reindexed.
+   */
+  manual?: boolean;
 }
 export interface SessionListParams {
   /**
@@ -3767,6 +3787,8 @@ export interface KnowledgeBasesSettingsParams {
   chunk_size?: number;
   chunk_overlap?: number;
   file_processing?: string;
+  table_context_size?: number;
+  image_context_size?: number;
 }
 export interface KnowledgeBasesSettingsResult {
   base: KnowledgeBase;
@@ -3825,9 +3847,26 @@ export interface KnowledgeDocumentsIndexResult {
 }
 export interface KnowledgeDocumentsChunksParams {
   document_id: string;
+  /**
+   * 1-based page of the reading order. Defaults to the first.
+   */
+  page?: number;
+  page_size?: number;
+  /**
+   * Filter by state; omit for both.
+   */
+  available?: boolean | null;
+  /**
+   * When set, the pieces are the ones that answer this query, best first, rather than a page of the reading order -- the same retrieval a search of the base does, narrowed to this document, by keyword where the model cannot be reached.
+   */
+  query?: string;
 }
 export interface KnowledgeDocumentsChunksResult {
   chunks: KnowledgeChunk[];
+  /**
+   * How many pieces the filter admits, which is what a pager counts.
+   */
+  total: number;
 }
 export interface KnowledgeDocumentsDeleteParams {
   document_id: string;
@@ -3837,6 +3876,39 @@ export interface KnowledgeDocumentsDeleteResult {
    * False when there was no such document, which is not an error: two clicks on one row answer the same way.
    */
   removed: boolean;
+}
+export interface KnowledgeChunksSwitchParams {
+  document_id: string;
+  chunk_ids: string[];
+  enabled: boolean;
+}
+export interface KnowledgeChunksSwitchResult {
+  /**
+   * How many pieces the store actually changed.
+   */
+  changed: number;
+}
+export interface KnowledgeChunksDeleteParams {
+  document_id: string;
+  chunk_ids: string[];
+}
+export interface KnowledgeChunksDeleteResult {
+  remaining: number;
+}
+export interface KnowledgeChunksCreateParams {
+  document_id: string;
+  text: string;
+}
+export interface KnowledgeChunksCreateResult {
+  chunk: KnowledgeChunk;
+}
+export interface KnowledgeChunksUpdateParams {
+  document_id: string;
+  chunk_id: string;
+  text: string;
+}
+export interface KnowledgeChunksUpdateResult {
+  chunk: KnowledgeChunk;
 }
 export interface KnowledgeSearchParams {
   base_ids: string[];
@@ -4149,6 +4221,10 @@ export interface RpcMethods {
   'knowledge.documents.index': { params: KnowledgeDocumentsIndexParams; result: KnowledgeDocumentsIndexResult };
   'knowledge.documents.chunks': { params: KnowledgeDocumentsChunksParams; result: KnowledgeDocumentsChunksResult };
   'knowledge.documents.delete': { params: KnowledgeDocumentsDeleteParams; result: KnowledgeDocumentsDeleteResult };
+  'knowledge.chunks.switch': { params: KnowledgeChunksSwitchParams; result: KnowledgeChunksSwitchResult };
+  'knowledge.chunks.delete': { params: KnowledgeChunksDeleteParams; result: KnowledgeChunksDeleteResult };
+  'knowledge.chunks.create': { params: KnowledgeChunksCreateParams; result: KnowledgeChunksCreateResult };
+  'knowledge.chunks.update': { params: KnowledgeChunksUpdateParams; result: KnowledgeChunksUpdateResult };
   'knowledge.search': { params: KnowledgeSearchParams; result: KnowledgeSearchResult };
   'clipboard.paste': { params: ClipboardPasteParams; result: ClipboardPasteResult };
   'command.dispatch': { params: CommandDispatchParams; result: CommandDispatchResult };
@@ -4220,6 +4296,10 @@ export const RPC_METHODS = [
   "knowledge.bases.list",
   "knowledge.bases.rename",
   "knowledge.bases.settings",
+  "knowledge.chunks.create",
+  "knowledge.chunks.delete",
+  "knowledge.chunks.switch",
+  "knowledge.chunks.update",
   "knowledge.documents.add",
   "knowledge.documents.add_note",
   "knowledge.documents.add_url",

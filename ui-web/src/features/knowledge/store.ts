@@ -1,7 +1,7 @@
 import { shell, t } from '../../shell/bridge'
 import { show as toast } from '../../shell/toast'
 
-import type { KbBase, KbChunk, KbDoc, KbHit, KbSettings, KbStatus, KnowledgeSource } from './types'
+import type { KbBase, KbChunk, KbChunkQuery, KbDoc, KbHit, KbSettings, KbStatus, KnowledgeSource } from './types'
 
 /* What an RPC failure actually said.
  *
@@ -69,6 +69,31 @@ interface State {
      empty list, which a reader would take for a document that indexed to
      nothing. */
   chunksFailed: string | null
+  /* How many pieces the current filter admits, which is what the pager counts
+     -- not how many are on screen. */
+  chunksTotal: number
+  /* Which page of the reading order is shown, 1-based. */
+  chunkPage: number
+  /* The query the list is answering. Non-empty replaces the page with what
+     matched, best first, so the pager stands down: relevance has no second
+     page the engine was asked for. */
+  chunkQuery: string
+  /* What is in the search box, which is not the same thing. A search is a
+     round trip to the embedding endpoint, so it waits for the typing to stop
+     (or for Enter) -- and every other reload in between has to keep using the
+     query that is actually in effect, not the half-typed one. */
+  chunkTyped: string
+  /* Which state the list is filtered to, or null for both. */
+  chunkFilter: boolean | null
+  /* Whether a chunk is shown whole or cut to a few lines. A reading preference,
+     so it outlives the document being closed. */
+  chunkView: 'full' | 'ellipse'
+  /* Which pieces are ticked, by id. Cleared whenever the list under them
+     changes, because a tick is a claim about rows that are on screen. */
+  chunkPicked: string[]
+  /* A write to the chunks is in flight. Its own flag rather than `busy`: that
+     one gates the document list, and these two panels are used at once. */
+  chunkBusy: boolean
   /* Which add-a-source dialog is up, if any. One field rather than a boolean
      each, because two of them open at once is not a state this page has. */
   dialog: Dialog | null
@@ -84,8 +109,10 @@ interface State {
 /* A dialog, and what it was opened on: `doc` is the note being rewritten, and
    its absence means a new one. */
 export interface Dialog {
-  kind: 'note' | 'url' | 'rename'
+  kind: 'note' | 'url' | 'rename' | 'chunk'
   doc?: KbDoc
+  /* The piece being rewritten. Absent means a new one is being written. */
+  chunk?: KbChunk
   /* The base being renamed. Only `rename` carries one. */
   base?: KbBase
 }
@@ -108,6 +135,14 @@ const EMPTY: State = {
   viewing: null,
   chunks: null,
   chunksFailed: null,
+  chunksTotal: 0,
+  chunkPage: 1,
+  chunkQuery: '',
+  chunkTyped: '',
+  chunkFilter: null,
+  chunkView: 'ellipse',
+  chunkPicked: [],
+  chunkBusy: false,
   dialog: null,
   adding: null,
   dragDepth: 0,
@@ -338,6 +373,12 @@ export async function uploadFolder(files: File[]): Promise<void> {
 
 export function openDialog(kind: 'note' | 'url', doc?: KbDoc): void {
   set({ dialog: { kind, doc } })
+}
+
+/* The add dialog with no chunk, the edit dialog with one. One dialog either
+   way: what a reader does in it is the same, and two would drift. */
+export function openChunkDialog(chunk?: KbChunk): void {
+  set({ dialog: { kind: 'chunk', chunk } })
 }
 
 export function openRename(base: KbBase): void {
@@ -613,7 +654,11 @@ export const DEFAULTS: Required<KbSettings> = {
   smart_chunking: true,
   separator: '\n\n',
   chunk_size: 2048,
-  chunk_overlap: 215,
+  /* Off. Overlap repeats text between neighbouring chunks, and every repeated
+     passage is retrieved twice and reads as two findings. */
+  chunk_overlap: 0,
+  table_context_size: 0,
+  image_context_size: 0,
   file_processing: '',
 }
 
@@ -626,6 +671,8 @@ export function settingsOf(base: KbBase): Required<KbSettings> {
     separator: base.separator ?? DEFAULTS.separator,
     chunk_size: base.chunk_size ?? DEFAULTS.chunk_size,
     chunk_overlap: base.chunk_overlap ?? DEFAULTS.chunk_overlap,
+    table_context_size: base.table_context_size ?? DEFAULTS.table_context_size,
+    image_context_size: base.image_context_size ?? DEFAULTS.image_context_size,
     file_processing: base.file_processing ?? DEFAULTS.file_processing,
   }
 }
@@ -863,13 +910,125 @@ export function previewUrl(doc: KbDoc): string {
   return previewKind(doc) === 'converted' ? `${base}&render=pdf` : base
 }
 
+/* How many pieces a page holds. Twenty is what a reader scans without the page
+   becoming a scroll of its own; the engine caps what it will answer with. */
+export const CHUNK_PAGE = 20
+
 export function openDoc(doc: KbDoc): void {
-  set({ viewing: doc, chunks: null, chunksFailed: null })
+  cancelChunkSearch()
+  /* A fresh opening starts at the top with nothing ticked and no query. The
+     view mode is deliberately left alone: it is how this reader likes to read,
+     not a fact about the file they just opened. */
+  set({
+    viewing: doc,
+    chunks: null,
+    chunksFailed: null,
+    chunksTotal: 0,
+    chunkPage: 1,
+    chunkQuery: '',
+    chunkTyped: '',
+    chunkFilter: null,
+    chunkPicked: [],
+  })
   void loadChunks(doc)
 }
 
 export function closeDoc(): void {
-  set({ viewing: null, chunks: null, chunksFailed: null })
+  cancelChunkSearch()
+  set({ viewing: null, chunks: null, chunksFailed: null, chunksTotal: 0, chunkPicked: [] })
+}
+
+/* Read the page the current controls describe.
+
+   One door for every control -- page, query, filter -- because they compose:
+   searching while filtered has to ask for both, and a second path would be the
+   one that forgets. */
+function chunkRequest(): KbChunkQuery {
+  const query = state.chunkQuery.trim()
+  if (query) return { query, page_size: CHUNK_PAGE }
+  return {
+    page: state.chunkPage,
+    page_size: CHUNK_PAGE,
+    ...(state.chunkFilter === null ? {} : { available: state.chunkFilter }),
+  }
+}
+
+export function chunkPages(): number {
+  return Math.max(1, Math.ceil(state.chunksTotal / CHUNK_PAGE))
+}
+
+export function showChunkPage(page: number): void {
+  const doc = state.viewing
+  if (!doc) return
+  set({ chunkPage: Math.min(Math.max(1, page), chunkPages()), chunkPicked: [] })
+  void loadChunks(doc)
+}
+
+export function filterChunks(available: boolean | null): void {
+  const doc = state.viewing
+  if (!doc) return
+  set({ chunkFilter: available, chunkPage: 1, chunkPicked: [] })
+  void loadChunks(doc)
+}
+
+/* How long the typing has to stop before a search goes out.
+
+   Three seconds, which is long for a keystroke debounce and right for this
+   one: the request embeds the query at whatever endpoint the base was built
+   with, so an eager search is a round trip per keystroke against somebody's
+   rate limit. Enter skips the wait for anyone who does not want to serve it. */
+const CHUNK_SEARCH_WAIT = 3000
+let chunkTimer: ReturnType<typeof setTimeout> | null = null
+
+function cancelChunkSearch(): void {
+  if (chunkTimer !== null) {
+    clearTimeout(chunkTimer)
+    chunkTimer = null
+  }
+}
+
+export function typeChunkSearch(query: string): void {
+  set({ chunkTyped: query })
+  cancelChunkSearch()
+  /* An emptied box goes back at once. Waiting three seconds to see the list
+     again after clearing the search reads as a page that has stopped
+     answering, and there is no request to spare by waiting. */
+  if (!query.trim()) {
+    if (state.chunkQuery) searchChunks('')
+    return
+  }
+  chunkTimer = setTimeout(() => {
+    chunkTimer = null
+    searchChunks(state.chunkTyped)
+  }, CHUNK_SEARCH_WAIT)
+}
+
+/* Search now -- what Enter does, and what the timer above ends up calling. */
+export function searchChunks(query: string): void {
+  const doc = state.viewing
+  if (!doc) return
+  cancelChunkSearch()
+  if (query === state.chunkQuery) return
+  set({ chunkQuery: query, chunkTyped: query, chunkPage: 1, chunkPicked: [] })
+  void loadChunks(doc)
+}
+
+export function setChunkView(view: 'full' | 'ellipse'): void {
+  set({ chunkView: view })
+}
+
+export function pickChunk(chunkId: string, on: boolean): void {
+  const picked = new Set(state.chunkPicked)
+  if (on) picked.add(chunkId)
+  else picked.delete(chunkId)
+  set({ chunkPicked: [...picked] })
+}
+
+export function pickAllChunks(on: boolean): void {
+  /* Only what is on screen, and only what can be acted on: a piece with no id
+     was written before ids existed and cannot be addressed one at a time. */
+  const ids = (state.chunks || []).map((c) => c.chunk_id || '').filter(Boolean)
+  set({ chunkPicked: on ? ids : [] })
 }
 
 /* The open document's pieces, read once per opening.
@@ -879,17 +1038,113 @@ export function closeDoc(): void {
    they have already moved on from, under the name of the one they are looking
    at. */
 async function loadChunks(doc: KbDoc): Promise<void> {
+  const asked = chunkRequest()
   try {
-    const found = await source().chunks(doc.id)
+    const page = await source().chunks(doc.id, asked)
     if (state.viewing?.id !== doc.id) return
-    /* Sorted here, where the panel's claim is made, rather than trusted from
-       the wire: the engine orders its answer, but "reading order" is what this
-       list says it shows, and a guarantee is worth holding at the place that
-       states it. Copied rather than sorted in place -- the array is the
-       source's, not ours. */
-    set({ chunks: [...found].sort((a, b) => a.chunk_index - b.chunk_index), chunksFailed: null })
+    /* A page of the reading order is sorted here, where the panel's claim is
+       made, rather than trusted from the wire: the engine orders its answer,
+       but "reading order" is what this list says it shows, and a guarantee is
+       worth holding at the place that states it. A search is not sorted -- its
+       order is the ranking, and renumbering it by position in the document
+       would throw away the only thing the query bought. */
+    const rows = asked.query ? page.chunks : [...page.chunks].sort((a, b) => a.chunk_index - b.chunk_index)
+    set({ chunks: rows, chunksTotal: page.total, chunksFailed: null })
   } catch (e) {
     if (state.viewing?.id !== doc.id) return
-    set({ chunks: [], chunksFailed: said(e) })
+    set({ chunks: [], chunksTotal: 0, chunksFailed: said(e) })
+  }
+}
+
+/* Reload the open document's pieces, after a write changed them. */
+function refreshChunks(): void {
+  const doc = state.viewing
+  if (doc) void loadChunks(doc)
+}
+
+export async function switchChunks(chunkIds: string[], enabled: boolean): Promise<void> {
+  const doc = state.viewing
+  if (!doc || !chunkIds.length) return
+  const wanted = new Set(chunkIds)
+  /* Shown before the engine answers, and put back if it refuses: a toggle that
+     waits for a round trip reads as a toggle that did not work. */
+  const before = state.chunks
+  set({
+    chunkBusy: true,
+    chunks: (before || []).map((c) => (wanted.has(c.chunk_id || '') ? { ...c, enabled } : c)),
+  })
+  try {
+    await source().switchChunks(doc.id, chunkIds, enabled)
+    refreshChunks()
+  } catch (e) {
+    set({ chunks: before })
+    toast(said(e))
+  } finally {
+    set({ chunkBusy: false })
+  }
+}
+
+export function deleteChunks(chunkIds: string[]): void {
+  const doc = state.viewing
+  if (!doc || !chunkIds.length) return
+  shell().confirmAsk(
+    t('gui.kb.chunk_delete'),
+    t('gui.kb.chunk_delete_body', { count: chunkIds.length }),
+    t('gui.kb.chunk_delete'),
+    () => {
+      set({ chunkBusy: true })
+      void source()
+        .deleteChunks(doc.id, chunkIds)
+        .then(() => {
+          set({ chunkPicked: [] })
+          /* Back a page when the last one emptied out, so deleting the tail of
+             a document does not leave the pager pointing past the end. */
+          const left = Math.max(1, Math.ceil(Math.max(0, state.chunksTotal - chunkIds.length) / CHUNK_PAGE))
+          if (state.chunkPage > left) set({ chunkPage: left })
+          refreshChunks()
+          if (state.openId) void reopen(state.openId)
+        })
+        .catch((e) => toast(said(e)))
+        .finally(() => set({ chunkBusy: false }))
+    },
+  )
+}
+
+export async function saveChunk(chunk: KbChunk, text: string): Promise<void> {
+  const doc = state.viewing
+  const id = chunk.chunk_id
+  if (!doc || !id || !text.trim()) return
+  set({ chunkBusy: true })
+  try {
+    await source().updateChunk(doc.id, id, text)
+    closeDialog()
+    /* The id changed with the text, so a tick pointing at the old one is
+       pointing at nothing. */
+    set({ chunkPicked: state.chunkPicked.filter((p) => p !== id) })
+    refreshChunks()
+  } catch (e) {
+    toast(said(e))
+  } finally {
+    set({ chunkBusy: false })
+  }
+}
+
+export async function addChunk(text: string): Promise<void> {
+  const doc = state.viewing
+  if (!doc || !text.trim()) return
+  set({ chunkBusy: true })
+  try {
+    await source().createChunk(doc.id, text)
+    closeDialog()
+    /* At the end of the reading order, so that is the page to be looking at. */
+    set({ chunkQuery: '', chunkFilter: null, chunkPicked: [] })
+    const total = state.chunksTotal + 1
+    set({ chunksTotal: total, chunkPage: Math.max(1, Math.ceil(total / CHUNK_PAGE)) })
+    refreshChunks()
+    if (state.openId) void reopen(state.openId)
+  } catch (e) {
+    toast(said(e))
+  } finally {
+    set({ chunkBusy: false })
   }
 }

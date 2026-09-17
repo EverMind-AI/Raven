@@ -3028,8 +3028,112 @@
       "zh": "分块"
     },
     "gui.kb.chunks_n": {
-      "en": "{n} in reading order",
-      "zh": "共 {n} 块，按阅读顺序"
+      "en": "Total {n}",
+      "zh": "共 {n} 块"
+    },
+    "gui.kb.chunk_pick": {
+      "en": "Select chunk {n}",
+      "zh": "选择第 {n} 块"
+    },
+    "gui.kb.chunk_pick_all": {
+      "en": "Select all",
+      "zh": "全选"
+    },
+    "gui.kb.chunk_enable": {
+      "en": "Enable",
+      "zh": "启用"
+    },
+    "gui.kb.chunk_disable": {
+      "en": "Disable",
+      "zh": "停用"
+    },
+    "gui.kb.chunk_delete": {
+      "en": "Delete",
+      "zh": "删除"
+    },
+    "gui.kb.chunk_delete_body": {
+      "en": "Delete {count} chunk(s)? They are gone from the index; the file itself stays.",
+      "zh": "删除 {count} 个分块？它们将从索引中移除，文件本身保留。"
+    },
+    "gui.kb.chunk_view": {
+      "en": "How much of each chunk to show",
+      "zh": "分块显示方式"
+    },
+    "gui.kb.chunk_full": {
+      "en": "Full text",
+      "zh": "全文"
+    },
+    "gui.kb.chunk_ellipse": {
+      "en": "Ellipse",
+      "zh": "省略"
+    },
+    "gui.kb.chunk_search": {
+      "en": "Search",
+      "zh": "搜索"
+    },
+    "gui.kb.chunk_no_match": {
+      "en": "Nothing in this file answers that.",
+      "zh": "该文件中没有匹配的内容。"
+    },
+    "gui.kb.chunk_filter": {
+      "en": "Which chunks to show",
+      "zh": "筛选分块"
+    },
+    "gui.kb.chunk_filter_all": {
+      "en": "All",
+      "zh": "全部"
+    },
+    "gui.kb.chunk_filter_on": {
+      "en": "Enabled",
+      "zh": "已启用"
+    },
+    "gui.kb.chunk_filter_off": {
+      "en": "Disabled",
+      "zh": "已停用"
+    },
+    "gui.kb.chunk_add": {
+      "en": "Add a chunk",
+      "zh": "新增分块"
+    },
+    "gui.kb.chunk_add_hint": {
+      "en": "The text to index as one chunk",
+      "zh": "作为一个分块索引的文本"
+    },
+    "gui.kb.chunk_add_note": {
+      "en": "Appended to the end and embedded like every other chunk. Reindexing the file deletes it along with the rest.",
+      "zh": "追加到末尾，并与其他分块一样进行嵌入。重新索引该文件时会与其他分块一并删除。"
+    },
+    "gui.kb.chunk_edit": {
+      "en": "Edit this chunk",
+      "zh": "编辑分块"
+    },
+    "gui.kb.chunk_edit_hint": {
+      "en": "Double-click to edit",
+      "zh": "双击编辑"
+    },
+    "gui.kb.chunk_edit_note": {
+      "en": "Saved as a new vector, so search matches what it now says. Reindexing the file deletes it along with the rest.",
+      "zh": "保存后会重新嵌入，检索将匹配修改后的内容。重新索引该文件时会与其他分块一并删除。"
+    },
+    "gui.kb.chunk_adding": {
+      "en": "Adding",
+      "zh": "正在新增"
+    },
+    "gui.kb.chunk_written": {
+      "en": "written",
+      "zh": "手写"
+    },
+    "gui.kb.chunk_prev": {
+      "en": "Previous page",
+      "zh": "上一页"
+    },
+    "gui.kb.chunk_next": {
+      "en": "Next page",
+      "zh": "下一页"
+    },
+    "gui.kb.chunk_page_of": {
+      "en": "{page} / {pages}",
+      "zh": "{page} / {pages}"
     },
     "gui.kb.chunks_none": {
       "en": "Nothing indexed for this file yet.",
@@ -7068,16 +7172,16 @@
       "zh": "智能分块"
     },
     "gui.kb.set_smart_help": {
-      "en": "Split on the structure the file has -- headings, slides, pages -- instead of on length alone.",
-      "zh": "按文件自身的结构切分，例如标题、幻灯片、页面，而不是仅按长度切分。"
+      "en": "Split on the structure the file has -- headings, slides, pages -- instead of on the delimiters below. Not in force yet: every base is cut on its delimiters while this is reworked.",
+      "zh": "按文件自身的结构切分，例如标题、幻灯片、页面，而不是按下面的分隔符切分。该选项暂未生效：重做期间，所有知识库均按分隔符切分。"
     },
     "gui.kb.set_sep": {
       "en": "Separator",
       "zh": "分隔符"
     },
     "gui.kb.set_sep_help": {
-      "en": "Where a plain split is allowed to cut, when smart chunking is off.",
-      "zh": "关闭智能分块时，普通切分允许断开的位置。"
+      "en": "Where a chunk may be cut. One delimiter per character; wrap a longer one in backticks, as in `\\n\\n`. The delimiter itself never appears in a chunk, and a unit between two delimiters is never split.",
+      "zh": "分块允许断开的位置。每个字符算一个分隔符；较长的分隔符用反引号包住，例如 `\\n\\n`。分隔符本身不会出现在分块内容中，两个分隔符之间的内容也不会被切断。"
     },
     "gui.kb.set_size": {
       "en": "Chunk Size",
@@ -7092,8 +7196,24 @@
       "zh": "重叠大小"
     },
     "gui.kb.set_lap_help": {
-      "en": "How much of the previous chunk each one repeats, so a sentence split across two is still findable.",
-      "zh": "每个分块重复前一个分块的长度，避免被切断的句子无法检索到。"
+      "en": "Tokens of each neighbouring chunk repeated at both ends, so a passage across a boundary is whole in both. Zero is off: repeated text is retrieved twice.",
+      "zh": "在每个分块两端重复相邻分块的若干 token，使跨边界的段落在两个分块中都完整。为 0 表示关闭：重复的内容会被检索两次。"
+    },
+    "gui.kb.set_tablectx": {
+      "en": "Table Context",
+      "zh": "表格上下文"
+    },
+    "gui.kb.set_tablectx_help": {
+      "en": "Tokens of the surrounding text to carry into a chunk that is a table. A table on its own says nothing about what its numbers are.",
+      "zh": "并入表格分块的上下文 token 数。单独的表格无法说明其中的数字代表什么。"
+    },
+    "gui.kb.set_imagectx": {
+      "en": "Figure Context",
+      "zh": "图片上下文"
+    },
+    "gui.kb.set_imagectx_help": {
+      "en": "The same, for a chunk that is a figure.",
+      "zh": "同上，用于图片分块。"
     },
     "gui.kb.set_tokens": {
       "en": "tokens",
@@ -7170,6 +7290,10 @@
     "gui.kb.save": {
       "en": "Save",
       "zh": "保存"
+    },
+    "gui.kb.set_smart_soon": {
+      "en": "Not yet",
+      "zh": "暂未启用"
     }
   }
 }

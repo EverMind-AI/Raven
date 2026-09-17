@@ -3588,6 +3588,10 @@ class KnowledgeBase(_Strict):
     smart_chunking: bool = True
     #: Where a plain split may cut, when smart chunking is off.
     separator: str = "\n\n"
+    #: Tokens of the prose around a table or a figure to carry into the chunk
+    #: that holds it. Zero is off.
+    table_context_size: int = 0
+    image_context_size: int = 0
     #: What a chunk is aimed at, and how much of the previous one each carries.
     chunk_size: int = 2048
     chunk_overlap: int = 215
@@ -3666,6 +3670,8 @@ class KnowledgeBasesSettingsParams(_Strict):
     top_k: int | None = None
     smart_chunking: bool | None = None
     separator: str | None = None
+    table_context_size: int | None = None
+    image_context_size: int | None = None
     chunk_size: int | None = None
     chunk_overlap: int | None = None
     file_processing: str | None = None
@@ -3790,10 +3796,23 @@ class KnowledgeChunk(_Strict):
     page_number: int | None = None
     #: The heading path the piece sits under, outermost first.
     heading_path: list[str] = Field(default_factory=list)
+    #: What addresses this piece. Derived from its text, so it survives a
+    #: rebuild of the same document. Empty on rows written before ids existed:
+    #: readable, but not actionable until the document is reindexed.
+    chunk_id: str = ""
+    #: Whether this piece may be retrieved at all. Disabled is not a ranking
+    #: penalty -- it is never searched and never reaches the agent.
+    enabled: bool = True
+    #: Whether a person wrote this piece rather than a parser cutting it.
+    manual: bool = False
 
 
 class KnowledgeDocumentsChunksParams(_Strict):
     document_id: str
+    page: int | None = None
+    page_size: int | None = None
+    available: bool | None = None
+    query: str | None = None
 
 
 class KnowledgeDocumentsChunksResult(_Strict):
@@ -3805,6 +3824,45 @@ class KnowledgeDocumentsChunksResult(_Strict):
     """
 
     chunks: list[KnowledgeChunk]
+    total: int
+
+
+class KnowledgeChunksSwitchParams(_Strict):
+    document_id: str
+    chunk_ids: list[str]
+    enabled: bool
+
+
+class KnowledgeChunksSwitchResult(_Strict):
+    changed: int
+
+
+class KnowledgeChunksDeleteParams(_Strict):
+    document_id: str
+    chunk_ids: list[str]
+
+
+class KnowledgeChunksDeleteResult(_Strict):
+    remaining: int
+
+
+class KnowledgeChunksCreateParams(_Strict):
+    document_id: str
+    text: str
+
+
+class KnowledgeChunksCreateResult(_Strict):
+    chunk: KnowledgeChunk
+
+
+class KnowledgeChunksUpdateParams(_Strict):
+    document_id: str
+    chunk_id: str
+    text: str
+
+
+class KnowledgeChunksUpdateResult(_Strict):
+    chunk: KnowledgeChunk
 
 
 class KnowledgeDocumentsDeleteParams(_Strict):
@@ -4283,6 +4341,10 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "knowledge.documents.index": (KnowledgeDocumentsIndexParams, KnowledgeDocumentsIndexResult),
     "knowledge.documents.delete": (KnowledgeDocumentsDeleteParams, KnowledgeDocumentsDeleteResult),
     "knowledge.documents.chunks": (KnowledgeDocumentsChunksParams, KnowledgeDocumentsChunksResult),
+    "knowledge.chunks.switch": (KnowledgeChunksSwitchParams, KnowledgeChunksSwitchResult),
+    "knowledge.chunks.delete": (KnowledgeChunksDeleteParams, KnowledgeChunksDeleteResult),
+    "knowledge.chunks.create": (KnowledgeChunksCreateParams, KnowledgeChunksCreateResult),
+    "knowledge.chunks.update": (KnowledgeChunksUpdateParams, KnowledgeChunksUpdateResult),
     "knowledge.search": (KnowledgeSearchParams, KnowledgeSearchResult),
     # playbooks.* -- the stored library, read-only
     "playbooks.list": (PlaybooksListParams, PlaybooksListResult),

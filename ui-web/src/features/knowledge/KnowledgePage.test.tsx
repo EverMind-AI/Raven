@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { KnowledgeApp } from './KnowledgePage'
 import * as store from './store'
 
-import type { KbBase, KbDoc, KbSearch, KnowledgeSource } from './types'
+import type { KbBase, KbChunk, KbDoc, KbSearch, KnowledgeSource } from './types'
 import type { Shell } from '../../shell/bridge'
 
 function base(over: Partial<KbBase> & { id: string }): KbBase {
@@ -81,7 +81,11 @@ function source(over: Partial<KnowledgeSource> = {}): void {
       upload: async (_b: string, file: File) => doc({ id: 'd1', source: file.name }),
       index: async (id: string) => doc({ id, status: 'ready', chunk_count: 2 }),
       search: async () => ({ hits: [], search_ms: 0, embed_ms: 0 }),
-      chunks: async () => [],
+      chunks: async () => ({ chunks: [], total: 0 }),
+      switchChunks: async () => 0,
+      deleteChunks: async () => 0,
+      createChunk: async (_d: string, text: string) => ({ chunk_index: 9, total_chunks: 10, text, manual: true }),
+      updateChunk: async (_d: string, _c: string, text: string) => ({ chunk_index: 0, total_chunks: 1, text, manual: true }),
       removeDoc: async () => {},
       ...over,
     },
@@ -978,17 +982,28 @@ describe('viewing the original file', () => {
     source({
       bases: async () => [base({ id: 'b1', name: 'handbook' })],
       documents: async () => [doc({ id: 'd1', source: 'contract.pdf', status: 'ready' })],
-      chunks: async () => [
-        { chunk_index: 1, total_chunks: 2, text: 'Second piece.', layout_type: 'text', page_number: 2 },
-        {
-          chunk_index: 0,
-          total_chunks: 2,
-          text: 'First piece.',
-          layout_type: 'heading',
-          page_number: 1,
-          heading_path: ['Terms'],
-        },
-      ],
+      chunks: async () => ({
+        chunks: [
+          {
+            chunk_index: 1,
+            total_chunks: 2,
+            text: 'Second piece.',
+            layout_type: 'text',
+            page_number: 2,
+            chunk_id: 'c2',
+          },
+          {
+            chunk_index: 0,
+            total_chunks: 2,
+            text: 'First piece.',
+            layout_type: 'heading',
+            page_number: 1,
+            heading_path: ['Terms'],
+            chunk_id: 'c1',
+          },
+        ],
+        total: 2,
+      }),
     })
     await mount()
     await act(async () => {
@@ -1009,13 +1024,291 @@ describe('viewing the original file', () => {
     expect(first.querySelector('.kbchunkpath')?.textContent).toBe('Terms')
   })
 
+  const chunk = (over: Partial<KbChunk> = {}): KbChunk => ({
+    chunk_index: 0,
+    total_chunks: 1,
+    text: 'a piece of it',
+    chunk_id: 'c1',
+    enabled: true,
+    manual: false,
+    ...over,
+  })
+
+  const openWithChunks = async (chunks: KbChunk[], total = chunks.length, over = {}) => {
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd1', source: 'contract.pdf', status: 'ready' })],
+      chunks: async () => ({ chunks, total }),
+      ...over,
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await clickName('contract.pdf')
+    await act(async () => {})
+  }
+
+  it('turns one chunk off from its own switch', async () => {
+    /* Disabled is not a ranking penalty: the engine drops it from retrieval
+       entirely, so the switch is worth showing on the row itself. */
+    const asked: unknown[] = []
+    await openWithChunks([chunk({ chunk_id: 'c1' })], 1, {
+      switchChunks: async (d: string, ids: string[], on: boolean) => {
+        asked.push([d, ids, on])
+        return 1
+      },
+    })
+
+    const box = document.querySelector('.kbswitch input') as HTMLInputElement
+    expect(box.checked).toBe(true)
+    await act(async () => {
+      box.click()
+    })
+
+    expect(asked).toEqual([['d1', ['c1'], false]])
+  })
+
+  it('offers the three operations only once something is ticked', async () => {
+    /* Absent rather than dead: three buttons that can never be pressed are
+       three things to read past, in a toolbar that is already full. */
+    const asked: unknown[] = []
+    await openWithChunks([chunk({ chunk_id: 'c1' }), chunk({ chunk_index: 1, chunk_id: 'c2' })], 2, {
+      switchChunks: async (_d: string, ids: string[], on: boolean) => {
+        asked.push([ids, on])
+        return ids.length
+      },
+    })
+
+    expect(screen.queryByText('gui.kb.chunk_disable')).toBeNull()
+    expect(screen.queryByText('gui.kb.chunk_delete')).toBeNull()
+
+    await act(async () => {
+      ;(document.querySelector('.kbpickall input') as HTMLInputElement).click()
+    })
+
+    expect(screen.getByText('gui.kb.picked_n {"n":2}')).toBeTruthy()
+    await act(async () => {
+      ;(screen.getByText('gui.kb.chunk_disable').closest('button') as HTMLButtonElement).click()
+    })
+
+    expect(asked).toEqual([[['c1', 'c2'], false]])
+  })
+
+  it('pages the reading order twenty at a time', async () => {
+    const asked: unknown[] = []
+    await openWithChunks([chunk()], 45, {
+      chunks: async (_d: string, opts: { page?: number; page_size?: number }) => {
+        asked.push(opts)
+        return { chunks: [chunk()], total: 45 }
+      },
+    })
+
+    expect(asked[0]).toMatchObject({ page: 1, page_size: 20 })
+    /* 45 pieces is three pages, so the pager is there and the first page has
+       nowhere back to go. */
+    expect(screen.getByText('gui.kb.chunk_page_of {"page":1,"pages":3}')).toBeTruthy()
+    await act(async () => {
+      ;(document.querySelector('[aria-label="gui.kb.chunk_next"]') as HTMLButtonElement).click()
+    })
+    expect(asked[asked.length - 1]).toMatchObject({ page: 2 })
+  })
+
+  it('searches on Enter without waiting, and not on a keystroke', async () => {
+    /* A search embeds the query at whatever endpoint the base was built with,
+       so typing does not spend one. The box runs the same retrieval a search
+       of the base does, narrowed to this file -- a word that is not on this
+       page still finds its chunk. */
+    const asked: unknown[] = []
+    await openWithChunks([chunk()], 40, {
+      chunks: async (_d: string, opts: { query?: string }) => {
+        asked.push(opts)
+        return { chunks: [chunk({ text: 'the matching piece' })], total: 1 }
+      },
+    })
+    const before = asked.length
+
+    const box = document.querySelector('.kbchunksearch') as HTMLInputElement
+    await act(async () => {
+      fireEvent.change(box, { target: { value: 'latency' } })
+    })
+    expect(asked.length).toBe(before)
+    expect(box.value).toBe('latency')
+
+    await act(async () => {
+      fireEvent.keyDown(box, { key: 'Enter' })
+    })
+
+    expect(asked[asked.length - 1]).toMatchObject({ query: 'latency' })
+    /* No pager over a ranking: relevance has no second page the engine was
+       asked for. */
+    expect(document.querySelector('.kbchunkfoot')).toBeNull()
+  })
+
+  it('searches on its own once the typing stops', async () => {
+    vi.useFakeTimers()
+    try {
+      const asked: unknown[] = []
+      await openWithChunks([chunk()], 40, {
+        chunks: async (_d: string, opts: { query?: string }) => {
+          asked.push(opts)
+          return { chunks: [chunk()], total: 1 }
+        },
+      })
+      const before = asked.length
+      const box = document.querySelector('.kbchunksearch') as HTMLInputElement
+
+      await act(async () => {
+        fireEvent.change(box, { target: { value: 'lat' } })
+        vi.advanceTimersByTime(2000)
+      })
+      /* Still typing: the first keystrokes must not each spend a request. */
+      expect(asked.length).toBe(before)
+
+      await act(async () => {
+        fireEvent.change(box, { target: { value: 'latency' } })
+        vi.advanceTimersByTime(3000)
+      })
+      await act(async () => {})
+
+      expect(asked[asked.length - 1]).toMatchObject({ query: 'latency' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('goes back to the reading order the moment the box is emptied', async () => {
+    /* Nothing to spend by waiting, and three seconds of a list that has
+       stopped answering reads as a fault. */
+    const asked: unknown[] = []
+    await openWithChunks([chunk()], 40, {
+      chunks: async (_d: string, opts: { query?: string; page?: number }) => {
+        asked.push(opts)
+        return { chunks: [chunk()], total: 40 }
+      },
+    })
+    const box = document.querySelector('.kbchunksearch') as HTMLInputElement
+    await act(async () => {
+      fireEvent.change(box, { target: { value: 'latency' } })
+      fireEvent.keyDown(box, { key: 'Enter' })
+    })
+    await act(async () => {})
+
+    await act(async () => {
+      fireEvent.change(box, { target: { value: '' } })
+    })
+    await act(async () => {})
+
+    expect(asked[asked.length - 1]).toMatchObject({ page: 1 })
+    expect(asked[asked.length - 1]).not.toHaveProperty('query')
+  })
+
+  it('shows a chunk whole or cut, and remembers which', async () => {
+    await openWithChunks([chunk({ text: 'a'.repeat(400) })])
+
+    expect(document.querySelector('.kbchunktx.cut')).not.toBeNull()
+    await act(async () => {
+      ;(screen.getByText('gui.kb.chunk_full').closest('button') as HTMLButtonElement).click()
+    })
+    expect(document.querySelector('.kbchunktx.cut')).toBeNull()
+  })
+
+  it('writes a chunk of its own, appended to the end', async () => {
+    const written: string[] = []
+    await openWithChunks([chunk()], 1, {
+      createChunk: async (_d: string, text: string) => {
+        written.push(text)
+        return chunk({ chunk_index: 1, chunk_id: 'c2', text, manual: true })
+      },
+    })
+
+    await act(async () => {
+      ;(document.querySelector('.kbchunkadd') as HTMLButtonElement).click()
+    })
+    const body = document.querySelector('#kbchunkbody') as HTMLTextAreaElement
+    await act(async () => {
+      fireEvent.change(body, { target: { value: 'a clause I typed' } })
+    })
+    await act(async () => {
+      ;(screen.getByText('gui.kb.create').closest('button') as HTMLButtonElement).click()
+    })
+
+    expect(written).toEqual(['a clause I typed'])
+    expect(document.querySelector('.kbmodal')).toBeNull()
+  })
+
+  it('rewrites a chunk on a double click, and re-embeds it', async () => {
+    /* A piece whose text changed and whose vector did not would be found by
+       the old words and read as the new ones. */
+    const saved: unknown[] = []
+    await openWithChunks([chunk({ chunk_id: 'c1', text: 'as it was cut' })], 1, {
+      updateChunk: async (d: string, id: string, text: string) => {
+        saved.push([d, id, text])
+        return chunk({ chunk_id: 'c9', text, manual: true })
+      },
+    })
+
+    await act(async () => {
+      fireEvent.doubleClick(document.querySelector('.kbchunktx') as HTMLElement)
+    })
+    const body = document.querySelector('#kbchunkbody') as HTMLTextAreaElement
+    /* Opens on what is there, so an edit is an edit rather than a retype. */
+    expect(body.value).toBe('as it was cut')
+
+    await act(async () => {
+      fireEvent.change(body, { target: { value: 'as I corrected it' } })
+    })
+    await act(async () => {
+      ;(screen.getByText('gui.kb.note_save').closest('button') as HTMLButtonElement).click()
+    })
+
+    expect(saved).toEqual([['d1', 'c1', 'as I corrected it']])
+    expect(document.querySelector('.kbmodal')).toBeNull()
+  })
+
+  it('will not save an edit that changed nothing', async () => {
+    await openWithChunks([chunk({ chunk_id: 'c1', text: 'as it was cut' })])
+
+    await act(async () => {
+      fireEvent.doubleClick(document.querySelector('.kbchunktx') as HTMLElement)
+    })
+
+    expect((screen.getByText('gui.kb.note_save').closest('button') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('filters by state from the filter icon', async () => {
+    const asked: unknown[] = []
+    await openWithChunks([chunk()], 3, {
+      chunks: async (_d: string, opts: { available?: boolean | null }) => {
+        asked.push(opts)
+        return { chunks: [chunk({ enabled: false })], total: 1 }
+      },
+    })
+
+    await act(async () => {
+      ;(document.querySelector('.kbfilter button') as HTMLButtonElement).click()
+    })
+    await act(async () => {
+      ;(screen.getByText('gui.kb.chunk_filter_off').closest('button') as HTMLButtonElement).click()
+    })
+
+    expect(asked[asked.length - 1]).toMatchObject({ available: false })
+  })
+
+  it('marks a chunk somebody wrote, and one that is off', async () => {
+    await openWithChunks([chunk({ manual: true, enabled: false })])
+
+    expect(screen.getByText('gui.kb.chunk_written')).toBeTruthy()
+    expect(document.querySelector('.kbchunk.off')).not.toBeNull()
+  })
+
   it('says a file has nothing indexed rather than showing an empty column', async () => {
     /* A document that failed, one still queued and one in a base with no model
        all land here, and an empty column would read as a bug. */
     source({
       bases: async () => [base({ id: 'b1' })],
       documents: async () => [doc({ id: 'd1', source: 'notes.md', status: 'failed' })],
-      chunks: async () => [],
+      chunks: async () => ({ chunks: [], total: 0 }),
     })
     await mount()
     await act(async () => {
@@ -1032,7 +1325,7 @@ describe('viewing the original file', () => {
     source({
       bases: async () => [base({ id: 'b1' })],
       documents: async () => [doc({ id: 'd1', source: 'onboarding.md', status: 'ready' })],
-      chunks: async () => [{ chunk_index: 0, total_chunks: 1, text: 'Only piece.' }],
+      chunks: async () => ({ chunks: [{ chunk_index: 0, total_chunks: 1, text: 'Only piece.', chunk_id: 'c1' }], total: 1 }),
     })
     await mount()
     await act(async () => {
@@ -1947,7 +2240,7 @@ describe('the knowledge base settings', () => {
     await openSettings()
 
     const helps = [...document.querySelectorAll('.kbsets .kbhelp')]
-    expect(helps.length).toBe(7)
+    expect(helps.length).toBe(9)
     for (const help of helps) {
       expect(help.getAttribute('title')).toBeTruthy()
       /* Reachable without a pointer, or the sentence only exists for people
@@ -2106,25 +2399,17 @@ describe('the knowledge base settings', () => {
     expect(saved).toEqual([])
   })
 
-  it('toggles smart chunking and disables the separator it replaces', async () => {
-    const saved = await openSettings({}, { smart_chunking: true })
+  it('says the strategy switch is not in force rather than offering a dead one', async () => {
+    /* Every base is cut the naive way while the structural chunker is
+       reworked. A switch that silently decides nothing is how the other four
+       settings on this panel spent their first release. */
+    await openSettings({}, { smart_chunking: true })
 
-    const toggle = field('gui.kb.set_smart').querySelector('.kbtog') as HTMLButtonElement
-    expect(toggle.getAttribute('aria-checked')).toBe('true')
-    /* Nothing plainly splits on a separator while the structure is doing it. */
-    expect((field('gui.kb.set_sep').querySelector('input') as HTMLInputElement).disabled).toBe(true)
-
-    await act(async () => {
-      toggle.click()
-    })
-    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    expect(field('gui.kb.set_smart').querySelector('.kbtog')).toBeNull()
+    expect(field('gui.kb.set_smart').textContent).toContain('gui.kb.set_smart_soon')
+    /* And the delimiters it would have replaced are in force, so the field
+       that sets them is live. */
     expect((field('gui.kb.set_sep').querySelector('input') as HTMLInputElement).disabled).toBe(false)
-
-    await act(async () => {
-      ;(screen.getByText('gui.kb.set_save').closest('button') as HTMLButtonElement).click()
-      await Promise.resolve()
-    })
-    expect(saved[0]!.smart_chunking).toBe(false)
   })
 
   it('says that chunking changes reach only what is added next', async () => {

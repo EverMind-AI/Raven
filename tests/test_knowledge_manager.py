@@ -8,10 +8,12 @@ pretending to be a model.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from raven.knowledge._embedding import EmbeddingConfig, EmbeddingError
-from raven.knowledge._manager import DuplicateBaseNameError, KnowledgeError, KnowledgeManager, StaleBaseError
+from raven.knowledge._manager import DuplicateBaseNameError, KnowledgeError, KnowledgeManager
 
 DIM = 8
 _VOCAB = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"]
@@ -132,6 +134,10 @@ beta beta beta notes on the second topic.
 
 async def _ready_base(manager, content: bytes = MARKDOWN, filename: str = "handbook.md"):
     base = await manager.create_base(name="handbook")
+    # Small enough that the fixture document is more than one chunk, which is
+    # what the paging, deleting and disabling tests below are about. The base
+    # default would swallow it whole.
+    manager.configure_base(base.id, chunk_size=12)
     doc = manager.add_document(base.id, filename=filename, content=content)
     indexed = await manager.index_document(doc.id)
     return base, indexed
@@ -235,28 +241,38 @@ async def test_a_base_is_searched_with_the_model_it_was_built_with(manager, endp
     assert manager.stub.calls[-1] != ["alpha"], "and not to the one configured now"
 
 
-async def test_a_base_whose_model_cannot_be_reached_says_so(manager, endpoints) -> None:
-    """Skipped rather than searched with the wrong vector -- and when it is the
-    only base asked for, the reason is raised instead of being answered with an
-    empty result, which says nothing about what to fix."""
+async def test_a_base_whose_model_cannot_be_reached_answers_by_keyword(manager, endpoints) -> None:
+    """The words still work. A base whose model has gone answers worse rather
+    than not at all, and says which of its answers came from words."""
     base, _ = await _ready_base(manager)
     manager.stub.model = "a-different-model"
     endpoints.refuse("stub-embed", EmbeddingError("model not served here"))
 
-    with pytest.raises(StaleBaseError, match="Point the base at a provider that serves it"):
-        await manager.search([base.id], "alpha")
+    outcome = await manager.search([base.id], "alpha")
+
+    assert outcome.hits, "the text is still there to match against"
+    assert "alpha" in outcome.hits[0].chunk.text.lower()
+    assert base.id in outcome.by_keyword
+    assert "Point the base at a provider that serves it" in outcome.by_keyword[base.id]
 
 
 async def test_a_width_change_is_also_stale(manager) -> None:
     """The base records both the model and the width, and the width leg has to
     stand on its own: a model can be redeployed at a different width under the
-    same name. Clearing the memo is what a fresh process does."""
+    same name. Clearing the memo is what a fresh process does.
+
+    Stale means the vectors cannot be queried, not that the base is gone: it
+    answers by keyword and says why, and the refusal that matters stays on the
+    indexing side, where writing into a mismatched collection would corrupt
+    it."""
     base, _ = await _ready_base(manager)
     manager.stub.dimensions = DIM + 1
     manager._widths.clear()
 
-    with pytest.raises(StaleBaseError):
-        await manager.search([base.id], "alpha")
+    outcome = await manager.search([base.id], "alpha")
+
+    assert base.id in outcome.by_keyword
+    assert "rebuild the base" in outcome.by_keyword[base.id]
 
 
 async def test_a_pin_that_contradicts_the_model_is_refused(manager) -> None:
@@ -338,7 +354,7 @@ async def test_each_base_is_embedded_with_its_own_model(manager, endpoints) -> N
 
     assert manager.stub.calls[-1] == ["alpha gamma"], "the base on the current model used it"
     assert other.calls == [["alpha gamma"]], "the base on the older model used that one"
-    assert outcome.skipped == {}
+    assert outcome.by_keyword == {}
     assert {hit.chunk.source for hit in outcome.hits} == {"handbook.md", "s.md"}
 
 
@@ -357,8 +373,9 @@ async def test_bases_sharing_a_model_share_one_embedding_call(manager) -> None:
 
 
 async def test_one_unreachable_base_does_not_take_the_others_down(manager, endpoints) -> None:
-    """Asking a mixed set is ordinary. The base that dropped out is named, so
-    a caller is not left thinking the others answered for it."""
+    """Asking a mixed set is ordinary. The base that fell back to words is
+    named, so a caller is not left thinking every hit was scored the same
+    way."""
     good, _ = await _ready_base(manager)
     manager.stub.model = "gone-model"
     stranded = await manager.create_base(name="stranded")
@@ -369,9 +386,9 @@ async def test_one_unreachable_base_does_not_take_the_others_down(manager, endpo
 
     outcome = await manager.search([good.id, stranded.id], "alpha")
 
-    assert {hit.chunk.source for hit in outcome.hits} == {"handbook.md"}
-    assert list(outcome.skipped) == [stranded.id]
-    assert "no endpoint serves it" in outcome.skipped[stranded.id]
+    assert "handbook.md" in {hit.chunk.source for hit in outcome.hits}
+    assert list(outcome.by_keyword) == [stranded.id]
+    assert "no endpoint serves it" in outcome.by_keyword[stranded.id]
 
 
 async def test_a_base_older_than_the_pin_goes_back_to_the_endpoint_it_came_from(
@@ -437,20 +454,169 @@ async def test_a_new_base_records_who_served_its_model(manager) -> None:
     assert base.embedding_provider == "siliconflow"
 
 
-# -- reading a document's chunks back ------------------------------
+async def test_editing_a_chunk_re_embeds_it(manager) -> None:
+    """A piece whose text changed and whose vector did not would be found by
+    the old words and read as the new ones."""
+    base, doc = await _ready_base(manager)
+    held, _ = await manager.document_chunks(doc.id)
+    target = held[0]
+
+    written = await manager.update_chunk(doc.id, target.chunk_id, "epsilon epsilon epsilon")
+
+    assert written.chunk.text == "epsilon epsilon epsilon"
+    assert written.chunk_id != target.chunk_id, "the id follows the content"
+    assert written.chunk.chunk_index == target.chunk.chunk_index, "and its place is kept"
+    assert written.manual is True
+    hits = (await manager.search([base.id], "epsilon")).hits
+    assert any("epsilon" in hit.chunk.text for hit in hits)
+    after, total = await manager.document_chunks(doc.id)
+    assert total == len(held), "an edit replaces, it does not add"
+
+
+async def test_an_edited_chunk_keeps_the_state_it_was_in(manager) -> None:
+    _, doc = await _ready_base(manager)
+    held, _ = await manager.document_chunks(doc.id)
+    target = held[0]
+    await manager.set_chunks_enabled(doc.id, [target.chunk_id], False)
+
+    written = await manager.update_chunk(doc.id, target.chunk_id, "rewritten while off")
+
+    assert written.enabled is False
+    after, _ = await manager.document_chunks(doc.id)
+    assert next(p for p in after if p.chunk_id == written.chunk_id).enabled is False
+
+
+async def test_editing_a_chunk_to_the_same_text_is_not_a_write(manager) -> None:
+    """No new vector, no new id: there is nothing for either to follow."""
+    _, doc = await _ready_base(manager)
+    held, _ = await manager.document_chunks(doc.id)
+    target = held[0]
+
+    written = await manager.update_chunk(doc.id, target.chunk_id, target.chunk.text)
+
+    assert written.chunk_id == target.chunk_id
+
+
+async def test_editing_a_chunk_that_is_not_there_is_refused(manager) -> None:
+    _, doc = await _ready_base(manager)
+
+    with pytest.raises(KnowledgeError):
+        await manager.update_chunk(doc.id, "no-such-chunk", "text")
+
+
+# -- the settings a base is chunked by -----------------------------
+
+
+async def test_a_base_is_chunked_the_way_it_is_configured(manager) -> None:
+    """The four chunking settings were saved, shown, and read by nothing: one
+    chunker was built at startup and used for every base."""
+    base = await manager.create_base(name="naive")
+    manager.configure_base(base.id, smart_chunking=False, separator="!", chunk_size=1)
+    doc = manager.add_document(base.id, filename="a.md", content=b"alpha!beta!gamma")
+    await manager.index_document(doc.id)
+
+    held, total = await manager.document_chunks(doc.id)
+
+    assert total == 3, "cut on the separator this base asked for"
+    assert [p.chunk.text for p in held] == ["alpha", "beta", "gamma"]
+
+
+async def test_every_base_is_cut_the_naive_way_for_now(manager) -> None:
+    """The structural chunker is being reworked, so the strategy setting is
+    kept and not consulted: a base asking for smart chunking is cut on its
+    delimiters like every other one."""
+    base = await manager.create_base(name="smart")
+    manager.configure_base(base.id, smart_chunking=True, separator="!", chunk_size=1)
+    doc = manager.add_document(base.id, filename="a.md", content=b"alpha!beta")
+    await manager.index_document(doc.id)
+
+    held, total = await manager.document_chunks(doc.id)
+
+    assert total == 2 and [p.chunk.text for p in held] == ["alpha", "beta"]
+
+
+async def test_an_overlap_nobody_chose_is_not_applied(manager) -> None:
+    """Every base carried 215 while nothing read the setting, so no document
+    was ever chunked with it and nobody picked it."""
+    base = await manager.create_base(name="legacy")
+    manager._records._bases[base.id] = replace(base, chunk_overlap=215)
+    manager._records._save()
+    manager._records._bases.clear()
+    manager._records._load()
+
+    assert manager.get_base(base.id).chunk_overlap == 0
+
+
+# -- keywords, when the vectors cannot be reached ------------------
+
+
+async def test_keyword_search_finds_chinese_text(manager, endpoints) -> None:
+    """The reason the keyword index is tokenized by n-grams rather than by
+    words: a language that writes without spaces matches nothing under the
+    default tokenizer, and this deployment's documents are in one."""
+    base = await manager.create_base(name="zh")
+    body = "# \u6807\u9898\n\n\u5ef6\u8fdf\u5728\u7b2c\u4e8c\u5b63\u5ea6\u4e0a\u5347\uff0c\u541e\u5410\u91cf\u4e0b\u964d\u3002\n"
+    doc = manager.add_document(base.id, filename="zh.md", content=body.encode())
+    assert (await manager.index_document(doc.id)).status == "ready"
+    manager.stub.model = "gone"
+    endpoints.refuse("stub-embed", EmbeddingError("no endpoint"))
+
+    outcome = await manager.search([base.id], "\u5ef6\u8fdf")
+
+    assert outcome.hits, "a chinese query matched chinese text"
+    assert base.id in outcome.by_keyword
+
+
+async def test_a_disabled_chunk_is_not_matched_by_keyword_either(manager, endpoints) -> None:
+    """Off means out of retrieval, whichever way the retrieval is done."""
+    base, doc = await _ready_base(manager)
+    held, _ = await manager.document_chunks(doc.id)
+    target = next(p for p in held if "first topic" in p.chunk.text)
+    await manager.set_chunks_enabled(doc.id, [target.chunk_id], False)
+    manager.stub.model = "gone"
+    endpoints.refuse("stub-embed", EmbeddingError("no endpoint"))
+
+    outcome = await manager.search([base.id], "alpha")
+
+    assert all("first topic" not in hit.chunk.text for hit in outcome.hits)
+
+
+async def test_mixed_scoring_is_merged_by_rank_not_by_value(manager, endpoints) -> None:
+    """A cosine similarity and a BM25 score are not comparable numbers. Sorting
+    the concatenation would let whichever scale runs hotter decide the order,
+    so the merge asks each list only for the part every scorer agrees on."""
+    first, _ = await _ready_base(manager)
+    # The pin moves, so the second base is built on a model that is still
+    # reachable while the first one's is not: one list of cosine scores, one of
+    # BM25 scores, in the same answer.
+    manager.stub.model = "second-model"
+    second = await manager.create_base(name="second")
+    doc = manager.add_document(second.id, filename="s.md", content=b"# alpha\n\nalpha alpha alpha\n")
+    await manager.index_document(doc.id)
+    endpoints.refuse("stub-embed", EmbeddingError("no endpoint"))
+
+    outcome = await manager.search([first.id, second.id], "alpha", top_k=5)
+
+    assert outcome.hits, "both kinds of answer are in the result"
+    assert first.id in outcome.by_keyword and second.id not in outcome.by_keyword
+
+
+# -- reading a document's chunks back, and acting on them ----------
 
 
 async def test_a_document_chunks_come_back_in_reading_order(manager) -> None:
     """Reading order is the chunker's numbering, and a scan of the store has no
     order of its own to promise -- so the store sorts rather than the caller
     hoping."""
-    base, doc = await _ready_base(manager)
+    _, doc = await _ready_base(manager)
 
-    chunks = await manager.document_chunks(doc.id)
+    held, total = await manager.document_chunks(doc.id)
 
-    assert [c.chunk_index for c in chunks] == list(range(len(chunks)))
-    assert len(chunks) == doc.chunk_count
-    assert "first topic" in chunks[0].text
+    assert [piece.chunk.chunk_index for piece in held] == list(range(total))
+    assert total == doc.chunk_count
+    assert "first topic" in held[0].chunk.text
+    assert all(piece.chunk_id for piece in held), "every piece is addressable"
+    assert all(piece.enabled and not piece.manual for piece in held)
 
 
 async def test_chunks_of_a_document_that_indexed_nothing_are_empty(manager) -> None:
@@ -460,18 +626,150 @@ async def test_chunks_of_a_document_that_indexed_nothing_are_empty(manager) -> N
     doc = manager.add_document(base.id, filename="a.md", content=b"# alpha\n")
     await manager.index_document(doc.id)
 
-    assert await manager.document_chunks(doc.id) == []
-    assert await manager.document_chunks("no-such-document") == []
+    assert await manager.document_chunks(doc.id) == ([], 0)
+    assert await manager.document_chunks("no-such-document") == ([], 0)
 
 
 async def test_chunks_of_one_document_do_not_include_another(manager) -> None:
-    base, first = await _ready_base(manager)
+    base, _ = await _ready_base(manager)
     second = manager.add_document(base.id, filename="other.md", content=b"# gamma\n\ngamma\n")
     await manager.index_document(second.id)
 
-    chunks = await manager.document_chunks(second.id)
+    held, _ = await manager.document_chunks(second.id)
 
-    assert chunks and all("gamma" in c.text for c in chunks)
+    assert held and all("gamma" in piece.chunk.text for piece in held)
+
+
+async def test_a_page_is_a_window_on_the_document(manager) -> None:
+    """Paged after the ordering, so page two follows page one through the
+    document rather than through whatever the scan returned."""
+    _, doc = await _ready_base(manager)
+
+    first, total = await manager.document_chunks(doc.id, offset=0, limit=1)
+    second, again = await manager.document_chunks(doc.id, offset=1, limit=1)
+
+    assert total == again == doc.chunk_count
+    assert [p.chunk.chunk_index for p in first] == [0]
+    assert [p.chunk.chunk_index for p in second] == [1]
+
+
+async def test_an_id_is_the_same_piece_after_a_rebuild(manager) -> None:
+    """Content-derived on purpose: a reader who turned a paragraph off last
+    week is still looking at the same paragraph after a reindex."""
+    _, doc = await _ready_base(manager)
+    before, _ = await manager.document_chunks(doc.id)
+
+    await manager.index_document(doc.id)
+    after, _ = await manager.document_chunks(doc.id)
+
+    assert [p.chunk_id for p in before] == [p.chunk_id for p in after]
+
+
+async def test_a_repeated_passage_still_gets_two_ids(manager) -> None:
+    """Hashing content alone would give both copies one name, and acting on one
+    would act on the other."""
+    base = await manager.create_base(name="repeats")
+    twice = b"# alpha\n\nsame words here\n\n# beta\n\nsame words here\n"
+    doc = manager.add_document(base.id, filename="twice.md", content=twice)
+    await manager.index_document(doc.id)
+
+    held, _ = await manager.document_chunks(doc.id)
+    texts = [p.chunk.text for p in held]
+
+    assert len(texts) != len(set(texts)) or len(held) == len({p.chunk_id for p in held})
+    assert len({p.chunk_id for p in held}) == len(held), "no two pieces share a name"
+
+
+async def test_a_disabled_chunk_is_not_retrieved(manager) -> None:
+    """Off is not a ranking penalty. The filter is in the store's own search,
+    where every caller passes through it."""
+    base, doc = await _ready_base(manager)
+    held, _ = await manager.document_chunks(doc.id)
+    target = next(p for p in held if "first topic" in p.chunk.text)
+
+    changed = await manager.set_chunks_enabled(doc.id, [target.chunk_id], False)
+
+    assert changed == 1
+    hits = (await manager.search([base.id], "alpha")).hits
+    assert all("first topic" not in hit.chunk.text for hit in hits)
+    back, _ = await manager.document_chunks(doc.id)
+    assert next(p for p in back if p.chunk_id == target.chunk_id).enabled is False
+
+
+async def test_turning_a_chunk_back_on_restores_it(manager) -> None:
+    base, doc = await _ready_base(manager)
+    held, _ = await manager.document_chunks(doc.id)
+    target = held[0]
+    await manager.set_chunks_enabled(doc.id, [target.chunk_id], False)
+
+    await manager.set_chunks_enabled(doc.id, [target.chunk_id], True)
+
+    hits = (await manager.search([base.id], "alpha")).hits
+    assert any(hit.chunk.text == target.chunk.text for hit in hits)
+
+
+async def test_listing_can_ask_for_one_state(manager) -> None:
+    _, doc = await _ready_base(manager)
+    held, _ = await manager.document_chunks(doc.id)
+    await manager.set_chunks_enabled(doc.id, [held[0].chunk_id], False)
+
+    off, off_total = await manager.document_chunks(doc.id, enabled=False)
+    on, on_total = await manager.document_chunks(doc.id, enabled=True)
+
+    assert off_total == 1 and [p.chunk_id for p in off] == [held[0].chunk_id]
+    assert on_total == len(held) - 1
+
+
+async def test_deleting_a_chunk_leaves_the_count_agreeing_with_the_index(manager) -> None:
+    """The row on the page reads that number to tell an indexed document from
+    an empty one."""
+    _, doc = await _ready_base(manager)
+    held, total = await manager.document_chunks(doc.id)
+
+    left = await manager.delete_chunks(doc.id, [held[0].chunk_id])
+
+    assert left == total - 1
+    assert manager.get_document(doc.id).chunk_count == total - 1
+    remaining, _ = await manager.document_chunks(doc.id)
+    assert held[0].chunk_id not in {p.chunk_id for p in remaining}
+
+
+async def test_a_written_chunk_is_appended_and_findable(manager) -> None:
+    """Appended rather than inserted: it was not cut from anywhere in the
+    document, and putting it between two pieces that were would claim a place
+    in the text it does not have."""
+    base, doc = await _ready_base(manager)
+    _, before = await manager.document_chunks(doc.id)
+
+    written = await manager.add_chunk(doc.id, "  epsilon epsilon epsilon  ")
+
+    assert written.manual is True and written.enabled is True
+    assert written.chunk.text == "epsilon epsilon epsilon"
+    held, total = await manager.document_chunks(doc.id)
+    assert total == before + 1
+    assert held[-1].chunk_id == written.chunk_id, "at the end of the reading order"
+    assert manager.get_document(doc.id).chunk_count == total
+    hits = (await manager.search([base.id], "epsilon")).hits
+    assert any("epsilon" in hit.chunk.text for hit in hits)
+
+
+async def test_a_written_chunk_does_not_survive_a_reindex(manager) -> None:
+    """A reindex is the document being cut again, and a piece nobody cut has
+    nothing to be attached to."""
+    _, doc = await _ready_base(manager)
+    written = await manager.add_chunk(doc.id, "written by hand")
+
+    await manager.index_document(doc.id)
+
+    held, _ = await manager.document_chunks(doc.id)
+    assert written.chunk_id not in {p.chunk_id for p in held}
+
+
+async def test_an_empty_written_chunk_is_refused(manager) -> None:
+    _, doc = await _ready_base(manager)
+
+    with pytest.raises(KnowledgeError):
+        await manager.add_chunk(doc.id, "   \n  ")
 
 
 # ── deletion ──────────────────────────────────────────────────────

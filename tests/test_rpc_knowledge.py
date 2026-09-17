@@ -187,6 +187,8 @@ async def test_creating_a_base_answers_the_row_the_list_would_show() -> None:
         "top_k",
         "smart_chunking",
         "separator",
+        "table_context_size",
+        "image_context_size",
         "chunk_size",
         "chunk_overlap",
         "file_processing",
@@ -1009,10 +1011,16 @@ async def test_chunks_answer_carries_what_the_parser_found(monkeypatch) -> None:
             "bbox": {"x0": 72.0, "x1": 540.0},
         }
 
+    class _Held:
+        chunk_id = "abc123"
+        chunk = _Chunk()
+        enabled = True
+        manual = False
+
     class _Manager:
-        async def document_chunks(self, document_id: str):
+        async def document_chunks(self, document_id: str, **kw):
             assert document_id == "d1"
-            return [_Chunk()]
+            return [_Held()], 1
 
     monkeypatch.setattr(kb, "knowledge_manager", lambda: _Manager())
 
@@ -1027,8 +1035,12 @@ async def test_chunks_answer_carries_what_the_parser_found(monkeypatch) -> None:
                 "layout_type": "heading",
                 "page_number": 3,
                 "heading_path": ["Terms", "Payment"],
+                "chunk_id": "abc123",
+                "enabled": True,
+                "manual": False,
             }
-        ]
+        ],
+        "total": 1,
     }
 
 
@@ -1042,9 +1054,15 @@ async def test_chunks_of_a_text_file_carry_no_page(monkeypatch) -> None:
         text = "plain"
         metadata = {"reading_order": 0}
 
+    class _Held:
+        chunk_id = ""
+        chunk = _Chunk()
+        enabled = True
+        manual = False
+
     class _Manager:
-        async def document_chunks(self, document_id: str):
-            return [_Chunk()]
+        async def document_chunks(self, document_id: str, **kw):
+            return [_Held()], 1
 
     monkeypatch.setattr(kb, "knowledge_manager", lambda: _Manager())
 
@@ -1058,3 +1076,111 @@ async def test_chunks_of_a_text_file_carry_no_page(monkeypatch) -> None:
 async def test_chunks_needs_a_document_id() -> None:
     with pytest.raises(ConfigValidationError):
         await kb.knowledge_documents_chunks({"document_id": "  "})
+
+
+async def test_a_page_of_chunks_is_asked_for_by_number(monkeypatch) -> None:
+    """Twenty a page, and the offset is the page the caller named."""
+    seen: dict[str, object] = {}
+
+    class _Manager:
+        async def document_chunks(self, document_id: str, **kw):
+            seen.update(kw)
+            return [], 57
+
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: _Manager())
+
+    out = await kb.knowledge_documents_chunks({"document_id": "d1", "page": 3})
+
+    assert seen["offset"] == 40 and seen["limit"] == 20
+    assert out["total"] == 57
+
+
+async def test_a_query_searches_the_document_instead_of_paging_it(monkeypatch) -> None:
+    """The search box answers with what matched, best first -- paging that would
+    promise a second page of relevance nobody asked the engine for."""
+
+    class _Chunk:
+        chunk_index = 4
+        total_chunks = 9
+        text = "matched"
+        metadata: dict = {}
+
+    class _Held:
+        chunk_id = "c9"
+        chunk = _Chunk()
+        enabled = True
+        manual = False
+
+    class _Manager:
+        async def search_document(self, document_id: str, query: str, *, limit: int):
+            assert (document_id, query, limit) == ("d1", "latency", 20)
+            return [_Held()]
+
+        async def document_chunks(self, *a, **kw):  # pragma: no cover - must not be reached
+            raise AssertionError("a query searches rather than pages")
+
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: _Manager())
+
+    out = await kb.knowledge_documents_chunks({"document_id": "d1", "query": "  latency "})
+
+    assert out["total"] == 1 and out["chunks"][0]["chunk_id"] == "c9"
+
+
+async def test_switching_chunks_needs_ids(monkeypatch) -> None:
+    with pytest.raises(ConfigValidationError):
+        await kb.knowledge_chunks_switch({"document_id": "d1", "chunk_ids": [], "enabled": False})
+    with pytest.raises(ConfigValidationError):
+        await kb.knowledge_chunks_switch({"document_id": "d1", "chunk_ids": ["  "], "enabled": False})
+
+
+async def test_switching_chunks_answers_with_what_changed(monkeypatch) -> None:
+    class _Manager:
+        async def set_chunks_enabled(self, document_id: str, chunk_ids: list, enabled: bool):
+            assert (document_id, chunk_ids, enabled) == ("d1", ["a", "b"], False)
+            return 2
+
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: _Manager())
+
+    assert await kb.knowledge_chunks_switch({"document_id": "d1", "chunk_ids": ["a", " b "], "enabled": False}) == {
+        "changed": 2
+    }
+
+
+async def test_deleting_chunks_answers_with_what_is_left(monkeypatch) -> None:
+    class _Manager:
+        async def delete_chunks(self, document_id: str, chunk_ids: list):
+            return 7
+
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: _Manager())
+
+    assert await kb.knowledge_chunks_delete({"document_id": "d1", "chunk_ids": ["a"]}) == {"remaining": 7}
+
+
+async def test_a_written_chunk_comes_back_as_the_page_reads_it(monkeypatch) -> None:
+    class _Chunk:
+        chunk_index = 12
+        total_chunks = 13
+        text = "written by hand"
+        metadata = {"layout_type": "text"}
+
+    class _Held:
+        chunk_id = "m1"
+        chunk = _Chunk()
+        enabled = True
+        manual = True
+
+    class _Manager:
+        async def add_chunk(self, document_id: str, text: str):
+            assert text == "written by hand"
+            return _Held()
+
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: _Manager())
+
+    out = await kb.knowledge_chunks_create({"document_id": "d1", "text": "  written by hand  "})
+
+    assert out["chunk"]["manual"] is True and out["chunk"]["chunk_id"] == "m1"
+
+
+async def test_an_empty_written_chunk_is_refused() -> None:
+    with pytest.raises(ConfigValidationError):
+        await kb.knowledge_chunks_create({"document_id": "d1", "text": "   "})

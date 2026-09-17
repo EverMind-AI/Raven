@@ -7124,6 +7124,20 @@
           "schema": {
             "type": "string"
           }
+        },
+        {
+          "name": "table_context_size",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "image_context_size",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
         }
       ],
       "result": {
@@ -7395,6 +7409,40 @@
           "schema": {
             "type": "string"
           }
+        },
+        {
+          "name": "page",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "description": "1-based page of the reading order. Defaults to the first."
+          }
+        },
+        {
+          "name": "page_size",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "available",
+          "required": false,
+          "schema": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Filter by state; omit for both."
+          }
+        },
+        {
+          "name": "query",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "When set, the pieces are the ones that answer this query, best first, rather than a page of the reading order -- the same retrieval a search of the base does, narrowed to this document, by keyword where the model cannot be reached."
+          }
         }
       ],
       "result": {
@@ -7408,10 +7456,15 @@
               "items": {
                 "$ref": "#/components/schemas/KnowledgeChunk"
               }
+            },
+            "total": {
+              "type": "integer",
+              "description": "How many pieces the filter admits, which is what a pager counts."
             }
           },
           "required": [
-            "chunks"
+            "chunks",
+            "total"
           ]
         }
       }
@@ -7442,6 +7495,171 @@
             "removed"
           ],
           "type": "object"
+        }
+      }
+    },
+    {
+      "name": "knowledge.chunks.switch",
+      "summary": "Turn pieces of one document on or off.",
+      "description": "Disabled means out of retrieval entirely -- not a ranking penalty. The filter is applied by the store, so every present and future caller inherits it.",
+      "params": [
+        {
+          "name": "document_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "chunk_ids",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "name": "enabled",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeChunksSwitchResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "changed": {
+              "type": "integer",
+              "description": "How many pieces the store actually changed."
+            }
+          },
+          "required": [
+            "changed"
+          ]
+        }
+      }
+    },
+    {
+      "name": "knowledge.chunks.delete",
+      "summary": "Remove pieces of one document from the index.",
+      "description": "Unlike disabling, nothing is kept. Answers with the number of pieces the document has left.",
+      "params": [
+        {
+          "name": "document_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "chunk_ids",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeChunksDeleteResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "remaining": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "remaining"
+          ]
+        }
+      }
+    },
+    {
+      "name": "knowledge.chunks.create",
+      "summary": "Append a piece a person wrote to a document.",
+      "description": "Appended rather than inserted: it was not cut from anywhere in the document. It is embedded with the base's own model, and it is deleted along with every other piece when the document is reindexed.",
+      "params": [
+        {
+          "name": "document_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "text",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeChunksCreateResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "chunk": {
+              "$ref": "#/components/schemas/KnowledgeChunk"
+            }
+          },
+          "required": [
+            "chunk"
+          ]
+        }
+      }
+    },
+    {
+      "name": "knowledge.chunks.update",
+      "summary": "Rewrite one piece's text, and the vector that answers for it.",
+      "description": "Replaced rather than edited in place: a piece whose text changed and whose vector did not would be found by the old words and read as the new ones. Its id changes with its text, its place in the reading order and its on/off state are kept, and it is marked as written by hand.",
+      "params": [
+        {
+          "name": "document_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "chunk_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "text",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeChunksUpdateResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "chunk": {
+              "$ref": "#/components/schemas/KnowledgeChunk"
+            }
+          },
+          "required": [
+            "chunk"
+          ]
         }
       }
     },
@@ -11545,6 +11763,14 @@
           },
           "file_processing": {
             "type": "string"
+          },
+          "table_context_size": {
+            "type": "integer",
+            "description": "Tokens of the prose around a table to carry into the chunk that holds it. Zero is off."
+          },
+          "image_context_size": {
+            "type": "integer",
+            "description": "Tokens of the prose around a figure to carry into the chunk that holds it. Zero is off."
           }
         },
         "required": [
@@ -12036,6 +12262,18 @@
               "type": "string"
             },
             "description": "The headings the piece sits under, outermost first."
+          },
+          "chunk_id": {
+            "type": "string",
+            "description": "What addresses this piece. Derived from its text, so it survives a rebuild of the same document. Empty on rows written before ids existed, which can be read but not acted on until the document is reindexed."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether this piece may be retrieved. A disabled piece is never searched and never reaches the agent."
+          },
+          "manual": {
+            "type": "boolean",
+            "description": "Whether a person wrote this piece. It is deleted with every other piece when the document is reindexed."
           }
         },
         "required": [

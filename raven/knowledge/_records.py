@@ -38,7 +38,17 @@ DocumentOrigin = Literal["file", "note", "url"]
 #: numbers -- and three copies of a default are three chances to disagree.
 DEFAULT_TOP_K = 6
 DEFAULT_CHUNK_SIZE = 2048
-DEFAULT_CHUNK_OVERLAP = 215
+#: Off. Overlap repeats text between neighbouring chunks, so a passage that
+#: straddles a boundary is whole in both -- and every repeated passage is
+#: retrieved twice and reads as two findings. Worth turning on deliberately,
+#: not by default.
+DEFAULT_CHUNK_OVERLAP = 0
+
+#: The overlap every base carried while nothing read the setting. A base still
+#: holding exactly it never had an overlap applied and never had one chosen, so
+#: it is read as the nothing it has always been rather than turned on by the
+#: change that made the setting work.
+LEGACY_UNUSED_OVERLAP = 215
 DEFAULT_SEPARATOR = "\n\n"
 
 
@@ -168,6 +178,11 @@ class KnowledgeBaseRecord:
     #: carries, both in tokens.
     chunk_size: int = DEFAULT_CHUNK_SIZE
     chunk_overlap: int = DEFAULT_CHUNK_OVERLAP
+    #: Tokens of the prose around a table or a figure to carry into the chunk
+    #: that holds it. A table on its own embeds as a grid of values with
+    #: nothing saying what they are about. Zero is off.
+    table_context_size: int = 0
+    image_context_size: int = 0
     #: Which pre-processing a file goes through on the way in. Empty is
     #: "don't use", which is the only setting there is so far.
     file_processing: str = ""
@@ -195,6 +210,20 @@ class KnowledgeDocumentRecord:
     #: for the rest. A note keeps its text in the blob like any other document,
     #: so it needs nothing here.
     origin_ref: str = ""
+
+
+def _without_the_unused_overlap(base: KnowledgeBaseRecord) -> KnowledgeBaseRecord:
+    """Read a base still carrying the old overlap default as having none.
+
+    That number was written into every base while nothing read the setting, so
+    no document was ever chunked with it and nobody chose it. Honouring it the
+    moment the setting starts working would turn overlap on across every
+    existing base without anyone asking -- and overlap is text retrieved twice.
+    A reader who wants one sets it, and then it is theirs.
+    """
+    if base.chunk_overlap != LEGACY_UNUSED_OVERLAP:
+        return base
+    return replace(base, chunk_overlap=DEFAULT_CHUNK_OVERLAP)
 
 
 class RecordStore:
@@ -225,7 +254,7 @@ class RecordStore:
             if record is None:
                 logger.warning("knowledge: dropping malformed base {}", base_id)
             else:
-                self._bases[base_id] = record
+                self._bases[base_id] = _without_the_unused_overlap(record)
         for doc_id, fields in (raw.get("documents") or {}).items():
             record = _build(KnowledgeDocumentRecord, doc_id, fields, doc_extra.get(doc_id))
             if record is None:
@@ -346,6 +375,8 @@ class RecordStore:
             "top_k",
             "smart_chunking",
             "separator",
+            "table_context_size",
+            "image_context_size",
             "chunk_size",
             "chunk_overlap",
             "file_processing",

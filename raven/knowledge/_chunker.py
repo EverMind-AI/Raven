@@ -15,6 +15,36 @@ from itertools import accumulate
 
 from raven.knowledge._types import Chunk, DataBlock, Section, TextBlock
 
+#: How far back a cut may be walked to land between words instead of inside
+#: one. A tenth of the budget: far enough to clear any ordinary word, short
+#: enough that a text with no boundary in reach (an unbroken CJK run, a base64
+#: blob) gives up quickly and cuts where it must rather than shrinking chunks.
+_BOUNDARY_REACH = 0.1
+
+
+def _back_to_a_boundary(text: str, start: int, end: int) -> int:
+    """Walk ``end`` back to the nearest break, if one is close enough.
+
+    A cut by byte budget alone lands wherever the count runs out, which is
+    usually the middle of a word: the piece before it ends in half a word and
+    the piece after starts with the other half, and both halves are embedded as
+    the nonsense they now are. Breaking at a newline is better than at a space,
+    because a newline is where the writer broke it.
+
+    Languages that write without spaces have no boundary to find, and the reach
+    is bounded so they are not punished for it.
+    """
+    if end >= len(text):
+        return end
+    floor = max(start + 1, end - int((end - start) * _BOUNDARY_REACH) - 1)
+    for breaks in ("\n", " \t"):
+        cut = end
+        while cut > floor:
+            if text[cut - 1] in breaks:
+                return cut
+            cut -= 1
+    return end
+
 
 class ChunkerBase(ABC):
     """Abstract base class for chunkers.
@@ -180,6 +210,7 @@ class ApproxTokenChunker(ChunkerBase):
             # Always make progress, even for characters whose UTF-8
             # encoding exceeds the budget on their own
             end = max(end, start + 1)
+            end = _back_to_a_boundary(text, start, end)
             pieces.append(text[start:end])
 
             if end >= len(text):

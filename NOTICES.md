@@ -37,6 +37,22 @@ retained in `LICENSES/`.
   The fork policy (hard fork, no upstream sync, fixes land in-tree) lives
   in `ui-tui/packages/hermes-ink/README.md`.
 
+## RAGFlow (retrieval engine)
+- Upstream source: https://github.com/infiniflow/ragflow
+- Copyright (c) 2025 InfiniFlow and RAGFlow contributors
+- License: Apache-2.0
+- Scope: `raven/knowledge/_naive_chunker.py` is a port of RAGFlow's
+  `naive_merge_docx` and the delimiter helpers around it (`rag/nlp/__init__.py`,
+  `rag/nlp/delim.py`, `common/token_utils.py`): the delimiter field syntax, the
+  build-then-merge arrangement, the rule that a table or a figure stands as its
+  own chunk, and the tokenizer the sizes are counted with. The table and figure
+  parser layout follows `deepdoc.parser` the same way; each module names its
+  origin in its own docstring.
+- Modifications: rewritten rather than vendored -- it carries no RAGFlow
+  import, is written against this package's Section and Chunk shapes, keeps the
+  positional metadata RAGFlow discards, and answers a tokenizer failure with an
+  estimate rather than with zero.
+
 ## agentscope (web-service framework)
 - Upstream source: https://github.com/agentscope-ai/agentscope
 - Copyright (c) 2025 Alibaba Group and AgentScope contributors

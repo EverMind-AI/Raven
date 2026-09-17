@@ -57,8 +57,24 @@ DS.knowledge = {
     rpc.call('knowledge.documents.add_url', { base_id: baseId, url }).then((r) => r && r.document),
   index: (documentId) =>
     rpc.call('knowledge.documents.index', { document_id: documentId }).then((r) => r && r.document),
-  chunks: (documentId) =>
-    rpc.call('knowledge.documents.chunks', { document_id: documentId }).then((r) => (r && r.chunks) || []),
+  chunks: (documentId, opts = {}) =>
+    rpc
+      .call('knowledge.documents.chunks', { document_id: documentId, ...opts })
+      .then((r) => ({ chunks: (r && r.chunks) || [], total: (r && r.total) || 0 })),
+  switchChunks: (documentId, chunkIds, enabled) =>
+    rpc
+      .call('knowledge.chunks.switch', { document_id: documentId, chunk_ids: chunkIds, enabled })
+      .then((r) => (r && r.changed) || 0),
+  deleteChunks: (documentId, chunkIds) =>
+    rpc
+      .call('knowledge.chunks.delete', { document_id: documentId, chunk_ids: chunkIds })
+      .then((r) => (r && r.remaining) || 0),
+  createChunk: (documentId, text) =>
+    rpc.call('knowledge.chunks.create', { document_id: documentId, text }).then((r) => r && r.chunk),
+  updateChunk: (documentId, chunkId, text) =>
+    rpc
+      .call('knowledge.chunks.update', { document_id: documentId, chunk_id: chunkId, text })
+      .then((r) => r && r.chunk),
   /* Answers nothing: a document that was already gone and one this call
      removed leave the page in the same place, and the list read that
      follows is what the row is drawn from either way. */

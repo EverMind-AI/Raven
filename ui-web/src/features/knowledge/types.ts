@@ -20,6 +20,11 @@ export interface KbBase {
   separator?: string
   chunk_size?: number
   chunk_overlap?: number
+  /* Tokens of the prose around a table or a figure to carry into the chunk
+     that holds it. Read by the naive strategy, where a table is its own
+     chunk. */
+  table_context_size?: number
+  image_context_size?: number
   file_processing?: string
 }
 
@@ -31,6 +36,8 @@ export interface KbSettings {
   separator?: string
   chunk_size?: number
   chunk_overlap?: number
+  table_context_size?: number
+  image_context_size?: number
   file_processing?: string
 }
 
@@ -103,7 +110,17 @@ export interface KnowledgeSource {
   /* One document's indexed pieces, in reading order. What the search matches
      against, not a fresh parse: the two stop agreeing as soon as a chunking
      setting has moved. */
-  chunks(documentId: string): Promise<KbChunk[]>
+  chunks(documentId: string, opts?: KbChunkQuery): Promise<KbChunkPage>
+  /* Turn pieces on or off. Off is out of retrieval entirely. */
+  switchChunks(documentId: string, chunkIds: string[], enabled: boolean): Promise<number>
+  /* Remove pieces. Unlike disabling, nothing is kept. Answers with how many
+     the document has left. */
+  deleteChunks(documentId: string, chunkIds: string[]): Promise<number>
+  /* Append a piece a person wrote, embedded like every other piece. */
+  createChunk(documentId: string, text: string): Promise<KbChunk>
+  /* Rewrite one piece, re-embedding it so the vector says what it says.
+     Its id changes with its text, because ids are derived from content. */
+  updateChunk(documentId: string, chunkId: string, text: string): Promise<KbChunk>
   /* Take one document out. The page's only way past a row that will not
      index: without it the base around it is the smallest thing that can be
      deleted. */
@@ -127,6 +144,30 @@ export interface KbChunk {
   layout_type?: string
   page_number?: number | null
   heading_path?: string[]
+  /* What addresses this piece. Derived from its text, so it survives a rebuild
+     of the same document. */
+  chunk_id?: string
+  /* Whether it may be retrieved. Off is not a ranking penalty: a disabled
+     piece is never searched and never reaches the agent. */
+  enabled?: boolean
+  /* Whether a person wrote it rather than a parser cutting it. It goes with
+     every other piece when the document is reindexed. */
+  manual?: boolean
+}
+
+/* How a page of chunks is asked for. Absent members mean "the first page of
+   the reading order, both states" -- and a `query` replaces the page entirely
+   with what matched, best first. */
+export interface KbChunkQuery {
+  page?: number
+  page_size?: number
+  available?: boolean | null
+  query?: string
+}
+
+export interface KbChunkPage {
+  chunks: KbChunk[]
+  total: number
 }
 
 export interface KbHit {

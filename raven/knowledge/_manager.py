@@ -11,6 +11,7 @@ from __future__ import annotations
 import mimetypes
 import os
 from dataclasses import dataclass, field
+from hashlib import sha256
 from pathlib import Path
 from time import perf_counter
 
@@ -27,6 +28,7 @@ from raven.knowledge._embedding import (
     everos_embedding_config,
     load_embedding_config,
 )
+from raven.knowledge._naive_chunker import NaiveChunker
 from raven.knowledge._records import (
     DEFAULT_TOP_K,
     DocumentOrigin,
@@ -34,10 +36,10 @@ from raven.knowledge._records import (
     KnowledgeDocumentRecord,
     RecordStore,
 )
-from raven.knowledge._structure import HeadingAwareChunker, StructuredTextParser
-from raven.knowledge._types import Chunk, VectorRecord, VectorSearchResult
+from raven.knowledge._structure import StructuredTextParser
+from raven.knowledge._types import Chunk, StoredChunk, TextBlock, VectorRecord, VectorSearchResult
 from raven.knowledge._vector_store import VectorStoreBase
-from raven.knowledge.parser import ParserBase
+from raven.knowledge.parser import LayoutType, ParserBase, section_metadata
 from raven.knowledge.parser.docx_parser import DocxParser
 from raven.knowledge.parser.text_parser import TextParser
 
@@ -77,14 +79,79 @@ class SearchOutcome:
     hits: list[VectorSearchResult] = field(default_factory=list)
     embed_ms: float = 0.0
     search_ms: float = 0.0
-    #: Bases that were asked for and could not be searched, base id to the
-    #: reason. One unreachable base among five is not a reason to answer
-    #: nothing about the other four -- but a search that quietly consulted
-    #: four when five were asked for has to say so somewhere, and this is
-    #: where. When *every* base drops out the reason is raised instead: an
-    #: empty result and an empty result for cause are not the same answer,
-    #: and only the second one tells a reader what to fix.
-    skipped: dict[str, str] = field(default_factory=dict)
+    #: Bases that answered by keyword rather than by meaning, base id to the
+    #: reason their vectors could not be reached. Not an error and not a
+    #: skip -- those bases are in the results -- but a reader comparing two
+    #: sets of hits deserves to know that some of them came from words. The
+    #: reason is the same sentence the base would have failed with, so it
+    #: still says what to fix.
+    by_keyword: dict[str, str] = field(default_factory=dict)
+
+
+def chunk_id_for(document_id: str, text: str, occurrence: int = 0) -> str:
+    """The id a piece of text has in a document, derived from the text itself.
+
+    Content-derived rather than random, so a piece keeps its name across a
+    rebuild: reindexing a document that has not changed writes the same ids
+    back, and a reader who disabled a paragraph last week is still looking at
+    the same paragraph.
+
+    ``occurrence`` is what keeps that from merging two pieces. A document
+    repeats itself -- a table header, a page footer, a boilerplate clause --
+    and hashing content alone would give both copies one id, so acting on one
+    would act on the other and a store keyed by id would hold whichever was
+    written last. The counter is the copy's index among identical texts in the
+    same document, so the first copy of a text is stable no matter how many
+    more appear after it.
+    """
+    seed = f"{document_id}\x00{occurrence}\x00{text}".encode()
+    return sha256(seed).hexdigest()[:32]
+
+
+def chunk_ids_for(document_id: str, texts: list[str]) -> list[str]:
+    """Ids for one document's pieces, counting repeats as they are met."""
+    seen: dict[str, int] = {}
+    ids: list[str] = []
+    for text in texts:
+        occurrence = seen.get(text, 0)
+        seen[text] = occurrence + 1
+        ids.append(chunk_id_for(document_id, text, occurrence))
+    return ids
+
+
+#: How far down a list a hit still counts for in the merge below. Sixty is the
+#: constant the original reciprocal-rank-fusion paper used and the one
+#: `skill_forge.fusion` already uses here; a hit at rank 1 scores 1/61, at rank
+#: 10 scores 1/70, so the top of every list is worth more than the tail of any
+#: other without one list's scale deciding the outcome.
+_RRF_K = 60
+
+
+def _merged(ranked: list[list[VectorSearchResult]], top_k: int) -> list[VectorSearchResult]:
+    """Fold several ranked lists into one, by rank rather than by score.
+
+    Sorting the concatenation by score is what a single-model search could get
+    away with. It stops being sound the moment two lists are scored on
+    different scales -- a cosine similarity against a BM25 score, or two models
+    whose similarities are not calibrated to each other -- because then the
+    ordering is decided by which scale runs hotter rather than by which hit is
+    better. Reciprocal rank fusion asks each list only for its order, which is
+    the part every scorer agrees on the meaning of.
+
+    One list passes through untouched, which is the ordinary case and keeps its
+    own scores intact for anything reading them.
+    """
+    if len(ranked) == 1:
+        return ranked[0][:top_k]
+
+    fused: dict[tuple[str, str], tuple[float, VectorSearchResult]] = {}
+    for hits in ranked:
+        for position, hit in enumerate(hits):
+            key = (hit.document_id, hit.chunk.text)
+            score, held = fused.get(key, (0.0, hit))
+            fused[key] = (score + 1.0 / (_RRF_K + position + 1), held)
+    best = sorted(fused.values(), key=lambda pair: pair[0], reverse=True)
+    return [hit for _, hit in best[:top_k]]
 
 
 def _default_parsers() -> list[ParserBase]:
@@ -130,7 +197,9 @@ class KnowledgeManager:
         self._blobs = self._root / "blobs"
         self._records = records or RecordStore(self._root / "records.json")
         self._parsers = parsers if parsers is not None else _default_parsers()
-        self._chunker = chunker or HeadingAwareChunker()
+        # None means "whatever each base is configured for"; a chunker passed
+        # in overrides every base, which is what a test or an embedder wants.
+        self._chunker = chunker
         self._embedding = embedding
         # model -> measured vector width. Probing costs one embedding call, so
         # it is done once per model rather than per base or per search.
@@ -544,19 +613,24 @@ class KnowledgeManager:
             # collection already holds, or it is unfindable by any query.
             client = self._client_for(base)
             await self._assert_current(base, client)
-            chunks = await self._chunks_for(record)
+            chunks = await self._chunks_for(record, base)
             if not chunks:
                 return self._records.set_status(document_id, "ready", chunk_count=0)
-            vectors = await client.embed([chunk.text for chunk in chunks])
+            texts = [chunk.text for chunk in chunks]
+            vectors = await client.embed(texts)
+            ids = chunk_ids_for(document_id, texts)
             # Replaces rather than appends: a reindex of the same document
             # would otherwise leave the previous run's chunks in the
-            # collection, and every hit would come back twice.
+            # collection, and every hit would come back twice. Everything the
+            # document held goes, including pieces a person wrote by hand and
+            # pieces they had turned off -- a reindex is the document being
+            # cut again, and there is nothing for those to be attached to.
             await self._store.delete(base.id, document_id)
             await self._store.insert(
                 base.id,
                 [
-                    VectorRecord(vector=v, document_id=document_id, chunk=c)
-                    for v, c in zip(vectors, chunks, strict=True)
+                    VectorRecord(vector=v, document_id=document_id, chunk=c, chunk_id=i)
+                    for v, c, i in zip(vectors, chunks, ids, strict=True)
                 ],
             )
         except (KnowledgeError, EmbeddingError, ValueError, OSError) as exc:
@@ -564,8 +638,30 @@ class KnowledgeManager:
             return self._records.set_status(document_id, "failed", error=str(exc))
         return self._records.set_status(document_id, "ready", chunk_count=len(chunks))
 
-    async def document_chunks(self, document_id: str) -> list[Chunk]:
-        """One document's chunks as they were indexed, in reading order.
+    def _indexed_document(self, document_id: str) -> tuple[KnowledgeDocumentRecord, KnowledgeBaseRecord] | None:
+        """The document and its base, when the pair can hold chunks at all.
+
+        One lookup for every chunk operation, because they all need the same
+        two records and the same three reasons to answer with nothing: no such
+        document, no base behind it, or a base with no vectors to hold pieces.
+        """
+        record = self._records.get_document(document_id)
+        if record is None:
+            return None
+        base = self._records.get_base(record.base_id)
+        if base is None or not self.embeds(base):
+            return None
+        return record, base
+
+    async def document_chunks(
+        self,
+        document_id: str,
+        *,
+        offset: int = 0,
+        limit: int | None = None,
+        enabled: bool | None = None,
+    ) -> tuple[list[StoredChunk], int]:
+        """One page of a document's chunks in reading order, and the total.
 
         Read back from the store rather than re-cut from the file: what a
         reader wants to see is what the search actually matches against, and
@@ -576,15 +672,234 @@ class KnowledgeManager:
         document that failed or is still queued -- which is the same answer as
         a document whose base was deleted underneath it.
         """
-        record = self._records.get_document(document_id)
-        if record is None:
-            return []
-        base = self._records.get_base(record.base_id)
-        if base is None or not self.embeds(base):
-            return []
-        return await self._store.list_chunks(base.id, document_id)
+        found = self._indexed_document(document_id)
+        if found is None:
+            return [], 0
+        _, base = found
+        return await self._store.list_chunks(base.id, document_id, offset=offset, limit=limit, enabled=enabled)
 
-    async def _chunks_for(self, record: KnowledgeDocumentRecord) -> list[Chunk]:
+    async def search_document(self, document_id: str, query: str, *, limit: int = 20) -> list[StoredChunk]:
+        """The pieces of one document that answer a query, best first.
+
+        The same retrieval the whole base gets, narrowed to one file: by vector
+        where the base's model can be reached, by keyword where it cannot. A
+        disabled piece is not returned, because this is retrieval and that is
+        what disabled means -- the way to see those is to list rather than
+        search.
+
+        Answered as stored pieces rather than as hits so the panel gets one
+        shape either way, with each piece's id and state on it.
+        """
+        found = self._indexed_document(document_id)
+        if found is None or not query.strip():
+            return []
+        _, base = found
+        try:
+            client = self._client_for(base)
+            await self._assert_current(base, client)
+            vector = (await client.embed([query]))[0]
+            hits = await self._store.search(base.id, vector, top_k=limit, document_id=document_id)
+        except (KnowledgeError, EmbeddingError, OSError) as exc:
+            logger.warning("knowledge: searching {} by keyword: {}", document_id, exc)
+            hits = await self._store.keyword_search(base.id, query, top_k=limit, document_id=document_id)
+
+        held, _ = await self._store.list_chunks(base.id, document_id)
+        by_id = {piece.chunk_id: piece for piece in held}
+        ordered: list[StoredChunk] = []
+        for hit in hits:
+            piece = by_id.get(hit.chunk_id)
+            if piece is not None:
+                ordered.append(piece)
+            elif hit.chunk_id == "":
+                # A row from before ids existed: readable, not addressable.
+                ordered.append(StoredChunk(chunk_id="", chunk=hit.chunk))
+        return ordered
+
+    async def set_chunks_enabled(self, document_id: str, chunk_ids: list[str], enabled: bool) -> int:
+        """Turn pieces of one document on or off. Returns how many changed.
+
+        Off means out of retrieval entirely -- not a ranking penalty -- so the
+        filter lives in the store's own search rather than in any one caller.
+        """
+        found = self._indexed_document(document_id)
+        if found is None or not chunk_ids:
+            return 0
+        _, base = found
+        return await self._store.set_chunks_enabled(base.id, chunk_ids, enabled)
+
+    async def delete_chunks(self, document_id: str, chunk_ids: list[str]) -> int:
+        """Remove pieces of one document. Returns how many are left after it.
+
+        The document's recorded chunk count is rewritten from what remains, so
+        the row on the page keeps agreeing with the index -- it is the number
+        a reader uses to tell an indexed document from an empty one.
+        """
+        found = self._indexed_document(document_id)
+        if found is None or not chunk_ids:
+            return 0
+        _, base = found
+        await self._store.delete_chunks(base.id, chunk_ids)
+        _, total = await self._store.list_chunks(base.id, document_id)
+        self._records.set_status(document_id, "ready", chunk_count=total)
+        return total
+
+    async def update_chunk(self, document_id: str, chunk_id: str, text: str) -> StoredChunk:
+        """Rewrite one piece's text, and the vector that answers for it.
+
+        Written as a replacement rather than an edit in place, because the
+        vector is the point: a piece whose text changed and whose vector did
+        not would be found by the old words and read as the new ones, which is
+        the one failure a reader of this panel would never catch.
+
+        Its id changes with its text -- ids are derived from content, and an
+        edited piece is not the piece that was there. Its place in the reading
+        order is kept, so a correction stays where the passage it corrects sat,
+        and so is its on/off state. It is marked as written by hand: it no
+        longer says what the file says, and the panel should not pretend
+        otherwise.
+        """
+        found = self._indexed_document(document_id)
+        if found is None:
+            raise KnowledgeError("this document has no index to edit")
+        _, base = found
+        body = text.strip()
+        if not body:
+            raise KnowledgeError("a chunk needs some text")
+
+        held, _ = await self._store.list_chunks(base.id, document_id)
+        existing = next((piece for piece in held if piece.chunk_id == chunk_id), None)
+        if existing is None:
+            raise KnowledgeError("that chunk is not in this document")
+        if existing.chunk.text == body:
+            return existing
+
+        client = self._client_for(base)
+        await self._assert_current(base, client)
+        vector = (await client.embed([body]))[0]
+
+        taken = {piece.chunk_id for piece in held if piece.chunk_id != chunk_id}
+        occurrence = 0
+        while chunk_id_for(document_id, body, occurrence) in taken:
+            occurrence += 1
+        chunk = existing.chunk.model_copy(
+            update={
+                "content": TextBlock(text=body),
+                "metadata": {**existing.chunk.metadata, "manual": True},
+            }
+        )
+        stored = StoredChunk(
+            chunk_id=chunk_id_for(document_id, body, occurrence),
+            chunk=chunk,
+            enabled=existing.enabled,
+            manual=True,
+        )
+        # Inserted before the old row is dropped would leave two pieces holding
+        # one place in the reading order if the insert failed halfway; dropped
+        # first leaves the document one piece short, which the panel shows and
+        # a retry fixes.
+        await self._store.delete_chunks(base.id, [chunk_id])
+        await self._store.insert(
+            base.id,
+            [
+                VectorRecord(
+                    vector=vector,
+                    document_id=document_id,
+                    chunk=chunk,
+                    chunk_id=stored.chunk_id,
+                    enabled=existing.enabled,
+                    manual=True,
+                )
+            ],
+        )
+        return stored
+
+    async def add_chunk(self, document_id: str, text: str) -> StoredChunk:
+        """Append a piece a person wrote to the end of a document.
+
+        Appended, not inserted: it was not cut from anywhere in the document,
+        and putting it between two pieces that *were* would claim a place in
+        the text it does not have. It is embedded with the base's own model,
+        like every other piece, so it is found by the same queries.
+
+        It lives exactly as long as the parse it sits behind. Reindexing the
+        document deletes every piece of it, this one included.
+        """
+        found = self._indexed_document(document_id)
+        if found is None:
+            raise KnowledgeError("this document has no index to add a piece to")
+        record, base = found
+        body = text.strip()
+        if not body:
+            raise KnowledgeError("a chunk needs some text")
+
+        client = self._client_for(base)
+        await self._assert_current(base, client)
+        vector = (await client.embed([body]))[0]
+
+        held, total = await self._store.list_chunks(base.id, document_id)
+        taken = {piece.chunk_id for piece in held}
+        occurrence = 0
+        while chunk_id_for(document_id, body, occurrence) in taken:
+            occurrence += 1
+        chunk = Chunk(
+            content=TextBlock(text=body),
+            source=record.source,
+            chunk_index=(held[-1].chunk.chunk_index + 1) if held else 0,
+            total_chunks=total + 1,
+            metadata=section_metadata(reading_order=total, layout_type=LayoutType.TEXT, manual=True),
+        )
+        stored = StoredChunk(
+            chunk_id=chunk_id_for(document_id, body, occurrence),
+            chunk=chunk,
+            enabled=True,
+            manual=True,
+        )
+        await self._store.insert(
+            base.id,
+            [
+                VectorRecord(
+                    vector=vector,
+                    document_id=document_id,
+                    chunk=chunk,
+                    chunk_id=stored.chunk_id,
+                    manual=True,
+                )
+            ],
+        )
+        self._records.set_status(document_id, "ready", chunk_count=total + 1)
+        return stored
+
+    def _chunker_for(self, base: KnowledgeBaseRecord) -> ChunkerBase:
+        """The chunker this base is configured for.
+
+        One chunker was built at construction and used for every base until
+        now, which left the four settings a reader can change -- the strategy,
+        the size, the separator and the overlap -- saved, displayed, and read
+        by nothing. They decide here.
+
+        ``smart_chunking`` is not consulted yet. It is meant to pick between
+        two different ideas rather than two settings of one -- the document's
+        own structure as the boundary, or the delimiters -- and the structural
+        half is being reworked, so every base is cut the naive way until it is
+        worth choosing again. The setting is kept rather than removed: it is
+        the shape the answer will take, and the panel says it is not in force
+        rather than offering a switch that decides nothing.
+
+        An explicitly supplied chunker still wins: a caller that passed one is
+        testing or embedding this engine somewhere with its own idea of a
+        chunk.
+        """
+        if self._chunker is not None:
+            return self._chunker
+        return NaiveChunker(
+            chunk_size=base.chunk_size,
+            separator=base.separator,
+            overlap_size=base.chunk_overlap,
+            table_context_size=base.table_context_size,
+            image_context_size=base.image_context_size,
+        )
+
+    async def _chunks_for(self, record: KnowledgeDocumentRecord, base: KnowledgeBaseRecord) -> list[Chunk]:
         content = self.read_document(record.id)
         if content is None:
             raise KnowledgeError("the uploaded file is missing from the store")
@@ -592,7 +907,7 @@ class KnowledgeManager:
         if parser is None:
             raise KnowledgeError(f"no parser for {record.media_type}")
         sections = await parser.parse(content, record.source)
-        return await self._chunker.chunk(sections)
+        return await self._chunker_for(base).chunk(sections)
 
     async def index_pending(self) -> int:
         """Index everything queued, oldest first. Returns how many were tried."""
@@ -612,10 +927,10 @@ class KnowledgeManager:
         call, so the common case -- every base on the configured endpoint --
         still costs exactly one round trip.
 
-        A base whose model cannot be reached is skipped and named in the
-        outcome rather than taking the whole search down with it. Asking a
-        mixed set is ordinary, and one unreachable base is not a reason to
-        answer nothing about the others.
+        A base whose model cannot be reached is searched by keyword instead,
+        and named in ``skipped`` so a reader knows which answers came from
+        words rather than from meaning. Asking a mixed set is ordinary, and a
+        base that cannot be embedded against still holds the text it was given.
 
         The two costs are timed apart because they answer different questions.
         Embedding is a round trip to whatever endpoint is configured and runs
@@ -638,8 +953,8 @@ class KnowledgeManager:
         started = perf_counter()
         vectors: dict[tuple[str, str], list[float]] = {}
         searchable: list[tuple[KnowledgeBaseRecord, list[float]]] = []
-        skipped: dict[str, str] = {}
-        failure: Exception | None = None
+        by_word: list[KnowledgeBaseRecord] = []
+        fell_back: dict[str, str] = {}
         for base in bases:
             key = (base.embedding_provider, base.embedding_model)
             try:
@@ -648,24 +963,28 @@ class KnowledgeManager:
                     await self._assert_current(base, client)
                     vectors[key] = (await client.embed([query]))[0]
             except (KnowledgeError, EmbeddingError, OSError) as exc:
+                # The words still work. A base whose model has gone answers by
+                # keyword rather than not at all -- worse retrieval than the
+                # vectors it holds, and the alternative is a base that has gone
+                # dark for a reason its reader cannot act on today.
                 reason = self._unsearchable(base, exc)
-                logger.warning("knowledge: skipping base {} in search: {}", base.name, reason)
-                skipped[base.id] = reason
-                failure = exc if isinstance(exc, StaleBaseError) else StaleBaseError(reason)
+                logger.warning("knowledge: base {} falls back to keywords: {}", base.name, reason)
+                fell_back[base.id] = reason
+                by_word.append(base)
                 continue
             searchable.append((base, vectors[key]))
-        if not searchable and failure is not None:
-            raise failure
         embedded = perf_counter()
 
-        hits: list[VectorSearchResult] = []
+        ranked: list[list[VectorSearchResult]] = []
         for base, vector in searchable:
-            hits.extend(await self._store.search(base.id, vector, top_k=top_k))
+            ranked.append(await self._store.search(base.id, vector, top_k=top_k))
+        for base in by_word:
+            ranked.append(await self._store.keyword_search(base.id, query, top_k=top_k))
         searched = perf_counter()
-        hits.sort(key=lambda hit: hit.score, reverse=True)
+
         return SearchOutcome(
-            hits=hits[:top_k],
+            hits=_merged(ranked, top_k),
             embed_ms=(embedded - started) * 1000.0,
             search_ms=(searched - embedded) * 1000.0,
-            skipped=skipped,
+            by_keyword=fell_back,
         )

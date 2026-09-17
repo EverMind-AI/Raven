@@ -21,6 +21,7 @@ from raven.knowledge import (
     DEFAULT_SEPARATOR,
     DEFAULT_TOP_K,
     DuplicateBaseNameError,
+    KnowledgeError,
 )
 from raven.rpc.errors import ConfigValidationError, InternalError
 
@@ -104,6 +105,8 @@ def _base_row(manager: KnowledgeManager, base: Any) -> dict[str, Any]:
         "top_k": int(getattr(base, "top_k", DEFAULT_TOP_K) or DEFAULT_TOP_K),
         "smart_chunking": bool(getattr(base, "smart_chunking", True)),
         "separator": str(getattr(base, "separator", DEFAULT_SEPARATOR)),
+        "table_context_size": int(getattr(base, "table_context_size", 0) or 0),
+        "image_context_size": int(getattr(base, "image_context_size", 0) or 0),
         "chunk_size": int(getattr(base, "chunk_size", DEFAULT_CHUNK_SIZE) or DEFAULT_CHUNK_SIZE),
         "chunk_overlap": int(getattr(base, "chunk_overlap", DEFAULT_CHUNK_OVERLAP) or 0),
         "file_processing": str(getattr(base, "file_processing", "") or ""),
@@ -174,6 +177,15 @@ TOP_K_MIN, TOP_K_MAX = 1, 50
 #: every chunk contains the one before it.
 CHUNK_MIN, CHUNK_MAX = 64, 8192
 
+#: A page of chunks. Twenty is what a reader scans without the page becoming a
+#: scroll of its own, and the ceiling is what stops a caller asking for a
+#: document's worth of text in one frame.
+CHUNK_PAGE_SIZE, MAX_CHUNK_PAGE = 20, 100
+
+#: The most prose a table or a figure may drag in with it. Past this the
+#: context is the chunk and the table is a footnote to it.
+CONTEXT_MAX = 2048
+
 
 def _bounded(params: dict[str, Any], key: str, low: int, high: int) -> int | None:
     """One integer setting, refused rather than clamped when it is out of range.
@@ -216,6 +228,10 @@ async def knowledge_bases_settings(params: dict[str, Any]) -> dict[str, Any]:
         settings["smart_chunking"] = bool(params["smart_chunking"])
     if params.get("separator") is not None:
         settings["separator"] = str(params["separator"])
+    for name in ("table_context_size", "image_context_size"):
+        size = _bounded(params, name, 0, CONTEXT_MAX)
+        if size is not None:
+            settings[name] = size
     if params.get("file_processing") is not None:
         settings["file_processing"] = str(params["file_processing"])
 
@@ -475,27 +491,118 @@ async def knowledge_documents_chunks(params: dict[str, Any]) -> dict[str, Any]:
     that are in the index, and those two stop agreeing the moment a chunking
     setting has moved.
     """
-    # Stripped, the way `query` is: a blank id is never a document, and
-    # answering it with an empty list would read as "this file indexed to
-    # nothing" rather than "you asked for nothing".
+    document_id = _document_id(params)
+    page = max(1, int(params.get("page") or 1))
+    size = min(MAX_CHUNK_PAGE, max(1, int(params.get("page_size") or CHUNK_PAGE_SIZE)))
+    available = params.get("available")
+    query = str(params.get("query") or "").strip()
+    manager = knowledge_manager()
+    try:
+        if query:
+            # Searching answers with what matched, best first. Paging it would
+            # promise a second page of relevance that the engine was never
+            # asked for -- the limit is the page size, and a reader who wants
+            # more narrows the query.
+            found = await manager.search_document(document_id, query, limit=size)
+            return {"chunks": [_chunk_row(piece) for piece in found], "total": len(found)}
+        held, total = await manager.document_chunks(
+            document_id,
+            offset=(page - 1) * size,
+            limit=size,
+            enabled=available if isinstance(available, bool) else None,
+        )
+    except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
+        raise InternalError(f"reading chunks failed: {exc}") from exc
+    return {"chunks": [_chunk_row(piece) for piece in held], "total": total}
+
+
+async def knowledge_chunks_switch(params: dict[str, Any]) -> dict[str, Any]:
+    """Turn pieces of one document on or off."""
+    document_id = _document_id(params)
+    chunk_ids = _chunk_ids(params)
+    enabled = bool(params.get("enabled"))
+    try:
+        changed = await knowledge_manager().set_chunks_enabled(document_id, chunk_ids, enabled)
+    except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
+        raise InternalError(f"switching chunks failed: {exc}") from exc
+    return {"changed": changed}
+
+
+async def knowledge_chunks_delete(params: dict[str, Any]) -> dict[str, Any]:
+    """Remove pieces of one document, and say how many it has left."""
+    document_id = _document_id(params)
+    chunk_ids = _chunk_ids(params)
+    try:
+        remaining = await knowledge_manager().delete_chunks(document_id, chunk_ids)
+    except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
+        raise InternalError(f"deleting chunks failed: {exc}") from exc
+    return {"remaining": remaining}
+
+
+async def knowledge_chunks_create(params: dict[str, Any]) -> dict[str, Any]:
+    """Append a piece a person wrote, embedded like every other piece."""
+    document_id = _document_id(params)
+    text = str(params.get("text") or "").strip()
+    if not text:
+        raise ConfigValidationError("text is required")
+    try:
+        written = await knowledge_manager().add_chunk(document_id, text)
+    except KnowledgeError as exc:
+        raise ConfigValidationError(str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
+        raise InternalError(f"adding a chunk failed: {exc}") from exc
+    return {"chunk": _chunk_row(written)}
+
+
+async def knowledge_chunks_update(params: dict[str, Any]) -> dict[str, Any]:
+    """Rewrite one piece, re-embedding it so the vector says what it says."""
+    document_id = _document_id(params)
+    chunk_id = str(params.get("chunk_id") or "").strip()
+    if not chunk_id:
+        raise ConfigValidationError("chunk_id is required")
+    text = str(params.get("text") or "").strip()
+    if not text:
+        raise ConfigValidationError("text is required")
+    try:
+        written = await knowledge_manager().update_chunk(document_id, chunk_id, text)
+    except KnowledgeError as exc:
+        raise ConfigValidationError(str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
+        raise InternalError(f"editing a chunk failed: {exc}") from exc
+    return {"chunk": _chunk_row(written)}
+
+
+def _document_id(params: dict[str, Any]) -> str:
+    """The document a chunk call is about.
+
+    Stripped, the way `query` is: a blank id is never a document, and answering
+    it with an empty list would read as "this file indexed to nothing" rather
+    than "you asked for nothing".
+    """
     document_id = str(params.get("document_id") or "").strip()
     if not document_id:
         raise ConfigValidationError("document_id is required")
-    try:
-        chunks = await knowledge_manager().document_chunks(document_id)
-    except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
-        raise InternalError(f"reading chunks failed: {exc}") from exc
-    return {"chunks": [_chunk_row(chunk) for chunk in chunks]}
+    return document_id
 
 
-def _chunk_row(chunk: Any) -> dict[str, Any]:
-    """One chunk as the page reads it, positional metadata flattened.
+def _chunk_ids(params: dict[str, Any]) -> list[str]:
+    raw = params.get("chunk_ids")
+    ids = [str(value).strip() for value in raw if str(value).strip()] if isinstance(raw, list) else []
+    if not ids:
+        raise ConfigValidationError("chunk_ids is required")
+    return ids
+
+
+def _chunk_row(held: Any) -> dict[str, Any]:
+    """One stored piece as the page reads it, positional metadata flattened.
 
     The parser records more than this -- a box, the character range each
     element of a section occupies -- and none of it has a reader yet. What is
     lifted out here is what a person scanning a list of pieces uses: which
-    heading it sits under, what kind of region it is, and what page to turn to.
+    heading it sits under, what kind of region it is, what page to turn to,
+    and what can be done to it.
     """
+    chunk = getattr(held, "chunk", held)
     metadata = getattr(chunk, "metadata", None) or {}
     page = metadata.get("page_number")
     path = metadata.get("heading_path")
@@ -506,6 +613,9 @@ def _chunk_row(chunk: Any) -> dict[str, Any]:
         "layout_type": str(metadata.get("layout_type") or ""),
         "page_number": int(page) if isinstance(page, int) and page > 0 else None,
         "heading_path": [str(part) for part in path] if isinstance(path, list) else [],
+        "chunk_id": str(getattr(held, "chunk_id", "") or ""),
+        "enabled": bool(getattr(held, "enabled", True)),
+        "manual": bool(getattr(held, "manual", False)),
     }
 
 
@@ -614,6 +724,10 @@ def register_knowledge_methods(dispatcher: Dispatcher) -> None:
     dispatcher.register("knowledge.bases.delete", knowledge_bases_delete)
     dispatcher.register("knowledge.documents.list", knowledge_documents_list)
     dispatcher.register("knowledge.documents.chunks", knowledge_documents_chunks)
+    dispatcher.register("knowledge.chunks.switch", knowledge_chunks_switch)
+    dispatcher.register("knowledge.chunks.delete", knowledge_chunks_delete)
+    dispatcher.register("knowledge.chunks.create", knowledge_chunks_create)
+    dispatcher.register("knowledge.chunks.update", knowledge_chunks_update)
     dispatcher.register("knowledge.documents.add", knowledge_documents_add)
     dispatcher.register("knowledge.documents.add_note", knowledge_documents_add_note)
     dispatcher.register("knowledge.documents.update_note", knowledge_documents_update_note)

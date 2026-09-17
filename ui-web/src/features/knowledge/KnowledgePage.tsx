@@ -732,6 +732,8 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
   const [sep, setSep] = useState(saved.separator)
   const [size, setSize] = useState(String(saved.chunk_size))
   const [lap, setLap] = useState(String(saved.chunk_overlap))
+  const [tableCtx, setTableCtx] = useState(String(saved.table_context_size ?? 0))
+  const [imageCtx, setImageCtx] = useState(String(saved.image_context_size ?? 0))
   const [adv, setAdv] = useState(true)
 
   const close = (): void => store.closeSettings()
@@ -741,6 +743,8 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
     setSep(store.DEFAULTS.separator)
     setSize(String(store.DEFAULTS.chunk_size))
     setLap(String(store.DEFAULTS.chunk_overlap))
+    setTableCtx('0')
+    setImageCtx('0')
   }
   const save = (): void => {
     void store.saveSettings({
@@ -749,11 +753,18 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
       separator: sep,
       chunk_size: Number(size),
       chunk_overlap: Number(lap),
+      table_context_size: Number(tableCtx),
+      image_context_size: Number(imageCtx),
     })
   }
   /* The two numbers are typed, so they can be mid-edit and empty or nonsense;
      saving those would ask the engine to refuse them. */
-  const numbers = Number(size) > 0 && Number(lap) >= 0 && Number(lap) < Number(size)
+  const numbers =
+    Number(size) > 0 &&
+    Number(lap) >= 0 &&
+    Number(lap) < Number(size) &&
+    Number(tableCtx) >= 0 &&
+    Number(imageCtx) >= 0
 
   return (
     <div className="kbmodal" role="dialog" aria-modal="true" aria-label={t('gui.kb.set_title')}>
@@ -796,16 +807,12 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
 
         {adv && (
           <>
+            {/* Not in force: every base is cut the naive way while the
+                structural chunker is reworked. Shown and disabled rather than
+                hidden -- a switch that silently decides nothing is how the
+                other four settings on this panel spent their first release. */}
             <Field label={t('gui.kb.set_smart')} help={t('gui.kb.set_smart_help')}>
-              <button
-                className="kbtog"
-                role="switch"
-                aria-checked={smart}
-                aria-label={t('gui.kb.set_smart')}
-                onClick={() => setSmart((v) => !v)}
-              >
-                <span />
-              </button>
+              <Soon label={t('gui.kb.set_smart_soon')} />
             </Field>
             <Field label={t('gui.kb.set_sep')} help={t('gui.kb.set_sep_help')}>
               {/* Escaped on the way in and out: the separator a reader means is
@@ -813,7 +820,6 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
               <input
                 className="kbname"
                 value={sep.replace(/\n/g, '\\n').replace(/\t/g, '\\t')}
-                disabled={smart}
                 onChange={(e) =>
                   setSep(e.currentTarget.value.replace(/\\n/g, '\n').replace(/\\t/g, '\t'))
                 }
@@ -828,6 +834,35 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
                   max={8192}
                   value={size}
                   onChange={(e) => setSize(e.currentTarget.value)}
+                />
+                <span>{t('gui.kb.set_tokens')}</span>
+              </div>
+            </Field>
+            {/* A table is its own chunk, and these say how much of the prose
+                around it comes along -- without them a table embeds as a grid
+                of values with nothing saying what they are about. */}
+            <Field label={t('gui.kb.set_tablectx')} help={t('gui.kb.set_tablectx_help')}>
+              <div className="kbunit">
+                <input
+                  className="kbname"
+                  type="number"
+                  min={0}
+                  max={2048}
+                  value={tableCtx}
+                  onChange={(e) => setTableCtx(e.currentTarget.value)}
+                />
+                <span>{t('gui.kb.set_tokens')}</span>
+              </div>
+            </Field>
+            <Field label={t('gui.kb.set_imagectx')} help={t('gui.kb.set_imagectx_help')}>
+              <div className="kbunit">
+                <input
+                  className="kbname"
+                  type="number"
+                  min={0}
+                  max={2048}
+                  value={imageCtx}
+                  onChange={(e) => setImageCtx(e.currentTarget.value)}
                 />
                 <span>{t('gui.kb.set_tokens')}</span>
               </div>
@@ -1190,65 +1225,340 @@ function MarkdownView({ doc }: { doc: KbDoc }): JSX.Element {
    script-driven, from drawing anything at all. */
 /* One indexed piece, as the search sees it.
 
-   Numbered from 1 the way the recall panel numbers its hits, so the same
-   chunk carries the same name in both places. What the badges say is what the
-   parser found and nothing more: a page only where the format has pages, a
-   layout type only where the source marked one. */
-function ChunkRow({ chunk }: { chunk: KbChunk }): JSX.Element {
+   Numbered from 1 the way the recall panel numbers its hits, so the same piece
+   carries the same name in both places. What the badges say is what the parser
+   found and nothing more: a page only where the format has pages, a layout
+   type only where the source marked one. */
+function ChunkRow({
+  chunk,
+  view,
+  picked,
+  busy,
+}: {
+  chunk: KbChunk
+  view: 'full' | 'ellipse'
+  picked: boolean
+  busy: boolean
+}): JSX.Element {
   const path = chunk.heading_path ?? []
+  const id = chunk.chunk_id || ''
+  const on = chunk.enabled !== false
   return (
-    <div className="kbchunk">
+    <div className={`kbchunk${on ? '' : ' off'}`}>
       <div className="kbchunkhd">
+        <input
+          type="checkbox"
+          checked={picked}
+          disabled={!id}
+          aria-label={t('gui.kb.chunk_pick', { n: chunk.chunk_index + 1 })}
+          onChange={(e) => store.pickChunk(id, e.currentTarget.checked)}
+        />
         <span className="kbchunkix">#{chunk.chunk_index + 1}</span>
         {chunk.layout_type && <span className="kbchunkty">{chunk.layout_type}</span>}
         {typeof chunk.page_number === 'number' && (
           <span className="kbchunkpg">{t('gui.kb.chunks_page', { n: chunk.page_number })}</span>
         )}
+        {chunk.manual && <span className="kbchunkty kbwritten">{t('gui.kb.chunk_written')}</span>}
         {path.length > 0 && (
           <span className="kbchunkpath" title={path.join(' > ')}>
             {path.join(' > ')}
           </span>
         )}
+        {/* A switch rather than a menu item: it is the state of this piece,
+            and the state is worth seeing without opening anything. */}
+        <label className="kbswitch">
+          <input
+            type="checkbox"
+            checked={on}
+            disabled={!id || busy}
+            aria-label={t(on ? 'gui.kb.chunk_disable' : 'gui.kb.chunk_enable')}
+            onChange={(e) => void store.switchChunks([id], e.currentTarget.checked)}
+          />
+          <span className="kbslider" aria-hidden="true" />
+        </label>
       </div>
-      <div className="kbchunktx">{chunk.text}</div>
+      {/* Double-click to rewrite, the way the row menu is a second click for
+          the file list: a single click on prose is how a reader selects a
+          word out of it, and taking that away to open an editor would make
+          the panel unreadable. */}
+      <div
+        className={`kbchunktx${view === 'ellipse' ? ' cut' : ''}`}
+        onDoubleClick={() => id && store.openChunkDialog(chunk)}
+        title={id ? t('gui.kb.chunk_edit_hint') : undefined}
+      >
+        {chunk.text}
+      </div>
     </div>
   )
 }
 
-/* The pieces the file was cut into, in reading order.
+/* What the toolbar does to a selection.
+
+   Absent rather than dead while nothing is ticked: three buttons that can
+   never be pressed are three things to read past every time, and this toolbar
+   is already carrying a search box and a pager's worth of controls in half a
+   split. They appear with the selection, which is also what says the selection
+   happened. */
+function ChunkOps({ picked, busy }: { picked: string[]; busy: boolean }): JSX.Element | null {
+  if (!picked.length) return null
+  return (
+    <>
+      <span className="who">{t('gui.kb.picked_n', { n: picked.length })}</span>
+      <button className="mini ghost" disabled={busy} onClick={() => void store.switchChunks(picked, true)}>
+        {t('gui.kb.chunk_enable')}
+      </button>
+      <button className="mini ghost" disabled={busy} onClick={() => void store.switchChunks(picked, false)}>
+        {t('gui.kb.chunk_disable')}
+      </button>
+      <button className="mini ghost danger" disabled={busy} onClick={() => store.deleteChunks(picked)}>
+        {t('gui.kb.chunk_delete')}
+      </button>
+    </>
+  )
+}
+
+/* Which pieces the list admits, behind the icon that means filter.
+
+   A menu rather than a cycling button: three states that a single control
+   steps through leave a reader guessing what the next press does, and the one
+   in force has to be readable at a glance -- which is what the tick is for. */
+function ChunkFilter({ picked }: { picked: boolean | null }): JSX.Element {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (!open) return
+    const shut = (): void => setOpen(false)
+    document.addEventListener('click', shut)
+    return () => {
+      document.removeEventListener('click', shut)
+    }
+  }, [open])
+  const choices: [boolean | null, string][] = [
+    [null, 'gui.kb.chunk_filter_all'],
+    [true, 'gui.kb.chunk_filter_on'],
+    [false, 'gui.kb.chunk_filter_off'],
+  ]
+  return (
+    <div className="kbops kbfilter">
+      <button
+        className={`mini ghost${picked === null ? '' : ' on'}`}
+        aria-label={t('gui.kb.chunk_filter')}
+        title={t('gui.kb.chunk_filter')}
+        aria-expanded={open}
+        onClick={(e) => {
+          e.stopPropagation()
+          setOpen((v) => !v)
+        }}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 7h16M7 12h10M10 17h4" />
+        </svg>
+      </button>
+      {open && (
+        <div className="kbmenu" role="menu">
+          {choices.map(([value, key]) => (
+            <button
+              key={key}
+              className="mi"
+              role="menuitemradio"
+              aria-checked={picked === value}
+              onClick={() => {
+                setOpen(false)
+                store.filterChunks(value)
+              }}
+            >
+              {picked === value ? '\u2713 ' : '\u2007\u2007'}
+              {t(key)}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* The pieces the file was cut into, and what can be done to them.
 
    Reading order is the chunker's own numbering: it walks the sections a parser
    produced and numbers as it goes, so the sequence down this list is the
-   sequence in the document beside it. */
+   sequence in the document beside it. A query replaces that order with the
+   ranking it found, which is the only order a search has. */
 function ChunkList({ s }: { s: ReturnType<typeof store.getState> }): JSX.Element {
+  const rows = s.chunks ?? []
+  const ids = rows.map((c) => c.chunk_id || '').filter(Boolean)
+  const all = ids.length > 0 && ids.every((id) => s.chunkPicked.includes(id))
+  const pages = store.chunkPages()
+  const searching = s.chunkQuery.trim().length > 0
   return (
     <div className="kbchunks">
       <div className="kbchunkshd">
         <b>{t('gui.kb.chunks_title')}</b>
-        {s.chunks && s.chunks.length > 0 && (
-          <span className="kbchunksn">{t('gui.kb.chunks_n', { n: s.chunks.length })}</span>
-        )}
+        <span className="kbchunksn">{t('gui.kb.chunks_n', { n: s.chunksTotal })}</span>
       </div>
+
+      <div className="kbchunkbar">
+        <label className="kbpickall">
+          <input
+            type="checkbox"
+            checked={all}
+            disabled={!ids.length}
+            aria-label={t('gui.kb.chunk_pick_all')}
+            onChange={() => store.pickAllChunks(!all)}
+          />
+          <span>{t('gui.kb.chunk_pick_all')}</span>
+        </label>
+        <ChunkOps picked={s.chunkPicked} busy={s.chunkBusy} />
+        {/* Two ways to read the same list, not two lists: full text for
+            checking a cut, cut-down for finding one. */}
+        <div className="kbseg" role="group" aria-label={t('gui.kb.chunk_view')}>
+          <button
+            className={s.chunkView === 'full' ? 'on' : ''}
+            aria-pressed={s.chunkView === 'full'}
+            onClick={() => store.setChunkView('full')}
+          >
+            {t('gui.kb.chunk_full')}
+          </button>
+          <button
+            className={s.chunkView === 'ellipse' ? 'on' : ''}
+            aria-pressed={s.chunkView === 'ellipse'}
+            onClick={() => store.setChunkView('ellipse')}
+          >
+            {t('gui.kb.chunk_ellipse')}
+          </button>
+        </div>
+        {/* Typing does not search: a search embeds the query at whatever
+            endpoint the base was built with, so it waits for the typing to
+            stop. Enter is there for anyone who would rather not wait. */}
+        <div className="kbsearchbox">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="11" cy="11" r="6.5" />
+            <path d="M16 16l4.5 4.5" />
+          </svg>
+          <input
+            className="kbchunksearch"
+            type="search"
+            value={s.chunkTyped}
+            placeholder={t('gui.kb.chunk_search')}
+            aria-label={t('gui.kb.chunk_search')}
+            onChange={(e) => store.typeChunkSearch(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') store.searchChunks(e.currentTarget.value)
+            }}
+          />
+        </div>
+        <ChunkFilter picked={s.chunkFilter} />
+        <button
+          className="mini ghost kbchunkadd"
+          aria-label={t('gui.kb.chunk_add')}
+          title={t('gui.kb.chunk_add')}
+          disabled={s.chunkBusy}
+          onClick={() => store.openChunkDialog()}
+        >
+          +
+        </button>
+      </div>
+
       {s.chunks === null ? (
         <Wait label={t('gui.kb.chunks_loading')} />
       ) : s.chunksFailed ? (
         <div className="empty-note">
           <div className="ttl">{s.chunksFailed}</div>
         </div>
-      ) : s.chunks.length === 0 ? (
+      ) : rows.length === 0 ? (
         /* Not the same as still reading: a document that failed, one still
-           queued, and one in a base with no model all land here, and saying
-           so beats an empty column a reader has to interpret. */
+           queued, and one in a base with no model all land here, and saying so
+           beats an empty column a reader has to interpret. */
         <div className="empty-note">
-          <div className="ttl">{t('gui.kb.chunks_none')}</div>
+          <div className="ttl">{searching ? t('gui.kb.chunk_no_match') : t('gui.kb.chunks_none')}</div>
         </div>
       ) : (
         <div className="kbchunklist">
-          {s.chunks.map((chunk) => (
-            <ChunkRow key={chunk.chunk_index} chunk={chunk} />
+          {rows.map((chunk) => (
+            <ChunkRow
+              key={chunk.chunk_id || chunk.chunk_index}
+              chunk={chunk}
+              view={s.chunkView}
+              picked={s.chunkPicked.includes(chunk.chunk_id || '')}
+              busy={s.chunkBusy}
+            />
           ))}
         </div>
       )}
+
+      {/* A pager only where there are pages to turn. A search answers with
+          what matched and has no second page of relevance to offer. */}
+      {!searching && pages > 1 && (
+        <div className="kbchunkfoot">
+          <button
+            className="mini ghost"
+            disabled={s.chunkPage <= 1}
+            aria-label={t('gui.kb.chunk_prev')}
+            onClick={() => store.showChunkPage(s.chunkPage - 1)}
+          >
+            &#8249;
+          </button>
+          <span className="who">{t('gui.kb.chunk_page_of', { page: s.chunkPage, pages })}</span>
+          <button
+            className="mini ghost"
+            disabled={s.chunkPage >= pages}
+            aria-label={t('gui.kb.chunk_next')}
+            onClick={() => store.showChunkPage(s.chunkPage + 1)}
+          >
+            &#8250;
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* A piece written by hand, appended to the end of the document.
+
+   Said out loud in the dialog: it is embedded like every other piece and found
+   by the same queries, and it goes when the document is reindexed. Both halves
+   matter -- the first is why it is worth writing, the second is why it is not
+   a place to keep anything. */
+function ChunkDialog({ chunk, busy }: { chunk?: KbChunk; busy: boolean }): JSX.Element {
+  const [text, setText] = useState(chunk?.text ?? '')
+  const field = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => field.current?.focus(), [])
+  const close = (): void => store.closeDialog()
+  const label = chunk ? t('gui.kb.chunk_edit') : t('gui.kb.chunk_add')
+  return (
+    <div className="kbmodal" role="dialog" aria-modal="true" aria-label={label}>
+      <div className="kbdlg kbwide">
+        <button className="x" aria-label={t('gui.kb.cancel')} onClick={close}>
+          &times;
+        </button>
+        <div className="ttl">{label}</div>
+        <textarea
+          id="kbchunkbody"
+          ref={field}
+          className="kbnote"
+          value={text}
+          placeholder={t('gui.kb.chunk_add_hint')}
+          onChange={(e) => setText(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') close()
+          }}
+        />
+        {/* Both halves said out loud: an edited piece is re-embedded, so the
+            vector says what the text says -- and it is gone with the rest the
+            next time the file is indexed. */}
+        <div className="hint">{chunk ? t('gui.kb.chunk_edit_note') : t('gui.kb.chunk_add_note')}</div>
+        <div className="kbacts">
+          {busy && <Wait label={t('gui.kb.chunk_adding')} />}
+          <button className="mini ghost" onClick={close}>
+            {t('gui.kb.cancel')}
+          </button>
+          <button
+            className="mini"
+            disabled={busy || !text.trim() || text === chunk?.text}
+            onClick={() => (chunk ? void store.saveChunk(chunk, text) : void store.addChunk(text))}
+          >
+            {chunk ? t('gui.kb.note_save') : t('gui.kb.create')}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -1492,10 +1802,16 @@ export function KnowledgeApp(): JSX.Element {
        meaningful against the first -- a chunk list alone says nothing about
        where a cut landed. */
     return (
-      <div className="kbview">
-        <DocViewer doc={s.viewing} />
-        <ChunkList s={s} />
-      </div>
+      <>
+        <div className="kbview">
+          <DocViewer doc={s.viewing} />
+          <ChunkList s={s} />
+        </div>
+        {/* The overlays belong to the page, not to the panel under them: the
+            early return above is what the file view is, and a dialog left
+            outside it could be opened from here and never drawn. */}
+        {s.dialog?.kind === 'chunk' && <ChunkDialog chunk={s.dialog.chunk} busy={s.chunkBusy} />}
+      </>
     )
   }
   return (
@@ -1553,6 +1869,7 @@ export function KnowledgeApp(): JSX.Element {
       {creating && <CreateDialog model={s.status?.model ?? ''} onClose={() => setCreating(false)} />}
       {s.dialog?.kind === 'note' && <NoteDialog doc={s.dialog.doc} busy={s.busy} />}
       {s.dialog?.kind === 'url' && <UrlDialog busy={s.busy} />}
+      {s.dialog?.kind === 'chunk' && <ChunkDialog chunk={s.dialog.chunk} busy={s.chunkBusy} />}
       {s.dialog?.kind === 'rename' && s.dialog.base && (
         <RenameDialog base={s.dialog.base} busy={s.busy} />
       )}
