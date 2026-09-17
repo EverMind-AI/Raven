@@ -13,7 +13,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { fakeGateway, loadPart } from '../../../scripts/legacy-part.mjs'
+import { fakeGateway, loadPart } from '../../../scripts/module-harness.mjs'
 
 import type { Sources } from '../../state/sources'
 

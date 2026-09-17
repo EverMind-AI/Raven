@@ -23,7 +23,7 @@
 
 import { flushSync } from 'react-dom'
 
-import { t } from './bridge'
+import { t } from '../i18n/t'
 
 export interface Tier {
   id: string
@@ -138,11 +138,11 @@ function commit(value: string): void {
   draw()
 }
 
-/* The mode the engine actually holds, pushed in by the live layer once the
-   config has loaded (and again whenever another surface changes it). */
+/* The mode the engine actually holds, pushed in once the config has loaded
+   (and again whenever another surface changes it). */
 /* How a pick reaches the config, when anything can write one. Registered by
-   ui-web/src/legacy/live/120-settings.js, which owns the settings transport;
-   null on the offline shell, where the pick commits locally. */
+   src/features/settings/chrome.ts, which owns the settings transport; null on
+   the offline shell, where the pick commits locally. */
 let persist: ((mode: string) => Promise<boolean> | boolean) | null = null
 
 export function setPermPersister(fn: (mode: string) => Promise<boolean> | boolean): void {
@@ -168,8 +168,8 @@ const el = <T extends HTMLElement>(id: string): T | null => document.getElementB
    The chip reads its own state, which is why it carries no hover label: the
    detail of each tier belongs in the panel the click opens. Nothing to remove
    for that -- the chip is rendered with no data-tip and no data-i18n-tip for
-   the lang store to fill, and the legacy drawPerm's `delete chip.dataset.tip`
-   was dead there too. It did not come across. */
+   the lang store to fill, and the `delete chip.dataset.tip` the draw before
+   this one carried was dead there too. It did not come across. */
 export function draw(): void {
   const cur = TIERS.find((p) => p.id === mode) || TIERS[0]!
   const name = el('permName')

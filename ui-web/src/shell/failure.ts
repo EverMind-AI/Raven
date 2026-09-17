@@ -13,7 +13,7 @@
 
 import { flushSync } from 'react-dom'
 
-import { t } from './bridge'
+import { t } from '../i18n/t'
 
 export interface FailureBar {
   say(text: string): void

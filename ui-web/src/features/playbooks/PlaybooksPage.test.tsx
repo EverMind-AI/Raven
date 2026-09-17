@@ -1,17 +1,19 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { PlaybooksApp } from './PlaybooksPage'
 import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
-import { setShell } from '../../shell/bridge'
 import { mountPageRoot } from '../../test/pageRoot'
 
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import * as detailStore from '../../state/detail'
 import type { PlaybookDetail, PlaybookNode, PlaybookRow, PlaybooksSource } from './types'
-import type { Shell } from '../../shell/bridge'
 
 /* The notices render from src/App.tsx into the standing #toasts host, so the
    page's own root has to be standing for any of them to appear -- and that root
@@ -66,18 +68,17 @@ function detail(over: Partial<PlaybookDetail> & { name: string }): PlaybookDetai
   }
 }
 
-/* The island runs against the two seams production wires: a fake shell on
-   setShell (T answers its own key, so assertions name catalogue keys
-   rather than translations) and a fixture source on sources.playbooks. */
+/* The island runs against the two seams production wires: a stand-in
+   translator on setTranslator (it answers its own key, so assertions name
+   catalogue keys rather than translations) and a fixture source on
+   sources.playbooks. */
 const pages: (string | null)[] = []
 
 function install(over: Partial<PlaybooksSource> = {}): void {
-  setShell({
-    T: (key: string, vars?: Record<string, unknown>) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: (_t: unknown, _b: unknown, _l: unknown, fn: () => void) => fn(),
-    showPage: (id: string | null) => pages.push(id),
-    closeDetail: () => {}
-  } as unknown as Shell)
+  setTranslator((key: string, vars?: Record<string, unknown> | null) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(detailStore, 'close').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t: unknown, _b: unknown, _l: unknown, fn: () => void) => fn())
+  vi.spyOn(pageStore, 'show').mockImplementation((id: string | null) => pages.push(id))
   setSources({
     playbooks: {
       list: async () => [row({ name: 'issue-triage' })],

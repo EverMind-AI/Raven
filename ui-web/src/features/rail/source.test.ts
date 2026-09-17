@@ -10,7 +10,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { fakeGateway, loadPart, looseQuery } from '../../../scripts/legacy-part.mjs'
+import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
 
 import type { Sources } from '../../state/sources'
 
@@ -30,12 +30,19 @@ async function harness({ rows = [] as Row[], cur = null as string | null } = {})
      factory would hand a cycle-mate the unmocked module. */
   await loadPart(() => import('../../state/session/registry'), {
     fakes: {
-      'demo/010-kernel.js': { $: looseQuery(), T: label },
-      'demo/040-state.js': { sess: (id: string) => rows.find((r) => r.id === id) },
-      'demo/050-rail.js': {
-        sessionDraw: () => log.push(['sessionDraw']),
-        sessionReplace: (next: Row[]) => log.push(['sessionReplace', next]),
-        sessionRows: () => rows,
+      'src/features/rail/store': {
+        draw: () => log.push(['sessionDraw']),
+      },
+      'src/state/session/rows': {
+        sess: (id: string) => rows.find((r) => r.id === id),
+        replace: (next: Row[]) => log.push(['sessionReplace', next]),
+        rows: () => rows,
+      },
+      'src/i18n/t': {
+        T: label,
+      },
+      'src/shell/dom': {
+        $: looseQuery(),
       },
     },
   })
@@ -196,14 +203,24 @@ async function refreshHarness({
   const log: unknown[][] = []
   await loadPart(() => import('../../state/session/registry'), {
     fakes: {
-      'src/shell/session': { current: () => cur },
-      'demo/010-kernel.js': { $: looseQuery(), T: label },
-      'demo/040-state.js': { sess: (id: string) => rows.find((r) => r.id === id), turn: { dispatch: () => {} } },
-      'demo/050-rail.js': {
-        sessionDraw: () => log.push(['sessionDraw']),
-        sessionReplace: (next: Row[]) => log.push(['sessionReplace', next.map((r) => r.id)]),
-        sessionRows: () => rows,
+      'src/features/rail/store': {
+        draw: () => log.push(['sessionDraw']),
       },
+      'src/features/composer/mount': {
+        turn: { dispatch: () => {} },
+      },
+      'src/state/session/rows': {
+        sess: (id: string) => rows.find((r) => r.id === id),
+        replace: (next: Row[]) => log.push(['sessionReplace', next.map((r) => r.id)]),
+        rows: () => rows,
+      },
+      'src/i18n/t': {
+        T: label,
+      },
+      'src/shell/dom': {
+        $: looseQuery(),
+      },
+      'src/shell/session': { current: () => cur },
       'src/features/rail/leave': {
         leaveDeletedSession: (id: string) => { log.push(['leaveDeleted', id]); return Promise.resolve() },
       },

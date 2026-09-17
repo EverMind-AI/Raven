@@ -1,8 +1,7 @@
 /* The whole-page redraw a language pick asks for.
  *
- * Was `redrawAll` in the live layer's settings part
- * (legacy/live/120-settings.js), where it was a hand-written list of nineteen
- * calls. Everything the catalogue reaches that is DRAWN rather than rendered is
+ * A hand-written list of nineteen calls (`redrawAll`) is what this was.
+ * Everything the catalogue reaches that is DRAWN rather than rendered is
  * in it: the regions src/App.tsx renders read the catalogue themselves and
  * redraw on the same notification, so what is left here is the eleven islands,
  * the four chrome writers, the shared drawer and the one reload.
@@ -22,8 +21,9 @@
  */
 
 import { islands } from '../islands'
-import { drawQueue as queueDraw } from '../features/composer/mount'
+import { drawQueue as queueDraw, turn } from '../features/composer/mount'
 import { label as modelLabel } from '../features/model/chip'
+import { draw as sessionDraw } from '../features/rail/store'
 import { draw as drawCtx } from '../shell/ctxchip'
 import { draw as drawFoot } from '../shell/foot'
 import { draw as drawPerm } from '../shell/perm'
@@ -32,8 +32,7 @@ import * as caps from './caps'
 import * as detail from './detail'
 import * as lang from './lang'
 import { isDraft } from './session/registry'
-import { sess, turn } from '../legacy/demo/040-state.js'
-import { sessionDraw, sessionOpen } from '../legacy/demo/050-rail.js'
+import { open as sessionOpen, sess } from './session/rows'
 
 export function repaint(): void {
   sessionDraw()
@@ -69,7 +68,10 @@ export function repaint(): void {
   /* The words baked into stored segments (note labels, phrased previews) come
      back right on a rebuild from disk. Skipped while a turn is streaming:
      re-opening the session mid-turn would cut the stream off. */
-  if (!isDraft() && sessionCurrent() && !turn.busy()) sessionOpen(sess(sessionCurrent()))
+  if (!isDraft() && sessionCurrent() && !turn.busy()) {
+    const row = sess(sessionCurrent())
+    if (row) void sessionOpen(row)
+  }
 }
 
 /** Subscribes the redraw once. src/main.tsx is the only caller. */

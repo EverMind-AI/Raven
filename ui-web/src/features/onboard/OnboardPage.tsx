@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { KeyInput } from '../../shell/key-input'
 import { ModelTagDefs, ModelTags } from '../../shell/model-tags'
 import { ProviderIcon, ProviderLink, ProviderStatus } from '../../shell/provider-mark'

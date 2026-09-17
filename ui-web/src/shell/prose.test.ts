@@ -1,11 +1,12 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { md } from './prose'
 import { resetSources, setSources } from '../state/sources'
-import { resetShell, setShell } from './bridge'
 
-import type { Shell } from './bridge'
+import { resetTranslator, setTranslator } from '../i18n/t'
+import * as pageStore from '../state/page'
+import * as confirmStore from '../state/confirm'
 import type { ProseSource } from './prose'
 
 /* The renderer reads two things and nothing else: whether a string is a path
@@ -23,18 +24,15 @@ function wire(over: Partial<ProseSource> = {}): { asked: string[] } {
     linkTargetOf: (u) => (u.startsWith('out/') ? { p: u.replace(/\/$/, ''), dir: u.endsWith('/') } : null),
     ...over,
   }
-  const shell: Shell = {
-    T: (key) => key,
-    confirmAsk: () => {},
-    showPage: () => {},
-  }
-  setShell(shell)
+  setTranslator((key) => key)
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
   setSources({ prose: source })
   return { asked }
 }
 
 afterEach(() => {
-  resetShell()
+  resetTranslator()
   resetSources()
 })
 

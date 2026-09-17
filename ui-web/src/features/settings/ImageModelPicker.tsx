@@ -1,7 +1,7 @@
 /** Image generation presets and custom model selection, saved as one model/quality pair. */
 import { useState } from 'react'
 
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import * as store from './store'
 
 import type { JSX } from 'react'

@@ -14,6 +14,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readFileSync } from 'node:fs'
 
+import * as nav from '../features/plugins/nav'
+import { islands } from '../islands'
 import * as lang from '../state/lang'
 import { mountPageRoot } from '../test/pageRoot'
 
@@ -22,26 +24,17 @@ import { mountPageRoot } from '../test/pageRoot'
 
 /* The six openers the rows call, kept real apart from the one verb each: the
    modules around them answer for names this file never touches (the Escape
-   chain's closers live in the same parts). */
-const opened = vi.hoisted(() => ({ list: [] as string[] }))
-vi.mock('../legacy/demo/120-capabilities.js', async (original) => ({
-  ...(await original<Record<string, unknown>>()),
-  openSkills: () => { opened.list.push('skills') },
-  openPlugins: () => { opened.list.push('plugins') },
-}))
-vi.mock('../legacy/demo/140-schedule.js', async (original) => ({
-  ...(await original<Record<string, unknown>>()),
-  openMem: () => { opened.list.push('memory') },
-  openKb: () => { opened.list.push('knowledge') },
-}))
-vi.mock('../legacy/demo/150-chrome.js', async (original) => ({
-  ...(await original<Record<string, unknown>>()),
-  openSettings: () => { opened.list.push('settings') },
-}))
-vi.mock('../legacy/demo/154-playbooks.js', async (original) => ({
-  ...(await original<Record<string, unknown>>()),
-  openPb: () => { opened.list.push('playbooks') },
-}))
+   chain's closers live beside those openers). */
+const opened = { list: [] as string[] }
+const note = (name: string) => async () => {
+  opened.list.push(name)
+}
+vi.spyOn(nav, 'openSkills').mockImplementation(note('skills'))
+vi.spyOn(nav, 'openPlugins').mockImplementation(note('plugins'))
+vi.spyOn(islands.playbooks, 'open').mockImplementation(note('playbooks'))
+vi.spyOn(islands.knowledge, 'open').mockImplementation(note('knowledge'))
+vi.spyOn(islands.memory, 'open').mockImplementation(note('memory'))
+vi.spyOn(islands.settings, 'open').mockImplementation(note('settings'))
 
 /* Nothing: the page root renders the grid, the column and the collapse's twin,
    so a case gets all three by mounting it. */
@@ -167,8 +160,7 @@ describe('the rail', () => {
   /* A React onClick leaves no trace on the element -- the root delegates every
      click -- so the count that matters is over the source. The new-task row's
      action belongs to the session rather than to the chrome that carries it, so
-     state/install.ts's installActions() binds it by id; the demo layer carried
-     a second handler that was dead, because that install ran first. */
+     state/install.ts's installActions() binds it by id. */
   it('leaves the new-task row exactly one handler, in the module that owns the action', () => {
     render()
     /* React leaves an empty onclick on every element it takes a click of (the
@@ -178,10 +170,9 @@ describe('the rail', () => {
     expect(el('newBtn').onclick).toBe(null)
     expect(el('skillBtn').onclick).not.toBe(null)
     const wiring = source('state/install.ts')
-    expect([...wiring.matchAll(/\$\('#newBtn'\)\.onclick/g)]).toHaveLength(1)
+    expect([...wiring.matchAll(/\$\('#newBtn'\)!?\.onclick/g)]).toHaveLength(1)
     const tag = /<button[^>]*id="newBtn"[^>]*>/.exec(source('chrome/Rail.tsx'))
     expect(tag?.[0]).not.toMatch(/onClick/)
-    expect(source('legacy/demo/150-chrome.js')).not.toMatch(/#newBtn'\)\.onclick/)
   })
 })
 

@@ -5,23 +5,22 @@
  * reading of the code alone does not make obvious.
  */
 
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { cronToRow, fmtEvery, fmtStamp, jobToSave } from './source'
-import { setShell } from '../../shell/bridge'
 
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as pageStore from '../../state/page'
+import * as confirmStore from '../../state/confirm'
 import type { CronDraft } from './types'
 import type { CronJobWire } from './source'
-import type { Shell } from '../../shell/bridge'
 
 /* A catalogue that echoes what it was asked for, so an assertion names the key
    and its variables rather than one language's wording. */
-const shell = {
-  T: (key: string, vars?: Record<string, string | number>) =>
-    (vars ? `${key}(${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')})` : key),
-  confirmAsk: () => {},
-  showPage: () => {},
-} as unknown as Shell
+setTranslator((key: string, vars?: Record<string, unknown> | null) =>
+(vars ? `${key}(${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')})` : key))
+vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
 
 const job = (over: Partial<CronJobWire>): CronJobWire => ({
   id: 'j1', name: 'nightly', message: 'summarise', enabled: true, kind: 'cron', expr: '0 9 * * *',
@@ -35,7 +34,6 @@ const draft = (over: Partial<CronDraft>): CronDraft => ({
 } as CronDraft)
 
 beforeEach(() => {
-  setShell(shell)
 })
 
 describe('one job, contract shape to page shape', () => {

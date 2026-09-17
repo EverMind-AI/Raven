@@ -14,7 +14,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { fakeGateway, loadPart } from '../../../scripts/legacy-part.mjs'
+import { fakeGateway, loadPart } from '../../../scripts/module-harness.mjs'
 
 import type { Sources } from '../sources'
 
@@ -42,24 +42,31 @@ async function harness({ rows = [] as Row[], current = 'tui:open' as string | nu
     return import('./pipeline')
   }, {
     fakes: {
+      'src/features/composer/mount': {
+        drawMeter: () => {},
+        goPaint: () => {},
+      },
+      'src/features/rail/store': { draw: () => {} },
+      'src/state/session/rows': {
+        sess: (id: string) => rows.find((r) => r.id === id),
+        replace: () => {},
+        rows: () => rows,
+      },
+      'src/features/composer/clarify': {
+        close: (id: string) => seen.closed.push(id),
+        open: (_p: unknown, answer: (...a: unknown[]) => void) =>
+          seen.sheets.push({ kind: 'clarify', owner: null, answer }),
+      },
+      'src/features/composer/approve': {
+        closeApproval: (id: string) => seen.closed.push(id),
+        openApproval: (_opts: unknown, answer: (...a: unknown[]) => void, owner: string | null) =>
+          seen.sheets.push({ kind: 'approval', owner, answer }),
+        open: (_prompt: string, yes: () => void, no: () => void, owner: string | null) =>
+          seen.sheets.push({ kind: 'confirm', owner, answer: (ok?: unknown) => (ok ? yes() : no()) }),
+      },
+      'src/i18n/t': { T: (key: string) => key },
       'src/shell/session': { current: () => current },
       'src/shell/toast': { show: (text: string) => seen.toasts.push(text) },
-      'demo/010-kernel.js': { T: (key: string) => key },
-      'demo/040-state.js': {
-        approvalClose: (id: string) => seen.closed.push(id),
-        approvalSheet: (_opts: unknown, answer: (...a: unknown[]) => void, owner: string | null) =>
-          seen.sheets.push({ kind: 'approval', owner, answer }),
-        approveSheet: (_prompt: string, yes: () => void, no: () => void, owner: string | null) =>
-          seen.sheets.push({ kind: 'confirm', owner, answer: (ok?: unknown) => (ok ? yes() : no()) }),
-        clarifyClose: (id: string) => seen.closed.push(id),
-        clarifySheet: (_p: unknown, answer: (...a: unknown[]) => void) =>
-          seen.sheets.push({ kind: 'clarify', owner: null, answer }),
-        sess: (id: string) => rows.find((r) => r.id === id),
-      },
-      'demo/050-rail.js': {
-        sessionDraw: () => {}, sessionReplace: () => {}, sessionRows: () => rows,
-      },
-      'demo/090-composer.js': { drawMeter: () => {}, goState: () => {} },
       /* The phase event goes to the conversation it names, whether or not that
          conversation is on screen -- which is the residency rule. */
       'src/state/session/residency': {
@@ -68,7 +75,9 @@ async function harness({ rows = [] as Row[], current = 'tui:open' as string | nu
       'src/features/rail/source': { touchSession: (id: string) => seen.touched.push(id) },
       'src/state/session/stages': { dispatch: (ev: unknown) => seen.events.push(ev) },
     },
-    islands: { rail: { reconcile: (_cur: Row[], next: Row[]) => ({ rows: next, currentMissing: false }) } },
+    islands: {
+      rail: { reconcile: (_cur: Row[], next: Row[]) => ({ rows: next, currentMissing: false }) },
+    },
   })
   const pipeline = (await import('./pipeline')) as Pipeline
   const registry = await import('./registry')

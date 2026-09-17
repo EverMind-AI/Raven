@@ -8,11 +8,14 @@ import * as store from './store'
 import { domSnapshot } from '../../test/domSnapshot'
 import { settingsTab } from '../../state/settingsTab'
 import { resetSources, setSources, sources } from '../../state/sources'
-import { setShell } from '../../shell/bridge'
 import { mountPageRoot } from '../../test/pageRoot'
 
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import * as settingsDialogStore from '../../state/settingsDialog'
+import * as detailStore from '../../state/detail'
 import type { KbBase, KbDoc, KbSearch, KnowledgeSource } from './types'
-import type { Shell } from '../../shell/bridge'
 import type { SettingsSource } from '../settings/types'
 
 /* The notices render from src/App.tsx into the standing #toasts host, so the
@@ -32,9 +35,9 @@ function base(over: Partial<KbBase> & { id: string }): KbBase {
   }
 }
 
-/* The island runs against the same two seams production wires: a fake shell on
-   setShell (T returns its key, so tests assert catalogue keys rather
-   than translations) and a fixture source on sources.knowledge. */
+/* The island runs against the same two seams production wires: a stand-in
+   translator on setTranslator (it returns its key, so tests assert catalogue
+   keys rather than translations) and a fixture source on sources.knowledge. */
 const pages: (string | null)[] = []
 const opened: number[] = []
 
@@ -69,18 +72,14 @@ function doc(over: Partial<KbDoc> & { id: string }): KbDoc {
 }
 
 function source(over: Partial<KnowledgeSource> = {}): void {
-  const fakeShell = {
-    T: (key: string, vars?: Record<string, unknown>) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    menuAt: () => {},
-    confirmAsk: (_t: unknown, body: unknown, _l: unknown, fn: () => void) => {
-      confirms.push(String(body))
-      fn()
-    },
-    showPage: (id: string | null) => pages.push(id),
-    openSet: () => opened.push(1),
-    closeDetail: () => {},
-  } as unknown as Shell
-  setShell(fakeShell)
+  setTranslator((key: string, vars?: Record<string, unknown> | null) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(detailStore, 'close').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t: unknown, body: unknown, _l: unknown, fn: () => void) => {
+  confirms.push(String(body))
+  fn()
+  })
+  vi.spyOn(pageStore, 'show').mockImplementation((id: string | null) => pages.push(id))
+  vi.spyOn(settingsDialogStore, 'open').mockImplementation(() => opened.push(1))
   setSources({
     knowledge: {
       status: async () => ({ configured: true, model: 'bge-m3' }),

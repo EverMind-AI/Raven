@@ -1,8 +1,8 @@
 /* The playbook library the offline canvas carries.
  *
- * Eight playbooks, and they were already wire-shaped where they lived
- * (ui-web/src/legacy/demo/154-playbooks.js said so): snake_case, exactly what
- * `playbooks.list` and `playbooks.get` answer, because the island is the same
+ * Eight playbooks, and they were already wire-shaped where they lived:
+ * snake_case, exactly what `playbooks.list` and `playbooks.get` answer,
+ * because the island is the same
  * code in both modes and a fixture in the island's own shape would hide a
  * mapping bug until live. The move is therefore a move: the same rows behind
  * the transport instead of behind the source.

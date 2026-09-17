@@ -45,7 +45,8 @@
 
 import { flushSync } from 'react-dom'
 
-import { ds, t } from './bridge'
+import { t } from '../i18n/t'
+import { ds } from '../state/sources'
 import { show as toast } from './toast'
 
 export interface TierOption {

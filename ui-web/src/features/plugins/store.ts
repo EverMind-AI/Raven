@@ -1,7 +1,9 @@
-import { ds, shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
 import { show as toast } from '../../shell/toast'
 import * as detail from '../../state/detail'
 
+import { drawIfOpenOnPlugins } from '../../state/caps'
 import type {
   DetailEntry,
   InstalledRow,
@@ -173,7 +175,7 @@ function authTick(on: boolean): void {
    tab is actually showing -- the legacy pmRedraw guard. */
 function sync(): void {
   set({})
-  shell().plugRedraw?.()
+  drawIfOpenOnPlugins()
 }
 
 export function redraw(): void {
@@ -206,7 +208,7 @@ export function searchIfIdle(): void {
 
 export async function search(): Promise<void> {
   set({ marketState: 'loading', err: '' })
-  shell().plugRedraw?.()
+  drawIfOpenOnPlugins()
   try {
     const r = await source().search(state.query, state.cat)
     r.items.forEach((it) => marketIds.add(it.id))
@@ -214,19 +216,19 @@ export async function search(): Promise<void> {
   } catch (e) {
     set({ items: [], err: msg(e), marketState: 'error' })
   }
-  shell().plugRedraw?.()
+  drawIfOpenOnPlugins()
 }
 
 export function toggleView(): void {
   set({ view: state.view === 'installed' ? 'market' : 'installed' })
   drawerClosed()
-  shell().plugRedraw?.()
+  drawIfOpenOnPlugins()
 }
 
 export function backToMarket(): void {
   set({ view: 'market' })
   drawerClosed()
-  shell().plugRedraw?.()
+  drawIfOpenOnPlugins()
 }
 
 /* ── drawer ──────────────────────────────────────────────────────── */

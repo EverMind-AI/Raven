@@ -1,10 +1,11 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { Shell } from './bridge'
 import { _resetForTests, bootError, show } from './failure'
-import { resetShell, setShell } from './bridge'
 import { mountPageRoot } from '../test/pageRoot'
+import { resetTranslator, setTranslator } from '../i18n/t'
+import * as pageStore from '../state/page'
+import * as confirmStore from '../state/confirm'
 
 /* Both bars are drawn by src/chrome/FailureBar.tsx, so the page's own root has
    to be standing for one to reach the body (see src/main.tsx) -- and that root
@@ -13,12 +14,9 @@ import { mountPageRoot } from '../test/pageRoot'
 let unmount = (): void => {}
 
 function wire(): void {
-  const shell: Shell = {
-    T: (key, vars) => key === 'gui.boot_fail' ? `${vars?.where}:${vars?.err}` : key,
-    confirmAsk: () => {},
-    showPage: () => {},
-  }
-  setShell(shell)
+  setTranslator((key, vars) => key === 'gui.boot_fail' ? `${vars?.where}:${vars?.err}` : key)
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
 }
 
 beforeEach(() => {
@@ -29,7 +27,7 @@ afterEach(() => {
   /* A bar is never taken down in the page, so the store outlives a case. */
   _resetForTests()
   unmount()
-  resetShell()
+  resetTranslator()
   document.body.innerHTML = ''
   vi.restoreAllMocks()
 })

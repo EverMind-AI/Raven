@@ -12,17 +12,21 @@ import { Lightbox } from '../../chrome/Lightbox'
 import { close as closeLightbox } from '../../shell/lightbox'
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources } from '../../state/sources'
-import { setShell } from '../../shell/bridge'
 
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
 import type { ComposerSource, SlashCmd } from './types'
-import type { Shell } from '../../shell/bridge'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const directNotes = vi.hoisted((): Array<[string, string]> => [])
 const toastWriter = vi.hoisted(() => ({ items: [] as string[] }))
-vi.mock('../transcript/mount', () => ({
+/* Partial, not wholesale: the island bag is assembled from every member this
+   module really has. */
+vi.mock('../transcript/mount', async (original) => ({
+  ...(await original<Record<string, unknown>>()),
   note: (label: string, detail: string) => { directNotes.push([label, detail]) },
 }))
 vi.mock('../../shell/toast', () => ({
@@ -86,14 +90,12 @@ function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; cal
     sent: [], halted: 0, notes: directNotes, toasts: [],
   }
   toastWriter.items = calls.toasts
-  const fakeShell: Shell = {
-    T: (key, vars) => {
-      const raw = (WORDS[lang] as Record<string, string>)[key] ?? key
-      return vars ? raw.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : raw
-    },
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: () => {},
-  }
+  setTranslator((key, vars) => {
+  const raw = (WORDS[lang] as Record<string, string>)[key] ?? key
+  return vars ? raw.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : raw
+  })
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   const source: ComposerSource = {
     meter: () => '',
     slash: [],
@@ -105,7 +107,6 @@ function wire(over: Partial<ComposerSource> = {}): { source: ComposerSource; cal
     stop: () => { calls.halted += 1 },
     ...over,
   }
-  setShell(fakeShell)
   setSources({ composer: source })
   document.body.innerHTML = DOCK
   return { source, calls }

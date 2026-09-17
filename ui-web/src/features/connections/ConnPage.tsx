@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { SetupGroup, SetupRow, Tile } from '../../shell/setuprow'
 import { Field, SheetHead, StateLine } from '../../shell/setupsheet'
 import * as store from './store'

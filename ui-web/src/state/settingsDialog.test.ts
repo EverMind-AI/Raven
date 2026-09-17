@@ -14,14 +14,15 @@
 import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from '../App'
-import { resetShell, setShell } from '../shell/bridge'
 import * as lang from './lang'
 import * as settings from './settingsDialog'
+import { resetTranslator, setTranslator } from '../i18n/t'
+import * as pageStore from '../state/page'
+import * as confirmStore from '../state/confirm'
 
-import type { Shell } from '../shell/bridge'
 
 const marks: string[] = []
 let root: ReturnType<typeof createRoot> | null = null
@@ -29,15 +30,13 @@ let root: ReturnType<typeof createRoot> | null = null
 function render(): void {
   root?.unmount()
   marks.length = 0
-  setShell({
-    T: (key: string) => key,
-    confirmAsk: () => {},
-    showPage: () => {},
-    navState: () => {
-      marks.push('markNew')
-      return { pages: [], btnOf: () => '' }
-    },
-  } as Shell)
+  setTranslator((key: string) => key)
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
+  vi.spyOn(pageStore, 'navState').mockImplementation(() => {
+  marks.push('markNew')
+  return { pages: [], btnOf: () => '' }
+  })
   document.body.innerHTML = '<div class="veil setveil" id="setVeil" data-open="false"></div>'
   root = createRoot(document.createElement('div'))
   flushSync(() => root!.render(createElement(App)))
@@ -51,7 +50,7 @@ afterEach(() => {
   root?.unmount()
   root = null
   document.body.innerHTML = ''
-  resetShell()
+  resetTranslator()
 })
 
 describe('the settings dialog', () => {
@@ -99,7 +98,7 @@ describe('the settings dialog', () => {
   /* markNewCurrent runs during the first draw, before the dialog's markup is
      in the document, which is why neither verb may need the element. */
   it('answers and does not throw on a page without the dialog', () => {
-    setShell({ T: (key: string) => key, confirmAsk: () => {}, showPage: () => {} } as Shell)
+    setTranslator((key: string) => key)
     document.body.innerHTML = ''
     expect(() => settings.open()).not.toThrow()
     expect(settings.isOpen()).toBe(true)

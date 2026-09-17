@@ -41,10 +41,8 @@
 
 import { useSyncExternalStore } from 'react'
 
-import { openPlugins, openSkills } from '../legacy/demo/120-capabilities.js'
-import { openKb, openMem } from '../legacy/demo/140-schedule.js'
-import { openSettings } from '../legacy/demo/150-chrome.js'
-import { openPb } from '../legacy/demo/154-playbooks.js'
+import { openPlugins, openSkills } from '../features/plugins/nav'
+import { islands } from '../islands'
 import * as find from '../shell/find'
 import * as lang from '../state/lang'
 import * as rail from '../state/rail'
@@ -105,32 +103,32 @@ function RailNav(): JSX.Element {
         </svg>
         <span data-i18n="gui.new_task">{lang.text('gui.new_task', '新任务')}</span>
       </button>
-      <button className="navi" id="skillBtn" onClick={() => openSkills()}>
+      <button className="navi" id="skillBtn" onClick={() => void openSkills()}>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <path d="M12 4l1.9 5.3L19 11l-5.1 1.7L12 18l-1.9-5.3L5 11l5.1-1.7Z" />
         </svg>
         <span data-i18n="gui.tab.skills">{lang.text('gui.tab.skills', '技能')}</span>
       </button>
-      <button className="navi" id="plugBtn" onClick={() => openPlugins()}>
+      <button className="navi" id="plugBtn" onClick={() => void openPlugins()}>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <path d="M9 3.5v4.5M15 3.5v4.5M7 8h10v4.5a5 5 0 0 1-10 0zM12 17.5v3" />
         </svg>
         <span data-i18n="gui.tab.plugins">{lang.text('gui.tab.plugins', '插件')}</span>
       </button>
-      <button className="navi" id="pbBtn" onClick={() => openPb()}>
+      <button className="navi" id="pbBtn" onClick={() => islands.playbooks.open()}>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <circle cx="5.5" cy="7" r="2" /><circle cx="5.5" cy="17" r="2" /><circle cx="18.5" cy="12" r="2" />
           <path d="M7.5 7.6c5 1.4 6.5 2.6 9 3.9M7.5 16.4c5-1.4 6.5-2.6 9-3.9" />
         </svg>
         <span data-i18n="gui.nav.pb">{lang.text('gui.nav.pb', '剧本')}</span>
       </button>
-      <button className="navi" id="kbBtn" onClick={() => openKb()}>
+      <button className="navi" id="kbBtn" onClick={() => islands.knowledge.open()}>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <path d="M5 4.5h9.5a2 2 0 0 1 2 2v13H7a2 2 0 0 1-2-2zM16.5 6.5H19v13h-2.5M8 8.5h5M8 12h5" />
         </svg>
         <span data-i18n="gui.nav.kb">{lang.text('gui.nav.kb', '知识库')}</span>
       </button>
-      <button className="navi" id="memBtn" onClick={() => openMem()}>
+      <button className="navi" id="memBtn" onClick={() => islands.memory.open()}>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <path d="M12 3l8 4.5-8 4.5-8-4.5zM4 12.4l8 4.5 8-4.5M4 16.6l8 4.5 8-4.5" />
         </svg>
@@ -205,7 +203,7 @@ function RailFoot(): JSX.Element {
       {/* The foot is the door to settings, and only that: accounts are not a
            thing this product has, so nothing down here pretends to be one.
            The version under the label is drawn by drawFoot(). */}
-      <button className="me" id="meBtn" data-i18n-aria="gui.nav.set" aria-label={lang.attr('gui.nav.set')} onClick={() => openSettings()}>
+      <button className="me" id="meBtn" data-i18n-aria="gui.nav.set" aria-label={lang.attr('gui.nav.set')} onClick={() => void islands.settings.open()}>
         <span className="av anon">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" />
             <path d="M12 3v2.2M12 18.8V21M4.6 7.8l1.9 1.1M17.5 15.1l1.9 1.1M4.6 16.2l1.9-1.1M17.5 8.9l1.9-1.1M3 12h2.2M18.8 12H21" /></svg>

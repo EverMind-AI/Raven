@@ -39,8 +39,8 @@
  *     page.css reads `.dock .sheets:has(>*)` off the rack, so it renders with
  *     no children at all rather than a placeholder.
  *   - #go's icon and disabled state, #meter's text, #attBtn's click (the
- *     composer store), #modelName and #modelChip's title (legacy/live/
- *     120-settings.js), #envName's label (legacy/demo/130-settings.js), and
+ *     composer store), #modelName and #modelChip's title
+ *     (features/model/chip.ts), #envName's label (state/envChip.ts), and
  *     #slashPop's data-open.
  *   - where #permPop and #tierPop stand. Both stores move the node to the body
  *     the first time it opens, because the card's entrance animation makes the

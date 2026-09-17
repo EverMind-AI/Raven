@@ -11,7 +11,7 @@ import type { ParamsOf } from '../../rpc/generated'
 import type { TierReply, TierSource } from '../../shell/tier'
 
 import { islands } from '../../islands'
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { current as sessionCurrent } from '../../shell/session'
 import { gateway } from '../../state/gateway'
 import { generation } from '../../state/session/generation'

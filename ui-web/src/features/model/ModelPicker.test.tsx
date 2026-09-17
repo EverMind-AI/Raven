@@ -7,9 +7,10 @@ import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources } from '../../state/sources'
-import { resetShell, setShell } from '../../shell/bridge'
 
-import type { Shell } from '../../shell/bridge'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as pageStore from '../../state/page'
+import * as confirmStore from '../../state/confirm'
 import type { ModelSource, Provider } from './types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -66,12 +67,9 @@ function install(over: Partial<ModelSource> = {}, providers = PROVIDERS): Harnes
     },
     ...over,
   }
-  const shell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: () => {},
-    showPage: () => {},
-  }
-  setShell(shell)
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
   setSources({ model: source })
   document.body.innerHTML = '<button id="modelChip">chip</button>'
   return h
@@ -101,7 +99,7 @@ const type = (text: string) =>
 afterEach(() => {
   act(() => store._resetForTests())
   cleanup()
-  resetShell()
+  resetTranslator()
   resetSources()
   document.body.innerHTML = ''
 })

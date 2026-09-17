@@ -9,13 +9,20 @@ fetches a second script.
 
 | Path | What it is |
 |---|---|
-| `src/page.html` | the document skeleton, with the two markers `build.py` splices into |
+| `src/page.html` | the document skeleton: `<head>`, the two pre-JavaScript shells, and the two markers `build.py` splices into |
 | `src/styles/page.css` | the stylesheet, inlined at `/*__STYLE__*/` |
-| `src/main.tsx` | the entry: mounts the React islands, then installs the legacy layer |
-| `src/legacy/` | the two pre-React layers (`demo/` fixtures, `live/` gateway), ES modules with an `install()` each, ordered by `src/legacy/index.js` |
-| `src/rpc/`, `src/state/` | the typed gateway seam: generated method contract, WebSocket transport, data sources |
+| `src/main.tsx` | the entry, a straight line: the page root, the listeners, the island roots, the transport, the boot |
+| `src/App.tsx` | the page root: every region at the body, in one portal, in document order |
+| `src/chrome/` | the page's own furniture -- rail, chat header, dock, sheet rack, tooltip, chips |
+| `src/features/<domain>/` | one island per domain: its component, its store, its `source.ts` |
+| `src/rpc/`, `src/state/` | the typed gateway seam and the page's state: generated method contract, WebSocket transport, data sources, the stores every region reads |
 | `src/assets/` | icons served from `dist/assets` |
 | `scripts/` | the gates, plus the generators they check |
+
+Nothing is published on `window`, and nothing outside the bundle reaches in: a
+writer imports what it calls, and the verbs a page-wide writer spends on an
+island are named in `src/islands.ts`. The vocabulary -- region, portal, escape
+order, language store -- is defined in `CONTEXT.md`.
 
 ## Build
 
@@ -29,11 +36,12 @@ python3 build.py       # splice into src/page.html -> dist/index.html, copy asse
 
 They are separate because `build.py` must run where npm may not be on PATH:
 the installer adds npm inside a subshell, and the python step is what the
-release wheel and `make build-ui` call. `build.py` ends by booting the artifact
-in happy-dom twice -- once on its fixtures (`?stub=1`), once in live mode with
-no gateway answering -- and comparing each DOM shape against its golden under
-`scripts/__golden__/`, so a structural regression fails the build rather than
-the browser.
+release wheel and `make build-ui` call. `build.py` is three substitutions and a
+copy -- every line of JavaScript the page runs comes from the one bundle -- and
+it ends by booting the artifact in happy-dom twice: once on its fixtures
+(`?stub=1`), once in live mode with no gateway answering, comparing each DOM
+shape against its golden under `scripts/__golden__/`, so a structural
+regression fails the build rather than the browser.
 
 ## Develop
 
@@ -61,7 +69,6 @@ npm run gen:check                      # src/rpc/generated.ts matches the schema
 node scripts/check-page.mjs            # the artifact: one style, two inline scripts, no markers
 node scripts/check-css.mjs
 node scripts/check-class-namespace.mjs
-node scripts/count-shared-globals.mjs
 ```
 
 The page checks read `dist/`, so build before running them. The two boot

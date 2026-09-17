@@ -1,7 +1,7 @@
 /* The model chip under the composer: what it says, and what clicking it opens.
  *
- * Was two halves of the live layer's settings part (legacy/live/120-settings.js):
- * the label every path that changes the model repaints, and the one click that
+ * Two halves of one element: the label every path that changes the model
+ * repaints, and the one click that
  * raises the picker. Both stay imperative writes on elements src/chrome/Dock.tsx
  * renders -- the chip's text is a model id rather than a phrase from the
  * catalogue, so the component has no value of its own for it, and React diffs

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 
-import { shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import * as store from './store'
 
 import type { Attachment, SlashCmd } from './types'

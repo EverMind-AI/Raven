@@ -1,22 +1,21 @@
 /* Which module page is open, and the only place that opens one.
  *
- * Was showPageBase in legacy/demo/120-capabilities.js, whose seven writes were
- * the whole of the state: "which page is up" was readable only by asking the
- * DOM what carried data-open="true". The writes stay, and stay here: the flyout,
+ * Seven writes used to be the whole of the state: "which page is up" was
+ * readable only by asking the DOM what carried data-open="true". The writes
+ * stay, and stay here: the flyout,
  * the Escape chain and the desk's own stylesheet rule all read the flag off the
  * elements, the order these seven land in relative to the four effects below is
  * the contract this module's gate pins, and src/App.tsx renders each section
  * with the value the page is served with and then never writes it again. The
  * answer is a field here as well, so a caller can ask without a selector.
  *
- * The two layers that used to decorate showPage subscribe here instead
- * (legacy/demo/152-skills.js, 153-plugins.js). Registration order is the order
- * their side effects were visible in, which is what the decorator reduce gave
- * them: every effect below runs first, then each subscriber in turn.
+ * The two tabs that used to decorate this function subscribe here instead
+ * (features/skills/tab.ts, features/plugins/tab.ts). Registration order is the
+ * order their side effects are visible in: every effect below runs first, then
+ * each subscriber in turn.
  */
 
 import { islands } from '../islands'
-import { markNewCurrent } from '../legacy/demo/050-rail.js'
 import * as caps from './caps'
 import * as detail from './detail'
 
@@ -85,7 +84,7 @@ export function show(id: PageId | null): void {
   /* Read by the rail: while a page is up it owns the selected state, so the
      session behind it stops claiming one too. */
   ;(document.querySelector('.app') as HTMLElement).dataset.page = id ? 'on' : 'off'
-  markNewCurrent()
+  islands.rail.markNew()
   /* caps and memory both use the shared detail drawer */
   if (id !== 'capsPage' && id !== 'memPage') detail.close()
   /* Same rule for the overlays a single page owns: the channel drawer and the

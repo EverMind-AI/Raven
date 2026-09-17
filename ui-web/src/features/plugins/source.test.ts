@@ -9,11 +9,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { mkMcpRow, mkPluginRow, mkSkillRow, mkToolRow, pmNormEntry } from './source'
 import { islands } from '../../islands'
-import { setShell } from '../../shell/bridge'
 
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as pageStore from '../../state/page'
+import * as confirmStore from '../../state/confirm'
 import type { DetailEntry } from './types'
 import type { ExtMcpRow, ExtPluginRow, ExtSkillRow, ExtToolRow } from './source'
-import type { Shell } from '../../shell/bridge'
 
 /* The contract's own row shapes, filled in for the fields a case is not about
    -- every builder here reads a handful of them. */
@@ -26,15 +27,12 @@ const plugin = (over: Partial<ExtPluginRow>): ExtPluginRow =>
 const mcp = (over: Partial<ExtMcpRow>): ExtMcpRow =>
   ({ name: 'a', transport: 'stdio', enabled: true, state: 'connected', tool_count: 0, ...over }) as ExtMcpRow
 
-const shell = {
-  T: (key: string, vars?: Record<string, string | number>, fallback?: string) =>
-    (vars ? `${key}(${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')})` : (fallback ?? key)),
-  confirmAsk: () => {},
-  showPage: () => {},
-} as unknown as Shell
+setTranslator((key: string, vars?: Record<string, unknown> | null, fallback?: string | null) =>
+(vars ? `${key}(${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')})` : (fallback ?? key)))
+vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
 
 beforeEach(() => {
-  setShell(shell)
 })
 
 describe('one tool row', () => {
@@ -84,7 +82,7 @@ describe('one skill row', () => {
      so is what the setter does. */
   it('refuses to be switched off, and says why', () => {
     const toast = vi.fn()
-    setShell({ ...shell, T: (key: string) => key } as unknown as Shell)
+    setTranslator((key: string) => key)
     const row = mkSkillRow(skill({ name: 'review', source: 'local' })) as unknown as { state: string }
     expect(row.state).toBe('on')
     row.state = 'off'

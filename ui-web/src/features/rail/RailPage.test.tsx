@@ -13,9 +13,10 @@ import {
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
-import { setShell, shell } from '../../shell/bridge'
 
-import type { Shell } from '../../shell/bridge'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
 import type { MenuItem } from '../../shell/menu'
 import type { ToastAction } from '../../shell/toast'
 import type { RailSnapshot, RailSource, SessRow } from './types'
@@ -44,21 +45,18 @@ interface Harness {
   toasts: Array<{ text: string; action?: ToastAction }>
 }
 
-/* The island runs against the same two seams production wires: a fake shell
-   handed in through setShell (T returns its key, so tests assert catalogue keys)
-   and a snapshot source on sources.sessions. */
+/* The island runs against the same two seams production wires: a stand-in
+   translator on setTranslator (it returns its key, so tests assert catalogue
+   keys) and a snapshot source on sources.sessions. */
 function install(over: Partial<RailSnapshot> = {}): Harness {
   const state: RailSnapshot = { rows: [row()], cur: 'a', busy: false, ...over }
   const calls: Array<[string, unknown]> = []
   const toasts: Array<{ text: string; action?: ToastAction }> = []
   toastWriter.items = toasts
-  const fakeShell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: id => calls.push(['showPage', id]),
-    navState: () => ({ pages: [], btnOf: () => undefined })
-  }
-  setShell(fakeShell)
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
+  vi.spyOn(pageStore, 'show').mockImplementation(id => calls.push(['showPage', id]))
+  vi.spyOn(pageStore, 'navState').mockImplementation(() => ({ pages: [], btnOf: () => undefined }))
   sessionReset()
   setCurrent(state.cur)
   onChange((id) => {
@@ -97,10 +95,9 @@ const BTN_OF: Record<string, string> = {
 }
 
 function navUp(open: string): void {
-  shell().navState = () => ({
+  vi.spyOn(pageStore, 'navState').mockReturnValue({
     pages: PAGES,
-    btnOf: p => BTN_OF[p],
-    morePages: ['xaPage', 'connPage', 'cronPage']
+    btnOf: (p: string) => BTN_OF[p]
   })
   document.querySelector<HTMLElement>('.app')!.dataset.page = 'on'
   PAGES.forEach(p => {

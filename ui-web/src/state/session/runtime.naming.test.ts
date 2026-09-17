@@ -4,7 +4,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { fakeGateway, loadPart, looseQuery, moduleText } from '../../../scripts/legacy-part.mjs'
+import { fakeGateway, loadPart, looseQuery, moduleText } from '../../../scripts/module-harness.mjs'
 
 type Runtime = typeof import('./runtime')
 
@@ -24,11 +24,20 @@ async function harness({ rows, current, titleCall }: {
      the first import did not reach is loaded afterwards without them. */
   await loadPart(() => import('./runtime'), {
     fakes: {
+      'src/features/rail/store': {
+        draw: () => draws.push('draw'),
+      },
+      'src/state/session/rows': {
+        sess: (id: string) => rows.find((r) => r.id === id),
+      },
+      'src/i18n/t': {
+        T: (key: string) => key,
+      },
+      'src/shell/dom': {
+        $: looseQuery(),
+      },
       'src/shell/session': { current: () => current },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
-      'demo/010-kernel.js': { $: looseQuery(), T: (key: string) => key },
-      'demo/040-state.js': { sess: (id: string) => rows.find((r) => r.id === id) },
-      'demo/050-rail.js': { sessionDraw: () => draws.push('draw') },
     },
   })
   const runtime = (await import('./runtime')) as Runtime

@@ -7,9 +7,11 @@ import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
-import { setShell } from '../../shell/bridge'
 
-import type { Shell } from '../../shell/bridge'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import { installWsPanel } from '../../test/wsPanel'
+import * as pageStore from '../../state/page'
 import type { BrowserSource, ChromiumSource, LinksSource, UrlRow } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -17,8 +19,8 @@ import type { BrowserSource, ChromiumSource, LinksSource, UrlRow } from './types
 
 const shellCalls: Array<[string, unknown]> = []
 
-/* The island runs against the same two seams production wires up: a fake
-   shell handed in through setShell (T returns its key, so tests assert catalogue
+/* The island runs against the same two seams production wires up: a stand-in
+   translator on setTranslator (it returns its key, so tests assert catalogue
    keys, not translations) and a source on sources.browser. */
 function wire(source: BrowserSource, lang = 'en'): void {
   shellCalls.length = 0
@@ -27,14 +29,15 @@ function wire(source: BrowserSource, lang = 'en'): void {
     configurable: true,
     value: { writeText: (text: string) => { shellCalls.push(['copy', text]); return Promise.resolve() } },
   })
-  const fakeShell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: () => {},
-    showWorkspace: (tab) => shellCalls.push(['showWorkspace', tab]),
-    wsShows: () => true,
-  }
-  setShell(fakeShell)
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
+  /* The browser view, standing open: the island only reads frames and tabs
+     while its own view is the one on screen. */
+  installWsPanel({
+    view: () => ({ tab: 'browser', open: true, picked: true }),
+    show: (tab) => { shellCalls.push(['showWorkspace', tab]) },
+  })
   setSources({ browser: source })
   document.body.innerHTML = '<div class="ws-body" id="wsBody"></div>'
 }

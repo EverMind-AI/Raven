@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { loadPart, looseQuery, moduleText } from '../../../scripts/legacy-part.mjs'
+import { loadPart, looseQuery, moduleText } from '../../../scripts/module-harness.mjs'
 
 type Runtime = typeof import('./runtime')
 
@@ -11,30 +11,33 @@ type Runtime = typeof import('./runtime')
    two numbers it returns, so both have to be observable and different. */
 async function turnPart(
   stamps: Record<string, unknown>,
-  stubs: { state?: Record<string, unknown>; transcript?: Record<string, unknown> } = {},
+  stubs: { transcript?: Record<string, unknown> } = {},
 ): Promise<Runtime> {
   /* The module under test is what the fakes are installed around: a module
      the first import did not reach is loaded afterwards without them. */
   await loadPart(() => import('./runtime'), {
     fakes: {
+      'src/features/rail/store': { draw: () => {} },
+      'src/state/session/rows': { sess: () => null },
+      'src/features/composer/mount': { queueShift: () => undefined, turn: { dispatch: () => {} } },
+        drawMeter: () => {},
+        goPaint: () => {},
+      'src/i18n/t': { T: (k: string) => k },
+      'src/shell/duration': { formatDuration: (ms: number) => `${ms}ms` },
+      'src/shell/dom': { $: looseQuery() },
       'src/shell/session': { current: () => 's1' },
       'src/shell/ctxchip': { set: () => {} },
       'src/shell/notifications': { show: () => {} },
-      'demo/010-kernel.js': { $: looseQuery(), dur: (ms: number) => `${ms}ms`, T: (k: string) => k },
-      'demo/040-state.js': {
-        down: () => {},
-        queueShift: () => undefined,
-        sess: () => null,
-        turn: { dispatch: () => {} },
-        ...stubs.state,
-      },
-      'demo/050-rail.js': { sessionDraw: () => {} },
-      'demo/070-transcript.js': { killStatus: () => {} },
-      'demo/090-composer.js': { drawMeter: () => {}, goState: () => {} },
       'src/state/session/registry': { touch: () => {} },
     },
     islands: {
-      transcript: { nudge: () => {}, stopStream: () => {}, ...stubs.transcript },
+      transcript: {
+        nudge: () => {},
+        stopStream: () => {},
+        ...stubs.transcript,
+        down: () => {},
+        killStatus: () => {},
+      },
       workspace: { currentTurn: () => 1 },
     },
   })

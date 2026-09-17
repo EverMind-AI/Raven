@@ -1,5 +1,6 @@
 import * as dagNodes from '../dag/nodes'
-import { ds, shell, t, verb } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
 import { formatDuration } from '../../shell/duration'
 import { md } from '../../shell/prose'
 import * as deliveries from '../workspace/deliveries'
@@ -11,7 +12,8 @@ import type {
   DeliveredData, FoldData, HistoryMessage, Hunk, Lane, NoteData, NoteHandle, QaData, Seg,
   SpawnListRow, StatusData, StepData, StepHandle, SubagentStatusLike, TranscriptSource,
 } from './types'
-import type { Shell } from '../../shell/bridge'
+import { I18N } from '../../i18n/t'
+import { panel } from '../../state/wsPanel'
 
 /* Plain external store. The legacy layers drive the transcript imperatively
  * (the replay, the live turn machine, the history reader all push segments),
@@ -556,8 +558,6 @@ export function answerProgress(lane: Lane, seg: AnswerData, shown: number | null
 }
 
 /* ── steps and calls ───────────────────────────────────────────────────── */
-
-const bridge = (): Shell => shell()
 
 function hunkFor(name: string, a: Record<string, unknown>): Hunk | null {
   if (name === 'edit_file' && typeof a.old_text === 'string' && typeof a.new_text === 'string') {
@@ -1862,7 +1862,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
    message; the reader gets chips instead. Parsed against both language
    variants, since history may have been written under the other one. */
 export function askText(lane: Lane, text: string, when?: string | null): void {
-  const notes = bridge().attNotes ? bridge().attNotes!() : []
+  const notes = Object.values((I18N.ui['gui.att.note'] ?? {}) as Record<string, string>)
   const s = String(text)
   for (const noteWord of notes) {
     if (!noteWord) continue
@@ -2124,7 +2124,7 @@ export function openDagNode(runId: string, nodeId: string, summary?: string | nu
 export function openSpawn(agent: string, label: string): void {
   const src = source()
   if (src.openSpawn) { src.openSpawn(agent, label); return }
-  shell().showWorkspace?.('agents')
+  panel().show('agents')
 }
 
 /* Test seam. */

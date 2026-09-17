@@ -8,9 +8,10 @@ import * as store from './store'
 import { domSnapshot } from '../../test/domSnapshot'
 import * as detail from '../../state/detail'
 import { resetSources, setSources, sources } from '../../state/sources'
-import { setShell } from '../../shell/bridge'
 
-import type { Shell } from '../../shell/bridge'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
 import type { XaActArgs, XaRow, XaSource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -43,8 +44,8 @@ function row(over: Partial<XaRow> = {}): XaRow {
   }
 }
 
-/* The island runs against the same two seams production wires: a fake
-   shell handed in through setShell (T returns its key, so tests assert catalogue
+/* The island runs against the same two seams production wires: a stand-in
+   translator on setTranslator (it returns its key, so tests assert catalogue
    keys, not translations) and a fixture source on sources.xa. */
 function install(rows: XaRow[], over: Partial<XaSource> = {}) {
   const acts: Array<[string, string, XaActArgs]> = []
@@ -69,17 +70,12 @@ function install(rows: XaRow[], over: Partial<XaSource> = {}) {
   const toasts: string[] = []
   toastWriter.items = toasts
   const confirms: string[] = []
-  const fakeShell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    /* Records as well as confirms: "no dialog stands between the reader and the
-       switch" is a claim only a spy can carry. */
-    confirmAsk: (title, _b, _l, fn) => {
-      confirms.push(title)
-      fn()
-    },
-    showPage: () => {},
-  }
-  setShell(fakeShell)
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((title, _b, _l, fn) => {
+  confirms.push(title)
+  fn()
+  })
   setSources({ xa: source })
   document.body.innerHTML =
     '<section id="xaPage"><div id="xaBody"></div></section>' +

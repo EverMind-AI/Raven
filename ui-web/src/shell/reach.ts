@@ -1,6 +1,6 @@
 /* Localized labels for the fixed execution-reach vocabulary. */
 
-import { t } from './bridge'
+import { t } from '../i18n/t'
 
 const KEYS: Record<string, string> = {
   local: 'gui.reach.local',

@@ -4,9 +4,9 @@
  * rather than replacing it, which is why the rail still marks the row you came
  * from every time it opens or shuts.
  *
- * Three verbs in the legacy chrome (setIsOpen / openSet / closeSet,
- * legacy/demo/120-capabilities.js) did this by reading and writing one
- * attribute on div#setVeil. The attribute is still written -- the container is
+ * Three verbs (setIsOpen / openSet / closeSet) used to do this by reading and
+ * writing one attribute on div#setVeil. The attribute is still written -- the
+ * container is
  * rendered with the flag the page is served with, the CSS shows the
  * dialog from it, and the Escape chain asks this module rather than the
  * element -- but the answer to "is it open" is the flag here, so there is one
@@ -17,7 +17,7 @@
  * on every draw. openSet never touched it.
  */
 
-import { markNewCurrent } from '../legacy/demo/050-rail.js'
+import { markNew as markNewCurrent } from '../features/rail/store'
 
 let up = false
 

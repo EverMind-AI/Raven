@@ -10,7 +10,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { fakeGateway, loadPart, looseQuery } from '../../../scripts/legacy-part.mjs'
+import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
 
 import * as turn from '../../features/composer/turn'
 import type { Sources } from '../sources'
@@ -36,17 +36,27 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
     return import('./pipeline')
   }, {
     fakes: {
-      'src/shell/session': { current: () => 's1', setCurrent: (id: string | null) => log.push(['pointer', id]) },
-      'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
-      'src/shell/toast': { show: (text: string) => log.push(['toast', text]) },
-      'src/shell/ctxchip': { set: () => {} },
-      'src/shell/notifications': { show: () => {} },
-      'src/shell/banner': { draw: () => {} },
-      'src/shell/tier': { load: () => {} },
-      'demo/010-kernel.js': { $: looseQuery(), T: (key: string) => key, dur: (ms: number) => `${ms}ms` },
-      'demo/040-state.js': {
-        claimDraft: () => {},
-        down: () => {},
+      'src/state/caps': { draw: () => {} },
+      'src/state/page': { show: () => {} },
+      'src/state/ws': { setOpen: () => {}, reset: () => {} },
+      'src/state/session/conversation': {
+        ask: (text: string) => log.push(['ask', text]),
+        noteRow: (labelText: string) => log.push(['noteRow', labelText]),
+        pitch: () => {},
+        splitAtts: (t: string) => ({ text: t, atts: [] }),
+        unpitch: () => {},
+      },
+      'src/features/rail/store': { markNew: () => {}, draw: () => log.push(['sessionDraw']) },
+      'src/state/sheetRack': { forget: () => {} },
+      'src/state/session/rows': {
+        sess: (id: string) => rows.find((r) => r.id === id),
+        open: () => {},
+        replace: () => {},
+        rows: () => rows,
+      },
+      'src/features/composer/mount': {
+        drawMeter: () => log.push(['drawMeter']),
+        goPaint: () => log.push(['goState']),
         loadDraft: () => {},
         parkDraft: () => {},
         queueClear: () => { queue.length = 0 },
@@ -54,50 +64,35 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
         queueRestore: (next: string[]) => { queue.length = 0; queue.push(...next) },
         queueShift: () => queue.shift(),
         queueSnapshot: () => [...queue],
-        sess: (id: string) => rows.find((r) => r.id === id),
-        sheetsForget: () => {},
-        stop_: () => log.push(['stop_']),
         /* The island's own phase machine: what `cancellable` and `busy` mean is
            its answer, and the decisions under test read them. */
         turn,
       },
-      'demo/050-rail.js': {
-        markNewCurrent: () => {},
-        sessionDraw: () => log.push(['sessionDraw']),
-        sessionOpen: () => {},
-        sessionReplace: () => {},
-        sessionRows: () => rows,
-      },
-      'demo/060-conversation.js': {
-        ask: (text: string) => log.push(['ask', text]),
-        noteRow: (labelText: string) => log.push(['noteRow', labelText]),
-        pitch: () => {},
-        splitAtts: (t: string) => ({ text: t, atts: [] }),
-        unpitch: () => {},
-      },
-      'demo/070-transcript.js': {
-        killStatus: () => log.push(['killStatus']),
-        newStep: () => ({ seal: () => {}, sayDelta: () => {}, thinkAppend: () => {} }),
-        showStatus: () => {},
-      },
-      'demo/090-composer.js': {
-        drawMeter: () => log.push(['drawMeter']),
-        goState: () => log.push(['goState']),
-        ta: { focus: () => {} },
-      },
-      'demo/100-workspace.js': { setWs: () => {}, wsReset: () => {} },
+      'src/shell/duration': { formatDuration: (ms: number) => `${ms}ms` },
+      'src/i18n/t': { T: (key: string) => key },
+      'src/shell/dom': { $: looseQuery() },
+      'src/shell/session': { current: () => 's1', setCurrent: (id: string | null) => log.push(['pointer', id]) },
+      'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
+      'src/shell/toast': { show: (text: string) => log.push(['toast', text]) },
+      'src/shell/ctxchip': { set: () => {} },
+      'src/shell/notifications': { show: () => {} },
+      'src/shell/banner': { draw: () => {} },
+      'src/shell/tier': { load: () => {} },
       'src/features/workspace/record': { wsOnHistory: () => {} },
-      'demo/120-capabilities.js': { drawCapsBadge: () => {}, showPage: () => {} },
-      'demo/152-skills.js': { drawCaps: () => {} },
       'src/features/rail/source': { rowPreview: (t: string) => t, touchSession: () => {} },
     },
     islands: {
+      composer: { claimDraft: () => {} },
       transcript: {
         nudge: () => {},
         stopStream: () => {},
         finishTurn: () => log.push(['foldTurn']),
         artifacts: () => log.push(['artifacts']),
         turnKept: () => turnKept,
+        down: () => {},
+        killStatus: () => log.push(['killStatus']),
+        step: () => ({ seal: () => {}, sayDelta: () => {}, thinkAppend: () => {} }),
+        status: () => {},
       },
       workspace: { currentTurn: () => 1, loadDeliveries: () => {} },
       rail: { endRename: () => {} },

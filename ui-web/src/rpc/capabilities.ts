@@ -4,8 +4,8 @@
  *
  *   - A METHOD the gateway does not serve AT ALL. It answers -32601 and the
  *     page must stop asking: `gone()` records the name, `has()` reads it back.
- *     That set was private to src/legacy/live/220-browser.js, which is why
- *     three other parts had to import the browser source to ask about
+ *     That set used to be private to the browser's own transport code, which
+ *     is why three other callers had to go through it to ask about
  *     sub-agents.
  *   - A FIELD an older gateway does not carry. Each is one condition at one
  *     site. Every one of them is named below and moved here unchanged, so the
@@ -127,7 +127,7 @@ export const hasStillOnDisk = (answer: unknown): boolean => field(answer, 'still
  * gateway carries the field, and the notice row simply stays hidden -- an
  * older gateway degrades to no notice rather than to a broken one. Sites: the
  * boot check and its unawaited re-check in src/state/boot.ts, and the
- * settings page's own check button in src/legacy/live/120-settings.js.
+ * settings page's own check button (src/features/settings/chrome.ts).
  */
 export const hasUpdateFlag = (version: unknown): boolean => !!field(version, 'update_available')
 

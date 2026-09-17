@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { fakeGateway, loadPart, looseQuery } from '../../../scripts/legacy-part.mjs'
+import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
 
 import type { Sources } from '../sources'
 
@@ -51,21 +51,23 @@ async function harness({
      is loaded afterwards without them. */
   await loadPart(async () => { await import('./runtime'); await import('./stages'); return import('./pipeline') }, {
     fakes: {
-      'src/shell/session': { current: () => current },
-      'src/shell/toast': { show: (text: string) => log.push(['toast', text]) },
-      'src/shell/ctxchip': { set: (used: unknown, max: unknown) => log.push(['setCtx', used, max]) },
-      'src/shell/notifications': { show: (title: string) => log.push(['notify', title]) },
-      'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
-      'demo/010-kernel.js': {
-        $: looseQuery(),
-        T: (key: string, vars?: unknown) => (vars ? `${key}:${JSON.stringify(vars)}` : key),
-        dur: (ms: number) => `${ms}ms`,
+      'src/state/ws': { setOpen: () => {} },
+      'src/state/session/conversation': {
+        ask: (text: string) => log.push(['ask', text]),
+        noteRow: (labelText: string, detail: string, opts?: Record<string, unknown>) =>
+          log.push(['noteRow', labelText, detail, opts ? Object.keys(opts).sort() : null]),
       },
-      'demo/040-state.js': {
-        down: () => log.push(['down']),
-        queueShift: () => undefined,
+      'src/features/rail/store': { draw: () => log.push(['sessionDraw']) },
+      'src/state/sheetRack': { session: () => 'sheet-key' },
+      'src/state/session/rows': {
         sess: (id: string) => rows.find((r) => r.id === id),
-        sheetSession: () => 'sheet-key',
+        replace: () => {},
+        rows: () => rows,
+      },
+      'src/features/composer/mount': {
+        drawMeter: () => log.push(['drawMeter']),
+        goPaint: () => log.push(['goState']),
+        queueShift: () => undefined,
         turn: {
           busy: () => busy,
           phase: () => phase,
@@ -73,24 +75,16 @@ async function harness({
             log.push(['dispatch', event.type, event.cancellable]),
         },
       },
-      'demo/050-rail.js': {
-        sessionDraw: () => log.push(['sessionDraw']),
-        sessionReplace: () => {},
-        sessionRows: () => rows,
+      'src/shell/duration': { formatDuration: (ms: number) => `${ms}ms` },
+      'src/i18n/t': {
+        T: (key: string, vars?: unknown) => (vars ? `${key}:${JSON.stringify(vars)}` : key),
       },
-      'demo/060-conversation.js': {
-        ask: (text: string) => log.push(['ask', text]),
-        noteRow: (labelText: string, detail: string, opts?: Record<string, unknown>) =>
-          log.push(['noteRow', labelText, detail, opts ? Object.keys(opts).sort() : null]),
-      },
-      'demo/070-transcript.js': {
-        dagFlowFeed: (type: string) => log.push(['dagFeed', type]),
-        killStatus: () => log.push(['killStatus']),
-        newStep: step,
-        showStatus: (text: string) => log.push(['showStatus', text]),
-      },
-      'demo/090-composer.js': { drawMeter: () => log.push(['drawMeter']), goState: () => log.push(['goState']) },
-      'demo/100-workspace.js': { setWs: () => {} },
+      'src/shell/dom': { $: looseQuery() },
+      'src/shell/session': { current: () => current },
+      'src/shell/toast': { show: (text: string) => log.push(['toast', text]) },
+      'src/shell/ctxchip': { set: (used: unknown, max: unknown) => log.push(['setCtx', used, max]) },
+      'src/shell/notifications': { show: (title: string) => log.push(['notify', title]) },
+      'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
       'src/features/workspace/record': {
         wsOnTool: (name: string, args: unknown, replay: boolean) => log.push(['wsOnTool', name, args, replay]),
         wsOnToolDone: (...a: unknown[]) => log.push(['wsOnToolDone', ...a]),
@@ -112,6 +106,11 @@ async function harness({
         /* The fold a stop makes asks this first and nothing else does, so it is
            where "softStop ran" is visible from outside. */
         turnKept: () => { log.push(['softStop']); return false },
+        down: () => log.push(['down']),
+        dagFeed: (type: string) => log.push(['dagFeed', type]),
+        killStatus: () => log.push(['killStatus']),
+        step: step,
+        status: (text: string) => log.push(['showStatus', text]),
       },
       workspace: { advanceTurn: () => log.push(['advanceTurn']), currentTurn: () => 3 },
       subagents: {

@@ -2,8 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import * as store from './perm'
-import { resetShell, setShell } from './bridge'
 import { mountPageRoot } from '../test/pageRoot'
+import { resetTranslator, setTranslator } from '../i18n/t'
 
 /* The stored tier is read when the store is reset, so a case that cares about
    it seeds localStorage and then asks for the reset. This was resetModules plus
@@ -18,7 +18,7 @@ async function load(stored?: string | null): Promise<typeof store> {
 }
 
 function wire(): void {
-  setShell({ T: (key) => key, confirmAsk: () => {}, showPage: () => {} })
+  setTranslator((key) => key)
 }
 
 /* The chip and the panel are the page root's now (src/chrome/PermChip.tsx,
@@ -41,7 +41,7 @@ afterEach(() => {
   unmount()
   unmount = () => {}
   store._resetForTests()
-  resetShell()
+  resetTranslator()
   document.body.innerHTML = ''
   localStorage.clear()
 })

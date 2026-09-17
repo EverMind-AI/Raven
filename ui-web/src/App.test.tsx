@@ -14,11 +14,11 @@
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from './App'
-import { T } from './i18n/t'
-import { setShell } from './shell/bridge'
+import { T, setTranslator } from './i18n/t'
+import * as confirmStore from './state/confirm'
 import * as detail from './state/detail'
 import * as lang from './state/lang'
 import * as page from './state/page'
@@ -28,14 +28,11 @@ import { bodySiblings } from './test/domSnapshot'
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-/* Opening a page re-marks the rail, which asks the shell for the page
-   registry; nothing here is about either. */
-setShell({
-  T: (key) => key,
-  confirmAsk: () => {},
-  showPage: () => {},
-  navState: () => ({ pages: [], btnOf: () => undefined }),
-})
+/* Opening a page re-marks the rail, which reads the page registry; nothing
+   here is about either. */
+setTranslator((key) => key)
+vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
+vi.spyOn(page, 'navState').mockImplementation(() => ({ pages: [], btnOf: () => undefined }))
 
 /* What page.html still carries: the two pre-JavaScript shells and the one empty
    host another root mounts into. The root renders everything else, appended

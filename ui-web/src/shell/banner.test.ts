@@ -1,17 +1,31 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { draw, setFault } from './banner'
+import { resetTranslator, setTranslator } from '../i18n/t'
+import * as nav from '../features/plugins/nav'
+import { islands } from '../islands'
+import * as confirmStore from '../state/confirm'
+import * as pageStore from '../state/page'
 import { resetSources, setSources } from '../state/sources'
-import { resetShell, setShell } from './bridge'
 import { mountPageRoot } from '../test/pageRoot'
 
 import type { BannerSource } from './banner'
-import type { Shell } from './bridge'
 
 interface Wired {
   opened: number
 }
+
+/* The notice's one action: the capabilities page on its plugin tab, then that
+   island's market card. Counted rather than run -- this file answers for the
+   strip, not for the page behind it. */
+const wired: Wired = { opened: 0 }
+vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
+vi.spyOn(nav, 'openPlugins').mockResolvedValue(undefined)
+vi.spyOn(islands.plugins, 'openMarket').mockImplementation((id) => {
+  if (id === 'websearch') wired.opened += 1
+})
 
 /* The container page.html carries. #bannerHost itself is the page root's now
    (src/chrome/ChatTop.tsx renders the scroller's three grounds), so the bench
@@ -21,16 +35,9 @@ const MARKUP = '<div class="app"><div class="main"><div class="split"><div class
 let unmount = (): void => {}
 
 function wire(needsWebsearch = false, withSource = true): Wired {
-  const w: Wired = { opened: 0 }
-  const shell: Shell = {
-    T: (key) => key,
-    confirmAsk: () => {},
-    showPage: () => {},
-    openWebsearch: () => {
-      w.opened += 1
-    },
-  }
-  setShell(shell)
+  const w = wired
+  w.opened = 0
+  setTranslator((key) => key)
   const source: BannerSource = { websearchNeeds: () => needsWebsearch }
   setSources(withSource ? { banner: source } : {})
   unmount()
@@ -48,7 +55,7 @@ afterEach(() => {
      source installed even after a case that deliberately ran without one. */
   setSources({ banner: { websearchNeeds: () => false } satisfies BannerSource })
   setFault(null)
-  resetShell()
+  resetTranslator()
   resetSources()
   unmount()
   unmount = () => {}

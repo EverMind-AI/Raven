@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import { shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { text as reachText } from '../../shell/reach'
 import { CardSkeleton } from '../../shell/skeleton'
 import * as detail from '../../state/detail'
@@ -10,6 +10,7 @@ import * as store from './store'
 import type { SkillsState } from './store'
 import type { HubItem } from './types'
 import type { JSX } from 'react'
+import { useInTask } from '../composer/useInTask'
 
 /* The skill tab mirrors the plugin tab exactly: the market IS the page,
    what you already have lives one level in (the installed button top-right
@@ -302,7 +303,7 @@ function SkillInstalled(): JSX.Element {
                     className="mini gold"
                     onClick={(e) => {
                       e.stopPropagation()
-                      shell().useInTask?.('gui.hub.use_prompt', c.name)
+                      useInTask('gui.hub.use_prompt', c.name)
                     }}
                   >
                     {t('gui.hub.use')}
@@ -363,7 +364,7 @@ function SkillDetail({ s, drawer }: { s: SkillsState; drawer: NonNullable<Skills
         {busy ? (
           <span className="pnote">{t('gui.hub.working')}</span>
         ) : installed ? (
-          <button className="mini gold" onClick={() => shell().useInTask?.('gui.hub.use_prompt', name)}>
+          <button className="mini gold" onClick={() => useInTask('gui.hub.use_prompt', name)}>
             {t('gui.hub.use')}
           </button>
         ) : (

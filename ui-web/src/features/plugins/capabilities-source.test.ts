@@ -5,8 +5,11 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { fakeGateway, loadPart, looseQuery } from '../../../scripts/legacy-part.mjs'
+import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
 
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as pageStore from '../../state/page'
+import * as confirmStore from '../../state/confirm'
 import type { CapabilitiesSource } from '../../state/sources'
 
 /* Narrower than the real PluginsSource: the two verbs the capabilities page
@@ -46,17 +49,18 @@ async function opener(source: CapabilitiesSource): Promise<{
   const toast = vi.fn()
   const skeleton = document.createElement('div')
   skeleton.id = 'skeleton'
-  const part = await loadPart(() => import('../../legacy/demo/120-capabilities.js'), {
+  const part = await loadPart(() => import('./nav'), {
     fakes: {
-      'demo/010-kernel.js': { $: looseQuery() },
       'src/state/page': { show: (page: string | null) => calls.push(`page:${page}`) },
-      'src/state/caps': { draw: () => calls.push('draw') },
+      'src/state/caps': {
+        extSet: (tab: string) => calls.push(`tab:${tab}`),
+        draw: () => calls.push('draw'),
+      },
       'src/shell/toast': { show: toast },
     },
     islands: { skills: { skeleton } },
   })
   ;(await seam()).capabilities = source
-  part.decorateExtSet(() => (tab: string) => calls.push(`tab:${tab}`))
   return { calls, open: part.openCaps, toast }
 }
 
@@ -153,15 +157,12 @@ describe('the live extension source', () => {
       },
       islands: { plugins: { event: vi.fn() } },
     })
-    /* The row builders word their own labels, so the source needs the shell's
-       catalogue the way it has it inside the page. Installed on the instance
-       loadPart's reset just produced. */
-    const bridge = await import('../../shell/bridge')
-    bridge.setShell({
-      T: (key: string, _vars?: Record<string, string | number>, fallback?: string) => fallback ?? key,
-      confirmAsk: () => {},
-      showPage: () => {},
-    })
+    /* The row builders word their own labels, so the source needs a lookup the
+       way it has one inside the page. Installed on the instance loadPart's reset
+       just produced. */
+    setTranslator((key: string, _vars?: Record<string, unknown> | null, fallback?: string | null) => fallback ?? key)
+    vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+    vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
     const call = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === 'settings.get') {
         return { settings: { tools: { disabledTools: [] }, plugins: { disabled: [] } } }

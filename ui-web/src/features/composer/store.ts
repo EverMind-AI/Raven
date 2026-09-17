@@ -1,4 +1,5 @@
-import { ds, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
 import * as attachmentCache from '../../shell/attachment-cache'
 import { formatDuration } from '../../shell/duration'
 import { SEND, SEND_PX, SEND_STROKE } from '../../shell/ico'

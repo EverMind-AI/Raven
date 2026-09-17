@@ -19,8 +19,8 @@ import type { ToolRow } from '../settings/types'
 import type { InstalledSkill, SkillsSource } from '../skills/types'
 
 import { islands } from '../../islands'
-import { LANG } from '../../legacy/demo/010-kernel.js'
-import { t } from '../../shell/bridge'
+import { code as LANG } from '../../i18n/t'
+import { t } from '../../i18n/t'
 import { show as toast } from '../../shell/toast'
 import { gateway } from '../../state/gateway'
 

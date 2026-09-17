@@ -10,9 +10,10 @@ import * as workspace from './store'
 
 import { setCurrent } from '../../shell/session'
 import { resetSources, setSources, sources } from '../../state/sources'
-import { resetShell, setShell } from '../../shell/bridge'
 
-import type { Shell } from '../../shell/bridge'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
 import type { InstanceRow } from '../subagents/types'
 import type { WorkspaceSource } from './types'
 
@@ -22,18 +23,14 @@ import type { WorkspaceSource } from './types'
 let agentRows: InstanceRow[] = []
 
 function wire(): void {
-  const fakeShell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: () => {},
-    workspaceSetOpen: () => {},
-  }
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   const source: WorkspaceSource = {
     shortPath: (p) => p,
     hostPlatform: () => 'mac',
     canBrowse: true,
   }
-  setShell(fakeShell)
   setSources({ workspace: source, prose: { pathOf: () => null, linkTargetOf: () => null } })
   /* The viewer reads /file for a text kind; a pending promise keeps it on the
      spinner rather than letting happy-dom dial a socket. */
@@ -54,7 +51,7 @@ afterEach(() => {
     desk._resetForTests()
     deliveries.restore([])
   })
-  resetShell()
+  resetTranslator()
   resetSources()
   vi.unstubAllGlobals()
 })

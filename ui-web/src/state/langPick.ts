@@ -1,9 +1,8 @@
 /* Picking the page's language: the persist behind a pick, and the two reads
  * that apply one at boot.
  *
- * Was the language half of the live layer's settings part
- * (legacy/live/120-settings.js). state/lang.ts moves the language and the
- * catalogue together and tells everything that draws itself to draw again; what
+ * state/lang.ts moves the language and the catalogue together and tells
+ * everything that draws itself to draw again; what
  * is here is the half that talks to the gateway -- one key, both front ends,
  * because `config.language` also drives the TUI (which polls it) and the
  * language the agent replies in.

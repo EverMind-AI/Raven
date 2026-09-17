@@ -30,7 +30,7 @@
 import { resume as dagResume, run as dagOpen, saved as dagSaved } from '../features/dag/mount'
 import * as agents from '../features/subagents/store'
 import * as desk from '../features/workspace/deskStore'
-import { ds } from './bridge'
+import { ds } from '../state/sources'
 import { only } from './persist'
 import { current, onChange } from './session'
 

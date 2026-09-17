@@ -6,15 +6,12 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import * as store from './store'
 import { resetSources, setSources } from '../../state/sources'
-import { setShell } from '../../shell/bridge'
+import { resetTranslator, setTranslator } from '../../i18n/t'
 
-import type { Shell } from '../../shell/bridge'
 
 beforeEach(() => {
   resetSources()
-  setShell({
-    T: (key: string) => key,
-  } as unknown as Shell)
+  setTranslator((key: string) => key)
   setSources({
     transcript: { clean: (t: string) => t, okOf: () => true },
   })

@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { fakeGateway, loadPart, looseQuery } from '../../../scripts/legacy-part.mjs'
+import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
 
 import * as turn from '../../features/composer/turn'
 import type { SessRow } from '../../features/rail/types'
@@ -32,6 +32,49 @@ async function harness({ rows = [] as Row[] } = {}) {
     return import('../install')
   }, {
     fakes: {
+      'src/state/caps': { draw: () => {} },
+      'src/state/page': { show: () => {} },
+      'src/state/ws': {
+        draw: () => {},
+        setOpen: () => {},
+        reset: () => {},
+        restore: () => {},
+        view: () => ({ tab: 'diff', picked: false }),
+        open: false,
+      },
+      'src/state/session/conversation': {
+        ask: (text: string) => log.push(['ask', text]),
+        noteRow: () => {},
+        pitch: () => {},
+        splitAtts: (t: string) => ({ text: t, atts: [] }),
+        unpitch: () => {},
+      },
+      'src/features/rail/store': { markNew: () => {}, draw: () => {} },
+      'src/state/session/rows': {
+        sess: (id: string) => rows.find((r) => r.id === id),
+        open: () => {},
+        replace: () => {},
+        rows: () => rows,
+      },
+      'src/features/composer/mount': {
+        drawMeter: () => {},
+        goPaint: () => {},
+        loadDraft: () => {},
+        parkDraft: () => {},
+        queueClear: () => {},
+        queueRestore: () => {},
+        queueShift: () => undefined,
+        queueSnapshot: () => [],
+        /* The island's own phase machine: "is a turn running" is its answer,
+           and the residency rule reads it. */
+        turn,
+      },
+      'src/features/composer/approve': {
+        openApproval: (_o: unknown, _answer: unknown, owner: string | null) => log.push(['sheet', owner]),
+      },
+      'src/shell/duration': { formatDuration: (ms: number) => `${ms}ms` },
+      'src/i18n/t': { T: (key: string) => key },
+      'src/shell/dom': { $: looseQuery() },
       'src/shell/session': {
         current: () => current,
         setCurrent: (id: string | null) => { current = id },
@@ -42,61 +85,25 @@ async function harness({ rows = [] as Row[] } = {}) {
       'src/shell/notifications': { show: () => {} },
       'src/shell/banner': { draw: () => {} },
       'src/shell/tier': { load: () => {} },
-      'demo/010-kernel.js': { $: looseQuery(), T: (key: string) => key, dur: (ms: number) => `${ms}ms` },
-      'demo/040-state.js': {
-        approvalSheet: (_o: unknown, _answer: unknown, owner: string | null) => log.push(['sheet', owner]),
-        claimDraft: () => {},
-        down: () => {},
-        loadDraft: () => {},
-        parkDraft: () => {},
-        queueClear: () => {},
-        queueRestore: () => {},
-        queueShift: () => undefined,
-        queueSnapshot: () => [],
-        sess: (id: string) => rows.find((r) => r.id === id),
-        stop_: () => {},
-        /* The island's own phase machine: "is a turn running" is its answer,
-           and the residency rule reads it. */
-        turn,
-      },
-      'demo/050-rail.js': {
-        markNewCurrent: () => {},
-        sessionDraw: () => {},
-        sessionOpen: () => {},
-        sessionReplace: () => {},
-        sessionRows: () => rows,
-      },
-      'demo/060-conversation.js': {
-        ask: (text: string) => log.push(['ask', text]),
-        noteRow: () => {},
-        pitch: () => {},
-        splitAtts: (t: string) => ({ text: t, atts: [] }),
-        unpitch: () => {},
-      },
-      'demo/070-transcript.js': {
-        killStatus: () => {},
-        newStep: () => ({
-          seal: () => {},
-          thinkAppend: () => {},
-          sayDelta: (text: string) => log.push(['sayDelta', text]),
-          tool: () => ({ done: () => {} }),
-        }),
-        showStatus: () => {},
-      },
-      'demo/090-composer.js': { drawMeter: () => {}, goState: () => {} },
-      'demo/100-workspace.js': {
-        drawWs: () => {}, setWs: () => {}, wsReset: () => {},
-        wsRestore: () => {}, wsView: () => ({ tab: 'diff', picked: false }), wsOpen: false,
-      },
-      'demo/120-capabilities.js': { drawCapsBadge: () => {}, showPage: () => {} },
-      'demo/152-skills.js': { drawCaps: () => {} },
       'src/features/workspace/record': { wsOnHistory: () => {} },
       'src/features/rail/source': { rowPreview: (t: string) => t, touchSession: () => {} },
       'src/features/transcript/source': { renderHistory: () => log.push(['history']) },
     },
     islands: {
-      composer: { liveAnchor: () => 0, setLiveAnchor: () => {} },
-      transcript: { nudge: () => {}, stopStream: () => {} },
+      composer: { liveAnchor: () => 0, setLiveAnchor: () => {}, claimDraft: () => {} },
+      transcript: {
+        nudge: () => {},
+        stopStream: () => {},
+        down: () => {},
+        killStatus: () => {},
+        step: () => ({
+          seal: () => {},
+          thinkAppend: () => {},
+          sayDelta: (text: string) => log.push(['sayDelta', text]),
+          tool: () => ({ done: () => {} }),
+        }),
+        status: () => {},
+      },
       workspace: {
         advanceTurn: () => {}, currentTurn: () => 1, loadDeliveries: () => {},
         snapshot: () => ({}), restore: () => {},

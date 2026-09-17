@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
-import { shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import * as page from '../../state/page'
 import { show as toast } from '../../shell/toast'
 import { current, setCurrent } from '../../shell/session'
 import { open as openCron } from '../cron/store'
@@ -27,7 +28,6 @@ function archiveSession(s: SessRow): void {
 }
 
 function sessItems(s: SessRow): Array<MenuItem | '-'> {
-  const sh = shell()
   return [
     {
       label: t('gui.sess.rename'),
@@ -88,8 +88,7 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
     : undefined
   const go = (): void => {
     if (editing) return
-    const sh = shell()
-    sh.showPage(null)
+    page.show(null)
     const now = current()
     if (s.id !== now) {
       setCurrent(s.id)

@@ -7,9 +7,12 @@ import * as store from './store'
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
-import { setShell } from '../../shell/bridge'
 
-import type { Shell } from '../../shell/bridge'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import * as useInTaskModule from '../../features/composer/useInTask'
+import * as capsStore from '../../state/caps'
 import type { DetailEntry, InstalledRow, MarketItem, PluginsSource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -53,9 +56,9 @@ function entryOf(it: MarketItem, over: Partial<DetailEntry> = {}): DetailEntry {
   }
 }
 
-/* The island runs against the same two seams production wires: a fake shell
-   handed in through setShell (T returns its key, so tests assert catalogue keys)
-   and a fixture source on sources.plugins. */
+/* The island runs against the same two seams production wires: a stand-in
+   translator on setTranslator (it returns its key, so tests assert catalogue
+   keys) and a fixture source on sources.plugins. */
 function install(
   items: MarketItem[],
   rowsArr: InstalledRow[] = [],
@@ -92,18 +95,11 @@ function install(
   }
   const shellCalls: Array<[string, unknown]> = []
   toastWriter.calls = shellCalls
-  const fakeShell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: (_t, _b, _l, fn) => fn(),
-    showPage: (id) => shellCalls.push(['showPage', id]),
-    useInTask: (key, name) => shellCalls.push(['useInTask', `${key}:${name}`]),
-    /* Recorded rather than ignored: the call is this island's contract with
-       the legacy caps-page chrome, which owns the tab title, the hero and the
-       installed button. It used to be a no-op here, so all five call sites
-       could be cut with the suite green. */
-    plugRedraw: () => shellCalls.push(['plugRedraw', null]),
-  }
-  setShell(fakeShell)
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
+  vi.spyOn(pageStore, 'show').mockImplementation((id) => shellCalls.push(['showPage', id]))
+  vi.spyOn(useInTaskModule, 'useInTask').mockImplementation((key, name) => shellCalls.push(['useInTask', `${key}:${name}`]))
+  vi.spyOn(capsStore, 'drawIfOpenOnPlugins').mockImplementation(() => shellCalls.push(['plugRedraw', null]))
   setSources({ plugins: source })
   document.body.innerHTML =
     '<section class="page" id="capsPage" data-open="true"><div id="capsBody"></div></section>' +

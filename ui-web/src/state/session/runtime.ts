@@ -30,12 +30,14 @@ import { load as loadTier } from '../../shell/tier'
 import { show as toast } from '../../shell/toast'
 import { gateway } from '../../state/gateway'
 import { sources } from '../sources'
-import { $, T, dur } from '../../legacy/demo/010-kernel.js'
-import { claimDraft, confirmAsk, down, queuePush, queueShift, sess, stop_, turn } from '../../legacy/demo/040-state.js'
-import { sessionDraw, sessionRows } from '../../legacy/demo/050-rail.js'
-import { ask, noteRow, noteSay, pitch, splitAtts } from '../../legacy/demo/060-conversation.js'
-import { killStatus, newStep } from '../../legacy/demo/070-transcript.js'
-import { drawMeter, goState } from '../../legacy/demo/090-composer.js'
+import { T } from '../../i18n/t'
+import { $ } from '../../shell/dom'
+import { drawMeter, goPaint as goState, queuePush, queueShift, turn } from '../../features/composer/mount'
+import { draw as sessionDraw } from '../../features/rail/store'
+import { formatDuration as dur } from '../../shell/duration'
+import { ask as confirmAsk } from '../confirm'
+import { ask, noteRow, noteSay, pitch, splitAtts } from './conversation'
+import { rows as sessionRows, sess } from './rows'
 import { reduce } from '../../features/composer/turn'
 import { generation } from './generation'
 import { ensure, get, isActiveRuntime, isDraft as registryIsDraft, mint, subscribe, viewRuntime } from './registry'
@@ -62,8 +64,8 @@ export class SessionRuntime {
      composer island's, which is what `goState` and the stop button read. */
   phase: TurnSnapshot = IDLE
 
-  st: ReturnType<typeof newStep> | null = null
-  steps: Array<ReturnType<typeof newStep>> = []
+  st: ReturnType<typeof islands.transcript.step> | null = null
+  steps: Array<ReturnType<typeof islands.transcript.step>> = []
   say = ''
   open = new Map<string, OpenCall>()
   sawEpisode = false
@@ -137,7 +139,7 @@ export function reset(rt: SessionRuntime = viewRuntime()): void {
 }
 
 export function ensureStep(rt: SessionRuntime = viewRuntime()) {
-  if (!rt.st) { rt.st = newStep(); rt.steps.push(rt.st) }
+  if (!rt.st) { rt.st = islands.transcript.step(); rt.steps.push(rt.st) }
   return rt.st
 }
 
@@ -173,7 +175,7 @@ export const fmtTok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(
 export function finishTurn(payload: unknown, rt: SessionRuntime = viewRuntime()): void {
   const p = (payload || {}) as { usage?: Record<string, number>; duration_ms?: number }
   const usage = p.usage || {}
-  killStatus()
+  islands.transcript.killStatus()
   /* The island promotes the streamed prose into the answer block where the
      prose stood, merges the silent stretches and folds the turn. */
   islands.transcript.finishTurn(rt.st, rt.steps, duration(p.duration_ms, rt))
@@ -192,7 +194,7 @@ export function finishTurn(payload: unknown, rt: SessionRuntime = viewRuntime())
   // background; ntfPush itself checks focus and the user's preference.
   ntfPush(T('gui.set.ntf.done'), (s && s.title) || rt.say.trim().slice(0, 80))
   reset(rt)
-  drawMeter(); goState(); sessionDraw(); down()
+  drawMeter(); goState(); sessionDraw(); islands.transcript.down()
   const nx = queueShift()
   if (nx !== undefined) send(nx)
 }
@@ -224,7 +226,7 @@ export function send(text: string): void {
   drawMeter(); goState(); sessionDraw()
   const failed = (e: unknown) => {
     const err = e as { message?: string }
-    killStatus()
+    islands.transcript.killStatus()
     turn.dispatch({ type: 'idle' })
     noteRow(T('gui.err.send'), err.message === 'not connected' ? T('gui.err.disconnected') : (err.message || String(e)),
       { retry: () => send(text) })
@@ -314,9 +316,8 @@ export function stop(): void {
    pressed stop and watched the half-written answer disappear behind
    "done", under a note saying the output was kept. */
 export function softStop(keepCancelling?: boolean, rt: SessionRuntime = viewRuntime()): void {
-  killStatus()
+  islands.transcript.killStatus()
   islands.transcript.finishTurn(rt.st, rt.steps, duration(undefined, rt))
-  stop_()
   if (!keepCancelling) turn.dispatch({ type: 'idle' })
   /* Only promise the output was kept when there is output above to keep. */
   noteRow(T(islands.transcript.turnKept() ? 'gui.halted' : 'gui.halted_bare'), '',
@@ -410,7 +411,7 @@ export async function promote(preview?: string, atPointer?: (id: string) => void
   if (atPointer) atPointer(s.id)
   // The composer was owned by 'new' until this point; keep later keystrokes
   // filed under the session that just came into being.
-  claimDraft(sessionCurrent())
+  islands.composer.claimDraft(sessionCurrent())
   await applyStagedModel(draftRt, s.id, gen)
   await applyStagedTier(draftRt, s.id)
   await applyStagedPerm(draftRt, s.id)
@@ -657,7 +658,7 @@ export async function compressNow(): Promise<void> {
   }
   /* The tail this scrolls is the open conversation's. */
   if (key !== sessionCurrent()) return
-  down()
+  islands.transcript.down()
 }
 
 /** Compact it now, rather than when the window fills. */
@@ -681,7 +682,7 @@ export function clearConversation(): void {
         /* The stage and the meter are the open conversation's, so they are
          only this reply's to touch while it IS the open one. */
         if (key !== sessionCurrent()) return
-        $('#stage').innerHTML = ''; pitch()
+        $('#stage')!.innerHTML = ''; pitch()
         drawMeter()
       })
       /* A failure is news for the conversation it happened to. Posted on

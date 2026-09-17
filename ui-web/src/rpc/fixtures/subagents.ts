@@ -5,9 +5,9 @@
  * external-agents roster (the xa island) and is a plain inventory; the instance
  * calls below it are the desk canvas's, and they are reached only through
  * `?desk-demo=1` -- which is why they are exported as an override group rather
- * than as part of the offline library. That entrance has always been applied on
- * the live page (it was a block inside src/legacy/live/230-tabs.js), and it
- * still is: the group goes on whichever transport the page chose.
+ * than as part of the offline library. That entrance has always been applied
+ * on the live page, and it still is: the group goes on whichever transport the
+ * page chose.
  */
 
 import type { Overrides } from '../overrideTransport'

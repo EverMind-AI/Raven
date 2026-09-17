@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { AgentList } from '../subagents/SubagentsPage'
 import * as agents from '../subagents/store'
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { DeskIcon } from './DeskIcon'
 import {
   anchoredGeometry,

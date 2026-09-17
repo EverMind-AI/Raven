@@ -7,9 +7,8 @@ import { resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { loadPart, moduleText } from './legacy-part.mjs'
+import { loadPart, moduleText } from './module-harness.mjs'
 
-const index = readFileSync(resolve(process.cwd(), 'src/legacy/index.js'), 'utf8')
 const bootText = moduleText('state/boot.ts')
 const installText = moduleText('state/install.ts')
 /* The page's own half, as one text: the claim on the first frame, the wiring,
@@ -30,14 +29,13 @@ const STEPS = [
   'setRuntime', 'goState',
 ]
 
-/* The boot part installed with every step of its own list replaced, and the
-   microtask queue held: what this is about is the order of the list and when
-   it runs, neither of which any step's own work decides. */
+/* The boot module with every step of its own list replaced: what this is about
+   is the order of the list and when it runs, neither of which any step's own
+   work decides. */
 async function harness(rows = []) {
   const calls = []
-  const queued = []
   const step = (name) => (...args) => calls.push([name, ...args])
-  const part = await loadPart(() => import('../src/legacy/demo/160-boot.js'), {
+  const part = await loadPart(() => import('../src/state/boot'), {
     fakes: {
       'src/shell/look': { load: step('lookLoad') },
       'src/shell/panes': { load: step('paneLoad') },
@@ -45,54 +43,43 @@ async function harness(rows = []) {
       'src/shell/tier': { load: step('loadTier') },
       'src/shell/ctxchip': { draw: step('drawCtx') },
       'src/shell/foot': { draw: step('drawFoot') },
-      'src/state/rail': { set: step('setRail') },
-      'demo/040-state.js': {
+      'src/shell/failure': {
         bootError: (where, error) => { throw new Error(`${where}: ${error}`) },
       },
-      'demo/050-rail.js': {
-        sessionDraw: step('sessionDraw'),
-        sessionOpen: step('sessionOpen'),
-        sessionRows: () => rows,
-      },
-      'demo/090-composer.js': { goState: step('goState') },
-      'demo/100-workspace.js': { bumpWs: step('bumpWs') },
-      'demo/130-settings.js': { drawSettings: step('drawSettings'), setRuntime: step('setRuntime') },
+      'src/state/rail': { set: step('setRail') },
+      'src/state/envChip': { setRuntime: step('setRuntime') },
+      'src/state/session/rows': { open: step('sessionOpen'), rows: () => rows },
       'src/state/caps': { draw: step('drawCaps') },
+      'src/state/ws': { bump: step('bumpWs') },
     },
-    islands: { onboard: { open: () => {} } },
+    islands: {
+      onboard: { open: () => {} },
+      rail: { draw: step('sessionDraw') },
+      settings: { redraw: step('drawSettings') },
+      composer: { goPaint: step('goState') },
+    },
   })
-  /* Held rather than let run: the whole claim is that the queued boot happens
-     after the install pass, so the test has to be the one that releases it. */
-  const real = globalThis.queueMicrotask
-  globalThis.queueMicrotask = (fn) => queued.push(fn)
-  try { part.install() } finally { globalThis.queueMicrotask = real }
-  return { part, calls, queued }
+  return { part, calls }
 }
 
 describe('the page boot order', () => {
-  it('boots fixture mode after the install pass', async () => {
+  it('draws the first frame from what the page already holds, in order', async () => {
     const row = { id: 'fixture' }
-    const { calls, queued } = await harness([row])
+    const { part, calls } = await harness([row])
     expect(calls).toEqual([])
-    expect(queued).toHaveLength(1)
 
-    queued.shift()()
+    part.bootPage()
 
     expect(calls.map(([name]) => name)).toEqual(STEPS)
     expect(calls.find(([name]) => name === 'sessionOpen')).toEqual(['sessionOpen', row])
   })
 
-  it('lets live claim the first paint and tolerates its empty session source', async () => {
-    const { part, calls, queued } = await harness()
-    /* What the boot's claim on the first frame does on its way in: the demo
-       boot backs off and the page decides when the splash lifts. */
-    part.claimBoot()
-    queued.shift()()
-    expect(calls).toEqual([])
-
-    queued.push(part.bootPage)
-    queued.shift()()
-
+  /* A live boot starts with an empty source and chooses a draft after the real
+     list lands, so the one step with nothing to act on is skipped and the rest
+     still run. */
+  it('tolerates an empty session source', async () => {
+    const { part, calls } = await harness()
+    part.bootPage()
     expect(calls.map(([name]) => name)).toEqual(STEPS.filter((name) => name !== 'sessionOpen'))
   })
 
@@ -122,23 +109,26 @@ describe('the page boot order', () => {
     }
   })
 
-  /* The chrome installs first, in every mode. The live layer used to be
-     skipped for a page opened from disk or with ?stub=1, where the demo
-     half's fixture sources answered instead; the fixtures are responders
-     behind the transport now (src/rpc/fixtures/), so one set of parts
-     installs and the URL only decides which transport they read
-     (src/state/transport.ts). The live layer itself is gone: its last part
-     is state/lang{Pick,Effects}.ts and features/settings/chrome.ts, which
-     main.tsx installs at the point that part installed. */
-  it('installs the legacy chrome before the boot, and the settings seam after it', () => {
-    const listed = [...index.matchAll(/^import \* as \w+ from '\.\/live\/([^']+)'$/gm)].map((m) => m[1])
-    expect(listed).toEqual([])
-    expect(index).toContain('for (const part of DEMO) part.install()')
+  /* The chrome installs first, in every mode. A page opened from disk or with
+     ?stub=1 used to skip the live half and let the offline fixtures answer
+     instead; the fixtures are responders behind the transport now
+     (src/rpc/fixtures/), so one set of installers runs and the URL only decides
+     which transport they read (src/state/transport.ts).
 
+     The order between them is what the concatenated script's manifest was, and
+     these four are the ones that depend on it: the palette's half of the
+     composer source before the settings seam adds its own member to the same
+     object, and both before the boot, which every one of them is read by. */
+  it('installs the page chrome before the boot, in the manifest order', () => {
     const main = moduleText('main.tsx')
-    expect(main.indexOf('installLegacy()')).toBeLessThan(main.indexOf('langEffects.install()'))
-    expect(main.indexOf('langEffects.install()')).toBeLessThan(main.indexOf('settingsChrome.install()'))
-    expect(main.indexOf('settingsChrome.install()')).toBeLessThan(main.indexOf('boot()'))
+    const at = (needle) => {
+      const ix = main.indexOf(needle)
+      expect(ix, needle).toBeGreaterThan(-1)
+      return ix
+    }
+    expect(at('installComposerPalette()')).toBeLessThan(at('langEffects.install()'))
+    expect(at('langEffects.install()')).toBeLessThan(at('settingsChrome.install()'))
+    expect(at('settingsChrome.install()')).toBeLessThan(at('boot()'))
 
     expect(wiring).not.toContain('CRONS.length = 0')
   })
