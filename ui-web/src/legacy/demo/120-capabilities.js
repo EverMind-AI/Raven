@@ -2,6 +2,7 @@
 
 import { islands } from '../../islands'
 import { show as toast } from '../../shell/toast'
+import * as caps from '../../state/caps'
 import * as detail from '../../state/detail'
 import * as page from '../../state/page'
 import * as settingsDialog from '../../state/settingsDialog'
@@ -9,16 +10,11 @@ import { sources } from '../../state/sources'
 import { $, applyDecorators } from './010-kernel.js'
 import { drawCaps } from './152-skills.js'
 
-let extTab = 'skill';
-/* The filter bar's state. On an object because demo/150-chrome.js writes both
-   fields from the pill row and the search field. */
-const capFilter = { kind: 'all', query: '' };
-
 /* Only one module page at a time. They used to cover the whole window, so
    two open at once was invisible; now that the rail stays put, the one behind
    shows through. */
 const NAV_OF = {
-  capsPage: () => (extTab === 'plugin' ? 'plugBtn' : 'skillBtn'),
+  capsPage: () => (caps.get().tab === 'plugin' ? 'plugBtn' : 'skillBtn'),
   xaPage: 'moreBtn',
   connPage: 'moreBtn',
   memPage: 'memBtn',
@@ -40,19 +36,15 @@ function decorateShowPage(wrap) { (showPageDecorators ??= []).push(wrap); }
    layers above decorate, so the shell stays where it was. */
 function showPageBase(id) { page.show(id); }
 
-/* Switching module resets the filters: a query typed while browsing skills is
-   not a question about plugins. */
+/* The tab, the filter reset and the drawer's close are src/state/caps.ts's now,
+   and the two layers above subscribe there instead of decorating this. The
+   registry stays because a harness registers through it
+   (features/plugins/capabilities-source.test.ts). */
 var extSetDecorators;
 function extSet(tab) { return applyDecorators(extSetDecorators, extSetBase)(tab); }
 function decorateExtSet(wrap) { (extSetDecorators ??= []).push(wrap); }
 
-function extSetBase(tab) {
-  if (!tab || tab === extTab) return;
-  extTab = tab; capFilter.kind = 'all'; capFilter.query = '';
-  $('#cq').value = '';
-  [...$('#cKind').children].forEach((c, i) => c.setAttribute('aria-pressed', String(i === 0)));
-  closeDetail();
-}
+function extSetBase(tab) { caps.extSet(tab); }
 
 async function openCaps(tab) {
   extSet(tab);
@@ -114,4 +106,4 @@ function drawCapsBadge() {}
 export function install() {
 }
 
-export { extTab, capFilter, NAV_OF, showPageDecorators, showPage, decorateShowPage, showPageBase, extSetDecorators, extSet, decorateExtSet, extSetBase, openCaps, openSkills, openPlugins, closeCaps, setIsOpen, openSet, closeSet, closeDetail, closeXa, drawXa, drawCapsBadge }
+export { NAV_OF, showPageDecorators, showPage, decorateShowPage, showPageBase, extSetDecorators, extSet, decorateExtSet, extSetBase, openCaps, openSkills, openPlugins, closeCaps, setIsOpen, openSet, closeSet, closeDetail, closeXa, drawXa, drawCapsBadge }

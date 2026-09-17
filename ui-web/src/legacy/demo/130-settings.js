@@ -9,7 +9,7 @@ import { draw as drawFoot } from '../../shell/foot'
 import { draw as drawPerm } from '../../shell/perm'
 import { show as toast } from '../../shell/toast'
 import { settingsTab } from '../../state/settingsTab'
-import { $, T, langSet, mk } from './010-kernel.js'
+import { $, T, langSet } from './010-kernel.js'
 import { sessionDraw } from './050-rail.js'
 
 // Filled in from system.version once the socket is up, and unknown until then:
@@ -19,21 +19,6 @@ import { sessionDraw } from './050-rail.js'
 let APP_VERSION = null;
 function appVersionSet(v) { APP_VERSION = v; }
 
-/* A tagged control never renders the new value; the refusal is spoken in the
-   row, not in a toast. Kept for the legacy rows (the capabilities page's tool
-   credentials). */
-function nlSay(el, reset, msg) {
-  if (reset) reset();
-  /* The row when the control sits in one, else the card: a chooser is a whole
-     card wide, and the refusal has to land where the click did. */
-  const host = el && el.closest ? el.closest('.crow') || el.closest('.scard') : null;
-  const text = T(msg || 'gui.set.not_live');
-  if (!host) { toast(text); return; }
-  host.querySelectorAll('.nlmsg').forEach((n) => n.remove());
-  const m = mk('div', 'nlmsg', text);
-  host.appendChild(m);
-  setTimeout(() => m.remove(), 3600);
-}
 const notLive = () => toast(T('gui.set.not_live'));
 
 /* The language pick with no persist behind it: flip the catalogue and repaint
@@ -72,4 +57,4 @@ export function install() {
 
 }
 
-export { APP_VERSION, appVersionSet, nlSay, notLive, langPickDemo, isMac, modKey, drawSettings, setRuntime }
+export { APP_VERSION, appVersionSet, notLive, langPickDemo, isMac, modKey, drawSettings, setRuntime }

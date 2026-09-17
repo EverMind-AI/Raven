@@ -1,17 +1,17 @@
 /* The shell half of the strangler bridge: what a migrated island (see
    ui-web/src/shell/bridge.ts) may call of the legacy page. Late-bound closures,
-   not references, because several of these resolve their decorator chain when
-   they are called -- drawCaps is wrapped by a later part, and showPage keeps
-   the registry one -- and the island must reach the outermost wrapper. Grows
-   one line per helper an island actually needs; never ahead of need. */
+   not references, because showPage resolves its decorator chain when it is
+   called and the island must reach the outermost wrapper. Grows one line per
+   helper an island actually needs; never ahead of need. */
 
 import { islands } from '../../islands'
 import { setShell } from '../../shell/bridge'
+import * as caps from '../../state/caps'
 import { $, I18N, T } from './010-kernel.js'
 import { confirmAsk } from './040-state.js'
 import { markNewCurrent } from './050-rail.js'
 import { setWs, wsOpen, wsPick, wsTab, wsView } from './100-workspace.js'
-import { NAV_OF, closeDetail, closeSet, extTab, openPlugins, openSet, setIsOpen, showPage } from './120-capabilities.js'
+import { NAV_OF, closeDetail, closeSet, openPlugins, openSet, setIsOpen, showPage } from './120-capabilities.js'
 import { drawCaps, useInTask } from './152-skills.js'
 
 /* Everything this part used to do while the concatenated page script ran, in
@@ -32,7 +32,7 @@ export function install() {
     navState: () => ({ pages: Object.keys(NAV_OF), btnOf: (p) => (typeof NAV_OF[p] === 'function' ? NAV_OF[p]() : NAV_OF[p]) }),
     openWebsearch: () => { openPlugins(); islands.plugins.openMarket('websearch'); },
     markNew: () => markNewCurrent(),
-    plugRedraw: () => { if ($('#capsPage').dataset.open === 'true' && extTab === 'plugin') drawCaps(); },
+    plugRedraw: () => { if ($('#capsPage').dataset.open === 'true' && caps.get().tab === 'plugin') drawCaps(); },
   };
 
   /* Settings-island verbs, one guarded line each: a helper missing from this

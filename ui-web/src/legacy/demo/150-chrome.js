@@ -10,18 +10,16 @@ import { toggle as toggleFind } from '../../shell/find'
 import { close as closeImage } from '../../shell/lightbox'
 import { toggle as togglePerm } from '../../shell/perm'
 import { toggle as toggleTier } from '../../shell/tier'
-import { show as toast } from '../../shell/toast'
 import { get as railOpen, set as setRail } from '../../state/rail'
 import { sources } from '../../state/sources'
 import { $, T } from './010-kernel.js'
 import { turn } from './040-state.js'
 import { renameTitle } from './050-rail.js'
 import { setWs, wsOpen } from './100-workspace.js'
-import { capFilter, closeCaps, closeDetail, closeSet, closeXa, drawCapsBadge, setIsOpen } from './120-capabilities.js'
+import { closeCaps, closeDetail, closeSet, closeXa, setIsOpen } from './120-capabilities.js'
 import { isMac } from './130-settings.js'
 import { closeCron, closeKb, closeMem } from './140-schedule.js'
 import { closeConn, connCloseDialog } from './145-connections.js'
-import { drawCaps } from './152-skills.js'
 import { closePb } from './154-playbooks.js'
 
 const composing = (e) => !!(e.isComposing || e.keyCode === 229);
@@ -130,22 +128,6 @@ export function install() {
     if (setIsOpen()) return closeSet();
     openSettings();
   });
-
-  $('#cq').oninput = () => { capFilter.query = $('#cq').value.trim().toLowerCase(); drawCaps(); };
-  $('#cKind').onclick = (e) => {
-    const b = e.target.closest('button'); if (!b) return;
-    capFilter.kind = b.dataset.k;
-    [...$('#cKind').children].forEach((c) => c.setAttribute('aria-pressed', String(c === b)));
-    drawCaps();
-  };
-  $('#mAdd').onclick = async () => {
-    const n = $('#mName').value.trim(), a = $('#mAddr').value.trim();
-    if (!n || !a) { toast(T('gui.adv.need_fields')); return; }
-    try { await sources.plugins.manual(n, a); }
-    catch (e) { toast(T('gui.plug.op_failed', { err: e.message || e })); return; }
-    $('#mName').value = ''; $('#mAddr').value = '';
-    drawCaps(); drawCapsBadge(); toast(T('gui.adv.added_x', { name: n }));
-  };
 }
 
 export { composing, tooNarrowToSplit, openSettings, drawMoreFly }

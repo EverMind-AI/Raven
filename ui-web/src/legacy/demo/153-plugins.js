@@ -1,23 +1,23 @@
 /* ══ module 2d: plugin market ═════════════════════════════════════
    The renderer is the plugins island (ui-web/src/features/plugins/); what
-   remains here is its shell face -- the tab chrome around #capsBody and the
-   names other layers still call. The island owns everything drawn inside the
-   body and the shared detail drawer.
+   remains here is its shell face -- the plugin tab's draw, its installed
+   button, the hero above the bar, and the names other layers still call. The
+   island owns everything drawn inside the body and the shared detail drawer.
 
-   This part must load AFTER 152-skills.js: its drawCaps wrapper is the
-   outermost of the chain, mirroring the old live-layer order -- the skill
-   branch below hands over to the skill tab's own draw, and the shared page
-   hero is synced from here for both tabs. */
+   This part must load AFTER 152-skills.js: its steps are the outer half of a
+   draw, mirroring the old live-layer order -- the skill branch hands over to
+   the skill tab's own draw, and the shared page hero is synced from here for
+   both tabs. src/state/caps.ts declares that order and calls these. */
 
 // Stable per-name hue: same plugin, same colour, every render and page.
 // Kept as a shell helper because the memory drawer uses it too.
 
 import { islands } from '../../islands'
+import * as caps from '../../state/caps'
 import * as page from '../../state/page'
 import { sources } from '../../state/sources'
 import { $, T, mk } from './010-kernel.js'
-import { decorateExtSet, extTab } from './120-capabilities.js'
-import { decorateDrawCaps, skInstBtn, skView } from './152-skills.js'
+import { skView } from './152-skills.js'
 
 function pmTile(name) {
   let h = 0;
@@ -38,11 +38,7 @@ function pmToggle(name, on) { islands.plugins.toggleMcp(name, on); }
 const needsAttn = (c) => c.state === 'need' || c.state === 'fail' || !!c.update;
 const attnCount = () => sources.plugins.rows().filter(needsAttn).length;
 
-/* The "installed" entry point rides in the filter bar, like the skills view
-   switch — created once, shown only on the plugin tab. */
-let pmInstBtn;
-
-/* The plugin tab's face on #capsBody: chrome first, then the island host.
+/* The plugin tab's face on #capsBody: the host first, then the chrome.
    The host node survives other tabs clearing #capsBody (they only detach
    it), so re-appending it costs nothing and loses no React state. */
 function drawPlugTab() {
@@ -51,95 +47,56 @@ function drawPlugTab() {
   box.appendChild(islands.plugins.host);
   const title = T('gui.tab.plugins');
   const view = islands.plugins.view();
-  $('#capsTitle').textContent = view === 'installed' ? T('gui.plug.installed_title') : title;
-  $('#capsPage').setAttribute('aria-label', title);
-  $('#cKind').hidden = true;
-  $('#advAdd').hidden = view !== 'market';
-  $('#cq').placeholder = T('gui.plug.search_ph');
-  $('.cbar').style.display = view === 'installed' ? 'none' : '';
-  pmInstBtn.sync();
+  caps.chrome({
+    title: view === 'installed' ? T('gui.plug.installed_title') : title,
+    label: title,
+    search: T('gui.plug.search_ph'),
+    pillsHidden: true,
+    advHidden: view !== 'market',
+    bar: view === 'installed' ? 'none' : '',
+  });
+  syncInstalledButton();
   islands.plugins.redraw();
   /* The first reveal fetches; a boot-time draw of the closed page must
      not fire a market search nobody asked for. */
   if ($('#capsPage').dataset.open === 'true') islands.plugins.searchIfIdle();
 }
 
+/* The "installed" entry point rides in the filter bar, like the skills view
+   switch — shown only on the plugin tab, and synced on the skill tab too. */
+function syncInstalledButton() {
+  const attn = attnCount();
+  caps.installedButton('plugin', {
+    hidden: caps.get().tab !== 'plugin' || islands.plugins.view() === 'installed',
+    label: T('gui.plug.installed_n', { n: islands.plugins.installedCount() }),
+    badge: attn ? String(attn) : null,
+  });
+}
+
+/* Title only — no tagline under it; that copy read as marketing, not UI.
+   It covers both tabs, which is why it is the last step of either draw:
+   skView is the mirror demo/152-skills.js maintains. */
+function syncHero() {
+  let title = '';
+  if (caps.get().tab === 'plugin' && islands.plugins.view() === 'market') title = T('gui.plug.hero');
+  else if (caps.get().tab === 'skill' && skView === 'market') title = T('gui.hub.hero');
+  caps.hero(title);
+}
+
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
-  pmInstBtn = (() => {
-    const b = mk('button', 'pminstbtn');
-    b.onclick = () => { islands.plugins.toggleView(); };
-    $('.cbar').appendChild(b);
-    return { el: b, sync() {
-      b.hidden = extTab !== 'plugin' || islands.plugins.view() === 'installed';
-      const n = islands.plugins.installedCount();
-      const attn = attnCount();
-      b.innerHTML = '';
-      b.append(mk('span', null, T('gui.plug.installed_n', { n })));
-      if (attn) b.appendChild(mk('span', 'pmbdg', String(attn)));
-    } };
-  })();
+  caps.installedButton('plugin', { hidden: false, label: null, badge: null });
+  caps.onDraw({ plugin: drawPlugTab, pluginButton: syncInstalledButton, hero: syncHero });
 
-  {
-    /* The hero sits above the search bar, so it lives outside #capsBody --
-     one node, repopulated on every draw for whichever view is up. It
-     covers both tabs, which is why it rides on this outermost wrapper:
-     skView is the mirror demo/152-skills.js maintains. */
-    const pageHero = () => {
-      let h = $('#pageHero');
-      if (!h) {
-        h = mk('div', 'pmhero');
-        h.id = 'pageHero';
-        const bar = document.querySelector('#capsPage .cbar');
-        bar.parentNode.insertBefore(h, bar);
-      }
-      return h;
-    };
-    /* Title only — no tagline under it; that copy read as marketing, not UI. */
-    const syncHero = () => {
-      const h = pageHero();
-      h.innerHTML = '';
-      let title = '';
-      if (extTab === 'plugin' && islands.plugins.view() === 'market') title = T('gui.plug.hero');
-      else if (extTab === 'skill' && skView === 'market') title = T('gui.hub.hero');
-      h.hidden = !title;
-      if (title) h.appendChild(mk('h3', null, title));
-    };
+  caps.onTab(() => {
+    islands.plugins.reset();
+    caps.bar('');
+  });
 
-    decorateDrawCaps((prev) => () => {
-      if (extTab === 'plugin') {
-        skInstBtn.sync();  // the skills "installed" button must not linger on this tab
-        drawPlugTab();
-        syncHero();
-        return;
-      }
-      // Undo this tab's chrome before handing back: the plugin view hid the
-      // status pills, and the skill view re-hides them for itself.
-      $('#cKind').hidden = false;
-      $('.cbar').style.display = '';
-      prev();
-      pmInstBtn.sync();
-      syncHero();
-    });
-
-    decorateExtSet((prev) => (tab) => {
-      const was = extTab;
-      prev(tab);
-      if (extTab !== was) { islands.plugins.reset(); $('.cbar').style.display = ''; }
-    });
-
-    page.subscribe(() => {
-      if (page.get() !== 'capsPage') { islands.plugins.drawerClosed(); $('.cbar').style.display = ''; }
-    });
-
-    const prevInput = $('#cq').oninput;
-    $('#cq').oninput = () => {
-      if (extTab === 'plugin') { islands.plugins.setQuery($('#cq').value.trim()); return; }
-      if (prevInput) prevInput();
-    };
-  }
-
+  page.subscribe(() => {
+    if (page.get() !== 'capsPage') { islands.plugins.drawerClosed(); caps.bar(''); }
+  });
 }
 
-export { pmTile, pmToggle, pmInstBtn, drawPlugTab }
+export { pmTile, pmToggle, drawPlugTab }
