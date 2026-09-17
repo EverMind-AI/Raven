@@ -179,7 +179,10 @@ def seed_identity(home: Path) -> list[str]:
         if target.exists():
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text((prompts / name).read_text(encoding="utf-8"), encoding="utf-8")
+        # newline="" for the reason raven-code seeds its guide that way: the
+        # default would write a CRLF copy of an LF prompt on Windows, and each
+        # seat is asserted equal to the packaged source byte for byte.
+        target.write_text((prompts / name).read_text(encoding="utf-8"), encoding="utf-8", newline="")
         seeded.append(str(seat))
     seeded.extend(sync_workspace_templates(home, silent=True))
     return seeded
