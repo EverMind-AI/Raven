@@ -4382,6 +4382,13 @@
             },
             "previous": {
               "$ref": "#/components/schemas/JsonValue"
+            },
+            "warning": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted."
             }
           },
           "required": [
@@ -4542,6 +4549,13 @@
           "properties": {
             "applied": {
               "type": "boolean"
+            },
+            "warning": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted."
             }
           },
           "required": [
@@ -4598,6 +4612,13 @@
           "properties": {
             "applied": {
               "type": "boolean"
+            },
+            "warning": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted."
             }
           },
           "required": [

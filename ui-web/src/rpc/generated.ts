@@ -2821,6 +2821,10 @@ export interface SettingsSetParams {
 export interface SettingsSetResult {
   applied: boolean;
   previous: JsonValue;
+  /**
+   * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
+   */
+  warning?: string | null;
 }
 export interface SettingsUsageParams {
   /**
@@ -2873,6 +2877,10 @@ export interface SettingsEverosSetParams {
 }
 export interface SettingsEverosSetResult {
   applied: boolean;
+  /**
+   * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
+   */
+  warning?: string | null;
 }
 export interface ChannelsStatusParams {}
 export interface ChannelsStatusResult {

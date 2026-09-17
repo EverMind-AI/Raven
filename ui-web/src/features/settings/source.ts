@@ -169,10 +169,13 @@ export const settingsSource: SettingsSource = {
      tells the island to only redraw. */
   set: async (key, value) => {
     try {
-      await gateway().call('settings.set', { key, value: value as ParamsOf<'settings.set'>['value'] })
+      const r = await gateway().call('settings.set', { key, value: value as ParamsOf<'settings.set'>['value'] })
       await loadSettings()
       void pushPermMode()
-      toast(t('gui.set.saved'))
+      /* The server says when a save costs something -- swapping the embedding
+         model invalidates every vector already stored. Discarding the answer
+         and toasting a fixed "saved" is how that reached nobody. */
+      toast(r.warning || t('gui.set.saved'))
     } catch (e) {
       toast(t('gui.plug.op_failed', { err: settingsErr(e) }))
       throw { handled: true }
@@ -186,9 +189,9 @@ export const settingsSource: SettingsSource = {
        it across -- what this page holds is `****set****`. */
     if (borrowFrom) p.borrow_from = borrowFrom
     try {
-      await gateway().call('settings.everosSet', p)
+      const r = await gateway().call('settings.everosSet', p)
       await loadEveros()
-      toast(t('gui.set.mem.saved'))
+      toast(r.warning || t('gui.set.mem.saved'))
     } catch (e) {
       toast(t('gui.plug.op_failed', { err: settingsErr(e) }))
       throw { handled: true }

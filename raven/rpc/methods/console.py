@@ -1147,6 +1147,7 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
         clear_everos_section,
         embedding_is_env_managed,
         everos_has_own_embedding,
+        host_embedding_section,
         set_everos_section,
     )
 
@@ -1219,10 +1220,25 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
         # model and a provider and holds no credential of its own, so an
         # address or a key sent here is refused rather than dropped: a value
         # accepted and discarded reads to the caller as one that was stored.
+        # The card renders the resolved address, because a reader configuring an
+        # endpoint wants to see where it goes -- and the row then sends it back
+        # on every save. An address equal to what the provider already answers
+        # with is this page echoing what it was shown, the same shape as the
+        # redacted key the borrow path already drops; refusing it made the row
+        # unsaveable without emptying a field nobody had touched. An address
+        # that differs is an instruction, and the block has no place for it.
+        # Only the address, and only when it matches: the card renders it as a
+        # `defaultValue`, so every save carries it back whether or not anyone
+        # touched it. The key is a placeholder rather than a value, so one that
+        # arrives here was typed on purpose and still has nowhere to live.
+        shown = host_embedding_section().get("base_url", "")
+        if shown and clean.get("base_url", "").rstrip("/") == shown.rstrip("/"):
+            clean.pop("base_url")
         stray = sorted(k for k in ("base_url", "api_key") if k in clean)
         if stray:
             raise ConfigValidationError(
-                f"{' and '.join(stray)} belongs to the provider, not to raven's embedding endpoint"
+                f"{' and '.join(stray)} belongs to the provider, not to raven's embedding endpoint; "
+                "pick the provider that serves this model instead"
             )
         from raven.config.update import EmbeddingPinError, embedding_model_change, set_embedding_endpoint
 

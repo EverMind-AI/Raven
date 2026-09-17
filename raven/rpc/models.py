@@ -2952,6 +2952,7 @@ class SettingsSetParams(_Strict):
 class SettingsSetResult(_Strict):
     applied: bool
     previous: JsonValue
+    warning: str | None = None
 
 
 class ApiUsageTotals(_Strict):
@@ -3049,6 +3050,7 @@ class SettingsEverosSetParams(_Strict):
 
 class SettingsEverosSetResult(_Strict):
     applied: bool
+    warning: str | None = None
 
 
 class ChannelField(_Strict):

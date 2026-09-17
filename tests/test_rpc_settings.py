@@ -224,6 +224,47 @@ class TestEmbeddingCardFollowsTheEndpointHome:
                 }
             )
 
+    async def test_the_address_the_card_showed_is_an_echo_not_an_instruction(
+        self, everos_toml, tmp_path, monkeypatch
+    ) -> None:
+        """The row renders the resolved address as a `defaultValue`, so every
+        save carries it back whether or not anyone touched it. Refusing that
+        made the row unsaveable without first emptying a field nobody had
+        edited -- changing only the model came back as an error."""
+        import json
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text(
+            json.dumps(
+                {
+                    "embedding": {"model": "old-model", "provider": "siliconflow"},
+                    "providers": {"siliconflow": {"apiKey": "sk", "apiBase": "https://api.siliconflow.cn/v1"}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        raven_home.set_config_path(cfg)
+        everos_toml.write_text('[llm]\nmodel = "m"\n', encoding="utf-8")
+
+        r = await rpc_console.settings_everos_set(
+            {
+                "section": "embedding",
+                "fields": {"model": "new-model", "base_url": "https://api.siliconflow.cn/v1"},
+            }
+        )
+
+        assert r["applied"] is True
+        assert json.loads(cfg.read_text(encoding="utf-8"))["embedding"] == {
+            "model": "new-model",
+            "provider": "siliconflow",
+        }
+
+        # An address that differs is an instruction, and there is nowhere to put it.
+        with pytest.raises(ConfigValidationError, match="belongs to the provider"):
+            await rpc_console.settings_everos_set(
+                {"section": "embedding", "fields": {"base_url": "https://elsewhere.test/v1"}}
+            )
+
     async def test_half_a_pin_is_refused_from_either_end(self, everos_toml, tmp_path, monkeypatch) -> None:
         """Both halves or neither. A model with nobody to serve it reads as
         configured on every screen while every reader resolves it to nothing;
