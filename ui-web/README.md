@@ -27,7 +27,7 @@ the store, the naming, the gates -- are `CONTRIBUTING.md`. The vocabulary is
 | `src/test/` | helpers and suites about the assembled page, and the region goldens under `src/test/__golden__/` |
 | `src/styles/page.css` | the page's own stylesheet -- the frame and the `--z` ladder -- inlined at `/*__STYLE__*/`. A domain's own rules live in its `styles.css` |
 | `src/assets/` | icons served from `dist/assets` |
-| `scripts/` | the seven tools: the two generators, the three artifact checks, the boot snapshot and the test harness |
+| `scripts/` | the seven tools: the client generator, the three artifact checks, the boot snapshot, the test harness and the gates' fixture call table |
 | `scripts/gates/` | the gates vitest runs over the tree, the stylesheet and the contract |
 
 Nothing is published on `window`, and nothing outside the bundle reaches in: a
