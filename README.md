@@ -53,58 +53,49 @@ Enable the agents you need during onboarding. See [`agents/README.md`](agents/RE
 
 **Raven-Code** enables **agentic software development**, turning requirements into working, tested code. It supports feature implementation, debugging, refactoring, data processing, and data analysis, helping users build new capabilities, resolve issues, and improve code quality while following their project's conventions.
 
-<table width="100%">
-<tr>
-<td width="58.82%" align="center" valign="top">
-  <a href="https://github.com/user-attachments/assets/0bf3221c-6bb7-4483-bd80-05ae43fda706"><img src="https://github.com/user-attachments/assets/0bf3221c-6bb7-4483-bd80-05ae43fda706" alt="Coding Benchmarks: SWE-bench Pro, SWE-bench Verified, WorkBuddy-Code Reward, and SWE-Refactor" width="100%"></a>
-</td>
-<td width="41.18%" align="center" valign="top">
-  <a href="https://github.com/user-attachments/assets/bccb4ab1-b49c-4b51-a209-67dc940cc485"><img src="https://github.com/user-attachments/assets/bccb4ab1-b49c-4b51-a209-67dc940cc485" alt="DataAgentBench (2026-08-24 Live): Raven-Code with Opus-5 achieves 0.8762 Pass@1" width="100%"></a>
-</td>
-</tr>
-<tr>
-<td align="center"><em>Raven-Code on Coding Benchmarks</em></td>
-<td align="center"><em>Raven-Code tops on DataAgentBench (2026-08-24 Live)</em></td>
-</tr>
-</table>
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/a516ebc2-f0b4-47d4-b970-7dfd492adc0e"><img src="https://github.com/user-attachments/assets/a516ebc2-f0b4-47d4-b970-7dfd492adc0e" alt="Coding Benchmarks: SWE-bench Pro, SWE-bench Verified, WorkBuddy-Code Reward, and SWE-Refactor" width="100%"></a>
+</p>
+
+<p align="center"><em>Raven-Code on Coding Benchmarks</em></p>
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/f4ee009a-d24f-4f11-85db-21e358b29104"><img src="https://github.com/user-attachments/assets/f4ee009a-d24f-4f11-85db-21e358b29104" alt="DataAgentBench (2026-08-24 Live): Raven-Code with Opus-5 achieves 0.8762 Pass@1" width="100%"></a>
+</p>
+
+<p align="center"><em>Raven-Code tops on DataAgentBench (2026-08-24 Live)</em></p>
 
 ### Raven-Design
 
 **Raven-Design** performs **visual design**, turning ideas and content into polished visual deliverables. It creates presentations, brand assets, charts, diagrams, and web interfaces, refining layout, typography, and visual consistency to help users communicate clearly and bring their ideas to life.
 
-<table width="100%">
-<tr>
-<td width="50%" align="center" valign="top">
-  <a href="https://github.com/user-attachments/assets/a356c0c6-cce4-44cb-89b4-414af1a57a2f"><img src="https://github.com/user-attachments/assets/a356c0c6-cce4-44cb-89b4-414af1a57a2f" alt="PresentBench: Raven-Design, Claude Code, and public leaderboard scores" width="100%"></a>
-</td>
-<td width="50%" align="center" valign="top">
-  <a href="https://github.com/user-attachments/assets/2006798b-4852-4117-be05-3343e5c86fa6"><img src="https://github.com/user-attachments/assets/2006798b-4852-4117-be05-3343e5c86fa6" alt="Visual Design: Raven-Design, Claude Code, and Hermes on ArtifactsBench Dashboard, ArtifactsBench SVG, and GDPVal" width="100%"></a>
-</td>
-</tr>
-<tr>
-<td align="center"><em>Raven-Design on PresentBench</em></td>
-<td align="center"><em>Raven-Design on ArtifactsBench and GDPVal</em></td>
-</tr>
-</table>
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/1c8a4339-77f3-4579-85cc-359bc171739d"><img src="https://github.com/user-attachments/assets/1c8a4339-77f3-4579-85cc-359bc171739d" alt="PresentBench: Raven-Design, Claude Code, and public leaderboard scores" width="100%"></a>
+</p>
+
+<p align="center"><em>Raven-Design on PresentBench</em></p>
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/061b5818-595b-4392-b9b6-53a1effb8347"><img src="https://github.com/user-attachments/assets/061b5818-595b-4392-b9b6-53a1effb8347" alt="Visual Design: Raven-Design, Claude Code, and Hermes on ArtifactsBench Dashboard, ArtifactsBench SVG, and GDPVal" width="100%"></a>
+</p>
+
+<p align="center"><em>Raven-Design on ArtifactsBench and GDPVal</em></p>
 
 ### Raven-Oncall
 
 **Raven-Oncall** enables **unattended workflow automation** for experimentation, optimization, and continuous monitoring. It autonomously manages workflows from start to completion, sustaining progress over hours or overnight, delivering results, and involving users only when human judgment is needed.
 
-<table width="100%">
-<tr>
-<td width="50%" align="center" valign="top">
-  <a href="https://github.com/user-attachments/assets/1a1b161e-946b-4049-ad4b-8ed8f22ac658"><img src="https://github.com/user-attachments/assets/1a1b161e-946b-4049-ad4b-8ed8f22ac658" alt="AI4AI (Nanochat 50M Pretraining): Bits Per Byte (BPB), Runtime, Tokens, and Cost" width="100%"></a>
-</td>
-<td width="50%" align="center" valign="top">
-  <a href="https://github.com/user-attachments/assets/358fc781-7524-4c1e-997b-fc31943d29d7"><img src="https://github.com/user-attachments/assets/358fc781-7524-4c1e-997b-fc31943d29d7" alt="AI4S Internal Benchmark: Success Rate, Average Total Runtime, Average Total Tokens, and Average Cost" width="100%"></a>
-</td>
-</tr>
-<tr>
-<td align="center"><em>Raven-Oncall vs. Claude Code on AI4AI (Nanochat 50M Pretraining)</em></td>
-<td align="center"><em>Raven-Oncall vs. Claude Code on AI4S Internal Benchmark</em></td>
-</tr>
-</table>
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/8e2b9721-421c-485c-b1dc-1acf901bcb2c"><img src="https://github.com/user-attachments/assets/8e2b9721-421c-485c-b1dc-1acf901bcb2c" alt="AI4AI (Nanochat 50M Pretraining): Bits Per Byte (BPB), Runtime, Tokens, and Cost" width="100%"></a>
+</p>
+
+<p align="center"><em>Raven-Oncall vs. Claude Code on AI4AI (Nanochat 50M Pretraining)</em></p>
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9"><img src="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9" alt="AI4S Internal Benchmark: Success Rate, Average Total Runtime, Average Total Tokens, and Average Cost" width="100%"></a>
+</p>
+
+<p align="center"><em>Raven-Oncall vs. Claude Code on AI4S Internal Benchmark</em></p>
 
 ## ❯❯ Benchmarks
 
