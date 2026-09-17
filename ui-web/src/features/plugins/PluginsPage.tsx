@@ -1,9 +1,10 @@
-import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
 import { shell, t } from '../../shell/bridge'
 import { show as toast } from '../../shell/toast'
 import { CardSkeleton } from '../../shell/skeleton'
+import * as detail from '../../state/detail'
 import * as store from './store'
 
 import type { Contribution, DetailEntry, InstalledRow, MarketItem, McpSnapshot } from './types'
@@ -369,29 +370,10 @@ function PyCard({ row }: { row: InstalledRow }): JSX.Element {
 
 /* ── detail drawer (market entries + installed servers) ──────────── */
 
-/* The drawer renders into the shared #detail chrome through a portal host
-   the island owns: other openers clear #dBody with innerHTML, which only
-   detaches this host -- React keeps rendering into it unharmed. */
+/* The drawer renders into the host the shared dialog keeps for this island
+   (src/state/detail.ts). Keyed by the card it holds, so a different card is a
+   fresh subtree rather than a diff against the last one's. */
 function DrawerHost({ drawer, s }: { drawer: store.Drawer; s: store.PlugState }): JSX.Element {
-  const host = useMemo(() => document.createElement('div'), [])
-  useEffect(() => {
-    const body = document.getElementById('dBody')
-    const detail = document.getElementById('detail')
-    const title = document.getElementById('dTitle')
-    if (!body || !detail) return
-    body.innerHTML = ''
-    if (title) title.textContent = ''
-    body.appendChild(host)
-    detail.dataset.open = 'true'
-    /* This card's body is fetched when it opens, so the panel holds a settled
-       box while it is on its way -- see `.detail[data-fill]`. */
-    detail.dataset.fill = 'true'
-    return () => {
-      host.remove()
-      detail.dataset.open = 'false'
-      delete detail.dataset.fill
-    }
-  }, [host])
   return createPortal(
     drawer.kind === 'progress' ? (
       <Progress s={s} />
@@ -400,7 +382,7 @@ function DrawerHost({ drawer, s }: { drawer: store.Drawer; s: store.PlugState })
     ) : (
       <InstDetail id={drawer.id} />
     ),
-    host,
+    detail.host('plugins'),
   )
 }
 

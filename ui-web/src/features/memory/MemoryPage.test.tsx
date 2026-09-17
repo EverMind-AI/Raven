@@ -46,10 +46,6 @@ function install(over: Partial<MemorySource> = {}, stats: MemStats | null = null
     T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: (id) => shellCalls.push(['showPage', id]),
-    closeDetail: () => {
-      const d = document.getElementById('detail')
-      if (d) d.dataset.open = 'false'
-    },
   }
   setShell(fakeShell)
   setSources({ memory: source })

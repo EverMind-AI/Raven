@@ -1,6 +1,6 @@
 import { ds, shell, t } from '../../shell/bridge'
-import { dropAfterFade } from '../../shell/detailfade'
 import { show as toast } from '../../shell/toast'
+import * as detail from '../../state/detail'
 
 import type { XaActArgs, XaOp, XaRow, XaSource } from './types'
 
@@ -164,46 +164,24 @@ function watchBuilds(rows: XaRow[]): void {
 
 /* ── the shared detail drawer ────────────────────────────────────── */
 
-/* The portal's own container inside the shared #dBody. Another page's
-   opener may wipe #dBody at any time (the skills/plugins openers do),
-   which detaches this node but leaves React's tree inside it intact;
-   every open re-adopts it, so the island never reconciles into nodes
-   a legacy wipe orphaned. */
-let host: HTMLDivElement | null = null
-/* Counts opens of the shared card, so a close scheduled for the card on screen
-   can tell a reopen from its own card still being there. Outside the reactive
-   state on purpose: nothing renders it. */
-let sheetGen = 0
-
+/** Where the card renders: the host the shared drawer keeps for this island. */
 export function detailHost(): HTMLDivElement {
-  if (!host) {
-    host = document.createElement('div')
-    /* Out of the box tree: #dBody is a grid and the sections were its
-       items before this container existed; contents keeps them so. */
-    host.style.display = 'contents'
-  }
-  return host
+  return detail.host('xa')
 }
 
 export function sheetOpen(row: XaRow): void {
-  const body = document.getElementById('dBody')
-  if (body && !body.contains(detailHost())) {
-    body.innerHTML = ''
-    body.appendChild(detailHost())
-  }
-  sheetGen += 1
+  detail.open('xa')
   set({ sheet: row.name, epoch: state.epoch + 1 })
 }
 
 export function closeSheet(): void {
-  shell().closeDetail?.()
-  sheetDismissed()
+  detail.close()
 }
 
-/* Called when legacy chrome closed the drawer itself (Esc, the close
-   button, a click outside): only the island state has to follow -- but not
-   until the drawer has finished fading, or the card is gone from inside a
-   panel that is still on screen. */
+/* What this island does when the drawer closes, whoever closed it (Esc, the
+   close button, a click outside, a page switch): drop the card -- but not until
+   the drawer has finished fading, or the card is gone from inside a panel that
+   is still on screen. */
 export function sheetDismissed(): void {
   if (!state.sheet) return
   /* Which open this close belongs to. The name cannot answer that: closing a
@@ -211,12 +189,13 @@ export function sheetDismissed(): void {
      back, so the pending drop read it as "still mine" and cleared the card that
      had just opened. `epoch` is no good either -- a background reload bumps it,
      which would read as a reopen and leave the closed card up. */
-  const gen = sheetGen
-  dropAfterFade(
+  const gen = detail.get().gen
+  detail.dropAfterFade(
     () => set({ sheet: null }),
-    () => sheetGen !== gen,
+    () => detail.get().gen !== gen,
   )
 }
+detail.onClose('xa', sheetDismissed)
 
 /* A language flip changes nothing in this state, but every visible string
    comes from t(), so a re-render is the whole redraw. */
