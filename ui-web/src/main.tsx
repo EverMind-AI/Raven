@@ -1,6 +1,8 @@
 import { createElement } from 'react'
+import { flushSync } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 
+import { App } from './App'
 import * as composer from './features/composer/mount'
 import * as sheets from './features/composer/sheets'
 import * as dagSheet from './features/dag/mount'
@@ -42,6 +44,21 @@ import { chooseTransport } from './state/transport'
  * setShell. The bundle reads the shell lazily (see shell/bridge.ts): at this
  * point no shell has been handed in yet.
  */
+
+/* The page's own root, committed before anything reaches into what it renders.
+ *
+ * Detached on purpose: createRoot(container).render() clears that container's
+ * existing children on its first commit, so a root at document.body would
+ * delete #splash, #noJs and every static region src/page.html still carries.
+ * What the root renders is portals into those containers (App.tsx).
+ *
+ * flushSync, and first, because everything below reads the result: the chrome
+ * binds #cfNo, #cfYes, #setClose and #dClose by id while it installs, and the
+ * settings island looks #snavList up while it renders. A plain render() would
+ * commit in a later task, after all of them.
+ */
+const appRoot = createRoot(document.createElement('div'))
+flushSync(() => appRoot.render(<App />))
 
 session.onChange(() => {
   sheets.sync()
