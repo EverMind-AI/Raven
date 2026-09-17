@@ -9,7 +9,7 @@
     "note": "NAMED means the url is a real place, not that anyone must visit it: the payload ships in git and in the wheel, so no install needs a token. The registry is the archive of what shipped and the lane fetch_templates.py pulls a new cut down through; a new cut is a new package version (upload, rewrite the pins, bump this url, commit the new bytes)."
   },
   "destination": "raven_ppt/assets/templates",
-  "source_of_truth": "The tracked payload under raven_ppt/assets/templates, whose bytes these pins sign: the eight re-cut light templates, corrected for a lone-punctuation text box and for card titles that collided when wrapped, plus two dark templates cut from user uploads (hidden vendor pages removed, reference pages from the other templates borrowed onto their own layouts, vendor marks stripped). This is the same payload the registry serves as ppt-templates 2026.09.09 (project 84258686). The earlier 2026.09.03 version carries only the eight-file payload and a gold template that no longer matches these pins; it stays downloadable for older checkouts. The retired fork kept its own twelve and was never the payload (its record: git history at the subagents/ removal commit)",
+  "source_of_truth": "The tracked payload under raven_ppt/assets/templates, whose bytes these pins sign: the eight re-cut light templates, corrected for a lone-punctuation text box and for card titles that collided when wrapped, plus two dark templates cut from user uploads (hidden vendor pages removed, reference pages from the other templates borrowed onto their own layouts, vendor marks stripped). This is the same payload the registry serves as ppt-templates 2026.09.09 (project 84258686). The earlier 2026.09.03 version carries only the eight-file payload and a gold template that no longer matches these pins; it stays downloadable for older checkouts. The retired fork kept its own twelve and was never the payload (its record: git history at the subagents/ removal commit) Two pages were then edited in place on 2026-09-17 without a new registry cut: beige_geometric_general_report lost its page 20 (a dark photograph under pale rounded cards), and black_circuit_tech_launch lost the circuit texture on its master and the photograph on its Section Header layout, so its body and section pages sit on the master's plain #000000.",
   "files": [
     {
       "name": "amber_wave_quarterly_summary.pptx",
@@ -18,13 +18,13 @@
     },
     {
       "name": "beige_geometric_general_report.pptx",
-      "bytes": 748798,
-      "sha256": "d63c47c66e0dcab00272bea7136bc6f27251c481220f8396a6bae3543f2ec163"
+      "bytes": 614701,
+      "sha256": "2de30173e380f074211cbea077b977964f22ea99c78e24528166959ac5ad9917"
     },
     {
       "name": "black_circuit_tech_launch.pptx",
-      "bytes": 6493082,
-      "sha256": "7c17db85748b80450b210b7a0b751602c3b0d4602e5dabba31a4974728cb5d89"
+      "bytes": 4976888,
+      "sha256": "86678eb4c16645d928448fd795d592ec33fdf3ce8baee252a20c9cf75490c03f"
     },
     {
       "name": "blue_minimal_general_analysis.pptx",
