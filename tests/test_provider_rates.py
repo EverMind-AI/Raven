@@ -720,15 +720,55 @@ def test_try_litellm_context_window_allow_fetch_false_still_answers_from_the_tab
     ) == rates._try_litellm_context_window("openai-codex/gpt-5.3-codex")
 
 
-def test_allow_fetch_false_does_not_ask_litellm_about_an_id_the_table_misses(monkeypatch):
-    """The ask behind the table is a request to the provider, not a second read.
+def _trap_every_outbound_seam(monkeypatch):
+    """Make any attempt to leave the process raise, so a test that passes did not
+    merely see no request -- it proves none was possible."""
+    import socket
 
-    ``get_model_info`` resolves an unknown id by asking whoever serves it --
-    the local server for ``ollama_chat/*``, huggingface.co for
-    ``huggingface/*`` -- so a caller that said it would not fetch cannot be
-    made to wait out that round trip. It gets None and keeps its default,
-    which is what ``resolve_context_window`` already documents for an id
-    nothing knows.
+    import httpx
+
+    def _trap(*_args, **_kwargs):
+        raise RuntimeError("outbound attempt on a no-fetch path")
+
+    monkeypatch.setattr(socket, "getaddrinfo", _trap)
+    monkeypatch.setattr(socket.socket, "connect", _trap)
+    for name in ("get", "post", "request", "stream"):
+        monkeypatch.setattr(httpx, name, _trap)
+    monkeypatch.setattr(httpx.Client, "send", _trap)
+
+
+def test_allow_fetch_false_still_reads_the_normalised_table_for_free(monkeypatch):
+    """A no-fetch caller must not lose the answers that were free to read.
+
+    The exact-key table misses many spellings that ``get_model_info`` resolves
+    by normalising against the same in-memory table -- the factory default
+    ``anthropic/claude-opus-4-5`` among them. Skipping the ask for every table
+    miss handed those models the 65536 fallback and over-trimmed the ones with
+    the widest windows the most. With every outbound seam trapped, the no-fetch
+    arm must equal the fetching arm and neither may leave the process.
+    """
+    from raven.providers.litellm_setup import import_litellm
+
+    import_litellm()
+    _trap_every_outbound_seam(monkeypatch)
+
+    model = "anthropic/claude-opus-4-5"
+    assert rates._table_entry(model) is None, "precondition: the exact-key read misses this spelling"
+
+    no_fetch = rates._try_litellm_context_window(model, allow_fetch=False)
+    fetch = rates._try_litellm_context_window(model)
+
+    assert no_fetch is not None, "the normalised read is on hand and must be used"
+    assert no_fetch == fetch, "a no-fetch caller reads the same free answer the fetching caller does"
+    assert rates._try_litellm_max_output(model, allow_fetch=False) == rates._try_litellm_max_output(model)
+
+
+def test_allow_fetch_false_does_not_ask_litellm_where_the_ask_leaves_memory(monkeypatch):
+    """The two families whose ask is a request to the provider are the only ones
+    a no-fetch caller is kept from: huggingface.co for ``huggingface/*``, the
+    local server for an ``ollama*`` id the table does not hold. Those answer
+    None and the caller keeps its default, which is what
+    ``resolve_context_window`` already documents for an id nothing knows.
     """
     from raven.providers.litellm_setup import import_litellm
 
@@ -741,14 +781,19 @@ def test_allow_fetch_false_does_not_ask_litellm_about_an_id_the_table_misses(mon
 
     monkeypatch.setattr(litellm, "get_model_info", _record)
 
-    unknown = "huggingface/no-such-org/no-such-model"
-    assert rates._try_litellm_context_window(unknown, allow_fetch=False) is None
-    assert rates._try_litellm_max_output(unknown, allow_fetch=False) is None
-    assert asked == [], f"a no-fetch caller reached the network for {asked}"
+    for unknown in ("huggingface/no-such-org/no-such-model", "ollama_chat/no-such-model", "ollama/no-such-model"):
+        assert rates._try_litellm_context_window(unknown, allow_fetch=False) is None
+        assert rates._try_litellm_max_output(unknown, allow_fetch=False) is None
+    # The candidate list also tries an ``openrouter/`` alias of each id, and that
+    # ask is answered from memory (OpenRouter is neither family), so it may be
+    # made. What may not be made is any ask that leaves the process.
+    left = [c for c in asked if rates._ask_leaves_memory(c)]
+    assert left == [], f"a no-fetch caller reached for the provider: {left}"
 
     # And the default path still asks, or the tier would be dead rather than deferred.
-    assert rates._try_litellm_context_window(unknown) is None
-    assert asked, "allow_fetch=True must still consult get_model_info"
+    asked.clear()
+    assert rates._try_litellm_context_window("huggingface/no-such-org/no-such-model") is None
+    assert any(rates._ask_leaves_memory(c) for c in asked), "allow_fetch=True must still consult get_model_info"
 
 
 def test_resolve_context_window_allow_fetch_false_reaches_the_litellm_tier(monkeypatch):

@@ -156,6 +156,24 @@ def _litellm_price_table() -> dict:
         return {}
 
 
+#: The id families whose ``get_model_info`` leaves memory. For every other id
+#: the call normalises the key against ``litellm.model_cost`` -- five spellings,
+#: no I/O -- and returns; the exact-key read in ``_table_entry`` misses many of
+#: those spellings, so the ask is what answers them and it is free. Two families
+#: are not: ``huggingface/`` fetches the model's config from huggingface.co, and
+#: ``ollama/`` / ``ollama_chat/`` asks the local server for any id ``model_cost``
+#: does not hold -- which, ``_table_entry`` being that same table, is every id
+#: that reaches the ask here. An ollama id the table knows only under a stripped
+#: spelling is skipped with them; a no-fetch caller keeps its default, which is
+#: the conservative side of that line.
+_ASK_LEAVES_MEMORY = ("huggingface/", "ollama/", "ollama_chat/")
+
+
+def _ask_leaves_memory(candidate: str) -> bool:
+    """Whether ``get_model_info(candidate)`` would reach past the process."""
+    return candidate.startswith(_ASK_LEAVES_MEMORY)
+
+
 def _table_entry(model: str) -> dict | None:
     """The table row keyed exactly by this model id, or None.
 
@@ -728,9 +746,9 @@ def _try_litellm_max_output(model: str, *, allow_fetch: bool = True) -> int | No
     this wrong answer the table and ``get_model_info`` alike, so guarding one
     would hand back exactly what the other just rejected.
 
-    ``allow_fetch=False`` stops after the table, for the reason given on
-    ``_try_litellm_context_window``: the ask behind the table is a request to
-    the provider, not a second read of memory.
+    ``allow_fetch=False`` skips only the asks that leave memory, for the reason
+    given on ``_try_litellm_context_window``: the normalised read is free and is
+    kept, the two provider-backed branches are not.
     """
     if not allow_fetch and not _litellm_ready():
         return None
@@ -745,7 +763,7 @@ def _try_litellm_max_output(model: str, *, allow_fetch: bool = True) -> int | No
         ceiling = _trustworthy_ceiling(_table_entry(candidate))
         if ceiling:
             return ceiling
-        if not allow_fetch:
+        if not allow_fetch and _ask_leaves_memory(candidate):
             continue
         if may_prompt(candidate):
             continue
@@ -881,19 +899,20 @@ def _try_litellm_context_window(model: str, *, allow_fetch: bool = True) -> int 
     over-estimate an 8k model by a factor of eight.
 
     ``allow_fetch=False`` answers from what is already on hand: a LiteLLM that
-    has already finished importing (see ``_litellm_ready``), and then its table
-    alone. Both halves are the same promise. Importing costs ~2-7s, which is
+    has already finished importing (see ``_litellm_ready``), and then whatever
+    can be read without leaving the process. Importing costs ~2-7s, which is
     the wait a caller passing this (``AgentLoop`` construction, racing the lazy
-    provider's prewarm thread over that same import) is trying to defer -- and
-    ``get_model_info`` is no cheaper for the ids it cannot answer from memory:
-    it asks the provider. For ``ollama_chat/*`` that is a request to the local
-    server, for ``huggingface/*`` one to huggingface.co, and a caller that said
-    it would not fetch cannot be made to wait out either.
+    provider's prewarm thread over that same import) is trying to defer.
 
-    An id the table does not carry therefore answers None here rather than
-    going out for it, which is what ``resolve_context_window`` already promises
-    such a caller: an unknown model returns None and it keeps its configured
-    default.
+    "On hand" is wider than the exact-key table. For most ids ``get_model_info``
+    is a free read too: it normalises the key against the same in-memory table
+    the exact read missed -- the factory default ``anthropic/claude-opus-4-5``
+    is one the exact read misses and the normalised read answers -- so a
+    no-fetch caller still asks for those. What it does not do is take the two
+    branches that leave memory, ``_ASK_LEAVES_MEMORY``: for those an id the
+    table does not carry answers None, which is what ``resolve_context_window``
+    already promises such a caller -- an unknown model returns None and it
+    keeps its configured default.
     """
     if not allow_fetch and not _litellm_ready():
         return None
@@ -910,7 +929,7 @@ def _try_litellm_context_window(model: str, *, allow_fetch: bool = True) -> int 
         window = _numeric(_table_entry(candidate), "max_input_tokens", "max_tokens")
         if window:
             return int(window)
-        if not allow_fetch:
+        if not allow_fetch and _ask_leaves_memory(candidate):
             continue
         if may_prompt(candidate):
             continue
