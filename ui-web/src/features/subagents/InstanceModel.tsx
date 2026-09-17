@@ -26,8 +26,8 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { t } from '../../i18n/t'
-import { show as menuAt } from '../../shell/menu'
-import { show as toast } from '../../shell/toast'
+import { show as menuAt } from '../../state/menu'
+import { show as toast } from '../../state/toast'
 import * as store from './store'
 
 import type { JSX, MouseEvent } from 'react'

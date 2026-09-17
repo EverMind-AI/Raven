@@ -5,7 +5,7 @@ import * as store from './store'
 
 import type { Attachment, SlashCmd } from './types'
 import type { ReactElement } from 'react'
-import * as lightbox from '../../shell/lightbox'
+import * as lightbox from '../../state/lightbox'
 
 /* The dock's four drawn collections. Each is its own root over the container
  * page.html already carries -- #queued, #atts, #slashList, and a host at the

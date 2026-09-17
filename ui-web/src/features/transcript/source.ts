@@ -11,8 +11,8 @@
 
 import { islands } from '../../islands'
 import { has } from '../../rpc/capabilities'
-import { current as sessionCurrent, setCurrent as sessionSet } from '../../shell/session'
-import { show as toast } from '../../shell/toast'
+import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
+import { show as toast } from '../../state/toast'
 import { gateway } from '../../state/gateway'
 import { dagOpenNode } from '../dag/open'
 import { T } from '../../i18n/t'

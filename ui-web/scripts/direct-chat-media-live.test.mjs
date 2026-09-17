@@ -19,7 +19,7 @@ import { fakeGateway, loadPart } from './module-harness.mjs'
    and the real note text behind it -- the note is what splits the message. */
 async function sender(calls) {
   const wiring = await loadPart(() => import('../src/state/install'), {
-    fakes: { 'src/shell/session': { current: () => 's1' } },
+    fakes: { 'src/lib/session': { current: () => 's1' } },
   })
   await fakeGateway((method, params) => { calls.push([method, params]); return Promise.resolve({}) })
   const { setSources, sources } = await import('../src/state/sources')

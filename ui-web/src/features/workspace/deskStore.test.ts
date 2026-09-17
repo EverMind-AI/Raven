@@ -7,7 +7,7 @@ import * as agents from '../subagents/store'
 import * as deliveries from './deliveries'
 import * as desk from './deskStore'
 import * as workspace from './store'
-import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
+import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
 import { resetSources, setSources, sources } from '../../state/sources'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'

@@ -60,7 +60,7 @@ describe('before any language is applied', () => {
     expect(document.documentElement.lang).toBe('zh-CN')
   })
 
-  /* What shell/platform.language(), MemoryPage's memWhen and the settings
+  /* What lib/platform.language(), MemoryPage's memWhen and the settings
      dialog's language radio read. All three used to read the attribute
      directly, so the store has to answer what the attribute says -- the served
      declaration on a page, and nothing at all in a document that declares

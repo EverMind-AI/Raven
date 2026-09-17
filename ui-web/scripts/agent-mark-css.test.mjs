@@ -1,7 +1,7 @@
 /* Which agent marks the dark theme filters, and with which filter.
  *
  * Three kinds of file sit in `assets/agents/`, and `data-tone` is what carries
- * the distinction from the map in agent-mark.tsx to this stylesheet:
+ * the distinction from the map in AgentMark.tsx to this stylesheet:
  *
  * - no tone: every shape carries its own fill. Renders the same in both themes
  *   and comes out as a photographic negative if inverted -- Claude's terracotta
@@ -17,7 +17,7 @@
  * applying the wrong one is silent. Pinned here because no DOM test can see it:
  * happy-dom applies no stylesheet, so `filter` is unobservable there. The
  * markup half -- that the tone reaches the element -- is pinned in
- * agent-mark.test.tsx, and the tone-matches-the-file half in
+ * AgentMark.test.tsx, and the tone-matches-the-file half in
  * tests/test_ui_agent_marks.py; this is the half that says the stylesheet still
  * reads it, and reads it per tone.
  *

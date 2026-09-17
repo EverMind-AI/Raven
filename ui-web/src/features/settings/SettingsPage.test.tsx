@@ -4,8 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { SettingsApp } from './SettingsPage'
 import * as store from './store'
-import * as lookStore from '../../shell/look'
-import * as notifications from '../../shell/notifications'
+import * as lookStore from '../../state/look'
+import * as notifications from '../../lib/notifications'
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
@@ -31,7 +31,7 @@ const connOpens = vi.hoisted(() => ({ n: 0 }))
 vi.mock('../connections/nav', () => ({ open: () => { connOpens.n += 1 } }))
 
 const toastWriter = vi.hoisted(() => ({ calls: [] as Array<[string, unknown]> }))
-vi.mock('../../shell/toast', () => {
+vi.mock('../../state/toast', () => {
   /* The page's own root renders the notices out of this module's store, so a
      fake standing in for it has to answer the store's half as well -- with
      nothing, because what this file asserts is the call and not the node. One
@@ -1131,7 +1131,7 @@ describe('settings island', () => {
       })
     }
 
-    /* `shell/menu` writes into a host element the page owns, so a test that
+    /* `state/menu` writes into a host element the page owns, so a test that
        opens the menu has to provide one -- and exactly one. `show` finds it by
        id, which answers with the first in the document, so a second host would
        be the one queried and never the one written to. */

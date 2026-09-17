@@ -1,6 +1,6 @@
 /* Every logo the provider maps name must actually be in the bundle.
  *
- * `provider-mark.tsx` resolves a name to `assets/providers/<icon>.svg` without
+ * `ProviderMark.tsx` resolves a name to `assets/providers/<icon>.svg` without
  * being able to say whether that file exists -- the request decides, and a miss
  * degrades to an initial rather than to a broken image. That degradation is
  * deliberate, and it is also what makes a typo invisible: the row looks exactly
@@ -20,11 +20,11 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
-const MARK = readFileSync(join(SRC, 'shell', 'provider-mark.tsx'), 'utf8')
+const MARK = readFileSync(join(SRC, 'components', 'ProviderMark.tsx'), 'utf8')
 
 const body = (name, open, close) => {
   const start = MARK.indexOf(name)
-  if (start < 0) throw new Error(`${name} is gone from provider-mark.tsx`)
+  if (start < 0) throw new Error(`${name} is gone from ProviderMark.tsx`)
   const from = MARK.indexOf(open, start)
   const to = MARK.indexOf(`\n${close}`, from)
   return MARK.slice(from, to)
@@ -39,7 +39,7 @@ const named = new Set([...mapValues('const ICONS'), ...mapValues('const VENDOR_I
 /* A vendor's dark drawing is named by the pair set rather than by an icon map,
    so it is folded in here under the one spelling the component builds. */
 const pairBlock = MARK.match(/const DARK_PAIRED = new Set\(\[([\s\S]*?)\]\)/)
-if (!pairBlock) throw new Error('DARK_PAIRED is gone from provider-mark.tsx')
+if (!pairBlock) throw new Error('DARK_PAIRED is gone from ProviderMark.tsx')
 const paired = [...pairBlock[1].matchAll(/'([a-z0-9-]+)'/g)].map((m) => `${m[1]}-dark`)
 paired.forEach((name) => named.add(name))
 const onDisk = new Set(readdirSync(join(SRC, 'assets', 'providers')).map((f) => f.replace(/\.svg$/, '')))

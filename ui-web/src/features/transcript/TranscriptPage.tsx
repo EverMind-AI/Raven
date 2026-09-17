@@ -3,15 +3,15 @@ import { flushSync } from 'react-dom'
 
 import * as dag from '../dag/graph'
 import { DagGraph } from '../dag/DagGraph'
-import * as attachmentCache from '../../shell/attachment-cache'
+import * as attachmentCache from '../../lib/attachmentCache'
 import { t } from '../../i18n/t'
-import { copy } from '../../shell/clipboard'
-import { open as openChip } from '../../shell/chips'
+import { copy } from '../../lib/clipboard'
+import { open as openChip } from '../../state/proseChips'
 import { getVersion as deliveriesVersion, humanSize, subscribe as deliveriesSubscribe } from '../workspace/deliveries'
 import {
   fileKind, fileURL, openDelivery as wsOpenDelivery, openPath as wsOpenPath,
 } from '../workspace/store'
-import { useTick } from '../../shell/tick'
+import { useTick } from '../../lib/tick'
 import { sources } from '../../state/sources'
 import { releaseUpward } from './overscroll'
 import * as store from './store'
@@ -24,7 +24,7 @@ import type {
   NoteData, QaData, Seg, StatusData, StepData,
 } from './types'
 import type { KeyboardEvent, ReactElement, ReactNode } from 'react'
-import * as lightbox from '../../shell/lightbox'
+import * as lightbox from '../../state/lightbox'
 
 /* The transcript renderer: three voices, three folding depths. Machine work
  * renders as quiet activity rows, never cards; a stretch of consecutive
@@ -180,10 +180,10 @@ function PreLinked({ text }: { text: string }): ReactElement {
       /* The chip opens itself, and has to: stopPropagation is needed because
          the chip sits inside a step row that would toggle under it, and
          React's stopPropagation stops the NATIVE event too -- so the
-         document-level click listener in shell/chips.ts never sees this one.
-         Dropping the openChip call here breaks click-to-open outright.
-         The keyboard path does go through chips.ts, as it went through the
-         handler chips.ts replaced: nothing stops keydown, and the
+         document-level click listener in state/proseChips.ts never sees this
+         one. Dropping the openChip call here breaks click-to-open outright.
+         The keyboard path does go through proseChips.ts, as it went through
+         the handler proseChips.ts replaced: nothing stops keydown, and the
          preventDefault there is also what keeps the button's own
          Enter-activates-a-click from opening the file a second time. */
       out.push(

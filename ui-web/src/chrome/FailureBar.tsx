@@ -1,4 +1,4 @@
-/* The two failure bars over the page (shell/failure.ts).
+/* The two failure bars over the page (state/failureBar.ts).
  *
  * A portal at the body, like the other overlays that belong to no page: each
  * bar is `position: fixed` across the top, so a wrapper would take the inset.
@@ -11,7 +11,7 @@
 import { useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import * as failure from '../shell/failure'
+import * as failure from '../state/failureBar'
 
 import type { JSX } from 'react'
 

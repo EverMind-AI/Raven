@@ -3,8 +3,9 @@
  * regions src/page.html used to carry as markup.
  *
  * One file per region of the page, under src/chrome/, beside src/features/
- * (islands) and src/shell/ (behaviour modules). Every element below is a
- * transcription -- tag, id, class, data-*, role, aria, the svg path data and
+ * (islands), src/state/ and src/chrome/behaviour/ (the modules that own
+ * listeners and measurements rather than markup). Every element below
+ * is a transcription -- tag, id, class, data-*, role, aria, the svg path data and
  * the text exactly as page.html spelled them, attributes in the same order --
  * and src/test/__golden__/region-app.txt is what says so. The containers are
  * here too now: src/App.tsx renders div.chat and this is the first five of its
@@ -113,7 +114,7 @@ export function ChatTop(): JSX.Element {
       </button>
       {/* The workspace seam, hung off the chat rather than the panel: the panel
           clips its own overflow, so a grip inside it could only be grabbed from
-          one side. No interior at all, and dragged by id from shell/panes.ts. */}
+          one side. No interior at all, and dragged by id from chrome/behaviour/panes.ts. */}
       <div
         className="grip"
         id="wsGrip"

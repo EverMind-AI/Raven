@@ -2,7 +2,7 @@
  * panel.
  *
  * The chip's own state -- the tier's icon, its name, the warning class and the
- * accessible name -- is painted by shell/perm.ts's draw over what this renders:
+ * accessible name -- is painted by state/perm.ts's draw over what this renders:
  * four writes by id whose values this component never renders one of, so React
  * cannot undo them (see that module). What is rendered here is the shape the
  * page is served with, plus the one attribute that belongs to the panel rather
@@ -15,7 +15,7 @@
 
 import { useSyncExternalStore } from 'react'
 
-import * as perm from '../shell/perm'
+import * as perm from '../state/perm'
 
 import type { JSX } from 'react'
 

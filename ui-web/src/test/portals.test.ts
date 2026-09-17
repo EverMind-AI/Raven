@@ -18,11 +18,11 @@ import { describe, expect, it, vi } from 'vitest'
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readFileSync } from 'node:fs'
 
-import * as menu from '../shell/menu'
-import * as session from '../shell/session'
-import * as tier from '../shell/tier'
-import * as toast from '../shell/toast'
-import * as upgrade from '../shell/upgrade'
+import * as menu from '../state/menu'
+import * as session from '../lib/session'
+import * as tier from '../state/tier'
+import * as toast from '../state/toast'
+import * as upgrade from '../state/upgradeShade'
 import * as confirm from '../state/confirm'
 import * as tip from '../state/tooltip'
 import { BOOT_BODY_ORDER, LAYERS, PORTALS, _resetForTests as resetLayers, host } from '../state/portals'
@@ -31,7 +31,7 @@ import { bodySiblings } from './domSnapshot'
 import { mountPageRoot } from './pageRoot'
 
 import { resetTranslator, setTranslator } from '../i18n/t'
-import type { TierReply, TierSource } from '../shell/tier'
+import type { TierReply, TierSource } from '../state/tier'
 
 const source = (path: string): string => readFileSync(path, 'utf8') as string
 

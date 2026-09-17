@@ -1,7 +1,7 @@
 import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
-import { formatDuration } from '../../shell/duration'
-import { current as currentSession, onChange as onSessionChange } from '../../shell/session'
+import { formatDuration } from '../../lib/duration'
+import { current as currentSession, onChange as onSessionChange } from '../../lib/session'
 import { sources } from '../../state/sources'
 import { plainTitle as stripTitle } from '../rail/title'
 import { instanceCtxStatus, toInstanceCtx } from './history'
@@ -160,7 +160,7 @@ export const plainTitle = stripTitle
    the reader is in, and whether anything changed enough to repaint. */
 /* The read in flight, not a flag saying there is one: a caller that has to
    know when the list has answered -- restoring a window the reader had open
-   (shell/resume.ts) -- can only wait on the same read the panel is already
+   (lib/resume.ts) -- can only wait on the same read the panel is already
    doing. Held rather than started again, so two callers share one answer. */
 let flight: Promise<void> | null = null
 let at = 0

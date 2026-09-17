@@ -10,7 +10,7 @@ import * as mount from './mount'
 import { WHEEL_LINE_PX } from './overscroll'
 import * as store from './store'
 import * as tail from './tail'
-import * as attachmentCache from '../../shell/attachment-cache'
+import * as attachmentCache from '../../lib/attachmentCache'
 import { markMissing as markDeliveryMissing } from '../workspace/deliveries'
 import { snapshot as deliveriesSnapshot } from '../workspace/deliveries'
 
@@ -23,7 +23,7 @@ import * as confirmStore from '../../state/confirm'
 import { installWsPanel } from '../../test/wsPanel'
 import * as pageStore from '../../state/page'
 import { I18N } from '../../i18n/t'
-import type { ProseTarget } from '../../shell/prose'
+import type { ProseTarget } from '../../lib/prose'
 import type { WorkspaceSource } from '../workspace/types'
 import type { ArtifactsSource, HistoryMessage, SpawnListRow, TranscriptSource } from './types'
 
@@ -39,8 +39,8 @@ let lang = 'en'
    it directly now, and a stub would also stop the output being the prose the
    segments actually show. The counter is hoisted because vi.mock is. */
 const seen = vi.hoisted(() => ({ md: 0 }))
-vi.mock('../../shell/prose', async (importOriginal) => {
-  const real = await importOriginal<typeof import('../../shell/prose')>()
+vi.mock('../../lib/prose', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../lib/prose')>()
   return { ...real, md: (src: string) => { seen.md += 1; return real.md(src) } }
 })
 
@@ -2317,7 +2317,7 @@ describe('transcript island, tool episodes', () => {
 
   /* The chip's click is the island's own, and has to be: React's
      stopPropagation -- which the chip needs so the row underneath does not
-     toggle -- stops the native event too, so shell/chips.ts never sees it.
+     toggle -- stops the native event too, so state/proseChips.ts never sees it.
      Without these two cases, dropping the openChip call would leave
      click-to-open dead with the whole suite still green. */
   describe('a path chip in tool output', () => {

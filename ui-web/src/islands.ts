@@ -41,9 +41,9 @@ import * as workspaceHunks from './features/workspace/hunks'
 import * as workspace from './features/workspace/store'
 import * as xa from './features/xa/store'
 import * as settings from './features/settings/store'
-import * as navfly from './shell/navfly'
-import * as urlAction from './shell/open-url'
-import * as resume from './shell/resume'
+import * as navfly from './state/navfly'
+import * as urlAction from './lib/openUrl'
+import * as resume from './lib/resume'
 
 /* The skills island renders into a host node the skills tab re-attaches under
    #capsBody on every draw (features/skills/tab.ts): the plugin tab clears that
@@ -127,19 +127,19 @@ export const islands = {
   },
   /* Not an island: one verb, spent when a conversation is opened, that puts
      back the sheet and the desk that conversation had before the page was
-     replaced (see shell/resume.ts). It reaches across three stores and the
+     replaced (see lib/resume.ts). It reaches across three stores and the
      transcript's own `dag.get` seam, which is why it is not any of theirs. */
   view: {
     resume: resume.resume,
     /* The graph alone. Reopening a conversation that is still in the page must
        not replay the desk's opens, but its graph still needs re-reading -- see
-       shell/resume.ts. */
+       lib/resume.ts. */
     refreshDag: resume.refreshDag,
     landing: resume.landing,
     /* Started by state/boot.ts once the session pointer is real. */
     watch: resume.watch,
   },
-  /* Not a React island: the nav flyout is a writer (see shell/navfly.ts). It
+  /* Not a React island: the nav flyout is a writer (see state/navfly.ts). It
      rides the same bag because the bag is what a page-wide writer is reached
      through, island or not -- here, by the language repaint. */
   nav: {
@@ -147,7 +147,7 @@ export const islands = {
   },
   /* One appended node per call, so this is a writer rather than an island:
      the browser island's source hands a URL to the desktop shell or the
-     browser tab through it (shell/open-url.ts). */
+     browser tab through it (lib/openUrl.ts). */
   chrome: {
     openUrl: urlAction.open,
   },

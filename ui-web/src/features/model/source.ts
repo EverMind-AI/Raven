@@ -8,11 +8,11 @@
 
 import type { ApiProtocol, ModelSource, Provider } from './types'
 import type { ParamsOf } from '../../rpc/generated'
-import type { TierReply, TierSource } from '../../shell/tier'
+import type { TierReply, TierSource } from '../../state/tier'
 
 import { islands } from '../../islands'
 import { t } from '../../i18n/t'
-import { current as sessionCurrent } from '../../shell/session'
+import { current as sessionCurrent } from '../../lib/session'
 import { gateway } from '../../state/gateway'
 import { generation } from '../../state/session/generation'
 import { staging } from '../../state/session/staging'

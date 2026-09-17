@@ -12,13 +12,13 @@
  * click.
  */
 
-import type { UpgradeShade } from '../shell/upgrade'
+import type { UpgradeShade } from './upgradeShade'
 
 import { turn } from '../features/composer/mount'
 import { T } from '../i18n/t'
-import { open as upShade } from '../shell/upgrade'
 import { ask as confirmAsk } from './confirm'
 import { gateway } from './gateway'
+import { open as upShade } from './upgradeShade'
 
 type UpKind = 'ver' | 'ui'
 

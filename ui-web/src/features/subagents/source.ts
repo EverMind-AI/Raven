@@ -13,8 +13,8 @@
  */
 
 import { islands } from '../../islands'
+import { current as sessionCurrent } from '../../lib/session'
 import { gone, has } from '../../rpc/capabilities'
-import { current as sessionCurrent } from '../../shell/session'
 import { gateway } from '../../state/gateway'
 import { mediaOf } from '../../state/session/runtime'
 

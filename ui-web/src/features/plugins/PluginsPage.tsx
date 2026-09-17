@@ -2,8 +2,8 @@ import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'rea
 import { createPortal } from 'react-dom'
 
 import { t } from '../../i18n/t'
-import { show as toast } from '../../shell/toast'
-import { CardSkeleton } from '../../shell/skeleton'
+import { show as toast } from '../../state/toast'
+import { CardSkeleton } from '../../components/Skeleton'
 import * as detail from '../../state/detail'
 import * as store from './store'
 

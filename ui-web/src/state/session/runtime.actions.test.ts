@@ -64,15 +64,15 @@ async function harness({ rows }: { rows: Row[] }) {
         /* Enough of the real thing to see WHICH conversation a message names. */
         T: (key: string, vars?: unknown) => (vars ? `${key}:${JSON.stringify(vars)}` : key),
       },
-      'src/shell/dom': {
+      'src/lib/dom': {
         $: looseQuery(),
       },
-      'src/shell/session': {
+      'src/lib/session': {
         current: () => current,
         setCurrent: (id: string | null) => { current = id; calls.push(['sessionSet', id]) },
       },
       'src/features/rail/title': { plainTitle: (t: unknown) => String(t) },
-      'src/shell/toast': { show: (text: string) => calls.push(['toast', text]) },
+      'src/state/toast': { show: (text: string) => calls.push(['toast', text]) },
       'src/state/updates': { showUpNote: () => {} },
     },
     islands: {
@@ -314,11 +314,11 @@ async function railHarness(
       'src/i18n/t': {
         T: label,
       },
-      'src/shell/dom': {
+      'src/lib/dom': {
         $: looseQuery(),
       },
-      'src/shell/session': { current: () => current, setCurrent: (id: string | null) => { current = id } },
-      'src/shell/toast': { show: toast },
+      'src/lib/session': { current: () => current, setCurrent: (id: string | null) => { current = id } },
+      'src/state/toast': { show: toast },
     },
     islands: {
       dag: { forget: () => {} },
@@ -496,12 +496,12 @@ async function bulkHarness(answers: Record<string, Answer | Error>) {
       'src/i18n/t': {
         T: label,
       },
-      'src/shell/dom': {
+      'src/lib/dom': {
         $: looseQuery(),
       },
       'src/state/session/registry': { switchToDraft: () => {} },
-      'src/shell/session': { current: () => null, setCurrent: () => {} },
-      'src/shell/toast': { show: () => {} },
+      'src/lib/session': { current: () => null, setCurrent: () => {} },
+      'src/state/toast': { show: () => {} },
     },
     islands: {
       settings: {

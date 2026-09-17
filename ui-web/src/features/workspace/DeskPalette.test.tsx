@@ -13,7 +13,7 @@ import * as desk from './deskStore'
 import * as seen from './seen'
 import * as workspace from './store'
 
-import { setCurrent } from '../../shell/session'
+import { setCurrent } from '../../lib/session'
 /* The wiring main.tsx gets from this import: the desk's file opener is handed
    to the workspace store here, and `openDelivery` reaches the desk through it. */
 import '../../islands'

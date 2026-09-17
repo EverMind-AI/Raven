@@ -8,14 +8,14 @@
  */
 
 import { hasStillOnDisk } from '../../rpc/capabilities'
-import { current as sessionCurrent, setCurrent as sessionSet } from '../../shell/session'
-import { show as toast } from '../../shell/toast'
+import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
+import { show as toast } from '../../state/toast'
 import { gateway } from '../../state/gateway'
 import { forget as forgetSubscription, switchToDraft } from '../../state/session/registry'
 import { sources } from '../../state/sources'
 import { islands } from '../../islands'
 import { T } from '../../i18n/t'
-import { $ } from '../../shell/dom'
+import { $ } from '../../lib/dom'
 import { dropDraft } from '../composer/mount'
 import { ask as confirmAsk } from '../../state/confirm'
 import { forget as sheetsForget } from '../../state/sheetRack'

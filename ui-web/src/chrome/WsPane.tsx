@@ -2,8 +2,8 @@
  * the chat.
  *
  * One file per region of the page, under src/chrome/ -- beside src/features/
- * (islands, each with its own root and its own data) and src/shell/ (behaviour
- * modules that own listeners and measurements rather than markup).
+ * (islands, each with its own root and its own data), src/state/ and src/chrome/behaviour/ (the modules that own
+ * listeners and measurements rather than markup).
  *
  * Every element below is a transcription -- tag, id, class, data-*, role, aria,
  * the svg path data and the text exactly as page.html spelled them, attributes

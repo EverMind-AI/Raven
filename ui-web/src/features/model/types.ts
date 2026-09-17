@@ -6,7 +6,7 @@
  * draws from.
  */
 
-import type { ModelTagFacts } from '../../shell/model-tags'
+import type { ModelTagFacts } from '../../components/ModelTags'
 
 export interface Provider {
   id: string

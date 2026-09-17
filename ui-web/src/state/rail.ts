@@ -15,7 +15,7 @@
  * this is it.
  *
  * Not here: the rail's WIDTH, which is a drag rather than a state
- * (src/shell/panes.ts), and the session list inside it, which is an island
+ * (src/chrome/behaviour/panes.ts), and the session list inside it, which is an island
  * (src/features/rail/).
  */
 

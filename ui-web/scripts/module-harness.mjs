@@ -39,7 +39,7 @@ function requireModule(module) {
  *   `() => import('../src/state/session/runtime')`. A thunk rather than a path
  *   so the specifier stays static and Vite can resolve it.
  * @param fakes exports to replace, keyed by the module's path from ui-web
- *   (`'src/shell/toast'`). What is not named keeps the real implementation, and
+ *   (`'src/state/toast'`). What is not named keeps the real implementation, and
  *   a key that names no module throws rather than standing in for nothing.
  * @param islands members of the island bag (src/islands.ts) to stand in for,
  *   assigned over the real ones one MEMBER at a time: a case names the verbs it
@@ -93,7 +93,7 @@ export function moduleText(rel) {
   return readFileSync(resolve(process.cwd(), 'src', rel), 'utf8')
 }
 
-/* A `$` (src/shell/dom.ts) that answers the document for what the test built
+/* A `$` (src/lib/dom.ts) that answers the document for what the test built
    and a throwaway element for everything else. A case builds the part of the
    page it is about and no more, and a writer reaching for one it did not build
    would throw; one element per unbuilt selector keeps the stand-ins stable

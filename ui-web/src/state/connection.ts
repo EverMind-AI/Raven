@@ -12,14 +12,14 @@
 
 import { T } from '../i18n/t'
 import { islands } from '../islands'
-import { show as failureBar } from '../shell/failure'
-import { open as upShade } from '../shell/upgrade'
+import { show as failureBar } from './failureBar'
 import { gateway } from './gateway'
 import { hideSplash } from './splash'
 import { distMoved, upgradeKind, upMarkClear } from './updates'
+import { open as upShade } from './upgradeShade'
 
 import type { ConnectionState, StateInfo } from '../rpc/transport'
-import type { UpgradeShade } from '../shell/upgrade'
+import type { UpgradeShade } from './upgradeShade'
 
 /* Whether this page is the desktop shell's own window. Read on demand rather
    than latched at boot: the user agent cannot change under a loaded page, and

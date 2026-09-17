@@ -24,11 +24,11 @@ import * as desk from './features/workspace/DeskPage'
 import * as workspace from './features/workspace/store'
 import { XaApp } from './features/xa/XaPage'
 import { SettingsApp } from './features/settings/SettingsPage'
-import * as find from './shell/find'
-import * as navfly from './shell/navfly'
-import * as panes from './shell/panes'
-import * as scrollbars from './shell/scrollbars'
-import * as session from './shell/session'
+import * as find from './state/find'
+import * as navfly from './state/navfly'
+import * as panes from './chrome/behaviour/panes'
+import * as scrollbars from './chrome/behaviour/scrollbars'
+import * as session from './lib/session'
 import { plugHost, skillsHost, skillsSkeletonHost } from './islands'
 import * as pluginsTab from './features/plugins/tab'
 import * as settingsChrome from './features/settings/chrome'
@@ -177,7 +177,7 @@ dropNoJs()
 /* The session pointer starts on the offline fixture's first conversation, and
    the boot's own claim clears it again a few lines below: the two writes
    together are what keeps a reload's "come back here" note off fixture noise
-   (state/boot.ts's claimFirstFrame, shell/resume.ts). */
+   (state/boot.ts's claimFirstFrame, lib/resume.ts). */
 session.setCurrent('a')
 /* The half of the composer's source no transport answers, before the settings
    seam adds its own member to the same object. */

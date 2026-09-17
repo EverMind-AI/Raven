@@ -15,12 +15,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as composer from '../features/composer/mount'
 import * as store from '../features/composer/store'
-import * as ctx from '../shell/ctxchip'
-import * as perm from '../shell/perm'
-import * as tier from '../shell/tier'
+import * as ctx from '../state/ctxChip'
 import * as lang from '../state/lang'
+import * as perm from '../state/perm'
 import { _resetForTests as resetLayers, host } from '../state/portals'
 import { setSources } from '../state/sources'
+import * as tier from '../state/tier'
 import { bodySiblings } from '../test/domSnapshot'
 import { mountPageRoot } from '../test/pageRoot'
 
@@ -71,7 +71,7 @@ const key = (init: KeyboardEventInit): void => {
 }
 
 /* The two popovers keep their up-or-down in a store rather than on the node
-   (src/shell/perm.ts, src/shell/tier.ts), so it outlives a case's markup and
+   (src/state/perm.ts, src/state/tier.ts), so it outlives a case's markup and
    has to be put back by hand between them. */
 beforeEach(() => {
   composer._resetForTests()

@@ -28,9 +28,9 @@
 
 import { busy as turnBusy } from '../features/composer/turn'
 import { islands } from '../islands'
-import { close as closeImage, isOpen as imageOpen } from '../shell/lightbox'
 import * as caps from './caps'
 import * as detail from './detail'
+import { close as closeImage, isOpen as imageOpen } from './lightbox'
 import * as settingsDialog from './settingsDialog'
 import { sources } from './sources'
 

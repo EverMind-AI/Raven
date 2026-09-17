@@ -1,9 +1,9 @@
 /* The rail: the column src/page.html used to carry as markup.
  *
  * One file per region of the page, under src/chrome/ -- beside src/features/
- * (islands, each with its own root and its own data) and src/shell/ (behaviour
- * modules that own listeners and measurements rather than markup). What is here
- * is the page's own furniture: elements the document was served with, rendered
+ * (islands, each with its own root and its own data), src/state/ and src/chrome/behaviour/ (the modules that own
+ * listeners and measurements rather than markup).
+ * What is here is the page's own furniture: elements the document was served with, rendered
  * by the page's root now.
  *
  * Every element below is a transcription -- tag, id, class, data-*, role, aria,
@@ -26,13 +26,13 @@
  *     second handler the demo layer had is gone.
  *   - #moreFly's rows and the two flags the fold writes (#moreFly[data-open],
  *     #moreBtn[aria-expanded]). The group is shared ground the way #list is:
- *     src/shell/navfly.ts builds the rows from a table and re-decides their
+ *     src/state/navfly.ts builds the rows from a table and re-decides their
  *     aria-current on demand, and the rail island's markNew() drives that.
  *   - the aria-current marks on the six nav buttons (features/rail/store.ts).
- *   - #meSub and #meKbd's text (src/shell/foot.ts), the update row's text and
+ *   - #meSub and #meKbd's text (src/state/foot.ts), the update row's text and
  *     its hidden flag (src/state/updates.ts), and #upnote's click.
  *   - #list's children (the rail island's own root) and #railGrip's drag
- *     (src/shell/panes.ts).
+ *     (src/chrome/behaviour/panes.ts).
  * Each of those is still exactly one writer of the value it writes, and React
  * cannot undo any of them: it renders each as the constant the page was served
  * with, and it diffs against the props it rendered last rather than against the
@@ -43,7 +43,7 @@ import { useSyncExternalStore } from 'react'
 
 import { openPlugins, openSkills } from '../features/plugins/nav'
 import { islands } from '../islands'
-import * as find from '../shell/find'
+import * as find from '../state/find'
 import * as lang from '../state/lang'
 import * as rail from '../state/rail'
 
@@ -155,7 +155,7 @@ function RailNav(): JSX.Element {
 }
 
 /* The search row. The field is deliberately uncontrolled and its listeners are
-   native (src/shell/find.ts); what is state here is the row's own showing and
+   native (src/state/find.ts); what is state here is the row's own showing and
    the clear button's, which are the same term read two ways.
 
    The whitespace page.html had between these three is reproduced: .find is
@@ -189,7 +189,7 @@ function FindRow(): JSX.Element {
 
 /* The foot row. The update notice above it and the two slots inside the door --
    the running build and this platform's shortcut for it -- are written by the
-   modules that know those facts (state/updates.ts, shell/foot.ts), so this
+   modules that know those facts (state/updates.ts, state/foot.ts), so this
    renders them as the page serves them: empty. */
 function RailFoot(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)

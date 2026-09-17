@@ -110,9 +110,9 @@ describe('the rail', () => {
   })
 
   /* Shared ground and other modules' values: the rail island roots itself in
-     #list, shell/navfly.ts builds the rows inside #moreFly and re-decides their
+     #list, state/navfly.ts builds the rows inside #moreFly and re-decides their
      marks, features/rail/store.ts writes aria-current over the nav buttons, and
-     shell/foot.ts writes the two slots in the door. React owning any of them
+     state/foot.ts writes the two slots in the door. React owning any of them
      would tear down what the other side put there. */
   it('hands the list, the fold and the foot slots over empty', () => {
     render()

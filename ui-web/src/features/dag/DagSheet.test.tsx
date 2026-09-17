@@ -11,7 +11,7 @@ import {
 import { back as subBack, openDagNode, _resetForTests as subReset } from '../subagents/store'
 import { advance, forget, resume, run, settle, start, sync, touch, _resetForTests } from './mount'
 import { fold as storeFold } from './store'
-import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
+import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
 import { resetSources, setSources } from '../../state/sources'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
@@ -443,7 +443,7 @@ describe('the dag sheet after a reload', () => {
   })
 
   /* Whether a conversation should be asked about at all is no longer settled
-     here: it moved to `resumeDag` in shell/resume.ts, which refuses when it has
+     here: it moved to `resumeDag` in lib/resume.ts, which refuses when it has
      no run to read, and is covered there by "asks for nothing when the
      conversation had nothing open". It had to move -- the test this replaces
      asserted a refusal based on a stored note, and a note is per-tab and absent

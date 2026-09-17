@@ -40,7 +40,7 @@ describe('the turn clock on an instance pane', () => {
     vi.useFakeTimers()
     vi.setSystemTime(1_700_000_090_000)
     render(<TurnClock row={row({ turnStartedAtMs: 1_700_000_000_000 })} />)
-    /* 90s, in the spelling `shell/duration.ts` gives every other elapsed number
+    /* 90s, in the spelling `lib/duration.ts` gives every other elapsed number
        on the page. */
     expect(shown()).toBe('1m30s')
   })

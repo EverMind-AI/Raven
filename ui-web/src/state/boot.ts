@@ -21,15 +21,15 @@ import { loadSessions, pinSession } from '../features/rail/source'
 import { loadSettings, pushPermMode } from '../features/settings/source'
 import { islands } from '../islands'
 import { hasUpdateFlag } from '../rpc/capabilities'
-import { draw as drawCtx } from '../shell/ctxchip'
-import { draw as drawFoot } from '../shell/foot'
-import { bootError } from '../shell/failure'
-import { load as lookLoad } from '../shell/look'
-import { load as paneLoad } from '../shell/panes'
-import { draw as drawPerm } from '../shell/perm'
-import { hostPlatformSet } from '../shell/platform'
-import { current as sessionCurrent, setCurrent as sessionSet } from '../shell/session'
-import { load as loadTier } from '../shell/tier'
+import { draw as drawCtx } from './ctxChip'
+import { draw as drawFoot } from './foot'
+import { bootError } from './failureBar'
+import { load as lookLoad } from './look'
+import { load as paneLoad } from '../chrome/behaviour/panes'
+import { draw as drawPerm } from './perm'
+import { hostPlatformSet } from '../lib/platform'
+import { current as sessionCurrent, setCurrent as sessionSet } from '../lib/session'
+import { load as loadTier } from './tier'
 import * as caps from './caps'
 import { authFail, bootFail, shellReady, surface } from './connection'
 import { setRuntime } from './envChip'
@@ -92,7 +92,7 @@ function claimFirstFrame(): void {
      for the next reload. Started after the line above on purpose: the demo
      chrome has already opened its canned session on this page, and both that
      and the clear above are fixture noise the note must not carry (see
-     shell/resume.ts). */
+     lib/resume.ts). */
   islands.view.watch()
 }
 
@@ -141,7 +141,7 @@ async function sequence(): Promise<void> {
        conversation and did not ask to leave it -- the page was replaced under
        them, by a refresh or by an upgrade -- so the tab's own note is what
        decides here, and it exists only for a tab that was already somewhere
-       (shell/resume.ts). Asked of the list rather than opened blind: a
+       (lib/resume.ts). Asked of the list rather than opened blind: a
        conversation deleted since is a note for something that is not there any
        more, and the new-task screen is the right answer for it. */
     const back = islands.view.landing(sessionRows().map((s: SessRow) => s.id))

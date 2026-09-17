@@ -28,10 +28,10 @@ import * as shellWindow from './shellWindow'
 import * as browser from '../features/browser/store'
 import * as composer from '../features/composer/mount'
 import * as boot from './boot'
-import * as chips from '../shell/chips'
-import * as menu from '../shell/menu'
-import * as panes from '../shell/panes'
-import * as scrollbars from '../shell/scrollbars'
+import * as chips from './proseChips'
+import * as menu from './menu'
+import * as panes from '../chrome/behaviour/panes'
+import * as scrollbars from '../chrome/behaviour/scrollbars'
 
 /* Target, event, phase, and who the handler belongs to. The fourth column is
    not asserted -- nothing about a listener says whose it is -- and is here
@@ -40,12 +40,12 @@ const ORDER = [
   ['document', 'click', 'capture', 'the link trap (features/browser)'],
   ['window', 'beforeunload', 'bubble', 'the unparked draft (features/composer)'],
   ['window', 'resize', 'bubble', "the field's height cap (features/composer)"],
-  ['document', 'scroll', 'capture', 'the overlay scrollbars (shell/scrollbars)'],
-  ['window', 'resize', 'bubble', 'the same, dropping every bar (shell/scrollbars)'],
-  ['window', 'resize', 'bubble', 'the two panes re-clamping (shell/panes)'],
-  ['document', 'click', 'bubble', 'a prose chip (shell/chips)'],
-  ['document', 'keydown', 'bubble', 'a prose chip by keyboard (shell/chips)'],
-  ['document', 'pointerdown', 'capture', 'a pointer outside the menu (shell/menu)'],
+  ['document', 'scroll', 'capture', 'the overlay scrollbars (chrome/behaviour/scrollbars)'],
+  ['window', 'resize', 'bubble', 'the same, dropping every bar (chrome/behaviour/scrollbars)'],
+  ['window', 'resize', 'bubble', 'the two panes re-clamping (chrome/behaviour/panes)'],
+  ['document', 'click', 'bubble', 'a prose chip (state/proseChips)'],
+  ['document', 'keydown', 'bubble', 'a prose chip by keyboard (state/proseChips)'],
+  ['document', 'pointerdown', 'capture', 'a pointer outside the menu (state/menu)'],
   ['document', 'contextmenu', 'bubble', 'the right-click rule (state/contextMenu)'],
   ['document', 'pointerdown', 'capture', 'a pointer outside the two popovers'],
   ['document', 'pointerover', 'bubble', 'the hover pill following (state/tooltip)'],

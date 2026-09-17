@@ -10,10 +10,10 @@
  */
 
 import { islands } from '../../islands'
-import { show as toast } from '../../shell/toast'
 import * as caps from '../../state/caps'
 import * as page from '../../state/page'
 import { sources } from '../../state/sources'
+import { show as toast } from '../../state/toast'
 
 export async function openCaps(tab: caps.Tab): Promise<void> {
   caps.extSet(tab)

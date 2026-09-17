@@ -2,7 +2,7 @@
  * its picker: a tier is not a model. It moves what raven asks of the sub-agents
  * it dispatches, and leaves raven's own effort alone.
  *
- * Served hidden, and shown by shell/tier.ts's draw once a catalogue has
+ * Served hidden, and shown by state/tier.ts's draw once a catalogue has
  * answered -- a build can offer none, and then the chip stays hidden rather
  * than drawing a control over nothing. The showing, the bars, the name and the
  * accessible name are that module's four writes by id, for the reason
@@ -12,7 +12,7 @@
 
 import { useSyncExternalStore } from 'react'
 
-import * as tier from '../shell/tier'
+import * as tier from '../state/tier'
 
 import type { JSX } from 'react'
 

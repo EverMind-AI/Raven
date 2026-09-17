@@ -31,9 +31,9 @@ import type { AgentsSource } from '../features/subagents/types'
 import type { ArtifactsSource, TranscriptSource } from '../features/transcript/types'
 import type { WorkspaceSource } from '../features/workspace/types'
 import type { XaSource } from '../features/xa/types'
-import type { BannerSource } from '../shell/banner'
-import type { ProseSource } from '../shell/prose'
-import type { TierSource } from '../shell/tier'
+import type { ProseSource } from '../lib/prose'
+import type { BannerSource } from './banner'
+import type { TierSource } from './tier'
 
 /* Whether the extensions list has been read, and reading it. Declared here
    rather than in a feature's types because no island has this domain: the

@@ -1,7 +1,7 @@
 import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
 import { settingsTab } from '../../state/settingsTab'
-import { show as toast } from '../../shell/toast'
+import { show as toast } from '../../state/toast'
 
 import * as settingsDialog from '../../state/settingsDialog'
 import type {

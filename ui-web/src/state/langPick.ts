@@ -9,9 +9,9 @@
  */
 
 import { code as LANG, T } from '../i18n/t'
-import { show as toast } from '../shell/toast'
 import { gateway } from './gateway'
 import * as lang from './lang'
+import { show as toast } from './toast'
 
 /* The language the gateway last agreed to, kept where a page that cannot reach
    it can still read it. `load` runs only after the connect succeeds, so on a

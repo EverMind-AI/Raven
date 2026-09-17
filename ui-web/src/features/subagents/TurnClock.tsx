@@ -1,8 +1,8 @@
 /* How long the turn this instance is answering has been running.
  *
  * The same number the main transcript puts beside a running card, in the same
- * spelling (`shell/duration.ts`) and on the same self-stopping clock
- * (`shell/tick.ts`), so a reader who has learned to read one has learned both.
+ * spelling (`lib/duration.ts`) and on the same self-stopping clock
+ * (`lib/tick.ts`), so a reader who has learned to read one has learned both.
  *
  * The instance's own lifetime would have been the easy number and the wrong
  * one: it is a different fact wearing the same clothes, and a pane header is
@@ -16,9 +16,9 @@
  * binding commit or a graph-origin write touched the record.
  */
 
-import { formatDuration } from '../../shell/duration'
+import { formatDuration } from '../../lib/duration'
 import { t } from '../../i18n/t'
-import { useTick } from '../../shell/tick'
+import { useTick } from '../../lib/tick'
 
 import type { InstanceRow } from './types'
 import type { JSX } from 'react'

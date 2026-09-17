@@ -12,8 +12,8 @@ import { cronExprHuman } from './humanize'
 import { islands } from '../../islands'
 import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
-import { setCurrent as sessionSet } from '../../shell/session'
-import { show as toast } from '../../shell/toast'
+import { setCurrent as sessionSet } from '../../lib/session'
+import { show as toast } from '../../state/toast'
 import { gateway } from '../../state/gateway'
 
 /** One job as `cron.list` sends it. */

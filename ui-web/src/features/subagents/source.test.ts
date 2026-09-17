@@ -23,7 +23,7 @@ async function harness() {
     return import('../../state/install')
   }, {
     fakes: {
-      'src/shell/session': { current: () => 's1' },
+      'src/lib/session': { current: () => 's1' },
       'src/state/session/runtime': { mediaOf: () => ({}) },
     },
     islands: { transcript: { agentStage: () => {} }, subagents: { directEvent: () => {} } },

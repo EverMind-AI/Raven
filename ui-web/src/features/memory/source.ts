@@ -8,8 +8,8 @@ import type { MemorySource } from './types'
 import type { ParamsOf } from '../../rpc/generated'
 
 import { t } from '../../i18n/t'
-import { show as toast } from '../../shell/toast'
 import { gateway } from '../../state/gateway'
+import { show as toast } from '../../state/toast'
 
 export const memorySource: MemorySource = {
   stats: () => gateway().call('memory.stats', {}),

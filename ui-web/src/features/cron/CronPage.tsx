@@ -1,11 +1,11 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
+import { SetupGroup, SetupRow } from '../../components/SetupRow'
+import { SheetFoot, SheetHead, StateLine } from '../../components/SetupSheet'
 import { t } from '../../i18n/t'
-import { show as menuAt } from '../../shell/menu'
-import { SetupGroup, SetupRow } from '../../shell/setuprow'
-import { SheetFoot, SheetHead, StateLine } from '../../shell/setupsheet'
-import { show as toast } from '../../shell/toast'
+import { show as menuAt } from '../../state/menu'
+import { show as toast } from '../../state/toast'
 import { cronExprHuman, cronWhen } from './humanize'
 import * as store from './store'
 

@@ -58,13 +58,13 @@ import { SheetRack } from './chrome/SheetRack'
 import { Tooltip } from './chrome/Tooltip'
 import { UpgradeShade } from './chrome/UpgradeShade'
 import { WsPane } from './chrome/WsPane'
-import * as menu from './shell/menu'
-import * as toast from './shell/toast'
 import * as confirm from './state/confirm'
 import * as detail from './state/detail'
 import * as lang from './state/lang'
+import * as menu from './state/menu'
 import * as rail from './state/rail'
 import * as settings from './state/settingsDialog'
+import * as toast from './state/toast'
 
 import type { JSX } from 'react'
 
@@ -199,7 +199,7 @@ function SettingsModal(): JSX.Element {
   )
 }
 
-/* The context menu's rows, in the host they were raised in (shell/menu.ts). The
+/* The context menu's rows, in the host they were raised in (state/menu.ts). The
    flag and the position are the store's, because they belong to div#menu, which
    this file renders as an empty region; what is here is the row list the writer
    used to build by hand. */
@@ -218,7 +218,7 @@ function ContextMenu(): JSX.Element | null {
   )
 }
 
-/* One notice (shell/toast.ts). A notice offering an action carries the button
+/* One notice (state/toast.ts). A notice offering an action carries the button
    that takes it; a plain one is one span, and the difference is what the two
    lifetimes are for. */
 function Notice({ t }: { t: toast.Toast }): JSX.Element {

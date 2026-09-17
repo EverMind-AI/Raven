@@ -9,7 +9,7 @@ import {
   current as sessionCurrent,
   onChange,
   setCurrent,
-} from '../../shell/session'
+} from '../../lib/session'
 
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
@@ -17,18 +17,18 @@ import { resetSources, setSources, sources } from '../../state/sources'
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
-import type { MenuItem } from '../../shell/menu'
-import type { ToastAction } from '../../shell/toast'
+import type { MenuItem } from '../../state/menu'
+import type { ToastAction } from '../../state/toast'
 import type { RailSnapshot, RailSource, SessRow } from './types'
 
 /* The search term is the find row's, not the snapshot's, so the island reads it
-   straight out of shell/find. Stubbed here rather than mounting that row's
+   straight out of state/find. Stubbed here rather than mounting that row's
    markup: this file asks what the LIST does with a term, and find.test.ts asks
    how the row produces one. */
 const found = vi.hoisted(() => ({ term: '' }))
 const toastWriter = vi.hoisted(() => ({ items: [] as Array<{ text: string; action?: ToastAction }> }))
-vi.mock('../../shell/find', () => ({ term: () => found.term }))
-vi.mock('../../shell/toast', () => ({
+vi.mock('../../state/find', () => ({ term: () => found.term }))
+vi.mock('../../state/toast', () => ({
   show: (text: string, action?: ToastAction) => { toastWriter.items.push({ text, action }) },
 }))
 

@@ -40,7 +40,7 @@ describe('the palette memory', () => {
 
   /* A preference the reader stated, not a record of what was on screen: it has
      to outlive the tab to mean what they meant by it, which is the one thing
-     the layout notes in shell/persist.ts deliberately do not do. */
+     the layout notes in lib/persist.ts deliberately do not do. */
   it('stores the collapse where closing the tab cannot take it', () => {
     palette.write('s1', false)
 

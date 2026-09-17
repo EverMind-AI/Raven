@@ -6,7 +6,7 @@
  * purpose.
  *
  * What differs is the wording. The heading and the note are written on open by
- * shell/tier.ts, from the catalogue that answered, and neither carries a
+ * state/tier.ts, from the catalogue that answered, and neither carries a
  * data-i18n key: the built-in ladder is a Session Tier and reaches sub-agents,
  * a deployment's own catalogue is a Session Mode and does not, so a language
  * flip walking the document's keys would paint the tier wording back over a
@@ -16,8 +16,8 @@
 import { useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import { place } from '../shell/popover'
-import * as tier from '../shell/tier'
+import { place } from '../lib/popover'
+import * as tier from '../state/tier'
 
 import type { JSX } from 'react'
 

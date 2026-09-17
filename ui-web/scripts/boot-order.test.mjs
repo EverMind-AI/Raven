@@ -37,13 +37,13 @@ async function harness(rows = []) {
   const step = (name) => (...args) => calls.push([name, ...args])
   const part = await loadPart(() => import('../src/state/boot'), {
     fakes: {
-      'src/shell/look': { load: step('lookLoad') },
-      'src/shell/panes': { load: step('paneLoad') },
-      'src/shell/perm': { draw: step('drawPerm') },
-      'src/shell/tier': { load: step('loadTier') },
-      'src/shell/ctxchip': { draw: step('drawCtx') },
-      'src/shell/foot': { draw: step('drawFoot') },
-      'src/shell/failure': {
+      'src/state/look': { load: step('lookLoad') },
+      'src/chrome/behaviour/panes': { load: step('paneLoad') },
+      'src/state/perm': { draw: step('drawPerm') },
+      'src/state/tier': { load: step('loadTier') },
+      'src/state/ctxChip': { draw: step('drawCtx') },
+      'src/state/foot': { draw: step('drawFoot') },
+      'src/state/failureBar': {
         bootError: (where, error) => { throw new Error(`${where}: ${error}`) },
       },
       'src/state/rail': { set: step('setRail') },

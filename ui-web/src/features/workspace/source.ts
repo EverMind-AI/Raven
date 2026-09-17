@@ -5,10 +5,10 @@
    seam, which replaces the fixture ones before the first paint. */
 
 import type { WorkspaceSource } from './types'
-import type { ProseSource, ProseTarget } from '../../shell/prose'
+import type { ProseSource, ProseTarget } from '../../lib/prose'
 
 import { islands } from '../../islands'
-import { current as sessionCurrent } from '../../shell/session'
+import { current as sessionCurrent } from '../../lib/session'
 import { gateway } from '../../state/gateway'
 
 export function relToWorkspace(p: string | null | undefined): string | null {
