@@ -41,6 +41,7 @@ async function harness(rows = []) {
       'src/shell/tier': { load: step('loadTier') },
       'src/shell/ctxchip': { draw: step('drawCtx') },
       'src/shell/foot': { draw: step('drawFoot') },
+      'src/state/rail': { set: step('setRail') },
       'demo/040-state.js': {
         bootError: (where, error) => { throw new Error(`${where}: ${error}`) },
       },
@@ -53,7 +54,6 @@ async function harness(rows = []) {
       'demo/100-workspace.js': { bumpWs: step('bumpWs') },
       'demo/120-capabilities.js': { drawCapsBadge: step('drawCapsBadge') },
       'demo/130-settings.js': { drawSettings: step('drawSettings'), setRuntime: step('setRuntime') },
-      'demo/150-chrome.js': { setRail: step('setRail') },
       'demo/152-skills.js': { drawCaps: step('drawCaps') },
     },
     islands: { onboard: { open: () => {} } },

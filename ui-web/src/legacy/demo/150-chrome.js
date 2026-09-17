@@ -9,49 +9,39 @@ import { islands } from '../../islands'
 import { toggle as toggleFind } from '../../shell/find'
 import { close as closeImage } from '../../shell/lightbox'
 import { toggle as togglePerm } from '../../shell/perm'
-import { setCurrent as sessionSet } from '../../shell/session'
 import { toggle as toggleTier } from '../../shell/tier'
 import { show as toast } from '../../shell/toast'
+import { get as railOpen, set as setRail } from '../../state/rail'
 import { sources } from '../../state/sources'
 import { $, T } from './010-kernel.js'
 import { turn } from './040-state.js'
-import { renameTitle, sessionDraw, sessionOpen, sessionRows } from './050-rail.js'
-import { ta } from './090-composer.js'
+import { renameTitle } from './050-rail.js'
 import { setWs, wsOpen } from './100-workspace.js'
-import { capFilter, closeCaps, closeDetail, closeSet, closeXa, drawCapsBadge, openPlugins, openSkills, setIsOpen, showPage } from './120-capabilities.js'
+import { capFilter, closeCaps, closeDetail, closeSet, closeXa, drawCapsBadge, setIsOpen } from './120-capabilities.js'
 import { isMac } from './130-settings.js'
-import { closeCron, closeKb, closeMem, openKb, openMem } from './140-schedule.js'
+import { closeCron, closeKb, closeMem } from './140-schedule.js'
 import { closeConn, connCloseDialog } from './145-connections.js'
 import { drawCaps } from './152-skills.js'
-import { closePb, openPb } from './154-playbooks.js'
+import { closePb } from './154-playbooks.js'
 
 const composing = (e) => !!(e.isComposing || e.keyCode === 229);
 
 /* ---- the search row ------------------------------------------------
-   Owned by ui-web/src/shell/find.ts, which holds the term and exports the
-   toggle imported here. The Cmd+F handler above stays here because showing the rail
-   first is a chrome decision, and it is the only caller from this side. */
+   Owned by ui-web/src/shell/find.ts, which holds the term and whether the row
+   is showing, and exports the toggle imported here. The Cmd+F handler below
+   stays here because showing the rail first is a chrome decision, and it is the
+   only caller from this side. */
 
-const setRail = (on) => {
-  const app = document.querySelector('.app');
-  app.dataset.rail = on ? 'on' : 'off';
-  document.documentElement.dataset.rail = on ? 'on' : 'off';
-  $('#railShow').hidden = on;
-};
 // Shrinking past the split point must not leave the conversation hidden.
 let tooNarrowToSplit;
 
-/* ---- the foot row --------------------------------------------------
-   One door to settings. What the row says -- the running build and this
-   platform's shortcut for that door -- is written by the foot module
-   (ui-web/src/shell/foot.ts), whose draw is imported here as drawFoot; the
-   door itself is here, because the dialog behind it is. */
-
-/* The one door to settings. The island's source owns the refresh that must
-   happen before drawing, so both modes use the same opener. */
+/* The one door to settings, which two things open: the rail's foot row
+   (ui-web/src/chrome/Rail.tsx) and the platform shortcut below. The island's
+   source owns the refresh that must happen before drawing, so both use the
+   same opener. */
 const openSettings = async () => { await islands.settings.open(); };
 
-/* ── the 更多 flyout ──────────────────────────────────────────────────
+/* ── the More flyout ──────────────────────────────────────────────────
    Sub-agents / entrances / schedules live here. The renderer is the nav flyout module
    (ui-web/src/shell/navfly.ts), which also owns the button that opens the group;
    what remains here is the one name the live layer still calls. */
@@ -109,25 +99,20 @@ export function install() {
       e.preventDefault(); setRail(true); toggleFind(true);
     }
     if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
-      e.preventDefault(); setRail(document.querySelector('.app').dataset.rail === 'off');
+      e.preventDefault(); setRail(!railOpen());
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n' && !inField) { e.preventDefault(); $('#newBtn').click(); }
   });
 
-  $('#newBtn').onclick = () => {
-    showPage(null);
-    const s = { id: 'n' + Date.now(), title: '新任务', last: '还没开始', when: '刚刚', run: null };
-    sessionRows().unshift(s); sessionSet(s.id); sessionDraw(); sessionOpen(s); ta.focus();
-  };
   $('#renameBtn').onclick = () => renameTitle();
-  // Collapsing the rail is the user's call, never the window's: it holds the
-  // session list, and having it vanish on resize loses your place.
-  $('#railBtn').onclick = () => setRail(false);
+  /* Collapsing the rail is the user's call, never the window's: it holds the
+   session list, and having it vanish on resize loses your place. The rail's own
+   toggle is a component's click now (src/chrome/Rail.tsx); this is the twin
+   that brings it back, and it stays here with the two shortcuts above while
+   button#railShow is static markup. */
   $('#railShow').onclick = () => setRail(true);
   tooNarrowToSplit = matchMedia('(max-width: 1040px)');
   tooNarrowToSplit.addEventListener('change', (e) => { if (e.matches && wsOpen) setWs(false); });
-
-  $('#meBtn').onclick = () => openSettings();
 
   /* The model chip's own menu is installed by live/120-settings.js: it opens
    the picker island against the provider list the page really has. This part
@@ -138,14 +123,6 @@ export function install() {
   $('#permChip').onclick = () => togglePerm();
   $('#tierChip').onclick = () => toggleTier();
 
-  /* Arrows, not references: live.js swaps openCaps for one that loads real data
-   first, and a stored reference would keep calling the demo. */
-  $('#skillBtn').onclick = () => openSkills();
-  $('#plugBtn').onclick = () => openPlugins();
-  /* wrapper, not the reference: live.js replaces openMem with the RPC loader */
-  $('#memBtn').onclick = () => openMem();
-  $('#pbBtn').onclick = () => openPb();
-  $('#kbBtn').onclick = () => openKb();
   /* The platform's own shortcut, same door as the foot row. */
   document.addEventListener('keydown', (e) => {
     if (e.key !== ',' || !(isMac() ? e.metaKey : e.ctrlKey)) return;
@@ -171,4 +148,4 @@ export function install() {
   };
 }
 
-export { composing, setRail, tooNarrowToSplit, openSettings, drawMoreFly }
+export { composing, tooNarrowToSplit, openSettings, drawMoreFly }
