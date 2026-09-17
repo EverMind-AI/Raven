@@ -31,7 +31,7 @@ import { installComposerPalette } from './app/install'
 import * as langEffects from './state/lang/effects'
 import { dropNoJs, markStart } from './app/splash'
 import * as ws from './state/ws'
-import { setWsPanel } from './state/wsPanel'
+import { setWsPane } from './state/wsPane'
 import { setGateway } from './rpc/gateway'
 import { installGlobalListeners } from './state/globalListeners'
 import * as portals from './state/portals'
@@ -71,14 +71,14 @@ installGlobalListeners()
 
 /* The panel the workspace, browser and sub-agent views are drawn inside, handed
    to the islands that ask it something rather than imported by them
-   (state/wsPanel.ts). */
-setWsPanel(ws)
+   (state/wsPane.ts). */
+setWsPane(ws)
 
 /* The desk, handed to the two island stores that open something in it. Handed
    rather than reached for: features/desk/store imports both of them
    back and subscribes to one as it evaluates, so an import the other way would
    run that subscription against a half-built module -- which is also why the
-   panel those stores ask about is handed to them (state/wsPanel.ts). Here,
+   panel those stores ask about is handed to them (state/wsPane.ts). Here,
    before the first frame, because either store may be asked to open a pane
    from the moment the page is on screen. */
 subagents.setAgentPane({ openAgent: desk.openDeskAgent, openAgentRecord: desk.openDeskAgentRecord })

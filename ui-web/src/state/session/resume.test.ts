@@ -13,7 +13,7 @@ import { reset as agentsLeave, _resetForTests as agentsReset, get as agentsState
 import { resetSources, setSources } from '../sources'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
-import { installWsPanel } from '../../test/wsPanelHarness'
+import { installWsPane } from '../../test/wsPaneHarness'
 import type { DagRun } from '../../features/dag/types'
 import type { InstanceRow } from '../../features/subagents/types'
 import type { TranscriptSource } from '../../features/transcript/types'
@@ -59,7 +59,7 @@ let dagRun: (runId: string) => Promise<unknown> = () => Promise.resolve(runWire)
 
 function wire(): void {
   setTranslator((key) => key)
-  installWsPanel()
+  installWsPane()
   setSources({
     transcript: {
       dagRun: (runId: string) => {

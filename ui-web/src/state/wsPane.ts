@@ -1,6 +1,6 @@
-/* What the workspace panel shows, for the islands drawn inside it.
+/* What the workspace pane shows, for the islands drawn inside it.
  *
- * The panel's own state and chrome are src/state/ws.ts, and that module reads
+ * The pane's own state and chrome are src/state/ws.ts, and that module reads
  * every island it draws -- the workspace's record, the browser's frames, the
  * delegated rows, the desk. An island importing it back would put its own
  * initialisation inside that cycle, and two modules in there do real work as
@@ -9,23 +9,23 @@
  * each other. A cycle is harmless when every read is inside a function; those
  * are not.
  *
- * So the four questions an island has for its panel are declared here, in a
- * module that imports nothing, and src/main.tsx hands the panel in. The same
+ * So the four questions an island has for its pane are declared here, in a
+ * module that imports nothing, and src/main.tsx hands the pane in. The same
  * inversion src/main.tsx makes for the other direction, and the same one
  * features/workspace/store.ts's setDeskOpener makes inside the feature.
  */
 
 /** What the pane's chrome currently shows. */
-export interface WsPanelView {
+export interface WsPaneView {
   tab: string
   open: boolean
   picked: boolean
 }
 
-export interface WsPanel {
+export interface WsPane {
   /** Which view, whether the pane stands, and whether a reader chose it. */
-  view(): WsPanelView
-  /** Pick a view. The panel decides whether that means the desk instead. */
+  view(): WsPaneView
+  /** Pick a view. The pane decides whether that means the desk instead. */
   pick(tab: string): void
   /** Put a view on screen: open the pane if it is shut, then pick. */
   show(tab: string): void
@@ -39,16 +39,16 @@ export interface WsPanel {
   showsTurn(): boolean
 }
 
-let wired: WsPanel | null = null
+let wired: WsPane | null = null
 
 /** src/main.tsx, once. */
-export function setWsPanel(p: WsPanel): void {
+export function setWsPane(p: WsPane): void {
   wired = p
 }
 
-/** The panel, or a loud failure: an island runs inside the assembled page. */
-export function panel(): WsPanel {
-  if (!wired) throw new Error('the workspace panel is not wired')
+/** The pane, or a loud failure: an island runs inside the assembled page. */
+export function pane(): WsPane {
+  if (!wired) throw new Error('the workspace pane is not wired')
   return wired
 }
 

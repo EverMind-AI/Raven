@@ -13,8 +13,8 @@
  * when the key arrives, so nothing here remembers a sequence.
  *
  * `id` is the text the chain tested, which is what the gate on this order
- * compares against (overlays.test.ts): a selector for the twelve layers with an
- * element, the predicate's own name for the two without one. `isOpen` is that
+ * compares against (escapeOrder.test.ts): a selector for the twelve layers with
+ * an element, the predicate's own name for the two without one. `isOpen` is that
  * same test -- the attribute for the twelve, because that is what the chain
  * read and what the four islands and three stores that raise them write, and
  * the module's own answer for the settings dialog, which has been a flag in
@@ -42,7 +42,7 @@ import { ds } from './sources'
 
 import type { PageId } from './pages'
 
-export type Overlay = {
+export type EscapeLayer = {
   /** The text the chain tested for this layer. */
   readonly id: string
   /** Asked afresh on every key, never cached. */
@@ -79,7 +79,7 @@ const CLOSERS: Record<PageId, () => void> = {
 /* The five layers Escape reaches before any page: an image, the confirm
    dialog, the channel dialog raised over the entries page, the shared drawer
    and the new-job sheet. */
-const ABOVE: readonly Overlay[] = [
+const ABOVE: readonly EscapeLayer[] = [
   { id: '.lightbox', isOpen: imageOpen, close: closeImage },
   { id: '#veil', isOpen: flagged('veil'), close: cancels('cfNo') },
   /* After the confirm veil, before the page: a dialog raised over the entry
@@ -91,7 +91,7 @@ const ABOVE: readonly Overlay[] = [
 
 /* And the two beneath every page: the settings dialog, which is a flag rather
    than an element, and the running turn. */
-const BELOW: readonly Overlay[] = [
+const BELOW: readonly EscapeLayer[] = [
   { id: 'setIsOpen()', isOpen: settingsDialog.isOpen, close: settingsDialog.close },
   /* The last resort: with nothing on screen to take back, Escape interrupts
      the running turn. */
@@ -99,7 +99,7 @@ const BELOW: readonly Overlay[] = [
 ]
 
 /** The fourteen, in the order Escape reaches them. */
-export const ORDER: readonly Overlay[] = [
+export const ESCAPE_ORDER: readonly EscapeLayer[] = [
   ...ABOVE,
   ...byEscape().map((page) => ({
     id: `#${page.id}`,
@@ -111,7 +111,7 @@ export const ORDER: readonly Overlay[] = [
 
 /** Closes the first layer that is open. Whether one was is the answer. */
 export function dispatch(): boolean {
-  for (const layer of ORDER) {
+  for (const layer of ESCAPE_ORDER) {
     if (!layer.isOpen()) continue
     layer.close()
     return true

@@ -4,7 +4,7 @@
  * earn a chip -- `code.pth` for a path it could resolve, `.artf` for a
  * deliverable the author linked by hand -- and emits them with the resolved
  * path on `data-p`. Until now the other half of that contract lived in the
- * legacy shell: two document-level listeners in demo/150-chrome.js, calling a
+ * page's own chrome: two document-level listeners, calling a
  * pair of function bindings (pathOpen, dirOpen) that the live layer overwrote
  * at load. So the renderer and the click were in different layers, and which
  * one you got depended on which file had run last.

@@ -413,10 +413,6 @@ export function pickAll(on: boolean): void {
   set({ picked: on ? get().docs.map((d) => d.id) : [] })
 }
 
-export function clearPicks(): void {
-  set({ picked: [] })
-}
-
 /* The picked rows, in the order the list shows them rather than the order they
    were ticked in: this is what the actions below report progress against. */
 function pickedDocs(): KbDoc[] {
@@ -644,14 +640,6 @@ export function closeRecall(): void {
   set({ recall: false, searching: false })
 }
 
-/* Clear what was asked without closing the panel. Null hits rather than an
-   empty list: "asked and found nothing" and "not asked yet" are different
-   states, and only the first one has a count to report. */
-export function clearRecall(): void {
-  cancelSearch()
-  set({ query: '', hits: null, cost: null, searching: false })
-}
-
 export function setQuery(query: string): void {
   set({ query })
 }
@@ -739,7 +727,7 @@ export function close(): void {
 
 /* A language flip changes nothing in this state, but every visible string
    comes from t(), so a re-render is the whole redraw. */
-export function redraw(): void {
+function redraw(): void {
   set({})
 }
 

@@ -27,8 +27,16 @@
 import { PAGES } from './pages'
 
 export interface Portal {
-  /** What the element is called; a CSS selector where it has one to itself. */
-  readonly selector: string
+  /** What the element is called, and the table's key: unique across the
+   *  thirteen. */
+  readonly id: string
+  /** The selector that finds it, for the eleven that have one to themselves.
+   *  The other two are named only: the model picker's wrapper carries neither
+   *  id nor class (`make` below says why), and `bootErrorBar` is a row of the
+   *  design's table that nothing in src/ builds. Anything looking these up in
+   *  the document has to skip the two without a selector rather than take two
+   *  nulls it cannot tell from a missing element. */
+  readonly selector?: string
   readonly kind: 'static' | 'reparent' | 'append'
   /** The `--z` token it takes, or the literal an inline style sets. */
   readonly z: string
@@ -72,19 +80,19 @@ const at = (bootKey: string): number => BOOT_BODY_ORDER.indexOf(bootKey) + 1
 
 /* The thirteen, in the order the design's portal table lists them. */
 export const PORTALS: readonly Portal[] = [
-  { selector: '.sbars', kind: 'append', z: '--z-scrollbars', at: at('div.sbars'), bootKey: 'div.sbars' },
-  { selector: 'pickHost', kind: 'append', z: '--z-picker', at: at('div'), bootKey: 'div' },
-  { selector: '#deskHost', kind: 'append', z: '--z-desk', at: at('div#deskHost'), bootKey: 'div#deskHost' },
-  { selector: '.tipp', kind: 'append', z: '--z-tip', at: at('div.tipp'), bootKey: 'div.tipp' },
-  { selector: '#permPop', kind: 'reparent', z: '46', at: 'last' },
-  { selector: '#tierPop', kind: 'reparent', z: '46', at: 'last' },
-  { selector: 'button.lightbox', kind: 'append', z: '--z-lightbox', at: 'last' },
-  { selector: '.upshade', kind: 'append', z: '--z-shade', at: 'last' },
-  { selector: '.topfail', kind: 'append', z: '--z-failbar', at: 'last' },
-  { selector: 'bootErrorBar', kind: 'append', z: '99', at: 'last' },
-  { selector: 'input[type=file]', kind: 'append', z: '', at: 'last' },
-  { selector: '#menu', kind: 'static', z: '--z-menu', at: at('div#menu'), bootKey: 'div#menu' },
-  { selector: '#toasts', kind: 'static', z: '--z-toast', at: at('div#toasts'), bootKey: 'div#toasts' },
+  { id: '.sbars', selector: '.sbars', kind: 'append', z: '--z-scrollbars', at: at('div.sbars'), bootKey: 'div.sbars' },
+  { id: 'pickHost', kind: 'append', z: '--z-picker', at: at('div'), bootKey: 'div' },
+  { id: '#deskHost', selector: '#deskHost', kind: 'append', z: '--z-desk', at: at('div#deskHost'), bootKey: 'div#deskHost' },
+  { id: '.tipp', selector: '.tipp', kind: 'append', z: '--z-tip', at: at('div.tipp'), bootKey: 'div.tipp' },
+  { id: '#permPop', selector: '#permPop', kind: 'reparent', z: '46', at: 'last' },
+  { id: '#tierPop', selector: '#tierPop', kind: 'reparent', z: '46', at: 'last' },
+  { id: 'button.lightbox', selector: 'button.lightbox', kind: 'append', z: '--z-lightbox', at: 'last' },
+  { id: '.upshade', selector: '.upshade', kind: 'append', z: '--z-shade', at: 'last' },
+  { id: '.topfail', selector: '.topfail', kind: 'append', z: '--z-failbar', at: 'last' },
+  { id: 'bootErrorBar', kind: 'append', z: '99', at: 'last' },
+  { id: 'input[type=file]', selector: 'input[type=file]', kind: 'append', z: '', at: 'last' },
+  { id: '#menu', selector: '#menu', kind: 'static', z: '--z-menu', at: at('div#menu'), bootKey: 'div#menu' },
+  { id: '#toasts', selector: '#toasts', kind: 'static', z: '--z-toast', at: at('div#toasts'), bootKey: 'div#toasts' },
 ]
 
 /** The four layers this module hands out, in the order they belong at the body. */

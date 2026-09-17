@@ -7,7 +7,7 @@
  * that way (scripts/gates/rail-nav-registry.test.mjs says which).
  *
  * The tables are derived now: state/pages.ts declares a page and src/App.tsx,
- * state/page.ts, state/overlays.ts, state/portals.ts, chrome/Rail.tsx,
+ * state/page.ts, state/escapeOrder.ts, state/portals.ts, chrome/Rail.tsx,
  * features/rail/store.ts and src/test/regions.test.ts all read it, so there is
  * nothing left for a new page to be missing FROM. What this gate holds is the
  * two ends of that: every domain declares itself (features/<domain>/manifest.ts

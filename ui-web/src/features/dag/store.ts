@@ -41,7 +41,6 @@ export const saved = (key: string): Kept | null => KEPT.read(key)
 
 export const version = (): number => epoch
 export const run = (key: string): DagRun | null => RUNS.get(key) || null
-export const keys = (): string[] => [...RUNS.keys()]
 
 export function subscribe(l: () => void): () => void {
   listeners.add(l)

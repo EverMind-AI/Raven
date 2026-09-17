@@ -1,5 +1,5 @@
 /* The capabilities page: which tab it shows, what its filter bar says, and the
- * chrome around #capsBody.
+ * frame around #capsBody.
  *
  * One section serves two modules -- the skill market and the plugin market --
  * and each of them used to write the same handful of elements from whichever
@@ -67,8 +67,8 @@ export interface CapsState {
   readonly hero: string | null
 }
 
-/** What a draw says about the chrome around the body. */
-export interface Chrome {
+/** What a draw says about the frame around the body. */
+export interface Frame {
   /** #capsTitle */
   readonly title: string
   /** #capsPage's aria-label: the tab's own name, installed view or not. */
@@ -87,11 +87,11 @@ export interface Chrome {
    draws. Named rather than a list, because the order they were visible in
    differs per tab (see `draw`). */
 export interface DrawHooks {
-  /** demo/152-skills.js: the skill tab, its own installed button included. */
+  /** features/skills/wire.ts: the skill tab, its own installed button included. */
   skill(): void
   /** Its button alone, which the plugin tab and the island's own changes sync. */
   skillButton(): void
-  /** demo/153-plugins.js: the plugin tab. */
+  /** features/plugins/wire.ts: the plugin tab. */
   plugin(): void
   pluginButton(): void
   /** The hero above the bar, last on both tabs. */
@@ -206,9 +206,9 @@ export function drawIfOpenOnPlugins(): void {
   if (page.get() === 'capsPage' && get().tab === 'plugin') draw()
 }
 
-/* The chrome a draw decides, in one commit: the six values are what the two
+/* The frame a draw decides, in one commit: the six values are what the two
    renderers wrote on six elements, and the component draws all six. */
-export function chrome(next: Chrome): void {
+export function setFrame(next: Frame): void {
   set({
     label: next.label,
     advHidden: next.advHidden,

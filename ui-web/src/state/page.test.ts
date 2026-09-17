@@ -119,7 +119,7 @@ describe('showing a module page', () => {
   })
 
   /* The order the three slots are spent in, which is what state/page.ts spells
-     out: the rail's mark, then the drawer, then the two page-owned overlays. */
+     out: the rail's mark, then the drawer, then the two page-owned escapeOrder. */
   it('spends the three registered slots in the order it declares', async () => {
     const { page, spent } = await fresh()
     document.getElementById('detail')!.dataset.open = 'true'

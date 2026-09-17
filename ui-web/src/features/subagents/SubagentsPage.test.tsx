@@ -20,7 +20,7 @@ import { resetSources, setSources, sources } from '../../state/sources'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
-import { installWsPanel } from '../../test/wsPanelHarness'
+import { installWsPane } from '../../test/wsPaneHarness'
 import * as pageStore from '../../state/page'
 import type { JSX } from 'react'
 import type { ComposerSource } from '../composer/types'
@@ -48,7 +48,7 @@ store.setAgentPane(deskPane)
 function wire(source: SubagentsSource): void {
   paints.length = 0
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
-  installWsPanel({ view: () => ({ tab: 'agents', open: true, picked: true }) })
+  installWsPane({ view: () => ({ tab: 'agents', open: true, picked: true }) })
   vi.spyOn(pageStore, 'show').mockImplementation(() => {})
   vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   sessionReset()
@@ -1817,7 +1817,7 @@ describe('subagents island, an instance detail', () => {
           ],
       }),
     })
-    installWsPanel()
+    installWsPane()
 
     render(<InstanceConversation row={row} />, {
       container: document.getElementById('wsBody')!,
@@ -1878,7 +1878,7 @@ describe('subagents island, an instance detail', () => {
           : [{ role: 'assistant', content: 'first' }, { role: 'assistant', content: 'second' }],
       }),
     })
-    installWsPanel()
+    installWsPane()
 
     render(<AgentRecordConversation row={row} />, {
       container: document.getElementById('wsBody')!,

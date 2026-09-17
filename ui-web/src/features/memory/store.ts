@@ -5,10 +5,10 @@ import type { MemItem, MemKind, MemStats, MemorySource } from './types'
 import * as page from '../../state/page'
 import { makeStore } from '../../state/store'
 
-/* Page state, outside React on purpose: the legacy shell drives this page
- * imperatively (nav opens it, Esc closes it, a language flip redraws it),
- * so the state lives in a plain store the shims can call, and the
- * component subscribes.
+/* Page state, outside React on purpose: the caller that closes this page is
+ * not React -- the Escape order asks the domain's own verb for it
+ * (state/escapeOrder.ts) -- so the state lives in a plain store it can call,
+ * and the component subscribes.
  */
 
 export const MEM_PAGE_SIZE = 20
@@ -57,7 +57,7 @@ export function set(patch: Partial<MemoryState>): void {
   store.set((prev) => ({ ...prev, ...patch }))
 }
 
-export const source = (): MemorySource => ds('memory')
+const source = (): MemorySource => ds('memory')
 
 function failure(e: unknown): string {
   const err = e as { data?: { detail?: string }; message?: string }
@@ -78,7 +78,7 @@ export async function load(): Promise<void> {
   }
 }
 
-export function refreshStats(): Promise<void> {
+function refreshStats(): Promise<void> {
   return source()
     .stats()
     .then((stats) => set({ stats, note: (stats && stats.note) || get().note }))
@@ -129,7 +129,7 @@ export function openDetail(it: MemItem): void {
   set({ detail: it })
 }
 
-export function closeDetail(): void {
+function closeDetail(): void {
   detail.close()
 }
 
@@ -138,7 +138,7 @@ export function closeDetail(): void {
    the drawer has finished fading, or the card is gone from inside a panel that
    is still on screen. `gen` is which open the drop belongs to: the item cannot
    answer that, because reopening the same row hands back the same object. */
-export function detailDismissed(): void {
+function detailDismissed(): void {
   if (!get().detail) return
   const gen = detail.get().gen
   detail.dropAfterFade(
@@ -170,6 +170,6 @@ export function remove(it: MemItem): void {
 /* A language flip changes nothing in this state, and every visible string comes
    from t() -- so the island's own subscription to the language store is the
    whole redraw, and this verb is what a caller outside React asks for one by. */
-export function redraw(): void {
+function redraw(): void {
   set({})
 }

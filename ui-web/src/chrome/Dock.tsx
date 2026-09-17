@@ -20,9 +20,9 @@
  *
  * Four of the children are files of their own, because each renders the whole
  * of a store: the context ring (./CtxChip.tsx) and the two chips with the
- * panels they open (./PermChip.tsx, ./PermPop.tsx, ./TierChip.tsx,
- * ./TierPop.tsx). Their place in the two child lists below is the page's, which
- * is the one thing about them this file still decides.
+ * popovers they open (./PermChip.tsx, ./PermPopover.tsx, ./TierChip.tsx,
+ * ./TierPopover.tsx). Their place in the two child lists below is the page's,
+ * which is the one thing about them this file still decides.
  *
  * What this does NOT own, though it renders the elements:
  *   - textarea#ta. It stays uncontrolled and its four listeners stay native
@@ -46,7 +46,7 @@
  *     #slashPop's data-open.
  *   - where #permPop and #tierPop stand. Both stores move the node to the body
  *     the first time it opens, because the card's entrance animation makes the
- *     card a containing block and re-bases the panel's fixed coordinates. A
+ *     card a containing block and re-bases the popover's fixed coordinates. A
  *     child moved out from under a portal is safe as long as React never
  *     reconciles that child list, which it does not: see above.
  * Each of those is still exactly one writer of the value it writes, and React
@@ -59,9 +59,9 @@ import { useSyncExternalStore } from 'react'
 
 import { CtxChip } from './CtxChip'
 import { PermChip } from './PermChip'
-import { PermPop } from './PermPop'
+import { PermPopover } from './PermPopover'
 import { TierChip } from './TierChip'
-import { TierPop } from './TierPop'
+import { TierPopover } from './TierPopover'
 import { t } from '../i18n/t'
 import * as lang from '../state/lang'
 
@@ -107,8 +107,8 @@ function DockIn(): JSX.Element {
         <div id="slashList" />
       </div>
 
-      <PermPop />
-      <TierPop />
+      <PermPopover />
+      <TierPopover />
     </div>
   )
 }

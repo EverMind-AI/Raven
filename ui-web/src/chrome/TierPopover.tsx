@@ -1,8 +1,8 @@
-/* The sub-agent effort panel: one row per rung the server offers.
+/* The sub-agent effort popover: one row per rung the server offers.
  *
  * Where it renders, when it moves to the body, why the rows go in through a
  * portal into their own list and why they are the list the open took are all as
- * src/chrome/PermPop.tsx records them; the two panels are built the same way on
+ * src/chrome/PermPopover.tsx records them; the two popovers are built the same way on
  * purpose.
  *
  * What differs is the wording. The heading and the note come from the store's
@@ -22,7 +22,7 @@ import * as tier from '../state/tier'
 
 import type { JSX } from 'react'
 
-export function TierPop(): JSX.Element {
+export function TierPopover(): JSX.Element {
   const s = useSyncExternalStore(tier.subscribe, tier.get)
   const box = useRef<HTMLDivElement>(null)
   const list = document.getElementById('tierList')

@@ -11,7 +11,7 @@ import { resetSources, setSources, sources } from '../../state/sources'
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as lang from '../../state/lang'
 import * as confirmStore from '../../state/confirm'
-import { installWsPanel } from '../../test/wsPanelHarness'
+import { installWsPane } from '../../test/wsPaneHarness'
 import * as pageStore from '../../state/page'
 import type { BrowserSource, ChromiumSource, LinksSource, UrlRow } from './types'
 
@@ -37,7 +37,7 @@ function wire(source: BrowserSource, language: 'en' | 'zh' = 'en'): void {
   vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   /* The browser view, standing open: the island only reads frames and tabs
      while its own view is the one on screen. */
-  installWsPanel({
+  installWsPane({
     view: () => ({ tab: 'browser', open: true, picked: true }),
     show: (tab) => { shellCalls.push(['showWorkspace', tab]) },
   })

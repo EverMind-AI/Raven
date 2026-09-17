@@ -607,7 +607,7 @@ function StdioWarn({
           className="mini"
           onClick={() => {
             const form = collect ? collect() : {}
-            if (form) store.install(entry, form)
+            if (form) store.installEntry(entry, form)
           }}
         >
           {t('gui.plug.still_install')}
@@ -682,7 +682,7 @@ function InstallControls({
               className="mini gold"
               onClick={() => {
                 const form = collect()
-                if (form) store.install(entry, form)
+                if (form) store.installEntry(entry, form)
               }}
             >
               {t('gui.plug.connect')}
@@ -715,7 +715,7 @@ function InstallControls({
             store.unfoldConfirm(entry.id)
             return
           }
-          store.install(entry, {})
+          store.installEntry(entry, {})
         }}
       >
         {s.busy === entry.id ? t('gui.hub.working') : t('gui.plug.install')}
@@ -831,7 +831,7 @@ function MarketDetail({ id, s }: { id: string; s: store.PlugState }): JSX.Elemen
                   store.unfoldConfirm(entry.id)
                   return
                 }
-                store.install(entry, {})
+                store.installEntry(entry, {})
               }}
             >
               {t('gui.plug.install')}

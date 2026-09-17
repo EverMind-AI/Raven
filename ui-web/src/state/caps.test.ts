@@ -109,7 +109,7 @@ describe('the capabilities page state', () => {
   })
 
   it('writes the three container attributes a draw decides, and keeps the rest as state', () => {
-    caps.chrome({
+    caps.setFrame({
       title: 'Installed skills',
       label: 'Skills',
       search: 'Search the skill market',
@@ -125,7 +125,7 @@ describe('the capabilities page state', () => {
       search: 'Search the skill market',
       pillsHidden: true,
     })
-    caps.chrome({ title: 'Plugins', label: 'Plugins', search: 'Search plugins', pillsHidden: true, advHidden: false, bar: '' })
+    caps.setFrame({ title: 'Plugins', label: 'Plugins', search: 'Search plugins', pillsHidden: true, advHidden: false, bar: '' })
     expect(el('advAdd').hidden).toBe(false)
     expect(bar().style.display).toBe('')
   })

@@ -74,8 +74,11 @@ function removeThenList(j: CronJob): void {
 export function CronApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   /* The language the page resolved, so a pick repaints this island: every word
-     below is a t(key) read at render time (state/lang/store.ts). */
-  useSyncExternalStore(lang.subscribe, lang.get)
+     below is a t(key) read at render time (state/lang/store.ts). The detail
+     view also refetches its run history on it -- run stamps arrive
+     language-baked from the source, so a flip has to ask again, while the
+     plain redraws the island's own controls ask for must not. */
+  const { lang: pageLang } = useSyncExternalStore(lang.subscribe, lang.get)
   const job = s.viewId ? s.rows.find((x) => x.id === s.viewId) : undefined
   useEffect(() => {
     if (s.viewId && !job) store.backToList()
@@ -84,7 +87,7 @@ export function CronApp(): JSX.Element {
   return (
     <>
       {job && draft ? (
-        <CronDetail key={`${job.id}:${s.epoch}`} job={job} draft={draft} rev={s.rev} lang={s.lang} />
+        <CronDetail key={`${job.id}:${s.epoch}`} job={job} draft={draft} rev={s.rev} lang={pageLang} />
       ) : s.loaded || s.rows.length ? (
         <CronList rows={s.rows} />
       ) : null}
@@ -215,14 +218,15 @@ function CronRow({ j }: { j: CronJob }): JSX.Element {
    what it is set to do, and what it has done. They used to be two cards
    stacked down one scroll, which meant editing a schedule with a run log
    underfoot and a delete button between them. */
-function CronDetail({ job, draft, rev, lang }: { job: CronJob; draft: CronDraft; rev: number; lang: number }): JSX.Element {
+function CronDetail({ job, draft, rev, lang }: { job: CronJob; draft: CronDraft; rev: number; lang: string }): JSX.Element {
   const [runs, setRuns] = useState<CronRun[] | null>(null)
   const [tab, setTab] = useState<'cfg' | 'runs'>('cfg')
   const [running, setRunning] = useState(false)
-  /* Keyed on rev, not just the job: the legacy page refetched history on
-     every draw, and the shell leans on that -- live's cron.finished handler
-     calls refresh() precisely so a run that lands while the reader is on
-     this page drops into the list. */
+  /* Keyed on rev and on the page's language, not just on the job. `rev` is
+     what the live cron.finished handler bumps through refresh(), precisely so
+     a run that lands while the reader is on this page drops into the list; the
+     language is what makes a flip re-ask for stamps the source baked words
+     into. */
   useEffect(() => {
     let stale = false
     store

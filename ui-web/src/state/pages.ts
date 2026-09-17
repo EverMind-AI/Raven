@@ -13,7 +13,7 @@
  * order the pages sit in the body (src/App.tsx renders them in it, and
  * state/portals.ts's BOOT_BODY_ORDER records it); `escapeRank` is a separate
  * order on purpose, because what Escape takes back first is not what is
- * rendered first (state/overlays.ts says why).
+ * rendered first (state/escapeOrder.ts says why).
  *
  * Data only, and in state/ rather than in features/: every table above reads
  * it, and a page's identity is strings. What a domain DOES -- its source, its
@@ -30,7 +30,7 @@ export interface ModulePage {
   readonly bodyId: string
   /** Which rail button lights up while it is open; two means its own two tabs. */
   readonly navButtons: readonly string[]
-  /** Its place in the Escape chain, low first (state/overlays.ts). */
+  /** Its place in the Escape chain, low first (state/escapeOrder.ts). */
   readonly escapeRank: number
   /** The key its heading speaks, absent for the one page that renders its own. */
   readonly head?: string

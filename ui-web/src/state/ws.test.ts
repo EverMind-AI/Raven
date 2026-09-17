@@ -74,7 +74,7 @@ beforeEach(() => {
   deskTabs = []
   resets = []
   vi.spyOn(workspace, 'shared').mockReturnValue(record)
-  vi.spyOn(workspace, 'draw').mockImplementation(() => { drew.push(snap()) })
+  vi.spyOn(workspace, 'mount').mockImplementation(() => { drew.push(snap()) })
   vi.spyOn(workspace, 'reset').mockImplementation(() => { resets.push('workspace') })
   vi.spyOn(desk, 'notifyDesk').mockImplementation(() => { notified.push(snap()) })
   vi.spyOn(desk, 'openDeskTab').mockImplementation((tab) => { deskTabs.push(tab) })

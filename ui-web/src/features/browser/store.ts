@@ -4,7 +4,7 @@ import { open as openUrl } from '../../lib/openUrl'
 import { sources } from '../../state/sources'
 
 import type { BrowserReply, BrowserSource, BrowserTabRow, ChromiumSource, FrameHead } from './types'
-import { panel } from '../../state/wsPanel'
+import { pane } from '../../state/wsPane'
 
 /* Page state, outside React on purpose: the panel drives this view imperatively
  * (state/ws.ts mounts and unmounts it per redraw, frames land from the
@@ -145,7 +145,7 @@ export const noFavAdd = (origin: string): void => {
 }
 
 export function showing(): boolean {
-  const shown = panel().view()
+  const shown = pane().view()
   return shown.open && shown.tab === 'browser'
 }
 
@@ -457,9 +457,9 @@ export async function closeBrowser(): Promise<void> {
   set({ started: false, url: '', hasFrame: false })
 }
 
-/* Leaving the browser view -- another tab, another session, the panel shut --
-   must drop the watch; the demo drawWs wrapper calls this on every repaint
-   that lands somewhere else. */
+/* Leaving the browser view -- another tab, another session, the pane shut --
+   must drop the watch; the pane's mount calls this on every repaint that lands
+   somewhere else (features/workspace/store.ts). */
 export function hidden(): void {
   void watch(false)
   tick(false)

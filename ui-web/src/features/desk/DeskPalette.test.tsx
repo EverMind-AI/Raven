@@ -20,7 +20,7 @@ import { resetSources, setSources, sources } from '../../state/sources'
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
-import { installWsPanel } from '../../test/wsPanelHarness'
+import { installWsPane } from '../../test/wsPaneHarness'
 import type { InstanceRow, SubagentsSource } from '../subagents/types'
 import type { WorkspaceSource, WsChange } from '../workspace/types'
 
@@ -56,7 +56,7 @@ const change = (key: string): WsChange => ({
 function wire(): void {
   opens.length = 0
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
-  installWsPanel()
+  installWsPane()
   vi.spyOn(pageStore, 'show').mockImplementation(() => {})
   vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   const source: WorkspaceSource = {

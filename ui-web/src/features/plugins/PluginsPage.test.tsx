@@ -196,7 +196,7 @@ describe('plugins island', () => {
   /* The island sets its own state and then tells the chrome, because the tab
      title, hero and installed button live outside any root it owns. Nothing
      asserted the second half. */
-  it('asks the caps chrome to redraw on both view transitions', async () => {
+  it('asks the caps frame to redraw on both view transitions', async () => {
     const { shellCalls } = install([item()], [{ id: 'sheets', name: 'sheets', src: 'raven-sheets', ver: '0.9.0', state: 'on' }])
     await mount()
     const redraws = () => shellCalls.filter((c) => c[0] === 'plugRedraw').length

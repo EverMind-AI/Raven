@@ -6,11 +6,12 @@ import * as detail from '../../state/detail'
 import type { HubDetail, HubItem, InstalledSkill, SkillsSource } from './types'
 import { makeStore } from '../../state/store'
 
-/* Page state, outside React on purpose: the legacy shell drives this page
- * imperatively (the skill tab's drawCaps redraws it, a tab switch resets
- * it, the shared drawer's close drops its sheet, a language flip redraws
- * it), so the state lives in a plain store the shims can call, and the
- * component subscribes.
+/* Page state, outside React on purpose: two of the callers that drive this
+ * tab are not React. The capabilities page dispatches its draw through its own
+ * hooks (state/caps.ts calls features/skills/wire.ts, which asks for the
+ * repaint below) and the shared drawer's close drops the sheet
+ * (state/detail.ts) -- so the state lives in a plain store those can call, and
+ * the component subscribes.
  */
 
 export const HUB_PAGE = 24
@@ -177,7 +178,7 @@ export function fetchDetail(hubId: string): void {
     .catch((e: unknown) => toast(t('gui.hub.err', { err: errText(e) })))
 }
 
-export function install(it: HubItem): void {
+export function installSkill(it: HubItem): void {
   set({ busy: it.id })
   source()
     .install(it.id)

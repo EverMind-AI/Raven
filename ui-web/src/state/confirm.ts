@@ -10,7 +10,7 @@
  * here and the buttons call back in. What stays imperative is the flag on the
  * container, because src/App.tsx renders div#veil with the flag the page is
  * served with and never writes it again: the Escape order reads that attribute
- * to decide the sheet is what an Escape should take back (state/overlays.ts),
+ * to decide the sheet is what an Escape should take back (state/escapeOrder.ts),
  * and the CSS shows the sheet from it.
  *
  * The question is committed synchronously, and that is a contract rather than a

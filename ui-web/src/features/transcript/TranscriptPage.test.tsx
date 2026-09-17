@@ -20,7 +20,7 @@ import { hold as holdHost } from '../../state/session/hosts'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
-import { installWsPanel } from '../../test/wsPanelHarness'
+import { installWsPane } from '../../test/wsPaneHarness'
 import * as pageStore from '../../state/page'
 import { I18N } from '../../i18n/t'
 import type { ProseTarget } from '../../lib/prose'
@@ -48,7 +48,7 @@ function wire(over: Partial<TranscriptSource> = {}): void {
   lang = 'en'
   seen.md = 0
   setTranslator((key, vars) => `${lang}:${key}` + (vars ? ` ${JSON.stringify(vars)}` : ''))
-  installWsPanel()
+  installWsPane()
   vi.spyOn(pageStore, 'show').mockImplementation(() => {})
   vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   const source: TranscriptSource = {
@@ -2160,7 +2160,7 @@ describe('transcript island, the delegation verbs', () => {
   it('sends a spawn row to the agents panel when nothing else will take it', () => {
     const went: string[] = []
     wire()
-    installWsPanel({ show: (tab: string) => { went.push(tab) } })
+    installWsPane({ show: (tab: string) => { went.push(tab) } })
     store.openSpawn('researcher', 'read the docs')
     expect(went).toEqual(['agents'])
   })

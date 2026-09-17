@@ -30,7 +30,7 @@ export const WHEEL_LINE_PX = 16
 
    A page is the scroller's own visible height -- that is what a page means to
    the thing being scrolled. `fallback` when it has none to report. */
-export function pixelDelta(deltaY: number, deltaMode: number, pageHeight: number): number {
+function pixelDelta(deltaY: number, deltaMode: number, pageHeight: number): number {
   if (deltaMode === 1) return deltaY * WHEEL_LINE_PX
   if (deltaMode === 2) return deltaY * (pageHeight || WHEEL_LINE_PX)
   return deltaY

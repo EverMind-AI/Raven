@@ -23,7 +23,7 @@ import * as lang from './store'
    rather than answering null. */
 const LANG_KEY = 'raven.gui.lang'
 
-export function remember(v: string): void {
+function remember(v: string): void {
   try { localStorage.setItem(LANG_KEY, v) } catch { /* private mode */ }
 }
 

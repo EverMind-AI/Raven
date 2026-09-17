@@ -11,6 +11,7 @@ import { mountPageRoot } from '../../test/pageRoot'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
+import * as lang from '../../state/lang'
 import * as pageStore from '../../state/page'
 import type { CronJob, CronSource } from './types'
 
@@ -107,6 +108,9 @@ afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
   resetSources()
+  /* Applying a language is module state, so the one case that flips it must
+     not leave the page in it. */
+  lang._resetForTests()
 })
 
 describe('cron island', () => {
@@ -245,9 +249,9 @@ describe('cron island', () => {
     await tab('gui.cron.tab_runs')
     await screen.findByText('stamped')
     const before = runs.mock.calls.length
-    /* What the legacy language flip calls through the shim. */
+    /* A real pick, which is the only thing that moves the page's language. */
     await act(async () => {
-      store.langRedraw()
+      lang.set('zh')
     })
     expect(runs.mock.calls.length).toBe(before + 1)
     /* The island's own repaint must not refetch. */

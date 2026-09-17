@@ -1,15 +1,15 @@
-/* The sub-agent effort tier: the chip on the composer (#tierChip) and the panel
+/* The sub-agent effort tier: the chip on the composer (#tierChip) and the popover
  * it opens (#tierPop).
  *
  * A store rather than a writer, for the reasons `perm.ts` gives next door:
- * <TierChip/> and <TierPop/> render both nodes from it (src/chrome/TierChip.tsx,
- * src/chrome/TierPop.tsx), the chip's four values and the panel's two headings
- * included. The panel is still moved to the body by hand, because that is the
+ * <TierChip/> and <TierPopover/> render both nodes from it (src/chrome/TierChip.tsx,
+ * src/chrome/TierPopover.tsx), the chip's four values and the popover's two headings
+ * included. The popover is still moved to the body by hand, because that is the
  * only way it can be positioned at all; what stays here is what decides. The
  * two chips sit side by side and are built the same way on purpose -- a reader
  * meets them as one row of session settings, not as two unrelated controls.
  *
- * What it is NOT is a model. What it IS depends on the catalogue, and the panel
+ * What it is NOT is a model. What it IS depends on the catalogue, and the popover
  * says which rather than assuming.
  *
  * A **Session Tier** is `medium`/`high`/`max` and nothing else: `clamp_tier`
@@ -72,7 +72,7 @@ let mode = ''
 let menu: TierOption[] = []
 let loaded = false
 
-/** One row of the panel, as the open that built it read the catalogue. */
+/** One row of the popover, as the open that built it read the catalogue. */
 export interface TierRow {
   readonly id: string
   readonly name: string
@@ -99,34 +99,34 @@ export type TierPaint =
     readonly aria: string
   }
 
-/** The panel's heading and footer, as the open that built them read them. */
+/** The popover's heading and footer, as the open that built them read them. */
 export interface TierHeadings {
   readonly lab: string
   readonly note: string
 }
 
-export interface TierPanel {
-  /** Up or down: the panel's data-open and the chip's aria-expanded. */
+export interface TierPopoverState {
+  /** Up or down: the popover's data-open and the chip's aria-expanded. */
   readonly open: boolean
-  /* The rows the last open built, or null while the panel has never been
-     opened. Not cleared when it closes, because closing only hid the panel
+  /* The rows the last open built, or null while the popover has never been
+     opened. Not cleared when it closes, because closing only hid the popover
      before and may not start emptying it -- so the catalogue here is the one
      that answered before the last open, not the one in force. */
   readonly listed: readonly TierRow[] | null
-  /** Bumped by every open, so a panel opened twice is measured twice. */
+  /** Bumped by every open, so a popover opened twice is measured twice. */
   readonly opened: number
   /** What the chip shows, or null while nothing has drawn it yet. */
   readonly paint: TierPaint | null
-  /* The words the last open chose, or null while the panel has never been
+  /* The words the last open chose, or null while the popover has never been
      opened -- and then the two nodes stand empty, which is how the page is
      served with them. */
   readonly head: TierHeadings | null
 }
 
-const shut: TierPanel = { open: false, listed: null, opened: 0, paint: null, head: null }
-const store = makeStore<TierPanel>(shut)
+const shut: TierPopoverState = { open: false, listed: null, opened: 0, paint: null, head: null }
+const store = makeStore<TierPopoverState>(shut)
 
-/** The panel's state, for <TierPop/> and <TierChip/>. */
+/** The popover's state, for <TierPopover/> and <TierChip/>. */
 export const { get, subscribe } = store
 
 /* Field by field, for the reason perm.ts's samePaint gives: a fresh object per
@@ -146,8 +146,8 @@ const sameHead = (a: TierHeadings | null, b: TierHeadings | null): boolean => {
 }
 
 /* Committed synchronously, for the reason perm.ts's put gives: `open` measures
-   the panel it has just filled. */
-export function set(next: TierPanel): void {
+   the popover it has just filled. */
+export function set(next: TierPopoverState): void {
   const now = get()
   if (next.open === now.open && next.listed === now.listed && next.opened === now.opened
     && samePaint(next.paint, now.paint) && sameHead(next.head, now.head)) return
@@ -257,9 +257,9 @@ export function draw(): void {
   })
 }
 
-/* The panel's heading and footer, chosen on open because both depend on the
+/* The popover's heading and footer, chosen on open because both depend on the
    catalogue that answered, and then held in the store until the next one.
-   Neither can be rendered from a key: <TierPop/> is built before anything is
+   Neither can be rendered from a key: <TierPopover/> is built before anything is
    asked, and a key there would have the lang store paint the tier wording back
    over a mode catalogue's. */
 const headings = (): TierHeadings => ({
@@ -328,8 +328,8 @@ export function open(): void {
   if (!pop || !chip) return
   /* Positioned off the chip, raised clear of the card, and moved to the body --
      all three for the reasons `perm.ts` records next door, its open included.
-     Before the commit, because the placement <TierPop/> makes in its layout
-     effect measures the panel where it now stands, at the size the headings and
+     Before the commit, because the placement <TierPopover/> makes in its layout
+     effect measures the popover where it now stands, at the size the headings and
      the rows of this same commit gave it. */
   if (pop.parentElement !== document.body) document.body.appendChild(pop)
   set({ ...get(), open: true, listed: rows(), opened: get().opened + 1, head: headings() })
@@ -346,7 +346,7 @@ export function toggle(): void {
   else open()
 }
 
-/* A row's click. The panel goes first, and a row that is already in force asks
+/* A row's click. The popover goes first, and a row that is already in force asks
    for nothing. */
 export function pick(id: string): void {
   close()
@@ -363,7 +363,7 @@ async function choose(id: string): Promise<void> {
   } catch (err) {
     toast(t('gui.tier.failed', { name: label(id) }))
     /* Nothing moved -- `mode` still holds what the server last told us -- but
-       the panel may be redrawn from it, so put the chip back in step. */
+       the popover may be redrawn from it, so put the chip back in step. */
     draw()
     void err
   }

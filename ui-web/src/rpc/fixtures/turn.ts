@@ -344,7 +344,7 @@ interface Frame {
    chunked the way the replay typed it, because that is what the transcript's
    streaming path is for: one `token.delta` per chunk rather than one for the
    whole answer. */
-export function framesOf(run: Run, websearchOn: boolean, turnId: string): Frame[] {
+function framesOf(run: Run, websearchOn: boolean, turnId: string): Frame[] {
   const frames: Frame[] = []
   let episode = 0
   for (const e of eventsFor(run, websearchOn)) {
@@ -390,7 +390,7 @@ export function framesOf(run: Run, websearchOn: boolean, turnId: string): Frame[
    by running the script through the island at zero delay; a page that reads
    its history off the wire gets it as messages instead, which is the shape a
    real transcript on disk has. */
-export function historyOf(run: Run, websearchOn: boolean, at: number): ResultOf<'session.resume'>['messages'] {
+function historyOf(run: Run, websearchOn: boolean, at: number): ResultOf<'session.resume'>['messages'] {
   const messages: ResultOf<'session.resume'>['messages'] = [
     { role: 'user', text: run.ask, timestamp: String(at) },
   ]
@@ -431,7 +431,7 @@ const nameOfCall = (run: Run, websearchOn: boolean, id: string): string => {
 
 /** The first line of what a script answers, which is what a finished turn
     leaves on its conversation's row. */
-export function previewOf(run: Run, websearchOn: boolean): string {
+function previewOf(run: Run, websearchOn: boolean): string {
   const answers = eventsFor(run, websearchOn).filter((e) => e.t === 'answer')
   const last = answers[answers.length - 1]
   return String((last && last.x) || '').trim().split('\n')[0]!.slice(0, 60)

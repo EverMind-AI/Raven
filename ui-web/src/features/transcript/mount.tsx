@@ -86,7 +86,8 @@ function laneIn(container: HTMLElement, main: boolean, view: (lane: Lane) => Rea
 }
 
 /* Detached lane for a page without a #stage (unit tests exercise the store
-   through the mounted views instead; this keeps the shims from throwing). */
+   through the mounted views instead; this keeps the verbs below answerable on
+   a page that has no stage to draw into). */
 let orphan: Lane | null = null
 
 export function mainLane(): Lane {
@@ -98,7 +99,7 @@ export function mainLane(): Lane {
   return laneIn(stage, true, (lane) => <StageView lane={lane} />)
 }
 
-/* ── the public face the legacy shims call ─────────────────────────────── */
+/* ── the public face the page's own machinery calls ───────────────────── */
 
 export function ask(text: string, when?: string | null): void {
   store.askText(mainLane(), String(text), when ?? null)

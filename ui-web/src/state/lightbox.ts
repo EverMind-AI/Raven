@@ -1,6 +1,6 @@
 /* Full-size view for any image in the page -- a staged thumbnail or one already
  * sent. Clicking anywhere closes it; Escape reaches it through the overlay
- * order (state/overlays.ts), which asks the two verbs below.
+ * order (state/escapeOrder.ts), which asks the two verbs below.
  *
  * State rather than a writer: the overlay is one node at the body, it belongs
  * to no page's root, and both islands that open one (the composer's tray and

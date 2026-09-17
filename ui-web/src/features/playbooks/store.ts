@@ -1,6 +1,6 @@
-/* Page state for the playbook library, outside React because the legacy shell
- * opens and closes this page imperatively (the rail button, Escape, a language
- * flip) exactly as it does for knowledge and memory.
+/* Page state for the playbook library, outside React because the caller that
+ * closes the page is not React: the Escape order asks the domain's own verb
+ * for it (state/escapeOrder.ts), exactly as it does for knowledge and memory.
  *
  * Two reads, mirroring the two calls: the list is fetched when the page opens,
  * one detail is fetched when a card is opened and then kept until the list is
@@ -152,7 +152,7 @@ export function showTab(tab: DetailTab): void {
 /* Read what this machine holds for the open playbook. A source without the
    surface leaves `creds` null and the tab says so; a failed read toasts and
    leaves the previous reading in place. */
-export async function loadCredentials(): Promise<void> {
+async function loadCredentials(): Promise<void> {
   const name = get().openName
   const src = source()
   if (!name || !src.credentials) {
@@ -295,7 +295,7 @@ export function closePage(): void {
 
 /* A language flip changes no state here, but every visible string comes from
    t(), so a re-render is the whole redraw. */
-export function redraw(): void {
+function redraw(): void {
   set({})
 }
 

@@ -14,7 +14,7 @@ import * as workspace from '../workspace/store'
 import type { AgentRow, InstanceRow } from '../subagents/types'
 import type { DeskDuo, DeskPane, DeskSplits, DeskState, DeskTab } from './types'
 import type { WsChange } from '../workspace/types'
-import { panel } from '../../state/wsPanel'
+import { pane } from '../../state/wsPane'
 import { makeStore } from '../../state/store'
 
 /* What a reload needs to put the desk back: what the reader OPENED, in the
@@ -208,7 +208,7 @@ function record(patch: Partial<DeskState>): void {
 function revealWorkspace(): void {
   const split = document.getElementById('split')
   if (split && split.dataset.open === 'true') return
-  panel().setOpen(true)
+  pane().setOpen(true)
 }
 
 /* `supersedes` names a pane this one REPLACES rather than joins: the same work
@@ -505,7 +505,7 @@ export function closePane(id: string): void {
        still standing down for them. */
     ...(panes.length ? {} : { paletteOpen: deskUp(currentSession()) }),
   })
-  if (!panes.length) panel().setOpen(false)
+  if (!panes.length) pane().setOpen(false)
 }
 
 export function setActive(id: string): void {

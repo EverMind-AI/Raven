@@ -44,7 +44,7 @@ beforeEach(() => {
   vi.spyOn(workspace, 'shared').mockReturnValue({ changes: [], urls: [], file: null, turn: 0, unseen: 0 })
   /* The pick is read off the state rather than off the call, because the tab
      strip's click and the keyboard both go through the store. */
-  vi.spyOn(workspace, 'draw').mockImplementation(() => { picked.push(ws.tab) })
+  vi.spyOn(workspace, 'mount').mockImplementation(() => { picked.push(ws.tab) })
   vi.spyOn(desk, 'notifyDesk').mockImplementation(() => {})
   vi.spyOn(desk, 'toggleDesk').mockImplementation(() => { desks.push('toggle') })
   render()

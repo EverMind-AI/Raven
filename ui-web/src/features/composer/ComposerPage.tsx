@@ -139,7 +139,7 @@ export function SlashList(): ReactElement {
 /* Decorative to a screen reader -- whatever it sits beside carries the meaning
    in words, and three animated bars announced as anything would be noise on a
    row that repaints four times a second. */
-export function WorkGlyph(): ReactElement {
+function WorkGlyph(): ReactElement {
   return <span className="wkg" aria-hidden="true"><i /><i /><i /></span>
 }
 

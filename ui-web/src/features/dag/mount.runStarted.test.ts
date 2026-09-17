@@ -1,10 +1,11 @@
 // @vitest-environment happy-dom
-/* What the pipeline hands the sheet when a graph starts.
+/* What the live layer hands ./mount.tsx's `start` when a graph starts.
  *
- * Three lines of wiring with no island behind them, so the island's own suite
- * cannot reach it -- the same blind spot that let the agent roster filter the
- * wrong field. The run the sheet is titled by is built there, and a field this
- * object does not carry is a field the sheet cannot draw. */
+ * The run object is built in state/session/pipeline.ts, three lines of wiring
+ * with no island behind them, so the island's own suite cannot reach it -- the
+ * same blind spot that let the agent roster filter the wrong field. The run the
+ * sheet is titled by is built there, and a field this object does not carry is
+ * a field the sheet cannot draw. */
 
 import { describe, expect, it } from 'vitest'
 

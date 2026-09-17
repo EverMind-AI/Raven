@@ -16,7 +16,7 @@ import * as hunks from './hunks'
 import { shared as workspaceShared } from './store'
 import { t } from '../../i18n/t'
 import { shortPath } from './source'
-import { panel } from '../../state/wsPanel'
+import { pane } from '../../state/wsPane'
 
 import type { WsChange, WsHunk, WsShared } from './types'
 
@@ -75,12 +75,12 @@ export function wsOnTool(name: string, args: unknown, _silent?: boolean): void {
     WS.urls.unshift({ url: String(a.query), kind: 'search', at: t('gui.sess.just_now') })
   } else return
 
-  const shown = panel().view()
+  const shown = pane().view()
   if (hit && shown.open && shown.tab === 'diff') hit.flash = true
   /* Draw before counting: the Changes view marks rows seen as it renders, so
      counting first would flash a badge that the very next line clears. */
-  if (panel().showsTurn()) panel().draw()
-  panel().bump()
+  if (pane().showsTurn()) pane().draw()
+  pane().bump()
 }
 
 export function wsOnToolDone(
@@ -101,8 +101,8 @@ export function wsOnToolDone(
       c.hunks.push(h); c.add += h.add; c.del += h.del
     }
   }
-  if (panel().showsTurn()) panel().draw()
-  panel().bump()
+  if (pane().showsTurn()) pane().draw()
+  pane().bump()
 }
 
 /* ── resumed sessions ──────────────────────────────────────────────────
@@ -156,5 +156,5 @@ export function wsOnHistory(messages: StoredMessage[] | null | undefined): void 
   WS.urls.forEach((u) => { u.at = t('gui.ws.turn_earlier') })
   WS.changes.forEach((c) => { c.seen = true })
   WS.unseen = 0
-  panel().bump()
+  pane().bump()
 }

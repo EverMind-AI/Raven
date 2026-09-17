@@ -57,7 +57,7 @@ const ACT_ICO: Record<string, string> = {
     + 'M21 18a2.2 2.2 0 1 1-4.4 0 2.2 2.2 0 0 1 4.4 0ZM7.3 11l9.4-4M7.3 13l9.4 4',
 }
 
-export function actIco(name: string): string {
+function actIco(name: string): string {
   switch (name) {
     case 'read_file': case 'read_skill': return ACT_ICO.doc as string
     case 'write_file': case 'edit_file': return ACT_ICO.pen as string
@@ -238,7 +238,7 @@ function dtlPre(text: string, key: string): ReactNode {
 
 /* Whether the settled call opens into a detail block at all: edits with no
    hunk and no failure and no label are the one shape that stays a bare row. */
-export function hasDtl(c: CallData): boolean {
+function hasDtl(c: CallData): boolean {
   if (c.name === 'edit_file' || c.name === 'write_file') {
     return !!(c.hunk && c.hunk.rows.length) || !c.ok || !!c.label
   }
@@ -915,7 +915,7 @@ const DagCard = memo(function DagCard({ lane, seg, c }: { lane: Lane; seg: StepD
 
 /* ── the step: thought, narration, work ────────────────────────────────── */
 
-export const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg: StepData }): ReactElement {
+const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg: StepData }): ReactElement {
   useSeg(lane, seg)
   const thinkRef = useRef<HTMLDivElement | null>(null)
   const cotRef = useRef<HTMLDivElement | null>(null)

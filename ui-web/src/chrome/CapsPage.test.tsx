@@ -138,7 +138,7 @@ describe('the capabilities page chrome', () => {
     host.id = 'islandHost'
     el('capsBody').appendChild(host)
     act(() => {
-      caps.chrome({ title: 'Skills', label: 'Skills', search: 'Search', pillsHidden: true, advHidden: true, bar: '' })
+      caps.setFrame({ title: 'Skills', label: 'Skills', search: 'Search', pillsHidden: true, advHidden: true, bar: '' })
     })
     expect(el('capsBody').firstElementChild).toBe(host)
   })
@@ -313,7 +313,7 @@ describe('the capabilities page chrome', () => {
     render()
     const served = el('capsTitle').textContent
     act(() => {
-      caps.chrome({ title: 'Installed skills', label: 'Skills', search: 'Search the market', pillsHidden: true, advHidden: true, bar: 'none' })
+      caps.setFrame({ title: 'Installed skills', label: 'Skills', search: 'Search the market', pillsHidden: true, advHidden: true, bar: 'none' })
     })
     expect(el('capsTitle').textContent).toBe('Installed skills')
     expect(field().placeholder).toBe('Search the market')
@@ -330,7 +330,7 @@ describe('the capabilities page chrome', () => {
      happy-dom). No act() here on purpose: that is what makes it observable. */
   it('commits a draw before the statement after it', () => {
     render()
-    caps.chrome({ title: 'Plugins', label: 'Plugins', search: 'Search plugins', pillsHidden: true, advHidden: false, bar: '' })
+    caps.setFrame({ title: 'Plugins', label: 'Plugins', search: 'Search plugins', pillsHidden: true, advHidden: false, bar: '' })
     expect(el('capsTitle').textContent).toBe('Plugins')
     expect(field().placeholder).toBe('Search plugins')
     expect(el('cKind').hidden).toBe(true)

@@ -27,7 +27,7 @@ import type { JSX, ReactNode } from 'react'
 
 /* Eight tints, picked from the name so a row keeps its colour across reloads
    without anything having to store one. */
-export function tileHue(name: string): number {
+function tileHue(name: string): number {
   let h = 0
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
   return h % 8
@@ -40,7 +40,7 @@ export function Tile({ name }: { name: string }): JSX.Element {
 /* The state dot. `ok` is the quiet default and carries no extra class, so a
    healthy list has no colour in it at all -- which is what makes the one amber
    dot in a list of twelve findable. */
-export function Led({ cls }: { cls: string }): JSX.Element {
+function Led({ cls }: { cls: string }): JSX.Element {
   return <span className={'led' + (cls === 'ok' ? '' : ' ' + cls)} />
 }
 

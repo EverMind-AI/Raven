@@ -6,10 +6,11 @@ import type { ConnChannel, ConnectionsSource } from './types'
 import * as page from '../../state/page'
 import { makeStore } from '../../state/store'
 
-/* Page state, outside React on purpose: the legacy shell drives this page
- * imperatively (nav opens it, Esc closes it and its dialog, a language flip
- * redraws it), so the state lives in a plain store the shims can call, and
- * the component subscribes.
+/* Page state, outside React on purpose: two of the callers that drive this
+ * page are not React. The Escape order closes the page and its dialog
+ * (state/escapeOrder.ts) and the page's own leave slot shuts the dialog behind
+ * the reader (app/install.ts fills state/page.ts's slot) -- so the state lives
+ * in a plain store those two can call, and the component subscribes.
  */
 
 export interface ConnState {
@@ -84,6 +85,6 @@ export async function apply(c: ConnChannel, patch: Record<string, string>, enabl
 
 /* A language flip changes nothing in this state, but every visible string
    comes from t(), so a re-render is the whole redraw. */
-export function redraw(): void {
+function redraw(): void {
   set({})
 }

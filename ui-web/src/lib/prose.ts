@@ -10,9 +10,8 @@
  * state/proseChips.ts, which reads the same source.
  */
 
-import { sources } from '../state/sources'
 import { t } from '../i18n/t'
-import { ds } from '../state/sources'
+import { ds, sources } from '../state/sources'
 
 export interface ProseTarget {
   p: string

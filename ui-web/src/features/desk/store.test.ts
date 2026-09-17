@@ -13,7 +13,7 @@ import { resetSources, setSources, sources } from '../../state/sources'
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
-import { installWsPanel } from '../../test/wsPanelHarness'
+import { installWsPane } from '../../test/wsPaneHarness'
 import type { InstanceRow } from '../subagents/types'
 
 /* Recorded rather than ignored: the panel the desk lives in is legacy chrome,
@@ -34,7 +34,7 @@ function wire(): void {
   setTranslator((key) => key)
   vi.spyOn(pageStore, 'show').mockImplementation(() => {})
   vi.spyOn(confirmStore, 'ask').mockImplementation((_title, _body, _label, fn) => fn())
-  installWsPanel({ setOpen: (open) => { panelCalls.push(open) } })
+  installWsPane({ setOpen: (open) => { panelCalls.push(open) } })
   localStorage.clear()
   sessionStorage.clear()
   sessionReset()

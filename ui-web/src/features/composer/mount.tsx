@@ -7,13 +7,15 @@ export * as turn from './turn'
 import type { Root } from 'react-dom/client'
 
 /* The composer island's face: the roots over the dock's containers, the
- * dock's own event wiring, and the verbs the legacy shims call.
+ * dock's own event wiring, and the verbs the page's own machinery calls --
+ * the session pipeline and its runtime, the boot, the language repaint, the
+ * update watch and the rail's leave.
  *
  * The roots are created on the first paint rather than at bundle time: this
- * script is assembled AHEAD of the page script (ui-web/build.py), so neither
- * the shell nor the composer source exists yet when it evaluates. install()
- * therefore only registers listeners -- every handler reads the seams lazily,
- * by which time the page has published them.
+ * script is assembled AHEAD of the page script (ui-web/build.py), so the
+ * composer source does not exist yet when it evaluates. install() therefore
+ * only registers listeners -- every handler reads the seams lazily, by which
+ * time the page has published them.
  */
 
 let roots: Root[] = []
@@ -73,7 +75,7 @@ function ensure(): void {
   store.subscribe(syncLiveHost)
 }
 
-/* ── the verbs the legacy shims call ──────────────────────────────────── */
+/* ── the verbs the page's own machinery calls ─────────────────────────── */
 
 export function goPaint(): void {
   ensure()

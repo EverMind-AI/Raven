@@ -18,7 +18,7 @@
  * What this does NOT own, though it renders the elements:
  *   - #wsBody's children. It is shared ground for three islands: the workspace
  *     view roots itself in it, and the browser and sub-agent views are handed
- *     the cleared box (features/workspace/store.ts's draw), so React must not
+ *     the cleared box (features/workspace/store.ts's mount), so React must not
  *     own that child list.
  *   - the tab strip's aria-selected and #wsWide's four attributes, which the
  *     pane's state writes at the moment it decides them (src/state/ws.ts).

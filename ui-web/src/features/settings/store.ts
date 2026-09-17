@@ -13,15 +13,16 @@ import type {
   UsageStats,
 } from './types'
 
-/* Page state, outside React on purpose: the legacy shell drives this dialog
- * imperatively (the me button and Cmd+, open it, redrawAll repaints it on a
- * language flip, the capabilities rows repaint it after a credential write),
- * so the state lives in a plain store the shims can call, and the component
- * subscribes.
+/* Page state, outside React on purpose: three of the callers that drive this
+ * dialog are not React. The platform's settings shortcut opens it
+ * (state/globalListeners.ts), the whole-page language repaint bumps its epoch
+ * (state/lang/effects.ts) and the boot repaints it once the gateway answers
+ * (app/boot.ts) -- so the state lives in a plain store those three can call,
+ * and the component subscribes.
  *
  * The open tab is NOT here: the chrome jumps the dialog to a section by
- * writing the shared slot (ui-web/src/state/settings.ts) before calling
- * drawSettings(), and the store syncs from it on every draw.
+ * writing the shared slot (ui-web/src/state/settings.ts) before asking for
+ * the repaint below, and the store syncs from it on every draw.
  */
 
 export interface SettingsState {

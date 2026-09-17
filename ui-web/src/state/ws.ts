@@ -36,7 +36,7 @@ import * as workspace from '../features/workspace/store'
 import { t } from '../i18n/t'
 
 import type { DeskTab } from '../features/desk/types'
-import type { WsPanelView } from './wsPanel'
+import type { WsPaneView } from './wsPane'
 
 /** Which view the pane shows: diff, file, browser or agents. */
 let tab = 'diff'
@@ -93,12 +93,12 @@ export function bump(): void {
 
 export function draw(): void {
   /* The island owns #wsBody; the agents and browser views draw into it
-     through their own islands, dispatched by the workspace island's draw. */
+     through their own islands, dispatched by the workspace island's mount. */
   epoch += 1
   ;[...el('wsTabs').children].forEach((b) => {
     b.setAttribute('aria-selected', String((b as HTMLElement).dataset.w === tab))
   })
-  workspace.draw()
+  workspace.mount()
 }
 
 export function setOpen(next: boolean, view?: string): void {
@@ -155,7 +155,7 @@ export function pick(view: string): void {
    bindings for it to read and write -- which view is up and whether the reader
    chose it belong to the pane, and only the pane knows a restore is not a
    fresh pick. */
-export function view(): WsPanelView {
+export function view(): WsPaneView {
   return { tab, open, picked }
 }
 

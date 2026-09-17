@@ -432,7 +432,7 @@ function InstanceAtt({ a, onRemove }: { a: Attachment; onRemove: () => void }): 
   )
 }
 
-export function InstanceComposer(
+function InstanceComposer(
   { open, name, fail }: {
     open: Extract<OpenItem, { kind: 'instance' }>
     name: string

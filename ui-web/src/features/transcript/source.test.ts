@@ -25,8 +25,8 @@ async function opener(calls: unknown[][], run: unknown) {
     return import('../../app/install')
   }, {
     fakes: {
-      'src/state/wsPanel': {
-        panel: () => ({ setOpen: (...args: unknown[]) => calls.push(['fallback', ...args]) }),
+      'src/state/wsPane': {
+        pane: () => ({ setOpen: (...args: unknown[]) => calls.push(['fallback', ...args]) }),
       },
       'src/state/sheetRack': {
         session: () => 'a',
@@ -79,8 +79,8 @@ async function nodeHarness({ rows = [{ kind: 'spawn', agent: 'raven', label: 'qc
     return import('../../app/install')
   }, {
     fakes: {
-      'src/state/wsPanel': {
-        panel: () => ({
+      'src/state/wsPane': {
+        pane: () => ({
           view: () => ({ tab: 'diff', open: false, picked: false }),
           setOpen: (open: boolean, tab?: string) => calls.push(['setWs', open, tab ?? null]),
           pick: (tab: string) => calls.push(['wsPick', tab]),

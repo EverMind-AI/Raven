@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
-/* The legacy adapters around the capabilities islands: the page opens before
- * its source refreshes, and live extension rows never borrow fixture storage.
+/* The capabilities source seam, from the three places that install and read
+ * it: the page opens before its source refreshes (features/plugins/wire.ts),
+ * the manual-add form waits on it (state/caps.ts), and live extension rows
+ * never borrow fixture storage (app/install.ts).
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'

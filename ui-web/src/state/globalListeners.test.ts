@@ -42,7 +42,7 @@ import * as scrollbars from '../chrome/behaviour/scrollbars'
    cannot be named from outside -- the popover arbitration, the code-block copy,
    the Escape chain and the settings shortcut -- and those four are what the
    order pins instead, together with the source-text case in
-   state/overlays.test.ts that holds every keydown the page installs to the
+   state/escapeOrder.test.ts that holds every keydown the page installs to the
    bubble phase.
 
    Identity, not shape, because two rows of the same shape are the pairs that

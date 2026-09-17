@@ -67,7 +67,7 @@ export function drawPlugTab(): void {
   box.appendChild(plugHost)
   const title = t('gui.tab.plugins')
   const view = plugins.view()
-  caps.chrome({
+  caps.setFrame({
     title: view === 'installed' ? t('gui.plug.installed_title') : title,
     label: title,
     search: t('gui.plug.search_ph'),

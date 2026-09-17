@@ -12,7 +12,7 @@ import { resetSources, setSources, sources } from '../../state/sources'
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
-import { installWsPanel } from '../../test/wsPanelHarness'
+import { installWsPane } from '../../test/wsPaneHarness'
 import type { WorkspaceSnapshot, WorkspaceSource, WsChange } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -67,7 +67,7 @@ function install(ws: WorkspaceSnapshot, over: Partial<WorkspaceSource> = {}, vie
   store.setDeskOpener(null)
   vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   vi.spyOn(pageStore, 'show').mockImplementation((id) => shellCalls.push(['showPage', id]))
-  installWsPanel({
+  installWsPane({
     view: () => view,
     show: (tab) => {
       shellCalls.push(['showWorkspace', tab])

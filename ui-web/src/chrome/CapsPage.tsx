@@ -29,8 +29,8 @@
  * owning it would re-render a text field the reader is typing into. Its two
  * listeners are native, on the element itself -- which is also what lets the
  * composition guard read the real KeyboardEvent -- and they dispatch on the
- * open tab, which is what the three layers the legacy chrome stacked on this
- * one field did (demo/150-chrome.js, then 152-skills.js, then 153-plugins.js).
+ * open tab, which is the one thing the two tab renderers cannot decide for
+ * themselves (features/skills/wire.ts, features/plugins/wire.ts).
  */
 
 import { useEffect, useRef, useSyncExternalStore } from 'react'
@@ -119,9 +119,10 @@ function Search(): JSX.Element {
 }
 
 /* One tab's "installed" entry point, which rides in the bar rather than in the
-   page: the count is the part's (demo/152-skills.js, 153-plugins.js), and the
-   click is the island's view switch. Rendered only once its part has created
-   it, and with no label until the first sync, which is how it was built. */
+   page: the count is the tab renderer's (features/skills/wire.ts,
+   features/plugins/wire.ts) and the click is the island's view switch. Rendered
+   only once its renderer has asked for it, and with no label until the first
+   sync, which is when the count is known. */
 function InstalledButton({ btn, toggle }: { btn: caps.Installed; toggle: () => void }): JSX.Element {
   return (
     <button className="pminstbtn" hidden={btn.hidden} onClick={toggle}>

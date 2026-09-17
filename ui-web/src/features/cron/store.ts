@@ -6,10 +6,12 @@ import type { CronDraft, CronJob, CronSource } from './types'
 import * as page from '../../state/page'
 import { makeStore } from '../../state/store'
 
-/* Page state, outside React on purpose: the legacy shell drives this page
- * imperatively (nav opens it, Esc closes it, a finished turn refreshes it,
- * a language flip redraws it), so the state lives in a plain store the
- * shims can call, and the component subscribes.
+/* Page state, outside React on purpose: the callers that drive this page are
+ * not React. The rail's flyout and the nav open it (state/navfly.ts), the
+ * Escape order closes it (state/escapeOrder.ts), the boot prefetches it
+ * (app/boot.ts) and the page's own teardown shuts its sheet
+ * (app/install.ts) -- so the state lives in a plain store those four can
+ * call, and the component subscribes.
  */
 
 export interface CronState {
@@ -29,13 +31,9 @@ export interface CronState {
   draft: CronDraft | null
   sheet: CronDraft | null
   epoch: number
-  /* Bumped only by a language flip: run stamps arrive language-baked from
-     the source, so the flip must refetch them, while the plain redraws the
-     island's own controls ask for must not. */
-  lang: number
 }
 
-const store = makeStore<CronState>({ rows: [], rev: 0, loaded: false, viewId: null, draft: null, sheet: null, epoch: 0, lang: 0 })
+const store = makeStore<CronState>({ rows: [], rev: 0, loaded: false, viewId: null, draft: null, sheet: null, epoch: 0 })
 
 export const { get, subscribe, _resetForTests } = store
 
@@ -56,7 +54,7 @@ export async function refresh(): Promise<void> {
   }
 }
 
-/* Boot calls this through the shim to prefetch without opening the page. */
+/* app/boot.ts calls this to prefetch the rows without opening the page. */
 export function warm(): Promise<void> {
   return source()
     .rows()
@@ -113,12 +111,8 @@ export function closeSheet(): void {
 }
 
 /* A language flip changes nothing in this state, but every visible string
-   comes from t(), so a re-render is the whole redraw. */
+   comes from t(), so a re-render is the whole redraw. The island's own controls
+   ask for this after writing a draft in place, which no get() can see. */
 export function redraw(): void {
   set({})
-}
-
-/* The shim's redraw: what the legacy language flip calls. */
-export function langRedraw(): void {
-  set({ lang: get().lang + 1 })
 }

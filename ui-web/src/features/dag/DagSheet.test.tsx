@@ -17,7 +17,7 @@ import { resetSources, setSources } from '../../state/sources'
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as pageStore from '../../state/page'
 import * as confirmStore from '../../state/confirm'
-import { installWsPanel } from '../../test/wsPanelHarness'
+import { installWsPane } from '../../test/wsPaneHarness'
 import type { SubagentsSource } from '../subagents/types'
 import type { TranscriptSource } from '../transcript/types'
 import type { DagRun } from './types'
@@ -28,7 +28,7 @@ const opened: Array<[string, string]> = []
 
 function wire(): void {
   setTranslator((key) => key)
-  installWsPanel()
+  installWsPane()
   vi.spyOn(pageStore, 'show').mockImplementation(() => {})
   vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
   setSources({

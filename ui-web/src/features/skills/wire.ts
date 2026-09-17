@@ -27,7 +27,7 @@ export function drawSkillTab(): void {
   box.innerHTML = ''
   const title = t('gui.tab.skills')
   const installed = skills.view() === 'installed'
-  caps.chrome({
+  caps.setFrame({
     title: installed ? t('gui.plug.installed_title') : title,
     label: title,
     search: t('gui.hub.search_ph'),

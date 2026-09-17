@@ -9,9 +9,9 @@ import { mountPageRoot } from '../test/pageRoot'
 import { resetTranslator, setTranslator } from '../i18n/t'
 import type { TierReply, TierSource } from './tier'
 
-/* The chip and the panel are the page root's now (src/chrome/TierChip.tsx,
-   src/chrome/TierPop.tsx), so the fixture is the one band they render into --
-   the composer card comes with them, and the card is what the panel has to open
+/* The chip and the popover are the page root's now (src/chrome/TierChip.tsx,
+   src/chrome/TierPopover.tsx), so the fixture is the one band they render into --
+   the composer card comes with them, and the card is what the popover has to open
    clear of. */
 function markup(): void {
   document.body.innerHTML = '<div class="dock"></div>'
@@ -145,7 +145,7 @@ describe('the sub-agent tier chip', () => {
     /* `clamp_tier` recognises `medium`/`high`/`max` and declines every other
        vocabulary, so a deployment's own rungs reach no sub-agent at all -- while
        what they DO move is the loop's own iteration cap and overlay. Heading a
-       panel of them "sub-agent effort" states the opposite of what picking one
+       popover of them "sub-agent effort" states the opposite of what picking one
        does. Same test as the clamp: every rung on offer, or none. */
     answer = async (mode) => ({
       mode: mode ?? 'thorough',
@@ -273,7 +273,7 @@ describe('the sub-agent tier chip', () => {
     expect(pop().dataset.open).toBe('false')
   })
 
-  it('closes on the chip a second time, since the panel has no close of its own', async () => {
+  it('closes on the chip a second time, since the popover has no close of its own', async () => {
     await tier.load()
 
     tier.toggle()
@@ -307,7 +307,7 @@ describe('the sub-agent tier chip', () => {
     }
   })
 
-  it('reparents the panel to the body, or it is positioned against the wrong box', async () => {
+  it('reparents the popover to the body, or it is positioned against the wrong box', async () => {
     /* The composer card's entrance animation makes it a containing block, which
        re-bases `position: fixed` inside it -- the same trap `perm.ts` records. */
     await tier.load()
@@ -334,7 +334,7 @@ describe('the sub-agent tier chip', () => {
 
     tier.open()
 
-    /* 436 - 240 - 6. Raised off the chip it was 272, which put the panel's lower
+    /* 436 - 240 - 6. Raised off the chip it was 272, which put the popover's lower
        edge at 512 -- inside the card, over the line being typed. */
     expect(parseFloat(pop().style.top)).toBe(190)
   })

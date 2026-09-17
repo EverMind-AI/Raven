@@ -13,13 +13,14 @@ import type { Attachment, ComposerSource, SlashCmd } from './types'
 import { makeStore } from '../../state/store'
 
 /* Plain external store, same shape as the other islands: the dock is driven
- * imperatively by the legacy page (the turn machine advances phase, the queue
- * drains into `send`, a session switch resets everything), so the state lives
- * here where the shims can reach it and the views subscribe.
+ * by callers that are not React. The turn machine advances the phase, the
+ * queue drains into `send` and a session switch resets everything -- all of it
+ * state/session's (pipeline, runtime, registry, residency, stages) -- so the
+ * state lives here where those can reach it and the views subscribe.
  *
- * `use` remains demo fixture state. The live phase and the queue are composer
- * state: every path that changes, parks, or restores them goes through this
- * island, so their ownership and rendering cannot diverge.
+ * The live phase and the queue are composer state: every path that changes,
+ * parks, or restores them goes through this island, so their ownership and
+ * rendering cannot diverge.
  */
 
 export interface ComposerState {
@@ -36,8 +37,9 @@ export interface ComposerState {
      `liveT0` and ticking through `tick`. */
   live: boolean
   tick: number
-  /* Bumped by every paint the legacy shims ask for. The views read the page's
-     own arrays through the source, so one counter is the whole subscription. */
+  /* Bumped by every paint asked for through features/composer/mount.tsx. The
+     views read the page's own arrays through the source, so one counter is the
+     whole subscription. */
   v: number
 }
 

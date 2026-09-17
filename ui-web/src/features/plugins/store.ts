@@ -14,10 +14,12 @@ import type {
   PluginsSource,
 } from './types'
 
-/* Page state, outside React on purpose: the legacy shell drives this page
- * imperatively (the tab chrome opens it, the search bar feeds it, gateway
- * events advance its installs), so the state lives in a plain store the
- * shims can call, and the component subscribes.
+/* Page state, outside React on purpose: two of the callers that drive this
+ * page are not React. The capabilities page dispatches its draw through its
+ * own hooks (state/caps.ts calls features/plugins/wire.ts) and the live
+ * transport's plug-hub events advance an install as it runs (app/install.ts
+ * registers `onEvent`) -- so the state lives in a plain store those can call,
+ * and the component subscribes.
  */
 
 export interface Drawer {
@@ -339,7 +341,7 @@ function progFail(err: string): void {
 
 /* ── actions ─────────────────────────────────────────────────────── */
 
-export function install(entry: DetailEntry, form: Record<string, string>): void {
+export function installEntry(entry: DetailEntry, form: Record<string, string>): void {
   // Pending from the first moment: the ledger lands on disk mid-call, and the
   // entry must not read as installed anywhere before its auth is proven.
   set({ busy: entry.id })
@@ -412,7 +414,7 @@ export function quickInstall(it: MarketItem): void {
         openDetail('market', entry.id, true)
         return
       }
-      install(entry, {})
+      installEntry(entry, {})
     })
     .catch((e: unknown) => {
       set({ busy: null })

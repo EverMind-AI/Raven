@@ -168,13 +168,13 @@ interface Shared {
   unseen: number
 }
 
-async function panel() {
+async function pane() {
   const { loadPart } = await import('../../../scripts/module-harness.mjs')
   const shared: Shared = { changes: [], urls: [], file: null, turn: 0, unseen: 0 }
   const part = await loadPart(() => import('./record'), {
     fakes: {
-      'src/state/wsPanel': {
-        panel: () => ({
+      'src/state/wsPane': {
+        pane: () => ({
           view: () => ({ tab: 'diff', open: false, picked: false }),
           bump: () => {},
           draw: () => {},
@@ -207,7 +207,7 @@ describe('rebuilding the panel from a stored conversation', () => {
     /* A live client advances on turn.started; without the same step on replay a
        reloaded session files the delegated reaction's files under its parent's
        turn. An origin-only entry (cron, sentinel) opens no turn either way. */
-    const { part, shared } = await panel()
+    const { part, shared } = await pane()
 
     part.wsOnHistory([
       { role: 'user', text: 'first ask' },
@@ -221,7 +221,7 @@ describe('rebuilding the panel from a stored conversation', () => {
   })
 
   it('replays each stored call with its arguments, and swaps in the stored diff', async () => {
-    const { part, shared } = await panel()
+    const { part, shared } = await pane()
 
     part.wsOnHistory([
       { role: 'assistant', tool_calls: [
@@ -244,7 +244,7 @@ describe('rebuilding the panel from a stored conversation', () => {
 
   it('marks everything it restored as already read', async () => {
     /* Nothing counts as unread: none of it arrived while the reader was away. */
-    const { part, shared } = await panel()
+    const { part, shared } = await pane()
     shared.changes.push({ key: 'a.py', seen: false, turn: 0 })
     shared.urls.push({ url: 'https://example.com', at: 'just now' })
 
@@ -260,7 +260,7 @@ describe('recording a change', () => {
   it('keeps one row per path per turn, adding up its hunks', async () => {
     /* Five edits to one file is one changed file with five hunks, which is how
        a person thinks about it. */
-    const { part, shared } = await panel()
+    const { part, shared } = await pane()
 
     part.wsRecordChange('/w/a.py', 'edit', { add: 2, del: 1 })
     part.wsRecordChange('/w/a.py', 'write', { add: 3, del: 0 })
@@ -279,7 +279,7 @@ describe('recording a change', () => {
     /* The newest change is the one you came here to read, so it arrives
        expanded -- and `auto` marks it as opened by us, so the next arrival
        folds it back without touching a row the reader opened on purpose. */
-    const { part, shared } = await panel()
+    const { part, shared } = await pane()
 
     part.wsRecordChange('/w/a.py', 'edit', { add: 1, del: 0 })
     const first = shared.changes[0] as { open: boolean; auto: boolean }

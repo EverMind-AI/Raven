@@ -15,11 +15,9 @@ import type { MenuItem } from '../../state/menu'
 import type { WsChange, WsFile, WsShared } from './types'
 import type { JSX, PointerEvent as ReactPointerEvent } from 'react'
 
-/* Copies of the icon paths the legacy renderers drew with (ICO in
-   demo/100-workspace.js, ACT_ICO.chev in demo/070-transcript.js): those
-   tables stay in the demo shell for the views that never left it, and the
-   island carries its own strings the same way the cron island carries its
-   FREQ table. */
+/* The icon paths this view draws with. The island carries its own strings the
+   same way the cron island carries its FREQ table, rather than reading a
+   shared table: every one of them is used here and nowhere else. */
 const ICO = {
   diff: 'M4 4h16v16H4zM12 8.5v7M8.5 12h7',
   file: 'M4 7.5c0-1.1.9-2 2-2h3.5l2 2.5H18c1.1 0 2 .9 2 2v7c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2v-9.5Z',

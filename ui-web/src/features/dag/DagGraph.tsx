@@ -32,7 +32,7 @@ const CARD_LAYERS = 5
    twenty characters and differ in the tail the box has least room for. The id is
    still reachable, one row down in the node panel, where the fields a dependency
    or a run dir is keyed by belong. */
-export const nodeLabel = (n: DagNode): string => n.node_summary || n.id
+const nodeLabel = (n: DagNode): string => n.node_summary || n.id
 
 export function visibleLayers(nodes: DagNode[], limit = CARD_LAYERS): {
   hiddenLayers: number

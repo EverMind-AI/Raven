@@ -73,7 +73,7 @@ export function elementSnapshot(root: Element): string {
 }
 
 /** `elementSnapshot` of the element carrying `id`, looked up under `root`. */
-export function regionSnapshot(root: Document | Element, id: string): string {
+function regionSnapshot(root: Document | Element, id: string): string {
   const found = 'getElementById' in root ? root.getElementById(id) : root.querySelector(`#${id}`)
   if (!found) throw new Error(`regionSnapshot: no element with id "${id}"`)
   return elementSnapshot(found)

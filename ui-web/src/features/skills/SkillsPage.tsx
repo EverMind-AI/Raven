@@ -173,7 +173,7 @@ function HubCard({ it, busy }: { it: HubItem; busy: string | null }): JSX.Elemen
               onClick={(e) => {
                 // Two hit zones: the button installs right away, the card opens the sheet.
                 e.stopPropagation()
-                store.install(it)
+                store.installSkill(it)
               }}
             >
               {t('gui.hub.install')}
@@ -369,7 +369,7 @@ function SkillDetail({ s, drawer }: { s: SkillsState; drawer: NonNullable<Skills
             {t('gui.hub.use')}
           </button>
         ) : (
-          <button className="mini gold" onClick={() => store.install(it ?? { id: hubId, name })}>
+          <button className="mini gold" onClick={() => store.installSkill(it ?? { id: hubId, name })}>
             {t('gui.hub.install')}
           </button>
         )}

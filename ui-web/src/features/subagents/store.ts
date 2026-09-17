@@ -8,17 +8,18 @@ import { instanceCtxStatus, toInstanceCtx } from './history'
 
 import type { ComposerSource } from '../composer/types'
 import type { AgentRow, InstanceCtx, InstanceRow, OpenItem, SubagentRow, SubagentsSource } from './types'
-import { panel } from '../../state/wsPanel'
+import { pane } from '../../state/wsPane'
 
-/* Page state, outside React on purpose: the legacy shell drives this view
- * imperatively (drawWs mounts and unmounts it per redraw, the dag sheet opens
- * nodes into it, wsReset clears it with the session), so the state lives in a
- * plain store the shims can call and the component subscribes.
+/* View state, outside React on purpose: three of the callers that drive this
+ * view are not React. The workspace pane mounts and unmounts it per repaint
+ * (features/workspace/store.ts's mount), the turn pipeline pushes a
+ * sub-agent's own frames into it (state/session/stages.ts calls `directEvent`)
+ * and the pane drops it with the conversation (state/ws.ts calls `reset`) --
+ * so the state lives in a plain store those three can call and the component
+ * subscribes.
  *
- * This is the legacy AGENTS/agentOpen/dagNode trio (the demo layer's sub-agent
- * part, before the migration) plus the refresh/poll judgements that lived
- * beside it; the fingerprint, the floor and the clock keep their behaviour so
- * the two can be diffed.
+ * The fingerprint, the poll floor and the clock are judgements rather than
+ * state, and they are kept here beside the rows they are about.
  */
 
 export interface AgentsState {
@@ -52,7 +53,7 @@ export interface AgentsState {
   who: string | null
   /* Bumped when the open run's status flips under the reader: remounts the
      detail so the header mark and the transcript land on the final state
-     together -- the island's equivalent of the legacy full drawWs. */
+     together -- the island's own equivalent of the pane's full remount. */
   epoch: number
   tick: number
 }
@@ -96,10 +97,10 @@ interface AgentPane {
   openAgent(row: InstanceRow, recordId?: string | null): void
   openAgentRecord(row: AgentRow): void
 }
-let pane: AgentPane | null = null
+let deskPane: AgentPane | null = null
 
 export function setAgentPane(p: AgentPane): void {
-  pane = p
+  deskPane = p
 }
 
 export const absent = (): boolean => {
@@ -347,7 +348,7 @@ export function openInstance(it: InstanceRow, recordId?: string | null): void {
   stageFresh = true
   paintedStatus = null
   set({ open: { kind: 'instance', agent: it.agent, handle: it.handle }, who: it.agent, epoch: state.epoch + 1 })
-  const workspace = pane
+  const workspace = deskPane
   /* The record this promotion is replacing, when it is a spawn's: the desk can
      derive a graph node's record id from the row, but a spawn's is the call id
      and the row does not carry one. Left off and the record pane stays open
@@ -716,7 +717,7 @@ export function openRow(it: AgentRow): void {
        promotion above swaps in the instance view when one turns up. */
     if (it.instance) refreshInstances(true)
   }
-  pane?.openAgentRecord(it)
+  deskPane?.openAgentRecord(it)
 }
 
 /* The dag sheet opens its nodes here (the sheet stays the map, this panel is
@@ -745,7 +746,7 @@ export function openDagNode(
      id stays the fallback: a run old enough to have no summary still has one. */
   const label = n.summary || n.id
   set({ open: { kind: 'dag', run_id: runId, node: n.id, agent: n.subagent, label }, who: null })
-  pane?.openAgentRecord({ kind: 'dag', run_id: runId, node: n.id, agent: n.subagent, label })
+  deskPane?.openAgentRecord({ kind: 'dag', run_id: runId, node: n.id, agent: n.subagent, label })
   /* Opened before this panel had ever asked for its rows: ask now, and the
      refresh promotes this to the instance view if a row turns up. */
   refreshInstances(true)
@@ -769,11 +770,12 @@ let stageEl: HTMLElement | null = null
 export function setStage(el: HTMLElement | null): void {
   stageEl = el
   /* A box arriving is the thing that makes the next paint a fresh one, and it
-     is not the same event as the island deciding to start over. `drawWs()`
-     wipes the panel body and mounts a new root on every draw, so a reopened
-     panel hands over an empty box while the open record has not changed at
-     all -- and a paint that believes it is a continuation appends the slice
-     it already drew, which is nothing, into a box with nothing in it. */
+     is not the same event as the island deciding to start over. The pane's
+     mount wipes #wsBody and makes a new root on every repaint
+     (features/workspace/store.ts), so a reopened pane hands over an empty box
+     while the open record has not changed at all -- and a paint that believes
+     it is a continuation appends the slice it already drew, which is nothing,
+     into a box with nothing in it. */
   if (el) stageFresh = true
 }
 
@@ -1034,7 +1036,7 @@ export function hook(): void {
 
 function onPoll(): void {
   detailPollListeners.forEach((listener) => listener())
-  const shown = panel().view()
+  const shown = pane().view()
   if (!(shown.open && shown.tab === 'agents')) {
     if (detailPollListeners.size) {
       refresh(true)

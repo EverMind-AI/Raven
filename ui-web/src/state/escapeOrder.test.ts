@@ -5,8 +5,8 @@
  * asserted it against that chain's source text, so that stage C11 could change
  * what is asserted without
  * touching the expectation. C11 has: the order is the ordered table in
- * src/state/overlays.ts -- a table, not a stack, because each entry answers "am
- * I open" when Escape arrives, so "the last one opened closes first" never
+ * src/state/escapeOrder.ts -- a table, not a stack, because each entry answers
+ * "am I open" when Escape arrives, so "the last one opened closes first" never
  * happens, which is what the chain did too.
  *
  * The array below is that expectation, unchanged. What is asserted against it
@@ -31,8 +31,8 @@ import * as playbooks from '../features/playbooks/store'
 import * as extAgents from '../features/extAgents/store'
 import { _resetForTests as sessionReset, setCurrent } from '../lib/session'
 import * as find from './find'
-import { installEscapeChain } from './globalListeners'
-import * as overlays from './overlays'
+import { installEscapeOrder } from './globalListeners'
+import * as escapeOrder from './escapeOrder'
 import * as settingsDialog from './settings'
 import * as sheets from './sheetRack'
 import { resetSources, sources } from './sources'
@@ -44,7 +44,7 @@ import type { ComposerSource } from '../features/composer/types'
    chain tests to decide whether that layer is on screen -- a selector for the
    twelve elements, the predicate's own name for the last two, which have no
    element of their own to look at. */
-const ESCAPE_ORDER = [
+const LAYER_IDS = [
   '.lightbox',
   '#veil',
   '#connVeil',
@@ -146,7 +146,7 @@ setTranslator((key) => key)
 beforeAll(() => {
   /* Once for the file: the listener is the document's, and rebuilding the body
      between cases does not take it off. */
-  installEscapeChain()
+  installEscapeOrder()
 })
 
 beforeEach(() => {
@@ -195,31 +195,31 @@ const key = (k: string, over: Partial<KeyboardEventInit> = {}): KeyboardEvent =>
 
 describe('the Escape priority order', () => {
   it('is the order the table reaches the fourteen layers in', () => {
-    expect(overlays.ORDER.map((layer) => layer.id)).toEqual([...ESCAPE_ORDER])
+    expect(escapeOrder.ESCAPE_ORDER.map((layer) => layer.id)).toEqual([...LAYER_IDS])
   })
 
   it('has no fifteenth entry, and every entry is in the fixture', () => {
-    expect(overlays.ORDER).toHaveLength(ESCAPE_ORDER.length)
-    expect(Object.keys(LAYERS)).toEqual([...ESCAPE_ORDER])
+    expect(escapeOrder.ESCAPE_ORDER).toHaveLength(LAYER_IDS.length)
+    expect(Object.keys(LAYERS)).toEqual([...LAYER_IDS])
   })
 
   it('reads nothing as open on a page where nothing is', () => {
-    expect(overlays.ORDER.filter((layer) => layer.isOpen())).toEqual([])
-    expect(overlays.dispatch()).toBe(false)
+    expect(escapeOrder.ESCAPE_ORDER.filter((layer) => layer.isOpen())).toEqual([])
+    expect(escapeOrder.dispatch()).toBe(false)
   })
 
-  it.each([...ESCAPE_ORDER])('sees %s open and takes it back', (id) => {
+  it.each([...LAYER_IDS])('sees %s open and takes it back', (id) => {
     LAYERS[id]!.up()
-    expect(overlays.ORDER.find((layer) => layer.id === id)!.isOpen()).toBe(true)
-    expect(overlays.dispatch()).toBe(true)
+    expect(escapeOrder.ESCAPE_ORDER.find((layer) => layer.id === id)!.isOpen()).toBe(true)
+    expect(escapeOrder.dispatch()).toBe(true)
     expect(LAYERS[id]!.taken()).toBe(true)
   })
 
   /* The table's whole point: with two layers up, which one goes is the table's
      order and not the order they were raised in. A stack would answer the
      second of each pair. */
-  const pairs = ESCAPE_ORDER.flatMap((first, i) =>
-    ESCAPE_ORDER.slice(i + 1).map((second) => ({ first, second })))
+  const pairs = LAYER_IDS.flatMap((first, i) =>
+    LAYER_IDS.slice(i + 1).map((second) => ({ first, second })))
 
   it('has ninety-one pairs to answer for', () => {
     expect(pairs).toHaveLength(91)
@@ -228,7 +228,7 @@ describe('the Escape priority order', () => {
   it.each(pairs)('takes back $first and leaves $second alone', ({ first, second }) => {
     LAYERS[second]!.up()
     LAYERS[first]!.up()
-    expect(overlays.dispatch()).toBe(true)
+    expect(escapeOrder.dispatch()).toBe(true)
     expect(LAYERS[first]!.taken()).toBe(true)
     expect(LAYERS[second]!.taken()).toBe(false)
   })
@@ -300,9 +300,9 @@ describe('the one listener that reads the order', () => {
        because what the three are registered in is declared in one place and
        asserted by the case above, not by where they sit in this text. */
     const listener = source('src/state/globalListeners.ts')
-    expect(listener).toMatch(/document\.addEventListener\('keydown', onEscapeChain\)\n/)
+    expect(listener).toMatch(/document\.addEventListener\('keydown', onEscapeOrder\)\n/)
     expect([...listener.matchAll(/addEventListener\('keydown'([^)]*)\)/g)].map((m) => m[1]).sort())
-      .toEqual([', chipKey', ', onEscapeChain', ', onSettingsKey'])
+      .toEqual([', chipKey', ', onEscapeOrder', ', onSettingsKey'])
   })
 
   /* And bubbling is what lets a field keep the key: the search row stops
