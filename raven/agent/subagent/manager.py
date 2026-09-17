@@ -7,7 +7,7 @@ from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -57,6 +57,9 @@ from raven.sandbox import SandboxConfig, build_executor
 from raven.security.trust import wrap_untrusted
 from raven.spine.message import Media
 from raven.tracing import trace
+
+if TYPE_CHECKING:
+    from raven.agent.loop.recovery import RecoveryLimits
 
 # One hour: a runaway re-injection loop fires fast and trips the limit quickly,
 # while legitimate spawns spread over time and age out before it bites.
@@ -218,12 +221,17 @@ class SubagentManager:
         session_dir: "Callable[[str], Path] | None" = None,
         session_tier: "Callable[[str | None], str] | None" = None,
         target_ready: "TargetReady | None" = None,
+        recovery_limits: "RecoveryLimits | None" = None,
     ):
+        from raven.agent.loop.recovery import RecoveryLimits
         from raven.config.schema import ExecToolConfig
 
         # Agent home. Also the working-directory fallback for a spawn that
         # captured none, which is the pre-split behaviour.
         self.workspace = workspace
+        # What a streamed spawn waits out on a dropped stream. The loop holds the
+        # deployment's own; a rig that passes none keeps the documented defaults.
+        self.recovery_limits = recovery_limits if recovery_limits is not None else RecoveryLimits()
         # SessionManager.session_dir, so a call record lands beside the
         # transcript of the session that made it -- including the sessions
         # whose group only the manager can resolve (raven/agent/subagent/history.py).
@@ -373,6 +381,8 @@ class SubagentManager:
             tools_allow=getattr(build, "tools_allow", None),
             skills_allow=getattr(build, "skills_allow", None),
             mcp_allow=getattr(row.config, "mcps", None),
+            retry_delays=tuple(self.recovery_limits.llm_error_retry_delays),
+            retry_after_output=bool(self.recovery_limits.llm_retry_after_output),
         )
 
     def build_role_backend(self, build: Any = None) -> "RavenLoopBackend":
@@ -398,6 +408,8 @@ class SubagentManager:
             image_search=self.image_search,
             tools_allow=getattr(build, "tools_allow", None),
             skills_allow=getattr(build, "skills_allow", None),
+            retry_delays=tuple(self.recovery_limits.llm_error_retry_delays),
+            retry_after_output=bool(self.recovery_limits.llm_retry_after_output),
         )
 
     def set_mcp_source(self, source: Any) -> None:
