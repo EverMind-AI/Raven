@@ -59,6 +59,16 @@ Windows PowerShell 5.1 可能拒绝重定向，请改用直连安装地址：
 irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex
 ```
 
+也可以从源码检出安装，适合基于代码做开发，或运行尚未发布的版本：
+
+```bash
+git clone https://github.com/EverMind-AI/Raven.git
+cd Raven
+./install.sh
+```
+
+以文件方式运行时，`install.sh` 会以可编辑（editable）模式安装该检出目录：Raven 及其内置插件都链接回你的工作树，TUI 包和内置页面也从该目录构建。通过管道运行时，即使身处克隆仓库中也始终安装已发布的 wheel，这样一行命令的安装就不会使用工作树中的任意内容。如需在管道方式下强制使用可编辑安装，请设置 `RAVEN_LOCAL_SRC=<dir>`。
+
 这些 Agent 随 Raven 一同发布：wheel 包包含 `agents/` 产品目录，首次使用时会将其复制到 Raven 主目录；源码安装则直接读取仓库中的目录。配置向导会逐一询问是否启用，并为所选 Agent 注册其适配的模型，或使用当前 Raven 的 LLM。详见 [`agents/README.md`](agents/README.md)。
 
 ### 🧭 完成引导并运行
@@ -390,14 +400,73 @@ WebUI 和 React/Ink TUI 共用 [`rpc-schema/openrpc.json`](rpc-schema/openrpc.js
 
 ## 🌐 EverMind 生态
 
-Raven 是 [EverMind](https://evermind.ai/) 开源生态的一部分。欢迎了解 [EverOS](https://github.com/EverMind-AI/EverOS)、[EverAlgo](https://github.com/EverMind-AI/EverAlgo)、[HyperMem](https://github.com/EverMind-AI/HyperMem)、[EvoAgentBench](https://github.com/EverMind-AI/EvoAgentBench)、[EverMemBench](https://github.com/EverMind-AI/EverMemBench) 和 [EverMe](https://github.com/EverMind-AI/EverMe)。
+EverMind 将记忆研究、可用于生产的产品和实际集成汇聚到同一个开源生态中。
 
-<br>
-<div align="right">
+<table>
+<tr>
+<th colspan="2">产品</th>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/EverOS">EverOS</a></strong></td>
+<td>面向 Agent 和用户的本地优先、以 Markdown 为原生格式的长期记忆运行时。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/Raven">Raven</a></strong></td>
+<td>以记忆为核心、可自我进化的 Agent 框架，具备主动性、上下文控制和技能进化能力。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/EverMe">EverMe (CLI)</a></strong></td>
+<td>面向跨设备、跨 Agent 个人记忆的命令行工具与 Agent 插件套件。</td>
+</tr>
+<tr>
+<th colspan="2">研究与评测</th>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/SkillCorpus">SkillCorpus</a></strong></td>
+<td>经过整理、可直接用于检索的 Agent 技能语料库，并配套检索与评测工具。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/EverAlgo">EverAlgo</a></strong></td>
+<td>支撑 EverOS 的无状态抽取、排序、解析与记忆算子。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/HyperMem">HyperMem</a></strong></td>
+<td>基于超图的分层记忆，支持由粗到细的长期对话检索。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/MSA">MSA</a></strong></td>
+<td>Memory Sparse Attention，面向可扩展的隐式记忆与一亿 Token 级上下文。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/EverMemBench">EverMemBench</a></strong></td>
+<td>评测记忆系统的事实召回、应用推理与个性化泛化能力。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/EvoAgentBench">EvoAgentBench</a></strong></td>
+<td>对 Agent 的自我进化、迁移效率、错误规避和技能使用进行纵向评测。</td>
+</tr>
+<tr>
+<th colspan="2"><a href="https://github.com/EverMind-AI/plugins">集成</a></th>
+</tr>
+<tr>
+<td><strong><a href="https://docs.openclaw.ai">OpenClaw</a></strong></td>
+<td><a href="https://github.com/EverMind-AI/plugins/tree/main/openclaw">OpenClaw 插件</a>，用于自动召回、采集以及会话记忆的生命周期管理。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a></strong></td>
+<td><a href="https://github.com/EverMind-AI/plugins/tree/main/hermes">Hermes 插件</a>，在多次 Hermes 会话之间保持持久记忆。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/deepseek-ai/DeepSeek-Harness">DeepSeek Harness</a></strong></td>
+<td><a href="https://github.com/EverMind-AI/plugins/tree/main/dsh">DSH 插件</a>，让 DeepSeek Harness 的 Agent 具备记忆能力。</td>
+</tr>
+<tr>
+<td><strong><a href="https://dify.ai">Dify</a></strong></td>
+<td>可在工作流和 Agent 中显式检索与存储记忆的<a href="https://github.com/EverMind-AI/plugins/tree/main/dify">自托管</a>与<a href="https://github.com/EverMind-AI/plugins/tree/main/dify_cloud">云端</a>工具。</td>
+</tr>
+</table>
 
-[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
-
-</div>
+这些项目共同构成了 EverMind 从研究到运行时的技术栈：方法与基准最终沉淀为可复用的记忆基础设施、产品和 Agent 集成。
 
 ## 🤝 参与贡献
 

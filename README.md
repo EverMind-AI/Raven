@@ -59,6 +59,22 @@ Windows PowerShell 5.1 may reject the redirect. Use the direct installer URL ins
 irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex
 ```
 
+Or install from a source checkout, to develop against the code or to run what
+has not been released yet:
+
+```bash
+git clone https://github.com/EverMind-AI/Raven.git
+cd Raven
+./install.sh
+```
+
+Run as a file, `install.sh` installs that checkout in editable mode: raven and
+its bundled plugins link back to your tree, and the TUI bundle and the served
+page are built from it. A piped run installs the published wheel even from
+inside a clone, so that a one-line install never picks up whatever a working
+tree happens to contain. Set `RAVEN_LOCAL_SRC=<dir>` to force the editable
+install through a pipe.
+
 The agent products ship with raven itself: a wheel carries the `agents/`
 product tree and copies it out to your raven home on first use, and a source
 checkout reads the tree in place. Setup asks about each product and registers
