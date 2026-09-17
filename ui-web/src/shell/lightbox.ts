@@ -1,6 +1,6 @@
 /* Full-size view for any image in the page -- a staged thumbnail or one already
- * sent. Clicking anywhere closes it; Escape is wired into the chrome's global
- * chain, which finds the overlay by class rather than asking here.
+ * sent. Clicking anywhere closes it; Escape reaches it through the overlay
+ * order (state/overlays.ts), which asks the two verbs below.
  *
  * A writer, not an island: the overlay is one node appended to the body, it
  * belongs to no page's root, and both islands that open one (the composer's
