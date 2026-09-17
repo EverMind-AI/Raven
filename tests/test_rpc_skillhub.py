@@ -243,6 +243,42 @@ def _loop_with(catalog):
 
 
 @pytest.mark.asyncio
+async def test_remove_finds_a_bundle_whose_name_a_path_sanitiser_would_change(workspace, monkeypatch):
+    """The bundle branch is asked with the name as the table knows it, not as a
+    path may spell it.
+
+    The wire name is sanitised for the branch that builds a path from it, and
+    that sanitiser keeps only what a path may hold. The bundle branch never
+    builds a path from the name -- it compares it to the table's -- and two
+    real names do not survive the sanitiser: a flat bundle whose SKILL.md
+    declares no name is keyed by its directory, ``<slug>@<version>``, and a
+    declared name may hold a space. Asked with the sanitised spelling, neither
+    is found, while ``ext.list`` reports both as removable: a control that
+    always fails, which is the shape this handler exists to prevent.
+    """
+    monkeypatch.setattr(hub, "_refresh_pool", lambda _factory: None)
+    stamp = json.dumps({"slug": "x", "version": "v0", "source": "hub"})
+
+    # No frontmatter: the table falls back to the directory name, `@` included.
+    unnamed = workspace / "hub" / "acme_tool@v0"
+    unnamed.mkdir(parents=True)
+    (unnamed / "SKILL.md").write_text("# a skill with no declared name\n")
+    (unnamed / hub.INSTALL_META).write_text(stamp)
+
+    # A declared name a path could not hold.
+    spaced = workspace / "hub" / "acme_two@v0"
+    spaced.mkdir(parents=True)
+    (spaced / "SKILL.md").write_text("---\nname: my skill\n---\n# body\n")
+    (spaced / hub.INSTALL_META).write_text(stamp)
+
+    assert (await skillhub.skillhub_remove({"name": "acme_tool@v0"})) == {"removed": True, "name": "acme_tool@v0"}
+    assert not unnamed.exists()
+
+    assert (await skillhub.skillhub_remove({"name": "my skill"})) == {"removed": True, "name": "my skill"}
+    assert not spaced.exists()
+
+
+@pytest.mark.asyncio
 async def test_remove_asks_the_running_loops_table_first(workspace, monkeypatch):
     """In production the removal is asked from a page that drew the name off the
     running loop's table, so that table is the one to resolve the name against:

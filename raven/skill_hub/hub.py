@@ -653,7 +653,7 @@ def _catalogue(root: Path, agent_loop_factory):
 def _bundle_for(root: Path, name: str, agent_loop_factory=None) -> Path | None:
     """The ``<root>/hub/<slug>@<version>`` bundle whose skill is ``name``, or None.
 
-    The market reaches the workspace by two installers with two layouts. The
+    The skill hub reaches the workspace by two installers with two layouts. The
     one this module drives puts a skill at ``<root>/<name>/`` under ``MARKER``.
     The one the context engine and the ``use_skill`` tool drive caches a whole
     bundle at ``<root>/hub/<slug>@<version>/`` and stamps ``INSTALL_META`` in
@@ -706,6 +706,12 @@ async def remove(skill_name: str, *, agent_loop_factory=None) -> dict:
     does not stop the context engine re-installing the skill on its next
     catalogue hit; that is what ``skill block`` is for, on either surface.
     """
+    # Two spellings of the name, one per branch. The market-module layout builds
+    # a path from it, so it is sanitised to what a path may hold. The bundle
+    # layout is found through the skill table, which keys on the name as the
+    # skill declares it -- and a flat bundle with no declared name is keyed by
+    # its directory, ``<slug>@<version>``, which the path sanitiser would strip
+    # the ``@`` from and never match. That branch is asked with the name as sent.
     name = _safe_name(skill_name)
     root = _skills_dir().resolve()
     target = (root / name).resolve()
@@ -718,12 +724,12 @@ async def remove(skill_name: str, *, agent_loop_factory=None) -> dict:
         await asyncio.to_thread(shutil.rmtree, target)
         await asyncio.to_thread(_refresh_pool, agent_loop_factory)
         return {"removed": True, "name": name}
-    bundle = _bundle_for(root, name, agent_loop_factory)
+    bundle = _bundle_for(root, skill_name, agent_loop_factory)
     if bundle is None:
         raise SkillHubRequestError("no such installed skill", data={"name": skill_name})
     await asyncio.to_thread(shutil.rmtree, bundle)
     await asyncio.to_thread(_refresh_pool, agent_loop_factory)
-    return {"removed": True, "name": name}
+    return {"removed": True, "name": skill_name}
 
 
 __all__ = [
