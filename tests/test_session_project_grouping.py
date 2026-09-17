@@ -224,6 +224,55 @@ def test_a_keyless_transcript_is_still_adopted_across_groups(tmp_path: Path) -> 
     assert [m["content"] for m in grouped.get_or_create("cli:ancient").messages] == ["remember me"]
 
 
+def test_a_transcript_that_cannot_be_read_is_still_adopted(tmp_path: Path) -> None:
+    """Unreadable is not the same as somebody else's.
+
+    The head is read to learn whose the file is; a file that will not open
+    answers that question with silence, and silence has to fall back to the
+    stem. Refusing it would hide the transcript behind a fresh empty one in
+    this process's own group, which is the failure the search exists to stop.
+    """
+    (tmp_path / "sessions" / "cli").mkdir(parents=True)
+    orphan = tmp_path / "sessions" / "cli" / "orphan.jsonl"
+    orphan.symlink_to(tmp_path / "sessions" / "cli" / "gone.jsonl")
+
+    grouped = SessionManager(tmp_path, project_slug="-srv-alpha")
+
+    assert grouped.session_path("cli:orphan") == orphan
+
+
+def test_a_transcript_whose_head_is_not_json_is_still_adopted(tmp_path: Path) -> None:
+    """A transcript truncated mid-write leads with a fragment, not a record.
+
+    That file is still this session's -- the interrupted write cost it its
+    metadata line, not its identity -- so a parse failure answers None and the
+    stem decides, the same way a keyless transcript does.
+    """
+    (tmp_path / "sessions" / "cli").mkdir(parents=True)
+    truncated = tmp_path / "sessions" / "cli" / "halfwritten.jsonl"
+    truncated.write_text('{"_type": "metadata", "crea', encoding="utf-8")
+
+    grouped = SessionManager(tmp_path, project_slug="-srv-alpha")
+
+    assert grouped.session_path("cli:halfwritten") == truncated
+
+
+def test_a_transcript_whose_head_is_not_metadata_is_still_adopted(tmp_path: Path) -> None:
+    """Valid JSON that is not a metadata record carries no key either.
+
+    A transcript that lost its leading record to a rewrite now opens on a
+    message. Reading ``key`` off that would be reading a field the record does
+    not have, so the head is rejected as a whole rather than trusted in part.
+    """
+    (tmp_path / "sessions" / "cli").mkdir(parents=True)
+    headless = tmp_path / "sessions" / "cli" / "headless.jsonl"
+    headless.write_text('{"role": "user", "content": "remember me"}\n', encoding="utf-8")
+
+    grouped = SessionManager(tmp_path, project_slug="-srv-alpha")
+
+    assert grouped.session_path("cli:headless") == headless
+
+
 def test_the_gateway_still_files_its_own_sessions_by_channel(tmp_path: Path) -> None:
     """Reaching across groups is a fallback for a transcript that already
     exists, not a change of where this process writes."""
