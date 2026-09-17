@@ -9,8 +9,9 @@ import { sources } from '../../state/sources'
 
 function markNewCurrent() { islands.rail.markNew(); }
 /* inline rename in the top bar, from the title bar's own button; the list
-   follows. Kept as a local name because #renameBtn's handler still calls it --
-   the live layer no longer replaces it, which is the part that mattered. */
+   follows. Kept as a local name because the chat header's button still calls it
+   (ui-web/src/chrome/ChatTop.tsx) -- the live layer no longer replaces it,
+   which is the part that mattered. */
 function renameTitle() { islands.rail.rename(); }
 
 const sessionSource = () => sources.sessions;

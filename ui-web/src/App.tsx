@@ -39,6 +39,7 @@ import { useEffect, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
 import { CapsPage } from './chrome/CapsPage'
+import { ChatTop } from './chrome/ChatTop'
 import { Rail } from './chrome/Rail'
 import * as menu from './shell/menu'
 import * as toast from './shell/toast'
@@ -193,9 +194,10 @@ function Toasts(): JSX.Element {
 
 /* Each interior into the container page.html still provides. Guarded the way
    the island mounts are: a document without the container renders nothing
-   rather than throwing. The rail resolves its own container -- aside.rail is
-   the one region with no id -- and the two overlays below find their own host,
-   because theirs is the one that was standing when they were raised. */
+   rather than throwing. The rail and the chat column resolve their own
+   containers -- div.app's two columns are the regions with no id -- and the two
+   overlays below find their own host, because theirs is the one that was
+   standing when they were raised. */
 export function App(): JSX.Element {
   const veilEl = document.getElementById('veil')
   const detailEl = document.getElementById('detail')
@@ -203,6 +205,7 @@ export function App(): JSX.Element {
   return (
     <>
       <Rail />
+      <ChatTop />
       <CapsPage />
       {detailEl ? createPortal(<DetailPanel />, detailEl) : null}
       {setVeilEl ? createPortal(<SettingsModal />, setVeilEl) : null}
