@@ -57,28 +57,7 @@ Enable the agents you need during onboarding. See [`agents/README.md`](agents/RE
 
 Raven includes presets for these third-party agents, so you can bring their capabilities into its orchestration workflows.
 
-<table width="100%">
-<tr>
-<td width="20%" align="center"><img src="ui-web/src/assets/agents/claudecode-color.svg" alt="Claude Code" width="64" height="64"><br><strong>Claude Code</strong></td>
-<td width="20%" align="center"><img src="ui-web/src/assets/agents/codex-color.svg" alt="Codex" width="64" height="64"><br><strong>Codex</strong></td>
-<td width="20%" align="center"><img src="ui-web/src/assets/agents/opencode.svg" alt="OpenCode" width="64" height="64"><br><strong>OpenCode</strong></td>
-<td width="20%" align="center"><img src="ui-web/src/assets/agents/hermesagent.svg" alt="Hermes Agent" width="64" height="64"><br><strong>Hermes Agent</strong></td>
-<td width="20%" align="center"><img src="ui-web/src/assets/agents/openclaw-color.svg" alt="OpenClaw" width="64" height="64"><br><strong>OpenClaw</strong></td>
-</tr>
-<tr>
-<td align="center"><img src="ui-web/src/assets/agents/miromind.svg" alt="MiroThinker" width="64" height="64"><br><strong>MiroThinker</strong></td>
-<td align="center"><img src="ui-web/src/assets/agents/copilot-color.svg" alt="GitHub Copilot" width="64" height="64"><br><strong>GitHub Copilot</strong></td>
-<td align="center"><img src="ui-web/src/assets/agents/qwen-color.svg" alt="Qwen Code" width="64" height="64"><br><strong>Qwen Code</strong></td>
-<td align="center"><img src="ui-web/src/assets/agents/codebuddy-color.svg" alt="CodeBuddy" width="64" height="64"><br><strong>CodeBuddy</strong></td>
-<td align="center"><img src="ui-web/src/assets/agents/qoder-color.svg" alt="Qoder" width="64" height="64"><br><strong>Qoder</strong></td>
-</tr>
-<tr>
-<td align="center"><img src="ui-web/src/assets/agents/grok.svg" alt="Grok Build" width="64" height="64"><br><strong>Grok Build</strong></td>
-<td align="center"><img src="ui-web/src/assets/agents/kimi.svg" alt="Kimi Code" width="64" height="64"><br><strong>Kimi Code</strong></td>
-<td align="center"><img src="ui-web/src/assets/agents/pi.svg" alt="Pi" width="64" height="64"><br><strong>Pi</strong></td>
-<td colspan="2"></td>
-</tr>
-</table>
+![Preset third-party agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, MiroThinker, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi](https://github.com/user-attachments/assets/a6121267-551f-432d-bd13-65bf7478387b)
 
 ## 🚀 Quick Start
 
