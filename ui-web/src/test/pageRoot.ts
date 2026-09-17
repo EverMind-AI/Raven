@@ -1,19 +1,19 @@
 /* The page's own root, for a test whose subject draws through it.
  *
- * Four overlays render from src/App.tsx rather than from the module that raises
- * them -- the confirm sheet, the settings frame, the context menu and the
- * notices -- so a test that asks one of those modules for DOM has to have the
- * root standing, the way src/main.tsx stands it up before anything else.
+ * It renders the page: src/App.tsx is one portal at the body carrying every
+ * region src/page.html used to be, so mounting this gives a case the real
+ * chrome -- the dialogs, the rail, the dock, the seven module pages, the
+ * standing #menu and #toasts hosts -- the way src/main.tsx stands it up before
+ * anything else. A case whose own fixture carried one of those elements would
+ * then have two of it, so the fixture is what goes.
  *
- * It renders only into the containers the test's own markup provides, and the
- * root itself is detached, so a page with none of them gets nothing: mounting
- * this cannot add an element to the body or change what a snapshot of one
- * records.
+ * The root itself is detached, which is the mechanism: React clears a container
+ * it is given as a root, so a root AT the body would delete what the document
+ * was served with instead of joining it.
  *
  * The menu and the notices find their host when they are raised, not when this
  * renders, so the order does not matter for them -- markup first or root first,
- * either way. The three dialog interiors portal into the container that exists
- * when this renders, which is what src/page.html guarantees in the page.
+ * either way.
  */
 import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'

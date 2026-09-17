@@ -19,15 +19,6 @@ let tooNarrowToSplit;
    that must happen before drawing, so both use the same opener. */
 const openSettings = async () => { await islands.settings.open(); };
 
-/* ── the More flyout ──────────────────────────────────────────────────
-   Sub-agents / entrances / schedules live here. The renderer is the nav flyout module
-   (ui-web/src/shell/navfly.ts), which also owns the button that opens the group;
-   what remains here is the one name the live layer still calls. */
-function drawMoreFly() {
-  /* A language flip re-runs the MORE_ROWS.forEach that names the rows. */
-  islands.nav.draw();
-}
-
 /* Everything this part used to do while the concatenated page script ran, in
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
@@ -50,4 +41,4 @@ export function install() {
    (ui-web/src/chrome/PermChip.tsx, ui-web/src/chrome/TierChip.tsx). */
 }
 
-export { tooNarrowToSplit, openSettings, drawMoreFly }
+export { tooNarrowToSplit, openSettings }

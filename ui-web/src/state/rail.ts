@@ -9,10 +9,10 @@
  * the rail's own markup: `.app` and `<html>` are the grid and the root that the
  * stylesheet reads the state off (`.app[data-rail="off"] .rail{display:none}`,
  * src/styles/page.css), and button#railShow is a top-level region of its own.
- * It cannot move into a component before the end of stage C either: the page's
- * root renders through portals into the containers src/page.html provides, and a
- * portal at the body would append that button after every region instead of
- * leaving it third (src/state/portals.ts).
+ * All three are rendered by src/App.tsx with the value the page is served with
+ * and never written by it again -- React diffs against the props it rendered
+ * last rather than against the document -- so one value keeps one writer, and
+ * this is it.
  *
  * Not here: the rail's WIDTH, which is a drag rather than a state
  * (src/shell/panes.ts), and the session list inside it, which is an island

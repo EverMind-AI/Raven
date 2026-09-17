@@ -7,22 +7,26 @@ import { resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { loadPart, moduleText, partNames } from './legacy-part.mjs'
+import { loadPart, moduleText } from './legacy-part.mjs'
 
-const liveParts = partNames('live')
 const index = readFileSync(resolve(process.cwd(), 'src/legacy/index.js'), 'utf8')
 const bootText = moduleText('state/boot.ts')
 const installText = moduleText('state/install.ts')
-/* The page's own half, as one text: the claim on the first frame, the wiring
-   and the gateway sequence were four files of the live layer and are two
-   modules now, and every rule below is about the whole of it rather than about
-   which of the two a line sits in. */
+/* The page's own half, as one text: the claim on the first frame, the wiring,
+   the gateway sequence and the settings seam were the whole of the live layer
+   and are six modules now, and every rule below is about the whole of it rather
+   than about which of them a line sits in. */
 const wiring = bootText + installText + moduleText('state/connection.ts')
-  + moduleText('state/updates.ts') + moduleText('legacy/live/120-settings.js')
+  + moduleText('state/updates.ts') + moduleText('state/langPick.ts')
+  + moduleText('state/langEffects.ts') + moduleText('features/settings/chrome.ts')
+  + moduleText('features/model/chip.ts')
 
+/* One step fewer than the concatenated boot had: `drawCapsBadge` was an empty
+   function -- the rail's module rows carry no counters -- and it went with the
+   rest of the draw shells. */
 const STEPS = [
-  'lookLoad', 'paneLoad', 'setRail', 'sessionDraw', 'sessionOpen', 'drawCapsBadge',
-  'drawPerm', 'drawWorkdir', 'loadTier', 'drawCtx', 'drawCaps', 'drawFoot', 'bumpWs', 'drawSettings',
+  'lookLoad', 'paneLoad', 'setRail', 'sessionDraw', 'sessionOpen',
+  'drawPerm', 'loadTier', 'drawCtx', 'drawCaps', 'drawFoot', 'bumpWs', 'drawSettings',
   'setRuntime', 'goState',
 ]
 
@@ -52,9 +56,8 @@ async function harness(rows = []) {
       },
       'demo/090-composer.js': { goState: step('goState') },
       'demo/100-workspace.js': { bumpWs: step('bumpWs') },
-      'demo/120-capabilities.js': { drawCapsBadge: step('drawCapsBadge') },
       'demo/130-settings.js': { drawSettings: step('drawSettings'), setRuntime: step('setRuntime') },
-      'demo/152-skills.js': { drawCaps: step('drawCaps') },
+      'src/state/caps': { draw: step('drawCaps') },
     },
     islands: { onboard: { open: () => {} } },
   })
@@ -119,22 +122,23 @@ describe('the page boot order', () => {
     }
   })
 
-  /* The chrome installs first, and both halves of it in every mode. The live
-     half used to be skipped for a page opened from disk or with ?stub=1, where
-     the demo half's fixture sources answered instead; the fixtures are
-     responders behind the transport now (src/rpc/fixtures/), so one set of
-     parts installs and the URL only decides which transport they read
-     (src/state/transport.ts). */
-  it('installs the legacy chrome in the manifests order, before the boot', () => {
+  /* The chrome installs first, in every mode. The live layer used to be
+     skipped for a page opened from disk or with ?stub=1, where the demo
+     half's fixture sources answered instead; the fixtures are responders
+     behind the transport now (src/rpc/fixtures/), so one set of parts
+     installs and the URL only decides which transport they read
+     (src/state/transport.ts). The live layer itself is gone: its last part
+     is state/lang{Pick,Effects}.ts and features/settings/chrome.ts, which
+     main.tsx installs at the point that part installed. */
+  it('installs the legacy chrome before the boot, and the settings seam after it', () => {
     const listed = [...index.matchAll(/^import \* as \w+ from '\.\/live\/([^']+)'$/gm)].map((m) => m[1])
-    expect(listed).toEqual(liveParts)
+    expect(listed).toEqual([])
     expect(index).toContain('for (const part of DEMO) part.install()')
-    expect(index).toContain('for (const part of LIVE) part.install()')
-    expect(index).not.toContain('liveMode')
-    expect(index.indexOf('for (const part of DEMO)')).toBeLessThan(index.indexOf('for (const part of LIVE)'))
 
     const main = moduleText('main.tsx')
-    expect(main.indexOf('installLegacy()')).toBeLessThan(main.indexOf('boot()'))
+    expect(main.indexOf('installLegacy()')).toBeLessThan(main.indexOf('langEffects.install()'))
+    expect(main.indexOf('langEffects.install()')).toBeLessThan(main.indexOf('settingsChrome.install()'))
+    expect(main.indexOf('settingsChrome.install()')).toBeLessThan(main.indexOf('boot()'))
 
     expect(wiring).not.toContain('CRONS.length = 0')
   })
@@ -147,7 +151,7 @@ describe('first-run model setup', () => {
   })
 
   it('guards New Task, Send, and the model selector with the same redirect', () => {
-    expect(wiring).toContain('composer.beforeSend = openModelsForMissingProvider')
+    expect(wiring).toContain('.beforeSend = openModelsForMissingProvider')
     expect(wiring.match(/if \(openModelsForMissingProvider\(\)\) return/g)).toHaveLength(2)
   })
 })

@@ -25,14 +25,9 @@ import { mountPageRoot } from '../test/pageRoot'
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-/* The containers page.html carries, and the standing host a notice needs. */
-const MARKUP =
-  '<section class="page" id="capsPage" data-open="true">' +
-  '<header></header><div class="work"><div class="wrap">' +
-  '<div class="cbar"></div><div id="capsBody"></div>' +
-  '<details class="adv" id="advAdd"></details>' +
-  '</div></div></section>' +
-  '<div class="toasts" id="toasts"></div>'
+/* Nothing: the page root renders the section, and the standing host a notice
+   needs is one of its siblings. */
+const MARKUP = ''
 
 /* The two verbs the field dispatches to, and the two the buttons call. The bag
    is assigned over rather than mocked, the way scripts/legacy-part.mjs does it. */

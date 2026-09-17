@@ -49,14 +49,14 @@ async function opener(source: CapabilitiesSource): Promise<{
   const part = await loadPart(() => import('../../legacy/demo/120-capabilities.js'), {
     fakes: {
       'demo/010-kernel.js': { $: looseQuery() },
-      'demo/152-skills.js': { drawCaps: () => calls.push('draw') },
+      'src/state/page': { show: (page: string | null) => calls.push(`page:${page}`) },
+      'src/state/caps': { draw: () => calls.push('draw') },
       'src/shell/toast': { show: toast },
     },
     islands: { skills: { skeleton } },
   })
   ;(await seam()).capabilities = source
   part.decorateExtSet(() => (tab: string) => calls.push(`tab:${tab}`))
-  part.decorateShowPage(() => (page: string) => calls.push(`page:${page}`))
   return { calls, open: part.openCaps, toast }
 }
 
@@ -108,15 +108,15 @@ describe('manual plugin add', () => {
     let finish!: () => void
     const manual = vi.fn(() => new Promise<void>((resolve) => { finish = resolve }))
     const drawCaps = vi.fn()
-    const drawCapsBadge = vi.fn()
     const toast = vi.fn()
     const part = await loadPart(() => import('../../state/caps'), {
       fakes: {
-        'demo/120-capabilities.js': { drawCapsBadge },
-        'demo/152-skills.js': { drawCaps },
         'src/shell/toast': { show: toast },
       },
     })
+    /* The draw the add asks for afterwards, through the tab renderer the skill
+       layer registers -- the only reachable tab in this case. */
+    part.onDraw({ skill: drawCaps })
     ;(await seam()).plugins = { manual } as unknown as PluginsSource
     const name = document.querySelector<HTMLInputElement>('#mName')!
     const address = document.querySelector<HTMLInputElement>('#mAddr')!
@@ -135,7 +135,6 @@ describe('manual plugin add', () => {
     expect(name.value).toBe('')
     expect(address.value).toBe('')
     expect(drawCaps).toHaveBeenCalledOnce()
-    expect(drawCapsBadge).toHaveBeenCalledOnce()
   })
 })
 

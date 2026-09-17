@@ -32,17 +32,9 @@ vi.mock('../legacy/demo/050-rail.js', async (original) => ({
   renameTitle: () => { renames.n += 1 },
 }))
 
-/* The four containers page.html carries, plus the seam that has no interior. */
-const MARKUP = [
-  '<div class="app"><div class="main"><div class="split"><div class="chat">',
-  '<div class="top"></div>',
-  '<div class="scroll" id="scroll"></div>',
-  '<button class="backpill" id="backpill" hidden></button>',
-  '<div class="grip" id="wsGrip" role="separator" aria-orientation="vertical"></div>',
-  '<div id="brand" aria-hidden="true"></div>',
-  '<div class="dock"></div>',
-  '</div></div></div></div>',
-].join('')
+/* Nothing: the page root renders the whole chat column, so a case gets the
+   five regions here and the dock beside them by mounting it. */
+const MARKUP = ''
 
 let unmount = (): void => {}
 

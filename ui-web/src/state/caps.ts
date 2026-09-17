@@ -8,13 +8,12 @@
  * market and the plugin market -- so every one of those wrote the same handful
  * of elements from whichever tab was up, by id, on every draw.
  *
- * What is state here is what src/chrome/CapsPage.tsx renders: the title, the
- * search field's placeholder, the status pills' pressed flag and the two
- * "installed" buttons. What is still written by hand is the three elements
- * src/page.html carries whose interiors are NOT this component's -- the
- * section's aria-label, the manual-add fold's `hidden`, the filter bar's
- * `display` -- and #pageHero, which sits between two static children of .wrap
- * and so cannot join a portal's child list before stage C14.
+ * All of it is state here, and src/chrome/CapsPage.tsx renders all of it: the
+ * title, the search field's placeholder, the status pills' pressed flag, the two
+ * "installed" buttons, and the four things a draw used to write on the markup by
+ * id -- the section's aria-label, the manual-add fold's `hidden`, the filter
+ * bar's `display`, and the hero above the bar, which is a child of .wrap the
+ * component renders in its place rather than a node inserted before it.
  *
  * The draw is dispatched from here rather than from a decorator chain. The two
  * tabs' renderers live in the parts that own the islands they draw, and this
@@ -29,10 +28,9 @@
 import { flushSync } from 'react-dom'
 
 import { T } from '../i18n/t'
-import { drawCapsBadge } from '../legacy/demo/120-capabilities.js'
-import { drawCaps } from '../legacy/demo/152-skills.js'
 import { show as toast } from '../shell/toast'
 import * as detail from './detail'
+import * as page from './page'
 import { sources } from './sources'
 
 /** The two modules the one section serves. */
@@ -54,11 +52,22 @@ export interface CapsState {
   readonly query: string
   /** #capsTitle, or null while no draw has named it: the served literal stands. */
   readonly title: string | null
-  /** #cq's placeholder, same rule. It carries no key, so no pass writes it. */
+  /** #cq's placeholder, same rule. It carries no key, so it has no catalogue. */
   readonly search: string | null
   readonly pillsHidden: boolean
   readonly skill: Installed | null
   readonly plugin: Installed | null
+  /** #capsPage's aria-label, or null while no draw has named one: the served
+   *  section carries none at all. */
+  readonly label: string | null
+  /** #advAdd's `hidden`. Served showing, which no reachable draw leaves it. */
+  readonly advHidden: boolean
+  /** .cbar's `display`, or null while nothing has set one -- the served bar has
+   *  no inline style, and the two values a draw uses are '' and 'none'. */
+  readonly bar: string | null
+  /** The hero's heading, or null while no draw has made one: the served .wrap
+   *  has no #pageHero, and a draw with no title leaves it standing but hidden. */
+  readonly hero: string | null
 }
 
 /** What a draw says about the chrome around the body. */
@@ -101,6 +110,10 @@ const served = (): CapsState => ({
   pillsHidden: false,
   skill: null,
   plugin: null,
+  label: null,
+  advHidden: false,
+  bar: null,
+  hero: null,
 })
 
 let state: CapsState = served()
@@ -156,12 +169,20 @@ export function extSet(tab: Tab | null | undefined): void {
   for (const fn of [...switched]) fn()
 }
 
+/* Leaving the section. Was closeCaps in the legacy part, and the order is its:
+   the page flag first, then the shared drawer -- which is not on any page, so
+   closing the section does not reach it on its own. */
+export function close(): void {
+  page.show(null)
+  detail.close()
+}
+
 /* A status pill: the filter it names, and the redraw the click asked for. The
    pills are hidden by every draw, so this is only reachable before the first
    one -- reproduced rather than fixed, like the rest of the bar. */
 export function pick(kind: string): void {
   put({ kind })
-  drawCaps()
+  draw()
 }
 
 /* The filter bar's own term. Both tabs take a typed query through their own
@@ -169,7 +190,7 @@ export function pick(kind: string): void {
    two above it fall through to, which no reachable tab does. */
 export function setQuery(query: string): void {
   put({ query })
-  drawCaps()
+  draw()
 }
 
 /** The renderers, from the parts that own them. */
@@ -194,25 +215,23 @@ export function draw(): void {
   hooks.hero?.()
 }
 
-/* The chrome a draw decides. The three elements page.html owns are written
-   here, keeping the relative order the two renderers wrote them in; the three
-   the component renders land in one commit after them. Unguarded, as the
-   renderers were:
-   all three are static markup, and a draw against a page that has none of it
-   is the error its two callers already catch (redrawAll, state/install.ts). */
+/* The chrome a draw decides, in one commit: the six values are what the two
+   renderers wrote on six elements, and the component draws all six. */
 export function chrome(next: Chrome): void {
-  document.getElementById('capsPage')!.setAttribute('aria-label', next.label)
-  ;(document.getElementById('advAdd') as HTMLElement).hidden = next.advHidden
-  bar(next.bar)
-  put({ title: next.title, search: next.search, pillsHidden: next.pillsHidden })
+  put({
+    label: next.label,
+    advHidden: next.advHidden,
+    bar: next.bar,
+    title: next.title,
+    search: next.search,
+    pillsHidden: next.pillsHidden,
+  })
 }
 
-/* .cbar's display. Its own attribute, not a rendered one: the bar is the
-   container src/chrome/CapsPage.tsx portals into. The installed view hides it
-   and every other path puts it back, which is why three call sites outside a
-   draw write it too. */
+/* .cbar's display on its own. The installed view hides the bar and every other
+   path puts it back, which is why three call sites outside a draw write it. */
 export function bar(display: string): void {
-  ;(document.querySelector('#capsPage .cbar') as HTMLElement).style.display = display
+  put({ bar: display })
 }
 
 /* One tab's "installed" button. The first call is what puts it in the bar --
@@ -222,26 +241,14 @@ export function installedButton(tab: Tab, next: Installed): void {
   put(tab === 'skill' ? { skill: next } : { plugin: next })
 }
 
-/* The page hero, above the bar and so outside #capsBody: one node, repopulated
-   on every draw for whichever view is up. It cannot be a rendered child before
-   stage C14: .wrap's other children are still page.html's, and a portal appends
-   after them rather than landing first. */
+/* The page hero, first child of .wrap and so above the bar and outside
+   #capsBody: one heading, renamed on every draw for whichever view is up, and
+   standing but empty and hidden on a view that has none. Null until the first
+   draw asks for one, because the served page has no such element -- which is
+   what makes "the element appears with the first draw" a state rather than an
+   insertion. */
 export function hero(title: string): void {
-  let el = document.getElementById('pageHero')
-  if (!el) {
-    const anchor = document.querySelector('#capsPage .cbar') as HTMLElement
-    el = document.createElement('div')
-    el.className = 'pmhero'
-    el.id = 'pageHero'
-    anchor.parentNode!.insertBefore(el, anchor)
-  }
-  el.innerHTML = ''
-  el.hidden = !title
-  if (title) {
-    const heading = document.createElement('h3')
-    heading.textContent = title
-    el.appendChild(heading)
-  }
+  put({ hero: title })
 }
 
 /* Tests only: back to the state the page is served in, the two tabs' renderers
@@ -277,7 +284,6 @@ export async function manualAdd(): Promise<void> {
   }
   name.value = ''
   address.value = ''
-  drawCaps()
-  drawCapsBadge()
+  draw()
   toast(T('gui.adv.added_x', { name: n }))
 }

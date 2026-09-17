@@ -26,6 +26,7 @@ import { load as loadTier } from '../shell/tier'
 import { authFail, bootFail, shellReady, surface } from './connection'
 import { gateway } from './gateway'
 import { installPage } from './install'
+import { load as loadLang, restore as langRestore } from './langPick'
 import { switchTo, switchToDraft } from './session/registry'
 import { sources } from './sources'
 import { hideSplash } from './splash'
@@ -33,11 +34,9 @@ import { resumeUpgrade, showUpNote, watchForUpdates } from './updates'
 import { hostPlatformSet } from '../legacy/demo/010-kernel.js'
 import { sess, turn } from '../legacy/demo/040-state.js'
 import { sessionRows } from '../legacy/demo/050-rail.js'
-import { drawCapsBadge } from '../legacy/demo/120-capabilities.js'
 import { appVersionSet } from '../legacy/demo/130-settings.js'
 import { cronWarm } from '../legacy/demo/140-schedule.js'
 import { bootPage, claimBoot, showOnboard } from '../legacy/demo/160-boot.js'
-import { langRestore, loadLang } from '../legacy/live/120-settings.js'
 
 import type { RailSource, SessRow } from '../features/rail/types'
 
@@ -179,7 +178,7 @@ async function sequence(): Promise<void> {
        the badges stay suppressed (data-counts="pending") rather than showing
        the demo mock's phantom counts. */
     Promise.allSettled([
-      loadExt().then(() => drawCapsBadge()),
+      loadExt(),
       cronWarm(),
     ]).then(() => {
       const rail = document.querySelector('.rail') as HTMLElement | null

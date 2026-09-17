@@ -9,13 +9,12 @@ Sources under ``src/``:
 - ``.modern/modern.iife.js`` -- the bundle Vite builds from ``src/main.tsx``,
                      injected at the script marker.
 
-The two layers under ``src/legacy/`` are ES modules now, reached from
-``src/main.tsx`` through ``src/legacy/index.js`` and bundled by Vite with
-everything else, so this script no longer assembles them and no longer inlines
-the message catalogue either (``src/legacy/demo/010-kernel.js`` imports
-``i18n/messages.json`` directly). The manifests below stay: they are the order
-``src/legacy/index.js`` installs the parts in, and one Python test outside this
-directory calls ``_concat``. No sandbox test reads them any more -- the
+What is left of ``src/legacy/`` is ES modules, reached from ``src/main.tsx``
+through ``src/legacy/index.js`` and bundled by Vite with everything else, so
+this script no longer assembles them and no longer inlines the message
+catalogue either (``src/legacy/demo/010-kernel.js`` imports
+``i18n/messages.json`` directly). The manifest below stays: it is the order
+``src/legacy/index.js`` installs the parts in. No test reads it any more -- the
 harnesses import the parts (``ui-web/scripts/legacy-part.mjs``), and the two
 shape gates take the list of parts from ``src/legacy/index.js``.
 Run:
@@ -47,10 +46,10 @@ ASSETV_MARK = "__ASSETV__"
 # one wrote. src/legacy/index.js calls them in exactly this order -- regenerate
 # it (scripts/legacy-index.mjs) after renaming, adding or removing a part.
 #
-# The live manifest is down to one part. The page's own wiring and boot are
-# src/state/{install,boot}.ts now; what is left here is the settings chrome,
-# which holds the whole-page redraw the Python test outside this directory reads
-# by source text -- so this file name and this entry stay until that test goes.
+# The live layer is gone: the page's own wiring and boot are
+# src/state/{install,boot}.ts, and its last part -- the settings chrome and the
+# whole-page redraw a language pick asks for -- is src/state/lang{Pick,Effects}.ts
+# and src/features/settings/chrome.ts.
 _DEMO_PARTS = [
     "010-kernel.js",
     "040-state.js",
@@ -70,17 +69,13 @@ _DEMO_PARTS = [
     "155-bridge.js",
     "160-boot.js",
 ]
-_LIVE_PARTS = [
-    "120-settings.js",
-]
+_LIVE_PARTS = []
 
 
 def _concat(subdir: str, manifest: list[str]) -> str:
     """The layer's parts as one text, in manifest order.
 
-    Nothing in the build reads this any more; it is what the Python test
-    outside this directory searches for a function it then evaluates. The layer
-    names stay "seam" / "demo" / "live" for every caller.
+    Nothing reads this any more. It goes with the last of the legacy layer.
     """
     layer = ROOT / "src" / "legacy" / subdir
     found = {p.name for p in layer.glob("*.js")}

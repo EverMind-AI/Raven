@@ -2,9 +2,9 @@
    The renderer is the skills island (ui-web/src/features/skills/): the hub
    market, the installed view and the shared detail drawer's skill sheet
    all render through it, off sources.skills. What remains here is its shell
-   face -- the draw both tabs enter through, the skill tab's own draw, and the
-   fixture source. The chrome the draw decides (the title, the search hint, the
-   filter bar) is src/state/caps.ts's, and src/chrome/CapsPage.tsx renders it. */
+   face -- the skill tab's own draw, and the fixture source. The chrome the
+   draw decides (the title, the search hint, the filter bar, the hero) is
+   src/state/caps.ts's, and src/chrome/CapsPage.tsx renders it. */
 
 /* Start a task with the capability already named: a fresh session whose
    composer opens pre-filled, cursor at the end, ready to complete.
@@ -15,7 +15,7 @@ import * as caps from '../../state/caps'
 import * as page from '../../state/page'
 import { sources } from '../../state/sources'
 import { $, T } from './010-kernel.js'
-import { closeDetail, drawCapsBadge } from './120-capabilities.js'
+import { closeDetail } from './120-capabilities.js'
 
 function useInTask(promptKey, name) {
   closeDetail();
@@ -29,15 +29,6 @@ function useInTask(promptKey, name) {
 
 /* Mirror of the island's view, read by the plugin layer's hero sync. */
 let skView = 'market';
-
-/* The name every caller of "draw the extensions page" has: the boot step, the
-   language flip's redrawAll, the reconnect, the bridge and the filter bar. */
-function drawCaps() {
-  /* Whichever tab is up. src/state/caps.ts dispatches -- it holds the tab and
-     the order the two layers' steps were visible in -- and each renderer owns
-     what goes into #capsBody. */
-  caps.draw();
-}
 
 /* The skill tab's face: the island owns everything inside the box, and the
    chrome above it is still the page's, set from here on every draw. */
@@ -59,7 +50,6 @@ function drawSkillTab() {
      not fire a hub search nobody asked for. */
   if ($('#capsPage').dataset.open === 'true') islands.skills.ensureSearch();
   syncInstalledButton();
-  drawCapsBadge();
 }
 
 /* The installed entry point rides in the filter bar, exactly like the plugin
@@ -96,9 +86,9 @@ export function install() {
    other change only needs the installed count refreshed. */
   islands.skills.subscribe(() => {
     const v = islands.skills.view();
-    if (v !== skView) { skView = v; if (caps.get().tab === 'skill') drawCaps(); return; }
+    if (v !== skView) { skView = v; if (caps.get().tab === 'skill') caps.draw(); return; }
     syncInstalledButton();
   });
 }
 
-export { useInTask, skView, drawCaps, drawSkillTab }
+export { useInTask, skView, drawSkillTab }

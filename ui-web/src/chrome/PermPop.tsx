@@ -62,6 +62,7 @@ export function PermPop(): JSX.Element {
       data-open={s.open ? 'true' : 'false'}
       role="dialog"
       data-i18n-aria="gui.perm.title"
+      aria-label={lang.attr('gui.perm.title')}
       ref={box}
     >
       <div className="hd"><span className="lab" data-i18n="gui.perm.title">{lang.text('gui.perm.title', '权限模式')}</span></div>

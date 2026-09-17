@@ -47,11 +47,11 @@ function sideChannelMethods() {
 /* Where a push handler can be installed: the page's own wiring, which registers
    the seven that are not a turn's, the session pipeline, which took the
    subscription envelope and the five requests that block a turn, and what is
-   left of the two legacy layers. */
+   left of the legacy layer. */
 const SITES = [
   'state/install.ts',
   'state/session/pipeline.ts',
-  ...['demo', 'live'].flatMap((layer) => partNames(layer).map((name) => `legacy/${layer}/${name}`)),
+  ...partNames('demo').map((name) => `legacy/demo/${name}`),
 ]
 
 /** Every [file:line, name] the page registers a push handler for. */

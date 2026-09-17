@@ -10,7 +10,7 @@
  * It is one store now. An island calls open() and close(), renders into the
  * host handed to it here, and hears about a close through the handler it
  * registers. The two flags are still written imperatively, because aside#detail
- * is static markup in src/page.html until the end of stage C and so is not
+ * is rendered with the flag the page is served with and so is not
  * React's to render; #dBody's child list is one host per owner, which React
  * never reconciles either. What IS React's is the interior App.tsx renders --
  * #dTitle's text and the close button.
