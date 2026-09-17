@@ -73,7 +73,7 @@ import yaml
 
 from raven.trajectory.cassette import replayability_problems
 from raven.trajectory.redact import scan_residuals
-from raven.trajectory.replay import REPLAY_MODES, ReplayReport, load_recording, run_replay
+from raven.trajectory.replay import REPLAY_MODES, ReplayReport, load_recording, run_replay, validate_recording
 
 EXPECTATION_FILE = "expect.yaml"
 CASE_FILE = "case.yaml"
@@ -558,6 +558,12 @@ def _cassette_problems(cassette_dir: Path) -> list[str]:
             problems.append(f"cassette cannot be parsed for replay: {exc}")
         else:
             problems.extend(f"cassette is not replayable: {p}" for p in replayability_problems(recording))
+            # replayability_problems only covers missing payloads; the shapes
+            # inside a present payload are the replay consumption contract,
+            # stated by validate_recording — without it a corrupt field (say
+            # tool_calls: [1]) passes here, halts the replay mid-run, and that
+            # halt can even masquerade as the expected divergence.
+            problems.extend(f"cassette is not replayable: {p}" for p in validate_recording(recording))
     return problems
 
 

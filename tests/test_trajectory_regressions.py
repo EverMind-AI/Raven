@@ -670,6 +670,28 @@ async def test_validate_case_rejects_corrupt_referenced_artifact(tmp_path) -> No
     assert any("is not valid JSON" in p for p in problems)
 
 
+async def test_validate_case_rejects_corrupt_fields_inside_a_payload(tmp_path) -> None:
+    """A payload can be a JSON object with every top-level piece present and
+    still crash replay mid-run on an inner field. The gate must hold the
+    replay consumption contract (validate_recording), or the crash-halt can
+    even masquerade as the expected divergence and pass both gates."""
+    case = _case_copy(tmp_path)
+    _, ref = _artifact_ref(case, "llm.output.artifact_path")
+    artifact = case / "cassette" / ref
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    payload["tool_calls"] = [1]
+    artifact.write_text(json.dumps(payload), encoding="utf-8")
+
+    problems = validate_case(case)
+    assert any("tool_calls entry is not an object" in p for p in problems)
+
+    # Even with an expectation written to match the crash-halt divergence,
+    # the static gate still fails the case.
+    _write_expect(case, "mode: strict\ndivergence: {kind: llm, index: 1}\nchecks: []\n")
+    problems = validate_case(case)
+    assert any("tool_calls entry is not an object" in p for p in problems)
+
+
 async def test_validate_case_rejects_escaping_artifact_reference(tmp_path) -> None:
     case = _case_copy(tmp_path)
     spans = _spans(case)
