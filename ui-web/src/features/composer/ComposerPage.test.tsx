@@ -8,6 +8,8 @@ import * as turn from './turn'
 import * as attachmentCache from '../../shell/attachment-cache'
 import * as tail from '../transcript/tail'
 
+import { Lightbox } from '../../chrome/Lightbox'
+import { close as closeLightbox } from '../../shell/lightbox'
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources } from '../../state/sources'
 import { setShell } from '../../shell/bridge'
@@ -511,12 +513,21 @@ describe('the attachment tray', () => {
     })
     const img = box.querySelector('.att.img img') as HTMLImageElement
     expect(img).toBeTruthy()
-    act(() => { fireEvent.click(img) })
-    /* The lightbox is a module in this bundle now, not a shell verb, so the
-       click opens the real overlay rather than recording a call. */
-    const shown = document.querySelector('.lightbox img') as HTMLImageElement
-    expect(shown).toBeTruthy()
-    expect(shown.alt).toBe('p.png')
+    /* The overlay is drawn by src/chrome/Lightbox.tsx, so something has to be
+       rendering it for the click below to put one on screen. Its own component
+       rather than the whole page root: this file mocks the transcript's mount
+       partially, and the page root reaches that through the island bag. */
+    render(<Lightbox />)
+    try {
+      act(() => { fireEvent.click(img) })
+      /* The lightbox is a module in this bundle now, not a shell verb, so the
+         click opens the real overlay rather than recording a call. */
+      const shown = document.querySelector('.lightbox img') as HTMLImageElement
+      expect(shown).toBeTruthy()
+      expect(shown.alt).toBe('p.png')
+    } finally {
+      closeLightbox()
+    }
   })
 
   it('removes a chip, hides the tray when the last one goes, and re-deadens send', async () => {

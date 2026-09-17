@@ -24,9 +24,7 @@ import * as desk from './features/workspace/DeskPage'
 import * as workspace from './features/workspace/store'
 import { XaApp } from './features/xa/XaPage'
 import { SettingsApp } from './features/settings/SettingsPage'
-import * as chips from './shell/chips'
 import * as find from './shell/find'
-import * as menuWriter from './shell/menu'
 import * as navfly from './shell/navfly'
 import * as panes from './shell/panes'
 import * as scrollbars from './shell/scrollbars'
@@ -35,6 +33,7 @@ import { plugHost, skillsHost, skillsSkeletonHost } from './islands'
 import { installLegacy } from './legacy/index.js'
 import { boot } from './state/boot'
 import { setGateway } from './state/gateway'
+import { installGlobalListeners } from './state/globalListeners'
 import * as portals from './state/portals'
 import { chooseTransport } from './state/transport'
 
@@ -61,6 +60,13 @@ import { chooseTransport } from './state/transport'
 const appRoot = createRoot(document.createElement('div'))
 flushSync(() => appRoot.render(<App />))
 
+/* Every listener the page holds on the document or the window, in the order
+   they are declared in (state/globalListeners.ts). Here rather than in each
+   module's own install() because the order is a contract and a contract needs
+   one place; after the root above, because a handler may reach for what it
+   renders, and because the root's own listener is react-dom's to register. */
+installGlobalListeners()
+
 session.onChange(() => {
   sheets.sync()
   dagSheet.sync()
@@ -71,6 +77,8 @@ session.onChange(() => {
 })
 find.onChange(rail.draw)
 
+/* Not a listener: the subscription to the frames the agent pushes, for a page
+   it opens before this view is ever shown. */
 installLinkTrap()
 
 /* The dock's own listeners -- the field, the send button, the file picker, the
@@ -78,18 +86,16 @@ installLinkTrap()
    because the markup is already in the document; the handlers read the shell
    and DS.composer lazily, which is what makes that safe this early. */
 composer.install()
-/* The chrome that installs itself. All five wire listeners over the static
-   markup, which is already parsed by the time this bundle runs: the page script
-   below is the LAST thing in the body. Installing here rather than from the
-   shell keeps each module's wiring next to the behaviour it belongs to. chips
-   is the one that binds nothing static -- it delegates off the document,
-   because the prose it acts on is replaced with every answer. */
+/* The chrome that wires itself over the static markup, which is already parsed
+   by the time this bundle runs: the page script below is the LAST thing in the
+   body. Installing here rather than from the shell keeps each module's wiring
+   next to the behaviour it belongs to. What each of these installs is
+   element-level -- the grips, the More button, the search row -- except the
+   scrollbars, which raise the layer their thumbs are parked in. */
 scrollbars.install()
 panes.install()
 navfly.install()
 find.install()
-chips.install()
-menuWriter.install()
 
 /* The model picker renders nothing until asked. One root at the body rather
    than a host inside a page: the popover is anchored to whatever button opened

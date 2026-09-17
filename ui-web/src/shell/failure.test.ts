@@ -1,9 +1,14 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Shell } from './bridge'
-import { bootError, show } from './failure'
+import { _resetForTests, bootError, show } from './failure'
 import { resetShell, setShell } from './bridge'
+import { mountPageRoot } from '../test/pageRoot'
+
+/* Both bars are drawn by src/chrome/FailureBar.tsx, so the page's own root has
+   to be standing for one to reach the body (see src/main.tsx). */
+let unmount = (): void => {}
 
 function wire(): void {
   const shell: Shell = {
@@ -14,7 +19,14 @@ function wire(): void {
   setShell(shell)
 }
 
+beforeEach(() => {
+  unmount = mountPageRoot()
+})
+
 afterEach(() => {
+  /* A bar is never taken down in the page, so the store outlives a case. */
+  _resetForTests()
+  unmount()
   resetShell()
   document.body.innerHTML = ''
   vi.restoreAllMocks()

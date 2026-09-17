@@ -117,8 +117,10 @@ export function gripDrag(el: HTMLElement, name: PaneName): void {
   })
 }
 
-/* Shrinking the window must re-clamp both, or the chat loses its floor. */
-function onResize(): void {
+/* Shrinking the window must re-clamp both, or the chat loses its floor.
+   Registered with the page's other window listeners
+   (state/globalListeners.ts). */
+export function onResize(): void {
   for (const n of names) set(n, cssPx(PANE[n].v) || PANE[n].min, false)
 }
 
@@ -127,5 +129,4 @@ export function install(): void {
   const wsGrip = document.getElementById('wsGrip')
   if (railGrip) gripDrag(railGrip, 'rail')
   if (wsGrip) gripDrag(wsGrip, 'ws')
-  window.addEventListener('resize', onResize)
 }

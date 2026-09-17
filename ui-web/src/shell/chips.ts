@@ -9,10 +9,12 @@
  * at load. So the renderer and the click were in different layers, and which
  * one you got depended on which file had run last.
  *
- * A writer, not an island: what it owns is two listeners on the document, and
- * the nodes it acts on are drawn by whoever rendered the prose. Delegation
- * rather than per-chip handlers because prose is replaced wholesale on every
- * answer -- there is nothing stable to bind to.
+ * A writer, not an island: what it owns is the two handlers below, and the
+ * nodes they act on are drawn by whoever rendered the prose. Delegation rather
+ * than per-chip handlers because prose is replaced wholesale on every answer --
+ * there is nothing stable to bind to. Both are registered on the document with
+ * the page's other document listeners (state/globalListeners.ts), which is
+ * where the order they run in is declared.
  *
  * What opening MEANS is still the page's, through DS.prose.open: the live
  * layer shows the file in the workspace island, the offline demo just brings
@@ -49,23 +51,21 @@ export function open(target: ProseTarget): void {
   source().open?.(target)
 }
 
-export function install(): void {
-  document.addEventListener('click', (e) => {
-    const chip = chipAt(e.target)
-    const at = chip && targetOf(chip)
-    if (at) open(at)
-  })
+export function onClick(e: MouseEvent): void {
+  const chip = chipAt(e.target)
+  const at = chip && targetOf(chip)
+  if (at) open(at)
+}
 
-  /* A chip is a link, so it answers the keys a link answers. The chips prose.ts
-     emits carry tabindex and role themselves; this is the other half of that,
-     and preventDefault is what stops Space from scrolling the transcript out
-     from under the file that is about to open. */
-  document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' && e.key !== ' ') return
-    const chip = chipAt(document.activeElement)
-    const at = chip && targetOf(chip)
-    if (!at) return
-    e.preventDefault()
-    open(at)
-  })
+/* A chip is a link, so it answers the keys a link answers. The chips prose.ts
+   emits carry tabindex and role themselves; this is the other half of that, and
+   preventDefault is what stops Space from scrolling the transcript out from
+   under the file that is about to open. */
+export function onKey(e: KeyboardEvent): void {
+  if (e.key !== 'Enter' && e.key !== ' ') return
+  const chip = chipAt(document.activeElement)
+  const at = chip && targetOf(chip)
+  if (!at) return
+  e.preventDefault()
+  open(at)
 }

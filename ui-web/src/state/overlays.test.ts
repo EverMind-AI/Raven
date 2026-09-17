@@ -307,19 +307,20 @@ describe('the one listener that reads the order', () => {
     expect(clicks).toEqual(['newBtn'])
   })
 
-  /* Where it is installed from is the contract: document listeners are
-     registered in one order at boot, and this one sits between the chrome's
-     code-block click and its settings shortcut, which is where the handler it
-     replaces was added. */
-  it('is installed by the chrome from where the old handler was added', () => {
-    const chrome = source('src/legacy/demo/150-chrome.js')
-    const copy = chrome.indexOf("document.addEventListener('click'")
-    const chain = chrome.indexOf('installEscapeChain()')
-    const settings = chrome.indexOf("document.addEventListener('keydown'")
-    expect(copy, 'the chrome no longer catches the code-block click').toBeGreaterThan(-1)
-    expect(chain, 'the chrome no longer installs the Escape order').toBeGreaterThan(copy)
+  /* Where it is registered is the contract: document listeners go on in one
+     order at boot, and this one sits between the code-block click and the
+     settings shortcut -- which is where the handler it replaces was added,
+     back when the legacy chrome added all three (C13 moved every document
+     listener into one installer, so the text this reads moved with them). */
+  it('is registered between the code-block click and the settings shortcut', () => {
+    const listeners = source('src/state/globalListeners.ts')
+    const copy = listeners.indexOf("document.addEventListener('click', copyCodeBlock)")
+    const chain = listeners.indexOf('\n  installEscapeChain()')
+    const settings = listeners.indexOf("document.addEventListener('keydown', onSettingsKey)")
+    expect(copy, 'nothing catches the code-block click').toBeGreaterThan(-1)
+    expect(chain, 'the Escape order is not installed after it').toBeGreaterThan(copy)
     expect(settings, 'the settings shortcut is no longer after it').toBeGreaterThan(chain)
-    expect(chrome.match(/document\.addEventListener\('keydown'/g) ?? []).toHaveLength(1)
+    expect(source('src/legacy/demo/150-chrome.js')).not.toMatch(/document\.addEventListener/)
   })
 
   it('is a bubble-phase listener, after the three the sheets register', () => {
@@ -329,11 +330,14 @@ describe('the one listener that reads the order', () => {
     const capture = /document\.addEventListener\('keydown', onKey, true\)/g
     expect(source('src/features/composer/approve.ts').match(capture) ?? []).toHaveLength(2)
     expect(source('src/features/composer/clarify.ts').match(capture) ?? []).toHaveLength(1)
+    /* And every keydown the page installs is bubble-phase, this one included:
+       a third argument would show up in one of the matches below. Sorted,
+       because what the three are registered in is declared in one place and
+       asserted by the case above, not by where they sit in this text. */
     const listener = source('src/state/globalListeners.ts')
-    expect(listener).toMatch(/document\.addEventListener\('keydown', \(e\) => \{/)
-    expect(listener.match(/addEventListener\(/g) ?? []).toHaveLength(1)
-    expect(listener).not.toMatch(/, true\)/)
-    expect(listener).not.toMatch(/capture/)
+    expect(listener).toMatch(/document\.addEventListener\('keydown', onEscapeChain\)\n/)
+    expect([...listener.matchAll(/addEventListener\('keydown'([^)]*)\)/g)].map((m) => m[1]).sort())
+      .toEqual([', chipKey', ', onEscapeChain', ', onSettingsKey'])
   })
 
   /* And bubbling is what lets a field keep the key: the search row stops

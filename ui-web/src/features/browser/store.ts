@@ -471,8 +471,11 @@ export function hook(): void {
   if (src && src.embedded) src.onFrame = onFrame
 }
 
-/* Transcript links belong to the user's browser, never to workspace chrome. */
-function trap(e: MouseEvent): void {
+/* Transcript links belong to the user's browser, never to workspace chrome.
+   Registered in the capture phase with the page's other document listeners
+   (state/globalListeners.ts), so a click on one is read before the transcript
+   can act on it. */
+export function trap(e: MouseEvent): void {
   if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
   const el = e.target as Element | null
   const a = el && el.closest ? (el.closest('#scroll a[href]') as HTMLAnchorElement | null) : null
@@ -482,7 +485,6 @@ function trap(e: MouseEvent): void {
 }
 
 export function installLinkTrap(): void {
-  document.addEventListener('click', trap, true)
   /* Subscribe to pushed frames as soon as the live source exists, so a page
      the agent opens before this view is ever shown is still tracked. */
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => hook())
