@@ -701,6 +701,37 @@ async def test_validate_case_rejects_escaping_artifact_reference(tmp_path) -> No
     assert any("escapes the cassette" in p for p in problems)
 
 
+async def test_validate_case_rejects_null_tool_params_even_with_a_green_expectation(tmp_path) -> None:
+    """params: null makes the replay skip the whole argument comparison, so a
+    case could go green with zero divergences while guarding nothing. The
+    static gate must reject it even when the expectation matches perfectly."""
+    case = _case_copy(tmp_path)
+    _, ref = _artifact_ref(case, "tool.input.artifact_path")
+    artifact = case / "cassette" / ref
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    payload["params"] = None
+    artifact.write_text(json.dumps(payload), encoding="utf-8")
+    _write_expect(case, "mode: strict\ndivergence: null\nchecks: []\n")
+
+    problems = validate_case(case)
+    assert any("params must be a mapping" in p for p in problems)
+
+
+@pytest.mark.parametrize("bad_name", [[], "", 7], ids=["list", "empty", "int"])
+async def test_validate_case_rejects_non_string_tool_names(tmp_path, bad_name) -> None:
+    """A non-string recorded name can only produce a synthetic tool-name
+    divergence an expectation could declare as expected; the gate rejects it."""
+    case = _case_copy(tmp_path)
+    _, ref = _artifact_ref(case, "tool.input.artifact_path")
+    artifact = case / "cassette" / ref
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    payload["name"] = bad_name
+    artifact.write_text(json.dumps(payload), encoding="utf-8")
+
+    problems = validate_case(case)
+    assert any("name must be a non-empty string" in p for p in problems)
+
+
 async def test_validate_case_rejects_semantically_empty_turn_input(tmp_path) -> None:
     """Valid JSON is not a usable payload: {} yields no replayable turn."""
     case = _case_copy(tmp_path)

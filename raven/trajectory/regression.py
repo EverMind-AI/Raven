@@ -564,6 +564,32 @@ def _cassette_problems(cassette_dir: Path) -> list[str]:
             # tool_calls: [1]) passes here, halts the replay mid-run, and that
             # halt can even masquerade as the expected divergence.
             problems.extend(f"cassette is not replayable: {p}" for p in validate_recording(recording))
+            problems.extend(_tool_contract_problems(recording))
+    return problems
+
+
+def _tool_contract_problems(recording: Any) -> list[str]:
+    """Recorded tool calls the replay would compare only partially.
+
+    The tool feed skips the name comparison when the recorded name is None
+    and the whole argument comparison when the recorded params is None, and a
+    non-string name can only ever produce a synthetic "tool name" divergence
+    an expectation could declare as expected — either way the comparison this
+    gate protects is silently disabled. A committed case therefore needs a
+    non-empty string name and a mapping params on every recorded tool call.
+    This is the gate's guarding contract, not replay's crash contract, so it
+    lives here rather than in validate_recording."""
+    problems: list[str] = []
+    for i, call in enumerate(recording.tool_calls):
+        if call.name is not None and (not isinstance(call.name, str) or not call.name):
+            problems.append(
+                f"cassette tool call #{i + 1} name must be a non-empty string, got {call.name!r}"
+            )
+        if not isinstance(call.params, dict):
+            problems.append(
+                f"cassette tool call #{i + 1} params must be a mapping, got {type(call.params).__name__}"
+                " — a missing params disables the replay's argument comparison"
+            )
     return problems
 
 
