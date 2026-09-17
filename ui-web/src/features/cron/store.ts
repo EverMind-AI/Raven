@@ -1,6 +1,6 @@
 import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
-import { show as toast } from '../../shell/toast'
+import { show as toast } from '../../state/toast'
 
 import type { CronDraft, CronJob, CronSource } from './types'
 import * as page from '../../state/page'

@@ -12,10 +12,10 @@
  */
 
 import { T } from '../../i18n/t'
-import { islands } from '../../islands'
 import * as caps from '../../state/caps'
 import * as page from '../../state/page'
 import { sources } from '../../state/sources'
+import { islands } from '../registry'
 
 /* Mirror of the island's view, read by the plugin tab's hero sync: the hero
    covers both tabs and is the last step of either draw. */

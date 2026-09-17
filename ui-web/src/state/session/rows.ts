@@ -1,7 +1,7 @@
 /* The conversation list, reached through the seam that answers for it.
  *
  * Four verbs over `sources.sessions`, one line each: the rail island renders
- * the rows, the page's boot owns the array behind them (state/boot.ts's
+ * the rows, the page's boot owns the array behind them (app/boot.ts's
  * sessionsSource), and what is here is what everything else asks of it.
  *
  * `sess` is the fifth, and the reason this is a module rather than four call

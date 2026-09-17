@@ -2,7 +2,7 @@ import type { ApiUsageModel, SettingsUsageResult, ToolSetupNeed } from '../../rp
 
 /* One provider row of the model panel. Each source owns its provider list;
    the live source shares its fetched rows with the composer's model picker. */
-import type { ModelTagFacts } from '../../shell/model-tags'
+import type { ModelTagFacts } from '../../components/ModelTags'
 
 export interface ProviderRow {
   id: string

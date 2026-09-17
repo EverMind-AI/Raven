@@ -27,10 +27,10 @@ async function startedRun(payload: Record<string, unknown>) {
       'src/state/sheetRack': {
         session: () => 'sess-1',
       },
-      'src/shell/dom': {
+      'src/lib/dom': {
         $: looseQuery(),
       },
-      'src/shell/session': { current: () => 'sess-1' },
+      'src/lib/session': { current: () => 'sess-1' },
     },
     islands: {
       transcript: {

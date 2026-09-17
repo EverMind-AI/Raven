@@ -15,12 +15,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as composer from '../features/composer/mount'
 import * as store from '../features/composer/store'
-import * as ctx from '../shell/ctxchip'
-import * as perm from '../shell/perm'
-import * as tier from '../shell/tier'
+import * as ctx from '../state/ctxChip'
 import * as lang from '../state/lang'
+import * as perm from '../state/perm'
 import { _resetForTests as resetLayers, host } from '../state/portals'
 import { setSources } from '../state/sources'
+import * as tier from '../state/tier'
 import { bodySiblings } from '../test/domSnapshot'
 import { mountPageRoot } from '../test/pageRoot'
 
@@ -28,6 +28,7 @@ import { resetTranslator, setTranslator } from '../i18n/t'
 import * as confirmStore from '../state/confirm'
 import * as pageStore from '../state/page'
 import type { ComposerSource } from '../features/composer/types'
+import type { TierSource } from '../state/tier'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -70,9 +71,10 @@ const key = (init: KeyboardEventInit): void => {
   })
 }
 
-/* The two popovers keep their up-or-down in a store rather than on the node
-   (src/shell/perm.ts, src/shell/tier.ts), so it outlives a case's markup and
-   has to be put back by hand between them. */
+/* The two popovers keep their up-or-down, the chip's paint and the tier panel's
+   two headings in a store rather than on the node (src/state/perm.ts,
+   src/state/tier.ts), so all of it outlives a case's markup and has to be put
+   back by hand between them. */
 beforeEach(() => {
   composer._resetForTests()
   store._resetForTests()
@@ -143,6 +145,43 @@ describe('the dock', () => {
     }
   })
 
+  /* The warning class and the order it lands in. It was a classList.toggle, so
+     `risk` came after `chip` and the pair reads `class="chip risk"` everywhere a
+     golden or a stylesheet records it; <PermChip/> renders the whole attribute
+     now, and this is what says the string did not change with the writer. */
+  it('paints the permission chip in the warning colour, after its own class', () => {
+    render()
+    expect(el('permChip').className).toBe('chip')
+    perm.setFromConfig('full')
+    expect(el('permChip').className).toBe('chip risk')
+    expect(el('permChip').getAttribute('aria-label')).toBe('t:gui.perm.title: t:gui.perm.full')
+  })
+
+  /* The bars are the store's markup rather than the two the page is served
+     with: `max` is three of them and the served svg has two (state/tier.ts's
+     ICO table, src/chrome/TierChip.tsx's SERVED), so a chip still rendering the
+     literal reds here instead of passing by coincidence -- which is what the
+     ladder's middle rung would do, its glyph being the served one exactly. */
+  it('draws the tier chip from the catalogue that answered', async () => {
+    const bars = (): Array<string | null> =>
+      [...el('tierChip').querySelectorAll('.pico path')].map((path) => path.getAttribute('d'))
+    render()
+    const menu = [{ id: 'medium' }, { id: 'high' }, { id: 'max' }]
+    setSources({
+      tier: {
+        read: async () => ({ mode: 'max', availableModes: menu }),
+        set: async () => ({ mode: 'max', availableModes: menu }),
+      } satisfies TierSource,
+    })
+    expect(bars()).toEqual(['M6 18.5v-4', 'M12 18.5v-9'])
+
+    await act(async () => { await tier.load() })
+
+    expect(el('tierChip').hidden).toBe(false)
+    expect(el('tierName').textContent).toBe('Max')
+    expect(bars()).toEqual(['M6 18.5v-4', 'M12 18.5v-9', 'M18 18.5v-14'])
+  })
+
   /* The context ring is served with neither attribute, which is why the store
      carries them as nullable: a data-tip at boot would move what the region
      goldens record. */
@@ -158,10 +197,13 @@ describe('the dock', () => {
     expect(Number(el('ctxChip').querySelector('.fg')!.getAttribute('stroke-dashoffset'))).toBeCloseTo(47.75 / 2, 5)
   })
 
-  /* Shared ground: the sheet rack, the composer's own three roots and the two
-     popover writers fill these. React owning any of them would tear down what
-     the other side put there -- and page.css reads `.dock .sheets:has(> *)` off
-     the rack, so an empty rack has to have no children at all. */
+  /* Empty as served. The sheet rack, the composer's own three roots and the two
+     popover stores are what fill them -- shared ground for the first three,
+     since React owning those would tear down what the other side put there, and
+     page.css reads `.dock .sheets:has(> *)` off the rack, so an empty rack has
+     to have no children at all. The two lists and the tier heading are filled
+     from a store instead, which is why each has to render nothing rather than
+     an empty string until there is something to say. */
   it('hands the rack, the queue, the palette and the two lists over empty', () => {
     render()
     for (const id of ['sheetRack', 'queued', 'slashList', 'permList', 'tierList', 'tierPopLab', 'meter']) {
@@ -176,8 +218,9 @@ describe('the dock', () => {
     for (const sel of ['#permName', '#envName', '#tierName', '#modelName', '#slashPop .lab', '#permPop .lab', '#permPop .note']) {
       expect(document.querySelector(sel)?.textContent, sel).not.toBe('')
     }
-    /* The heading and the note of the tier panel are written on open, from the
-       catalogue that answered, so they carry no key and no literal. */
+    /* The heading and the note of the tier panel come from the store, chosen on
+       open from the catalogue that answered, so they carry no key and no
+       literal -- and nothing at all before the first open. */
     expect(el('tierPop').querySelector('.note')!.textContent).toBe('')
     for (const node of el('tierPop').querySelectorAll('*')) {
       for (const name of node.getAttributeNames()) expect(name).not.toMatch(/^data-i18n/)
@@ -312,7 +355,7 @@ describe('a popover reparented out of the card', () => {
 })
 
 /* Last in the file on purpose: applying a language is module state for
-   everything after it. Same agreement as the rail's -- the pass state/lang.ts
+   everything after it. Same agreement as the rail's -- the pass state/lang/store.ts
    makes over the document's data-i18n attributes, and the component rendering
    the same key through lang.text -- so the dock cannot come back in the served
    language once a flip has moved it. */
@@ -337,9 +380,11 @@ describe('the dock once a language is applied', () => {
     expect(hint()).toBe(appliedHint)
   })
 
-  /* The four chips carry no key: each is owned by the writer that fills it
-     afterwards, so a flip must leave the served word alone here and let that
-     writer replace it. */
+  /* The four chips carry no key: each is owned by whoever fills it afterwards,
+     so a flip must leave the served word alone here and let that owner replace
+     it. Two of the four read their own store rather than the language, so the
+     flip does not reach them either -- the boot's list and the language
+     repaint's list are what call their draw. */
   it('leaves the four unkeyed chip labels to their writers', () => {
     render()
     const labels = (): string[] => ['#permName', '#envName', '#tierName', '#modelName']
@@ -433,9 +478,9 @@ describe('the two popovers', () => {
     }
   })
 
-  /* The tier panel's heading and note are written on open, from the catalogue
-     that answered, and neither may carry a key: the built-in ladder is a
-     Session Tier and reaches sub-agents, a deployment's own catalogue is a
+  /* The tier panel's heading and note are the store's, chosen on open from the
+     catalogue that answered, and neither may carry a key: the built-in ladder
+     is a Session Tier and reaches sub-agents, a deployment's own catalogue is a
      Session Mode and does not, so a flip walking the document's keys would
      paint the tier wording back over a mode catalogue's. */
   it('leaves the tier panel with no key for a language flip to find', () => {

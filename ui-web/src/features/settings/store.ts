@@ -1,9 +1,9 @@
 import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
-import { settingsTab } from '../../state/settingsTab'
-import { show as toast } from '../../shell/toast'
+import { settingsTab } from '../../state/settings'
+import { show as toast } from '../../state/toast'
 
-import * as settingsDialog from '../../state/settingsDialog'
+import * as settingsDialog from '../../state/settings'
 import type {
   ModelCandidate,
   ProviderOp,
@@ -19,7 +19,7 @@ import type {
  * subscribes.
  *
  * The open tab is NOT here: the chrome jumps the dialog to a section by
- * writing the shared slot (ui-web/src/state/settingsTab.ts) before calling
+ * writing the shared slot (ui-web/src/state/settings.ts) before calling
  * drawSettings(), and the store syncs from it on every draw.
  */
 

@@ -13,16 +13,16 @@ import * as desk from './deskStore'
 import * as seen from './seen'
 import * as workspace from './store'
 
-import { setCurrent } from '../../shell/session'
+import { setCurrent } from '../../lib/session'
 /* The wiring main.tsx gets from this import: the desk's file opener is handed
    to the workspace store here, and `openDelivery` reaches the desk through it. */
-import '../../islands'
+import '../registry'
 import { resetSources, setSources, sources } from '../../state/sources'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
-import { installWsPanel } from '../../test/wsPanel'
+import { installWsPanel } from '../../test/wsPanelHarness'
 import type { AgentsSource, InstanceRow } from '../subagents/types'
 import type { WorkspaceSource, WsChange } from './types'
 
@@ -635,10 +635,10 @@ describe('the size the desk comes up at', () => {
 /* That the reserve reaches the stylesheet at all.
  *
  * `deskGeometry.test.ts` pins what the number is and
- * `scripts/desk-reserve-css.test.mjs` pins where the stylesheet spends it. This
- * is the join: the panel is `position: fixed`, so the only thing connecting it
- * to the layout is this property landing on the root, and neither of those two
- * tests would notice if it stopped being set.
+ * `scripts/gates/desk-reserve-css.test.mjs` pins where the stylesheet spends
+ * it. This is the join: the panel is `position: fixed`, so the only thing
+ * connecting it to the layout is this property landing on the root, and
+ * neither of those two tests would notice if it stopped being set.
  */
 describe('the reserve the palette publishes', () => {
   /* happy-dom measures everything as zero, and the reserve turns on the chat's

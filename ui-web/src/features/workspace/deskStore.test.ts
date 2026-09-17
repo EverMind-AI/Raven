@@ -7,13 +7,13 @@ import * as agents from '../subagents/store'
 import * as deliveries from './deliveries'
 import * as desk from './deskStore'
 import * as workspace from './store'
-import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
+import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
 import { resetSources, setSources, sources } from '../../state/sources'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
-import { installWsPanel } from '../../test/wsPanel'
+import { installWsPanel } from '../../test/wsPanelHarness'
 import type { InstanceRow } from '../subagents/types'
 
 /* Recorded rather than ignored: the panel the desk lives in is legacy chrome,

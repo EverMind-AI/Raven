@@ -29,7 +29,7 @@ async function harness({ rows = [] as Row[] } = {}) {
   await loadPart(async () => {
     await import('./runtime'); await import('./stages')
     await import('./pipeline')
-    return import('../install')
+    return import('../../app/install')
   }, {
     fakes: {
       'src/state/caps': { draw: () => {} },
@@ -72,19 +72,19 @@ async function harness({ rows = [] as Row[] } = {}) {
       'src/features/composer/approve': {
         openApproval: (_o: unknown, _answer: unknown, owner: string | null) => log.push(['sheet', owner]),
       },
-      'src/shell/duration': { formatDuration: (ms: number) => `${ms}ms` },
+      'src/lib/duration': { formatDuration: (ms: number) => `${ms}ms` },
       'src/i18n/t': { T: (key: string) => key },
-      'src/shell/dom': { $: looseQuery() },
-      'src/shell/session': {
+      'src/lib/dom': { $: looseQuery() },
+      'src/lib/session': {
         current: () => current,
         setCurrent: (id: string | null) => { current = id },
       },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
-      'src/shell/toast': { show: (text: string) => log.push(['toast', text]) },
-      'src/shell/ctxchip': { set: () => {} },
-      'src/shell/notifications': { show: () => {} },
-      'src/shell/banner': { draw: () => {} },
-      'src/shell/tier': { load: () => {} },
+      'src/state/toast': { show: (text: string) => log.push(['toast', text]) },
+      'src/state/ctxChip': { set: () => {} },
+      'src/lib/notifications': { show: () => {} },
+      'src/state/banner': { draw: () => {} },
+      'src/state/tier': { load: () => {} },
       'src/features/workspace/record': { wsOnHistory: () => {} },
       'src/features/rail/source': { rowPreview: (t: string) => t, touchSession: () => {} },
       'src/features/transcript/source': { renderHistory: () => log.push(['history']) },
@@ -126,8 +126,8 @@ async function harness({ rows = [] as Row[] } = {}) {
   })
   const { setSources } = await import('../sources')
   setSources({ composer: { slash: [] }, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
-  const wiring = await import('../install')
-  const connection = await import('../connection')
+  const wiring = await import('../../app/install')
+  const connection = await import('../../app/connection')
   wiring.installActions()
   /* The push handlers, which the page's wiring installs beside them. */
   pipeline.installPipeline()

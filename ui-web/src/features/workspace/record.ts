@@ -12,7 +12,7 @@
  * the redraw -- is the page's (src/state/ws.ts), not this module's.
  */
 
-import { islands } from '../../islands'
+import { islands } from '../registry'
 import { T } from '../../i18n/t'
 import { sources } from '../../state/sources'
 import { panel } from '../../state/wsPanel'

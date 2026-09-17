@@ -1,7 +1,7 @@
 """Every provider mark ships, and every tone declared on one is true of its file.
 
 The settings page draws a brand mark per provider and per model family. The
-tables live in ``ui-web/src/shell/provider-mark.tsx`` and the files live beside
+tables live in ``ui-web/src/components/ProviderMark.tsx`` and the files live beside
 them, so nothing in either language notices when the two disagree: a renamed
 file leaves a row addressing a 404, and a mark no table names ships to every
 user forever inside the wheel.
@@ -33,7 +33,7 @@ import re
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
-_TABLE = _ROOT / "ui-web" / "src" / "shell" / "provider-mark.tsx"
+_TABLE = _ROOT / "ui-web" / "src" / "components" / "ProviderMark.tsx"
 _ASSETS = _ROOT / "ui-web" / "src" / "assets" / "providers"
 
 _PAINT = re.compile(r'(?:fill|stroke|stop-color)="([^"]+)"')

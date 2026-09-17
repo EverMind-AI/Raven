@@ -33,10 +33,10 @@ async function harness({ rows, current, titleCall }: {
       'src/i18n/t': {
         T: (key: string) => key,
       },
-      'src/shell/dom': {
+      'src/lib/dom': {
         $: looseQuery(),
       },
-      'src/shell/session': { current: () => current },
+      'src/lib/session': { current: () => current },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
     },
   })

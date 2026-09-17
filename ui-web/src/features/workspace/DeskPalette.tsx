@@ -368,7 +368,7 @@ export function DeskPalette(): JSX.Element | null {
        click. */
     event.preventDefault()
     /* Like `resize` below, and like every other drag handle in the app
-       (`shell/scrollbars.ts` does both on its thumb): the press has done its
+       (`chrome/behaviour/scrollbars.ts` does both on its thumb): the press has done its
        job here, and letting it climb is what let an ancestor act on the same
        gesture. */
     event.stopPropagation()

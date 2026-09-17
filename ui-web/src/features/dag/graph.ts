@@ -9,7 +9,7 @@
  */
 
 import { t } from '../../i18n/t'
-import { formatDuration } from '../../shell/duration'
+import { formatDuration } from '../../lib/duration'
 import { settled } from './nodes'
 
 import type { DagNode, DagRun, DagLayout } from './types'

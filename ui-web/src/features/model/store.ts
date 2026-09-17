@@ -9,7 +9,7 @@
 
 import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
-import { show as toast } from '../../shell/toast'
+import { show as toast } from '../../state/toast'
 import { sources } from '../../state/sources'
 
 import { offered } from './types'

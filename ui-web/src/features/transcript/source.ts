@@ -9,11 +9,11 @@
  * in src/state/session/.
  */
 
-import { islands } from '../../islands'
+import { islands } from '../registry'
 import { has } from '../../rpc/capabilities'
-import { current as sessionCurrent, setCurrent as sessionSet } from '../../shell/session'
-import { show as toast } from '../../shell/toast'
-import { gateway } from '../../state/gateway'
+import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
+import { show as toast } from '../../state/toast'
+import { gateway } from '../../rpc/gateway'
 import { dagOpenNode } from '../dag/open'
 import { T } from '../../i18n/t'
 import { draw as sessionDraw } from '../rail/store'

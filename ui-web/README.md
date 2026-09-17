@@ -13,16 +13,21 @@ fetches a second script.
 | `src/styles/page.css` | the stylesheet, inlined at `/*__STYLE__*/` |
 | `src/main.tsx` | the entry, a straight line: the page root, the listeners, the island roots, the transport, the boot |
 | `src/App.tsx` | the page root: every region at the body, in one portal, in document order |
-| `src/chrome/` | the page's own furniture -- rail, chat header, dock, sheet rack, tooltip, chips |
-| `src/features/<domain>/` | one island per domain: its component, its store, its `source.ts` |
-| `src/rpc/`, `src/state/` | the typed gateway seam and the page's state: generated method contract, WebSocket transport, data sources, the stores every region reads |
+| `src/app/` | the page's lifecycle, called once from `main.tsx`: the boot's ordered list, the wiring, the connection, the update watch, the splash |
+| `src/rpc/` | the typed gateway seam: the generated method contract, the gateway slot, the three transports and the offline fixture library |
+| `src/state/` | the stores every region reads, plus `lang/` and `session/` |
+| `src/chrome/` | the page's own furniture -- rail, chat header, dock, sheet rack, tooltip, chips -- plus `behaviour/`, the two it installs rather than renders |
+| `src/features/<domain>/` | one island per domain: its component, its store, its `source.ts`; `features/registry.ts` is the bag of verbs a page-wide writer spends on them |
+| `src/components/` | the small components more than one region renders |
+| `src/lib/` | helpers with no store and no page of their own (`lib/dom.ts` is the page's `$`) |
 | `src/assets/` | icons served from `dist/assets` |
-| `scripts/` | the gates, plus the generators they check |
+| `scripts/` | the seven tools: the two generators, the three artifact checks, the boot snapshot and the test harness |
+| `scripts/gates/` | the gates vitest runs over the tree, the stylesheet and the contract |
 
 Nothing is published on `window`, and nothing outside the bundle reaches in: a
 writer imports what it calls, and the verbs a page-wide writer spends on an
-island are named in `src/islands.ts`. The vocabulary -- region, portal, escape
-order, language store -- is defined in `CONTEXT.md`.
+island are named in `src/features/registry.ts`. The vocabulary -- region,
+portal, escape order, language store -- is defined in `CONTEXT.md`.
 
 ## Build
 

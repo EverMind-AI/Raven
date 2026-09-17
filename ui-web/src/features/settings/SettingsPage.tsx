@@ -3,18 +3,18 @@ import { createPortal } from 'react-dom'
 
 import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
-import { show as menuAt } from '../../shell/menu'
-import { KeyInput } from '../../shell/key-input'
-import * as lookStore from '../../shell/look'
-import * as notifications from '../../shell/notifications'
-import { open as openUrl } from '../../shell/open-url'
-import { isMac, modKey } from '../../shell/platform'
-import { ModelTagDefs, ModelTags, TagGlyph } from '../../shell/model-tags'
+import { show as menuAt } from '../../state/menu'
+import { KeyInput } from '../../components/KeyInput'
+import * as lookStore from '../../state/look'
+import * as notifications from '../../lib/notifications'
+import { open as openUrl } from '../../lib/openUrl'
+import { isMac, modKey } from '../../lib/platform'
+import { ModelTagDefs, ModelTags, TagGlyph } from '../../components/ModelTags'
 
-import type { ModelTagFacts } from '../../shell/model-tags'
-import { ModelIcon, ProviderIcon, ProviderLink, ProviderStatus } from '../../shell/provider-mark'
-import { hint as reachHint, text as reachText } from '../../shell/reach'
-import { show as toast } from '../../shell/toast'
+import type { ModelTagFacts } from '../../components/ModelTags'
+import { ModelIcon, ProviderIcon, ProviderLink, ProviderStatus } from '../../components/ProviderMark'
+import { hint as reachHint, text as reachText } from '../../lib/reach'
+import { show as toast } from '../../state/toast'
 import { subscribe as langSubscribe, tag as langTag } from '../../state/lang'
 import { open as openConn } from '../connections/nav'
 import * as store from './store'
@@ -25,7 +25,7 @@ import type { RailSource } from '../rail/types'
 import type { EverosSection, ProviderRow, ToolGroup, ToolRow } from './types'
 import type { JSX, ReactNode, RefObject } from 'react'
 import { ask as confirmAsk } from '../../state/confirm'
-import * as settingsDialog from '../../state/settingsDialog'
+import * as settingsDialog from '../../state/settings'
 
 /* The session list, reached through the seam. `deleteAll` is wrapped because
    a source that has none is the shape a demo shell can be in, and an
@@ -42,7 +42,7 @@ const deleteAllSessions = (): void => {
 /* The dialog's contents, transcribed from the legacy drawSettings pages:
    same class names, same DOM shape, ui-web/src/styles/page.css untouched. The
    dialog frame is the page's own root (src/App.tsx) over the static #setVeil,
-   and whether it is up is src/state/settingsDialog.ts's; the island reaches
+   and whether it is up is src/state/settings.ts's; the island reaches
    both through the shell bridge, as it always has. */
 
 /* Settings is grouped, not one flat strip: the groups answer "what am I

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 
 import { _resetForTests, add, dropClass, forget, remove, session, sheets, sync } from './sheetRack'
-import { _resetForTests as sessionReset, setCurrent } from '../shell/session'
+import { _resetForTests as sessionReset, setCurrent } from '../lib/session'
 import { resetTranslator, setTranslator } from '../i18n/t'
 import * as pageStore from '../state/page'
 import * as confirmStore from '../state/confirm'

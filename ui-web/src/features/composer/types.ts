@@ -33,7 +33,7 @@ export interface UploadRes {
 }
 
 /* The composer source: what the dock reads of the page it sits in. The boot's
- * own wiring installs it (state/install.ts) and the settings chrome adds the
+ * own wiring installs it (app/install.ts) and the settings chrome adds the
  * one member only it can answer -- `beforeSend`. Turn phase and queue state
  * belong to the composer store.
  */

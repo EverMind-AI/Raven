@@ -15,7 +15,7 @@ import { fakeGateway, loadPart } from '../../../scripts/module-harness.mjs'
 import type { SessRow } from '../../features/rail/types'
 
 type Registry = typeof import('./registry')
-type Wiring = typeof import('../install')
+type Wiring = typeof import('../../app/install')
 
 interface Row { id: string; title?: string; status?: string | null }
 interface Staged { model: unknown; tier: string | null; perm: string | null }
@@ -49,7 +49,7 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
      is the order that keeps one module graph: the fakes are installed around
      the modules the first import reaches, and one it did not is loaded
      afterwards without them. */
-  await loadPart(async () => { await import('./registry'); return import('../install') }, {
+  await loadPart(async () => { await import('./registry'); return import('../../app/install') }, {
     fakes: {
       'src/state/caps': { draw: () => {} },
       'src/state/page': { show: () => {} },
@@ -79,14 +79,14 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
         },
       },
       'src/i18n/t': { T: (key: string) => key },
-      'src/shell/dom': { $ },
-      'src/shell/session': { current: () => current, setCurrent: (id: string | null) => { current = id; calls.push(['sessionSet', id]) } },
+      'src/lib/dom': { $ },
+      'src/lib/session': { current: () => current, setCurrent: (id: string | null) => { current = id; calls.push(['sessionSet', id]) } },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
-      'src/shell/toast': { show: (text: string) => calls.push(['toast', text]) },
-      'src/shell/ctxchip': { set: (used: number) => calls.push(['setCtx', used]) },
-      'src/shell/banner': { draw: () => {} },
-      'src/shell/tier': { load: () => calls.push(['loadTier']) },
-      'src/shell/perm': { setFromConfig: () => {} },
+      'src/state/toast': { show: (text: string) => calls.push(['toast', text]) },
+      'src/state/ctxChip': { set: (used: number) => calls.push(['setCtx', used]) },
+      'src/state/banner': { draw: () => {} },
+      'src/state/tier': { load: () => calls.push(['loadTier']) },
+      'src/state/perm': { setFromConfig: () => {} },
       'src/features/workspace/record': { wsOnHistory: () => {} },
       'src/features/transcript/source': {
         renderHistory: (messages: Array<{ text: string }>) => { state.fresh = null; calls.push(['renderHistory', messages[0]]) },
@@ -137,11 +137,11 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
        here, and an empty envelope is a valid answer to both. */
     return Promise.resolve({})
   })
-  const wiring = (await import('../install')) as Wiring
+  const wiring = (await import('../../app/install')) as Wiring
   const { setSources } = await import('../sources')
   setSources({ composer: { slash: [] }, sessions: {}, transcript: {} } as never)
   const { staging } = await import('./staging')
-  const connection = await import('../connection')
+  const connection = await import('../../app/connection')
   wiring.installActions()
   /* The four page-level names the switch used to keep, as the conversations
      that keep them now: the subscription whose frames paint the stage is the
@@ -171,7 +171,7 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
     subscribe: registry.subscribe,
     startDraft: registry.switchToDraft,
     openLiveSession: (row: Row) => registry.switchTo(row as SessRow),
-    /* The handler state/connection.ts runs once the transport says the socket
+    /* The handler app/connection.ts runs once the transport says the socket
        is back. Registered by installActions(), one registrar today. */
     onReconnect: [...(connection.reconnectHandlers as Set<() => Promise<void>>)][0]!,
     calls,

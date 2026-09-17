@@ -21,15 +21,15 @@ import { loadPermMode } from '../../features/settings/source'
 import { renderHistory } from '../../features/transcript/source'
 import { wsOnHistory } from '../../features/workspace/record'
 import { wsSetRoot } from '../../features/workspace/source'
-import { islands } from '../../islands'
-import { draw as drawBanner } from '../../shell/banner'
-import { set as setCtx } from '../../shell/ctxchip'
-import { current as sessionCurrent, setCurrent as sessionSet } from '../../shell/session'
-import { load as loadTier } from '../../shell/tier'
-import { show as toast } from '../../shell/toast'
-import { gateway } from '../gateway'
+import { islands } from '../../features/registry'
+import { draw as drawBanner } from '../banner'
+import { set as setCtx } from '../ctxChip'
+import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
+import { load as loadTier } from '../tier'
+import { show as toast } from '../toast'
+import { gateway } from '../../rpc/gateway'
 import { T } from '../../i18n/t'
-import { $ } from '../../shell/dom'
+import { $ } from '../../lib/dom'
 import { drawMeter, goPaint as goState, loadDraft, parkDraft, queueClear, turn } from '../../features/composer/mount'
 import { draw as sessionDraw, markNew as markNewCurrent } from '../../features/rail/store'
 import { reset as wsReset, setOpen as setWs } from '../ws'
@@ -304,12 +304,12 @@ export async function switchTo(s: SessRow): Promise<void> {
     const u = (r.info && r.info.usage) || {}
     /* context_estimated rides along in this payload and is not passed on: the
        ring has nowhere to say an estimate, so the writer takes two numbers.
-       See shell/ctxchip.ts. */
+       See state/ctxChip.ts. */
     setCtx(u.context_used, u.context_max)
     /* Every graph this conversation started, oldest first, as the gateway
        stamped them onto the rows that started them. This is the only source
        that survives a run the reader never saw start: no live event reached
-       this page for it, so nothing was written down -- see shell/resume.ts. */
+       this page for it, so nothing was written down -- see lib/resume.ts. */
     const dagRuns = (r.messages || [])
       .map((m) => (m && m.dag_run_id) || '')
       .filter((id): id is string => !!id)

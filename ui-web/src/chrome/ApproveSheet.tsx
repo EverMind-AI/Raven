@@ -12,7 +12,7 @@
  * screen.
  */
 import { SheetOption } from './SheetRack'
-import { CROSS, Glyph } from '../shell/ico'
+import { CROSS, Glyph } from '../components/Ico'
 
 import type { SheetOptionRow } from './SheetRack'
 import type { JSX } from 'react'

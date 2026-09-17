@@ -1,9 +1,9 @@
 /** State and actions for the floating workspace desk. */
 
 import { t } from '../../i18n/t'
-import { slot } from '../../shell/persist'
-import { current as currentSession } from '../../shell/session'
-import { show as toast } from '../../shell/toast'
+import { slot } from '../../lib/persist'
+import { current as currentSession } from '../../lib/session'
+import { show as toast } from '../../state/toast'
 import { instanceState } from '../subagents/history'
 import * as agents from '../subagents/store'
 import * as deliveries from './deliveries'
@@ -621,7 +621,7 @@ export function notifyDesk(): void {
  * that way, and it left the desk down for good.
  *
  * Subscribed here rather than fixed at the poll: the poll is one of several
- * writers -- the panel refreshes on its own, and `shell/resume` forces one --
+ * writers -- the panel refreshes on its own, and `lib/resume` forces one --
  * and a store should hear its own evidence change wherever it changes from. */
 agents.subscribe(weighTheDesk)
 

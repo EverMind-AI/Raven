@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 
-import { AgentMark, isOwnAgent } from '../../shell/agent-mark'
+import { AgentMark, isOwnAgent } from '../../components/AgentMark'
 import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
-import { SendGlyph } from '../../shell/ico'
+import { SendGlyph } from '../../components/Ico'
 import { composing, fmtSize } from '../composer/store'
 import { instanceMark, instanceState } from './history'
 import * as store from './store'
@@ -140,7 +140,7 @@ export function InstanceRowView({ it, onOpen = store.openInstanceRow, compact = 
            below then cancels its native activation, so the control is reachable
            with the mouse and not with the keyboard -- and the reader gets the
            row opening, which is the thing they were trying not to do. The same
-           boundary `shell/setuprow.tsx` already draws, for the same reason.
+           boundary `components/SetupRow.tsx` already draws, for the same reason.
            `stopPropagation` on the click cannot cover this: a click does not
            reach here, a keydown does. */
         if (e.target !== e.currentTarget) return

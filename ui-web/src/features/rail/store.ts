@@ -1,8 +1,8 @@
 import { ds } from '../../state/sources'
 import { dropDraft } from '../composer/store'
-import { mark as navMark } from '../../shell/navfly'
-import { setCurrent } from '../../shell/session'
-import { show as toast } from '../../shell/toast'
+import { mark as navMark } from '../../state/navfly'
+import { setCurrent } from '../../lib/session'
+import { show as toast } from '../../state/toast'
 import { plainTitle } from './title'
 
 import type { RailSnapshot, RailSource, SessRow } from './types'

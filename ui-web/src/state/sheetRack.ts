@@ -1,7 +1,7 @@
 /* The sheet rack: session-scoped bookkeeping for everything that docks above
  * the composer.
  *
- * State rather than a writer, for the reason `shell/lightbox.ts` states -- one
+ * State rather than a writer, for the reason `state/lightbox.ts` states -- one
  * node appended to a host is a writer, a container plus a list is not -- and
  * the list is what is here: which conversation each sheet belongs to, what it
  * renders, and who is waiting on the reader. The rack it fills (`#sheetRack`)
@@ -39,7 +39,7 @@
 
 import { flushSync } from 'react-dom'
 
-import { current } from '../shell/session'
+import { current } from '../lib/session'
 import { dockLift } from '../features/composer/store'
 
 import type { ReactNode } from 'react'

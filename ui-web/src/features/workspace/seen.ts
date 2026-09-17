@@ -24,8 +24,8 @@ replay was about to restore. A mark is news about a mark; it writes nowhere
 else.
 */
 
-import { slot } from '../../shell/persist'
-import { current as currentSession } from '../../shell/session'
+import { slot } from '../../lib/persist'
+import { current as currentSession } from '../../lib/session'
 
 import type { DeskSeen, DeskTab } from './deskTypes'
 

@@ -13,7 +13,7 @@
  * registry, the naming timers -- and a case that ran before must not be visible
  * in the next one.
  */
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 /* Off cwd, not off `import.meta.url`: under happy-dom that is an http URL. */
 import { resolve } from 'node:path'
 
@@ -21,13 +21,27 @@ import { vi } from 'vitest'
 
 const mocked = new Set()
 
+/* A suffix the specifier in `fakes` is allowed to leave off. */
+const SUFFIXES = ['', '.ts', '.tsx', '.mjs']
+
+/* Mocking a path nothing resolves is silently inert -- the part loads with its
+   real collaborator and the case still runs, testing the opposite of what it
+   says -- so a misspelt key has to be an error here rather than a stand-in
+   that never stands in. */
+function requireModule(module) {
+  const base = resolve(process.cwd(), module)
+  if (!SUFFIXES.some((suffix) => existsSync(base + suffix)))
+    throw new Error(`fakes key '${module}' names no module under ui-web/`)
+}
+
 /**
  * @param importPart a thunk that imports the module under test, e.g.
  *   `() => import('../src/state/session/runtime')`. A thunk rather than a path
  *   so the specifier stays static and Vite can resolve it.
  * @param fakes exports to replace, keyed by the module's path from ui-web
- *   (`'src/shell/toast'`). What is not named keeps the real implementation.
- * @param islands members of the island bag (src/islands.ts) to stand in for,
+ *   (`'src/state/toast'`). What is not named keeps the real implementation, and
+ *   a key that names no module throws rather than standing in for nothing.
+ * @param islands members of the island bag (src/features/registry.ts) to stand in for,
  *   assigned over the real ones one MEMBER at a time: a case names the verbs it
  *   is about and the rest of that island answers as it really does. Assigned
  *   rather than mocked, and taken from the module the reset above just gave the
@@ -39,6 +53,7 @@ export async function loadPart(importPart, { fakes = {}, islands = {} } = {}) {
   vi.resetModules()
   for (const [module, exports] of Object.entries(fakes)) {
     const path = `../${module}`
+    requireModule(module)
     mocked.add(path)
     /* Descriptors, not a spread: a fake for a binding the part reassigns --
        `viewGen` -- has to be a getter, and spreading one would freeze it at
@@ -48,7 +63,7 @@ export async function loadPart(importPart, { fakes = {}, islands = {} } = {}) {
   }
   const part = await importPart()
   if (Object.keys(islands).length) {
-    const bag = (await import('../src/islands')).islands
+    const bag = (await import('../src/features/registry')).islands
     for (const [name, members] of Object.entries(islands)) Object.assign(bag[name], members)
   }
   return part
@@ -62,7 +77,7 @@ export async function loadPart(importPart, { fakes = {}, islands = {} } = {}) {
    defer a call and settle it in whatever order the race under test needs. */
 export async function fakeGateway(handler) {
   const { FixtureTransport } = await import('../src/rpc/fixtureTransport')
-  const { setGateway } = await import('../src/state/gateway')
+  const { setGateway } = await import('../src/rpc/gateway')
   const transport = new FixtureTransport({})
   transport.call = handler
   transport.callUnchecked = handler
@@ -78,7 +93,7 @@ export function moduleText(rel) {
   return readFileSync(resolve(process.cwd(), 'src', rel), 'utf8')
 }
 
-/* A `$` (src/shell/dom.ts) that answers the document for what the test built
+/* A `$` (src/lib/dom.ts) that answers the document for what the test built
    and a throwaway element for everything else. A case builds the part of the
    page it is about and no more, and a writer reaching for one it did not build
    would throw; one element per unbuilt selector keeps the stand-ins stable
