@@ -16,7 +16,8 @@
 //
 // What is recorded: tag, #id, .classes and [data-*] per element, indented by
 // depth, text dropped, script and style skipped (the build changes how many
-// there are). Determinism rests on the timer clamps below: the splash lifts on
+// there are). The two data attributes that carry a phrase rather than a flag
+// are recorded by name alone, for the reason beside PHRASE below. Determinism rests on the timer clamps below: the splash lifts on
 // a 250ms floor plus a fade, and clamping every timer to 50ms makes the tree
 // stop moving within the tick budget rather than depending on wall time.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -24,6 +25,9 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { Window } from 'happy-dom'
+
+/** The data attributes whose value is a sentence, not a state. */
+const PHRASE = new Set(['data-tip', 'data-label'])
 
 const usage = () => {
   console.error('usage: node scripts/boot-snapshot.mjs <dist/index.html> [--url <url>] [--golden <path>] [--update]')
@@ -82,7 +86,14 @@ const walk = (node, depth) => {
   const classes = (node.getAttribute('class') || '').trim()
   if (classes) parts.push(`.${classes.split(/\s+/).join('.')}`)
   const data = node.getAttributeNames().filter((a) => a.startsWith('data-')).sort()
-  for (const a of data) parts.push(`[${a}=${node.getAttribute(a)}]`)
+  /* A flag's value is shape and is recorded; a phrase's is text and is not.
+     Two data attributes carry a sentence from the catalogue rather than a
+     state -- the hover pill's words and the copy button's label -- so what
+     goes in the golden is that the element carries one. Their wording is the
+     catalogue's business (scripts/gates/i18n-keys.test.mjs), and recording it
+     here made every copy edit, and the language the page boots in, a golden
+     change in a file whose subject is the shape. */
+  for (const a of data) parts.push(PHRASE.has(a) ? `[${a}]` : `[${a}=${node.getAttribute(a)}]`)
   lines.push(`${'  '.repeat(depth)}${parts.join('')}`)
   for (const child of node.children) walk(child, depth + 1)
 }
