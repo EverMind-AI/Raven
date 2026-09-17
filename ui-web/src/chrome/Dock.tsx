@@ -16,6 +16,12 @@
  * rendered as the page serves them, because each is owned by whoever writes it
  * afterwards.
  *
+ * Four of the children are files of their own, because each renders the whole
+ * of a store: the context ring (./CtxChip.tsx) and the two chips with the
+ * panels they open (./PermChip.tsx, ./PermPop.tsx, ./TierChip.tsx,
+ * ./TierPop.tsx). Their place in the two child lists below is the page's, which
+ * is the one thing about them this file still decides.
+ *
  * What this does NOT own, though it renders the elements:
  *   - textarea#ta. It stays uncontrolled and its four listeners stay native
  *     (features/composer/mount.tsx installs them by id, which resolves because
@@ -28,18 +34,15 @@
  *     staged and the composer inserts it before .field. React never re-orders
  *     these children -- none of them is conditional -- so a node put between
  *     two of them stays between them.
- *   - the children of #sheetRack, #queued, #slashList, #permList and #tierList.
- *     Each is shared ground: the sheet rack, the composer's own roots and the
- *     two popover writers fill them, and page.css reads `.dock .sheets:has(>*)`
- *     off the rack, so it renders with no children at all rather than a
- *     placeholder.
+ *   - the children of #sheetRack, #queued and #slashList. Each is shared
+ *     ground: the sheet rack and the composer's own roots fill them, and
+ *     page.css reads `.dock .sheets:has(>*)` off the rack, so it renders with
+ *     no children at all rather than a placeholder.
  *   - #go's icon and disabled state, #meter's text, #attBtn's click (the
- *     composer store), #permChip / #permName / #tierChip / #tierName (shell/
- *     perm.ts, shell/tier.ts, whose clicks legacy/demo/150-chrome.js still
- *     binds), #modelName and #modelChip's title (legacy/live/120-settings.js),
- *     #envName's label (legacy/demo/130-settings.js), and #slashPop's
- *     data-open.
- *   - where #permPop and #tierPop stand. Both writers move the node to the body
+ *     composer store), #modelName and #modelChip's title (legacy/live/
+ *     120-settings.js), #envName's label (legacy/demo/130-settings.js), and
+ *     #slashPop's data-open.
+ *   - where #permPop and #tierPop stand. Both stores move the node to the body
  *     the first time it opens, because the card's entrance animation makes the
  *     card a containing block and re-bases the panel's fixed coordinates. A
  *     child moved out from under a portal is safe as long as React never
@@ -54,6 +57,10 @@ import { useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
 import { CtxChip } from './CtxChip'
+import { PermChip } from './PermChip'
+import { PermPop } from './PermPop'
+import { TierChip } from './TierChip'
+import { TierPop } from './TierPop'
 import * as lang from '../state/lang'
 
 import type { JSX } from 'react'
@@ -84,25 +91,11 @@ function DockIn(): JSX.Element {
           </svg>
           {' '}
         </button>
-        <button className="chip" id="permChip" aria-expanded="false" aria-haspopup="true">
-          <svg className="pico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-            <path d="M12 3.5 19 6v5.5c0 4-2.9 7.4-7 9-4.1-1.6-7-5-7-9V6l7-2.5Z" />
-          </svg>
-          <span id="permName">自动执行</span>
-        </button>
+        <PermChip />
         <span className="chip" id="envChip" hidden><span className="led" /><span id="envName">本机</span></span>
         <span className="meter" id="meter" />
         <CtxChip />
-        {/* Beside the model chip and deliberately not inside its picker: a tier
-             is not a model. It moves what raven asks of the sub-agents it
-             dispatches, and leaves raven's own effort alone. Hidden until the
-             catalogue answers, since a build can offer none. */}
-        <button className="chip" id="tierChip" aria-expanded="false" aria-haspopup="true" hidden>
-          <svg className="pico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-            <path d="M6 18.5v-4" /><path d="M12 18.5v-9" />
-          </svg>
-          <span id="tierName">High</span>
-        </button>
+        <TierChip />
         <button className="chip" id="modelChip"><span id="modelName">minimax-m3</span></button>
         <button className="go" id="go" disabled data-i18n-aria="gui.send" />
       </div>
@@ -112,21 +105,8 @@ function DockIn(): JSX.Element {
         <div id="slashList" />
       </div>
 
-      <div className="pop" id="permPop" data-open="false" role="dialog" data-i18n-aria="gui.perm.title">
-        <div className="hd"><span className="lab" data-i18n="gui.perm.title">{lang.text('gui.perm.title', '权限模式')}</span></div>
-        <div id="permList" />
-        <div className="note" data-i18n="gui.perm.note">{lang.text('gui.perm.note', '下一个工具调用起生效。')}</div>
-      </div>
-      {/* Heading and note are written on open, from the catalogue that
-           answered: the built-in ladder is a Session Tier and reaches
-           sub-agents, a deployment's own catalogue is a Session Mode and
-           does not. No `data-i18n` on either, or a language flip would put
-           the tier wording back over a mode catalogue. */}
-      <div className="pop" id="tierPop" data-open="false" role="dialog" aria-labelledby="tierPopLab">
-        <div className="hd"><span className="lab" id="tierPopLab" /></div>
-        <div id="tierList" role="radiogroup" />
-        <div className="note" />
-      </div>
+      <PermPop />
+      <TierPop />
     </div>
   )
 }
