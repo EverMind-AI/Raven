@@ -37,49 +37,6 @@ Raven 是 **The Harness of Harnesses**，一个为自主协作与开放共创而
 
 https://github.com/user-attachments/assets/3c541dae-5852-447f-8ea6-c9877612ad57
 
-## 🚀 快速开始
-
-### 📦 安装
-
-Linux、macOS 或 WSL2：
-
-```bash
-curl -fsSL https://raven.evermind.ai/install.sh | bash
-```
-
-原生 Windows PowerShell：
-
-```powershell
-irm https://raven.evermind.ai/install.ps1 | iex
-```
-
-Windows PowerShell 5.1 可能拒绝重定向，请改用直连安装地址：
-
-```powershell
-irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex
-```
-
-这些 Agent 随 Raven 一同发布：wheel 包包含 `agents/` 产品目录，首次使用时会将其复制到 Raven 主目录；源码安装则直接读取仓库中的目录。配置向导会逐一询问是否启用，并为所选 Agent 注册其适配的模型，或使用当前 Raven 的 LLM。详见 [`agents/README.md`](agents/README.md)。
-
-### 🧭 完成引导并运行
-
-```bash
-raven
-```
-
-首次启动时，Raven 会引导你完成配置，然后打开终端界面。可选步骤可以跳过。
-
-运行 `raven onboard` 重新配置，或运行 `raven doctor` 检查配置。
-
-### ⬆️ 升级
-
-```bash
-raven upgrade --check
-raven upgrade
-```
-
-升级会保留配置、会话和记忆。Raven 不会自动更新。
-
 ## 🤝 Raven 自有 Agent
 
 Raven 通过模块化架构构建了四个性能领先的 Agent。每个 Agent 都由可复用的 harness 组件组装而成，并搭配适合其领域的工具、技能和工作流。Raven 既可以将单项任务交给一个 Agent，也可以在同一工作流中协调多个 Agent 协作。
@@ -121,6 +78,98 @@ Raven 为以下第三方 Agent 提供预设，方便你将它们的能力接入 
 <td colspan="2"></td>
 </tr>
 </table>
+
+## 🚀 快速开始
+
+### 📦 安装
+
+Linux、macOS 或 WSL2：
+
+```bash
+curl -fsSL https://raven.evermind.ai/install.sh | bash
+```
+
+原生 Windows PowerShell：
+
+```powershell
+irm https://raven.evermind.ai/install.ps1 | iex
+```
+
+Windows PowerShell 5.1 可能拒绝重定向，请改用直连安装地址：
+
+```powershell
+irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex
+```
+
+也可以从源码检出安装，适合基于代码做开发，或运行尚未发布的版本：
+
+```bash
+git clone https://github.com/EverMind-AI/Raven.git
+cd Raven
+./install.sh
+```
+
+以文件方式运行时，`install.sh` 会以可编辑（editable）模式安装该检出目录：Raven 及其内置插件都链接回你的工作树，TUI 包和内置页面也从该目录构建。通过管道运行时，即使身处克隆仓库中也始终安装已发布的 wheel，这样一行命令的安装就不会使用工作树中的任意内容。如需在管道方式下强制使用可编辑安装，请设置 `RAVEN_LOCAL_SRC=<dir>`。
+
+这些 Agent 随 Raven 一同发布：wheel 包包含 `agents/` 产品目录，首次使用时会将其复制到 Raven 主目录；源码安装则直接读取仓库中的目录。配置向导会逐一询问是否启用，并为所选 Agent 注册其适配的模型，或使用当前 Raven 的 LLM。详见 [`agents/README.md`](agents/README.md)。
+
+## 🏠 自托管
+
+Raven 可以直接从源码仓库运行，也可以作为单个 Docker Compose 服务运行。Compose 部署通过 nginx 提供已构建的页面，在同一个容器中运行 Raven 引擎及其子服务，并将持久化状态保存到命名卷中。
+
+### 📝 前置条件
+
+使用 Docker 部署时，请安装 Docker Engine 和 Docker Compose v2。使用源码部署时，请安装 Python 3.12、`uv`、Node.js 和 npm，并在启动引擎前安装仓库依赖。
+
+### 🐳 使用 Docker Compose 启动
+
+仓库中的 Compose 配置会在构建镜像时完成页面和 Python 环境的构建，因此无需在宿主机上单独构建：
+
+```bash
+cd docker
+docker compose up
+```
+
+打开 <http://127.0.0.1:18793>。Compose 容器运行完整的 `gateway` 引擎，因此在 **设置 > 模型（Settings > Model Providers）** 中添加模型服务商后，无需重启即可在下一轮使用。
+
+容器布局、登录流程、模型服务商配置和运维说明详见 [`docker/README.md`](docker/README.md)。
+
+### ⚙️ 配置
+
+Docker 先读取 [`docker/.env`](docker/.env) 中已提交的默认值，再加载可选的、被 Git 忽略的 `docker/.env.local` 覆盖这些默认值。请将凭据和部署相关的覆盖项写入 `.env.local`，不要写入已提交的文件。
+
+Raven 将配置、会话、工作区、日志和记忆保存在 `RAVEN_HOME` 下。Compose 镜像通过 `raven-data` 卷将其映射到 `/data`。升级或重启时请保留该卷；`docker compose down -v` 会删除卷及其中的数据。
+
+### 🛠️ 构建 Docker 镜像
+
+使用 Makefile 目标构建镜像：
+
+```bash
+make docker-build
+```
+
+默认标签是 `raven:local`。如需选择其他标签或可选依赖集：
+
+```bash
+make docker-build DOCKER_IMAGE=raven:local
+docker build -t raven:local --build-arg RAVEN_EXTRAS="channels,tools,sandbox" .
+```
+
+要通过 Compose 运行本地构建的镜像，请设置 `RAVEN_IMAGE=raven:local`（也可以在命令前直接设置该变量），然后在 `docker/` 目录运行 `docker compose up`。对应的 Makefile 快捷方式是 `RAVEN_IMAGE=raven:local make docker-up`。使用 `make docker-down` 停止服务。
+
+### 🚀 从源码启动服务
+
+在仓库根目录运行：
+
+```bash
+make install-deps
+make build-ui
+uv run raven web
+```
+
+`raven web` 会打开本地页面，并在终端退出后保持引擎运行。默认地址是 `http://127.0.0.1:18792`。调试时可以使用 `uv run raven web --foreground`，使用 `uv run raven web --stop` 停止常驻引擎。首次启动时可以暂时不配置模型，之后在 **设置 > 模型（Settings > Models）** 中添加，或运行 `uv run raven onboard`。
+
+如果只需要启动引擎而不打开浏览器页面，请使用 `uv run raven gateway`。
 
 ## 🧩 核心系统
 
@@ -193,74 +242,6 @@ raven web
 | `raven trajectory` | 保存、回放、脱敏、标注和保留执行轨迹，用于调试 |
 
 运行 `raven --help` 或 `raven <command> --help` 查看完整命令说明。
-
-## 🏠 自托管
-
-Raven 可以直接从源码仓库运行，也可以作为单个 Docker Compose 服务运行。Compose 部署通过 nginx 提供已构建的页面，在同一个容器中运行 Raven 引擎及其子服务，并将持久化状态保存到命名卷中。
-
-### 📝 前置条件
-
-使用 Docker 部署时，请安装 Docker Engine 和 Docker Compose v2。使用源码部署时，请安装 Python 3.12、`uv`、Node.js 和 npm，并在启动引擎前安装仓库依赖。
-
-### 🐳 使用 Docker Compose 启动
-
-仓库中的 Compose 配置会在构建镜像时完成页面和 Python 环境的构建，因此无需在宿主机上单独构建：
-
-```bash
-cd docker
-docker compose up
-```
-
-打开 <http://127.0.0.1:18793>。Compose 容器运行完整的 `gateway` 引擎，因此在 **设置 > 模型（Settings > Model Providers）** 中添加模型服务商后，无需重启即可在下一轮使用。
-
-容器布局、登录流程、模型服务商配置和运维说明详见 [`docker/README.md`](docker/README.md)。
-
-### ⚙️ 配置
-
-Docker 先读取 [`docker/.env`](docker/.env) 中已提交的默认值，再加载可选的、被 Git 忽略的 `docker/.env.local` 覆盖这些默认值。请将凭据和部署相关的覆盖项写入 `.env.local`，不要写入已提交的文件。常用配置包括：
-
-| 变量 | 用途 |
-| --- | --- |
-| `RAVEN_WEB_PORT` | Compose 发布到宿主机的端口，默认为 `18793` |
-| `RAVEN_AUTO_LOGIN` | 自动为本地浏览器登录；对远程开放时设为 `0` |
-| `RAVEN_EXTRAS` | 可选镜像扩展，例如 `channels`、`tools`、`sandbox`、`browser` 或 `eval` |
-| `RAVEN_PLUGINS` | 要安装到镜像中的内置插件，包括 `everos-memory` |
-| `RAVEN_PROVIDER` | 可选模型服务商，在容器启动时写入 `config.json` |
-| `RAVEN_API_KEY` | 可选模型服务商密钥；本地服务商可以留空 |
-| `RAVEN_API_BASE` | 可选自定义端点；无需密钥的本地服务商只需设置此项 |
-
-Raven 将配置、会话、工作区、日志和记忆保存在 `RAVEN_HOME` 下。Compose 镜像通过 `raven-data` 卷将其映射到 `/data`。升级或重启时请保留该卷；`docker compose down -v` 会删除卷及其中的数据。
-
-### 🛠️ 构建 Docker 镜像
-
-使用 Makefile 目标构建镜像：
-
-```bash
-make docker-build
-```
-
-默认标签是 `raven:local`。如需选择其他标签或可选依赖集：
-
-```bash
-make docker-build DOCKER_IMAGE=raven:local
-docker build -t raven:local --build-arg RAVEN_EXTRAS="channels,tools,sandbox" .
-```
-
-要通过 Compose 运行本地构建的镜像，请设置 `RAVEN_IMAGE=raven:local`（也可以在命令前直接设置该变量），然后在 `docker/` 目录运行 `docker compose up`。对应的 Makefile 快捷方式是 `RAVEN_IMAGE=raven:local make docker-up`。使用 `make docker-down` 停止服务。
-
-### 🚀 从源码启动服务
-
-在仓库根目录运行：
-
-```bash
-make install-deps
-make build-ui
-uv run raven web
-```
-
-`raven web` 会打开本地页面，并在终端退出后保持引擎运行。默认地址是 `http://127.0.0.1:18792`。调试时可以使用 `uv run raven web --foreground`，使用 `uv run raven web --stop` 停止常驻引擎。首次启动时可以暂时不配置模型，之后在 **设置 > 模型（Settings > Models）** 中添加，或运行 `uv run raven onboard`。
-
-如果只需要启动引擎而不打开浏览器页面，请使用 `uv run raven gateway`。
 
 ## 📚 文档
 
@@ -390,14 +371,73 @@ WebUI 和 React/Ink TUI 共用 [`rpc-schema/openrpc.json`](rpc-schema/openrpc.js
 
 ## 🌐 EverMind 生态
 
-Raven 是 [EverMind](https://evermind.ai/) 开源生态的一部分。欢迎了解 [EverOS](https://github.com/EverMind-AI/EverOS)、[EverAlgo](https://github.com/EverMind-AI/EverAlgo)、[HyperMem](https://github.com/EverMind-AI/HyperMem)、[EvoAgentBench](https://github.com/EverMind-AI/EvoAgentBench)、[EverMemBench](https://github.com/EverMind-AI/EverMemBench) 和 [EverMe](https://github.com/EverMind-AI/EverMe)。
+EverMind 将记忆研究、可用于生产的产品和实际集成汇聚到同一个开源生态中。
 
-<br>
-<div align="right">
+<table>
+<tr>
+<th colspan="2">产品</th>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/EverOS">EverOS</a></strong></td>
+<td>面向 Agent 和用户的本地优先、以 Markdown 为原生格式的长期记忆运行时。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/Raven">Raven</a></strong></td>
+<td>以记忆为核心、可自我进化的 Agent 框架，具备主动性、上下文控制和技能进化能力。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/EverMe">EverMe (CLI)</a></strong></td>
+<td>面向跨设备、跨 Agent 个人记忆的命令行工具与 Agent 插件套件。</td>
+</tr>
+<tr>
+<th colspan="2">研究与评测</th>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/SkillCorpus">SkillCorpus</a></strong></td>
+<td>经过整理、可直接用于检索的 Agent 技能语料库，并配套检索与评测工具。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/EverAlgo">EverAlgo</a></strong></td>
+<td>支撑 EverOS 的无状态抽取、排序、解析与记忆算子。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/HyperMem">HyperMem</a></strong></td>
+<td>基于超图的分层记忆，支持由粗到细的长期对话检索。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/MSA">MSA</a></strong></td>
+<td>Memory Sparse Attention，面向可扩展的隐式记忆与一亿 Token 级上下文。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/EverMemBench">EverMemBench</a></strong></td>
+<td>评测记忆系统的事实召回、应用推理与个性化泛化能力。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/EvoAgentBench">EvoAgentBench</a></strong></td>
+<td>对 Agent 的自我进化、迁移效率、错误规避和技能使用进行纵向评测。</td>
+</tr>
+<tr>
+<th colspan="2"><a href="https://github.com/EverMind-AI/plugins">集成</a></th>
+</tr>
+<tr>
+<td><strong><a href="https://docs.openclaw.ai">OpenClaw</a></strong></td>
+<td><a href="https://github.com/EverMind-AI/plugins/tree/main/openclaw">OpenClaw 插件</a>，用于自动召回、采集以及会话记忆的生命周期管理。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a></strong></td>
+<td><a href="https://github.com/EverMind-AI/plugins/tree/main/hermes">Hermes 插件</a>，在多次 Hermes 会话之间保持持久记忆。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/deepseek-ai/DeepSeek-Harness">DeepSeek Harness</a></strong></td>
+<td><a href="https://github.com/EverMind-AI/plugins/tree/main/dsh">DSH 插件</a>，让 DeepSeek Harness 的 Agent 具备记忆能力。</td>
+</tr>
+<tr>
+<td><strong><a href="https://dify.ai">Dify</a></strong></td>
+<td>可在工作流和 Agent 中显式检索与存储记忆的<a href="https://github.com/EverMind-AI/plugins/tree/main/dify">自托管</a>与<a href="https://github.com/EverMind-AI/plugins/tree/main/dify_cloud">云端</a>工具。</td>
+</tr>
+</table>
 
-[![](https://img.shields.io/badge/-Back_to_top-gray?style=flat-square)](#readme-top)
-
-</div>
+这些项目共同构成了 EverMind 从研究到运行时的技术栈：方法与基准最终沉淀为可复用的记忆基础设施、产品和 Agent 集成。
 
 ## 🤝 参与贡献
 

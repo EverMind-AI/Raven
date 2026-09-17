@@ -37,52 +37,6 @@ Results describe the published test configurations; model, task set, and evaluat
 
 https://github.com/user-attachments/assets/3c541dae-5852-447f-8ea6-c9877612ad57
 
-## 🚀 Quick Start
-
-### 📦 Install
-
-Linux, macOS, or WSL2:
-
-```bash
-curl -fsSL https://raven.evermind.ai/install.sh | bash
-```
-
-Native Windows PowerShell:
-
-```powershell
-irm https://raven.evermind.ai/install.ps1 | iex
-```
-
-Windows PowerShell 5.1 may reject the redirect. Use the direct installer URL instead:
-
-```powershell
-irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex
-```
-
-The agent products ship with raven itself: a wheel carries the `agents/`
-product tree and copies it out to your raven home on first use, and a source
-checkout reads the tree in place. Setup asks about each product and registers
-the ones you take up, on the model it is tuned for or on this raven's LLM.
-See [`agents/README.md`](agents/README.md).
-
-### 🧭 Onboard and run
-
-```bash
-raven
-```
-
-On first launch, Raven guides you through setup and opens the terminal UI. You can skip optional steps.
-
-Run `raven onboard` to reconfigure or `raven doctor` to check your setup.
-
-### ⬆️ Upgrade
-
-```bash
-raven upgrade --check
-raven upgrade
-```
-
-Upgrades preserve configuration, sessions, and memory. Raven does not update automatically.
 
 ## 🤝 Raven Agents
 
@@ -125,6 +79,134 @@ Raven includes presets for these third-party agents, so you can bring their capa
 <td colspan="2"></td>
 </tr>
 </table>
+
+## 🚀 Quick Start
+
+### 📦 Install
+
+Linux, macOS, or WSL2:
+
+```bash
+curl -fsSL https://raven.evermind.ai/install.sh | bash
+```
+
+Native Windows PowerShell:
+
+```powershell
+irm https://raven.evermind.ai/install.ps1 | iex
+```
+
+Windows PowerShell 5.1 may reject the redirect. Use the direct installer URL instead:
+
+```powershell
+irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex
+```
+
+Or install from a source checkout, to develop against the code or to run what
+has not been released yet:
+
+```bash
+git clone https://github.com/EverMind-AI/Raven.git
+cd Raven
+./install.sh
+```
+
+Run as a file, `install.sh` installs that checkout in editable mode: raven and
+its bundled plugins link back to your tree, and the TUI bundle and the served
+page are built from it. A piped run installs the published wheel even from
+inside a clone, so that a one-line install never picks up whatever a working
+tree happens to contain. Set `RAVEN_LOCAL_SRC=<dir>` to force the editable
+install through a pipe.
+
+The agent products ship with raven itself: a wheel carries the `agents/`
+product tree and copies it out to your raven home on first use, and a source
+checkout reads the tree in place. Setup asks about each product and registers
+the ones you take up, on the model it is tuned for or on this raven's LLM.
+See [`agents/README.md`](agents/README.md).
+
+## 🏠 Self-Hosting
+
+Raven can run directly from a checkout or as a single Docker Compose service. The
+Compose deployment serves the built page through nginx, keeps the Raven engine
+and its child services in one container, and stores durable state in a named
+volume.
+
+### 📝 Prerequisites
+
+For a Docker deployment, install Docker Engine and Docker Compose v2. For a
+source deployment, install Python 3.12, `uv`, Node.js, and npm. A source
+checkout also needs the repository dependencies installed before starting the
+engine.
+
+### 🐳 Start with Docker Compose
+
+The repository Compose setup builds the page and Python environment as part of
+the image, so no separate host-side build is required:
+
+```bash
+cd docker
+docker compose up
+```
+
+Open <http://127.0.0.1:18793>. The Compose container runs the full `gateway`
+engine so providers added from **Settings > Models** are available on the next
+turn without restarting.
+
+For the detailed container layout, sign-in flow, provider setup, and operational
+notes, see [`docker/README.md`](docker/README.md).
+
+### ⚙️ Configuration
+
+Docker reads committed defaults from [`docker/.env`](docker/.env), then loads
+the optional, git-ignored `docker/.env.local` over them.
+Put credentials and deployment-specific overrides in `.env.local`, not in the
+committed file.
+
+Raven stores its configuration, sessions, workspace, logs, and memory under
+`RAVEN_HOME`. The Compose image maps this to `/data` through the `raven-data`
+volume. Keep that volume for upgrades and restarts; `docker compose down -v`
+deletes it and its data.
+
+### 🛠️ Build a Docker image
+
+Build the image using the Makefile target:
+
+```bash
+make docker-build
+```
+
+The default tag is `raven:local`. To select a different tag or optional
+dependency set:
+
+```bash
+make docker-build DOCKER_IMAGE=raven:local
+docker build -t raven:local --build-arg RAVEN_EXTRAS="channels,tools,sandbox" .
+```
+
+Run the locally built image through Compose by exporting
+`RAVEN_IMAGE=raven:local` (or prefixing the command with that assignment) and
+running `docker compose up` from `docker/`. The Makefile shortcut is
+`RAVEN_IMAGE=raven:local make docker-up`. Stop the stack with `make docker-down`.
+
+
+### 🚀 Start the server from source
+
+From the repository root:
+
+```bash
+make install-deps
+make build-ui
+uv run raven web
+```
+
+`raven web` opens the local page and leaves the engine running after the
+terminal exits. It defaults to `http://127.0.0.1:18792`. Use
+`uv run raven web --foreground` when debugging, or `uv run raven web --stop` to
+stop the resident engine. The first run can start without a configured model;
+add one from **Settings > Model Providers** or run `uv run raven onboard`.
+
+To run only the engine without the browser launcher, use
+`uv run raven gateway`.
 
 ## 🧩 Core Systems
 
@@ -198,98 +280,7 @@ The command opens the WebUI in your browser and keeps Raven running in the backg
 
 Run `raven --help` or `raven <command> --help` for the complete CLI surface.
 
-## 🏠 Self-Hosting
 
-Raven can run directly from a checkout or as a single Docker Compose service. The
-Compose deployment serves the built page through nginx, keeps the Raven engine
-and its child services in one container, and stores durable state in a named
-volume.
-
-### 📝 Prerequisites
-
-For a Docker deployment, install Docker Engine and Docker Compose v2. For a
-source deployment, install Python 3.12, `uv`, Node.js, and npm. A source
-checkout also needs the repository dependencies installed before starting the
-engine.
-
-### 🐳 Start with Docker Compose
-
-The repository Compose setup builds the page and Python environment as part of
-the image, so no separate host-side build is required:
-
-```bash
-cd docker
-docker compose up
-```
-
-Open <http://127.0.0.1:18793>. The Compose container runs the full `gateway`
-engine so providers added from **Settings > Models** are available on the next
-turn without restarting.
-
-For the detailed container layout, sign-in flow, provider setup, and operational
-notes, see [`docker/README.md`](docker/README.md).
-
-### ⚙️ Configuration
-
-Docker reads committed defaults from [`docker/.env`](docker/.env), then loads
-the optional, git-ignored `docker/.env.local` over them.
-Put credentials and deployment-specific overrides in `.env.local`, not in the
-committed file. Common settings include:
-
-| Variable | Purpose |
-| --- | --- |
-| `RAVEN_WEB_PORT` | Host port published by Compose (default `18793`) |
-| `RAVEN_AUTO_LOGIN` | Automatically sign in local browsers; set to `0` for remote exposure |
-| `RAVEN_EXTRAS` | Optional image extras such as `channels`, `tools`, `sandbox`, `browser`, or `eval` |
-| `RAVEN_PLUGINS` | Bundled plugins to install in the image, including `everos-memory` |
-| `RAVEN_PROVIDER` | Optional provider seeded into `config.json` at container startup |
-| `RAVEN_API_KEY` | Optional provider key; local providers may leave it empty |
-| `RAVEN_API_BASE` | Optional custom endpoint, sufficient by itself for keyless local providers |
-
-Raven stores its configuration, sessions, workspace, logs, and memory under
-`RAVEN_HOME`. The Compose image maps this to `/data` through the `raven-data`
-volume. Keep that volume for upgrades and restarts; `docker compose down -v`
-deletes it and its data.
-
-### 🛠️ Build a Docker image
-
-Build the image using the Makefile target:
-
-```bash
-make docker-build
-```
-
-The default tag is `raven:local`. To select a different tag or optional
-dependency set:
-
-```bash
-make docker-build DOCKER_IMAGE=raven:local
-docker build -t raven:local --build-arg RAVEN_EXTRAS="channels,tools,sandbox" .
-```
-
-Run the locally built image through Compose by exporting
-`RAVEN_IMAGE=raven:local` (or prefixing the command with that assignment) and
-running `docker compose up` from `docker/`. The Makefile shortcut is
-`RAVEN_IMAGE=raven:local make docker-up`. Stop the stack with `make docker-down`.
-
-### 🚀 Start the server from source
-
-From the repository root:
-
-```bash
-make install-deps
-make build-ui
-uv run raven web
-```
-
-`raven web` opens the local page and leaves the engine running after the
-terminal exits. It defaults to `http://127.0.0.1:18792`. Use
-`uv run raven web --foreground` when debugging, or `uv run raven web --stop` to
-stop the resident engine. The first run can start without a configured model;
-add one from **Settings > Model Providers** or run `uv run raven onboard`.
-
-To run only the engine without the browser launcher, use
-`uv run raven gateway`.
 
 ## 📚 Documentation
 
