@@ -90,6 +90,7 @@ let tabT: ReturnType<typeof setInterval> | null = null
 let tabsBusy = false
 let lastTried = ''
 let lastBlob: Blob | null = null
+let lastUrl = ''
 let frameQ: Blob | null = null
 let painting = false
 const noFav = new Set<string>()
@@ -149,10 +150,48 @@ export function setDeskPane(on: boolean): void {
   deskPane = on
 }
 
+/* Whether the palette's miniature is up. A second holder of the view, counted
+   apart from the pane so that closing either leaves the stream to the other. */
+let pip = false
+export function setPip(on: boolean): void {
+  pip = on
+}
+
 export function showing(): boolean {
-  if (deskPane) return true
+  if (deskPane || pip) return true
   const s = shell()
   return s.wsShows ? s.wsShows('browser') : false
+}
+
+/* Every decoded frame, for views that are not the stage: the palette's
+   miniatures draw the same pictures the stage does, without a second stream.
+   The url each frame belongs to rides along, because there is one stream and
+   several tabs -- a miniature takes the frames that are its own and keeps the
+   last of them when the stream moves to another tab. Called with the last
+   frame on subscribe, so a view that opens mid-page is not blank until the
+   next paint. */
+const frameWatchers = new Set<(blob: Blob, url: string) => void>()
+export function subscribeFrames(cb: (blob: Blob, url: string) => void): () => void {
+  frameWatchers.add(cb)
+  if (lastBlob) cb(lastBlob, lastUrl)
+  return () => {
+    frameWatchers.delete(cb)
+  }
+}
+
+/* The last picture seen of each tab, so the palette can show every page at
+   once: only the front tab streams, and a card left blank until the reader
+   brings its tab forward is the flicker the strip exists to end. Bounded a
+   little above the driver's tab limit; oldest sight goes first. */
+const SHOTS_KEPT = 24
+const shots = new Map<string, Blob>()
+export const shotFor = (url: string): Blob | null => shots.get(url) || null
+
+function remember(url: string, blob: Blob): void {
+  if (!url) return
+  shots.delete(url)
+  shots.set(url, blob)
+  for (const stale of [...shots.keys()].slice(0, Math.max(0, shots.size - SHOTS_KEPT))) shots.delete(stale)
 }
 
 const gone = (e: unknown): boolean =>
@@ -174,6 +213,9 @@ function b64Blob(b64: string): Blob {
 async function paint(blob: Blob): Promise<void> {
   frameQ = blob
   lastBlob = blob
+  lastUrl = state.url
+  remember(state.url, blob)
+  for (const cb of frameWatchers) cb(blob, state.url)
   if (painting) return
   painting = true
   while (frameQ) {
@@ -479,7 +521,7 @@ export async function closeBrowser(): Promise<void> {
    so the window sat on "no page open" while the model browsed. The pane's own
    unmount clears the flag before it calls this. */
 export function hidden(): void {
-  if (deskPane) return
+  if (deskPane || pip) return
   void watch(false)
   tick(false)
 }
@@ -530,8 +572,11 @@ export function _resetForTests(): void {
   noWatch = false
   tabsBusy = false
   painting = false
+  pip = false
   frameQ = null
   lastBlob = null
+  lastUrl = ''
+  shots.clear()
   lastTried = ''
   noFav.clear()
   host = null

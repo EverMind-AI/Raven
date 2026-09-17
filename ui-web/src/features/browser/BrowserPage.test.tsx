@@ -3,10 +3,11 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { BrowserApp } from './BrowserPage'
+import { BrowserPip } from './Pip'
 import * as store from './store'
 
 import type { Shell } from '../../shell/bridge'
-import type { BrowserSource, ChromiumSource, LinksSource, UrlRow } from './types'
+import type { BrowserSource, BrowserTabRow, ChromiumSource, LinksSource, UrlRow } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -270,6 +271,110 @@ describe('browser island, embedded shape (the rpc source)', () => {
     await act(async () => {})
 
     expect(calls).toContainEqual(['watch', { on: false }])
+  })
+
+  it('the miniature holds the frame lease itself and lets go when it leaves', async () => {
+    /* The palette's thumbnail is a second view of the one stream: with no
+       stage mounted it is what keeps the frames coming, and it must not take
+       the stream down under a window that is still showing it. */
+    const { calls } = chromium({ frame: async () => ({ started: true, url: 'https://example.com', title: 'Example' }) })
+    const box = document.getElementById('wsBody')!
+    const view = render(<BrowserPip onOpen={() => {}} empty={<i>none</i>} />, { container: box })
+    await act(async () => {
+      await store.poll(true)
+    })
+
+    expect(box.querySelector('.desk-pip canvas')).toBeTruthy()
+    expect(box.textContent).toContain('Example')
+    expect(calls.some(([k, p]) => k === 'watch' && (p as { on: boolean }).on)).toBe(true)
+    expect(store.showing()).toBe(true)
+
+    calls.length = 0
+    store.hidden()
+    expect(calls).toEqual([])
+
+    view.unmount()
+    await act(async () => {})
+    expect(calls).toContainEqual(['watch', { on: false }])
+  })
+
+  it('the miniature mirrors the frames the stage is painted with', async () => {
+    chromium({ frame: async () => ({ started: true, url: 'https://example.com' }) })
+    const seen: Blob[] = []
+    const off = store.subscribeFrames((blob) => seen.push(blob))
+
+    const blob = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/jpeg' })
+    store.onFrame({ url: 'https://example.com' }, blob)
+    await act(async () => {})
+
+    expect(seen).toEqual([blob])
+    off()
+    /* A late subscriber is handed the last frame at once, so a thumbnail that
+       opens between paints is not blank until the next one. */
+    const late: Blob[] = []
+    store.subscribeFrames((b) => late.push(b))()
+    expect(late).toEqual([blob])
+  })
+
+  it('gives every tab a card, names the agent in it, and brings a card forward on click', async () => {
+    /* Two agents browse in two tabs and only the front one streams, so a
+       single miniature flickered between them and said whose neither was. */
+    const rows: BrowserTabRow[] = [
+      { index: 0, url: 'https://a.test/', title: 'A page', agent: 2 },
+      { index: 1, url: 'https://b.test/', title: 'B page', active: true, agent: 1 },
+    ]
+    const asked: unknown[] = []
+    chromium({
+      frame: async () => ({ started: true, url: 'https://b.test/' }),
+      tabs: async (p) => {
+        asked.push(p)
+        return { started: true, tabs: rows }
+      },
+    })
+    const opens: number[] = []
+    const box = document.getElementById('wsBody')!
+    render(<BrowserPip onOpen={() => opens.push(1)} empty={<i>none</i>} />, { container: box })
+    await act(async () => {
+      store._setForTests({ started: true, url: 'https://b.test/', tabs: rows })
+    })
+
+    const card = (n: number): HTMLElement => box.querySelectorAll('.desk-pip')[n] as HTMLElement
+    const cards = [...box.querySelectorAll('.desk-pip')] as HTMLElement[]
+    expect(cards.map((c) => c.title)).toEqual(['https://a.test/', 'https://b.test/'])
+    expect(cards.map((c) => c.dataset.live)).toEqual([undefined, '1'])
+    expect(card(0).textContent).toContain('gui.br.agent_tag {"n":2}')
+    expect(card(1).textContent).toContain('gui.br.agent_tag {"n":1}')
+
+    asked.length = 0
+    await act(async () => card(0).click())
+    expect(asked).toContainEqual({ action: 'activate', index: 0 })
+    expect(opens).toEqual([1])
+
+    /* The front tab's card is already what it shows: clicking it opens the
+       window without reshuffling the tabs underneath. */
+    asked.length = 0
+    await act(async () => card(1).click())
+    expect(asked.filter((p) => (p as { action: string }).action !== 'list')).toEqual([])
+    expect(opens).toEqual([1, 1])
+  })
+
+  it('keeps the last picture of each tab, so a card is not blank until its tab is in front', async () => {
+    /* One stream, several tabs: a card whose tab left the front keeps the last
+       frame that was its own, and takes no frame belonging to its neighbour. */
+    chromium()
+    const a = new Blob([new Uint8Array([1])], { type: 'image/jpeg' })
+    const b = new Blob([new Uint8Array([2])], { type: 'image/jpeg' })
+    store.onFrame({ url: 'https://a.test/' }, a)
+    store.onFrame({ url: 'https://b.test/' }, b)
+    await act(async () => {})
+
+    expect(store.shotFor('https://a.test/')).toBe(a)
+    expect(store.shotFor('https://b.test/')).toBe(b)
+    expect(store.shotFor('https://c.test/')).toBe(null)
+
+    const seen: Array<[Blob, string]> = []
+    store.subscribeFrames((blob, at) => seen.push([blob, at]))()
+    expect(seen).toEqual([[b, 'https://b.test/']])
   })
 
   it('asks a popped-out browser where it is, never for a picture', async () => {

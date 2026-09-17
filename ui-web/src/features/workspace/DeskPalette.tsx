@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { AgentList } from '../subagents/SubagentsPage'
+import { BrowserPip } from '../browser/Pip'
 import * as browser from '../browser/store'
 import * as agents from '../subagents/store'
 import { t } from '../../shell/bridge'
@@ -170,31 +171,18 @@ function DeliverableRow({ row, here }: { row: DeliveryRow; here: boolean }): JSX
   )
 }
 
-/* Where the shared browser is, and the door to the window that shows it. One
-   row because there is one page: the model and the reader drive the same
-   Chromium, so a list would be a list of one thing under every heading. */
+/* The page in miniature, and the door to the window that shows it full size.
+   The model and the reader drive the same Chromium, so there is one page to
+   show; a picture of it answers "what is it doing" without opening anything. */
 function BrowserNav(): JSX.Element {
-  const page = useSyncExternalStore(browser.subscribe, browser.getState)
-  if (!page.started || !page.url) {
-    return <DeskEmpty kind="browser" title={t('gui.br.idle')} hint={t('gui.br.idle_w')} />
-  }
   return (
-    <div className="desk-list">
-      <button
-        className="desk-row"
-        title={page.url}
-        onClick={() => {
-          desk.readItem('browser', page.url)
-          desk.openDeskBrowser()
-        }}
-      >
-        <DeskIcon kind="browser" />
-        <span className="desk-name">
-          <b>{page.title || page.url}</b>
-          <s>{page.url}</s>
-        </span>
-      </button>
-    </div>
+    <BrowserPip
+      onOpen={() => {
+        desk.readItem('browser', browser.getState().url)
+        desk.openDeskBrowser()
+      }}
+      empty={<DeskEmpty kind="browser" title={t('gui.br.idle')} hint={t('gui.br.idle_w')} />}
+    />
   )
 }
 

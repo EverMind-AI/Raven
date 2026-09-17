@@ -5221,6 +5221,35 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-pane-body > .fwrap { height: 100%; }
 .desk-pane-body > .desk-browser { height: 100%; display: flex; flex-direction: column; }
 .desk-pane:has(.desk-browser) .desk-pane-body { overflow: hidden; }
+/* A browser alone in the column is a sidebar, not a window: flush to the edge
+   and the column's full height, a rule against the chat rather than a card's
+   corners -- the shape a reader knows from every other agent's in-app browser.
+   Alone, because beside another pane it is one window of several again. */
+.desk-ready .ws:has(.desk-grid.n1 > .desk-pane > .desk-pane-body > .desk-browser) { margin: 0; }
+.desk-grid.n1 > .desk-pane:has(> .desk-pane-body > .desk-browser) {
+  border-radius: 0; border-width: 0 0 0 1px; }
+/* The palette's miniatures: one card per tab, the page at thumbnail size with
+   its caption under it. Only the front tab streams, so a card for a tab that
+   has never been in front has no picture yet -- dashed, the way an empty slot
+   reads, and the front one carries the only colour in the strip. */
+.desk-pips { display: flex; flex-direction: column; }
+.desk-pip { display: flex; flex-direction: column; gap: 6px; width: 100%; padding: 8px; border: 0;
+  background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.desk-pip canvas { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.desk-pip:hover canvas { border-color: var(--text); }
+.desk-pip[data-live] canvas { border-color: var(--link); }
+.desk-pip[data-blank] canvas { border-style: dashed; }
+.desk-pip-note { display: grid; place-items: center; aspect-ratio: 16 / 10; border: 1px dashed var(--line);
+  border-radius: 8px; color: var(--faint); font-size: 11px; }
+.desk-pip-cap { display: grid; grid-template-columns: 1fr auto; align-items: center; column-gap: 6px;
+  min-width: 0; font: 400 11px var(--sans); color: var(--faint); }
+.desk-pip-cap b, .desk-pip-cap s { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.desk-pip-cap b { color: var(--text); font-weight: 500; font-size: 11.5px; }
+.desk-pip-cap s { grid-column: 1 / -1; text-decoration: none; }
+/* Which agent is in this tab: a name, so monospaced and small. */
+.desk-pip-tag, .btab-agent { flex: none; padding: 0 5px; border-radius: 999px; background: var(--raised);
+  border: 1px solid var(--line); color: var(--muted); font: 500 10px/15px var(--mono); }
 .instance-conversation { position: relative; height: 100%; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .instance-conversation .satx { flex: 1; min-height: 0; overflow-y: auto; }
 /* Room for the composer, and the glass the transcript scrolls under -- but only

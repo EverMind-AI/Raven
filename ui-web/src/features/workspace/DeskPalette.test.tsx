@@ -875,10 +875,11 @@ describe('the panel drags by its handle', () => {
     expect(desk.getState().tab).toBe('diff')
   })
 
-  it('gives the shared browser a tab, and its row opens the window', async () => {
+  it('gives the shared browser a tab that shows the page in miniature and opens the window', async () => {
     /* The reader's door to the page the model is on: the legacy panel had a
        Browser tab and the desk had none, so a page the agent opened was
-       reachable only by the window the transcript happened to open. */
+       reachable only by the window the transcript happened to open. A picture
+       rather than a row, because the glance is the point of the tab. */
     render(<DeskPalette />)
     await act(async () => {
       desk.update({ paletteOpen: true, tab: 'browser' })
@@ -889,9 +890,10 @@ describe('the panel drags by its handle', () => {
       browser._setForTests({ started: true, url: 'https://example.com/a', title: 'Example' })
     })
 
-    const row = document.querySelector('.desk-body .desk-row') as HTMLElement
-    expect(row.textContent).toContain('Example')
-    await act(async () => row.click())
+    const pip = document.querySelector('.desk-body .desk-pip') as HTMLElement
+    expect(pip.querySelector('canvas')).toBeTruthy()
+    expect(pip.textContent).toContain('Example')
+    await act(async () => pip.click())
 
     expect(desk.getState().panes.map((pane) => pane.id)).toEqual(['browser'])
   })
