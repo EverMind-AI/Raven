@@ -150,7 +150,13 @@ class HostedBackendCases:
         assert hit.metadata["id"] == mid
         assert hit.metadata["backend"] == self.backend_cls.NAME
 
+    #: Whether this service keeps the agent's own side of a conversation apart
+    #: from what it knows about the user. Flat ones do not; MemOS does.
+    serves_agent_track: bool = False
+
     async def test_agent_track_is_empty_without_a_request(self, backend, fake):
+        if self.serves_agent_track:
+            pytest.skip("this service has an agent track of its own")
         fake.seed(USER, "alice likes tea")
         assert await backend.recall("tea", agent_id=AGENT, top_k=5) == []
         assert fake.requests == []

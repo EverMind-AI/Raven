@@ -13,16 +13,22 @@ that sends it at the service default of 6 rows.
 
 A search answers only from the views named in ``include_memory_view``; an
 unknown name is a 400, so the field is read rather than tolerated. The default
-is the factual view alone, which leaves a whole class of memory out of reach:
-the pool also holds skills, each a ``name``/``description``/``procedure``
-triple distilled from several conversations, and those are the closest thing
-this service has to an agent's own experience. ``SEARCH_VIEWS`` asks for them
-beside the factual rows. ``memory_limit_number`` is one budget shared across
-the views, so asking costs nothing when the skills lose on relevance -- and
-they usually do (measured 2026-09-17: 9 skills topped out at 0.5097 against a
-0.5773 floor among the 20 factual rows that filled the budget). That is the
-service's own ranking, which is worth reporting; a caller that never asked
-could not tell it apart from having no skills at all.
+is the factual view alone, which left the rest of the pool unreachable. Two
+of those views are the agent's own side of the same conversations and have no
+counterpart among the factual rows: a ``tool_memory`` row is one task's
+trajectory -- ``tool_value`` gives task, action and result, ``experience``
+gives the rule drawn from it -- and a ``skill`` is the ``name``/
+``description``/``procedure`` triple several trajectories collapsed into.
+``USER_VIEWS`` and ``AGENT_VIEWS`` put each family behind the track that asks
+for it.
+
+``memory_limit_number`` is one budget shared across the views in a request, so
+naming a view that loses on relevance costs nothing: measured 2026-09-17,
+asking for skills beside the factual rows returned no skills at all, because
+nine of them topped out at 0.5097 relativity against a 0.5773 floor among the
+twenty factual rows that filled the budget. That is the service ranking them,
+which is a finding; a caller that never named the view could not tell it apart
+from a pool with no skills in it.
 
 MemOS reports failure inside a 200: ``code`` is ``0`` on success, ``40309`` on
 rate limiting, and ``message`` is ``"ok"``. ``_effective_status`` folds those
@@ -41,9 +47,29 @@ from raven.memory_engine import Call, HttpMemoryBackend, Reply, clamp_score
 from raven.plugins import PluginContext
 
 RATE_LIMITED_CODE = 40309
-#: Views a recall draws from. ``preference`` is left out: it holds standing
-#: likes and dislikes about a person, which a coding task has no use for.
-SEARCH_VIEWS = ("detail_factual", "skill")
+#: MemOS keeps one identity and sorts what it knows into views, so raven's two
+#: tracks are two sets of views against the same ``user_id`` rather than two ids.
+#:
+#: ``detail_factual`` is the narrative of what happened, which is what the user
+#: track asks for. ``tool_memory`` and ``skill`` are the agent's own side: a
+#: ``ToolTrajectoryMemory`` records the task, the actions taken, the result and
+#: the rule drawn from it, and a skill is the procedure several of those
+#: collapsed into. ``preference`` stays out of both -- standing likes and
+#: dislikes about a person are not what a coding task needs -- and so do
+#: ``event`` and ``profile``.
+USER_VIEWS = ("detail_factual",)
+AGENT_VIEWS = ("tool_memory", "skill")
+
+
+def _tool_text(row: dict[str, Any]) -> str:
+    """A trajectory row: what was done, then what it taught.
+
+    ``tool_value`` is the run itself (task, actions, result) and ``experience``
+    is the rule drawn out of it. The rule alone reads as advice from nowhere,
+    and the run alone leaves the reader to re-derive the point, so both go.
+    """
+    lines = [str(row.get("tool_value") or "").strip(), str(row.get("experience") or "").strip()]
+    return "\n".join(line for line in lines if line)
 
 
 def _skill_text(value: Any) -> str:
@@ -96,13 +122,20 @@ class MemosBackend(HttpMemoryBackend):
         return Call(
             "POST",
             "/search/memory",
-            json={
-                "query": query,
-                "user_id": owner,
-                "memory_limit_number": top_k,
-                "include_memory_view": list(SEARCH_VIEWS),
-            },
+            json=self._search_body(query, top_k, owner, USER_VIEWS),
         )
+
+    def _agent_recall_call(self, query: str, top_k: int, owner: str) -> Call | None:
+        return Call("POST", "/search/memory", json=self._search_body(query, top_k, owner, AGENT_VIEWS))
+
+    @staticmethod
+    def _search_body(query: str, top_k: int, owner: str, views: tuple[str, ...]) -> dict[str, Any]:
+        return {
+            "query": query,
+            "user_id": owner,
+            "memory_limit_number": top_k,
+            "include_memory_view": list(views),
+        }
 
     def _parse_hits(self, body: Any) -> list[Memory]:
         data = (body or {}).get("data") or {}
@@ -112,11 +145,14 @@ class MemosBackend(HttpMemoryBackend):
             ("memory", "memory_detail_list"),
             ("preference", "preference_detail_list"),
             ("skill", "skill_detail_list"),
+            ("tool", "tool_memory_detail_list"),
         ):
             rows.extend((kind, row) for row in data.get(key) or [])
         for kind, row in rows:
             if kind == "skill":
                 text = _skill_text(row.get("skill_value"))
+            elif kind == "tool":
+                text = _tool_text(row)
             else:
                 text = str(row.get("memory_value") or row.get("preference") or "")
             if not text:
@@ -184,7 +220,7 @@ class MemosBackend(HttpMemoryBackend):
                 "query": "health",
                 "user_id": self._user_id,
                 "memory_limit_number": 1,
-                "include_memory_view": list(SEARCH_VIEWS),
+                "include_memory_view": list(USER_VIEWS),
             },
         )
 
@@ -194,4 +230,4 @@ def make_backend(ctx: PluginContext) -> MemosBackend:
     return MemosBackend(ctx)
 
 
-__all__ = ["SEARCH_VIEWS", "MemosBackend", "make_backend"]
+__all__ = ["AGENT_VIEWS", "USER_VIEWS", "MemosBackend", "make_backend"]

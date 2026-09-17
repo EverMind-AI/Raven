@@ -6,7 +6,7 @@ import httpx
 
 from raven.memory_engine.http_backend import Reply
 from raven_memos.backend import MemosBackend
-from tests._hosted_memory_cases import USER, HostedBackendCases
+from tests._hosted_memory_cases import AGENT, USER, HostedBackendCases
 from tests._hosted_memory_fakes import FakeMemos
 
 _SKILL = {
@@ -21,6 +21,7 @@ class TestMemos(HostedBackendCases):
     backend_cls = MemosBackend
     RECALL_PATH = "/search/memory"
     HEALTH_PATH = "/search/memory"
+    serves_agent_track = True
 
     def store_path(self, session_id: str) -> str:
         return "/add/message"
@@ -98,12 +99,47 @@ class TestMemos(HostedBackendCases):
         )
         assert skill.score == 0.9
 
-    async def test_recall_names_the_views_it_wants(self, backend, fake):
-        """The service validates the names (an unknown one is a 400), and its
-        default is the factual view alone -- skills have to be asked for."""
+    async def test_each_track_names_the_views_that_belong_to_it(self, backend, fake):
+        """One identity, two families of view.
+
+        MemOS has no second id to route by, so the tracks are told apart by
+        what they ask for: the user track wants the narrative of what
+        happened, the agent track wants the agent's own side of it. The
+        service validates these names -- an unknown one is a 400 -- and its
+        default is the factual view alone, so the agent's half has to be
+        asked for by name or it is simply absent.
+        """
         await backend.recall("tea", user_id=USER, top_k=5)
-        (req,) = fake.requests
-        assert FakeMemos.body(req)["include_memory_view"] == ["detail_factual", "skill"]
+        await backend.recall("tea", agent_id=AGENT, top_k=5)
+        user_req, agent_req = fake.requests
+        assert FakeMemos.body(user_req)["include_memory_view"] == ["detail_factual"]
+        assert FakeMemos.body(agent_req)["include_memory_view"] == ["tool_memory", "skill"]
+        # One identity: the agent call still owns its rows by ``user_id``.
+        assert FakeMemos.body(agent_req)["user_id"] == AGENT
+
+    async def test_a_trajectory_carries_both_what_was_done_and_what_it_taught(self, backend, fake):
+        """``tool_value`` is the run, ``experience`` is the rule from it.
+
+        Neither half stands alone: the rule without the run is advice from
+        nowhere, and the run without the rule leaves the point to be
+        re-derived. Nothing here read either field before.
+        """
+        fake.tool_memories[AGENT] = [
+            {
+                "memory_id": "tool-1",
+                "relativity": 0.69,
+                "tool_type": "ToolTrajectoryMemory",
+                "tool_value": "User task: widen the check. -> Execution action: edited _validate_params.",
+                "experience": "when a check rejects a numpy scalar, accept numbers.Integral instead.",
+            }
+        ]
+        hits = await backend.recall("types", agent_id=AGENT, top_k=5)
+        (tool,) = [h for h in hits if h.metadata["kind"] == "tool"]
+        assert tool.text == (
+            "User task: widen the check. -> Execution action: edited _validate_params.\n"
+            "when a check rejects a numpy scalar, accept numbers.Integral instead."
+        )
+        assert tool.score == 0.69
 
     async def test_delete_sends_memory_ids_alone(self, backend, fake):
         """One selector only: ``user_id`` beside ``memory_ids`` is refused by

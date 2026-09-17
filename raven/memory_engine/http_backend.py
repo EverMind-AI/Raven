@@ -23,7 +23,8 @@ Two decisions every subclass inherits:
   ``recall_session`` name theirs in ``user_id``; ``store`` may name one in
   ``metadata["user_id"]`` (a sub-agent's scope) and otherwise writes under the
   host's ``ServiceLocator.user_id``. A flat service has no agent track, so an
-  ``agent_id`` call is answered empty without a request.
+  ``agent_id`` call is answered empty without a request, unless the
+  subclass names an agent-track search of its own.
 """
 
 from __future__ import annotations
@@ -141,6 +142,18 @@ class HttpMemoryBackend:
     def _recall_call(self, query: str, top_k: int, owner: str) -> Call:
         raise NotImplementedError
 
+    def _agent_recall_call(self, query: str, top_k: int, owner: str) -> Call | None:
+        """The agent-track search, or ``None`` for a service that has no such thing.
+
+        Most of these services keep one undifferentiated pool, and answering
+        the agent call from it would hand the same rows back a second time
+        under a heading that claims they are something else. A service that
+        does distil the agent's own side of a conversation -- what was tried,
+        what it cost, the procedure that came out of it -- overrides this and
+        says where that lives.
+        """
+        return None
+
     def _parse_hits(self, body: Any) -> list[Memory]:
         raise NotImplementedError
 
@@ -204,13 +217,20 @@ class HttpMemoryBackend:
         agent_id: str | None = None,
         top_k: int,
     ) -> list[Memory]:
-        # Flat services have one track: the agent-track call is answered
-        # empty without a request, as is the caller bug of both-or-neither.
-        if (user_id is None) == (agent_id is None) or agent_id is not None:
+        # Exactly one owner: both-or-neither is a caller bug, answered empty.
+        if (user_id is None) == (agent_id is None):
             return []
-        if top_k <= 0 or not self._api_key or user_id is None:
+        if top_k <= 0 or not self._api_key:
             return []
-        reply = await self._send(self._recall_call(query, top_k, user_id), timeout=RECALL_TIMEOUT_S)
+        call = (
+            self._recall_call(query, top_k, user_id)
+            if user_id is not None
+            else self._agent_recall_call(query, top_k, str(agent_id))
+        )
+        # No agent track here: empty, and no request to find that out.
+        if call is None:
+            return []
+        reply = await self._send(call, timeout=RECALL_TIMEOUT_S)
         if self._effective_status(reply) != 200:
             self._warn("recall", reply)
             return []
