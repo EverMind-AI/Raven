@@ -60,7 +60,7 @@ Enable the agents you need during onboarding. See [`agents/README.md`](agents/RE
 <p align="center"><em>Raven-Code on Coding Benchmarks</em></p>
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/f4ee009a-d24f-4f11-85db-21e358b29104"><img src="https://github.com/user-attachments/assets/f4ee009a-d24f-4f11-85db-21e358b29104" alt="DataAgentBench (2026-08-24 Live): Raven-Code with Opus-5 achieves 0.8762 Pass@1" width="100%"></a>
+  <a href="https://github.com/user-attachments/assets/75f60aa2-3e2f-42fb-aa51-aa111bf078d0"><img src="https://github.com/user-attachments/assets/75f60aa2-3e2f-42fb-aa51-aa111bf078d0" alt="DataAgentBench (2026-08-24 Live): Raven-Code with Opus-5 achieves 0.8762 Pass@1" width="100%"></a>
 </p>
 
 <p align="center"><em>Raven-Code tops on DataAgentBench (2026-08-24 Live)</em></p>
@@ -70,7 +70,7 @@ Enable the agents you need during onboarding. See [`agents/README.md`](agents/RE
 **Raven-Design** performs **visual design**, turning ideas and content into polished visual deliverables. It creates presentations, brand assets, charts, diagrams, and web interfaces, refining layout, typography, and visual consistency to help users communicate clearly and bring their ideas to life.
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/1c8a4339-77f3-4579-85cc-359bc171739d"><img src="https://github.com/user-attachments/assets/1c8a4339-77f3-4579-85cc-359bc171739d" alt="PresentBench: Raven-Design, Claude Code, and public leaderboard scores" width="100%"></a>
+  <a href="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9"><img src="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9" alt="PresentBench: Raven-Design, Claude Code, and public leaderboard scores" width="100%"></a>
 </p>
 
 <p align="center"><em>Raven-Design on PresentBench</em></p>

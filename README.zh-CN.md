@@ -60,7 +60,7 @@ Raven 通过模块化架构构建了四个专业 Agent。每个 Agent 都由可�
 <p align="center"><em>Raven-Code 在编程基准测试中的表现</em></p>
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/f4ee009a-d24f-4f11-85db-21e358b29104"><img src="https://github.com/user-attachments/assets/f4ee009a-d24f-4f11-85db-21e358b29104" alt="DataAgentBench (2026-08-24 Live): Raven-Code with Opus-5 achieves 0.8762 Pass@1" width="100%"></a>
+  <a href="https://github.com/user-attachments/assets/75f60aa2-3e2f-42fb-aa51-aa111bf078d0"><img src="https://github.com/user-attachments/assets/75f60aa2-3e2f-42fb-aa51-aa111bf078d0" alt="DataAgentBench (2026-08-24 Live): Raven-Code with Opus-5 achieves 0.8762 Pass@1" width="100%"></a>
 </p>
 
 <p align="center"><em>Raven-Code 位居 DataAgentBench 榜首（2026-08-24 Live）</em></p>
@@ -70,7 +70,7 @@ Raven 通过模块化架构构建了四个专业 Agent。每个 Agent 都由可�
 **Raven-Design** 提供**视觉设计**能力，将想法与内容转化为精美的视觉作品。它支持演示文稿、品牌素材、图表、示意图和网页界面创作，通过持续优化布局、字体与视觉一致性，帮助用户清晰表达信息，将创意变为作品。
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/1c8a4339-77f3-4579-85cc-359bc171739d"><img src="https://github.com/user-attachments/assets/1c8a4339-77f3-4579-85cc-359bc171739d" alt="PresentBench: Raven-Design, Claude Code, and public leaderboard scores" width="100%"></a>
+  <a href="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9"><img src="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9" alt="PresentBench: Raven-Design, Claude Code, and public leaderboard scores" width="100%"></a>
 </p>
 
 <p align="center"><em>Raven-Design 在 PresentBench 上的表现</em></p>
