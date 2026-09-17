@@ -56,7 +56,9 @@ Raven 通过模块化架构构建了四个性能领先的 Agent。每个 Agent �
 
 Raven 为以下第三方 Agent 提供预设，方便你将它们的能力接入 Raven 的编排工作流。
 
-![Preset third-party agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, MiroThinker, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi](https://github.com/user-attachments/assets/a6121267-551f-432d-bd13-65bf7478387b)
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/a6121267-551f-432d-bd13-65bf7478387b" alt="Preset third-party agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, MiroThinker, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi">
+</p>
 
 ## 🚀 快速开始
 

@@ -57,7 +57,9 @@ Enable the agents you need during onboarding. See [`agents/README.md`](agents/RE
 
 Raven includes presets for these third-party agents, so you can bring their capabilities into its orchestration workflows.
 
-![Preset third-party agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, MiroThinker, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi](https://github.com/user-attachments/assets/a6121267-551f-432d-bd13-65bf7478387b)
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/a6121267-551f-432d-bd13-65bf7478387b" alt="Preset third-party agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, MiroThinker, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi">
+</p>
 
 ## 🚀 Quick Start
 
