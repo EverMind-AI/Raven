@@ -32,16 +32,14 @@ async function turnPart(
       'src/state/ctxChip': { set: () => {} },
       'src/lib/notifications': { show: () => {} },
       'src/state/session/registry': { touch: () => {} },
-    },
-    islands: {
-      transcript: {
+      'src/features/transcript/mount': {
         nudge: () => {},
         stopStream: () => {},
         ...stubs.transcript,
-        down: () => {},
         killStatus: () => {},
       },
-      workspace: { currentTurn: () => 1 },
+      'src/features/transcript/tail': { down: () => {} },
+      'src/features/workspace/store': { currentTurn: () => 1 },
     },
   })
   const runtime = (await import('./runtime')) as Runtime

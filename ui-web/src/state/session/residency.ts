@@ -13,7 +13,10 @@
  * host off `#stage` and files it on the runtime; coming back puts it back.
  */
 
-import { islands } from '../../features/registry'
+import { liveAnchor, setLiveAnchor } from '../../features/composer/mount'
+import { nudge, stopStream } from '../../features/transcript/mount'
+import { down as scrollTranscriptDown } from '../../features/transcript/tail'
+import { restore as wsRestoreSnapshot, snapshot as wsSnapshot } from '../../features/workspace/store'
 import { draw as drawBanner } from '../banner'
 import { current as sessionCurrent } from '../../lib/session'
 import { drawMeter, goPaint as goState, queueRestore, queueSnapshot, turn } from '../../features/composer/mount'
@@ -50,7 +53,7 @@ export function park(): void {
   const rt = viewRuntime()
   release()
   if (!turn.busy()) return
-  islands.transcript.stopStream()
+  stopStream()
   const s = sess(rt.key)
   if (s) s.status = 'run'
   rt.phase = turn.snapshot()
@@ -59,8 +62,8 @@ export function park(): void {
      away conversation's idle turn-live paint zeroes it -- without carrying it
      here, a turn ten minutes in read "2s" after a round trip through another
      conversation. */
-  rt.liveT0 = islands.composer.liveAnchor()
-  rt.ws = islands.workspace.snapshot()
+  rt.liveT0 = liveAnchor()
+  rt.ws = wsSnapshot()
   /* Asked for, not read off the panel's own bindings: this is where the pane
      state is kept, not where it is owned. */
   rt.pane = wsView()
@@ -80,8 +83,8 @@ export function resume(rt: SessionRuntime, apply?: (ev: unknown) => void): void 
   turn.restore(rt.phase); queueRestore(rt.queue)
   /* Before drawMeter below: its turn-live paint keeps a non-zero anchor, so the
      clock resumes from the turn's real start rather than from the switch. */
-  islands.composer.setLiveAnchor(rt.liveT0 || 0)
-  islands.workspace.restore(rt.ws as WorkspaceSnapshot)
+  setLiveAnchor(rt.liveT0 || 0)
+  wsRestoreSnapshot(rt.ws as WorkspaceSnapshot)
   if (rt.pane) wsRestore(rt.pane.tab, rt.pane.picked)
   const s = sess(sessionCurrent())
   if (s && s.status === 'run') s.status = null
@@ -90,8 +93,8 @@ export function resume(rt: SessionRuntime, apply?: (ev: unknown) => void): void 
   if (apply) {
     backlog.forEach((ev) => { try { apply(ev) } catch { /* one bad frame must not eat the rest */ } })
   }
-  islands.transcript.nudge()
+  nudge()
   drawMeter(); goState(); sessionDraw(); drawBanner()
   if (typeof drawWs === 'function' && wsOpen) drawWs()
-  islands.transcript.down()
+  scrollTranscriptDown()
 }

@@ -13,7 +13,8 @@
 
 import { view as skillView } from '../skills/tab'
 import { T } from '../../i18n/t'
-import { islands } from '../registry'
+import { plugHost } from '../hosts'
+import * as plugins from './store'
 import * as caps from '../../state/caps'
 import * as page from '../../state/page'
 import { ds } from '../../state/sources'
@@ -33,9 +34,9 @@ const attnCount = (): number => ds('plugins').rows().filter(needsAttn).length
 export function drawPlugTab(): void {
   const box = document.getElementById('capsBody') as HTMLElement
   box.innerHTML = ''
-  box.appendChild(islands.plugins.host)
+  box.appendChild(plugHost)
   const title = T('gui.tab.plugins')
-  const view = islands.plugins.view()
+  const view = plugins.view()
   caps.chrome({
     title: view === 'installed' ? T('gui.plug.installed_title') : title,
     label: title,
@@ -45,17 +46,17 @@ export function drawPlugTab(): void {
     bar: view === 'installed' ? 'none' : '',
   })
   syncInstalledButton()
-  islands.plugins.redraw()
+  plugins.redraw()
   /* The first reveal fetches; a boot-time draw of the closed page must not fire
      a market search nobody asked for. */
-  if (page.get() === 'capsPage') islands.plugins.searchIfIdle()
+  if (page.get() === 'capsPage') plugins.searchIfIdle()
 }
 
 export function syncInstalledButton(): void {
   const attn = attnCount()
   caps.installedButton('plugin', {
-    hidden: caps.get().tab !== 'plugin' || islands.plugins.view() === 'installed',
-    label: T('gui.plug.installed_n', { n: islands.plugins.installedCount() }),
+    hidden: caps.get().tab !== 'plugin' || plugins.view() === 'installed',
+    label: T('gui.plug.installed_n', { n: plugins.installedCount() }),
     badge: attn ? String(attn) : null,
   })
 }
@@ -64,7 +65,7 @@ export function syncInstalledButton(): void {
    covers both tabs, which is why it is the last step of either draw. */
 export function syncHero(): void {
   let title = ''
-  if (caps.get().tab === 'plugin' && islands.plugins.view() === 'market') title = T('gui.plug.hero')
+  if (caps.get().tab === 'plugin' && plugins.view() === 'market') title = T('gui.plug.hero')
   else if (caps.get().tab === 'skill' && skillView === 'market') title = T('gui.hub.hero')
   caps.hero(title)
 }
@@ -75,11 +76,11 @@ export function install(): void {
   caps.onDraw({ plugin: drawPlugTab, pluginButton: syncInstalledButton, hero: syncHero })
 
   caps.onTab(() => {
-    islands.plugins.reset()
+    plugins.reset()
     caps.bar('')
   })
 
   page.subscribe(() => {
-    if (page.get() !== 'capsPage') { islands.plugins.drawerClosed(); caps.bar('') }
+    if (page.get() !== 'capsPage') { plugins.drawerClosed(); caps.bar('') }
   })
 }

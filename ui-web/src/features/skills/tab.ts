@@ -15,7 +15,8 @@ import { T } from '../../i18n/t'
 import * as caps from '../../state/caps'
 import * as page from '../../state/page'
 import { ds } from '../../state/sources'
-import { islands } from '../registry'
+import { skillsHost } from '../hosts'
+import * as skills from './store'
 
 /* Mirror of the island's view, read by the plugin tab's hero sync: the hero
    covers both tabs and is the last step of either draw. */
@@ -25,7 +26,7 @@ export function drawSkillTab(): void {
   const box = document.getElementById('capsBody') as HTMLElement
   box.innerHTML = ''
   const title = T('gui.tab.skills')
-  const installed = islands.skills.view() === 'installed'
+  const installed = skills.view() === 'installed'
   caps.chrome({
     title: installed ? T('gui.plug.installed_title') : title,
     label: title,
@@ -34,17 +35,17 @@ export function drawSkillTab(): void {
     advHidden: true,
     bar: installed ? 'none' : '',
   })
-  islands.skills.attach(box)
-  islands.skills.redraw()
+  box.appendChild(skillsHost)
+  skills.redraw()
   /* The first reveal fetches; a boot-time draw of the closed page must not fire
      a hub search nobody asked for. */
-  if (page.get() === 'capsPage') islands.skills.ensureSearch()
+  if (page.get() === 'capsPage') skills.ensureSearch()
   syncInstalledButton()
 }
 
 export function syncInstalledButton(): void {
   caps.installedButton('skill', {
-    hidden: caps.get().tab !== 'skill' || islands.skills.view() === 'installed',
+    hidden: caps.get().tab !== 'skill' || skills.view() === 'installed',
     label: T('gui.plug.installed_n', { n: ds('skills').installed().length }),
     badge: null,
   })
@@ -60,18 +61,18 @@ export function install(): void {
   /* Switching module drops what this tab had. Registered before the plugin
      tab's, which is the order the two decorators' effects were visible in. */
   caps.onTab(() => {
-    islands.skills.reset()
+    skills.reset()
   })
 
   page.subscribe(() => {
-    if (page.get() !== 'capsPage') islands.skills.dropDrawer()
+    if (page.get() !== 'capsPage') skills.dropDrawer()
   })
 
   /* The island owns the view; the chrome follows it from out here. A view flip
      redraws the whole tab (title, bar, hero) through the dispatch; any other
      change only needs the installed count refreshed. */
-  islands.skills.subscribe(() => {
-    const v = islands.skills.view()
+  skills.subscribe(() => {
+    const v = skills.view()
     if (v !== view) { view = v; if (caps.get().tab === 'skill') caps.draw(); return }
     syncInstalledButton()
   })

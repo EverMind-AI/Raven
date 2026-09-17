@@ -30,7 +30,7 @@ import { onResize as dropBars, onScroll as barsOnScroll } from '../chrome/behavi
 import { trap as linkTrap } from '../features/browser/store'
 import { fitField, parkDraftNow } from '../features/composer/mount'
 import { composing } from '../features/composer/store'
-import { islands } from '../features/registry'
+import { open as openSettings } from '../features/settings/store'
 import { T } from '../i18n/t'
 import { isMac } from '../lib/platform'
 import { onContextMenu } from './contextMenu'
@@ -105,7 +105,7 @@ function onSettingsKey(e: KeyboardEvent): void {
   if (e.key !== ',' || !(isMac() ? e.metaKey : e.ctrlKey)) return
   e.preventDefault()
   if (settingsIsOpen()) { closeSettings(); return }
-  void islands.settings.open()
+  void openSettings()
 }
 
 /* Its own entry point, because the order table it reads has a gate of its own

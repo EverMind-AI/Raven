@@ -38,8 +38,10 @@ async function opener(calls: unknown[][], run: unknown) {
       'src/features/dag/open': {
         dagOpenNode: (runId: string, node: { id: string }) => calls.push(['node', runId, node.id]),
       },
+      'src/features/dag/mount': {
+        run: (key: string) => (key === 'a' ? run : null),
+      },
     },
-    islands: { dag: { run: (key: string) => (key === 'a' ? run : null) } },
   })
   const { setSources, sources } = await import('../../state/sources')
   setSources({ transcript: {}, composer: {}, sessions: {} } as unknown as Partial<Sources>)
@@ -87,15 +89,15 @@ async function nodeHarness({ rows = [{ kind: 'spawn', agent: 'raven', label: 'qc
       },
       'src/lib/session': { current: () => 's1' },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
-    },
-    islands: {
-      subagents: {
+      'src/features/subagents/store': {
         openDagNode: (run: string, node: { id: string }) => calls.push(['openDagNode', run, node.id]),
         rows: () => rows,
         openRow: (row: SpawnRow) => calls.push(['openRow', row.label]),
         refresh: () => calls.push(['refresh']),
       },
-      workspace: { openDeskTab: (tab: string) => calls.push(['openDeskTab', tab]) },
+      'src/features/workspace/deskStore': {
+        openDeskTab: (tab: string) => calls.push(['openDeskTab', tab]),
+      },
     },
   })
   await fakeGateway(() => Promise.resolve({}))

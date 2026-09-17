@@ -22,7 +22,7 @@ import { show as toast } from '../../state/toast'
 import { pick as langPick } from '../../state/lang/pick'
 import { staging } from '../../state/session/staging'
 import { APP_VERSION, appVersionSet, askUpgrade, showUpNote } from '../../app/updates'
-import { islands } from '../registry'
+import { redraw as redrawSettings } from './store'
 
 /* The version check the rail-foot notice already does, on demand. No new
    backend: system.version carries the answer. */
@@ -36,7 +36,7 @@ export async function checkUpdate(btn: HTMLButtonElement): Promise<void> {
     if (v.raven_version) appVersionSet(v.raven_version)
     if (hasUpdateFlag(v)) {
       showUpNote('ver', (v as { latest_version?: string }).latest_version)
-      islands.settings.redraw()
+      redrawSettings()
       askUpgrade()
       return
     }

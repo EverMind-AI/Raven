@@ -23,7 +23,12 @@ import { readFileSync } from 'node:fs'
 
 import { openApproval } from '../features/composer/approve'
 import * as turn from '../features/composer/turn'
-import { islands } from '../features/registry'
+import * as connections from '../features/connections/store'
+import * as cron from '../features/cron/store'
+import * as knowledge from '../features/knowledge/store'
+import * as memory from '../features/memory/store'
+import * as playbooks from '../features/playbooks/store'
+import * as xa from '../features/xa/store'
 import { _resetForTests as sessionReset, setCurrent } from '../lib/session'
 import * as find from './find'
 import { installEscapeChain } from './globalListeners'
@@ -84,35 +89,19 @@ const PAGE = [
   '<button id="railShow"></button>',
 ].join('')
 
-/* What each layer's close lands on. Every island verb the table reaches is a
-   member of the island bag, which is an object, so a stand-in is an
-   assignment rather than a mocked module -- where a mocked module would be a
-   second copy of half the page. Two of these are not probes but quiet
-   stand-ins for
-   verbs a close reaches through: the cron sheet and the rail's marks, which the
-   page store and the settings dialog call on their way out. */
+/* What each layer's close lands on. Every island verb the table reaches is one
+   export of one store, stood in for one name at a time -- so the rest of that
+   store answers as it really does, and a close that reaches past its own verb
+   is visible. */
 const spies = {
   connDialog: vi.fn(),
   connClose: vi.fn(),
   cronClose: vi.fn(),
-  cronSheet: vi.fn(),
   memClose: vi.fn(),
   pbClose: vi.fn(),
   kbClose: vi.fn(),
   xaClose: vi.fn(),
-  railMark: vi.fn(),
   stop: vi.fn(),
-}
-const real = {
-  connDialog: islands.connections.closeDialog,
-  connClose: islands.connections.close,
-  cronClose: islands.cron.close,
-  cronSheet: islands.cron.closeSheet,
-  memClose: islands.memory.close,
-  pbClose: islands.playbooks.close,
-  kbClose: islands.knowledge.close,
-  xaClose: islands.xa.close,
-  railMark: islands.rail.markNew,
 }
 
 /* Which button was pressed on the two sheets that are answered by a click. */
@@ -166,15 +155,15 @@ beforeEach(() => {
   document.getElementById('cfNo')!.onclick = () => { cancelled.push('cfNo') }
   document.getElementById('jobNo')!.onclick = () => { cancelled.push('jobNo') }
   for (const spy of Object.values(spies)) spy.mockClear()
-  islands.connections.closeDialog = spies.connDialog
-  islands.connections.close = spies.connClose
-  islands.cron.close = spies.cronClose
-  islands.cron.closeSheet = spies.cronSheet
-  islands.memory.close = spies.memClose
-  islands.playbooks.close = spies.pbClose
-  islands.knowledge.close = spies.kbClose
-  islands.xa.close = spies.xaClose
-  islands.rail.markNew = spies.railMark
+  /* Each layer's own close, stood in for one export at a time: what is under
+     test is which one the key reaches, not what any of them does. */
+  vi.spyOn(connections, 'closeDialog').mockImplementation(spies.connDialog)
+  vi.spyOn(connections, 'close').mockImplementation(spies.connClose)
+  vi.spyOn(cron, 'close').mockImplementation(spies.cronClose)
+  vi.spyOn(memory, 'close').mockImplementation(spies.memClose)
+  vi.spyOn(playbooks, 'closePage').mockImplementation(spies.pbClose)
+  vi.spyOn(knowledge, 'close').mockImplementation(spies.kbClose)
+  vi.spyOn(xa, 'close').mockImplementation(spies.xaClose)
   sources.composer = { stop: spies.stop } as unknown as ComposerSource
   settingsDialog.close()
   /* The row's flag outlives a case now that it is a store's rather than the
@@ -187,13 +176,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  Object.assign(islands.connections, { closeDialog: real.connDialog, close: real.connClose })
-  Object.assign(islands.cron, { close: real.cronClose, closeSheet: real.cronSheet })
-  islands.memory.close = real.memClose
-  islands.playbooks.close = real.pbClose
-  islands.knowledge.close = real.kbClose
-  islands.xa.close = real.xaClose
-  islands.rail.markNew = real.railMark
+  vi.restoreAllMocks()
   resetSources()
   resetTranslator()
   sessionReset()

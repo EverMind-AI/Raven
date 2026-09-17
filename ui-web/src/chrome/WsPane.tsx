@@ -38,7 +38,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react'
 import { composing } from '../features/composer/store'
-import { islands } from '../features/registry'
+import { toggleDesk } from '../features/workspace/deskStore'
 import * as lang from '../state/lang'
 import * as ws from '../state/ws'
 
@@ -63,7 +63,7 @@ function useOutsideControls(): void {
     }
     pane?.addEventListener('keydown', keydown)
     const toggle = document.getElementById('wsBtn')
-    if (toggle) toggle.onclick = () => islands.workspace.toggleDesk()
+    if (toggle) toggle.onclick = () => toggleDesk()
     return () => {
       pane?.removeEventListener('keydown', keydown)
       if (toggle) toggle.onclick = null

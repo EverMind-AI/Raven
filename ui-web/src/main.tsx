@@ -20,15 +20,16 @@ import * as rail from './features/rail/store'
 import { Skeleton as SkillsSkeleton, SkillsApp } from './features/skills/SkillsPage'
 import { WsApp } from './features/workspace/WorkspacePage'
 import { DeskApp } from './features/workspace/DeskPage'
-import * as desk from './features/workspace/DeskPage'
+import * as desk from './features/workspace/deskStore'
 import * as workspace from './features/workspace/store'
+import * as subagents from './features/subagents/store'
 import { XaApp } from './features/xa/XaPage'
 import { SettingsApp } from './features/settings/SettingsPage'
 import * as find from './state/find'
 import * as panes from './chrome/behaviour/panes'
 import * as scrollbars from './chrome/behaviour/scrollbars'
 import * as session from './lib/session'
-import { plugHost, skillsHost, skillsSkeletonHost } from './features/registry'
+import { plugHost, skillsHost, skillsSkeletonHost } from './features/hosts'
 import * as pluginsTab from './features/plugins/tab'
 import * as settingsChrome from './features/settings/chrome'
 import * as skillsTab from './features/skills/tab'
@@ -79,6 +80,16 @@ installGlobalListeners()
    to the islands that ask it something rather than imported by them
    (state/wsPanel.ts). */
 setWsPanel(ws)
+
+/* The desk, handed to the two island stores that open something in it. Handed
+   rather than reached for: features/workspace/deskStore imports both of them
+   back and subscribes to one as it evaluates, so an import the other way would
+   run that subscription against a half-built module -- which is also why the
+   panel those stores ask about is handed to them (state/wsPanel.ts). Here,
+   before the first frame, because either store may be asked to open a pane
+   from the moment the page is on screen. */
+subagents.setAgentPane({ openAgent: desk.openDeskAgent, openAgentRecord: desk.openDeskAgentRecord })
+workspace.setDeskOpener(desk.openDeskFile)
 
 
 session.onChange(() => {

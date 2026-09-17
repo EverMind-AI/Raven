@@ -36,7 +36,8 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 
 import { composing } from '../features/composer/store'
-import { islands } from '../features/registry'
+import * as plugins from '../features/plugins/store'
+import * as skills from '../features/skills/store'
 import * as caps from '../state/caps'
 import * as lang from '../state/lang'
 
@@ -78,11 +79,11 @@ function Search(): JSX.Element {
       const value = el.value.trim()
       const tab = caps.get().tab
       if (tab === 'plugin') {
-        islands.plugins.setQuery(value)
+        plugins.setQuery(value)
         return
       }
       if (tab === 'skill') {
-        islands.skills.setQuery(value)
+        skills.setQuery(value)
         return
       }
       caps.setQuery(el.value.trim().toLowerCase())
@@ -94,7 +95,7 @@ function Search(): JSX.Element {
       if (composing(e)) return
       if (e.key !== 'Enter' || caps.get().tab !== 'skill') return
       e.preventDefault()
-      islands.skills.searchNow(el.value.trim())
+      skills.searchNow(el.value.trim())
     }
     el.addEventListener('input', typed)
     el.addEventListener('keydown', key)
@@ -153,8 +154,8 @@ function FilterBar(): JSX.Element {
           </button>
         ))}
       </div>
-      {s.skill ? <InstalledButton btn={s.skill} toggle={() => islands.skills.toggleView()} /> : null}
-      {s.plugin ? <InstalledButton btn={s.plugin} toggle={() => islands.plugins.toggleView()} /> : null}
+      {s.skill ? <InstalledButton btn={s.skill} toggle={() => skills.toggleView()} /> : null}
+      {s.plugin ? <InstalledButton btn={s.plugin} toggle={() => plugins.toggleView()} /> : null}
     </>
   )
 }

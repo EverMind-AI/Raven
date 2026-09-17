@@ -46,7 +46,10 @@ async function harness({ rows = [] as Row[], current = 'tui:open' as string | nu
         drawMeter: () => {},
         goPaint: () => {},
       },
-      'src/features/rail/store': { draw: () => {} },
+      'src/features/rail/store': {
+        draw: () => {},
+        reconcileRows: (_cur: Row[], next: Row[]) => ({ rows: next, currentMissing: false }),
+      },
       'src/state/session/rows': {
         sess: (id: string) => rows.find((r) => r.id === id),
         replace: () => {},
@@ -74,9 +77,6 @@ async function harness({ rows = [] as Row[], current = 'tui:open' as string | nu
       },
       'src/features/rail/source': { touchSession: (id: string) => seen.touched.push(id) },
       'src/state/session/stages': { dispatch: (ev: unknown) => seen.events.push(ev) },
-    },
-    islands: {
-      rail: { reconcile: (_cur: Row[], next: Row[]) => ({ rows: next, currentMissing: false }) },
     },
   })
   const pipeline = (await import('./pipeline')) as Pipeline

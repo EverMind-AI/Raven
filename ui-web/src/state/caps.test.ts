@@ -8,8 +8,9 @@
  * effects, the container attributes, the hero's position, and the names the
  * other layers still call.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { plugHost, skillsHost } from '../features/hosts'
 import { T } from '../i18n/t'
 import { mountPageRoot } from '../test/pageRoot'
 
@@ -42,6 +43,7 @@ afterEach(() => {
   unmount()
   unmount = () => {}
   document.body.innerHTML = ''
+  vi.restoreAllMocks()
 })
 
 describe('the capabilities page state', () => {
@@ -201,32 +203,27 @@ describe('the capabilities page state', () => {
 })
 
 /* The chrome half of the two tabs' draws, which used to be six writes by id in
-   each of them (demo/152-skills.js, demo/153-plugins.js). The islands and the
-   sources are stood in for; what is asserted is the chrome each view decides.
-   Last in the file, because standing in for the island bag is module state. */
+   each of them (demo/152-skills.js, demo/153-plugins.js). The two island stores
+   and the sources are stood in for; what is asserted is the chrome each view
+   decides. The hosts are the real ones (src/features/hosts.ts): a draw appends
+   the node the island's root renders into, and which node that is is the thing
+   a tab must not get wrong. */
 describe('the two draws the dispatch reaches', () => {
-  const skillHost = document.createElement('div')
-  const plugHost = document.createElement('div')
-  const views = { skill: 'market', plugin: 'market' }
+  const views: { skill: 'installed' | 'market'; plugin: string } = { skill: 'market', plugin: 'market' }
 
   beforeEach(async () => {
     views.skill = 'market'
     views.plugin = 'market'
-    const { islands } = await import('../features/registry')
-    Object.assign(islands.skills, {
-      view: () => views.skill,
-      attach: (box: Element) => box.appendChild(skillHost),
-      redraw: () => {},
-      ensureSearch: () => {},
-      subscribe: () => () => {},
-    })
-    Object.assign(islands.plugins, {
-      view: () => views.plugin,
-      host: plugHost,
-      redraw: () => {},
-      installedCount: () => 3,
-      searchIfIdle: () => {},
-    })
+    const skills = await import('../features/skills/store')
+    const plugins = await import('../features/plugins/store')
+    vi.spyOn(skills, 'view').mockImplementation(() => views.skill)
+    vi.spyOn(skills, 'redraw').mockImplementation(() => {})
+    vi.spyOn(skills, 'ensureSearch').mockImplementation(() => {})
+    vi.spyOn(skills, 'subscribe').mockImplementation(() => () => {})
+    vi.spyOn(plugins, 'view').mockImplementation(() => views.plugin)
+    vi.spyOn(plugins, 'redraw').mockImplementation(() => {})
+    vi.spyOn(plugins, 'installedCount').mockImplementation(() => 3)
+    vi.spyOn(plugins, 'searchIfIdle').mockImplementation(() => {})
     const { setSources } = await import('./sources')
     setSources({
       skills: { installed: () => [{}, {}] },
@@ -247,7 +244,7 @@ describe('the two draws the dispatch reaches', () => {
     expect(bar().style.display).toBe('')
     /* The island's host, under a box this cleared first. */
     expect(el('capsBody').children).toHaveLength(1)
-    expect(el('capsBody').firstElementChild).toBe(skillHost)
+    expect(el('capsBody').firstElementChild).toBe(skillsHost)
     expect(caps.get().skill).toEqual({ hidden: false, label: T('gui.plug.installed_n', { n: 2 }), badge: null })
   })
 

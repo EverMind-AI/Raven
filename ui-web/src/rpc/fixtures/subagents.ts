@@ -13,8 +13,7 @@
 import type { Overrides } from '../overrideTransport'
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
 import type { ResultOf } from '../generated'
-
-import { islands } from '../../features/registry'
+import type { PushMethod } from '../notifications'
 
 type Row = ResultOf<'subagents.list'>['rows'][number]
 type InstanceRow = ResultOf<'subagents.instances'>['instances'][number]
@@ -150,7 +149,17 @@ export function deskDemoOverrides(
   clock: () => number,
   schedule: (ms: number, fn: () => void) => void,
   roster: () => Promise<string[]>,
+  push: (method: PushMethod, params: unknown) => void,
 ): Overrides {
+  /* The subscription each conversation's frames ride, read off the answer the
+     transport underneath gave: a direct turn's events are pushed on it, which
+     is what the lane does on a live page (see state/session/stages.ts). */
+  const subs = new Map<string, string>()
+  const notify = (sessionKey: string, target: unknown, type: string, payload: object): void => {
+    const subscription = subs.get(sessionKey)
+    if (!subscription) return
+    push('event', { subscription_id: subscription, event: { type, payload: { ...payload, target } } })
+  }
   const now = clock()
   const instances: InstanceRow[] = [
     { sessionKey: 'desk-demo', agent: 'research-raven', handle: 'market-map-a19f', kind: 'playbook', status: 'running', runId: '市场调研', nodeId: '竞品功能调研', createdAtMs: now - 420000, updatedAtMs: now, turnStartedAtMs: now - 96000, resumable: true },
@@ -279,13 +288,21 @@ export function deskDemoOverrides(
       const turns = history.get(target.handle) || []
       turns.push({ call_id: `${target.handle}-${clock()}-u`, role: 'user', content: text, at_ms: clock() })
       history.set(target.handle, turns)
-      islands.subagents.directEvent(target, 'message.start', { content: text })
+      notify(p.session_key, target, 'message.start', { content: text })
       schedule(1200, () => {
         turns.push({ call_id: `${target.handle}-${clock()}-a`, role: 'assistant', content: `已收到并完成：${text}`, at_ms: clock() })
         row.status = 'completed'; row.updatedAtMs = clock()
-        islands.subagents.directEvent(target, 'message.complete', {})
+        notify(p.session_key, target, 'message.complete', {})
       })
       return { turn_id: `direct-${clock()}`, accepted: true, naming: false }
+    },
+    /* Not answered here, only watched: the page opens one subscription per
+       conversation and every frame names it, so the direct turn above has to
+       push on the one this conversation really got. */
+    'turn.subscribe': async (p, next) => {
+      const r = await next()
+      if (r && r.subscription_id) subs.set(p.session_key, r.subscription_id)
+      return r
     },
   }
 }

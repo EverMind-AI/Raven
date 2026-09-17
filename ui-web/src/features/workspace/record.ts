@@ -12,14 +12,15 @@
  * the redraw -- is the page's (src/state/ws.ts), not this module's.
  */
 
-import { islands } from '../registry'
+import * as hunks from './hunks'
+import { shared as workspaceShared } from './store'
 import { T } from '../../i18n/t'
 import { shortPath } from './source'
 import { panel } from '../../state/wsPanel'
 
 import type { WsChange, WsHunk, WsShared } from './types'
 
-const record = (): WsShared => islands.workspace.shared()
+const record = (): WsShared => workspaceShared()
 
 /* The two front ends hand over different shapes -- the live RPC gives the
    whole argument object, a replayed call gives the one string it displays.
@@ -65,9 +66,9 @@ export function wsOnTool(name: string, args: unknown, _silent?: boolean): void {
   const path = (a.path || a.file_path || '') as string
   let hit: WsChange | null = null
   if (name === 'edit_file' && path) {
-    hit = wsRecordChange(path, 'edit', islands.workspace.hunkFromEdit(a.old_text as string, a.new_text as string))
+    hit = wsRecordChange(path, 'edit', hunks.fromEdit(a.old_text as string, a.new_text as string))
   } else if (name === 'write_file' && path) {
-    hit = wsRecordChange(path, 'write', islands.workspace.hunkFromWrite(a.content as string))
+    hit = wsRecordChange(path, 'write', hunks.fromWrite(a.content as string))
   } else if (name === 'web_fetch' && a.url) {
     WS.urls.unshift({ url: String(a.url), kind: 'fetch', at: T('gui.sess.just_now') })
   } else if (name === 'web_search' && a.query) {
@@ -94,7 +95,7 @@ export function wsOnToolDone(
     const path = (a.path || a.file_path || '') as string
     const c = WS.changes.find((x) => x.key === path && x.turn === WS.turn)
     if (c) {
-      const h = islands.workspace.hunkFromUnified(diff)
+      const h = hunks.fromUnified(diff)
       const stale = c.hunks.pop()
       if (stale) { c.add -= stale.add; c.del -= stale.del }
       c.hunks.push(h); c.add += h.add; c.del += h.del

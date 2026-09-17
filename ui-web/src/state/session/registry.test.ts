@@ -58,7 +58,17 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
         pitch: () => { state.fresh = '1'; calls.push(['pitch']) },
         unpitch: () => { state.fresh = null; calls.push(['unpitch']) },
       },
-      'src/features/rail/store': { markNew: () => {}, draw: () => calls.push(['sessionDraw']) },
+      'src/features/rail/store': {
+        markNew: () => {},
+        draw: () => calls.push(['sessionDraw']),
+        /* What the heading held when the editor was ended, so the order is
+           assertable: ending it has to come before anything reads or writes
+           h1#title, and while one is open that id resolves to nothing. */
+        endRename: () => {
+          calls.push(['endRename', boxes['#title'] ? boxes['#title']!.textContent : null])
+          editor.commit()
+        },
+      },
       'src/state/session/rows': {
         sess: (id: string) => (rows || []).find((r) => r.id === id),
         open: (s: Row) => api.switchTo!(s as SessRow),
@@ -96,28 +106,17 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
         resume: () => calls.push(['restoreTurn']),
       },
       'src/features/workspace/source': { wsSetRoot: (root: string) => calls.push(['wsSetRoot', root]) },
-    },
-    islands: {
       /* The streaming buffer the turn state resets through. */
-      transcript: {
+      'src/features/transcript/mount': {
         nudge: () => {},
         stopStream: () => {},
         killStatus: () => {},
         status: (text: string) => calls.push(['showStatus', text]),
       },
-      workspace: { loadDeliveries: (id: string) => calls.push(['loadDeliveries', id]) },
-      view: {
+      'src/features/workspace/store': { loadDeliveries: (id: string) => calls.push(['loadDeliveries', id]) },
+      'src/lib/resume': {
         resume: (id: string) => calls.push(['viewResume', id]),
         refreshDag: (id: string) => calls.push(['viewRefreshDag', id]),
-      },
-      /* What the heading held when the editor was ended, so the order is
-         assertable: ending it has to come before anything reads or writes
-         h1#title, and while one is open that id resolves to nothing. */
-      rail: {
-        endRename: () => {
-          calls.push(['endRename', boxes['#title'] ? boxes['#title']!.textContent : null])
-          editor.commit()
-        },
       },
     },
   })

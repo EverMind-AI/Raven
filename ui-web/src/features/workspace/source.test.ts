@@ -10,22 +10,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   hostIsLocal, liveLinkTargetOf, livePathOf, relToWorkspace, relToWsRoot, setShortener, wsSetRoot,
 } from './source'
-import { islands } from '../registry'
+import * as store from './store'
 
 const local = (hostname: string): void => {
   vi.spyOn(globalThis, 'location', 'get').mockReturnValue({ hostname } as Location)
 }
 
-let changesBefore: typeof islands.workspace.changes
-
 beforeEach(() => {
-  changesBefore = islands.workspace.changes
   wsSetRoot('')
   setShortener((p) => p)
 })
 
 afterEach(() => {
-  islands.workspace.changes = changesBefore
   vi.restoreAllMocks()
 })
 
@@ -101,13 +97,13 @@ describe('a bare path in prose', () => {
   /* The second provable case: Raven touched that file this session, wherever
      it lives. Everything else stays plain text. */
   it('links a file this session changed, and nothing else', () => {
-    islands.workspace.changes = () => [{ key: '/elsewhere/report.md' }] as ReturnType<typeof islands.workspace.changes>
+    vi.spyOn(store, 'changes').mockReturnValue([{ key: '/elsewhere/report.md' }] as ReturnType<typeof store.changes>)
     expect(livePathOf('/elsewhere/report.md')).toBe('/elsewhere/report.md')
     expect(livePathOf('/elsewhere/other.md')).toBe(null)
   })
 
   it('matches a changed file by the short name the panel shows it under', () => {
-    islands.workspace.changes = () => [{ key: '/repo/src/a.ts' }] as ReturnType<typeof islands.workspace.changes>
+    vi.spyOn(store, 'changes').mockReturnValue([{ key: '/repo/src/a.ts' }] as ReturnType<typeof store.changes>)
     setShortener((p) => p.replace('/repo/', ''))
     expect(livePathOf('src/a.ts')).toBe('/repo/src/a.ts')
   })
@@ -191,17 +187,15 @@ async function panel() {
       'src/i18n/t': {
         T: (key: string) => key,
       },
-    },
-    islands: {
+      'src/features/workspace/store': { shared: () => shared },
       /* Three tellable hunks: which builder a replayed call reached for, and
          whether the tool's own diff replaced the guess, are both read off the
          row rather than off a spy -- the record and the replay are one module
          now, so a spy could only stand in for one of them. */
-      workspace: {
-        shared: () => shared,
-        hunkFromEdit: () => ({ add: 1, del: 0, rows: ['guessed'] }),
-        hunkFromWrite: () => ({ add: 2, del: 0, rows: ['whole file'] }),
-        hunkFromUnified: (diff: string) => ({ add: 5, del: 3, rows: [diff] }),
+      'src/features/workspace/hunks': {
+        fromEdit: () => ({ add: 1, del: 0, rows: ['guessed'] }),
+        fromWrite: () => ({ add: 2, del: 0, rows: ['whole file'] }),
+        fromUnified: (diff: string) => ({ add: 5, del: 3, rows: [diff] }),
       },
     },
   })

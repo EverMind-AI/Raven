@@ -14,9 +14,7 @@ import * as seen from './seen'
 import * as workspace from './store'
 
 import { setCurrent } from '../../lib/session'
-/* The wiring main.tsx gets from this import: the desk's file opener is handed
-   to the workspace store here, and `openDelivery` reaches the desk through it. */
-import '../registry'
+import { installDeskHandoff } from '../../test/deskHandoff'
 import { resetSources, setSources, sources } from '../../state/sources'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
@@ -25,6 +23,10 @@ import * as pageStore from '../../state/page'
 import { installWsPanel } from '../../test/wsPanelHarness'
 import type { AgentsSource, InstanceRow } from '../subagents/types'
 import type { WorkspaceSource, WsChange } from './types'
+
+/* The wiring src/main.tsx does: the desk's file opener is handed to the
+   workspace store there, and `openDelivery` reaches the desk through it. */
+installDeskHandoff()
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 

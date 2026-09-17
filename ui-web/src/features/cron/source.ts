@@ -8,7 +8,8 @@ import type { CronJob, CronDraft, CronRun, CronSource } from './types'
 import type { ParamsOf, ResultOf } from '../../rpc/generated'
 
 import { cronExprHuman } from './humanize'
-import { islands } from '../registry'
+import { close as closeCronPage } from './store'
+import { draw as drawSessions } from '../rail/store'
 import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
 import { setCurrent as sessionSet } from '../../lib/session'
@@ -128,14 +129,14 @@ export const cronSource: CronSource = {
     .then(() => toast(t('gui.cron.triggered_x', { name: j.name })))
     .catch((e) => toast(t('gui.op.trigger_failed', { detail: e.message || e }))),
   openRun: async (j) => {
-    islands.cron.close()
+    closeCronPage()
     const rail = ds('sessions')
     const s = { id: `cron:${j.id}`, title: j.name, last: '', when: '',
       at: Math.floor(Date.now() / 1000), run: null, live: true, from: 'cron' }
     const rows = rail.snapshot().rows
     if (!rows.find((row) => row.id === s.id)) rows.unshift(s)
     sessionSet(s.id)
-    islands.rail.draw()
+    drawSessions()
     rail.open(s)
   },
 }

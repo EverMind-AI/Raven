@@ -36,7 +36,11 @@ import {
   proseSource, setHostPlatformReader, setShortener, workspaceSource,
 } from '../features/workspace/source'
 import { xaSource } from '../features/xa/source'
-import { islands } from '../features/registry'
+import { closeDialog as closeConnDialog } from '../features/connections/store'
+import { closeSheet as closeCronSheet } from '../features/cron/store'
+import { onEvent as pluginsEvent } from '../features/plugins/store'
+import { markNew } from '../features/rail/store'
+import { shared as workspaceShared } from '../features/workspace/store'
 import { setFault as setMemFault } from '../state/banner'
 import { show as toast } from '../state/toast'
 import { current as sessionCurrent } from '../lib/session'
@@ -167,7 +171,7 @@ export function installSources(): void {
      (features/workspace/record.ts). The transcript counts it the same way over
      the same payload. */
   sources.artifacts = {
-    changes: (turn) => islands.workspace.shared().changes.filter((c) => c.turn === turn),
+    changes: (turn) => workspaceShared().changes.filter((c) => c.turn === turn),
   }
 
   /* Files are uploaded into <workspace>/uploads and handed to the agent as
@@ -222,10 +226,10 @@ function onMcpStatus(frame: unknown): void {
     // ext.list) -- coalesce the reload; startup syncs fire one event per server.
     clearTimeout(pmExtSoon)
     pmExtSoon = setTimeout(() => loadExt()
-      .then(() => islands.plugins.event({ kind: 'rows' }))
+      .then(() => pluginsEvent({ kind: 'rows' }))
       .catch(() => {}), 250)
   }
-  islands.plugins.event({
+  pluginsEvent({
     kind: 'status', name: p.name, state: p.state, tool_count: p.tool_count, error: p.error ?? undefined,
     auth_url: p.auth_url || null,
   })
@@ -233,7 +237,7 @@ function onMcpStatus(frame: unknown): void {
 
 function onOauthPending(frame: unknown): void {
   const p = frame as OauthPendingParams
-  islands.plugins.event({
+  pluginsEvent({
     kind: 'authPending', server: p.server, url: p.url,
     expires_in: p.expires_in, interactive: p.interactive,
   })
@@ -241,7 +245,7 @@ function onOauthPending(frame: unknown): void {
 
 function onOauthDone(frame: unknown): void {
   const p = frame as OauthDoneParams
-  islands.plugins.event({ kind: 'authDone', server: p.server, ok: !!p.ok, error: p.error })
+  pluginsEvent({ kind: 'authDone', server: p.server, ok: !!p.ok, error: p.error })
 }
 
 /** Every handler the page hangs on the transport, and the one clock it starts. */
@@ -301,6 +305,13 @@ export function installActions(): void {
   installSessionActions()
   /* The slash palette's two session verbs, on the rows the dock declares. */
   installSlashActions()
+  /* What a page switch spends on an island: the rail re-marks itself, and the
+     two overlays a single page owns close behind it. Registered here because
+     state/page.ts does not import features/ -- it declares the three slots and
+     the order they run in (state/page.ts's `show`). */
+  page.onShow('markNav', markNew)
+  page.onShow('closeConnDialog', closeConnDialog)
+  page.onShow('closeCronSheet', closeCronSheet)
 
   $('#newBtn')!.onclick = () => {
     if (openModelsForMissingProvider()) return

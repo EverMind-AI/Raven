@@ -87,12 +87,11 @@ function set(p: Partial<AgentsState>): void {
 export const source = (): AgentsSource => ds('agents')
 
 /* Where a pane opened from this panel goes: the floating desk, when the page
-   has one. Handed in (src/features/registry.ts) rather than imported from
-   features/workspace/deskStore, which is what the island bag used to stand in
-   for: the desk imports this store back and subscribes to it as it evaluates,
-   so an import in this direction would run that subscription against a
-   half-built module. Null on a page with no desk wired, which is every test
-   that does not ask for one. */
+   has one. Handed in (src/main.tsx) rather than imported from
+   features/workspace/deskStore: the desk imports this store back and
+   subscribes to it as it evaluates, so an import in this direction would run
+   that subscription against a half-built module. Null on a page with no desk
+   wired, which is every test that does not ask for one. */
 interface AgentPane {
   openAgent(row: InstanceRow, recordId?: string | null): void
   openAgentRecord(row: AgentRow): void

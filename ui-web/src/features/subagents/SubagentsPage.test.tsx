@@ -16,7 +16,6 @@ import * as store from './store'
 import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
 
 import { domSnapshot } from '../../test/domSnapshot'
-import { islands } from '../registry'
 import { resetSources, setSources, sources } from '../../state/sources'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
@@ -31,6 +30,16 @@ import type { AgentCtx, AgentRow, AgentsSource, DirectTurn, InstanceRow, Subagen
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const paints: Array<{ ctx: unknown; opts?: { key?: string; empty?: string; reset?: boolean } }> = []
+
+/* Where a pane opened from this panel goes, handed in the way src/main.tsx
+   hands it in: the desk imports this store back, so the store takes its opener
+   rather than importing the desk (features/subagents/store.ts's setAgentPane).
+   The two verbs are spied on per case. */
+const deskPane = {
+  openAgent: (_row: InstanceRow, _recordId?: string | null): void => {},
+  openAgentRecord: (_row: AgentRow): void => {},
+}
+store.setAgentPane(deskPane)
 
 /* The island runs against the same two seams production wires up: a stand-in
    translator on setTranslator (it returns its key) and a source on
@@ -119,7 +128,7 @@ afterEach(() => {
 
 describe('subagents island, the list', () => {
   it('routes an existing instance opener into the floating workspace', () => {
-    const openAgent = vi.spyOn(islands.workspace, 'openAgent').mockImplementation(() => {})
+    const openAgent = vi.spyOn(deskPane, 'openAgent').mockImplementation(() => {})
     const row = inst({ handle: 'resume-me', resumable: true })
     store.openInstance(row)
     /* Second argument is the record this promotion replaces; a row opened
@@ -131,7 +140,7 @@ describe('subagents island, the list', () => {
   })
 
   it('routes a legacy run detail into a workspace record pane', () => {
-    const openAgentRecord = vi.spyOn(islands.workspace, 'openAgentRecord').mockImplementation(() => {})
+    const openAgentRecord = vi.spyOn(deskPane, 'openAgentRecord').mockImplementation(() => {})
     const row: AgentRow = { id: 'spawn-1', kind: 'spawn', label: 'legacy task' }
     store.openRow(row)
     expect(openAgentRecord).toHaveBeenCalledWith(row)
@@ -1686,7 +1695,7 @@ describe('subagents island, an instance detail', () => {
        the summary never reached the record row at all; and the pane's own header
        reads `row.node` before `row.label`, so the id would have won even once
        the summary arrived. */
-    const openAgentRecord = vi.spyOn(islands.workspace, 'openAgentRecord').mockImplementation(() => {})
+    const openAgentRecord = vi.spyOn(deskPane, 'openAgentRecord').mockImplementation(() => {})
     instances([], { instances: async () => [], node: async () => ({ messages: [] }) })
     await act(async () => {
       store.openDagNode('r1', {
@@ -1715,8 +1724,8 @@ describe('subagents island, an instance detail', () => {
 
   it('promotes that node once, not on every heartbeat after it', async () => {
     const row = inst({ handle: 'h-1', status: 'completed', resumable: true, runId: 'r1', nodeId: 'shape' })
-    const openAgent = vi.spyOn(islands.workspace, 'openAgent').mockImplementation(() => {})
-    const openAgentRecord = vi.spyOn(islands.workspace, 'openAgentRecord').mockImplementation(() => {})
+    const openAgent = vi.spyOn(deskPane, 'openAgent').mockImplementation(() => {})
+    const openAgentRecord = vi.spyOn(deskPane, 'openAgentRecord').mockImplementation(() => {})
     instances([], {
       instances: async () => [row],
       instanceHistory: async () => ({ turns: [] }),

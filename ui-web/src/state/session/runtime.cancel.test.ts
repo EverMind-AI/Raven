@@ -46,7 +46,11 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
         splitAtts: (t: string) => ({ text: t, atts: [] }),
         unpitch: () => {},
       },
-      'src/features/rail/store': { markNew: () => {}, draw: () => log.push(['sessionDraw']) },
+      'src/features/rail/store': {
+        markNew: () => {},
+        draw: () => log.push(['sessionDraw']),
+        endRename: () => {},
+      },
       'src/state/sheetRack': { forget: () => {} },
       'src/state/session/rows': {
         sess: (id: string) => rows.find((r) => r.id === id),
@@ -67,6 +71,7 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
         /* The island's own phase machine: what `cancellable` and `busy` mean is
            its answer, and the decisions under test read them. */
         turn,
+        claimDraft: () => {},
       },
       'src/lib/duration': { formatDuration: (ms: number) => `${ms}ms` },
       'src/i18n/t': { T: (key: string) => key },
@@ -80,23 +85,27 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
       'src/state/tier': { load: () => {} },
       'src/features/workspace/record': { wsOnHistory: () => {} },
       'src/features/rail/source': { rowPreview: (t: string) => t, touchSession: () => {} },
-    },
-    islands: {
-      composer: { claimDraft: () => {} },
-      transcript: {
+      'src/features/transcript/mount': {
         nudge: () => {},
         stopStream: () => {},
         finishTurn: () => log.push(['foldTurn']),
         artifacts: () => log.push(['artifacts']),
         turnKept: () => turnKept,
-        down: () => {},
         killStatus: () => log.push(['killStatus']),
         step: () => ({ seal: () => {}, sayDelta: () => {}, thinkAppend: () => {} }),
         status: () => {},
       },
-      workspace: { currentTurn: () => 1, loadDeliveries: () => {} },
-      rail: { endRename: () => {} },
-      view: { resume: () => {}, refreshDag: () => {} },
+      'src/features/transcript/tail': {
+        down: () => {},
+      },
+      'src/features/workspace/store': {
+        currentTurn: () => 1,
+        loadDeliveries: () => {},
+      },
+      'src/lib/resume': {
+        resume: () => {},
+        refreshDag: () => {},
+      },
     },
   })
   const runtime = (await import('./runtime')) as Runtime

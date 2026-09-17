@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { pmNormEntry } from './source'
 import { mkMcpRow, mkPluginRow, mkSkillRow, mkToolRow } from '../installed/source'
-import { islands } from '../registry'
+import * as plugins from './store'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as pageStore from '../../state/page'
@@ -126,9 +126,7 @@ describe('one mcp row', () => {
   })
 
   it('switches through the island, which owns the write', () => {
-    const toggleMcp = vi.fn()
-    const before = islands.plugins.toggleMcp
-    islands.plugins.toggleMcp = toggleMcp
+    const toggleMcp = vi.spyOn(plugins, 'toggleMcp').mockImplementation(() => {})
     try {
       const row = mkMcpRow(mcp({ name: 'remote', transport: 'http' })) as unknown as { state: string }
       row.state = 'on'
@@ -136,7 +134,7 @@ describe('one mcp row', () => {
       row.state = 'off'
       expect(toggleMcp).toHaveBeenCalledWith('remote', false)
     } finally {
-      islands.plugins.toggleMcp = before
+      toggleMcp.mockRestore()
     }
   })
 })

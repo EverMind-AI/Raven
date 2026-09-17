@@ -14,7 +14,8 @@
  * belongs to that watcher, which is still writing into it.
  */
 
-import { islands } from '../features/registry'
+import { release as releaseRail } from '../features/rail/store'
+import { status as transcriptStatus } from '../features/transcript/mount'
 import { T } from '../i18n/t'
 import { gateway } from '../rpc/gateway'
 import { show as failureBar } from '../state/failureBar'
@@ -105,7 +106,7 @@ export function bootFail(e: unknown): void {
   const msg = [(err && err.message) || String(e), detail].filter(Boolean).join(' - ')
   failureBar(T('gui.boot_fail', { where: 'live boot', err: msg }))
   // A dead boot must not leave the rail shimmering forever under the banner.
-  islands.rail.release()
+  releaseRail()
   if (window.console) console.error('[live boot]', e)
 }
 
@@ -139,7 +140,7 @@ export async function onConnectionState(state: ConnectionState, info?: StateInfo
   if (state === 'reconnecting' && attempt === 0) {
     // In the DOM, not a toast: a silent drop mid-turn reads as the model
     // hanging forever, which is exactly the bug report this line answers.
-    try { islands.transcript.status(T('gui.reconnecting')) } catch { /* pre-boot */ }
+    try { transcriptStatus(T('gui.reconnecting')) } catch { /* pre-boot */ }
     return
   }
   if (state === 'reconnecting') {

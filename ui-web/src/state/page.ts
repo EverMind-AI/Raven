@@ -13,9 +13,14 @@
  * (features/skills/tab.ts, features/plugins/tab.ts). Registration order is the
  * order their side effects are visible in: every effect below runs first, then
  * each subscriber in turn.
+ *
+ * What a switch asks of an island is registered rather than imported: three
+ * calls used to reach into features/ from here, which put every store that
+ * opens a page in the closure of every other and made this module the largest
+ * single cost in the import graph. The slots below are filled by the page's
+ * wiring (src/app/install.ts) and spent in the order `show` spells out.
  */
 
-import { islands } from '../features/registry'
 import * as caps from './caps'
 import * as detail from './detail'
 
@@ -54,6 +59,26 @@ export function navState(): { pages: string[]; btnOf(p: string): string | undefi
   }
 }
 
+/** The three things a switch asks of an island, in the order it asks them. */
+const SLOTS = ['markNav', 'closeConnDialog', 'closeCronSheet'] as const
+
+/** One of the three callbacks `show` spends. */
+export type ShowSlot = (typeof SLOTS)[number]
+
+const slots = new Map<ShowSlot, () => void>()
+
+/** Registers what a switch spends on an island. src/app/install.ts fills all three. */
+export function onShow(name: ShowSlot, fn: () => void): void {
+  slots.set(name, fn)
+}
+
+/* An unfilled slot is a switch that asks nothing: a page driven from a test
+   registers the ones its case is about and the rest stay empty. */
+const spend = (name: ShowSlot): void => {
+  const fn = slots.get(name)
+  if (fn) fn()
+}
+
 let current: PageId | null = null
 const listeners = new Set<() => void>()
 
@@ -89,13 +114,13 @@ export function show(id: PageId | null): void {
   /* Read by the rail: while a page is up it owns the selected state, so the
      session behind it stops claiming one too. */
   ;(document.querySelector('.app') as HTMLElement).dataset.page = id ? 'on' : 'off'
-  islands.rail.markNew()
+  spend('markNav')
   /* caps and memory both use the shared detail drawer */
   if (id !== 'capsPage' && id !== 'memPage') detail.close()
   /* Same rule for the overlays a single page owns: the channel drawer and the
      new-job sheet used to survive the switch and sit over whatever came next,
      still showing the entry the reader had left behind. */
-  if (id !== 'connPage') islands?.connections?.closeDialog?.()
-  if (id !== 'cronPage') islands?.cron?.closeSheet?.()
+  if (id !== 'connPage') spend('closeConnDialog')
+  if (id !== 'cronPage') spend('closeCronSheet')
   for (const fn of [...listeners]) fn()
 }

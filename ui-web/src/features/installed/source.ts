@@ -19,7 +19,7 @@ import type { ResultOf } from '../../rpc/generated'
 import type { ToolRow } from '../settings/types'
 import type { InstalledSkill } from '../skills/types'
 
-import { islands } from '../registry'
+import { toggleMcp } from '../plugins/store'
 import { t } from '../../i18n/t'
 import { show as toast } from '../../state/toast'
 import { gateway } from '../../rpc/gateway'
@@ -118,7 +118,7 @@ export function mkMcpRow(m: ExtMcpRow): InstalledRow {
     one: m.connected ? t('gui.ext.mcp_tools', { n: m.tool_count }) : '', tools: [], perms: [] }
   Object.defineProperty(o, 'state', {
     get: () => (!m.enabled ? 'off' : MCP_LEGACY[m.state] || 'off'),
-    set: (v) => islands.plugins.toggleMcp(m.name, v === 'on'),
+    set: (v) => toggleMcp(m.name, v === 'on'),
   })
   return o
 }

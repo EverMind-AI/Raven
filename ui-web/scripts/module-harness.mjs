@@ -5,8 +5,7 @@
  * out and evaluating it with its collaborators passed in as parameters. The
  * layer is gone and every module it held has a home, but the shape this gives a
  * case outlived it -- a collaborator is an import, which `fakes` replaces by
- * module path and export name, and the island bag is an object, which `islands`
- * assigns over.
+ * module path and export name.
  *
  * Every load starts from module state as fresh as a reload's, because a module
  * and the ones around it hold real state -- the panel's open view, the session
@@ -41,13 +40,8 @@ function requireModule(module) {
  * @param fakes exports to replace, keyed by the module's path from ui-web
  *   (`'src/state/toast'`). What is not named keeps the real implementation, and
  *   a key that names no module throws rather than standing in for nothing.
- * @param islands members of the island bag (src/features/registry.ts) to stand in for,
- *   assigned over the real ones one MEMBER at a time: a case names the verbs it
- *   is about and the rest of that island answers as it really does. Assigned
- *   rather than mocked, and taken from the module the reset above just gave the
- *   part: a binding a harness held from an earlier load belongs to that load.
  */
-export async function loadPart(importPart, { fakes = {}, islands = {} } = {}) {
+export async function loadPart(importPart, { fakes = {} } = {}) {
   for (const path of mocked) vi.doUnmock(path)
   mocked.clear()
   vi.resetModules()
@@ -61,12 +55,7 @@ export async function loadPart(importPart, { fakes = {}, islands = {} } = {}) {
     vi.doMock(path, async (original) =>
       Object.defineProperties({ ...(await original()) }, Object.getOwnPropertyDescriptors(exports)))
   }
-  const part = await importPart()
-  if (Object.keys(islands).length) {
-    const bag = (await import('../src/features/registry')).islands
-    for (const [name, members] of Object.entries(islands)) Object.assign(bag[name], members)
-  }
-  return part
+  return await importPart()
 }
 
 /* The transport the freshly loaded graph will speak through, with both call

@@ -71,7 +71,12 @@ async function harness(): Promise<{
         queueSnapshot: () => ['queued'],
         /* The island's own phase machine, which is what is under test here. */
         turn,
+        liveAnchor: () => 42,
+        setLiveAnchor: () => log.push('setLiveAnchor'),
       },
+      'src/features/workspace/store': { snapshot: () => ({ ...workspace }), restore: workspaceRestore },
+      'src/features/transcript/mount': { nudge: vi.fn(), stopStream: vi.fn() },
+      'src/features/transcript/tail': { down: vi.fn() },
       'src/lib/dom': { $: looseQuery() },
       'src/lib/session': { current: () => current },
       'src/state/banner': { draw: vi.fn() },
@@ -84,11 +89,6 @@ async function harness(): Promise<{
           if (ev && ev.type === 'bad') throw new Error('a bad frame')
         },
       },
-    },
-    islands: {
-      composer: { liveAnchor: () => 42, setLiveAnchor: () => log.push('setLiveAnchor') },
-      workspace: { snapshot: () => ({ ...workspace }), restore: workspaceRestore },
-      transcript: { nudge: vi.fn(), stopStream: vi.fn(), down: vi.fn() },
     },
   })
   const registry = (await import('./registry')) as Registry

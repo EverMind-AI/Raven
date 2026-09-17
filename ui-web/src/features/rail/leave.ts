@@ -12,14 +12,15 @@ import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/s
 import { show as toast } from '../../state/toast'
 import { forget as forgetSubscription, switchToDraft } from '../../state/session/registry'
 import { sources } from '../../state/sources'
-import { islands } from '../registry'
+import { forget as forgetDagRuns } from '../dag/mount'
+import { redraw as redrawSettings } from '../settings/store'
 import { T } from '../../i18n/t'
 import { $ } from '../../lib/dom'
 import { dropDraft } from '../composer/mount'
 import { ask as confirmAsk } from '../../state/confirm'
 import { forget as sheetsForget } from '../../state/sheetRack'
 import { open as sessionOpen, replace as sessionReplace, rows as sessionRows } from '../../state/session/rows'
-import { draw as sessionDraw } from './store'
+import { draw as sessionDraw, removeSessionRow } from './store'
 import { deleteSession, renamed, setArchived } from './source'
 
 import type { SessRow } from './types'
@@ -30,8 +31,8 @@ export async function leaveDeletedSession(sessionId: string): Promise<void> {
   dropDraft(sessionId)
   forgetSubscription(sessionId)
   sheetsForget(sessionId)
-  islands.dag.forget(sessionId)
-  const transition = islands.rail.removeRow(sessionRows(), sessionCurrent(), sessionId)
+  forgetDagRuns(sessionId)
+  const transition = removeSessionRow(sessionRows(), sessionCurrent(), sessionId)
   sessionReplace(transition.rows)
   if (transition.kind === 'unchanged') { sessionDraw(); return }
   if (transition.kind === 'open') {
@@ -45,7 +46,7 @@ export async function leaveDeletedSession(sessionId: string): Promise<void> {
 }
 
 export async function leaveArchivedSession(sessionId: string): Promise<void> {
-  const transition = islands.rail.removeRow(sessionRows(), sessionCurrent(), sessionId)
+  const transition = removeSessionRow(sessionRows(), sessionCurrent(), sessionId)
   sessionReplace(transition.rows)
   if (transition.kind === 'unchanged') { sessionDraw(); return }
   if (transition.kind === 'open') {
@@ -141,7 +142,7 @@ export async function deleteAll(): Promise<void> {
   sessionReplace(sessionRows().filter((s: SessRow) => !gone.includes(s.id)))
   sessionSet(null)
   switchToDraft()
-  islands.settings.redraw()
+  redrawSettings()
   toast(sessionRows().length
     ? T('gui.set.dat.del_partial', { n: gone.length, left: sessionRows().length })
     : T('gui.set.dat.del_done', { n: gone.length }))

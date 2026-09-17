@@ -406,8 +406,8 @@ export interface ArtifactsSource {
   changes(turn: number): WsChange[]
 }
 
-/* The pull half of the seam. Event pushes arrive through the island API the
-   live layer forwards into (the island bag's `transcript`). */
+/* The pull half of the seam. Event pushes arrive through this island's own
+   verbs, which the session pipeline calls directly (features/transcript/mount). */
 export interface TranscriptSource {
   clean(text: unknown): string
   okOf(name: string, preview: string): boolean

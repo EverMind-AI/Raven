@@ -8,9 +8,9 @@
  *
  * Beside the rack rather than in shell/, because it is a tenant of it: one sheet
  * appended to #sheetRack, filed under the conversation that asked. That is also
- * why its opener sits on the composer's member of the island bag instead of a
- * member of its own -- the rack's six names are already there and this is the
- * seventh thing the layers do to that rack.
+ * why its opener is the composer's rather than a domain of its own -- the
+ * rack's six names are already the composer's, and this is the seventh thing
+ * the page does to that rack.
  *
  * What is here is each sheet's own element and the answers it can give; the
  * markup inside them is src/chrome/ApproveSheet.tsx (the preview variant) and

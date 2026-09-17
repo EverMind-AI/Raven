@@ -25,8 +25,13 @@ async function harness() {
     fakes: {
       'src/lib/session': { current: () => 's1' },
       'src/state/session/runtime': { mediaOf: () => ({}) },
+      'src/features/transcript/mount': {
+        agentStage: () => {},
+      },
+      'src/features/subagents/store': {
+        directEvent: () => {},
+      },
     },
-    islands: { transcript: { agentStage: () => {} }, subagents: { directEvent: () => {} } },
   })
   await fakeGateway(() => Promise.resolve({}))
   const { setSources, sources } = await import('../../state/sources')

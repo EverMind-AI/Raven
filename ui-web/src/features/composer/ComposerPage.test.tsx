@@ -23,8 +23,8 @@ import type { ComposerSource, SlashCmd } from './types'
 
 const directNotes = vi.hoisted((): Array<[string, string]> => [])
 const toastWriter = vi.hoisted(() => ({ items: [] as string[] }))
-/* Partial, not wholesale: the island bag is assembled from every member this
-   module really has. */
+/* Partial, not wholesale: the page calls this module by name for verbs this
+   case is not about. */
 vi.mock('../transcript/mount', async (original) => ({
   ...(await original<Record<string, unknown>>()),
   note: (label: string, detail: string) => { directNotes.push([label, detail]) },
@@ -517,7 +517,7 @@ describe('the attachment tray', () => {
     /* The overlay is drawn by src/chrome/Lightbox.tsx, so something has to be
        rendering it for the click below to put one on screen. Its own component
        rather than the whole page root: this file mocks the transcript's mount
-       partially, and the page root reaches that through the island bag. */
+       partially, and the page root reaches those verbs by name. */
     render(<Lightbox />)
     try {
       act(() => { fireEvent.click(img) })

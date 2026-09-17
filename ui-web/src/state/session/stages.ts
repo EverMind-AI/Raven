@@ -17,7 +17,11 @@
  */
 
 import { cleanPreview, okOf } from '../../features/transcript/source'
-import { islands } from '../../features/registry'
+import * as dagSheet from '../../features/dag/mount'
+import { fromStarted } from '../../features/dag/nodes'
+import { directEvent } from '../../features/subagents/store'
+import * as transcript from '../../features/transcript/mount'
+import { advanceTurn, currentTurn as wsCurrentTurn } from '../../features/workspace/store'
 import { hasToolOk } from '../../rpc/capabilities'
 import { current as sessionCurrent } from '../../lib/session'
 import { show as toast } from '../toast'
@@ -70,7 +74,7 @@ export const STAGES: readonly Stage[] = [
     if (!turn.busy() && p.content) ask(p.content)
     if (p.content) touchSession(sessionCurrent(), p.content)
     rt.dispatch({ type: 'stream', cancellable: true }); goState(); drawMeter()
-    islands.workspace.advanceTurn()
+    advanceTurn()
   }),
 
   arm('turn.started', (rt, p) => {
@@ -83,11 +87,11 @@ export const STAGES: readonly Stage[] = [
        the lane. `delegated` carries the identity AND the injected text, the
        same identity a stored entry carries on replay, so the two views draw
        the same row at the same place. */
-    islands.workspace.advanceTurn()
+    advanceTurn()
     if (p.delegated) {
       const d = p.delegated
       const isDag = d.kind === 'dag'
-      islands.transcript.delivered({
+      transcript.delivered({
         label: d.label || '',
         isDag,
         status: d.status,
@@ -111,7 +115,7 @@ export const STAGES: readonly Stage[] = [
   arm('episode.start', (rt) => {
     if (rt.st) { rt.st.seal() }
     flushSay(rt)
-    rt.st = islands.transcript.step(); rt.steps.push(rt.st); rt.sawEpisode = true
+    rt.st = transcript.step(); rt.steps.push(rt.st); rt.sawEpisode = true
   }),
 
   /* The server named the session. Replaces whatever the row shows without
@@ -126,7 +130,7 @@ export const STAGES: readonly Stage[] = [
   arm('session.naming_ended', (_rt, p) => { void namingEnded(p.session_id, p.reason) }),
 
   arm('notice', (rt, p) => {
-    islands.transcript.killStatus()
+    transcript.killStatus()
     /* Seals the open step first: this ends the turn, so the streamed prose
        above stays where it was said. */
     if (rt.st) { rt.st.seal(); rt.st = null }
@@ -136,17 +140,17 @@ export const STAGES: readonly Stage[] = [
 
   /* The smart-mode reviewer runs inside the tool dispatch; name the pause. */
   arm('permission.review', (_rt, p) => {
-    if (p.phase === 'started') islands.transcript.status(T('gui.perm.reviewing'))
-    else islands.transcript.killStatus()
+    if (p.phase === 'started') transcript.status(T('gui.perm.reviewing'))
+    else transcript.killStatus()
   }),
 
   arm('thinking.delta', (rt, p) => {
-    islands.transcript.killStatus()
+    transcript.killStatus()
     ensureStep(rt).thinkAppend(p.text || '')
   }),
 
   arm('token.delta', (rt, p) => {
-    islands.transcript.killStatus()
+    transcript.killStatus()
     const st = ensureStep(rt)
     /* sayDelta folds a finished thought before the prose lands. */
     st.sayDelta(p.text || '')
@@ -155,7 +159,7 @@ export const STAGES: readonly Stage[] = [
   }),
 
   arm('tool.start', (rt, p) => {
-    islands.transcript.killStatus()
+    transcript.killStatus()
     const st = ensureStep(rt)
     /* The call id travels with the row: a `run_subagent_dag` names it on every
        progress event, and it is what binds the graph to this card rather than to
@@ -168,7 +172,7 @@ export const STAGES: readonly Stage[] = [
   }),
 
   arm('tool.complete', (rt, p) => {
-    if (p.metadata) islands.transcript.delivery(islands.workspace.currentTurn(), p.metadata, p.tool_call_id)
+    if (p.metadata) transcript.delivery(wsCurrentTurn(), p.metadata, p.tool_call_id)
     const o = rt.open.get(p.tool_call_id)
     if (!o) return
     rt.open.delete(p.tool_call_id)
@@ -192,7 +196,7 @@ export const STAGES: readonly Stage[] = [
   }),
 
   arm('error', (rt, p) => {
-    islands.transcript.killStatus()
+    transcript.killStatus()
     /* A cancelled turn is the one "error" a person asked for; the event still
        matters when the cancel came from ANOTHER client on the same session. */
     if (p.reason === 'cancelled_by_client') {
@@ -220,7 +224,7 @@ export const STAGES: readonly Stage[] = [
      from `running`, the record id its stream is read by. Through the island
      for the same reason the dag events go through it: what a frame means to a
      card is one definition, next to the model it moves. */
-  arm('subagent.status', (_rt, p) => { islands.transcript.spawnFeed(p) }),
+  arm('subagent.status', (_rt, p) => { transcript.spawnFeed(p) }),
 
   /* A result was submitted, not yet visible: the turn it opens is still queued
      behind its parent, so the row does NOT belong here. It arrives with the
@@ -231,7 +235,7 @@ export const STAGES: readonly Stage[] = [
   arm('dag.run_started', (_rt, p) => {
     /* The trail's delegation card paints the same events as the sheet below:
        one feed call per branch, before the sheet's own bookkeeping. */
-    islands.transcript.dagFeed('dag.run_started', p)
+    transcript.dagFeed('dag.run_started', p)
     /* The graph arrives whole, before any node runs. Filed under the
        conversation it belongs to: a stage only ever runs for the conversation
        on screen, so the current key is the owning key on both paths. */
@@ -239,9 +243,9 @@ export const STAGES: readonly Stage[] = [
        features/dag/nodes.ts): the payload was being unpacked field by field here
        as well, so "what a node is" had two definitions that only happened to
        agree. */
-    const started = islands.dag.fromStarted(p)
+    const started = fromStarted(p)
     const key = sheetSession()
-    islands.dag.start(key, {
+    dagSheet.start(key, {
       run_id: p.run_id,
       session: key,
       order: started.map((n) => n.id),
@@ -252,22 +256,22 @@ export const STAGES: readonly Stage[] = [
   }),
 
   arm('dag.node_updated', (_rt, p) => {
-    islands.transcript.dagFeed('dag.node_updated', p)
+    transcript.dagFeed('dag.node_updated', p)
     /* Through the island rather than into the run's node map from here: what a
        report means to a node is one definition, next to the model it moves, and
        the copy that lived here had drifted into inventing a clock. */
-    islands.dag.advance(sheetSession(), p)
+    dagSheet.advance(sheetSession(), p)
   }),
 
   arm('dag.run_completed', (_rt, p) => {
-    islands.transcript.dagFeed('dag.run_completed', p)
-    islands.dag.settle(sheetSession(), p)
+    transcript.dagFeed('dag.run_completed', p)
+    dagSheet.settle(sheetSession(), p)
   }),
 
   /* The trail card alone: the sheet shows one run at a time by design, so a
      replanned run's sheet just keeps showing the old graph until the new run's
      own dag.run_started arrives and replaces it wholesale. */
-  arm('dag.run_replanned', (_rt, p) => { islands.transcript.dagFeed('dag.run_replanned', p) }),
+  arm('dag.run_replanned', (_rt, p) => { transcript.dagFeed('dag.run_replanned', p) }),
 
   /* Declared by the contract and drawn by nothing. Named rather than left to
      fall off the end, so that "the page does not render this" is a decision
@@ -336,7 +340,7 @@ export function dispatch(ev: unknown): void {
      These belong on the instance's own page, which reads them back through
      `subagents.instance.history`. */
   const target = targetOf(frame)
-  if (target) { islands.subagents.directEvent(target, frame.type, frame.payload as { content?: string }); return }
+  if (target) { directEvent(target, frame.type, frame.payload as { content?: string }); return }
   const stage = stageOf(frame)
   if (!stage) return
   stage.run(viewRuntime(), frame)

@@ -13,7 +13,7 @@ import * as caps from '../../state/caps'
 import * as page from '../../state/page'
 import { ds } from '../../state/sources'
 import { show as toast } from '../../state/toast'
-import { islands } from '../registry'
+import { skillsSkeletonHost } from '../hosts'
 
 export async function openCaps(tab: caps.Tab): Promise<void> {
   caps.extSet(tab)
@@ -23,7 +23,7 @@ export async function openCaps(tab: caps.Tab): Promise<void> {
   else {
     const box = document.getElementById('capsBody') as HTMLElement
     box.innerHTML = ''
-    box.appendChild(islands.skills.skeleton)
+    box.appendChild(skillsSkeletonHost)
   }
   try {
     if (await src.load()) caps.draw()

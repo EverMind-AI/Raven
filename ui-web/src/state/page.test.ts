@@ -18,21 +18,23 @@ const PAGES = ['capsPage', 'xaPage', 'connPage', 'memPage', 'pbPage', 'kbPage', 
 
 interface Fresh {
   page: typeof import('./page')
-  islands: (typeof import('../features/registry'))['islands']
+  /* What each registered slot was asked, in the order the switch asked it. */
+  spent: string[]
 }
 
-/* Fresh module state per case: the store holds which page is open and a set of
-   subscribers, and both would leak into the next case. The island bag is taken
-   from the same reset graph the store just got, the way
-   scripts/module-harness.mjs does it. */
+/* Fresh module state per case: the store holds which page is open, a set of
+   subscribers and the three slots the page's wiring fills, and all three would
+   leak into the next case.
+   The slots are filled here the way src/app/install.ts fills them, which is
+   also what says an unfilled slot is a switch that asks nothing. */
 async function fresh(): Promise<Fresh> {
   vi.resetModules()
   const page = await import('./page')
-  const { islands } = await import('../features/registry')
-  vi.spyOn(islands.rail, 'markNew').mockImplementation(() => {})
-  vi.spyOn(islands.connections, 'closeDialog').mockImplementation(() => {})
-  vi.spyOn(islands.cron, 'closeSheet').mockImplementation(() => {})
-  return { page, islands }
+  const spent: string[] = []
+  for (const slot of ['markNav', 'closeConnDialog', 'closeCronSheet'] as const) {
+    page.onShow(slot, () => { spent.push(slot) })
+  }
+  return { page, spent }
 }
 
 /* The page as show() reaches it: the shell mark, the seven sections with their
@@ -88,10 +90,10 @@ describe('showing a module page', () => {
   })
 
   it('has the rail re-mark itself on every switch', async () => {
-    const { page, islands } = await fresh()
+    const { page, spent } = await fresh()
     page.show('xaPage')
     page.show(null)
-    expect(islands.rail.markNew).toHaveBeenCalledTimes(2)
+    expect(spent.filter((name) => name === 'markNav')).toHaveLength(2)
   })
 
   /* caps and memory both render into the shared drawer, so opening either of
@@ -107,13 +109,22 @@ describe('showing a module page', () => {
   })
 
   it('closes a page-owned overlay only when the page it belongs to is not the one opening', async () => {
-    const { page, islands } = await fresh()
+    const { page, spent } = await fresh()
     page.show('connPage')
-    expect(islands.connections.closeDialog).not.toHaveBeenCalled()
-    expect(islands.cron.closeSheet).toHaveBeenCalledTimes(1)
+    expect(spent.filter((name) => name === 'closeConnDialog')).toHaveLength(0)
+    expect(spent.filter((name) => name === 'closeCronSheet')).toHaveLength(1)
     page.show('cronPage')
-    expect(islands.connections.closeDialog).toHaveBeenCalledTimes(1)
-    expect(islands.cron.closeSheet).toHaveBeenCalledTimes(1)
+    expect(spent.filter((name) => name === 'closeConnDialog')).toHaveLength(1)
+    expect(spent.filter((name) => name === 'closeCronSheet')).toHaveLength(1)
+  })
+
+  /* The order the three slots are spent in, which is what state/page.ts spells
+     out: the rail's mark, then the drawer, then the two page-owned overlays. */
+  it('spends the three registered slots in the order it declares', async () => {
+    const { page, spent } = await fresh()
+    document.getElementById('detail')!.dataset.open = 'true'
+    page.show('memPage')
+    expect(spent).toEqual(['markNav', 'closeConnDialog', 'closeCronSheet'])
   })
 })
 

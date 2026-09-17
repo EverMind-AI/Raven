@@ -42,7 +42,10 @@
 import { useSyncExternalStore } from 'react'
 
 import { openPlugins, openSkills } from '../features/plugins/nav'
-import { islands } from '../features/registry'
+import { open as openKnowledge } from '../features/knowledge/store'
+import { open as openMemory } from '../features/memory/store'
+import { openPage as openPlaybooks } from '../features/playbooks/store'
+import { open as openSettings } from '../features/settings/store'
 import * as find from '../state/find'
 import * as foot from '../state/foot'
 import * as lang from '../state/lang'
@@ -119,20 +122,20 @@ function RailNav(): JSX.Element {
         </svg>
         <span data-i18n="gui.tab.plugins">{lang.text('gui.tab.plugins', '插件')}</span>
       </button>
-      <button className="navi" id="pbBtn" onClick={() => islands.playbooks.open()}>
+      <button className="navi" id="pbBtn" onClick={() => openPlaybooks()}>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <circle cx="5.5" cy="7" r="2" /><circle cx="5.5" cy="17" r="2" /><circle cx="18.5" cy="12" r="2" />
           <path d="M7.5 7.6c5 1.4 6.5 2.6 9 3.9M7.5 16.4c5-1.4 6.5-2.6 9-3.9" />
         </svg>
         <span data-i18n="gui.nav.pb">{lang.text('gui.nav.pb', '剧本')}</span>
       </button>
-      <button className="navi" id="kbBtn" onClick={() => islands.knowledge.open()}>
+      <button className="navi" id="kbBtn" onClick={() => openKnowledge()}>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <path d="M5 4.5h9.5a2 2 0 0 1 2 2v13H7a2 2 0 0 1-2-2zM16.5 6.5H19v13h-2.5M8 8.5h5M8 12h5" />
         </svg>
         <span data-i18n="gui.nav.kb">{lang.text('gui.nav.kb', '知识库')}</span>
       </button>
-      <button className="navi" id="memBtn" onClick={() => islands.memory.open()}>
+      <button className="navi" id="memBtn" onClick={() => openMemory()}>
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <path d="M12 3l8 4.5-8 4.5-8-4.5zM4 12.4l8 4.5 8-4.5M4 16.6l8 4.5 8-4.5" />
         </svg>
@@ -220,7 +223,7 @@ function RailFoot(): JSX.Element {
       {/* The foot is the door to settings, and only that: accounts are not a
            thing this product has, so nothing down here pretends to be one.
            The version under the label is state/foot.ts's. */}
-      <button className="me" id="meBtn" data-i18n-aria="gui.nav.set" aria-label={lang.attr('gui.nav.set')} onClick={() => void islands.settings.open()}>
+      <button className="me" id="meBtn" data-i18n-aria="gui.nav.set" aria-label={lang.attr('gui.nav.set')} onClick={() => void openSettings()}>
         <span className="av anon">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" />
             <path d="M12 3v2.2M12 18.8V21M4.6 7.8l1.9 1.1M17.5 15.1l1.9 1.1M4.6 16.2l1.9-1.1M17.5 8.9l1.9-1.1M3 12h2.2M18.8 12H21" /></svg>

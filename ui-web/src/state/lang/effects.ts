@@ -24,7 +24,15 @@
  * last, and the guard in front of it is what keeps it off a streaming turn.
  */
 
-import { islands } from '../../features/registry'
+import * as connections from '../../features/connections/store'
+import * as cron from '../../features/cron/store'
+import * as knowledge from '../../features/knowledge/store'
+import * as memory from '../../features/memory/store'
+import * as playbooks from '../../features/playbooks/store'
+import { redraw as redrawSettings } from '../../features/settings/store'
+import { redraw as redrawTranscript } from '../../features/transcript/mount'
+import * as xa from '../../features/xa/store'
+import { draw as drawNavRows } from '../navfly'
 import { drawQueue as queueDraw, turn } from '../../features/composer/mount'
 import { label as modelLabel } from '../../features/model/chip'
 import { draw as sessionDraw } from '../../features/rail/store'
@@ -46,18 +54,18 @@ export function repaint(): void {
   drawCtx()
   /* Every module page, not just the open one: a hidden page keeps its old DOM,
      so it would still be in the previous language when reopened. */
-  islands.settings.redraw()
+  redrawSettings()
   try { caps.draw() } catch { /* extensions not loaded yet */ }
-  try { islands.connections.redraw() } catch { /* channels not loaded yet */ }
-  try { islands.cron.redraw() } catch { /* schedules not loaded yet */ }
-  try { islands.xa.redraw() } catch { /* agents not loaded yet */ }
-  try { islands.memory.redraw() } catch { /* memory not loaded yet */ }
-  try { islands.knowledge.redraw() } catch { /* knowledge not loaded yet */ }
-  try { islands.playbooks.redraw() } catch { /* playbooks not loaded yet */ }
+  try { connections.redraw() } catch { /* channels not loaded yet */ }
+  try { cron.langRedraw() } catch { /* schedules not loaded yet */ }
+  try { xa.redraw() } catch { /* agents not loaded yet */ }
+  try { memory.redraw() } catch { /* memory not loaded yet */ }
+  try { knowledge.redraw() } catch { /* knowledge not loaded yet */ }
+  try { playbooks.redraw() } catch { /* playbooks not loaded yet */ }
   /* The rows' own words follow the catalogue on their own (chrome/MoreFly.tsx);
      what this asks for is the mark on each of them, which is written from
      outside React and is the one thing a re-render leaves alone. */
-  islands.nav.draw()
+  drawNavRows()
   /* The shared drawer is closed rather than redrawn: it is not on any page, so
      nothing above reaches it, and every one of its five openers would have to
      hand back the subject it was drawn from. Left open it would sit in the old
@@ -68,7 +76,7 @@ export function repaint(): void {
   /* The transcript island re-renders its catalogue words (verbs, fold headers,
      footers) in place -- which is also what covers a turn still streaming,
      where the reload below must not run. */
-  islands.transcript.redraw()
+  redrawTranscript()
   queueDraw()
   /* The words baked into stored segments (note labels, phrased previews) come
      back right on a rebuild from disk. Skipped while a turn is streaming:

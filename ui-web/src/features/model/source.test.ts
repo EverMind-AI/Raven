@@ -57,6 +57,7 @@ async function live({ session = null, answers = null }: Options = {}) {
       },
       'src/features/rail/store': {
         draw: () => {},
+        endRename: () => {},
       },
       'src/features/composer/mount': {
         drawMeter: () => {},
@@ -79,11 +80,9 @@ async function live({ session = null, answers = null }: Options = {}) {
       'src/state/tier': { load: () => {} },
       'src/state/perm': { setFromConfig: (m: string) => calls.push(['setPermMode', m]) },
       'src/state/session/residency': { park: () => {} },
-    },
-    islands: {
-      settings: { openModels: () => calls.push(['openModels']) },
-      rail: { endRename: () => {} },
-      model: { current: () => '', setCurrent: (m: string) => calls.push(['modelSet', m]) },
+      'src/features/settings/store': {
+        openModels: () => calls.push(['openModels']),
+      },
     },
   })
   await fakeGateway((method: string, params: Record<string, unknown>) => {

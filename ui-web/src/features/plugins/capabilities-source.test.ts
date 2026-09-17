@@ -57,8 +57,10 @@ async function opener(source: CapabilitiesSource): Promise<{
         draw: () => calls.push('draw'),
       },
       'src/state/toast': { show: toast },
+      'src/features/hosts': {
+        skillsSkeletonHost: skeleton,
+      },
     },
-    islands: { skills: { skeleton } },
   })
   ;(await seam()).capabilities = source
   return { calls, open: part.openCaps, toast }
@@ -154,8 +156,10 @@ describe('the live extension source', () => {
       fakes: {
         'src/state/banner': { setFault: vi.fn() },
         'src/state/toast': { show: vi.fn() },
+        'src/features/plugins/store': {
+          onEvent: vi.fn(),
+        },
       },
-      islands: { plugins: { event: vi.fn() } },
     })
     /* The row builders word their own labels, so the source needs a lookup the
        way it has one inside the page. Installed on the instance loadPart's reset

@@ -144,9 +144,13 @@ describe('the offline fixture library', () => {
     const { deskDemoOverrides, onboardDemoOverrides } = await import('../../src/rpc/fixtures/index.ts')
     const later = (ms, fn) => { fn() }
     const roster = () => Promise.resolve(['raven', 'claude_code'])
+    /* What a direct turn pushes on the conversation's own subscription, which
+       this gate is not about: the shape of an ANSWER is. */
+    const pushed = []
     const groups = {
       'onboard=demo': onboardDemoOverrides(later),
-      'desk-demo=1': deskDemoOverrides(() => 1789000000000, later, roster),
+      'desk-demo=1': deskDemoOverrides(() => 1789000000000, later, roster,
+        (method, params) => pushed.push([method, params])),
     }
     /* The direct-chat door the canvas knocks on to tell a pane its instance
        answered reads the roster through the seam, and only a booted page has
@@ -186,6 +190,40 @@ describe('the offline fixture library', () => {
       }
     }
     expect(failures).toEqual([])
+  })
+
+  /* The one answer the desk canvas gives that is not an answer: a turn
+     addressed to an instance is reported by frames, the way a live gateway
+     reports one, and the canvas used to reach into the island's store instead.
+     Pushed on the subscription the conversation really opened, and every frame
+     carries the target -- an untagged one is the main agent's and would be
+     typed into the conversation as if raven had said it
+     (src/state/session/stages.ts). */
+  it('reports a direct turn as frames on the conversation own subscription', async () => {
+    const base = await library()
+    const { OverrideTransport } = await import('../../src/rpc/overrideTransport.ts')
+    const { deskDemoOverrides } = await import('../../src/rpc/fixtures/index.ts')
+    const due = []
+    const later = (ms, fn) => { due.push([ms, fn]) }
+    const roster = () => Promise.resolve(['raven'])
+    let canvas = null
+    canvas = new OverrideTransport(base, deskDemoOverrides(() => 1789000000000, later, roster,
+      (method, params) => canvas.push(method, params)))
+    const frames = []
+    canvas.on('event', (params) => frames.push(params))
+
+    const { instances } = await canvas.call('subagents.instances', { session_key: 'a' })
+    const target = { agent: instances[0].agent, handle: instances[0].handle }
+    const { subscription_id: subscription } = await canvas.call('turn.subscribe', { session_key: 'a' })
+    await canvas.call('turn.send', { session_key: 'a', content: 'one turn', target })
+    for (const [, fn] of due.splice(0)) fn()
+
+    expect(frames.map((f) => [f.subscription_id, f.event.type, f.event.payload.target]))
+      .toEqual([
+        [subscription, 'message.start', target],
+        [subscription, 'message.complete', target],
+      ])
+    expect(frames[0].event.payload.content).toBe('one turn')
   })
 
   /* Both forks of the research conversation, because which one plays depends on

@@ -17,7 +17,7 @@ fetches a second script.
 | `src/rpc/` | the typed gateway seam: the generated method contract, the gateway slot, the three transports and the offline fixture library |
 | `src/state/` | the stores every region reads, plus `lang/` and `session/` |
 | `src/chrome/` | the page's own furniture -- rail, chat header, dock, sheet rack, tooltip, chips -- plus `behaviour/`, the two it installs rather than renders |
-| `src/features/<domain>/` | one island per domain: its component, its store, its `source.ts`; `features/registry.ts` is the bag of verbs a page-wide writer spends on them |
+| `src/features/<domain>/` | one island per domain: its component, its store, its `source.ts`; `features/hosts.ts` holds the three detached nodes a tab re-attaches |
 | `src/components/` | the small components more than one region renders |
 | `src/lib/` | helpers with no store and no page of their own (`lib/dom.ts` is the page's `$`) |
 | `src/assets/` | icons served from `dist/assets` |
@@ -25,9 +25,11 @@ fetches a second script.
 | `scripts/gates/` | the gates vitest runs over the tree, the stylesheet and the contract |
 
 Nothing is published on `window`, and nothing outside the bundle reaches in: a
-writer imports what it calls, and the verbs a page-wide writer spends on an
-island are named in `src/features/registry.ts`. The vocabulary -- region,
-portal, escape order, language store -- is defined in `CONTEXT.md`.
+writer imports what it calls, and the direction those imports may run in is
+`scripts/gates/import-direction.test.mjs`. A page-wide writer that `src/state/`
+cannot import from takes a registered callback instead (`state/page.ts`'s
+`onShow`). The vocabulary -- region, portal, escape order, language store -- is
+defined in `CONTEXT.md`.
 
 ## Build
 

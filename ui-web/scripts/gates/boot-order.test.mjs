@@ -51,12 +51,18 @@ async function harness(rows = []) {
       'src/state/session/rows': { open: step('sessionOpen'), rows: () => rows },
       'src/state/caps': { draw: step('drawCaps') },
       'src/state/ws': { bump: step('bumpWs') },
-    },
-    islands: {
-      onboard: { open: () => {} },
-      rail: { draw: step('sessionDraw') },
-      settings: { redraw: step('drawSettings') },
-      composer: { goPaint: step('goState') },
+      'src/features/onboard/store': {
+        open: () => {},
+      },
+      'src/features/rail/store': {
+        draw: step('sessionDraw'),
+      },
+      'src/features/settings/store': {
+        redraw: step('drawSettings'),
+      },
+      'src/features/composer/mount': {
+        goPaint: step('goState'),
+      },
     },
   })
   return { part, calls }
@@ -154,7 +160,7 @@ describe('first-run model setup', () => {
 describe('the claim on the first frame', () => {
   it('starts the view watch, and only after it has cleared the pointer', () => {
     const clear = bootText.indexOf('sessionSet(null)')
-    const watch = bootText.indexOf('islands.view.watch()')
+    const watch = bootText.indexOf('watchSessionNote()')
     expect(clear).toBeGreaterThan(-1)
     expect(watch).toBeGreaterThan(clear)
   })
@@ -164,7 +170,7 @@ describe('the claim on the first frame', () => {
   it('installs the session source before it holds the rail', () => {
     const install = bootText.indexOf('sources.sessions = sessionsSource')
     expect(install).toBeGreaterThan(-1)
-    expect(bootText.indexOf('islands.rail.hold()')).toBeGreaterThan(install)
+    expect(bootText.indexOf('holdRail()')).toBeGreaterThan(install)
   })
 })
 

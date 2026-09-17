@@ -10,10 +10,10 @@
  */
 
 import { panel } from '../../state/wsPanel'
-import { islands } from '../registry'
+import { openDagNode } from '../subagents/store'
 
 export function dagOpenNode(runId: string, n: { id: string; summary?: string | null }): void {
-  islands.subagents.openDagNode(runId, n)
+  openDagNode(runId, n)
   /* The open above already raised the node's own window, and in desk mode that
      window IS the view -- so there is no panel tab left to pick. Picking one
      anyway routed through `openDeskTab`, whose whole job is to open the

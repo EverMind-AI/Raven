@@ -31,13 +31,13 @@ async function startedRun(payload: Record<string, unknown>) {
         $: looseQuery(),
       },
       'src/lib/session': { current: () => 'sess-1' },
-    },
-    islands: {
-      transcript: {
+      'src/features/transcript/mount': {
         dagFeed: () => {},
       },
-      dag: {
+      'src/features/dag/nodes': {
         fromStarted: () => [],
+      },
+      'src/features/dag/mount': {
         start: (key: string, run: Record<string, unknown>) => started.push({ key, run }),
       },
     },

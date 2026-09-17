@@ -8,9 +8,11 @@
  * document at the moment they are called, which is what says the writes landed
  * before the handover rather than after it.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { islands } from '../features/registry'
+import * as desk from '../features/workspace/deskStore'
+import * as subagents from '../features/subagents/store'
+import * as workspace from '../features/workspace/store'
 import { T } from '../i18n/t'
 import * as lang from '../state/lang'
 import { mountPageRoot } from '../test/pageRoot'
@@ -61,8 +63,6 @@ let deskTabs: string[] = []
 let resets: string[] = []
 let unmount = (): void => {}
 
-const real = { workspace: { ...islands.workspace }, subagents: { ...islands.subagents } }
-
 beforeEach(() => {
   document.body.innerHTML = MARKUP
   unmount = mountPageRoot()
@@ -73,14 +73,13 @@ beforeEach(() => {
   notified = []
   deskTabs = []
   resets = []
-  Object.assign(islands.workspace, {
-    shared: () => record,
-    draw: () => { drew.push(snap()) },
-    notifyDesk: () => { notified.push(snap()) },
-    openDeskTab: (tab: string) => { deskTabs.push(tab) },
-    reset: () => { resets.push('workspace') },
-  })
-  Object.assign(islands.subagents, { reset: () => { resets.push('subagents') } })
+  vi.spyOn(workspace, 'shared').mockReturnValue(record)
+  vi.spyOn(workspace, 'draw').mockImplementation(() => { drew.push(snap()) })
+  vi.spyOn(workspace, 'reset').mockImplementation(() => { resets.push('workspace') })
+  vi.spyOn(desk, 'notifyDesk').mockImplementation(() => { notified.push(snap()) })
+  vi.spyOn(desk, 'openDeskTab').mockImplementation((tab) => { deskTabs.push(tab) })
+  vi.spyOn(desk, 'reset').mockImplementation(() => { resets.push('desk') })
+  vi.spyOn(subagents, 'reset').mockImplementation(() => { resets.push('subagents') })
 })
 
 /* Module state outlives a case, so it is put back while the markup it writes to
@@ -90,8 +89,7 @@ afterEach(() => {
   ws.restore('diff', false)
   unmount()
   unmount = () => {}
-  Object.assign(islands.workspace, real.workspace)
-  Object.assign(islands.subagents, real.subagents)
+  vi.restoreAllMocks()
   document.documentElement.classList.remove('desk-ready')
   document.body.innerHTML = ''
 })
@@ -237,7 +235,7 @@ describe('a different session', () => {
     ws.reset()
     expect(ws.tab).toBe('diff')
     expect(ws.picked).toBe(false)
-    expect(resets).toEqual(['workspace', 'subagents'])
+    expect(resets).toEqual(['workspace', 'desk', 'subagents'])
   })
 })
 

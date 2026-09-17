@@ -9,7 +9,10 @@
  * in src/state/session/.
  */
 
-import { islands } from '../registry'
+import { run as dagRunOf } from '../dag/mount'
+import { history as drawHistory } from './mount'
+import * as subagents from '../subagents/store'
+import { openDeskTab } from '../workspace/deskStore'
 import { has } from '../../rpc/capabilities'
 import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
 import { show as toast } from '../../state/toast'
@@ -58,7 +61,7 @@ export function renderHistory(messages: HistoryMessage[]): void {
      resetView; still needed for the reconnect replay, which repaints a
      conversation without leaving it. */
   unpitch()
-  islands.transcript.history(messages)
+  drawHistory(messages)
 }
 
 /* Opening a delegated graph: the last node if this page already holds the run's
@@ -68,7 +71,7 @@ export function renderHistory(messages: HistoryMessage[]): void {
 export function openDagRun(runId: string): void {
   const id = String(runId || '')
   if (id) {
-    const d = islands.dag.run(sheetSession())
+    const d = dagRunOf(sheetSession())
     const last = d && d.run_id === id ? d.order[d.order.length - 1] : null
     if (last) {
       /* With what the node is FOR, not only its id. The run holds every node's
@@ -125,12 +128,12 @@ export function openSpawn(agent: string, label: string): void {
    mode that is the whole answer. The panel's agents view is only needed where
    there are no windows. */
   if (!document.documentElement.classList.contains('desk-ready')) panel().setOpen(true, 'agents')
-  const match = () => islands.subagents.rows().find((x) => x.kind !== 'dag'
+  const match = () => subagents.rows().find((x) => x.kind !== 'dag'
     && (!label || plainTitle(x.label) === plainTitle(label))
     && (!agent || (x.agent || 'raven') === (agent || 'raven')))
   const attempt = (n: number): void => {
     const it = match()
-    if (it) { islands.subagents.openRow(it); return }
+    if (it) { subagents.openRow(it); return }
     if (n >= 4) {
       /* Nothing was found, so nothing was opened -- and a click that opens
        nothing reads as broken. `refresh` keeps the drawn list on a failed
@@ -138,10 +141,10 @@ export function openSpawn(agent: string, label: string): void {
        registry spells differently lands here, and the reader is left with a
        list they can search by hand. Only on this branch: the palette beside
        a window the reader did get is the thing this whole change removes. */
-      islands.workspace.openDeskTab('agents')
+      openDeskTab('agents')
       return
     }
-    islands.subagents.refresh(true)
+    subagents.refresh(true)
     setTimeout(() => attempt(n + 1), 700)
   }
   attempt(0)

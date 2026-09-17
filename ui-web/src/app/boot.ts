@@ -22,7 +22,12 @@ import { onboardSource } from '../features/onboard/source'
 import { loadExt } from '../features/installed/source'
 import { loadSessions, sessionsSource } from '../features/rail/source'
 import { loadSettings, pushPermMode } from '../features/settings/source'
-import { islands } from '../features/registry'
+import { goPaint } from '../features/composer/mount'
+import { warm as warmCron } from '../features/cron/store'
+import { open as openOnboard } from '../features/onboard/store'
+import { draw as sessionDraw, hold as holdRail, release as releaseRail } from '../features/rail/store'
+import { redraw as redrawSettings } from '../features/settings/store'
+import { landing, watch as watchSessionNote } from '../lib/resume'
 import { hasUpdateFlag } from '../rpc/capabilities'
 import { draw as drawCtx } from '../state/ctxChip'
 import { draw as drawFoot } from '../state/foot'
@@ -73,14 +78,14 @@ function claimFirstFrame(): void {
   const rail = document.querySelector('.rail') as HTMLElement | null
   if (rail) rail.dataset.counts = 'pending'
   sources.sessions = sessionsSource
-  islands.rail.hold()
+  holdRail()
   sessionSet(null)
   /* From here on the pointer is the page's own, so what it says can be recorded
      for the next reload. Started after the line above on purpose: the demo
      chrome has already opened its canned session on this page, and both that
      and the clear above are fixture noise the note must not carry (see
      lib/resume.ts). */
-  islands.view.watch()
+  watchSessionNote()
 }
 
 /* Everything a first frame needs from the gateway, in the order it needs it. */
@@ -118,7 +123,7 @@ async function sequence(): Promise<void> {
       .then((fresh) => { if (hasUpdateFlag(fresh)) showUpNote('ver', latestOf(fresh)) })
       .catch(() => {})
     await loadSessions()
-    islands.rail.release()
+    releaseRail()
     /* Home is the new-task screen, never the last session: opening straight
        into someone else's half-finished transcript is a worse first frame than
        an empty composer, and the rail is one click away. A draft writes nothing
@@ -131,7 +136,7 @@ async function sequence(): Promise<void> {
        (lib/resume.ts). Asked of the list rather than opened blind: a
        conversation deleted since is a note for something that is not there any
        more, and the new-task screen is the right answer for it. */
-    const back = islands.view.landing(sessionRows().map((s: SessRow) => s.id))
+    const back = landing(sessionRows().map((s: SessRow) => s.id))
     if (back) await switchTo(sess(back) as SessRow)
     else switchToDraft()
     /* Remember whether task actions need to send the reader to Models. The
@@ -146,7 +151,7 @@ async function sequence(): Promise<void> {
          nothing would get the version that writes. */
       const cannedInstead = /[?&]onboard=demo/.test(location.search)
       if (!cannedInstead && /[?&]onboard=1/.test(location.search)) {
-        islands.onboard.open()
+        openOnboard()
       }
     } catch (e) {
       if (window.console) console.warn('[live boot] setup.status failed; skipping onboarding gate', e)
@@ -167,7 +172,7 @@ async function sequence(): Promise<void> {
        the demo mock's phantom counts. */
     Promise.allSettled([
       loadExt(),
-      islands.cron.warm(),
+      warmCron(),
     ]).then(() => {
       const rail = document.querySelector('.rail') as HTMLElement | null
       if (rail) delete rail.dataset.counts
@@ -190,7 +195,7 @@ export function bootPage(): void {
     ['lookLoad', (): void => lookLoad()],
     ['paneLoad', (): void => paneLoad()],
     ['setRail', (): void => setRail(true)],
-    ['sessionDraw', (): void => islands.rail.draw()],
+    ['sessionDraw', (): void => sessionDraw()],
     /* A live boot deliberately starts with an empty source and chooses a draft
        after the real list lands; an offline page has a fixture row to open. */
     ['sessionOpen', (): void => { const first = sessionRows()[0]; if (first) void sessionOpen(first) }],
@@ -200,9 +205,9 @@ export function bootPage(): void {
     ['drawCaps', (): void => caps.draw()],
     ['drawFoot', (): void => drawFoot()],
     ['bumpWs', (): void => bumpWs()],
-    ['drawSettings', (): void => islands.settings.redraw()],
+    ['drawSettings', (): void => redrawSettings()],
     ['setRuntime', (): void => setRuntime()],
-    ['goState', (): void => islands.composer.goPaint()],
+    ['goState', (): void => goPaint()],
   ] as Array<[string, () => void]>).forEach(([where, step]) => {
     try { step() } catch (e) { bootError(where, e) }
   })
@@ -213,7 +218,7 @@ export function bootPage(): void {
    Registered with the page's other window listeners
    (src/state/globalListeners.ts). */
 export function onLoad(): void {
-  if (/[?&]onboard=demo/.test(location.search)) islands.onboard.open()
+  if (/[?&]onboard=demo/.test(location.search)) openOnboard()
 }
 
 /**

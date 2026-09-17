@@ -10,7 +10,8 @@ import type { ApiProtocol, ModelSource, Provider } from './types'
 import type { ParamsOf } from '../../rpc/generated'
 import type { TierReply, TierSource } from '../../state/tier'
 
-import { islands } from '../registry'
+import { setCurrent } from './store'
+import { open as openSettings, openModels, openProviderModels } from '../settings/store'
 import { t } from '../../i18n/t'
 import { current as sessionCurrent } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
@@ -63,7 +64,7 @@ export function setChipPainter(fn: () => void): void {
 
 /* The chip the composer shows and the settings default both write. */
 export const showModel = (model: string): void => {
-  islands.model.setCurrent(model)
+  setCurrent(model)
   paintChip()
 }
 
@@ -71,7 +72,7 @@ export function openModelsForMissingProvider(): boolean {
   const connected = providersLive.some((p) => p.on)
   const knownMissing = setupState.providerConfigured === false || providersLive.length > 0
   if (connected || !knownMissing) return false
-  void islands.settings.openModels()
+  void openModels()
   return true
 }
 
@@ -179,8 +180,8 @@ export const modelSource: ModelSource = {
     await gateway().call('model.set_protocol', { model, slug: provider, protocol })
     await loadProviders()
   },
-  openSettings: () => islands.settings.open(),
-  openProviderModels: (provider: string) => islands.settings.openProviderModels(provider),
+  openSettings: () => openSettings(),
+  openProviderModels: (provider: string) => openProviderModels(provider),
 }
 
 /* The tier over the wire. One method serves all three calls, and every reply

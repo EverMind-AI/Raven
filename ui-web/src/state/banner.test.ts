@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { draw, setFault } from './banner'
 import { resetTranslator, setTranslator } from '../i18n/t'
 import * as nav from '../features/plugins/nav'
-import { islands } from '../features/registry'
+import * as plugins from '../features/plugins/store'
 import * as confirmStore from './confirm'
 import * as pageStore from './page'
 import { resetSources, setSources } from './sources'
@@ -23,7 +23,7 @@ const wired: Wired = { opened: 0 }
 vi.spyOn(pageStore, 'show').mockImplementation(() => {})
 vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
 vi.spyOn(nav, 'openPlugins').mockResolvedValue(undefined)
-vi.spyOn(islands.plugins, 'openMarket').mockImplementation((id) => {
+vi.spyOn(plugins, 'openDetail').mockImplementation((_kind, id) => {
   if (id === 'websearch') wired.opened += 1
 })
 

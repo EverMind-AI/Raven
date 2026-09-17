@@ -191,8 +191,18 @@ runs first), so it is one place and `src/state/globalListeners.test.ts` asserts
 it call for call. A control's own handler is not here: that belongs with the
 control.
 
-**Island bag**:
-`src/features/registry.ts` -- one object naming every verb a page-wide writer
-spends on an island. Read at call time, so it is also the seam a case stands in
-for (`vi.spyOn` on a bag, or `scripts/module-harness.mjs`'s `islands` option).
-A member with no reader does not belong in it.
+**Island host**:
+One of the three detached nodes in `src/features/hosts.ts` that an island root
+renders into and a tab module re-attaches on every draw. Every other root is
+given a container `src/App.tsx` rendered or a layer `host()` hands out; these
+three cannot be rendered, because the capabilities page's two tabs clear their
+box with `innerHTML` and React must own neither.
+_Avoid_: "host" for the container a region renders empty -- that is shared
+ground, and the island roots itself in it.
+
+**Page callback**:
+One of the three slots `src/state/page.ts` declares and `src/app/install.ts`
+fills: what a page switch spends on an island (the rail's mark, the channel
+dialog's close, the new-job sheet's close), in the order `show` spells out.
+Registered rather than imported, because `src/state/` does not import
+`src/features/` -- which is also how a case names the slots it is about.

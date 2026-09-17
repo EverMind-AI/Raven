@@ -27,7 +27,12 @@
  */
 
 import { busy as turnBusy } from '../features/composer/turn'
-import { islands } from '../features/registry'
+import * as connections from '../features/connections/store'
+import * as cron from '../features/cron/store'
+import * as knowledge from '../features/knowledge/store'
+import * as memory from '../features/memory/store'
+import * as playbooks from '../features/playbooks/store'
+import * as xa from '../features/xa/store'
 import * as caps from './caps'
 import * as detail from './detail'
 import { close as closeImage, isOpen as imageOpen } from './lightbox'
@@ -60,16 +65,16 @@ export const ORDER: readonly Overlay[] = [
   { id: '#veil', isOpen: flagged('veil'), close: cancels('cfNo') },
   /* After the confirm veil, before the page: a dialog raised over the entry
      list is what Escape should take back first. */
-  { id: '#connVeil', isOpen: flagged('connVeil'), close: () => islands.connections.closeDialog() },
+  { id: '#connVeil', isOpen: flagged('connVeil'), close: () => connections.closeDialog() },
   { id: '#detail', isOpen: flagged('detail'), close: detail.close },
   { id: '#jobVeil', isOpen: flagged('jobVeil'), close: cancels('jobNo') },
-  { id: '#cronPage', isOpen: flagged('cronPage'), close: () => islands.cron.close() },
-  { id: '#memPage', isOpen: flagged('memPage'), close: () => islands.memory.close() },
-  { id: '#pbPage', isOpen: flagged('pbPage'), close: () => islands.playbooks.close() },
-  { id: '#kbPage', isOpen: flagged('kbPage'), close: () => islands.knowledge.close() },
+  { id: '#cronPage', isOpen: flagged('cronPage'), close: () => cron.close() },
+  { id: '#memPage', isOpen: flagged('memPage'), close: () => memory.close() },
+  { id: '#pbPage', isOpen: flagged('pbPage'), close: () => playbooks.closePage() },
+  { id: '#kbPage', isOpen: flagged('kbPage'), close: () => knowledge.close() },
   { id: '#capsPage', isOpen: flagged('capsPage'), close: caps.close },
-  { id: '#xaPage', isOpen: flagged('xaPage'), close: () => islands.xa.close() },
-  { id: '#connPage', isOpen: flagged('connPage'), close: () => islands.connections.close() },
+  { id: '#xaPage', isOpen: flagged('xaPage'), close: () => xa.close() },
+  { id: '#connPage', isOpen: flagged('connPage'), close: () => connections.close() },
   { id: 'setIsOpen()', isOpen: settingsDialog.isOpen, close: settingsDialog.close },
   /* The last resort: with nothing on screen to take back, Escape interrupts
      the running turn. */

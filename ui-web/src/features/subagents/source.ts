@@ -16,7 +16,7 @@ import { current as sessionCurrent } from '../../lib/session'
 import { gone, has } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
 import { mediaOf } from '../../state/session/runtime'
-import { islands } from '../registry'
+import { agentStage } from '../transcript/mount'
 
 import type { AgentCtxLike } from '../transcript/store'
 import type { AgentsSource } from './types'
@@ -119,7 +119,7 @@ export const agentsSource: AgentsSource = {
    scroll). A member here rather than its own binding, because a painter is
    only ever wanted for a record, and this is the source the records come
    from. */
-  stagePaint: (box, r, opts) => islands.transcript.agentStage(box, r as AgentCtxLike | null, opts),
+  stagePaint: (box, r, opts) => agentStage(box, r as AgentCtxLike | null, opts),
 }
 
 /* Two seconds, for the life of the tab whether or not the panel is open: the

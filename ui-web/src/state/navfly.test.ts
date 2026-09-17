@@ -15,9 +15,8 @@ import type { RailSource } from '../features/rail/types'
 /* The three openers are direct imports now, so the pages they open are observed
    by standing in for those modules rather than for a shell verb. */
 const opens = vi.hoisted(() => ({ list: [] as string[] }))
-/* Partial, not wholesale: the rail's own marker reaches the page registry, which
-   reaches the island bag, and the bag is assembled from every member each of
-   these modules really has. */
+/* Partial, not wholesale: the page store and the rail call other verbs of each
+   of these modules by name. */
 vi.mock('../features/connections/nav', async (original) => ({
   ...(await original<Record<string, unknown>>()),
   open: () => opens.list.push('connPage'),

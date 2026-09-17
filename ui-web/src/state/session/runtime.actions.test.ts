@@ -74,9 +74,7 @@ async function harness({ rows }: { rows: Row[] }) {
       'src/features/rail/title': { plainTitle: (t: unknown) => String(t) },
       'src/state/toast': { show: (text: string) => calls.push(['toast', text]) },
       'src/app/updates': { showUpNote: () => {} },
-    },
-    islands: {
-      transcript: {
+      'src/features/transcript/tail': {
         down: () => calls.push(['down']),
       },
     },
@@ -299,6 +297,11 @@ async function railHarness(
       },
       'src/features/rail/store': {
         draw: draws,
+        endRename: () => {},
+        removeSessionRow: (next: Row[], _current: string | null, id: string) => {
+          left(id)
+          return { kind: 'unchanged', rows: next }
+        },
       },
       'src/state/sheetRack': {
         forget: () => {},
@@ -319,15 +322,8 @@ async function railHarness(
       },
       'src/lib/session': { current: () => current, setCurrent: (id: string | null) => { current = id } },
       'src/state/toast': { show: toast },
-    },
-    islands: {
-      dag: { forget: () => {} },
-      rail: {
-        endRename: () => {},
-        removeRow: (next: Row[], _current: string | null, id: string) => {
-          left(id)
-          return { kind: 'unchanged', rows: next }
-        },
+      'src/features/dag/mount': {
+        forget: () => {},
       },
     },
   })
@@ -502,9 +498,7 @@ async function bulkHarness(answers: Record<string, Answer | Error>) {
       'src/state/session/registry': { switchToDraft: () => {} },
       'src/lib/session': { current: () => null, setCurrent: () => {} },
       'src/state/toast': { show: () => {} },
-    },
-    islands: {
-      settings: {
+      'src/features/settings/store': {
         redraw: () => {},
       },
     },

@@ -30,7 +30,9 @@
  * `code`).
  */
 
-import { islands } from '../features/registry'
+import { notifyDesk, openDeskTab, reset as resetDesk } from '../features/workspace/deskStore'
+import { reset as resetSubagents } from '../features/subagents/store'
+import * as workspace from '../features/workspace/store'
 import { T } from '../i18n/t'
 
 import type { DeskTab } from '../features/workspace/deskTypes'
@@ -75,7 +77,7 @@ export function setFull(on: boolean): void {
    The count is CHANGED FILES, not tool calls: five edits to one file is one
    thing to look at, and "+5" for a single file reads as a lie. */
 export function bump(): void {
-  const ws = islands.workspace.shared()
+  const ws = workspace.shared()
   ws.unseen = ws.changes.filter((c) => !c.seen).length
   const n = ws.unseen
   const chip = el('wsBdg')
@@ -86,7 +88,7 @@ export function bump(): void {
     u.textContent = n ? `+${n}` : ''
     u.hidden = n === 0
   }
-  islands.workspace.notifyDesk?.()
+  notifyDesk()
 }
 
 export function draw(): void {
@@ -96,14 +98,13 @@ export function draw(): void {
   ;[...el('wsTabs').children].forEach((b) => {
     b.setAttribute('aria-selected', String((b as HTMLElement).dataset.w === tab))
   })
-  islands.workspace.draw()
+  workspace.draw()
 }
 
 export function setOpen(next: boolean, view?: string): void {
   if (next && view && document.documentElement.classList.contains('desk-ready')) {
-    const desk = islands.workspace && islands.workspace.openDeskTab
-    if (desk && view !== 'browser') {
-      desk(view as DeskTab)
+    if (view !== 'browser') {
+      openDeskTab(view as DeskTab)
       return
     }
   }
@@ -134,12 +135,11 @@ export function show(view: string): void {
    note rather than being replaced by the launcher. */
 export function pick(view: string): void {
   if (document.documentElement.classList.contains('desk-ready')) {
-    const desk = islands.workspace && islands.workspace.openDeskTab
-    if (desk && view !== 'browser') {
+    if (view !== 'browser') {
       /* Cast, not validated: the desk's own opener is written for these two
          call sites and stops a view name it does not know (openDeskTab in
          features/workspace/deskStore.ts). */
-      desk(view as DeskTab)
+      openDeskTab(view as DeskTab)
       return
     }
   }
@@ -172,13 +172,14 @@ export function reset(): void {
   picked = false
   /* A different session is a different workspace state: the island clears the
      record and drops the file tree listings it read before the switch. */
-  islands.workspace.reset()
+  workspace.reset()
+  resetDesk()
   /* Subagents belong to the session that spawned them, so they leave with it
      -- carrying the list into the next conversation would attribute one
      conversation's background work to another. The open dag node goes for the
      same reason, and because `dag.node` is addressed by session: left set, the
      pane would ask the newly opened conversation for a run it never made. */
-  islands.subagents.reset()
+  resetSubagents()
 }
 
 export const stale = (mine: number): boolean => mine !== epoch

@@ -205,6 +205,10 @@ async function refreshHarness({
     fakes: {
       'src/features/rail/store': {
         draw: () => log.push(['sessionDraw']),
+        reconcileRows: (current: Row[], next: Row[], at: string | null) => {
+          log.push(['reconcile', current.map((r) => r.id), next.map((r) => r.id), at])
+          return reconciled || { rows: next, currentMissing: false }
+        },
       },
       'src/features/composer/mount': {
         turn: { dispatch: () => {} },
@@ -224,14 +228,9 @@ async function refreshHarness({
       'src/features/rail/leave': {
         leaveDeletedSession: (id: string) => { log.push(['leaveDeleted', id]); return Promise.resolve() },
       },
-    },
-    islands: {
-      transcript: { nudge: () => {}, stopStream: () => {} },
-      rail: {
-        reconcile: (current: Row[], next: Row[], at: string | null) => {
-          log.push(['reconcile', current.map((r) => r.id), next.map((r) => r.id), at])
-          return reconciled || { rows: next, currentMissing: false }
-        },
+      'src/features/transcript/mount': {
+        nudge: () => {},
+        stopStream: () => {},
       },
     },
   })

@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readFileSync } from 'node:fs'
 
-import { islands } from '../features/registry'
+import * as rail from '../features/rail/store'
 import * as lang from '../state/lang'
 import { mountPageRoot } from '../test/pageRoot'
 
@@ -28,7 +28,7 @@ import { mountPageRoot } from '../test/pageRoot'
 /* The one verb the header calls, kept as a counter: renaming is the rail
    island's, and this file answers for the button rather than for the rename. */
 const renames = { n: 0 }
-vi.spyOn(islands.rail, 'rename').mockImplementation(() => {
+vi.spyOn(rail, 'rename').mockImplementation(() => {
   renames.n += 1
 })
 

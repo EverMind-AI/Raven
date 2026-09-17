@@ -9,7 +9,7 @@ import type { ProseSource, ProseTarget } from '../../lib/prose'
 
 import { current as sessionCurrent } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
-import { islands } from '../registry'
+import { changes as workspaceChanges, showFile } from './store'
 
 export function relToWorkspace(p: string | null | undefined): string | null {
   const s = String(p || '')
@@ -55,7 +55,7 @@ export const livePathOf = (s: string): string | null => {
   const text = String(s).trim().replace(/:\d+(?::\d+)?$/, '')
   if (!text || /\s/.test(text)) return null
   if (/(?:^|\/)(?:\.raven\/)?workspace\/./.test(text)) return relToWorkspace(text) || text
-  const hit = islands.workspace.changes().find((c) => c.key === text || shorten(c.key) === text)
+  const hit = workspaceChanges().find((c) => c.key === text || shorten(c.key) === text)
   return hit ? hit.key : null
 }
 
@@ -96,7 +96,7 @@ export const proseSource: ProseSource = {
      stops calling a directory a link at all (see the dir check there). */
   open: ({ p, dir }) => (dir
     ? void gateway().call('fs.reveal', { path: p, session: sessionCurrent() || '' }).catch(() => {})
-    : islands.workspace.showFile(p)),
+    : showFile(p)),
 }
 
 /* The gateway host's OS family, handed in by the boot's own wiring

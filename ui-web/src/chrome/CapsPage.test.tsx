@@ -14,7 +14,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readFileSync } from 'node:fs'
 
-import { islands } from '../features/registry'
+import * as plugins from '../features/plugins/store'
+import * as skills from '../features/skills/store'
 import { FixtureTransport } from '../rpc/fixtureTransport'
 import { setGateway } from '../rpc/gateway'
 import * as caps from '../state/caps'
@@ -62,15 +63,11 @@ beforeEach(() => {
      component renders them, so every case starts from the served page. */
   caps._resetForTests()
   asked.list.length = 0
-  Object.assign(islands.skills, {
-    setQuery: (q: string) => asked.list.push(`skills.setQuery:${q}`),
-    searchNow: (q: string) => asked.list.push(`skills.searchNow:${q}`),
-    toggleView: () => asked.list.push('skills.toggleView'),
-  })
-  Object.assign(islands.plugins, {
-    setQuery: (q: string) => asked.list.push(`plugins.setQuery:${q}`),
-    toggleView: () => asked.list.push('plugins.toggleView'),
-  })
+  vi.spyOn(skills, 'setQuery').mockImplementation((q: string) => asked.list.push(`skills.setQuery:${q}`))
+  vi.spyOn(skills, 'searchNow').mockImplementation((q: string) => asked.list.push(`skills.searchNow:${q}`))
+  vi.spyOn(skills, 'toggleView').mockImplementation(() => asked.list.push('skills.toggleView'))
+  vi.spyOn(plugins, 'setQuery').mockImplementation((q: string) => asked.list.push(`plugins.setQuery:${q}`))
+  vi.spyOn(plugins, 'toggleView').mockImplementation(() => asked.list.push('plugins.toggleView'))
 })
 
 afterEach(() => {
@@ -78,6 +75,7 @@ afterEach(() => {
   unmount = () => {}
   document.body.innerHTML = ''
   resetSources()
+  vi.restoreAllMocks()
 })
 
 describe('the capabilities page chrome', () => {

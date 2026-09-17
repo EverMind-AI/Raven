@@ -49,7 +49,12 @@ async function harness({ rows = [] as Row[] } = {}) {
         splitAtts: (t: string) => ({ text: t, atts: [] }),
         unpitch: () => {},
       },
-      'src/features/rail/store': { markNew: () => {}, draw: () => {} },
+      'src/features/rail/store': {
+        markNew: () => {},
+        draw: () => {},
+        endRename: () => {},
+        reconcileRows: (_cur: SessRow[], next: SessRow[]) => ({ rows: next, currentMissing: false }),
+      },
       'src/state/session/rows': {
         sess: (id: string) => rows.find((r) => r.id === id),
         open: () => {},
@@ -68,6 +73,9 @@ async function harness({ rows = [] as Row[] } = {}) {
         /* The island's own phase machine: "is a turn running" is its answer,
            and the residency rule reads it. */
         turn,
+        liveAnchor: () => 0,
+        setLiveAnchor: () => {},
+        claimDraft: () => {},
       },
       'src/features/composer/approve': {
         openApproval: (_o: unknown, _answer: unknown, owner: string | null) => log.push(['sheet', owner]),
@@ -88,13 +96,9 @@ async function harness({ rows = [] as Row[] } = {}) {
       'src/features/workspace/record': { wsOnHistory: () => {} },
       'src/features/rail/source': { rowPreview: (t: string) => t, touchSession: () => {} },
       'src/features/transcript/source': { renderHistory: () => log.push(['history']) },
-    },
-    islands: {
-      composer: { liveAnchor: () => 0, setLiveAnchor: () => {}, claimDraft: () => {} },
-      transcript: {
+      'src/features/transcript/mount': {
         nudge: () => {},
         stopStream: () => {},
-        down: () => {},
         killStatus: () => {},
         step: () => ({
           seal: () => {},
@@ -104,16 +108,14 @@ async function harness({ rows = [] as Row[] } = {}) {
         }),
         status: () => {},
       },
-      workspace: {
+      'src/features/transcript/tail': { down: () => {} },
+      'src/features/workspace/store': {
         advanceTurn: () => {}, currentTurn: () => 1, loadDeliveries: () => {},
         snapshot: () => ({}), restore: () => {},
       },
-      rail: {
-        endRename: () => {},
-        reconcile: (_cur: SessRow[], next: SessRow[]) => ({ rows: next, currentMissing: false }),
-      },
-      view: { resume: () => {}, refreshDag: () => {} },
-      dag: { forget: () => {} },
+      'src/features/workspace/deskStore': { claimDraft: () => {} },
+      'src/lib/resume': { resume: () => {}, refreshDag: () => {} },
+      'src/features/dag/mount': { forget: () => {} },
     },
   })
   const registry = await import('./registry')

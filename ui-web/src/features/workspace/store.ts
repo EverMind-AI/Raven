@@ -19,8 +19,7 @@ import { makeStore } from '../../state/store'
  * imperatively (the tab bar, the open/close buttons and the tool hooks all
  * live in legacy parts and call drawWs), so the state lives where the shims
  * can reach it and the component subscribes. The workspace record lives here
- * as well; the legacy fixture adapter reaches the stable record through the
- * island bag, while the live layer uses the narrow accessors below.
+ * as well, and the accessors below are what the page reads it through.
  */
 
 export type WsRoute = 'launch' | 'diff' | 'file'
@@ -290,10 +289,10 @@ export function relToWorkspace(p: string): string | null {
   return s.replace(/^\.\//, '')
 }
 
-/* The desk's file opener, handed in by src/features/registry.ts for the same reason the
+/* The desk's file opener, handed in by src/main.tsx for the same reason the
    subagents panel takes its pane opener that way: features/workspace/deskStore
-   imports this module back. Null leaves the legacy panel path below, which is
-   what a page without a desk has. */
+   imports this module back. Null leaves the panel path below, which is what a
+   page without a desk has. */
 let deskFile: ((path: string) => void) | null = null
 
 export function setDeskOpener(fn: ((path: string) => void) | null): void {

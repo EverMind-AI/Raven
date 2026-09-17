@@ -11,7 +11,7 @@
  * One entry of the old list is absent: `drawCapsBadge` was an empty function
  * (the rail's module rows carry no counters), and it went with the draw shells.
  */
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 import { loadPart } from '../../../scripts/module-harness.mjs'
 
@@ -37,17 +37,19 @@ const ORDER = [
   'sessionOpen',
 ]
 
-/** The eight islands whose `redraw()` is a repaint in place, plus the two verbs. */
-const ISLAND_STEPS: Array<[string, string]> = [
-  ['settings', 'redraw'],
-  ['connections', 'redraw'],
-  ['cron', 'redraw'],
-  ['xa', 'redraw'],
-  ['memory', 'redraw'],
-  ['knowledge', 'redraw'],
-  ['playbooks', 'redraw'],
-  ['nav', 'draw'],
-  ['transcript', 'redraw'],
+/* The eight islands whose `redraw()` is a repaint in place, plus the two verbs:
+   the step's name in ORDER above, the module the repaint really lives in, and
+   the export it is called by. */
+const ISLAND_STEPS: Array<[string, string, string]> = [
+  ['settings.redraw', 'src/features/settings/store', 'redraw'],
+  ['connections.redraw', 'src/features/connections/store', 'redraw'],
+  ['cron.redraw', 'src/features/cron/store', 'langRedraw'],
+  ['xa.redraw', 'src/features/xa/store', 'redraw'],
+  ['memory.redraw', 'src/features/memory/store', 'redraw'],
+  ['knowledge.redraw', 'src/features/knowledge/store', 'redraw'],
+  ['playbooks.redraw', 'src/features/playbooks/store', 'redraw'],
+  ['nav.draw', 'src/state/navfly', 'draw'],
+  ['transcript.redraw', 'src/features/transcript/mount', 'redraw'],
 ]
 
 interface Harness {
@@ -59,11 +61,19 @@ interface Harness {
 /* Every step replaced by a recorder. `current` answers a session and the turn is
    idle, so the guarded reload at the end runs -- the one step of the list that
    can be skipped, and the case below that skips it is what says so. */
-async function harness({ busy = false, draft = false, session = 'cli:one' as string | null } = {}): Promise<Harness> {
+async function harness(
+  { busy = false, draft = false, session = 'cli:one' as string | null, throwing = [] as string[] } = {},
+): Promise<Harness> {
   const order: string[] = []
-  const step = (name: string) => () => { order.push(name) }
+  const step = (name: string) => (): void => {
+    if (throwing.includes(name)) throw new Error('not loaded')
+    order.push(name)
+  }
   const part = await loadPart(() => import('./effects'), {
     fakes: {
+      ...Object.fromEntries(
+        ISLAND_STEPS.map(([name, module, verb]) => [module, { [verb]: step(name) }])
+      ),
       'src/features/rail/store': {
         draw: step('sessionDraw'),
       },
@@ -83,9 +93,6 @@ async function harness({ busy = false, draft = false, session = 'cli:one' as str
       'src/state/detail': { close: step('detail.close') },
       'src/state/session/registry': { isDraft: () => draft },
     },
-    islands: Object.fromEntries(
-      ISLAND_STEPS.map(([name, verb]) => [name, { [verb]: step(`${name}.${verb}`) }])
-    ),
   })
   return { order, repaint: part.repaint, install: part.install }
 }
@@ -101,14 +108,9 @@ describe('the language repaint', () => {
      so it would still be in the previous language when reopened. An island that
      has not loaded throws instead, and the redraw carries on. */
   it('carries on past a page whose island has not loaded', async () => {
-    const h = await harness()
-    const { islands } = await import('../../features/registry')
-    for (const name of ['cron', 'memory', 'playbooks'] as const) {
-      vi.spyOn(islands[name], 'redraw').mockImplementation(() => { throw new Error('not loaded') })
-    }
+    const h = await harness({ throwing: ['cron.redraw', 'memory.redraw', 'playbooks.redraw'] })
     h.repaint()
     expect(h.order).toEqual(ORDER.filter((name) => !/^(cron|memory|playbooks)\./.test(name)))
-    vi.restoreAllMocks()
   })
 
   /* The reload rebuilds the conversation from disk, which would cut a streaming

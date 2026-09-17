@@ -14,8 +14,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readFileSync } from 'node:fs'
 
+import * as knowledge from '../features/knowledge/store'
+import * as memory from '../features/memory/store'
 import * as nav from '../features/plugins/nav'
-import { islands } from '../features/registry'
+import * as playbooks from '../features/playbooks/store'
+import * as settings from '../features/settings/store'
 import * as lang from '../state/lang'
 import { mountPageRoot } from '../test/pageRoot'
 
@@ -31,10 +34,10 @@ const note = (name: string) => async () => {
 }
 vi.spyOn(nav, 'openSkills').mockImplementation(note('skills'))
 vi.spyOn(nav, 'openPlugins').mockImplementation(note('plugins'))
-vi.spyOn(islands.playbooks, 'open').mockImplementation(note('playbooks'))
-vi.spyOn(islands.knowledge, 'open').mockImplementation(note('knowledge'))
-vi.spyOn(islands.memory, 'open').mockImplementation(note('memory'))
-vi.spyOn(islands.settings, 'open').mockImplementation(note('settings'))
+vi.spyOn(playbooks, 'openPage').mockImplementation(note('playbooks'))
+vi.spyOn(knowledge, 'open').mockImplementation(note('knowledge'))
+vi.spyOn(memory, 'open').mockImplementation(note('memory'))
+vi.spyOn(settings, 'open').mockImplementation(note('settings'))
 
 /* Nothing: the page root renders the grid, the column and the collapse's twin,
    so a case gets all three by mounting it. */

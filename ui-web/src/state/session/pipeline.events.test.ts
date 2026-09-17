@@ -57,7 +57,10 @@ async function harness({
         noteRow: (labelText: string, detail: string, opts?: Record<string, unknown>) =>
           log.push(['noteRow', labelText, detail, opts ? Object.keys(opts).sort() : null]),
       },
-      'src/features/rail/store': { draw: () => log.push(['sessionDraw']) },
+      'src/features/rail/store': {
+        draw: () => log.push(['sessionDraw']),
+        reconcileRows: (_cur: Row[], next: Row[]) => ({ rows: next, currentMissing: false }),
+      },
       'src/state/sheetRack': { session: () => 'sheet-key' },
       'src/state/session/rows': {
         sess: (id: string) => rows.find((r) => r.id === id),
@@ -92,9 +95,7 @@ async function harness({
       'src/features/rail/source': {
         touchSession: (id: string, preview?: string) => log.push(['touch', id, preview]),
       },
-    },
-    islands: {
-      transcript: {
+      'src/features/transcript/mount': {
         nudge: () => {},
         stopStream: () => {},
         delivered: (row: Record<string, unknown>) => log.push(['delivered', row]),
@@ -106,24 +107,30 @@ async function harness({
         /* The fold a stop makes asks this first and nothing else does, so it is
            where "softStop ran" is visible from outside. */
         turnKept: () => { log.push(['softStop']); return false },
-        down: () => log.push(['down']),
         dagFeed: (type: string) => log.push(['dagFeed', type]),
         killStatus: () => log.push(['killStatus']),
         step: step,
         status: (text: string) => log.push(['showStatus', text]),
       },
-      workspace: { advanceTurn: () => log.push(['advanceTurn']), currentTurn: () => 3 },
-      subagents: {
+      'src/features/transcript/tail': {
+        down: () => log.push(['down']),
+      },
+      'src/features/workspace/store': {
+        advanceTurn: () => log.push(['advanceTurn']),
+        currentTurn: () => 3,
+      },
+      'src/features/subagents/store': {
         directEvent: (target: unknown, type: string) => log.push(['directEvent', target, type]),
       },
-      dag: {
+      'src/features/dag/nodes': {
         fromStarted: () => [{ id: 'first' }, { id: 'last' }],
+      },
+      'src/features/dag/mount': {
         start: (key: string, run: Record<string, unknown>) => log.push(['dagStart', key, run.run_id]),
         advance: (key: string, p: unknown) => log.push(['dagAdvance', key, p]),
         settle: (key: string, p: unknown) => log.push(['dagSettle', key, p]),
         run: () => null,
       },
-      rail: { reconcile: (_cur: Row[], next: Row[]) => ({ rows: next, currentMissing: false }) },
     },
   })
   const pipeline = (await import('./pipeline')) as Pipeline

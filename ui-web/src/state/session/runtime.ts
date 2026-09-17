@@ -21,7 +21,11 @@ import { rowPreview, touchSession } from '../../features/rail/source'
 import { plainTitle } from '../../features/rail/title'
 import { loadPermMode, stagedPerm } from '../../features/settings/source'
 import { wsSetRoot as wsSetRootImpl } from '../../features/workspace/source'
-import { islands } from '../../features/registry'
+import { claimDraft as claimComposerDraft } from '../../features/composer/mount'
+import { claimDraft as claimDeskDraft } from '../../features/workspace/deskStore'
+import * as transcript from '../../features/transcript/mount'
+import { down as scrollTranscriptDown } from '../../features/transcript/tail'
+import { currentTurn as wsCurrentTurn } from '../../features/workspace/store'
 import { hasNamingFlag, hasTurnDuration } from '../../rpc/capabilities'
 import { set as setCtx } from '../ctxChip'
 import { show as ntfPush } from '../../lib/notifications'
@@ -64,8 +68,8 @@ export class SessionRuntime {
      composer island's, which is what `goState` and the stop button read. */
   phase: TurnSnapshot = IDLE
 
-  st: ReturnType<typeof islands.transcript.step> | null = null
-  steps: Array<ReturnType<typeof islands.transcript.step>> = []
+  st: ReturnType<typeof transcript.step> | null = null
+  steps: Array<ReturnType<typeof transcript.step>> = []
   say = ''
   open = new Map<string, OpenCall>()
   sawEpisode = false
@@ -132,14 +136,14 @@ export const state = (): SessionRuntime => viewRuntime()
 
 /** Back to a conversation with no turn running. */
 export function reset(rt: SessionRuntime = viewRuntime()): void {
-  islands.transcript.stopStream()
+  transcript.stopStream()
   rt.st = null; rt.steps = []; rt.say = ''; rt.open.clear(); rt.sawEpisode = false
   rt.startedAt = Date.now()
   rt.answerAt = 0
 }
 
 export function ensureStep(rt: SessionRuntime = viewRuntime()) {
-  if (!rt.st) { rt.st = islands.transcript.step(); rt.steps.push(rt.st) }
+  if (!rt.st) { rt.st = transcript.step(); rt.steps.push(rt.st) }
   return rt.st
 }
 
@@ -175,14 +179,14 @@ export const fmtTok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(
 export function finishTurn(payload: unknown, rt: SessionRuntime = viewRuntime()): void {
   const p = (payload || {}) as { usage?: Record<string, number>; duration_ms?: number }
   const usage = p.usage || {}
-  islands.transcript.killStatus()
+  transcript.killStatus()
   /* The island promotes the streamed prose into the answer block where the
      prose stood, merges the silent stretches and folds the turn. */
-  islands.transcript.finishTurn(rt.st, rt.steps, duration(p.duration_ms, rt))
+  transcript.finishTurn(rt.st, rt.steps, duration(p.duration_ms, rt))
   /* The turn's products close it, after the answer and after any note: the
      bar is the last line of a turn, and it is only drawn once the turn is
      over -- nothing grows it mid-flight. */
-  islands.transcript.artifacts(islands.workspace.currentTurn())
+  transcript.artifacts(wsCurrentTurn())
   turn.dispatch({ type: 'idle' })
   const inTok = usage.input_tokens || usage.prompt_tokens || 0
   /* The window fill is the turn's prompt, not the running total. */
@@ -194,7 +198,7 @@ export function finishTurn(payload: unknown, rt: SessionRuntime = viewRuntime())
   // background; ntfPush itself checks focus and the user's preference.
   ntfPush(T('gui.set.ntf.done'), (s && s.title) || rt.say.trim().slice(0, 80))
   reset(rt)
-  drawMeter(); goState(); sessionDraw(); islands.transcript.down()
+  drawMeter(); goState(); sessionDraw(); scrollTranscriptDown()
   const nx = queueShift()
   if (nx !== undefined) send(nx)
 }
@@ -226,7 +230,7 @@ export function send(text: string): void {
   drawMeter(); goState(); sessionDraw()
   const failed = (e: unknown) => {
     const err = e as { message?: string }
-    islands.transcript.killStatus()
+    transcript.killStatus()
     turn.dispatch({ type: 'idle' })
     noteRow(T('gui.err.send'), err.message === 'not connected' ? T('gui.err.disconnected') : (err.message || String(e)),
       { retry: () => send(text) })
@@ -316,14 +320,14 @@ export function stop(): void {
    pressed stop and watched the half-written answer disappear behind
    "done", under a note saying the output was kept. */
 export function softStop(keepCancelling?: boolean, rt: SessionRuntime = viewRuntime()): void {
-  islands.transcript.killStatus()
-  islands.transcript.finishTurn(rt.st, rt.steps, duration(undefined, rt))
+  transcript.killStatus()
+  transcript.finishTurn(rt.st, rt.steps, duration(undefined, rt))
   if (!keepCancelling) turn.dispatch({ type: 'idle' })
   /* Only promise the output was kept when there is output above to keep. */
-  noteRow(T(islands.transcript.turnKept() ? 'gui.halted' : 'gui.halted_bare'), '',
+  noteRow(T(transcript.turnKept() ? 'gui.halted' : 'gui.halted_bare'), '',
     { quiet: true, host: $('#stage') })
   /* A stopped turn still produced what it produced. */
-  islands.transcript.artifacts(islands.workspace.currentTurn())
+  transcript.artifacts(wsCurrentTurn())
   reset(rt)
   drawMeter(); goState(); sessionDraw()
 }
@@ -411,7 +415,11 @@ export async function promote(preview?: string, atPointer?: (id: string) => void
   if (atPointer) atPointer(s.id)
   // The composer was owned by 'new' until this point; keep later keystrokes
   // filed under the session that just came into being.
-  islands.composer.claimDraft(sessionCurrent())
+  /* One announcement, two owners: the composer's draft text and the desk's
+     palette are both filed under the draft and have to follow it to the
+     session (see deskStore.claimDraft). */
+  claimComposerDraft(sessionCurrent())
+  claimDeskDraft(sessionCurrent())
   await applyStagedModel(draftRt, s.id, gen)
   await applyStagedTier(draftRt, s.id)
   await applyStagedPerm(draftRt, s.id)
@@ -658,7 +666,7 @@ export async function compressNow(): Promise<void> {
   }
   /* The tail this scrolls is the open conversation's. */
   if (key !== sessionCurrent()) return
-  islands.transcript.down()
+  scrollTranscriptDown()
 }
 
 /** Compact it now, rather than when the window fills. */
