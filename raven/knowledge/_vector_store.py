@@ -17,7 +17,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from raven.knowledge._types import DocumentSummary, VectorRecord, VectorSearchResult
+from raven.knowledge._types import Chunk, DocumentSummary, VectorRecord, VectorSearchResult
 
 
 class VectorStoreBase(ABC):
@@ -65,3 +65,14 @@ class VectorStoreBase(ABC):
         metadata_filter: dict[str, Any] | None = None,
     ) -> list[DocumentSummary]:
         """One summary per distinct ``document_id`` in ``collection``."""
+
+    @abstractmethod
+    async def list_chunks(self, collection: str, document_id: str) -> list[Chunk]:
+        """One document's chunks, in the order they were cut from it.
+
+        Reading order, which is ``chunk_index``: the chunker numbers a
+        document's pieces as it walks the sections a parser produced, so the
+        sequence is the document's own. The store returns rows in whatever
+        order the scan finds them, so the ordering is this method's to
+        guarantee rather than the caller's to hope for.
+        """

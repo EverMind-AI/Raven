@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 176 methods, 96 component schemas.
+// 177 methods, 97 component schemas.
 
 /* eslint-disable */
 /**
@@ -1601,6 +1601,29 @@ export interface PlaybookCredentialServer {
 }
 export interface OkResult {
   ok: boolean;
+}
+/**
+ * One indexed piece of a document, as the search sees it. The positional fields are absent for a format that does not have them -- absent means the parser did not know, never that the value is zero.
+ */
+export interface KnowledgeChunk {
+  /**
+   * Where the piece sits in its document. This is the reading order: the chunker numbers pieces as it walks the sections the parser produced.
+   */
+  chunk_index: number;
+  total_chunks: number;
+  text: string;
+  /**
+   * What the region is, as the source file marked it. Empty when the parser had nothing to go on.
+   */
+  layout_type?: string;
+  /**
+   * The 1-based page the piece starts on, where the format has pages.
+   */
+  page_number?: number | null;
+  /**
+   * The headings the piece sits under, outermost first.
+   */
+  heading_path?: string[];
 }
 export interface SessionListParams {
   /**
@@ -3800,6 +3823,12 @@ export interface KnowledgeDocumentsIndexParams {
 export interface KnowledgeDocumentsIndexResult {
   document: KnowledgeDocument;
 }
+export interface KnowledgeDocumentsChunksParams {
+  document_id: string;
+}
+export interface KnowledgeDocumentsChunksResult {
+  chunks: KnowledgeChunk[];
+}
 export interface KnowledgeDocumentsDeleteParams {
   document_id: string;
 }
@@ -4118,6 +4147,7 @@ export interface RpcMethods {
   'knowledge.documents.update_note': { params: KnowledgeDocumentsUpdateNoteParams; result: KnowledgeDocumentsUpdateNoteResult };
   'knowledge.documents.add_url': { params: KnowledgeDocumentsAddUrlParams; result: KnowledgeDocumentsAddUrlResult };
   'knowledge.documents.index': { params: KnowledgeDocumentsIndexParams; result: KnowledgeDocumentsIndexResult };
+  'knowledge.documents.chunks': { params: KnowledgeDocumentsChunksParams; result: KnowledgeDocumentsChunksResult };
   'knowledge.documents.delete': { params: KnowledgeDocumentsDeleteParams; result: KnowledgeDocumentsDeleteResult };
   'knowledge.search': { params: KnowledgeSearchParams; result: KnowledgeSearchResult };
   'clipboard.paste': { params: ClipboardPasteParams; result: ClipboardPasteResult };
@@ -4193,6 +4223,7 @@ export const RPC_METHODS = [
   "knowledge.documents.add",
   "knowledge.documents.add_note",
   "knowledge.documents.add_url",
+  "knowledge.documents.chunks",
   "knowledge.documents.delete",
   "knowledge.documents.index",
   "knowledge.documents.list",

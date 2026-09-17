@@ -437,6 +437,43 @@ async def test_a_new_base_records_who_served_its_model(manager) -> None:
     assert base.embedding_provider == "siliconflow"
 
 
+# -- reading a document's chunks back ------------------------------
+
+
+async def test_a_document_chunks_come_back_in_reading_order(manager) -> None:
+    """Reading order is the chunker's numbering, and a scan of the store has no
+    order of its own to promise -- so the store sorts rather than the caller
+    hoping."""
+    base, doc = await _ready_base(manager)
+
+    chunks = await manager.document_chunks(doc.id)
+
+    assert [c.chunk_index for c in chunks] == list(range(len(chunks)))
+    assert len(chunks) == doc.chunk_count
+    assert "first topic" in chunks[0].text
+
+
+async def test_chunks_of_a_document_that_indexed_nothing_are_empty(manager) -> None:
+    """A base with no model, a document that failed, one still queued: all the
+    same answer, and none of them an error."""
+    base = await manager.create_base(name="files only", embedding=False)
+    doc = manager.add_document(base.id, filename="a.md", content=b"# alpha\n")
+    await manager.index_document(doc.id)
+
+    assert await manager.document_chunks(doc.id) == []
+    assert await manager.document_chunks("no-such-document") == []
+
+
+async def test_chunks_of_one_document_do_not_include_another(manager) -> None:
+    base, first = await _ready_base(manager)
+    second = manager.add_document(base.id, filename="other.md", content=b"# gamma\n\ngamma\n")
+    await manager.index_document(second.id)
+
+    chunks = await manager.document_chunks(second.id)
+
+    assert chunks and all("gamma" in c.text for c in chunks)
+
+
 # ── deletion ──────────────────────────────────────────────────────
 
 

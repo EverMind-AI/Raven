@@ -100,6 +100,10 @@ export interface KnowledgeSource {
      site on the reader's behalf -- and kept as markdown. */
   addUrl(baseId: string, url: string): Promise<KbDoc>
   index(documentId: string): Promise<KbDoc>
+  /* One document's indexed pieces, in reading order. What the search matches
+     against, not a fresh parse: the two stop agreeing as soon as a chunking
+     setting has moved. */
+  chunks(documentId: string): Promise<KbChunk[]>
   /* Take one document out. The page's only way past a row that will not
      index: without it the base around it is the smallest thing that can be
      deleted. */
@@ -108,6 +112,23 @@ export interface KnowledgeSource {
 }
 
 /* One hit. `score` is a similarity, so higher is nearer. */
+/* One indexed piece of a document, as the search sees it.
+
+   The positional fields are there for the formats that have them -- a page and
+   a layout type come off a Word file or a PDF, and a text file has neither.
+   Absent means the parser did not know, never that the value is zero. */
+export interface KbChunk {
+  /* Where the piece sits in its document, and how many there are. This is the
+     reading order: the chunker numbers pieces as it walks the sections the
+     parser produced, so the sequence is the document's own. */
+  chunk_index: number
+  total_chunks: number
+  text: string
+  layout_type?: string
+  page_number?: number | null
+  heading_path?: string[]
+}
+
 export interface KbHit {
   score: number
   document_id: string

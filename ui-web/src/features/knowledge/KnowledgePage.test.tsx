@@ -81,6 +81,7 @@ function source(over: Partial<KnowledgeSource> = {}): void {
       upload: async (_b: string, file: File) => doc({ id: 'd1', source: file.name }),
       index: async (id: string) => doc({ id, status: 'ready', chunk_count: 2 }),
       search: async () => ({ hits: [], search_ms: 0, embed_ms: 0 }),
+      chunks: async () => [],
       removeDoc: async () => {},
       ...over,
     },
@@ -766,10 +767,9 @@ describe('the two-panel layout', () => {
   })
 
   it('names the controls it has not built yet instead of pretending', async () => {
-    /* Recall Test, Settings, View Chunks and Disable have nothing behind them.
-       They are on screen because the design puts them there, and disabled
-       because a control that looks live and does nothing when pressed is
-       worse than one that says it is not ready. */
+    /* Disable has nothing behind it. It is on screen because the design puts
+       it there, and disabled because a control that looks live and does
+       nothing when pressed is worse than one that says it is not ready. */
     source({
       bases: async () => [base({ id: 'b1' })],
       documents: async () => [doc({ id: 'd1', source: 'onboarding.md', status: 'ready' })],
@@ -780,9 +780,14 @@ describe('the two-panel layout', () => {
     })
 
     await openRowMenu('onboarding.md')
-    for (const label of ['gui.kb.doc_view_chunks', 'gui.kb.doc_disable']) {
+    for (const label of ['gui.kb.doc_disable']) {
       expect((screen.getByText(label).closest('button') as HTMLButtonElement).disabled).toBe(true)
     }
+    /* View Chunks is wired now: it opens the same panel clicking the name
+       does. */
+    expect(
+      (screen.getByText('gui.kb.doc_view_chunks').closest('button') as HTMLButtonElement).disabled,
+    ).toBe(false)
     /* Every data source in the menu is wired, so the button that opens it is
        not one of the stubs. */
     const add = screen.getByText('+ gui.kb.add_source').closest('button') as HTMLButtonElement
@@ -945,6 +950,103 @@ describe('viewing the original file', () => {
     })
     expect(document.querySelector('.kbframe')).toBeNull()
     expect(document.querySelector('.kbtable')).not.toBeNull()
+  })
+
+  it('takes the whole page while a file is open, rail and all', async () => {
+    /* The widest thing on the screen should be the thing being read. Picking
+       another base is not a move anyone makes mid-document, and the way back
+       is the one button in the header. */
+    await openBase([doc({ id: 'd1', source: 'contract.pdf', status: 'ready' })])
+
+    await clickName('contract.pdf')
+
+    expect(document.querySelector('.kbview')).not.toBeNull()
+    expect(document.querySelector('.kbsplit')).toBeNull()
+    expect(document.querySelector('.kbrail')).toBeNull()
+
+    await act(async () => {
+      ;(document.querySelector('.kbback') as HTMLButtonElement).click()
+    })
+    expect(document.querySelector('.kbrail')).not.toBeNull()
+    expect(document.querySelector('.kbview')).toBeNull()
+  })
+
+  it('shows the chunks beside the file, in reading order', async () => {
+    /* The two halves answer one question: what the file says, and what the
+       index actually holds of it. Reading order is the chunker's numbering,
+       so the list runs down the document. */
+    source({
+      bases: async () => [base({ id: 'b1', name: 'handbook' })],
+      documents: async () => [doc({ id: 'd1', source: 'contract.pdf', status: 'ready' })],
+      chunks: async () => [
+        { chunk_index: 1, total_chunks: 2, text: 'Second piece.', layout_type: 'text', page_number: 2 },
+        {
+          chunk_index: 0,
+          total_chunks: 2,
+          text: 'First piece.',
+          layout_type: 'heading',
+          page_number: 1,
+          heading_path: ['Terms'],
+        },
+      ],
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+
+    await clickName('contract.pdf')
+    await act(async () => {})
+
+    expect(document.querySelector('.kborig .kbframe')).not.toBeNull()
+    const rows = [...document.querySelectorAll('.kbchunk .kbchunktx')].map((n) => n.textContent)
+    /* Answered out of order on purpose: the panel shows the document's order,
+       not the transport's. */
+    expect(rows).toEqual(['First piece.', 'Second piece.'])
+    const first = document.querySelector('.kbchunk') as HTMLElement
+    expect(first.querySelector('.kbchunkix')?.textContent).toBe('#1')
+    expect(first.querySelector('.kbchunkty')?.textContent).toBe('heading')
+    expect(first.querySelector('.kbchunkpath')?.textContent).toBe('Terms')
+  })
+
+  it('says a file has nothing indexed rather than showing an empty column', async () => {
+    /* A document that failed, one still queued and one in a base with no model
+       all land here, and an empty column would read as a bug. */
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd1', source: 'notes.md', status: 'failed' })],
+      chunks: async () => [],
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+
+    await clickName('notes.md')
+    await act(async () => {})
+
+    expect(screen.getByText('gui.kb.chunks_none')).toBeTruthy()
+  })
+
+  it('opens the same panel from the row menu as from the name', async () => {
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd1', source: 'onboarding.md', status: 'ready' })],
+      chunks: async () => [{ chunk_index: 0, total_chunks: 1, text: 'Only piece.' }],
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+
+    await openRowMenu('onboarding.md')
+    await act(async () => {
+      ;(screen.getByText('gui.kb.doc_view_chunks').closest('button') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+
+    expect(document.querySelector('.kbview')).not.toBeNull()
+    expect(document.querySelector('.kbchunktx')?.textContent).toBe('Only piece.')
   })
 
   it('asks the gateway to convert the formats no browser draws', async () => {

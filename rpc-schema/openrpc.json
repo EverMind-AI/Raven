@@ -7385,6 +7385,38 @@
       }
     },
     {
+      "name": "knowledge.documents.chunks",
+      "summary": "One document's indexed pieces, in reading order.",
+      "description": "What the search matches against, not what a fresh parse would produce: the two stop agreeing the moment a chunking setting has moved. An empty list is an ordinary answer -- a document that failed, one still queued, and one in a base with no embedding model all have nothing indexed to show.",
+      "params": [
+        {
+          "name": "document_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeDocumentsChunksResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "chunks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/KnowledgeChunk"
+              }
+            }
+          },
+          "required": [
+            "chunks"
+          ]
+        }
+      }
+    },
+    {
       "name": "knowledge.documents.delete",
       "summary": "Remove one document from its base, with its chunks and blob.",
       "params": [
@@ -11970,6 +12002,46 @@
         },
         "required": [
           "ok"
+        ]
+      },
+      "KnowledgeChunk": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One indexed piece of a document, as the search sees it. The positional fields are absent for a format that does not have them -- absent means the parser did not know, never that the value is zero.",
+        "properties": {
+          "chunk_index": {
+            "type": "integer",
+            "description": "Where the piece sits in its document. This is the reading order: the chunker numbers pieces as it walks the sections the parser produced."
+          },
+          "total_chunks": {
+            "type": "integer"
+          },
+          "text": {
+            "type": "string"
+          },
+          "layout_type": {
+            "type": "string",
+            "description": "What the region is, as the source file marked it. Empty when the parser had nothing to go on."
+          },
+          "page_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The 1-based page the piece starts on, where the format has pages."
+          },
+          "heading_path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The headings the piece sits under, outermost first."
+          }
+        },
+        "required": [
+          "chunk_index",
+          "total_chunks",
+          "text"
         ]
       }
     },

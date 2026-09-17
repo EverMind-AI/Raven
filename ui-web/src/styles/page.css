@@ -5322,6 +5322,50 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   flex: 1; min-height: 0;
   border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px;
 }
+/* A file open takes the page the split would have had: same frame, same
+   bounds, no rail. Two columns inside it -- the file as it was written, and
+   the pieces the index holds -- because the second only means anything against
+   the first. Each column scrolls on its own, so a long document and a long
+   chunk list do not drag each other. */
+.kbview {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 34%);
+  grid-template-rows: auto minmax(0, 1fr); gap: 0 14px;
+  min-height: 0; flex: 1;
+  border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px 14px;
+}
+/* The header names the file, so it spans both halves rather than sitting over
+   one of them. */
+.kbview .kbvhd { grid-column: 1 / -1; }
+.kborig { min-width: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.kborig .kbframe { flex: 1; height: auto; min-height: 0; }
+.kbchunks {
+  min-width: 0; min-height: 0; display: flex; flex-direction: column;
+  border-left: 1px solid var(--line-soft); padding-left: 14px;
+}
+.kbchunkshd {
+  display: flex; align-items: baseline; gap: 8px; padding-bottom: 8px; flex: none;
+}
+.kbchunkshd b { font-size: 12.5px; font-weight: 600; }
+.kbchunksn { font-size: 11.5px; color: var(--muted); }
+.kbchunklist { overflow-y: auto; display: grid; gap: 8px; align-content: start; padding-right: 2px; }
+.kbchunk { border: 1px solid var(--line-soft); border-radius: 9px; padding: 8px 10px; background: var(--surface); }
+.kbchunkhd { display: flex; align-items: baseline; gap: 6px; margin-bottom: 5px; }
+/* The number is the reading order, so it reads first and stays put. */
+.kbchunkix { font-size: 11px; font-weight: 600; color: var(--muted); flex: none; }
+.kbchunkty, .kbchunkpg {
+  font-size: 10.5px; color: var(--muted); flex: none;
+  border: 1px solid var(--line-soft); border-radius: 5px; padding: 0 4px;
+}
+.kbchunkpath {
+  font-size: 10.5px; color: var(--muted); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* The text as it was cut, newlines and all: what the index holds is what the
+   reader is here to check, so it is not reflowed into a paragraph. */
+.kbchunktx {
+  font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.kbview .kbprose { margin: 0 auto; }
 .kbrail { overflow-y: auto; display: grid; gap: 2px; align-content: start;
   border-right: 1px solid var(--line-soft); padding-right: 10px; }
 .kbrail .kbadd { justify-self: stretch; margin-bottom: 8px; }

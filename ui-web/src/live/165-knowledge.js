@@ -57,6 +57,8 @@ DS.knowledge = {
     rpc.call('knowledge.documents.add_url', { base_id: baseId, url }).then((r) => r && r.document),
   index: (documentId) =>
     rpc.call('knowledge.documents.index', { document_id: documentId }).then((r) => r && r.document),
+  chunks: (documentId) =>
+    rpc.call('knowledge.documents.chunks', { document_id: documentId }).then((r) => (r && r.chunks) || []),
   /* Answers nothing: a document that was already gone and one this call
      removed leave the page in the same place, and the list read that
      follows is what the row is drawn from either way. */

@@ -564,6 +564,26 @@ class KnowledgeManager:
             return self._records.set_status(document_id, "failed", error=str(exc))
         return self._records.set_status(document_id, "ready", chunk_count=len(chunks))
 
+    async def document_chunks(self, document_id: str) -> list[Chunk]:
+        """One document's chunks as they were indexed, in reading order.
+
+        Read back from the store rather than re-cut from the file: what a
+        reader wants to see is what the search actually matches against, and
+        re-running the parser would show them what a *rebuild* would produce,
+        which is a different thing the moment a setting has moved.
+
+        Empty for a document with nothing indexed -- a base with no model, a
+        document that failed or is still queued -- which is the same answer as
+        a document whose base was deleted underneath it.
+        """
+        record = self._records.get_document(document_id)
+        if record is None:
+            return []
+        base = self._records.get_base(record.base_id)
+        if base is None or not self.embeds(base):
+            return []
+        return await self._store.list_chunks(base.id, document_id)
+
     async def _chunks_for(self, record: KnowledgeDocumentRecord) -> list[Chunk]:
         content = self.read_document(record.id)
         if content is None:

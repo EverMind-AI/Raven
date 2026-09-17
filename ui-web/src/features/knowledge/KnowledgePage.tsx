@@ -7,7 +7,7 @@ import { ProviderIcon, ravenIconPath } from '../../shell/provider-mark'
 import { open as openSettings, setTab as setSettingsTab } from '../settings/store'
 import * as store from './store'
 
-import type { KbBase, KbDoc, KbHit } from './types'
+import type { KbBase, KbChunk, KbDoc, KbHit } from './types'
 import type { JSX } from 'react'
 
 /* Controls the panel shows because they belong to it, and which nothing is
@@ -1014,7 +1014,19 @@ function DocMenu({ doc, busy }: { doc: KbDoc; busy: boolean }): JSX.Element {
       </button>
       {open && (
         <div className="kbmenu" role="menu">
-          <Soon label={t('gui.kb.doc_view_chunks')} className="mi" />
+          {/* The same door as clicking the name: both open the file beside
+              its chunks, and two ways in that showed different things would
+              be two features to keep in step. */}
+          <button
+            className="mi"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false)
+              store.openDoc(doc)
+            }}
+          >
+            {t('gui.kb.doc_view_chunks')}
+          </button>
           {/* Only a note. Every other origin is a copy of something the reader
               holds elsewhere, and offering to edit it here would make this
               base the only place their change exists. */}
@@ -1176,7 +1188,73 @@ function MarkdownView({ doc }: { doc: KbDoc }): JSX.Element {
    arrives under a CSP sandbox, which is what gives it an opaque origin; the
    attribute as well would stop the browser's own PDF viewer, which is
    script-driven, from drawing anything at all. */
+/* One indexed piece, as the search sees it.
+
+   Numbered from 1 the way the recall panel numbers its hits, so the same
+   chunk carries the same name in both places. What the badges say is what the
+   parser found and nothing more: a page only where the format has pages, a
+   layout type only where the source marked one. */
+function ChunkRow({ chunk }: { chunk: KbChunk }): JSX.Element {
+  const path = chunk.heading_path ?? []
+  return (
+    <div className="kbchunk">
+      <div className="kbchunkhd">
+        <span className="kbchunkix">#{chunk.chunk_index + 1}</span>
+        {chunk.layout_type && <span className="kbchunkty">{chunk.layout_type}</span>}
+        {typeof chunk.page_number === 'number' && (
+          <span className="kbchunkpg">{t('gui.kb.chunks_page', { n: chunk.page_number })}</span>
+        )}
+        {path.length > 0 && (
+          <span className="kbchunkpath" title={path.join(' > ')}>
+            {path.join(' > ')}
+          </span>
+        )}
+      </div>
+      <div className="kbchunktx">{chunk.text}</div>
+    </div>
+  )
+}
+
+/* The pieces the file was cut into, in reading order.
+
+   Reading order is the chunker's own numbering: it walks the sections a parser
+   produced and numbers as it goes, so the sequence down this list is the
+   sequence in the document beside it. */
+function ChunkList({ s }: { s: ReturnType<typeof store.getState> }): JSX.Element {
+  return (
+    <div className="kbchunks">
+      <div className="kbchunkshd">
+        <b>{t('gui.kb.chunks_title')}</b>
+        {s.chunks && s.chunks.length > 0 && (
+          <span className="kbchunksn">{t('gui.kb.chunks_n', { n: s.chunks.length })}</span>
+        )}
+      </div>
+      {s.chunks === null ? (
+        <Wait label={t('gui.kb.chunks_loading')} />
+      ) : s.chunksFailed ? (
+        <div className="empty-note">
+          <div className="ttl">{s.chunksFailed}</div>
+        </div>
+      ) : s.chunks.length === 0 ? (
+        /* Not the same as still reading: a document that failed, one still
+           queued, and one in a base with no model all land here, and saying
+           so beats an empty column a reader has to interpret. */
+        <div className="empty-note">
+          <div className="ttl">{t('gui.kb.chunks_none')}</div>
+        </div>
+      ) : (
+        <div className="kbchunklist">
+          {s.chunks.map((chunk) => (
+            <ChunkRow key={chunk.chunk_index} chunk={chunk} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function DocViewer({ doc }: { doc: KbDoc }): JSX.Element {
+
   const kind = store.previewKind(doc)
   return (
     <>
@@ -1195,29 +1273,27 @@ function DocViewer({ doc }: { doc: KbDoc }): JSX.Element {
           </a>
         )}
       </div>
-      {kind === 'markdown' ? (
-        <MarkdownView doc={doc} />
-      ) : kind === 'none' ? (
-        <div className="empty-note">
-          <div className="ttl">{t('gui.kb.no_preview')}</div>
-          {/* A download rather than a wall of bytes: the file is still theirs
-              to open, in whatever does know the format. */}
-          <a className="mini" href={store.previewUrl(doc)} download={doc.source}>
-            {t('gui.kb.download')}
-          </a>
-        </div>
-      ) : (
-        <iframe className="kbframe" src={store.previewUrl(doc)} title={doc.source} />
-      )}
+      <div className="kborig">
+        {kind === 'markdown' ? (
+          <MarkdownView doc={doc} />
+        ) : kind === 'none' ? (
+          <div className="empty-note">
+            <div className="ttl">{t('gui.kb.no_preview')}</div>
+            {/* A download rather than a wall of bytes: the file is still theirs
+                to open, in whatever does know the format. */}
+            <a className="mini" href={store.previewUrl(doc)} download={doc.source}>
+              {t('gui.kb.download')}
+            </a>
+          </div>
+        ) : (
+          <iframe className="kbframe" src={store.previewUrl(doc)} title={doc.source} />
+        )}
+      </div>
     </>
   )
 }
 
 function BasePanel({ base, s }: { base: KbBase; s: ReturnType<typeof store.getState> }): JSX.Element {
-  /* The file takes the whole panel rather than opening beside the table: a
-     document is what the reader came to look at, and half a page of it is not
-     worth keeping a list they can get back to with one button. */
-  if (s.viewing) return <DocViewer doc={s.viewing} />
   /* Every row, and at least one: an empty list whose header tick reads "on"
      would offer to act on nothing. */
   const all = s.docs.length > 0 && s.picked.length === s.docs.length
@@ -1405,6 +1481,23 @@ export function KnowledgeApp(): JSX.Element {
   }
 
   const open = s.openId ? s.bases.find((b) => b.id === s.openId) : undefined
+  /* A file takes the whole page, rail included, rather than only the panel
+     beside it: a document is what the reader came to look at, and the widest
+     thing on the screen should be the thing being read. What the rail offers
+     -- another base, a new one -- is not a move anyone makes mid-document, and
+     it is one button away. */
+  if (s.viewing) {
+    /* Two halves of one question: the file as it was written, and the pieces
+       the index actually holds. Side by side because the second is only
+       meaningful against the first -- a chunk list alone says nothing about
+       where a cut landed. */
+    return (
+      <div className="kbview">
+        <DocViewer doc={s.viewing} />
+        <ChunkList s={s} />
+      </div>
+    )
+  }
   return (
     <>
       <div className="kbsplit">

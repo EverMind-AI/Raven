@@ -3768,6 +3768,45 @@ class KnowledgeDocumentsIndexResult(_Strict):
     document: KnowledgeDocument
 
 
+class KnowledgeChunk(_Strict):
+    """One indexed piece of a document, as the search sees it.
+
+    Positional fields are optional because only some formats have them: a
+    parser reports a page and a box for a document laid out on pages, and
+    nothing for a text file that has no such thing. Absent means the format
+    does not know, never that the value is zero.
+    """
+
+    #: Where the piece sits in its document, and how many there are. This is
+    #: the reading order: the chunker numbers pieces as it walks the sections
+    #: the parser produced, so the sequence is the document's own.
+    chunk_index: int
+    total_chunks: int
+    text: str
+    #: What the region is, as the source file marked it -- a heading, a table,
+    #: a figure caption. Empty when the parser had nothing to go on.
+    layout_type: str = ""
+    #: The 1-based page the piece starts on, for a format that has pages.
+    page_number: int | None = None
+    #: The heading path the piece sits under, outermost first.
+    heading_path: list[str] = Field(default_factory=list)
+
+
+class KnowledgeDocumentsChunksParams(_Strict):
+    document_id: str
+
+
+class KnowledgeDocumentsChunksResult(_Strict):
+    """A document's chunks in reading order.
+
+    Empty is an ordinary answer, not an error: a document that failed, one
+    still queued, and one in a base with no embedding model all have nothing
+    indexed to show.
+    """
+
+    chunks: list[KnowledgeChunk]
+
+
 class KnowledgeDocumentsDeleteParams(_Strict):
     document_id: str
 
@@ -4243,6 +4282,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "knowledge.documents.add_url": (KnowledgeDocumentsAddUrlParams, KnowledgeDocumentsAddUrlResult),
     "knowledge.documents.index": (KnowledgeDocumentsIndexParams, KnowledgeDocumentsIndexResult),
     "knowledge.documents.delete": (KnowledgeDocumentsDeleteParams, KnowledgeDocumentsDeleteResult),
+    "knowledge.documents.chunks": (KnowledgeDocumentsChunksParams, KnowledgeDocumentsChunksResult),
     "knowledge.search": (KnowledgeSearchParams, KnowledgeSearchResult),
     # playbooks.* -- the stored library, read-only
     "playbooks.list": (PlaybooksListParams, PlaybooksListResult),

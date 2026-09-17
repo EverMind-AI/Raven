@@ -167,6 +167,24 @@ class LanceDBVectorStore(VectorStoreBase):
             for row in rows
         ]
 
+    async def list_chunks(self, collection: str, document_id: str) -> list[Chunk]:
+        if not await self.has_collection(collection):
+            return []
+        table = await self._table(collection)
+        rows = await (
+            table.query()
+            .where(f"document_id = {_sql_quote(document_id)}")
+            # The vector is the bulk of a row and nothing here reads it.
+            .select(["chunk_index", "chunk_json"])
+            .to_list()
+        )
+        chunks = [Chunk.model_validate_json(row["chunk_json"]) for row in rows]
+        # By the chunk's own number rather than the row's: a scan has no order
+        # to promise, and the number is what the chunker wrote as it walked the
+        # document.
+        chunks.sort(key=lambda chunk: chunk.chunk_index)
+        return chunks
+
     async def list_documents(
         self,
         collection: str,

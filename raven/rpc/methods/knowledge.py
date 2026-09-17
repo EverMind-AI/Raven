@@ -467,6 +467,48 @@ async def knowledge_documents_index(params: dict[str, Any]) -> dict[str, Any]:
     return {"document": _doc_row(doc)}
 
 
+async def knowledge_documents_chunks(params: dict[str, Any]) -> dict[str, Any]:
+    """One document's indexed pieces, in reading order.
+
+    What the search matches against, not what a fresh parse would produce: a
+    reader checking why a document answers the way it does needs the pieces
+    that are in the index, and those two stop agreeing the moment a chunking
+    setting has moved.
+    """
+    # Stripped, the way `query` is: a blank id is never a document, and
+    # answering it with an empty list would read as "this file indexed to
+    # nothing" rather than "you asked for nothing".
+    document_id = str(params.get("document_id") or "").strip()
+    if not document_id:
+        raise ConfigValidationError("document_id is required")
+    try:
+        chunks = await knowledge_manager().document_chunks(document_id)
+    except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
+        raise InternalError(f"reading chunks failed: {exc}") from exc
+    return {"chunks": [_chunk_row(chunk) for chunk in chunks]}
+
+
+def _chunk_row(chunk: Any) -> dict[str, Any]:
+    """One chunk as the page reads it, positional metadata flattened.
+
+    The parser records more than this -- a box, the character range each
+    element of a section occupies -- and none of it has a reader yet. What is
+    lifted out here is what a person scanning a list of pieces uses: which
+    heading it sits under, what kind of region it is, and what page to turn to.
+    """
+    metadata = getattr(chunk, "metadata", None) or {}
+    page = metadata.get("page_number")
+    path = metadata.get("heading_path")
+    return {
+        "chunk_index": int(getattr(chunk, "chunk_index", 0) or 0),
+        "total_chunks": int(getattr(chunk, "total_chunks", 0) or 0),
+        "text": getattr(chunk, "text", "") or "",
+        "layout_type": str(metadata.get("layout_type") or ""),
+        "page_number": int(page) if isinstance(page, int) and page > 0 else None,
+        "heading_path": [str(part) for part in path] if isinstance(path, list) else [],
+    }
+
+
 def _forget_preview(document_id: str) -> None:
     """Drop the source copy a preview retained for this document.
 
@@ -571,6 +613,7 @@ def register_knowledge_methods(dispatcher: Dispatcher) -> None:
     dispatcher.register("knowledge.bases.settings", knowledge_bases_settings)
     dispatcher.register("knowledge.bases.delete", knowledge_bases_delete)
     dispatcher.register("knowledge.documents.list", knowledge_documents_list)
+    dispatcher.register("knowledge.documents.chunks", knowledge_documents_chunks)
     dispatcher.register("knowledge.documents.add", knowledge_documents_add)
     dispatcher.register("knowledge.documents.add_note", knowledge_documents_add_note)
     dispatcher.register("knowledge.documents.update_note", knowledge_documents_update_note)

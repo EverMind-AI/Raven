@@ -991,3 +991,70 @@ async def test_a_search_with_no_top_k_leaves_the_number_to_the_engine() -> None:
     await kb.knowledge_search({"base_ids": ["b1"], "query": "what", "top_k": 3})
 
     assert asked == [None, 3]
+
+
+async def test_chunks_answer_carries_what_the_parser_found(monkeypatch) -> None:
+    """The row is flattened for the page: which piece it is, what kind of
+    region, what page. The parser records more -- a box, the character range
+    each element covers -- and none of it has a reader yet."""
+
+    class _Chunk:
+        chunk_index = 2
+        total_chunks = 5
+        text = "the body of it"
+        metadata = {
+            "layout_type": "heading",
+            "page_number": 3,
+            "heading_path": ["Terms", "Payment"],
+            "bbox": {"x0": 72.0, "x1": 540.0},
+        }
+
+    class _Manager:
+        async def document_chunks(self, document_id: str):
+            assert document_id == "d1"
+            return [_Chunk()]
+
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: _Manager())
+
+    out = await kb.knowledge_documents_chunks({"document_id": "d1"})
+
+    assert out == {
+        "chunks": [
+            {
+                "chunk_index": 2,
+                "total_chunks": 5,
+                "text": "the body of it",
+                "layout_type": "heading",
+                "page_number": 3,
+                "heading_path": ["Terms", "Payment"],
+            }
+        ]
+    }
+
+
+async def test_chunks_of_a_text_file_carry_no_page(monkeypatch) -> None:
+    """Absent, not zero: a text file has no pages, and a page number of 0 would
+    read as one."""
+
+    class _Chunk:
+        chunk_index = 0
+        total_chunks = 1
+        text = "plain"
+        metadata = {"reading_order": 0}
+
+    class _Manager:
+        async def document_chunks(self, document_id: str):
+            return [_Chunk()]
+
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: _Manager())
+
+    row = (await kb.knowledge_documents_chunks({"document_id": "d1"}))["chunks"][0]
+
+    assert row["page_number"] is None
+    assert row["layout_type"] == ""
+    assert row["heading_path"] == []
+
+
+async def test_chunks_needs_a_document_id() -> None:
+    with pytest.raises(ConfigValidationError):
+        await kb.knowledge_documents_chunks({"document_id": "  "})

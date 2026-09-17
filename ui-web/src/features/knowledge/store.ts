@@ -1,7 +1,7 @@
 import { shell, t } from '../../shell/bridge'
 import { show as toast } from '../../shell/toast'
 
-import type { KbBase, KbDoc, KbHit, KbSettings, KbStatus, KnowledgeSource } from './types'
+import type { KbBase, KbChunk, KbDoc, KbHit, KbSettings, KbStatus, KnowledgeSource } from './types'
 
 /* What an RPC failure actually said.
  *
@@ -59,6 +59,16 @@ interface State {
      media type to decide what it is showing, and a row that is deleted while
      open should not leave the panel looking up an id that is gone. */
   viewing: KbDoc | null
+  /* The open document's indexed pieces, beside its original. Null while they
+     are still being read, which is a different thing from the empty list a
+     document with nothing indexed answers with -- one is "wait", the other is
+     "there is nothing here", and a panel that showed the same for both would
+     be lying half the time. */
+  chunks: KbChunk[] | null
+  /* Why the pieces could not be read. The panel says so rather than showing an
+     empty list, which a reader would take for a document that indexed to
+     nothing. */
+  chunksFailed: string | null
   /* Which add-a-source dialog is up, if any. One field rather than a boolean
      each, because two of them open at once is not a state this page has. */
   dialog: Dialog | null
@@ -96,6 +106,8 @@ const EMPTY: State = {
   settings: false,
   picked: [],
   viewing: null,
+  chunks: null,
+  chunksFailed: null,
   dialog: null,
   adding: null,
   dragDepth: 0,
@@ -852,9 +864,32 @@ export function previewUrl(doc: KbDoc): string {
 }
 
 export function openDoc(doc: KbDoc): void {
-  set({ viewing: doc })
+  set({ viewing: doc, chunks: null, chunksFailed: null })
+  void loadChunks(doc)
 }
 
 export function closeDoc(): void {
-  set({ viewing: null })
+  set({ viewing: null, chunks: null, chunksFailed: null })
+}
+
+/* The open document's pieces, read once per opening.
+
+   Guarded on the document still being the open one: a reader clicking down a
+   list faster than the engine answers would otherwise see the pieces of a file
+   they have already moved on from, under the name of the one they are looking
+   at. */
+async function loadChunks(doc: KbDoc): Promise<void> {
+  try {
+    const found = await source().chunks(doc.id)
+    if (state.viewing?.id !== doc.id) return
+    /* Sorted here, where the panel's claim is made, rather than trusted from
+       the wire: the engine orders its answer, but "reading order" is what this
+       list says it shows, and a guarantee is worth holding at the place that
+       states it. Copied rather than sorted in place -- the array is the
+       source's, not ours. */
+    set({ chunks: [...found].sort((a, b) => a.chunk_index - b.chunk_index), chunksFailed: null })
+  } catch (e) {
+    if (state.viewing?.id !== doc.id) return
+    set({ chunks: [], chunksFailed: said(e) })
+  }
 }
