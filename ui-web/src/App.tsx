@@ -42,6 +42,7 @@ import { CapsPage } from './chrome/CapsPage'
 import { ChatTop } from './chrome/ChatTop'
 import { Dock } from './chrome/Dock'
 import { Rail } from './chrome/Rail'
+import { WsPane } from './chrome/WsPane'
 import * as menu from './shell/menu'
 import * as toast from './shell/toast'
 import * as confirm from './state/confirm'
@@ -195,10 +196,11 @@ function Toasts(): JSX.Element {
 
 /* Each interior into the container page.html still provides. Guarded the way
    the island mounts are: a document without the container renders nothing
-   rather than throwing. The rail and the chat column resolve their own
-   containers -- div.app's two columns are the regions with no id -- so does the
-   dock, which is nested inside one, and the two overlays below find their own
-   host, because theirs is the one that was standing when they were raised. */
+   rather than throwing. The rail, the chat column and the workspace pane
+   resolve their own containers -- div.app's two columns are the regions with no
+   id -- so does the dock, which is nested inside one, and the two overlays
+   below find their own host, because theirs is the one that was standing when
+   they were raised. */
 export function App(): JSX.Element {
   const veilEl = document.getElementById('veil')
   const detailEl = document.getElementById('detail')
@@ -208,6 +210,7 @@ export function App(): JSX.Element {
       <Rail />
       <ChatTop />
       <Dock />
+      <WsPane />
       <CapsPage />
       {detailEl ? createPortal(<DetailPanel />, detailEl) : null}
       {setVeilEl ? createPortal(<SettingsModal />, setVeilEl) : null}

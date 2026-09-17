@@ -13,10 +13,10 @@ import type { AgentRow, AgentsSource, InstanceCtx, InstanceRow, OpenItem, Subage
  * nodes into it, wsReset clears it with the session), so the state lives in a
  * plain store the shims can call and the component subscribes.
  *
- * This is the legacy AGENTS/agentOpen/dagNode trio (ui-web/src/legacy/demo/110-subagents.js
- * before the migration) plus the refresh/poll judgements that lived beside it;
- * the fingerprint, the floor and the clock keep their behaviour so the two can
- * be diffed.
+ * This is the legacy AGENTS/agentOpen/dagNode trio (the demo layer's sub-agent
+ * part, before the migration) plus the refresh/poll judgements that lived
+ * beside it; the fingerprint, the floor and the clock keep their behaviour so
+ * the two can be diffed.
  */
 
 export interface AgentsState {

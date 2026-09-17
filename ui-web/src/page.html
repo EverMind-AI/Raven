@@ -74,59 +74,10 @@
       </div>
 
       <!-- workspace: what the agent is touching right now -->
-      <aside class="ws" id="ws" data-i18n-aria="gui.workspace">
-        <div class="ws-top">
-          <!-- Segmented icons, not a dropdown: a collapsed menu hides exactly the
-               thing you need in your peripheral vision -- that a command is still
-               running, or that three more files changed. -->
-          <div class="wseg" id="wsTabs" role="tablist">
-            <button role="tab" data-w="diff" aria-selected="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                <rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8.5v7M8.5 12h7"/>
-              </svg>
-              <span class="lb" data-i18n="gui.ws.changes">Diff</span>
-              <span class="bdg" id="wsUnseen" hidden></span>
-            </button>
-            <button role="tab" data-w="browser" aria-selected="false">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                <circle cx="12" cy="12" r="8"/><path d="M4.5 12h15M12 4.5c-4.5 4.5-4.5 10.5 0 15M12 4.5c4.5 4.5 4.5 10.5 0 15"/>
-              </svg>
-              <span class="lb" data-i18n="gui.ws.browser">浏览器</span>
-            </button>
-            <button role="tab" data-w="agents" aria-selected="false">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                <rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 4.5V8M8.5 13h.01M15.5 13h.01"/>
-              </svg>
-              <span class="lb" data-i18n="gui.ws.agents">子智能体</span>
-              <span class="rundot" id="wsAgentRun" hidden></span>
-            </button>
-          </div>
-          <div class="ws-acts">
-            <!-- Two glyphs, one button: arrows out to take the window, arrows in
-                 to give it back. The state is on the button, so which one shows
-                 is CSS rather than a redraw. -->
-            <button class="ghost-ic wsfull tipdn" id="wsWide" aria-pressed="false"
-                    data-i18n-tip="gui.ws.expand_panel" data-i18n-aria="gui.ws.expand_panel">
-              <svg class="ex" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                <path d="M14 5h5v5M10 19H5v-5M19 5l-6 6M5 19l6-6"/>
-              </svg>
-              <svg class="in" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                <path d="M19 10h-5V5M5 14h5v5M13 11l6-6M11 13l-6 6"/>
-              </svg>
-            </button>
-            <!-- Same glyph and same corner as the toggle in the chat header, and
-                 only one of the two is ever on screen: the panel toggle is one
-                 control at one place that changes state, not a pair that trade
-                 positions when the panel opens. -->
-            <button class="ghost-ic wstog tipdn" id="wsClose" aria-expanded="true" data-i18n-tip="gui.collapse_ws" data-i18n-aria="gui.collapse_ws">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                <rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15"/>
-              </svg>
-            </button>
-          </div>
-        </div>
-        <div class="ws-body" id="wsBody"></div>
-      </aside>
+      <!-- The two children inside render from src/chrome/WsPane.tsx; only the
+           column itself is still markup. Its #wsBody is shared ground: the
+           workspace, browser and sub-agent views each draw into that box. -->
+      <aside class="ws" id="ws" data-i18n-aria="gui.workspace"></aside>
     </div>
   </div>
 </div>
