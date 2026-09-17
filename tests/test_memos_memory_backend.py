@@ -9,6 +9,12 @@ from raven_memos.backend import MemosBackend
 from tests._hosted_memory_cases import USER, HostedBackendCases
 from tests._hosted_memory_fakes import FakeMemos
 
+_SKILL = {
+    "name": "Widen a strict type check",
+    "description": "Accept numpy scalars in validation.",
+    "procedure": ["1. Find _validate_params", "2. Use numbers.Integral"],
+}
+
 
 class TestMemos(HostedBackendCases):
     fake_cls = FakeMemos
@@ -59,13 +65,45 @@ class TestMemos(HostedBackendCases):
         assert backend._effective_status(Reply(200, {"code": 0, "message": "ok"})) == 200
         assert backend._effective_status(Reply(500, None)) == 500
 
-    async def test_hits_keep_memory_and_preference_lists_only(self, backend, fake):
+    async def test_hits_keep_the_views_asked_for_and_drop_the_rest(self, backend, fake):
         fake.seed(USER, "alice drinks tea")
         fake.preferences[USER] = ["prefers oolong"]
+        fake.skills[USER] = [_SKILL]
         hits = await backend.recall("tea", user_id=USER, top_k=10)
-        assert [h.text for h in hits] == ["alice drinks tea", "prefers oolong"]
-        assert [h.metadata["kind"] for h in hits] == ["memory", "preference"]
+        # Ordered by relativity across the views, not by which list they sat in:
+        # the caller keeps a prefix, so a weak factual row must not displace a
+        # strong skill just for arriving in an earlier list.
+        assert [h.metadata["kind"] for h in hits] == ["skill", "memory", "preference"]
+        assert hits[1].text == "alice drinks tea"
+        assert hits[2].text == "prefers oolong"
+        # Tool, profile and event rows are memory about the session, not about
+        # the work; they stay out.
         assert not any("noise" in h.text for h in hits)
+
+    async def test_a_skill_arrives_as_its_procedure_not_as_an_empty_string(self, backend, fake):
+        """``skill_value`` is a triple, and the empty-text guard hides the miss.
+
+        Read a skill row for ``memory_value`` and it is blank, and a blank hit
+        is skipped -- so the whole view reads as "this pool has no skills"
+        rather than as a field name that does not match.
+        """
+        fake.skills[USER] = [_SKILL]
+        hits = await backend.recall("types", user_id=USER, top_k=10)
+        (skill,) = [h for h in hits if h.metadata["kind"] == "skill"]
+        assert skill.text == (
+            "Widen a strict type check\n"
+            "Accept numpy scalars in validation.\n"
+            "1. Find _validate_params\n"
+            "2. Use numbers.Integral"
+        )
+        assert skill.score == 0.9
+
+    async def test_recall_names_the_views_it_wants(self, backend, fake):
+        """The service validates the names (an unknown one is a 400), and its
+        default is the factual view alone -- skills have to be asked for."""
+        await backend.recall("tea", user_id=USER, top_k=5)
+        (req,) = fake.requests
+        assert FakeMemos.body(req)["include_memory_view"] == ["detail_factual", "skill"]
 
     async def test_delete_sends_memory_ids_alone(self, backend, fake):
         """One selector only: ``user_id`` beside ``memory_ids`` is refused by

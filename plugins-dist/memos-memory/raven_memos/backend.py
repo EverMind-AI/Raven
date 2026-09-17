@@ -7,9 +7,22 @@ conversation back, ``POST /delete/memory`` with ``memory_ids`` alone for the
 browser. A search row is ``{"id", "memory_key", "memory_value", "memory_type",
 "relativity", "conversation_id", ...}`` (observed 2026-09-15).
 
-A search takes its row budget as memory_limit_number; top_k is not a
-field of this route and is ignored rather than refused, which caps a caller that
-sends it at the service default of 6 rows.
+A search takes its row budget as ``memory_limit_number``; ``top_k`` is not a
+field of this route and is ignored rather than refused, which caps a caller
+that sends it at the service default of 6 rows.
+
+A search answers only from the views named in ``include_memory_view``; an
+unknown name is a 400, so the field is read rather than tolerated. The default
+is the factual view alone, which leaves a whole class of memory out of reach:
+the pool also holds skills, each a ``name``/``description``/``procedure``
+triple distilled from several conversations, and those are the closest thing
+this service has to an agent's own experience. ``SEARCH_VIEWS`` asks for them
+beside the factual rows. ``memory_limit_number`` is one budget shared across
+the views, so asking costs nothing when the skills lose on relevance -- and
+they usually do (measured 2026-09-17: 9 skills topped out at 0.5097 against a
+0.5773 floor among the 20 factual rows that filled the budget). That is the
+service's own ranking, which is worth reporting; a caller that never asked
+could not tell it apart from having no skills at all.
 
 MemOS reports failure inside a 200: ``code`` is ``0`` on success, ``40309`` on
 rate limiting, and ``message`` is ``"ok"``. ``_effective_status`` folds those
@@ -28,6 +41,28 @@ from raven.memory_engine import Call, HttpMemoryBackend, Reply, clamp_score
 from raven.plugins import PluginContext
 
 RATE_LIMITED_CODE = 40309
+#: Views a recall draws from. ``preference`` is left out: it holds standing
+#: likes and dislikes about a person, which a coding task has no use for.
+SEARCH_VIEWS = ("detail_factual", "skill")
+
+
+def _skill_text(value: Any) -> str:
+    """Flatten a skill into the lines a model can act on.
+
+    A skill is not a sentence like the factual rows are: it arrives as
+    ``{"name", "description", "procedure": [...]}``. The procedure is the part
+    worth having -- it names files, functions and commands -- so it is kept
+    whole under its own title rather than summarised away.
+    """
+    if not isinstance(value, dict):
+        return str(value or "")
+    lines = [str(value.get("name") or "").strip(), str(value.get("description") or "").strip()]
+    procedure = value.get("procedure")
+    if isinstance(procedure, list):
+        lines.extend(str(step).strip() for step in procedure)
+    elif procedure:
+        lines.append(str(procedure).strip())
+    return "\n".join(line for line in lines if line)
 
 
 def _body_code(body: Any) -> int | None:
@@ -55,34 +90,52 @@ class MemosBackend(HttpMemoryBackend):
         return self._effective_status(reply) == 200 and (reply.body or {}).get("message") == "ok"
 
     def _recall_call(self, query: str, top_k: int, owner: str) -> Call:
-        # The row budget is memory_limit_number. top_k is not a field of
-        # this route: it is accepted and ignored, so the service answers with its
-        # own default (6 rows, measured 2026-09-17) whatever the caller asked for.
+        # The row budget is ``memory_limit_number``. ``top_k`` is not a field
+        # of this route: it is accepted and ignored, so the service answers with
+        # its own default (6 rows, measured 2026-09-17) whatever was asked for.
         return Call(
             "POST",
             "/search/memory",
-            json={"query": query, "user_id": owner, "memory_limit_number": top_k},
+            json={
+                "query": query,
+                "user_id": owner,
+                "memory_limit_number": top_k,
+                "include_memory_view": list(SEARCH_VIEWS),
+            },
         )
 
     def _parse_hits(self, body: Any) -> list[Memory]:
         data = (body or {}).get("data") or {}
         out: list[Memory] = []
-        for kind, key in (("memory", "memory_detail_list"), ("preference", "preference_detail_list")):
-            for row in data.get(key) or []:
+        rows: list[tuple[str, dict[str, Any]]] = []
+        for kind, key in (
+            ("memory", "memory_detail_list"),
+            ("preference", "preference_detail_list"),
+            ("skill", "skill_detail_list"),
+        ):
+            rows.extend((kind, row) for row in data.get(key) or [])
+        for kind, row in rows:
+            if kind == "skill":
+                text = _skill_text(row.get("skill_value"))
+            else:
                 text = str(row.get("memory_value") or row.get("preference") or "")
-                if not text:
-                    continue
-                out.append(
-                    Memory(
-                        text=text,
-                        score=clamp_score(row.get("relativity", row.get("score"))),
-                        metadata={
-                            "id": row.get("memory_id") or row.get("id"),
-                            "kind": kind,
-                            "backend": self.NAME,
-                        },
-                    )
+            if not text:
+                continue
+            out.append(
+                Memory(
+                    text=text,
+                    score=clamp_score(row.get("relativity", row.get("score"))),
+                    metadata={
+                        "id": row.get("memory_id") or row.get("id"),
+                        "kind": kind,
+                        "backend": self.NAME,
+                    },
                 )
+            )
+        # The caller keeps the first ``top_k``. Each view arrives sorted within
+        # itself, so without this a weaker row from an earlier view would
+        # outrank a better one purely by which list it happened to sit in.
+        out.sort(key=lambda m: m.score, reverse=True)
         return out
 
     def _store_call(self, session_id: str, messages: list[dict[str, Any]], owner: str) -> Call:
@@ -127,7 +180,12 @@ class MemosBackend(HttpMemoryBackend):
         return Call(
             "POST",
             "/search/memory",
-            json={"query": "health", "user_id": self._user_id, "memory_limit_number": 1},
+            json={
+                "query": "health",
+                "user_id": self._user_id,
+                "memory_limit_number": 1,
+                "include_memory_view": list(SEARCH_VIEWS),
+            },
         )
 
 
@@ -136,4 +194,4 @@ def make_backend(ctx: PluginContext) -> MemosBackend:
     return MemosBackend(ctx)
 
 
-__all__ = ["MemosBackend", "make_backend"]
+__all__ = ["SEARCH_VIEWS", "MemosBackend", "make_backend"]

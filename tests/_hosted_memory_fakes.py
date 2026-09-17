@@ -244,6 +244,10 @@ class FakeMemos(FakeCloud):
     def __init__(self, **kw: Any) -> None:
         super().__init__(**kw)
         self.preferences: dict[str, list[str]] = {}
+        # Seeded like preferences are, so a case that says nothing about skills
+        # gets none. The noise lists below stay unconditional on purpose: they
+        # are what a backend has to filter out, and a case cannot ask for them.
+        self.skills: dict[str, list[dict[str, Any]]] = {}
 
     def _error_body(self, status: int) -> Any:
         return {"code": status, "message": f"fake {status}", "data": None}
@@ -279,7 +283,13 @@ class FakeMemos(FakeCloud):
                     for i, p in enumerate(self.preferences.get(b["user_id"], []))
                 ],
                 "tool_memory_detail_list": [{"memory_id": "tool-1", "memory_value": "tool noise"}],
-                "skill_detail_list": [{"memory_id": "skill-1", "memory_value": "skill noise"}],
+                # A skill is a name/description/procedure triple, not a sentence
+                # in ``memory_value`` -- reading it as one drops every skill the
+                # service returns, and drops it silently.
+                "skill_detail_list": [
+                    {"memory_id": f"skill-{i}", "relativity": 0.9, "skill_value": sk}
+                    for i, sk in enumerate(self.skills.get(b["user_id"], []))
+                ],
                 "profile_detail_list": [{"memory_id": "profile-1", "memory_value": "profile noise"}],
                 "event_detail_list": [{"memory_id": "event-1", "memory_value": "event noise"}],
                 "preference_note": "",
