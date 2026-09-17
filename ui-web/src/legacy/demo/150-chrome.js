@@ -1,33 +1,21 @@
-/* An IME sends its keystrokes as keydown too, so while a composition is open
-   Enter belongs to the input method: it commits the candidate being typed
-   (letters included, which is how CJK users type Latin). Acting on it would
-   swallow the text the reader was in the middle of writing. Every Enter
-   handler over a text field asks this first. keyCode 229 is the older spelling
-   some IMEs still send instead of isComposing. */
+/* What is left of the page's chrome: the copy button over a code block, the
+   rail's twin toggle, the two composer chips and the settings shortcut. The
+   Escape order is a table in ui-web/src/state/overlays.ts and the one keydown
+   that reads it, with the three shortcuts it shares a handler with, is
+   ui-web/src/state/globalListeners.ts -- installed below from where the
+   handler used to be added. The IME guard is the composer field's own, passed
+   along because demo/110-subagents.js still asks this file for it. */
 
 import { islands } from '../../islands'
-import { toggle as toggleFind } from '../../shell/find'
-import { close as closeImage } from '../../shell/lightbox'
+import { composing } from '../../features/composer/store'
 import { toggle as togglePerm } from '../../shell/perm'
 import { toggle as toggleTier } from '../../shell/tier'
-import { get as railOpen, set as setRail } from '../../state/rail'
-import { sources } from '../../state/sources'
+import { installEscapeChain } from '../../state/globalListeners'
+import { set as setRail } from '../../state/rail'
 import { $, T } from './010-kernel.js'
-import { turn } from './040-state.js'
 import { setWs, wsOpen } from './100-workspace.js'
-import { closeCaps, closeDetail, closeSet, closeXa, setIsOpen } from './120-capabilities.js'
+import { closeSet, setIsOpen } from './120-capabilities.js'
 import { isMac } from './130-settings.js'
-import { closeCron, closeKb, closeMem } from './140-schedule.js'
-import { closeConn, connCloseDialog } from './145-connections.js'
-import { closePb } from './154-playbooks.js'
-
-const composing = (e) => !!(e.isComposing || e.keyCode === 229);
-
-/* ---- the search row ------------------------------------------------
-   Owned by ui-web/src/shell/find.ts, which holds the term and whether the row
-   is showing, and exports the toggle imported here. The Cmd+F handler below
-   stays here because showing the rail first is a chrome decision, and it is the
-   only caller from this side. */
 
 // Shrinking past the split point must not leave the conversation hidden.
 let tooNarrowToSplit;
@@ -69,43 +57,13 @@ export function install() {
     }, 1500);
   });
 
-  document.addEventListener('keydown', (e) => {
-    /* Escape ends an open composition; it must not also close a panel or halt the
-     running turn behind the reader's back. */
-    if (composing(e)) return;
-    const inField = /INPUT|TEXTAREA/.test(document.activeElement.tagName);
-    if (e.key === 'Escape') {
-      if (document.querySelector('.lightbox')) return closeImage();
-      if ($('#veil').dataset.open === 'true') return $('#cfNo').click();
-      /* After the confirm veil, before the page: a dialog raised over the entry
-       list is what Escape should take back first. */
-      if ($('#connVeil').dataset.open === 'true') return connCloseDialog();
-      if ($('#detail').dataset.open === 'true') return closeDetail();
-      if ($('#jobVeil').dataset.open === 'true') return $('#jobNo').click();
-      if ($('#cronPage').dataset.open === 'true') return closeCron();
-      if ($('#memPage').dataset.open === 'true') return closeMem();
-      if ($('#pbPage').dataset.open === 'true') return closePb();
-      if ($('#kbPage').dataset.open === 'true') return closeKb();
-      if ($('#capsPage').dataset.open === 'true') return closeCaps();
-      if ($('#xaPage').dataset.open === 'true') return closeXa();
-      if ($('#connPage').dataset.open === 'true') return closeConn();
-      if (setIsOpen()) return closeSet();
-      if (turn.busy()) return sources.composer.stop();
-    }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
-      e.preventDefault(); setRail(true); toggleFind(true);
-    }
-    if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
-      e.preventDefault(); setRail(!railOpen());
-    }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n' && !inField) { e.preventDefault(); $('#newBtn').click(); }
-  });
+  installEscapeChain();
 
   /* Collapsing the rail is the user's call, never the window's: it holds the
    session list, and having it vanish on resize loses your place. The rail's own
    toggle is a component's click now (src/chrome/Rail.tsx); this is the twin
-   that brings it back, and it stays here with the two shortcuts above while
-   button#railShow is static markup. */
+   that brings it back, and it stays here while button#railShow is static
+   markup. */
   $('#railShow').onclick = () => setRail(true);
   tooNarrowToSplit = matchMedia('(max-width: 1040px)');
   tooNarrowToSplit.addEventListener('change', (e) => { if (e.matches && wsOpen) setWs(false); });
