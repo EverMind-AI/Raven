@@ -21,7 +21,10 @@ from raven.knowledge._embedding import (
     EmbeddingClient,
     EmbeddingConfig,
     EmbeddingError,
+    asking_for,
     embedding_client,
+    embedding_config_for,
+    everos_embedding_config,
     load_embedding_config,
 )
 from raven.knowledge._records import (
@@ -74,6 +77,14 @@ class SearchOutcome:
     hits: list[VectorSearchResult] = field(default_factory=list)
     embed_ms: float = 0.0
     search_ms: float = 0.0
+    #: Bases that were asked for and could not be searched, base id to the
+    #: reason. One unreachable base among five is not a reason to answer
+    #: nothing about the other four -- but a search that quietly consulted
+    #: four when five were asked for has to say so somewhere, and this is
+    #: where. When *every* base drops out the reason is raised instead: an
+    #: empty result and an empty result for cause are not the same answer,
+    #: and only the second one tells a reader what to fix.
+    skipped: dict[str, str] = field(default_factory=dict)
 
 
 def _default_parsers() -> list[ParserBase]:
@@ -124,6 +135,10 @@ class KnowledgeManager:
         # model -> measured vector width. Probing costs one embedding call, so
         # it is done once per model rather than per base or per search.
         self._widths: dict[str, int] = {}
+        # (provider, model) -> client, for bases not on today's endpoint.
+        # Built once rather than per search: a client is a config and a
+        # connection pool, and a mixed-model search rebuilds the same few.
+        self._clients: dict[tuple[str, str], EmbeddingClient] = {}
         if store is None:
             from raven.knowledge._lancedb import LanceDBVectorStore
 
@@ -139,6 +154,89 @@ class KnowledgeManager:
                 "no embedding endpoint is configured; set [embedding] in the EverOS config before using a knowledge base"
             )
         return embedding_client(config)
+
+    def _client_for(self, base: KnowledgeBaseRecord) -> EmbeddingClient:
+        """The client that speaks the model this base was built with.
+
+        A base is searched with its own model or not at all. The collection
+        holds vectors from whatever was configured the day it was built, and a
+        query embedded with anything else lands somewhere unrelated in the same
+        space -- so the model follows the base, not the session.
+
+        Three cases, in the order they are tried:
+
+        - the base wants what is configured now (the common one, and the only
+          one before this existed): today's client, unchanged;
+        - the base recorded its provider: that provider's endpoint, asked for
+          the base's model, because a model id does not name a credential;
+        - the base recorded a model but no provider (every base written before
+          the field existed): the EverOS endpoint when that is what still
+          names this model, since a base older than the pin was built through
+          it and the file is the only record of where its vectors came from;
+          otherwise today's endpoint, asked for the base's model, which is the
+          last thing left to try.
+        """
+        configured = self._client()
+        if base.embedding_model == configured.model:
+            return configured
+
+        cached = self._clients.get((base.embedding_provider, base.embedding_model))
+        if cached is not None:
+            return cached
+
+        config = embedding_config_for(base.embedding_provider, base.embedding_model, base.dimensions)
+        if config is None:
+            if base.embedding_provider:
+                raise StaleBaseError(
+                    f"knowledge base {base.name!r} was indexed with {base.embedding_model!r} "
+                    f"through {base.embedding_provider!r}, which has no usable credentials now; "
+                    "restore that provider or rebuild the base"
+                )
+            # No provider was ever recorded. The endpoint the memory backend
+            # configured is where a base older than raven's own pin came from,
+            # so it is tried first -- and only when it still names this base's
+            # model, which is what makes it the right endpoint rather than
+            # merely another one.
+            inherited = everos_embedding_config()
+            if inherited is not None and inherited.model == base.embedding_model:
+                config = inherited
+            else:
+                config = asking_for(self._endpoint(), base.embedding_model, base.dimensions or None)
+        client = embedding_client(config)
+        self._clients[(base.embedding_provider, base.embedding_model)] = client
+        return client
+
+    def _unsearchable(self, base: KnowledgeBaseRecord, exc: Exception) -> str:
+        """Why a base dropped out, said so a reader can act on it.
+
+        The raw failure is the endpoint's own words -- "model not found", a
+        timeout, a 401 -- and none of them mention the base or say what to do
+        about it. What went wrong is the same in every case: the model this
+        base holds vectors from could not be reached, and until it can the
+        base cannot be searched without answering from the wrong space.
+
+        Deliberately not diagnosed further. Whether the endpoint is down or
+        simply does not host this model is not reliably distinguishable from
+        here, and guessing the first would tell someone to wait when they need
+        to act, while guessing the second would tell them to rebuild a base
+        that is fine.
+        """
+        if isinstance(exc, StaleBaseError):
+            return str(exc)
+        where = f"through {base.embedding_provider!r}" if base.embedding_provider else "on the configured endpoint"
+        return (
+            f"knowledge base {base.name!r} holds vectors from {base.embedding_model!r}, and asking for that model "
+            f"{where} failed ({exc}). Point the base at a provider that serves it, or rebuild it on the model "
+            "configured now."
+        )
+
+    def _endpoint(self) -> EmbeddingConfig:
+        config = self._embedding or load_embedding_config()
+        if config is None:
+            raise KnowledgeError(
+                "no embedding endpoint is configured; set [embedding] in the EverOS config before using a knowledge base"
+            )
+        return config
 
     def embedding_available(self) -> bool:
         """Whether a base could be created right now."""
@@ -168,19 +266,26 @@ class KnowledgeManager:
         return width
 
     async def _assert_current(self, base: KnowledgeBaseRecord, client: EmbeddingClient) -> None:
-        """Refuse a base whose vectors answer to a different model.
+        """Refuse a base whose vectors no longer answer to the model it holds.
 
         Keyed on the model and the width, deliberately not on the base URL: an
         operator moving the same model behind a new gateway or rotating a key
         changes neither the vectors nor what a query embeds to, and forcing a
         rebuild for that would throw away a working index for nothing.
+
+        The model half is now satisfied by construction -- ``_client_for``
+        hands back a client for the base's own model -- so what is left to
+        catch is a width that moved under a name that did not: a provider
+        re-pointing a model id at a bigger one, or an endpoint answering a
+        model it does not serve with some default. Either way the collection
+        was sized to the old number and the new vectors do not belong in it.
         """
         width = await self._width_of(client)
         if base.embedding_model == client.model and base.dimensions == width:
             return
         raise StaleBaseError(
             f"knowledge base {base.name!r} was indexed with {base.embedding_model!r} "
-            f"({base.dimensions}d) but {client.model!r} ({width}d) is configured now; "
+            f"({base.dimensions}d) but {client.model!r} now answers with {width}d; "
             "rebuild the base to search it"
         )
 
@@ -209,6 +314,7 @@ class KnowledgeManager:
             embedding_model=client.model,
             dimensions=width,
             description=description,
+            embedding_provider=getattr(client, "provider", ""),
         )
         # The collection is named for the id, not the display name: a rename
         # is an edit, and a collection that followed it would strand its rows.
@@ -433,7 +539,10 @@ class KnowledgeManager:
 
         self._records.set_status(document_id, "indexing")
         try:
-            client = self._client()
+            # The base's own model, not the configured one: a document added
+            # to an older base has to be embedded into the space its
+            # collection already holds, or it is unfindable by any query.
+            client = self._client_for(base)
             await self._assert_current(base, client)
             chunks = await self._chunks_for(record)
             if not chunks:
@@ -477,9 +586,16 @@ class KnowledgeManager:
     async def search(self, base_ids: list[str], query: str, top_k: int | None = None) -> SearchOutcome:
         """Search across bases, merged and ranked together.
 
-        One embedding call for the query, not one per base: they are searched
-        with the same vector, and a base whose model no longer matches is
-        refused rather than searched with it.
+        One embedding call per distinct model, not one per search: a base is
+        searched with the vector its own model produces, because that is the
+        space its collection lives in. Bases built with the same model share a
+        call, so the common case -- every base on the configured endpoint --
+        still costs exactly one round trip.
+
+        A base whose model cannot be reached is skipped and named in the
+        outcome rather than taking the whole search down with it. Asking a
+        mixed set is ordinary, and one unreachable base is not a reason to
+        answer nothing about the others.
 
         The two costs are timed apart because they answer different questions.
         Embedding is a round trip to whatever endpoint is configured and runs
@@ -499,15 +615,31 @@ class KnowledgeManager:
         # cuts the total back to that same figure.
         if top_k is None:
             top_k = max(int(getattr(b, "top_k", DEFAULT_TOP_K) or DEFAULT_TOP_K) for b in bases)
-        client = self._client()
-        for base in bases:
-            await self._assert_current(base, client)
-
         started = perf_counter()
-        vector = (await client.embed([query]))[0]
-        embedded = perf_counter()
-        hits: list[VectorSearchResult] = []
+        vectors: dict[tuple[str, str], list[float]] = {}
+        searchable: list[tuple[KnowledgeBaseRecord, list[float]]] = []
+        skipped: dict[str, str] = {}
+        failure: Exception | None = None
         for base in bases:
+            key = (base.embedding_provider, base.embedding_model)
+            try:
+                if key not in vectors:
+                    client = self._client_for(base)
+                    await self._assert_current(base, client)
+                    vectors[key] = (await client.embed([query]))[0]
+            except (KnowledgeError, EmbeddingError, OSError) as exc:
+                reason = self._unsearchable(base, exc)
+                logger.warning("knowledge: skipping base {} in search: {}", base.name, reason)
+                skipped[base.id] = reason
+                failure = exc if isinstance(exc, StaleBaseError) else StaleBaseError(reason)
+                continue
+            searchable.append((base, vectors[key]))
+        if not searchable and failure is not None:
+            raise failure
+        embedded = perf_counter()
+
+        hits: list[VectorSearchResult] = []
+        for base, vector in searchable:
             hits.extend(await self._store.search(base.id, vector, top_k=top_k))
         searched = perf_counter()
         hits.sort(key=lambda hit: hit.score, reverse=True)
@@ -515,4 +647,5 @@ class KnowledgeManager:
             hits=hits[:top_k],
             embed_ms=(embedded - started) * 1000.0,
             search_ms=(searched - embedded) * 1000.0,
+            skipped=skipped,
         )

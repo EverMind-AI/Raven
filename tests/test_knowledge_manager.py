@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from raven.knowledge._embedding import EmbeddingConfig
+from raven.knowledge._embedding import EmbeddingConfig, EmbeddingError
 from raven.knowledge._manager import DuplicateBaseNameError, KnowledgeError, KnowledgeManager, StaleBaseError
 
 DIM = 8
@@ -54,6 +54,56 @@ class _NoStore:
 
     async def delete_collection(self, collection: str) -> None:
         return None
+
+
+class _Endpoints:
+    """The endpoints a manager can reach, other than the configured one.
+
+    A base built with a model the current pin no longer names has to be
+    embedded through whatever still serves that model, and the manager finds
+    it by building a client for the base's own model. This stands in for that
+    lookup: ``serve`` makes a model answerable, ``refuse`` makes it fail the
+    way an endpoint that does not host it would.
+    """
+
+    def __init__(self) -> None:
+        self.clients: dict[str, _StubClient] = {}
+        self.refusals: dict[str, Exception] = {}
+        #: Every config the manager asked for a client with, so a test can say
+        #: which endpoint it decided on and not only which model.
+        self.built: list[EmbeddingConfig] = []
+
+    def serve(self, model: str, dimensions: int = DIM) -> "_StubClient":
+        client = _StubClient(model=model, dimensions=dimensions)
+        self.clients[model] = client
+        return client
+
+    def refuse(self, model: str, error: Exception) -> None:
+        self.refusals[model] = error
+
+    def build(self, config: EmbeddingConfig):
+        self.built.append(config)
+        if config.model in self.refusals:
+            raise self.refusals[config.model]
+        return self.clients.get(config.model) or self.serve(config.model)
+
+
+@pytest.fixture
+def endpoints(monkeypatch):
+    """Route the manager's per-base client building at the stubs above."""
+    registry = _Endpoints()
+    monkeypatch.setattr("raven.knowledge._manager.embedding_client", registry.build)
+    monkeypatch.setattr(
+        "raven.knowledge._manager.embedding_config_for",
+        lambda provider, model, dimensions=None: (
+            EmbeddingConfig(
+                model=model, base_url="https://other/v1", api_key="k", provider=provider, dimensions=dimensions
+            )
+            if provider
+            else None
+        ),
+    )
+    return registry
 
 
 @pytest.fixture
@@ -170,14 +220,30 @@ async def test_indexing_a_document_whose_base_is_gone_fails_it(manager) -> None:
 # ── the staleness rule ────────────────────────────────────────────
 
 
-async def test_a_base_indexed_with_another_model_refuses_to_be_searched(manager) -> None:
-    """The vectors answer to the old model; a query embedded with the new one
-    lands somewhere unrelated in the same space. Searching anyway returns
-    confident nonsense, so it has to say rebuild."""
+async def test_a_base_is_searched_with_the_model_it_was_built_with(manager, endpoints) -> None:
+    """The vectors answer to the model the base was built with, so that is the
+    model the query is embedded with -- moving the configured pin does not move
+    the space an existing collection lives in."""
     base, _ = await _ready_base(manager)
     manager.stub.model = "a-different-model"
+    old_model = endpoints.serve("stub-embed")
 
-    with pytest.raises(StaleBaseError, match="rebuild"):
+    hits = (await manager.search([base.id], "alpha", top_k=1)).hits
+
+    assert len(hits) == 1
+    assert old_model.calls == [["alpha"]], "the query went to the base's own model"
+    assert manager.stub.calls[-1] != ["alpha"], "and not to the one configured now"
+
+
+async def test_a_base_whose_model_cannot_be_reached_says_so(manager, endpoints) -> None:
+    """Skipped rather than searched with the wrong vector -- and when it is the
+    only base asked for, the reason is raised instead of being answered with an
+    empty result, which says nothing about what to fix."""
+    base, _ = await _ready_base(manager)
+    manager.stub.model = "a-different-model"
+    endpoints.refuse("stub-embed", EmbeddingError("model not served here"))
+
+    with pytest.raises(StaleBaseError, match="Point the base at a provider that serves it"):
         await manager.search([base.id], "alpha")
 
 
@@ -231,11 +297,144 @@ async def test_moving_the_endpoint_does_not_make_a_base_stale(manager) -> None:
 
 async def test_indexing_into_a_stale_base_fails_the_document_not_the_queue(manager) -> None:
     base, _ = await _ready_base(manager)
-    manager.stub.model = "a-different-model"
+    manager.stub.dimensions = DIM + 1
+    manager._widths.clear()
     doc = manager.add_document(base.id, filename="b.md", content=b"beta")
 
     assert (await manager.index_document(doc.id)).status == "failed"
     assert "rebuild" in manager.get_document(doc.id).error
+
+
+async def test_a_new_document_is_embedded_with_the_base_own_model(manager, endpoints) -> None:
+    """A document added to an older base has to land in the space that base's
+    collection already holds, or nothing it says is findable."""
+    base, _ = await _ready_base(manager)
+    manager.stub.model = "a-different-model"
+    old_model = endpoints.serve("stub-embed")
+    doc = manager.add_document(base.id, filename="b.md", content=b"# beta\n\nbeta beta beta\n")
+
+    assert (await manager.index_document(doc.id)).status == "ready"
+    assert old_model.calls, "the chunks went to the base's own model"
+    assert (await manager.search([base.id], "beta", top_k=1)).hits
+
+
+# -- one embedding per model, not one per search -------------------
+
+
+async def test_each_base_is_embedded_with_its_own_model(manager, endpoints) -> None:
+    """The point of the whole arrangement: two bases built with two models are
+    two different vector spaces, and one query vector cannot address both."""
+    first, _ = await _ready_base(manager)
+    # The pin moves, a second base is built on it, and it moves back -- so the
+    # two bases hold vectors from two models and neither is the odd one out.
+    manager.stub.model = "second-model"
+    second = await manager.create_base(name="second")
+    doc = manager.add_document(second.id, filename="s.md", content=b"# gamma\n\ngamma gamma\n")
+    assert (await manager.index_document(doc.id)).status == "ready"
+    manager.stub.model = "stub-embed"
+    other = endpoints.serve("second-model")
+
+    outcome = await manager.search([first.id, second.id], "alpha gamma")
+
+    assert manager.stub.calls[-1] == ["alpha gamma"], "the base on the current model used it"
+    assert other.calls == [["alpha gamma"]], "the base on the older model used that one"
+    assert outcome.skipped == {}
+    assert {hit.chunk.source for hit in outcome.hits} == {"handbook.md", "s.md"}
+
+
+async def test_bases_sharing_a_model_share_one_embedding_call(manager) -> None:
+    """The common case still costs one round trip: what is grouped is the
+    model, not the base."""
+    first, _ = await _ready_base(manager)
+    second = await manager.create_base(name="second")
+    doc = manager.add_document(second.id, filename="s.md", content=b"# gamma\n\ngamma\n")
+    await manager.index_document(doc.id)
+    before = len(manager.stub.calls)
+
+    await manager.search([first.id, second.id], "alpha")
+
+    assert len(manager.stub.calls) - before == 1
+
+
+async def test_one_unreachable_base_does_not_take_the_others_down(manager, endpoints) -> None:
+    """Asking a mixed set is ordinary. The base that dropped out is named, so
+    a caller is not left thinking the others answered for it."""
+    good, _ = await _ready_base(manager)
+    manager.stub.model = "gone-model"
+    stranded = await manager.create_base(name="stranded")
+    doc = manager.add_document(stranded.id, filename="s.md", content=b"# gamma\n\ngamma\n")
+    await manager.index_document(doc.id)
+    manager.stub.model = "stub-embed"
+    endpoints.refuse("gone-model", EmbeddingError("no endpoint serves it"))
+
+    outcome = await manager.search([good.id, stranded.id], "alpha")
+
+    assert {hit.chunk.source for hit in outcome.hits} == {"handbook.md"}
+    assert list(outcome.skipped) == [stranded.id]
+    assert "no endpoint serves it" in outcome.skipped[stranded.id]
+
+
+async def test_a_base_older_than_the_pin_goes_back_to_the_endpoint_it_came_from(
+    manager, endpoints, monkeypatch
+) -> None:
+    """A base built before raven had an embedding pin came through the EverOS
+    endpoint, and that file still names the model and the address. Reaching for
+    it is what keeps such a base searchable with no setting to fill in -- the
+    alternative is asking today's provider for a model it never served."""
+    base, _ = await _ready_base(manager)
+    manager.stub.model = "a-different-model"
+    inherited = endpoints.serve("stub-embed")
+    monkeypatch.setattr(
+        "raven.knowledge._manager.everos_embedding_config",
+        lambda: EmbeddingConfig(model="stub-embed", base_url="https://inherited/v1", api_key="k"),
+    )
+
+    hits = (await manager.search([base.id], "alpha", top_k=1)).hits
+
+    assert hits and inherited.calls == [["alpha"]]
+
+
+async def test_the_inherited_endpoint_is_not_used_for_a_model_it_does_not_name(manager, endpoints, monkeypatch) -> None:
+    """It is the right endpoint only because it names this base's model; for
+    any other, it is just a second endpoint to guess with."""
+    base, _ = await _ready_base(manager)
+    manager.stub.model = "a-different-model"
+    monkeypatch.setattr(
+        "raven.knowledge._manager.everos_embedding_config",
+        lambda: EmbeddingConfig(model="something-else", base_url="https://inherited/v1", api_key="k"),
+    )
+
+    client = manager._client_for(base)
+
+    assert client.model == "stub-embed", "still the base's own model"
+    assert endpoints.built[-1].base_url != "https://inherited/v1", "but not through that endpoint"
+
+
+async def test_a_base_can_be_pointed_at_the_provider_that_still_serves_it(manager, endpoints) -> None:
+    """The way back for a base stranded by a change of pin, short of a rebuild:
+    the model and the width are what the collection was built to and cannot
+    move, but where that model is reached can."""
+    base, _ = await _ready_base(manager)
+    manager.stub.model = "a-different-model"
+    endpoints.refuse("stub-embed", EmbeddingError("this endpoint does not serve it"))
+    served_elsewhere = _StubClient(model="stub-embed")
+    endpoints.clients["stub-embed"] = served_elsewhere
+    endpoints.refusals.clear()
+
+    assert manager.configure_base(base.id, embedding_provider="siliconflow").embedding_provider == "siliconflow"
+    hits = (await manager.search([base.id], "alpha", top_k=1)).hits
+
+    assert hits and served_elsewhere.calls == [["alpha"]]
+
+
+async def test_a_new_base_records_who_served_its_model(manager) -> None:
+    """Recorded at creation because a model id does not name a credential: the
+    query has to go back out on that provider's address later."""
+    manager.stub.provider = "siliconflow"
+
+    base = await manager.create_base(name="recorded")
+
+    assert base.embedding_provider == "siliconflow"
 
 
 # ── deletion ──────────────────────────────────────────────────────

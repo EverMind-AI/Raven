@@ -143,6 +143,13 @@ class KnowledgeBaseRecord:
     created_at: str
     updated_at: str
     description: str = ""
+    #: Who served the model this base was built with. Recorded because the
+    #: model id alone cannot be embedded against later: the query has to go
+    #: out on that provider's address and credential, and today's configured
+    #: pin may name a different one. Empty on every base written before this
+    #: existed, and on one built through the inherited EverOS endpoint, which
+    #: names no provider -- those fall back to whatever is configured now.
+    embedding_provider: str = ""
     #: The settings a reader can change after the base exists. Every one of
     #: them is defaulted, so a registry written before they existed loads with
     #: the behaviour it already had.
@@ -272,6 +279,7 @@ class RecordStore:
         embedding_model: str,
         dimensions: int,
         description: str = "",
+        embedding_provider: str = "",
     ) -> KnowledgeBaseRecord:
         now = _now()
         record = KnowledgeBaseRecord(
@@ -280,6 +288,7 @@ class RecordStore:
             embedding_model=embedding_model,
             dimensions=dimensions,
             description=description,
+            embedding_provider=embedding_provider,
             created_at=now,
             updated_at=now,
         )
@@ -327,6 +336,13 @@ class RecordStore:
         if record is None:
             return None
         allowed = {
+            # Not the model and not the width -- those are what the collection
+            # was built to. The provider is only where that same model is
+            # reached, which is why it can move: an operator who repoints the
+            # configured pin at another vendor leaves every older base naming
+            # a model the new endpoint does not serve, and without this the
+            # only way back is a rebuild.
+            "embedding_provider",
             "top_k",
             "smart_chunking",
             "separator",
