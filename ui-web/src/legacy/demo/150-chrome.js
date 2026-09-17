@@ -153,8 +153,6 @@ export function install() {
     if (setIsOpen()) return closeSet();
     openSettings();
   });
-  $('#setClose').onclick = () => closeSet();
-  $('#setVeil').onclick = (e) => { if (e.target === $('#setVeil')) closeSet(); };
 
   $('#cq').oninput = () => { capFilter.query = $('#cq').value.trim().toLowerCase(); drawCaps(); };
   $('#cKind').onclick = (e) => {

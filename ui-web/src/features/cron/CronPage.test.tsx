@@ -8,9 +8,15 @@ import * as store from './store'
 import { domSnapshot } from '../../test/domSnapshot'
 import { resetSources, setSources, sources } from '../../state/sources'
 import { setShell } from '../../shell/bridge'
+import { mountPageRoot } from '../../test/pageRoot'
 
 import type { Shell } from '../../shell/bridge'
 import type { CronJob, CronSource } from './types'
+
+/* The overflow menu's rows render from src/App.tsx into the shared #menu
+   host, so the page's own root has to be standing for this island's menus to
+   appear. */
+mountPageRoot()
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true

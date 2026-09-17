@@ -13,6 +13,7 @@ import { setCurrent as sessionSet } from '../../shell/session'
 import { close as closeTierPop } from '../../shell/tier'
 import { show as toast } from '../../shell/toast'
 import { open as upShade } from '../../shell/upgrade'
+import * as confirm from '../../state/confirm'
 import { $, T, mk } from './010-kernel.js'
 import { sessionRows } from './050-rail.js'
 
@@ -29,16 +30,11 @@ const sess = (id) => sessionRows().find((s) => s.id === id);
 
 /* ══ composer drafts ══════════════════════════════════════════════
    Storage and ownership live in islands.composer. */
-/* ══ confirm dialog ═══════════════════════════════════════════════ */
-let cfFn = null;
-function confirmAsk(title, body, label, fn) {
-  $('#cfTitle').textContent = title;
-  $('#cfBody').textContent = body;
-  $('#cfYes').textContent = label;
-  cfFn = fn;
-  $('#veil').dataset.open = 'true';
-  $('#cfNo').focus();
-}
+/* ══ confirm dialog ═══════════════════════════════════════════════
+   The question, the two buttons and the veil are src/state/confirm.ts's now.
+   This is the name the islands reach through the bridge and the live layer's
+   callers still use. */
+function confirmAsk(title, body, label, fn) { confirm.ask(title, body, label, fn); }
 
 /* ══ session-scoped sheets ════════════════════════════════
    The rack that holds everything docking above the composer -- a clarify
@@ -152,9 +148,6 @@ const lastTextNodeIn = (root) => {
    the same order. src/legacy/index.js is the only caller. */
 export function install() {
   sessionSet('a');
-  $('#cfNo').onclick = () => { $('#veil').dataset.open = 'false'; cfFn = null; };
-  $('#cfYes').onclick = () => { $('#veil').dataset.open = 'false'; if (cfFn) cfFn(); cfFn = null; };
-  $('#veil').onclick = (e) => { if (e.target === $('#veil')) $('#cfNo').click(); };
   /* Dev-only hook, beside __clarify, __upnote and __dag in the live layer and
    for the same reason: the approval sheet only appears when an engine asks for
    one, which is too long a loop to design a sheet in. On window because a
@@ -216,4 +209,4 @@ export function install() {
   });
 }
 
-export { timers, runState, rt, undoBin, stop_, later, down, sess, cfFn, confirmAsk, sheetSession, sheetAdd, sheetRemove, sheetDropClass, sheetsSync, sheetsForget, approveSheet, approvalSheet, approvalClose, clarifySheet, clarifyClose, queueDraw, queuePush, queueShift, queueClear, queueSnapshot, queueRestore, parkDraft, loadDraft, dropDraft, claimDraft, turn, modelCurrent, modelSet, failureBar, bootError, upShade, ctxMenu, copyToClip, nativeCtxOk, tipEl, tipFor, tipPlace, tipHide, dragBand, lastTextNodeIn }
+export { timers, runState, rt, undoBin, stop_, later, down, sess, confirmAsk, sheetSession, sheetAdd, sheetRemove, sheetDropClass, sheetsSync, sheetsForget, approveSheet, approvalSheet, approvalClose, clarifySheet, clarifyClose, queueDraw, queuePush, queueShift, queueClear, queueSnapshot, queueRestore, parkDraft, loadDraft, dropDraft, claimDraft, turn, modelCurrent, modelSet, failureBar, bootError, upShade, ctxMenu, copyToClip, nativeCtxOk, tipEl, tipFor, tipPlace, tipHide, dragBand, lastTextNodeIn }

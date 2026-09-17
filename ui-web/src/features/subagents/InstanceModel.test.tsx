@@ -6,9 +6,14 @@ import { InstanceModel } from './InstanceModel'
 import * as store from './store'
 import { resetSources, setSources } from '../../state/sources'
 import { resetShell, setShell } from '../../shell/bridge'
+import { mountPageRoot } from '../../test/pageRoot'
 
 import type { Shell } from '../../shell/bridge'
 import type { AgentsSource, InstanceRow } from './types'
+
+/* The chip's menu rows render from src/App.tsx into the shared #menu host, so
+   the page's own root has to be standing for them to appear. */
+mountPageRoot()
 
 function wire(over: Partial<AgentsSource> = {}): void {
   const shell: Shell = {
