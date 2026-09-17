@@ -111,6 +111,23 @@ def test_the_hub_marker_is_none_when_the_market_is_absent(monkeypatch: pytest.Mo
     assert _hub_marker_name() is None
 
 
+def test_the_install_meta_name_is_none_when_the_writer_is_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The second stamp is read from the module that writes it, on the same
+    terms as the first: absent, it costs the bundle half of the hub flag and
+    nothing else -- never the skill list."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _no_audit(name, *args, **kwargs):
+        if name == "raven.skill_hub.audit":
+            raise ImportError("market not installed")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_audit)
+    assert console_module._install_meta_name() is None
+
+
 # The other half of this -- that an installed market yields *its* marker name,
 # so hub-installed skills are recognised -- belongs with the market itself and
 # is not testable here: nothing in this tree provides skillhub.

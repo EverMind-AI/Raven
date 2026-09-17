@@ -10,6 +10,7 @@ import io
 import json
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -220,6 +221,141 @@ async def test_remove_reaches_a_bundle_the_other_installer_cached(workspace, mon
     assert (await skillhub.skillhub_remove({"name": "tool"})) == {"removed": True, "name": "tool"}
     assert not wrapped.exists(), "the bundle is the install unit, so the bundle is what goes"
     assert handmade.is_dir(), "removing bundles leaves the unstamped folder alone"
+
+
+def _stamped_bundle(workspace, slug, name, *, flat=False):
+    """A bundle the context engine would have cached, wrapped or flat."""
+    bundle = workspace / "hub" / f"{slug}@v0"
+    skill = bundle if flat else bundle / name
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(f"---\nname: {name}\n---\n# {name}\n")
+    (skill / hub.INSTALL_META).write_text(json.dumps({"slug": slug, "version": "v0", "source": "hub"}))
+    return bundle, skill
+
+
+def _table(*metas):
+    """A skill table answering ``gather_all_skills`` with the given rows."""
+    return SimpleNamespace(gather_all_skills=lambda: list(metas))
+
+
+def _loop_with(catalog):
+    return SimpleNamespace(context=SimpleNamespace(skills=catalog))
+
+
+@pytest.mark.asyncio
+async def test_remove_asks_the_running_loops_table_first(workspace, monkeypatch):
+    """In production the removal is asked from a page that drew the name off the
+    running loop's table, so that table is the one to resolve the name against:
+    a cold table over the same workspace could lag it by a watcher tick, and
+    "which directory is this name" must have one answer on both surfaces.
+
+    Proved by handing the loop a table that names the bundle and making the
+    cold table unbuildable: only the loop's answer can have found it.
+    """
+    monkeypatch.setattr(hub, "_refresh_pool", lambda _factory: None)
+    bundle, skill = _stamped_bundle(workspace, "acme_tool", "tool")
+    import raven.memory_engine as memory_engine
+
+    def _no_cold_table(*_args, **_kwargs):
+        raise RuntimeError("the cold table must not be consulted when the loop has one")
+
+    monkeypatch.setattr(memory_engine, "LocalSkillCatalog", _no_cold_table)
+    loop = _loop_with(_table(SimpleNamespace(name="tool", path=skill / "SKILL.md")))
+
+    out = await skillhub.skillhub_remove({"name": "tool"}, agent_loop_factory=lambda: loop)
+
+    assert out == {"removed": True, "name": "tool"}
+    assert not bundle.exists()
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        pytest.param(lambda: (_ for _ in ()).throw(RuntimeError("loop is broken")), id="factory-raises"),
+        pytest.param(lambda: SimpleNamespace(context=None), id="loop-has-no-table"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_remove_falls_back_to_a_cold_table_when_the_loop_cannot_answer(workspace, monkeypatch, factory):
+    """A loop that cannot be asked -- raising, or built without a skill table --
+    must not make a removal impossible: the same workspace can be read cold,
+    the way ``ext.list`` reads it when it has no loop either."""
+    monkeypatch.setattr(hub, "_refresh_pool", lambda _factory: None)
+    bundle, _skill = _stamped_bundle(workspace, "acme_tool", "tool")
+
+    out = await skillhub.skillhub_remove({"name": "tool"}, agent_loop_factory=factory)
+
+    assert out == {"removed": True, "name": "tool"}
+    assert not bundle.exists()
+
+
+@pytest.mark.asyncio
+async def test_remove_refuses_rather_than_guessing_when_no_table_can_be_had(workspace, monkeypatch):
+    """No loop and a cold table that cannot be built leaves nothing to resolve
+    the name against. Guessing from a folder name is the defect this lookup
+    replaced, so the answer is a refusal, and the bundle stays."""
+    monkeypatch.setattr(hub, "_refresh_pool", lambda _factory: None)
+    bundle, _skill = _stamped_bundle(workspace, "acme_tool", "tool")
+    import raven.memory_engine as memory_engine
+
+    def _unbuildable(*_args, **_kwargs):
+        raise RuntimeError("no catalogue on this host")
+
+    monkeypatch.setattr(memory_engine, "LocalSkillCatalog", _unbuildable)
+
+    with pytest.raises(ConfigValidationError):
+        await skillhub.skillhub_remove({"name": "tool"})
+    assert bundle.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_remove_treats_a_table_that_fails_to_enumerate_as_empty(workspace, monkeypatch):
+    """The table is asked, not trusted: an enumeration that raises answers as if
+    it listed nothing, and the caller gets the same refusal an unknown name
+    gets rather than a stack trace."""
+    monkeypatch.setattr(hub, "_refresh_pool", lambda _factory: None)
+    bundle, _skill = _stamped_bundle(workspace, "acme_tool", "tool")
+
+    def _broken():
+        raise RuntimeError("registry rebuild in progress")
+
+    loop = _loop_with(SimpleNamespace(gather_all_skills=_broken))
+
+    with pytest.raises(ConfigValidationError):
+        await skillhub.skillhub_remove({"name": "tool"}, agent_loop_factory=lambda: loop)
+    assert bundle.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_remove_ignores_rows_that_cannot_place_the_name_in_a_bundle(workspace, monkeypatch):
+    """Three rows can carry the asked name and still not name a removable
+    bundle: one with no path at all, one whose path is a skill the market
+    module installed at ``<skills>/<name>/`` -- the other layout, handled by the
+    other branch of ``remove`` and never by this lookup -- and one under
+    ``hub/`` with no stamp. Each is passed over; the one stamped bundle wins.
+    """
+    monkeypatch.setattr(hub, "_refresh_pool", lambda _factory: None)
+    market = workspace / "tool"
+    market.mkdir(parents=True)
+    (market / "SKILL.md").write_text("# market copy")
+    (market / hub.MARKER).write_text(json.dumps({"id": "uuid-market"}))
+    unstamped = workspace / "hub" / "hand@v0" / "tool"
+    unstamped.mkdir(parents=True)
+    (unstamped / "SKILL.md").write_text("# hand copy")
+    bundle, skill = _stamped_bundle(workspace, "acme_tool", "tool")
+
+    rows = [
+        SimpleNamespace(name="tool", path=None),
+        SimpleNamespace(name="tool", path=market / "SKILL.md"),
+        SimpleNamespace(name="tool", path=unstamped / "SKILL.md"),
+        SimpleNamespace(name="tool", path=skill / "SKILL.md"),
+    ]
+    assert hub._bundle_for(workspace, "tool", lambda: _loop_with(_table(*rows))) == bundle
+
+    # Without the stamped row nothing under hub/ qualifies: the market copy is
+    # not this lookup's to find, and the hand-placed folder carries no stamp.
+    assert hub._bundle_for(workspace, "tool", lambda: _loop_with(_table(*rows[:3]))) is None
+    assert market.is_dir() and unstamped.is_dir()
 
 
 @pytest.mark.asyncio
