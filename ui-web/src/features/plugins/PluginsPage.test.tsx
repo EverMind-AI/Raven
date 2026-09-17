@@ -224,7 +224,7 @@ describe('plugins island', () => {
     expect(redraws()).toBe(beforeSearch + 2)
   })
 
-  it('opens the detail drawer from a card and closes with the legacy close path', async () => {
+  it('opens the detail drawer from a card and closes with the shared close path', async () => {
     install([item()])
     await mount()
     await act(async () => {

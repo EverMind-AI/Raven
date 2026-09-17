@@ -16,10 +16,11 @@
  *
  * The data-i18n* attributes stay on the markup rather than becoming t() calls.
  * state/lang.ts applies a language by walking the document and rewriting them,
- * and these three components hold no state and subscribe to nothing, so React
- * never re-renders them and never puts a served literal back over text a flip
- * has already moved. Subscribing them to the lang store is the opposite of what
- * this step needs.
+ * and none of these components subscribes to the lang store, so a flip is never
+ * undone by a re-render putting a served literal back over text it has already
+ * moved. A re-render is harmless anyway -- React diffs against the props it
+ * rendered last, not against the document -- which is what lets the drawer
+ * below subscribe to its own store while its rewritten attributes stay put.
  *
  * Not here, and not later: #splash and #noJs. Both are pre-JavaScript shells --
  * the splash is the literal first frame, painted while this bundle is still
@@ -27,7 +28,10 @@
  * neither can be something React puts on screen. They stay in page.html and are
  * taken down at boot (state/splash.ts, legacy/demo/010-kernel.js).
  */
+import { useEffect, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
+
+import * as detail from './state/detail'
 
 import type { JSX } from 'react'
 
@@ -46,15 +50,33 @@ function ConfirmSheet(): JSX.Element {
   )
 }
 
-/* The shared detail drawer. #dBody renders empty on purpose: it is shared
-   ground four islands append their own host into, and React must not own that
-   child list (see the memory, xa, skills and plugins openers). */
+/* The shared detail drawer. #dBody renders empty on purpose: state/detail.ts
+   keeps one host per owner under it and each island renders its card into its
+   own, so React must not own that child list.
+
+   The title is the store's. It is the served em-dash until a card claims the
+   header, and every card blanks it -- an empty <b> is what turns the header row
+   into a floating close control (`.detail header:has(b:empty)`, page.css:3592),
+   so the emptiness is load-bearing and no card ever puts the dash back. */
 function DetailPanel(): JSX.Element {
+  const s = useSyncExternalStore(detail.subscribe, detail.get)
+  /* The scrim is the container, which src/page.html still renders, so this
+     listener cannot be an onClick. Same handler the close button has: the
+     drawer's own panel is a child, so a click inside it is not the scrim. */
+  useEffect(() => {
+    const el = document.getElementById('detail')
+    if (!el) return
+    const away = (e: Event): void => {
+      if (e.target === el) detail.close()
+    }
+    el.addEventListener('click', away)
+    return () => el.removeEventListener('click', away)
+  }, [])
   return (
     <div className="dpanel">
       <header>
-        <b id="dTitle">—</b>
-        <button className="dx" id="dClose" data-i18n-aria="gui.close" aria-label="关闭">
+        <b id="dTitle">{s.title ?? '—'}</b>
+        <button className="dx" id="dClose" data-i18n-aria="gui.close" aria-label="关闭" onClick={() => detail.close()}>
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
         </button>
       </header>

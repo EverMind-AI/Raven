@@ -9,11 +9,16 @@
  * golden records only tag, id, class and data-* -- that the roles, the labels
  * and the literals are still on the markup.
  */
+import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { App } from './App'
+import * as detail from './state/detail'
+
+/* React refuses act() outside a test runner it recognizes unless told. */
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 /* The three containers page.html carries, as it carries them, plus a fourth
    region the root has nothing to do with. */
@@ -131,5 +136,56 @@ describe('the page root', () => {
   it('renders nothing when the page has no containers to render into', () => {
     render('<div class="app"></div>')
     expect(document.body.innerHTML).toBe('<div class="app"></div>')
+  })
+})
+
+/* The drawer's own half of state/detail.ts: what only the component can do,
+   which is the title and the two closers. Last on purpose -- opening the shared
+   drawer blanks its title for good (the store keeps page state, and no card
+   ever puts the served dash back), so these cases have to run after the one
+   above that reads the served literal. */
+describe('the shared detail drawer', () => {
+  it('blanks the served title for a card, and never puts it back', () => {
+    render()
+    const title = (): string | null => document.getElementById('dTitle')!.textContent
+    expect(title()).toBe('—')
+    act(() => {
+      detail.open('memory')
+    })
+    /* An empty <b> is what turns the header row into a floating close control
+       (`.detail header:has(b:empty)`, src/styles/page.css). */
+    expect(title()).toBe('')
+    expect(document.getElementById('dTitle')!.childNodes).toHaveLength(0)
+    act(() => {
+      detail.close()
+    })
+    expect(title()).toBe('')
+  })
+
+  it('closes from the close button', () => {
+    render()
+    act(() => {
+      detail.open('memory')
+    })
+    expect(document.getElementById('detail')!.dataset.open).toBe('true')
+    act(() => {
+      document.getElementById('dClose')!.click()
+    })
+    expect(document.getElementById('detail')!.dataset.open).toBe('false')
+  })
+
+  it('closes from the scrim, and not from the panel over it', () => {
+    render()
+    act(() => {
+      detail.open('memory')
+    })
+    act(() => {
+      document.querySelector<HTMLElement>('#detail .dpanel')!.click()
+    })
+    expect(document.getElementById('detail')!.dataset.open).toBe('true')
+    act(() => {
+      document.getElementById('detail')!.click()
+    })
+    expect(document.getElementById('detail')!.dataset.open).toBe('false')
   })
 })

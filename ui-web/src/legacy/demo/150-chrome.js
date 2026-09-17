@@ -155,9 +155,6 @@ export function install() {
   });
   $('#setClose').onclick = () => closeSet();
   $('#setVeil').onclick = (e) => { if (e.target === $('#setVeil')) closeSet(); };
-  $('#dClose').onclick = closeDetail;
-  /* The scrim closes the sheet; calls through the name so later decorators win. */
-  $('#detail').addEventListener('click', (e) => { if (e.target === $('#detail')) closeDetail(); });
 
   $('#cq').oninput = () => { capFilter.query = $('#cq').value.trim().toLowerCase(); drawCaps(); };
   $('#cKind').onclick = (e) => {

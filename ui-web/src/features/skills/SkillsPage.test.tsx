@@ -48,11 +48,6 @@ function install(items: HubItem[], over: Partial<SkillsSource> = {}, installed: 
     confirmAsk: (_t, _b, _l, fn) => fn(),
     showPage: (id) => shellCalls.push(['showPage', id]),
     useInTask: (key, name) => shellCalls.push(['useInTask', `${key}:${name}`]),
-    closeDetail: () => {
-      const el = document.getElementById('detail')
-      if (el) el.dataset.open = 'false'
-      store.dropDrawer()
-    },
   }
   setShell(fakeShell)
   setSources({ skills: source })

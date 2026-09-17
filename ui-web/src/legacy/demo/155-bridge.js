@@ -1,8 +1,8 @@
 /* The shell half of the strangler bridge: what a migrated island (see
    ui-web/src/shell/bridge.ts) may call of the legacy page. Late-bound closures,
    not references, because several of these resolve their decorator chain when
-   they are called -- showPage, closeDetail and drawCaps are each wrapped by
-   two later parts -- and the island must reach the outermost wrapper. Grows
+   they are called -- drawCaps is wrapped by a later part, and showPage keeps
+   the registry one -- and the island must reach the outermost wrapper. Grows
    one line per helper an island actually needs; never ahead of need. */
 
 import { islands } from '../../islands'

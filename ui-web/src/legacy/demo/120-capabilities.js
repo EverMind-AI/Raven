@@ -2,6 +2,7 @@
 
 import { islands } from '../../islands'
 import { show as toast } from '../../shell/toast'
+import * as detail from '../../state/detail'
 import * as page from '../../state/page'
 import { sources } from '../../state/sources'
 import { $, applyDecorators } from './010-kernel.js'
@@ -90,11 +91,10 @@ function closeSet() {
   markNewCurrent();
 }
 
-var closeDetailDecorators;
-function closeDetail() { return applyDecorators(closeDetailDecorators, closeDetailBase)(); }
-function decorateCloseDetail(wrap) { (closeDetailDecorators ??= []).push(wrap); }
-
-function closeDetailBase() { $('#detail').dataset.open = 'false'; }
+/* The flag, the fade and the four islands' cards are src/state/detail.ts's now,
+   and the two layers above no longer decorate this. It is still the name the
+   Escape chain and the live layer's redrawAll call. */
+function closeDetail() { detail.close(); }
 
 /* ══ module 2b: external agents ════════════════════════════════════
    The renderer is the xa island (ui-web/src/features/xa/); what remains here
@@ -123,4 +123,4 @@ function drawCapsBadge() {}
 export function install() {
 }
 
-export { extTab, capFilter, NAV_OF, showPageDecorators, showPage, decorateShowPage, showPageBase, extSetDecorators, extSet, decorateExtSet, extSetBase, openCaps, openSkills, openPlugins, closeCaps, setIsOpen, openSet, closeSet, closeDetailDecorators, closeDetail, decorateCloseDetail, closeDetailBase, closeXa, drawXa, drawCapsBadge }
+export { extTab, capFilter, NAV_OF, showPageDecorators, showPage, decorateShowPage, showPageBase, extSetDecorators, extSet, decorateExtSet, extSetBase, openCaps, openSkills, openPlugins, closeCaps, setIsOpen, openSet, closeSet, closeDetail, closeXa, drawXa, drawCapsBadge }
