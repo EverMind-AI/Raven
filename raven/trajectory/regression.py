@@ -582,9 +582,7 @@ def _tool_contract_problems(recording: Any) -> list[str]:
     problems: list[str] = []
     for i, call in enumerate(recording.tool_calls):
         if call.name is not None and (not isinstance(call.name, str) or not call.name):
-            problems.append(
-                f"cassette tool call #{i + 1} name must be a non-empty string, got {call.name!r}"
-            )
+            problems.append(f"cassette tool call #{i + 1} name must be a non-empty string, got {call.name!r}")
         if not isinstance(call.params, dict):
             problems.append(
                 f"cassette tool call #{i + 1} params must be a mapping, got {type(call.params).__name__}"
