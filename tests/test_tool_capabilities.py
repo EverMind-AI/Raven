@@ -23,6 +23,7 @@ from raven.agent.tools.capabilities import (
     Need,
     borrowable_credential,
     configured_from,
+    disabled_by,
     has_credential,
     is_configured,
     is_disabled,
@@ -417,6 +418,33 @@ def test_the_picture_switch_reads_as_off_rather_than_unconfigured(workspace, tmp
     assert is_configured(cap, config) is True
     assert is_disabled(cap, config) is True
     assert is_offered(cap, config) is _on_offer(loop, "image_search")
+    # The setting a report must name: `disabledTools` need not contain the
+    # tool, and editing it cannot turn this one on.
+    assert disabled_by(cap, config) == "tools.web.search.images"
+
+
+def test_the_off_switch_each_capability_names_is_the_one_that_undoes_it(workspace, tmp_path: Path) -> None:
+    """Both branches of the field, and the order where both are shut.
+
+    The registration gate is named ahead of the deny list because taking
+    image_search out of `disabledTools` with pictures off restarts into the
+    same missing tool.
+    """
+    config = _config(tmp_path)
+    config.tools.web.search.api_key = "sk-serper"
+    config.tools.web.search.images = True
+    pictures = next(c for c in CAPABILITIES if c.tool == "image_search")
+    search = next(c for c in CAPABILITIES if c.tool == "web_search")
+
+    assert disabled_by(pictures, config) == ""
+    assert disabled_by(search, config) == ""
+
+    config.tools.disabled_tools = ["web_search", "image_search"]
+    assert disabled_by(search, config) == "tools.disabledTools"
+    assert disabled_by(pictures, config) == "tools.disabledTools"
+
+    config.tools.web.search.images = False
+    assert disabled_by(pictures, config) == "tools.web.search.images"
 
 
 def test_a_media_key_added_after_start_surfaces_the_tool(workspace, tmp_path: Path, monkeypatch) -> None:
