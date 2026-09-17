@@ -185,9 +185,13 @@ class ToolCapabilityInfo:
     #: the same as ``configured``: a model with no key is registered and fails
     #: on every call.
     has_credential: bool = True
-    #: Switched off by name in ``tools.disabledTools``, which happens after
-    #: registration -- so this row is configured and still not offered.
+    #: Switched off by the deployment, so this row can be configured and still
+    #: not offered. ``disabled_by`` names which setting did it.
     disabled: bool = False
+    #: The setting that switched it off, empty when nothing did. Carried rather
+    #: than assumed: two settings reach ``disabled`` and a row that names the
+    #: wrong one sends the operator to edit a line that cannot turn the tool on.
+    disabled_by: str = ""
     config_path: str = ""
     #: Where this capability's own credential goes, which for the media family
     #: is not ``config_path`` -- that one names the model.
@@ -416,6 +420,7 @@ def _gather_tools(config: "Config") -> ToolsInfo:
         CAPABILITIES,
         borrowable_credential,
         configured_from,
+        disabled_by,
         has_credential,
         is_configured,
         is_disabled,
@@ -432,6 +437,7 @@ def _gather_tools(config: "Config") -> ToolsInfo:
                 source=configured_from(cap, config),
                 has_credential=has_credential(cap, config),
                 disabled=is_disabled(cap, config),
+                disabled_by=disabled_by(cap, config),
                 config_path=cap.config_path,
                 key_path=cap.key_path,
                 borrowable=borrowable_credential(cap, config),
@@ -743,7 +749,7 @@ def _render_tool_capabilities(tools: ToolsInfo) -> None:
                 mark = "[dim]x[/dim]"
             console.print(f"{label}{mark} {cap.summary}{where}")
             if cap.disabled:
-                console.print(f"{indent}[dim]switched off in[/dim] tools.disabledTools")
+                console.print(f"{indent}[dim]switched off in[/dim] {cap.disabled_by}")
                 continue
             if not cap.has_credential:
                 console.print(f"{indent}[yellow]no key resolves; calls will fail[/yellow]")
@@ -757,7 +763,7 @@ def _render_tool_capabilities(tools: ToolsInfo) -> None:
             # independent decisions, and setup instructions that leave the off
             # switch unsaid send someone to set a key, restart, and find the
             # tool still gone.
-            console.print(f"{indent}[dim]switched off in[/dim] tools.disabledTools")
+            console.print(f"{indent}[dim]switched off in[/dim] {cap.disabled_by}")
         if cap.need == "own_credential":
             console.print(f"{indent}[dim]switch on:[/dim] {cap.config_path}")
             if cap.borrowable:
