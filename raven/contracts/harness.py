@@ -8,7 +8,7 @@ The four roles name the strategy *decisions* a turn makes, not four layers and
 not the loop itself. Memory assembles the window the model sees and decides how
 a transcript is made to fit again mid-turn, Planning may prepare turn guidance,
 Capability picks the tool definitions one iteration exposes, and Action produces
-one usable model response and judges a call against the dispatch's playbook.
+one usable model response and judges a call against the dispatch's Charter.
 Everything else the turn does -- iteration accounting, hook phases, tool
 execution and approval, persistence and event order -- stays with the L2 shell,
 which is what makes these four replaceable at all.
@@ -22,7 +22,7 @@ policy: the shell's ``changed`` test never fires, and an overflow the loop
 could have recovered from ends the turn.
 
 _Avoid_: reading ``ActionModule`` as "the loop". The shell owns retries, tool
-execution and events; Action owns one model decision and the playbook's verdict
+execution and events; Action owns one model decision and the Charter's verdict
 on a call. And reading Memory as the memory engine: Memory here is the turn's
 *window*, which the context engine owns; long-term recall is a different organ
 behind its own paper.

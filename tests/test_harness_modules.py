@@ -453,3 +453,46 @@ def test_a_refusal_closes_the_window_a_notch_and_spends_the_turns_budget():
         )
     )
     assert not again.changed, "demotion is once per turn, and the counter is what says so"
+
+
+def test_the_engine_is_handed_a_turn_memory_briefed_from_the_charter():
+    """The join, not the two halves. A charter is bound, a real assemble runs,
+    and what the engine receives carries the brief -- which it can only do if
+    Memory filled the turn before handing it over. Without this, deleting the
+    ``_briefed`` call leaves every other test in this file green."""
+    from raven.agent.subagent.charter import Charter, charter_scope
+    from raven.contracts.assembled import TokenBudget
+    from raven.contracts.context import TurnContext
+
+    seen: dict[str, object] = {}
+
+    class _Recording:
+        owns_compaction = False
+
+        async def assemble(self, session_key, session_messages, budget, *, turn):
+            seen["brief"] = turn.task_brief
+            seen["done_when"] = turn.task_done_when
+            return object()
+
+        async def after_turn(self, session_key, outcome): ...
+
+    memory = DefaultMemory(
+        _Recording(),
+        provider=lambda: SimpleNamespace(generation=None),
+        model=lambda: "m",
+        context_window_tokens=lambda: 1_000,
+        tool_definitions=lambda: [],
+        system_prompt=lambda skills: "S",
+        compaction=lambda: SimpleNamespace(enabled=False),
+        output_ceiling=lambda model=None: 256,
+    )
+    budget = TokenBudget(
+        context_length=8000, reserved_output=1000, reserved_tools=0, reserved_system=0, available_history=7000
+    )
+
+    with charter_scope(Charter(prompt="Only look at A.", stop_when="both tables land")):
+        asyncio.run(memory.assemble("s1", [], budget, turn=TurnContext(current_message="hi")))
+
+    assert seen == {"brief": "Only look at A.", "done_when": "both tables land"}, (
+        "the engine was handed a turn Memory never briefed"
+    )

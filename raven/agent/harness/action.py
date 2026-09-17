@@ -14,7 +14,7 @@ best-of-n or a critic pass -- and return the one the loop sees.
 
 ``judge`` is the other half of "what the agent does next": the registry asks
 it once per call a response proposed, before that call is dispatched. The
-default answers with whatever this dispatch's playbook asked for, which is
+default answers with whatever this dispatch's Charter asked for, which is
 nothing at all on a turn that carried none.
 """
 
@@ -38,7 +38,7 @@ class DefaultAction:
         params: Mapping[str, Any],
         prior: Sequence[tuple[str, Mapping[str, Any]]],
     ) -> list[str]:
-        """Why this dispatch's playbook refuses this call, or an empty list.
+        """Why this dispatch's Charter refuses this call, or an empty list.
 
         Imported in the call, not for style: ``raven.agent.subagent`` pulls its
         manager and every backend on package import, so naming the charter at
@@ -82,7 +82,7 @@ def bind(action: DefaultAction) -> ActionModule:
     The same guard the Memory role gets, and for a sharper reason: the tool
     registry catches whatever ``judge`` raises and answers with no opinion, so
     a role missing that method would not fail loudly -- it would quietly let
-    every call a dispatch's playbook refuses through.
+    every call a dispatch's Charter refuses through.
     """
     if not isinstance(action, ActionModule):
         raise TypeError(f"{type(action).__name__} cannot serve as the Action role: it must provide decide and judge")

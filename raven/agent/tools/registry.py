@@ -284,7 +284,7 @@ class ToolRegistry:
     ):
         self._tools: dict[str, Tool] = {}
         # The Action role, asked once per call for the judgement this
-        # dispatch's playbook carries. Injected the way the permission gate
+        # dispatch's Charter carries. Injected the way the permission gate
         # beside it is: the module supplies the sentences, ``execute`` still
         # decides what to do with them, so a replaced role can withhold
         # nothing it was not already able to withhold. ``None`` on a registry
@@ -293,7 +293,7 @@ class ToolRegistry:
         # role existed -- which is the right answer for every registry that is
         # not a turn's: the MCP connection managers and the curator's own
         # lookup table build one to hold tool definitions, never to dispatch a
-        # turn's calls, so there is no dispatch for a playbook to judge.
+        # turn's calls, so there is no dispatch for a Charter to judge.
         #
         # A provider rather than the role itself: the registry is built before
         # the loop assembles its harness, so there is no role to hand over yet.
@@ -408,7 +408,7 @@ class ToolRegistry:
         registries this tree builds take no provider -- the curator's own tool
         set among them, and it dispatches inside the turn's ``charter_scope``
         -- so an absent provider means "nobody chose a role here", not "this
-        dispatch carries no playbook". The default role is what the module-level
+        dispatch carries no Charter". The default role is what the module-level
         helper this method replaced already was.
         """
         try:

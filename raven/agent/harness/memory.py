@@ -132,7 +132,7 @@ class DefaultMemory:
 
     @staticmethod
     def _briefed(turn: "TurnContext") -> "TurnContext":
-        """The turn with what this dispatch's playbook asked of it, if anything.
+        """The turn with what this dispatch's Charter asked of it, if anything.
 
         Read here rather than where the text is rendered: what a turn shows its
         model is this role's question, so a later field ("carry the memory

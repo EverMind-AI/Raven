@@ -308,7 +308,7 @@ class RavenLoopBackend:
         # This lane runs its own loop rather than an ``AgentLoop``, so it has
         # no harness to borrow the Action role from -- it builds the default
         # one for the single thing the registry asks of it: the judgement this
-        # dispatch's playbook carries -- wired the way ``AgentLoop`` wires its
+        # dispatch's Charter carries -- wired the way ``AgentLoop`` wires its
         # own, so a charter's ``checks`` hold on this lane as they do on the
         # forked one.
         # Imported here, not at module scope: ``raven.agent.harness`` reaches

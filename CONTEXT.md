@@ -1441,7 +1441,7 @@ reaches `config.admission` for the door vocabulary and builds a loop by hand for
 legal, because it is a harness over recorded runs, not an entrance. One package holds two
 seats: in `agent/`, `agent/loop` is the L2 harness shell every entrance runs, and its
 siblings -- `tools`, `subagent`, `context`, `hook`, `personalizer`, `workdir`,
-`window` -- are L3 cargo the loop consumes; the "cargo does not import the loop shell"
+`harness`, `window` -- are L3 cargo the loop consumes; the "cargo does not import the loop shell"
 import-linter contract keeps the two seats apart in the shared directory, which is why
 the package is not split physically (ruled 2026-08-30). The one exception the target
 tree always named: the ACP client family -- the client, the `acp_agent` backend that

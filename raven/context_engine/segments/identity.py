@@ -10,7 +10,7 @@ from raven.contracts.context import AssemblyContext, Segment
 
 
 def _task_block(ctx: AssemblyContext) -> str:
-    """What this dispatch's playbook asked of the turn, as the identity shows it.
+    """What this dispatch's Charter asked of the turn, as the identity shows it.
 
     Appended, never substituted. The text above carries the runtime facts a
     turn cannot work without -- the working directory, the platform policy, the
