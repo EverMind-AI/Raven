@@ -5,111 +5,57 @@
  * Two steps of the `--z` ladder in src/styles/page.css are deliberate ties --
  * `--z-shade` with `--z-tip` at 90, and `--z-picker` with the inline 46 the two
  * composer popovers set -- so for those four elements the DOM order at the body
- * is the whole of the stacking decision. Stage C renders these containers from
- * one place (state/portals.ts), and if that place emits them in another order
- * the ties flip with no test and no pixel to catch it. This file is that test.
- *
- * Three kinds are distinguished, because each breaks differently:
- *   static   -- page.html already has it at the body; the writer only fills it.
- *   reparent -- born inside a page, moved to the body on first open, and never
- *               moved back.
- *   append   -- created at runtime and appended to the body.
+ * is the whole of the stacking decision. The order is declared in
+ * src/state/portals.ts, which is also what hands out the four standing layers,
+ * and if that table says one thing while the page does another the ties flip
+ * with no test and no pixel to catch it. This file reads the table against the
+ * page: the boot goldens, the markup, the two popovers that reparent
+ * themselves, and the body while every overlay is up. The table's own accessor
+ * has its own test beside it (src/state/portals.test.ts).
  */
-import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
-import { flushSync } from 'react-dom'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readFileSync } from 'node:fs'
 
-import { App } from '../App'
+import * as menu from '../shell/menu'
 import * as session from '../shell/session'
 import * as tier from '../shell/tier'
+import * as toast from '../shell/toast'
 import { resetShell, setShell } from '../shell/bridge'
+import * as confirm from '../state/confirm'
+import { BOOT_BODY_ORDER, LAYERS, PORTALS, _resetForTests as resetLayers, host } from '../state/portals'
 import { resetSources, setSources } from '../state/sources'
 import { bodySiblings } from './domSnapshot'
+import { mountPageRoot } from './pageRoot'
 
 import type { Shell } from '../shell/bridge'
 import type { TierReply, TierSource } from '../shell/tier'
 
-interface Portal {
-  /** What the element is called; a CSS selector where it has one to itself. */
-  readonly selector: string
-  readonly kind: 'static' | 'reparent' | 'append'
-  /** The `--z` token it takes, or the literal an inline style sets. */
-  readonly z: string
-  /** Its 1-based place among the body's children at boot, or `last` for the
-   *  ones that only reach the body when something opens them. */
-  readonly at: number | 'last'
-  /** The line a boot golden shows for it, for the four that are there at boot
-   *  and the two static hosts. */
-  readonly bootKey?: string
-}
-
-/* The thirteen, in the order the design's portal table lists them. */
-const PORTALS: readonly Portal[] = [
-  { selector: '.sbars', kind: 'append', z: '--z-scrollbars', at: 18, bootKey: 'div.sbars' },
-  { selector: 'pickHost', kind: 'append', z: '--z-picker', at: 19, bootKey: 'div' },
-  { selector: '#deskHost', kind: 'append', z: '--z-desk', at: 20, bootKey: 'div#deskHost' },
-  { selector: '.tipp', kind: 'append', z: '--z-tip', at: 21, bootKey: 'div.tipp' },
-  { selector: '#permPop', kind: 'reparent', z: '46', at: 'last' },
-  { selector: '#tierPop', kind: 'reparent', z: '46', at: 'last' },
-  { selector: 'button.lightbox', kind: 'append', z: '--z-lightbox', at: 'last' },
-  { selector: '.upshade', kind: 'append', z: '--z-shade', at: 'last' },
-  { selector: '.topfail', kind: 'append', z: '--z-failbar', at: 'last' },
-  { selector: 'bootErrorBar', kind: 'append', z: '99', at: 'last' },
-  { selector: 'input[type=file]', kind: 'append', z: '', at: 'last' },
-  { selector: '#menu', kind: 'static', z: '--z-menu', at: 16, bootKey: 'div#menu' },
-  { selector: '#toasts', kind: 'static', z: '--z-toast', at: 17, bootKey: 'div#toasts' },
-]
-
-/* The body's standing order after boot, as the goldens record it: seventeen
-   static regions (#splash and #noJs are removed before the snapshot is taken)
-   then the four appended while the page installs itself. Keyed by tag plus id,
-   or tag plus classes when there is no id -- the model picker's wrapper has
-   neither, which is why one entry is a bare `div`. */
-const BOOT_BODY_ORDER = [
-  'div#onb',
-  'div.app',
-  'button#railShow',
-  'section#capsPage',
-  'section#xaPage',
-  'section#connPage',
-  'section#memPage',
-  'section#pbPage',
-  'section#kbPage',
-  'section#cronPage',
-  'div#jobVeil',
-  'aside#detail',
-  'div#setVeil',
-  'div#veil',
-  'div#connVeil',
-  'div#menu',
-  'div#toasts',
-  'div.sbars',
-  'div',
-  'div#deskHost',
-  'div.tipp',
-] as const
-
 const source = (path: string): string => readFileSync(path, 'utf8') as string
 
-/* The body-level lines of a boot golden, reduced to the key BOOT_BODY_ORDER
-   uses: the golden's own bytes are already pinned by scripts/boot-snapshot.mjs,
-   so what is read here is only the order. */
+/* The key BOOT_BODY_ORDER files an element under: its id, or its classes when
+   it has none. Read from a signature line, so a golden's line and a live
+   element's `bodySiblings` entry are reduced the same way. */
+function keyOf(line: string): string {
+  const parsed = /^([a-z]+)(?:#([\w-]+))?((?:\.[^.[]+)*)/.exec(line)
+  expect(parsed, `unreadable body-level line: ${line}`).toBeTruthy()
+  const [, tag = '', id, classes = ''] = parsed!
+  if (id) return `${tag}#${id}`
+  return `${tag}${classes}`
+}
+
+/* The body-level lines of a boot golden: the golden's own bytes are already
+   pinned by scripts/boot-snapshot.mjs, so what is read here is only the order. */
 function goldenBodyKeys(path: string): string[] {
   return source(path)
     .split('\n')
     .filter((line) => line.length > 0 && !line.startsWith(' '))
-    .map((line) => {
-      const parsed = /^([a-z]+)(?:#([\w-]+))?((?:\.[^.[]+)*)/.exec(line)
-      expect(parsed, `unreadable body-level line in ${path}: ${line}`).toBeTruthy()
-      const [, tag = '', id, classes = ''] = parsed!
-      if (id) return `${tag}#${id}`
-      return `${tag}${classes}`
-    })
+    .map(keyOf)
 }
+
+/** The body as it stands, keyed the way the goldens key it. */
+const bodyKeys = (doc: Document): string[] => bodySiblings(doc).map(keyOf)
 
 /* page.html's two static hosts and the card the two popovers start inside. */
 function pageMarkup(): Document {
@@ -174,9 +120,50 @@ describe('the portal table', () => {
   it('leaves the body order untouched when the page root renders', () => {
     const doc = pageMarkup()
     const before = bodySiblings(doc)
-    const root = createRoot(document.createElement('div'))
-    flushSync(() => root.render(createElement(App)))
-    expect(bodySiblings(doc)).toEqual(before)
+    const unmount = mountPageRoot()
+    try {
+      expect(bodySiblings(doc)).toEqual(before)
+    } finally {
+      unmount()
+    }
+  })
+
+  /* Every overlay at once. The menu's rows, the notices and the confirm sheet
+     all render into hosts that are already at the body, so raising them may
+     neither reorder the body nor add to it -- which is the whole of why they
+     are portals into standing hosts rather than roots of their own. */
+  it('keeps the boot order while the menu, three notices and the confirm sheet are up', () => {
+    vi.useFakeTimers()
+    /* One root, as the page has one: a second standing root would render the
+       overlays a second time into the same hosts. */
+    let unmount = (): void => {}
+    try {
+      const doc = pageMarkup()
+      /* The two pre-JavaScript shells are taken down at boot, which is why the
+         golden's static half is seventeen regions rather than nineteen. */
+      doc.getElementById('splash')!.remove()
+      doc.getElementById('noJs')!.remove()
+      resetLayers()
+      for (const layer of LAYERS) host(layer)
+      unmount = mountPageRoot()
+      expect(bodyKeys(doc)).toEqual([...BOOT_BODY_ORDER])
+      menu.show(10, 12, [{ label: 'Rename', fn: () => {} }, '-', { label: 'Delete', bad: true, fn: () => {} }])
+      toast.show('one')
+      toast.show('two')
+      toast.show('three', { label: 'Undo', fn: () => {} })
+      confirm.ask('Delete this?', 'It cannot be undone.', 'Delete', () => {})
+      /* Up, not merely asked for: an overlay that rendered nothing at all would
+         pass the order assertion below without ever being on screen. */
+      expect(doc.getElementById('menu')!.children).toHaveLength(3)
+      expect(doc.getElementById('menu')!.dataset.open).toBe('true')
+      expect(doc.getElementById('toasts')!.children).toHaveLength(3)
+      expect(doc.getElementById('veil')!.dataset.open).toBe('true')
+      expect(bodyKeys(doc)).toEqual([...BOOT_BODY_ORDER])
+    } finally {
+      unmount()
+      vi.useRealTimers()
+      resetLayers()
+    }
   })
 
   it('starts the two popovers inside the composer card', () => {

@@ -35,6 +35,7 @@ import { plugHost, skillsHost, skillsSkeletonHost } from './islands'
 import { installLegacy } from './legacy/index.js'
 import { boot } from './state/boot'
 import { setGateway } from './state/gateway'
+import * as portals from './state/portals'
 import { chooseTransport } from './state/transport'
 
 /* The island bundle: the React roots the page mounts, the chrome that wires
@@ -52,10 +53,10 @@ import { chooseTransport } from './state/transport'
  * delete #splash, #noJs and every static region src/page.html still carries.
  * What the root renders is portals into those containers (App.tsx).
  *
- * flushSync, and first, because everything below reads the result: the chrome
- * binds #cfNo, #cfYes, #setClose and #dClose by id while it installs, and the
- * settings island looks #snavList up while it renders. A plain render() would
- * commit in a later task, after all of them.
+ * flushSync, and first, because everything below reads the result: the settings
+ * island looks #snavList up while it renders, the confirm store focuses #cfNo
+ * as it asks, and the chrome's Escape chain clicks that button. A plain
+ * render() would commit in a later task, after all of them.
  */
 const appRoot = createRoot(document.createElement('div'))
 flushSync(() => appRoot.render(<App />))
@@ -93,10 +94,13 @@ menuWriter.install()
 /* The model picker renders nothing until asked. One root at the body rather
    than a host inside a page: the popover is anchored to whatever button opened
    it -- the composer chip or a settings row -- and belongs to neither. The
-   wrapper is inert for layout; .mpick is position: fixed. */
-const pickHost = document.createElement('div')
-document.body.appendChild(pickHost)
-createRoot(pickHost).render(<ModelPickerApp />)
+   wrapper is inert for layout; .mpick is position: fixed.
+
+   The layer comes from state/portals.ts, which declares where each of the four
+   standing layers belongs: this one shares its `--z` step with the two composer
+   popovers, and being appended before them is the whole of what puts it under
+   them. */
+createRoot(portals.host('picker')).render(<ModelPickerApp />)
 
 const onboardHost = document.getElementById('onb')
 if (onboardHost) createRoot(onboardHost).render(<OnboardApp />)
@@ -112,10 +116,7 @@ const pbHost = document.getElementById('pbBody')
 if (pbHost) createRoot(pbHost).render(<PlaybooksApp />)
 const connHost = document.getElementById('connBody')
 if (connHost) createRoot(connHost).render(<ConnApp />)
-const deskHost = document.createElement('div')
-deskHost.id = 'deskHost'
-document.body.appendChild(deskHost)
-const deskRoot = createRoot(deskHost)
+const deskRoot = createRoot(portals.host('desk'))
 queueMicrotask(() => deskRoot.render(<DeskApp />))
 createRoot(skillsHost).render(<SkillsApp />)
 createRoot(skillsSkeletonHost).render(<>{Array.from({ length: 6 }, (_, i) => <SkillsSkeleton key={i} />)}</>)

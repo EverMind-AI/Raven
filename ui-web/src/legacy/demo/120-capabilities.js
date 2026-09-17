@@ -4,9 +4,9 @@ import { islands } from '../../islands'
 import { show as toast } from '../../shell/toast'
 import * as detail from '../../state/detail'
 import * as page from '../../state/page'
+import * as settingsDialog from '../../state/settingsDialog'
 import { sources } from '../../state/sources'
 import { $, applyDecorators } from './010-kernel.js'
-import { markNewCurrent } from './050-rail.js'
 import { drawCaps } from './152-skills.js'
 
 let extTab = 'skill';
@@ -74,22 +74,13 @@ const openSkills = () => openCaps('skill');
 const openPlugins = () => openCaps('plugin');
 function closeCaps() { showPage(null); closeDetail(); }
 /* A dialog, so it layers over whatever you were reading rather than replacing
-   it -- but the rail still marks itself, since that is where you came from. */
-/* Called from markNewCurrent, which runs during the first draw -- so it has to
-   tolerate being asked before the dialog's markup is in the document. */
-function setIsOpen() {
-  const v = $('#setVeil');
-  return !!v && v.dataset.open === 'true';
-}
-function openSet() {
-  $('#setVeil').dataset.open = 'true';
-  markNewCurrent();
-  $('#setModal').focus();
-}
-function closeSet() {
-  $('#setVeil').dataset.open = 'false';
-  markNewCurrent();
-}
+   it -- but the rail still marks itself, since that is where you came from.
+   The flag, the rail's marks and the focus are src/state/settingsDialog.ts's
+   now; these are the names the Esc chain, the settings shortcut and the bridge
+   still call. */
+function setIsOpen() { return settingsDialog.isOpen(); }
+function openSet() { settingsDialog.open(); }
+function closeSet() { settingsDialog.close(); }
 
 /* The flag, the fade and the four islands' cards are src/state/detail.ts's now,
    and the two layers above no longer decorate this. It is still the name the

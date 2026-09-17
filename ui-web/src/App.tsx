@@ -1,5 +1,6 @@
 /* The page's own React root: the dialog shells src/page.html used to carry as
- * markup.
+ * markup, and the two overlays -- the context menu's rows and the notices --
+ * that the chrome used to build by hand.
  *
  * Every element below is a transcription -- tag, id, class, data-*, role, aria
  * and text exactly as page.html spelled them, attributes in the same order --
@@ -14,13 +15,16 @@
  * commit), which is why the root in main.tsx is a detached element and
  * everything here is a portal.
  *
- * The data-i18n* attributes stay on the markup rather than becoming t() calls.
- * state/lang.ts applies a language by walking the document and rewriting them,
- * and none of these components subscribes to the lang store, so a flip is never
- * undone by a re-render putting a served literal back over text it has already
- * moved. A re-render is harmless anyway -- React diffs against the props it
- * rendered last, not against the document -- which is what lets the drawer
- * below subscribe to its own store while its rewritten attributes stay put.
+ * Language. The static markup carries data-i18n* keys rather than t() calls,
+ * and state/lang.ts applies a language by walking the document and rewriting
+ * them. A component that renders one of those keyed literals therefore has two
+ * writers, and it takes its literal through lang.text(key, literal) -- the same
+ * key, the same catalogue -- so the two agree on every value in both
+ * directions. The literals with no key (#cfTitle, #cfYes, #setTitle) have
+ * nothing to look up: each is owned by whoever writes it afterwards (the
+ * confirm store, the settings island), and a re-render cannot undo that,
+ * because React diffs against the props it rendered last rather than against
+ * the document.
  *
  * Not here, and not later: #splash and #noJs. Both are pre-JavaScript shells --
  * the splash is the literal first frame, painted while this bundle is still
@@ -31,20 +35,51 @@
 import { useEffect, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
+import * as menu from './shell/menu'
+import * as toast from './shell/toast'
+import * as confirm from './state/confirm'
 import * as detail from './state/detail'
+import * as lang from './state/lang'
+import * as settings from './state/settingsDialog'
 
 import type { JSX } from 'react'
 
-/* The confirm dialog. The asker fills #cfTitle / #cfBody and the label on
-   #cfYes, and the chrome binds both buttons (legacy/demo/040-state.js). */
+/* A veil's own click, for the three dialogs that close when the reader clicks
+   beside them. The veil IS the container, which src/page.html still renders, so
+   this cannot be an onClick; the guard is what the legacy handlers had -- the
+   panel is a child, so a click inside it is not a click on the scrim. Every
+   handler passed in is a module function, so the listener is registered once
+   and not on every render. */
+function useScrim(id: string, close: () => void): void {
+  useEffect(() => {
+    const el = document.getElementById(id)
+    if (!el) return
+    const away = (e: Event): void => {
+      if (e.target === el) close()
+    }
+    el.addEventListener('click', away)
+    return () => el.removeEventListener('click', away)
+  }, [id, close])
+}
+
+/* Cancelling is what the scrim and the Escape chain both do, and the chain does
+   it by clicking #cfNo -- which reaches this through the button's onClick. */
+const cancel = (): void => confirm.answer(false)
+
+/* The confirm dialog. The question is state/confirm.ts's: the asker hands it a
+   title, a body and a label for the yes button, and until something asks, the
+   three literals the page was served with stand. */
 function ConfirmSheet(): JSX.Element {
+  const s = useSyncExternalStore(confirm.subscribe, confirm.get)
+  useSyncExternalStore(lang.subscribe, lang.get)
+  useScrim('veil', cancel)
   return (
     <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="cfTitle">
-      <header id="cfTitle">确认</header>
-      <div className="body" id="cfBody" />
+      <header id="cfTitle">{s.title ?? '确认'}</header>
+      <div className="body" id="cfBody">{s.body}</div>
       <footer>
-        <button className="btn" id="cfNo" data-i18n="gui.cancel">取消</button>
-        <button className="btn bad" id="cfYes">确认</button>
+        <button className="btn" id="cfNo" data-i18n="gui.cancel" onClick={cancel}>{lang.text('gui.cancel', '取消')}</button>
+        <button className="btn bad" id="cfYes" onClick={() => confirm.answer(true)}>{s.label ?? '确认'}</button>
       </footer>
     </div>
   )
@@ -60,18 +95,7 @@ function ConfirmSheet(): JSX.Element {
    so the emptiness is load-bearing and no card ever puts the dash back. */
 function DetailPanel(): JSX.Element {
   const s = useSyncExternalStore(detail.subscribe, detail.get)
-  /* The scrim is the container, which src/page.html still renders, so this
-     listener cannot be an onClick. Same handler the close button has: the
-     drawer's own panel is a child, so a click inside it is not the scrim. */
-  useEffect(() => {
-    const el = document.getElementById('detail')
-    if (!el) return
-    const away = (e: Event): void => {
-      if (e.target === el) detail.close()
-    }
-    el.addEventListener('click', away)
-    return () => el.removeEventListener('click', away)
-  }, [])
+  useScrim('detail', detail.close)
   return (
     <div className="dpanel">
       <header>
@@ -87,8 +111,14 @@ function DetailPanel(): JSX.Element {
 
 /* The settings dialog's frame. #snavList and #spanels render empty for the same
    reason as #dBody: the settings island portals its nav into the first and
-   roots its panels in the second. */
+   roots its panels in the second.
+
+   #setTitle is the island's: it writes the section's name there on every draw.
+   The literal below is what the page is served with, and is why this component
+   must not render a value of its own for it. */
 function SettingsModal(): JSX.Element {
+  useSyncExternalStore(lang.subscribe, lang.get)
+  useScrim('setVeil', settings.close)
   return (
     <div className="smodal" id="setModal" role="dialog" aria-modal="true" data-i18n-aria="gui.page.set">
       <nav className="snav" id="snav">
@@ -98,7 +128,7 @@ function SettingsModal(): JSX.Element {
             grid parent (.snav .brandrow, src/styles/page.css:3667). */}
         <div className="brandrow">
           {' '}
-          <span className="wm" data-i18n="gui.page.set">设置</span>{' '}
+          <span className="wm" data-i18n="gui.page.set">{lang.text('gui.page.set', '设置')}</span>{' '}
         </div>
         <div className="snavlist" id="snavList" />
       </nav>
@@ -108,7 +138,7 @@ function SettingsModal(): JSX.Element {
             <h3 id="setTitle">设置</h3>
             <p className="sub" id="setSub" />
           </div>
-          <button className="icb" id="setClose" data-i18n-tip="gui.close" data-i18n-aria="gui.close">
+          <button className="icb" id="setClose" data-i18n-tip="gui.close" data-i18n-aria="gui.close" onClick={() => settings.close()}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </header>
@@ -118,18 +148,59 @@ function SettingsModal(): JSX.Element {
   )
 }
 
+/* The context menu's rows, in the host they were raised in (shell/menu.ts). The
+   flag and the position are the store's, because they belong to div#menu, which
+   page.html still renders; what is here is the row list it had built by hand. */
+function ContextMenu(): JSX.Element | null {
+  const s = useSyncExternalStore(menu.subscribe, menu.get)
+  if (!s.host) return null
+  return createPortal(
+    s.items.map((item, i) =>
+      item === '-' ? (
+        <hr key={i} />
+      ) : (
+        <button key={i} className={item.bad ? 'bad' : undefined} onClick={() => menu.pick(item)}>{item.label}</button>
+      )
+    ),
+    s.host
+  )
+}
+
+/* One notice (shell/toast.ts). A notice offering an action carries the button
+   that takes it; a plain one is one span, and the difference is what the two
+   lifetimes are for. */
+function Notice({ t }: { t: toast.Toast }): JSX.Element {
+  return (
+    <div className="toast">
+      <span className="t">{t.text}</span>
+      {t.action ? <button onClick={() => toast.run(t.id)}>{t.action.label}</button> : null}
+    </div>
+  )
+}
+
+/* Each notice into the host it was raised in, oldest first -- a host is
+   captured when the notice is raised, the way the writer resolved #toasts per
+   call, so a page that replaced the host cannot move a notice already up. */
+function Toasts(): JSX.Element {
+  const live = useSyncExternalStore(toast.subscribe, toast.get)
+  return <>{live.map((t) => createPortal(<Notice t={t} />, t.host, String(t.id)))}</>
+}
+
 /* Each interior into the container page.html still provides. Guarded the way
    the island mounts are: a document without the container renders nothing
-   rather than throwing. */
+   rather than throwing. The two overlays below find their own host, because
+   theirs is the one that was standing when they were raised. */
 export function App(): JSX.Element {
-  const veil = document.getElementById('veil')
-  const detail = document.getElementById('detail')
-  const setVeil = document.getElementById('setVeil')
+  const veilEl = document.getElementById('veil')
+  const detailEl = document.getElementById('detail')
+  const setVeilEl = document.getElementById('setVeil')
   return (
     <>
-      {detail ? createPortal(<DetailPanel />, detail) : null}
-      {setVeil ? createPortal(<SettingsModal />, setVeil) : null}
-      {veil ? createPortal(<ConfirmSheet />, veil) : null}
+      {detailEl ? createPortal(<DetailPanel />, detailEl) : null}
+      {setVeilEl ? createPortal(<SettingsModal />, setVeilEl) : null}
+      {veilEl ? createPortal(<ConfirmSheet />, veilEl) : null}
+      <ContextMenu />
+      <Toasts />
     </>
   )
 }
