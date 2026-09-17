@@ -260,7 +260,10 @@ function wireDrag(t: HTMLElement, el: HTMLElement, axis: Axis): void {
   })
 }
 
-function onScroll(e: Event): void {
+/* The capture-phase scroll, which is how one handler covers every scroller in
+   the app. Registered with the page's other document listeners
+   (state/globalListeners.ts). */
+export function onScroll(e: Event): void {
   const el = root(e.target)
   if (!el) return
   show(el)
@@ -269,12 +272,11 @@ function onScroll(e: Event): void {
 
 /* Resizing moves every box at once, and a bar mid-fade would be left hanging
    over whatever landed under it. */
-function onResize(): void {
+export function onResize(): void {
   live.forEach(hide)
 }
 
+/** Raises the layer, so the thumbs have somewhere to be parked. */
 export function install(): void {
   layer()
-  document.addEventListener('scroll', onScroll, true)
-  window.addEventListener('resize', onResize)
 }

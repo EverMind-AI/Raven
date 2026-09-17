@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { mountPageRoot } from '../test/pageRoot'
-import { close, install, show } from './menu'
+import { close, onPointerDown, show } from './menu'
 
 /* The rows render from src/App.tsx into whichever host the menu was raised in,
    so the page's own root has to be standing for any of them to appear. It is
@@ -76,7 +76,7 @@ describe('the menu writer', () => {
   it('closes on an outside pointer and stays open for a pointer inside', () => {
     document.body.innerHTML =
       '<div id="menu" data-open="true"><button>Here</button></div><button id="away">Away</button>'
-    install()
+    document.addEventListener('pointerdown', onPointerDown, true)
     document.querySelector('#menu button')!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
     expect(document.getElementById('menu')!.dataset.open).toBe('true')
     document.getElementById('away')!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))

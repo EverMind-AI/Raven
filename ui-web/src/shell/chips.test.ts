@@ -1,18 +1,19 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { install, open } from './chips'
+import { onClick, onKey, open } from './chips'
 import { resetSources, setSources } from '../state/sources'
 
 import type { ProseSource, ProseTarget } from './prose'
 
-/* install() binds on the document and never unbinds -- it is the page's, for
-   the page's life. So it is installed once here, and each case reads what the
-   source below recorded. */
+/* Both handlers are the page's, registered once on the document and never
+   taken off (src/state/globalListeners.ts). So they are registered once here,
+   and each case reads what the source below recorded. */
 let seen: ProseTarget[] = []
 let source: ProseSource
 
-install()
+document.addEventListener('click', onClick)
+document.addEventListener('keydown', onKey)
 
 beforeEach(() => {
   seen = []

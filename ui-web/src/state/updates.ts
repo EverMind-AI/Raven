@@ -184,29 +184,40 @@ export async function distMoved(): Promise<boolean> {
   return tag !== distBase
 }
 
+/* Deliberately NOT skipped while a notice is already showing. It used to be,
+   and that is what made this watcher blind exactly when it mattered: the
+   version notice is up precisely when an upgrade is about to land, so the one
+   moment the built page really does change was the one moment nothing was
+   watching for it. showUpNote already arbitrates which notice wins, so the
+   ranking does not need a second gate here. */
+const probe = async (): Promise<void> => {
+  const tag = await distProbe()
+  if (tag === null) return
+  if (distBase === null) { distBase = tag; return }
+  if (tag !== distBase) showUpNote('ui')
+}
+
+/* Whether the watch below ever started. The tab-visible probe is registered
+   once with the page's other document listeners (state/globalListeners.ts),
+   which is earlier than the boot reaches this module and happens in every mode;
+   this flag is what keeps it answering nothing until there is a watch. */
+let watching = false
+
+/** A tab coming back to the front, for a page that is watching its build. */
+export function onVisible(): void {
+  if (!watching) return
+  if (document.visibilityState === 'visible') void probe()
+}
+
 export function watchForUpdates(): void {
   const note = $('#upnote') as HTMLElement | null
   if (!note) return
-  const probe = async (): Promise<void> => {
-    /* Deliberately NOT skipped while a notice is already showing. It used to
-       be, and that is what made this watcher blind exactly when it mattered:
-       the version notice is up precisely when an upgrade is about to land, so
-       the one moment the built page really does change was the one moment
-       nothing was watching for it. showUpNote already arbitrates which notice
-       wins, so the ranking does not need a second gate here. */
-    const tag = await distProbe()
-    if (tag === null) return
-    if (distBase === null) { distBase = tag; return }
-    if (tag !== distBase) showUpNote('ui')
-  }
   note.onclick = () => { if (upKind === 'ver') askUpgrade(); else window.location.reload() }
   /* The click stays wired either way -- the version notice this row also
      carries comes from the gateway, which the dev server proxies. Only the
      dist watch is built-page-only; see distProbe. */
   if (!import.meta.env.PROD) return
+  watching = true
   void probe()
   setInterval(probe, 30000)
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') void probe()
-  })
 }

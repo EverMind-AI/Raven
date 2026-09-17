@@ -2,10 +2,11 @@
  * sent. Clicking anywhere closes it; Escape reaches it through the overlay
  * order (state/overlays.ts), which asks the two verbs below.
  *
- * A writer, not an island: the overlay is one node appended to the body, it
- * belongs to no page's root, and both islands that open one (the composer's
- * tray and the transcript's attachment chips) would otherwise each need a root
- * of their own for the same single node.
+ * State rather than a writer: the overlay is one node at the body, it belongs
+ * to no page's root, and both islands that open one (the composer's tray and
+ * the transcript's attachment chips) would otherwise each need a root of their
+ * own for the same single node. What it looks like is src/chrome/Lightbox.tsx;
+ * what is here is the one shot on screen.
  *
  * The islands call open() directly rather than through a shell verb. It used to
  * be `Shell.openImage` because the function lived in the legacy layer; now it
@@ -13,11 +14,42 @@
  * back in would only add a way for it to be missing.
  */
 
+import { flushSync } from 'react-dom'
+
 import { t } from './bridge'
+
+export interface Shot {
+  readonly src: string
+  /** The name the sender gave the file, or '' -- never invented. */
+  readonly alt: string
+  /* Read when the image is opened, not at render: the reader can flip the
+     language while the page is up, and a label that re-read itself would
+     change under a shade that is already on screen. */
+  readonly label: string
+}
 
 const CLS = 'lightbox'
 
+let shot: Shot | null = null
+const listeners = new Set<() => void>()
+
+export const get = (): Shot | null => shot
+
+export function subscribe(fn: () => void): () => void {
+  listeners.add(fn)
+  return () => { listeners.delete(fn) }
+}
+
+function commit(next: Shot | null): void {
+  shot = next
+  flushSync(() => { for (const fn of [...listeners]) fn() })
+}
+
 export function close(): void {
+  commit(null)
+  /* Anything else carrying the class as well, because that is how the overlay
+     order finds an overlay: it asks the document rather than this module, so
+     close() has to answer for a node this module did not draw. */
   document.querySelectorAll('.' + CLS).forEach((n) => n.remove())
 }
 
@@ -29,16 +61,6 @@ export function open(src: string, name?: string): void {
   /* One at a time: opening a second over the first would leave the first to be
      closed by a click the reader thinks closed the second. */
   close()
-  const box = document.createElement('button')
-  box.className = CLS
-  /* Read at open time, not at module scope: the reader can flip the language
-     while the page is up. */
-  box.setAttribute('aria-label', t('gui.img.close'))
-  const img = document.createElement('img')
-  img.src = src
-  img.alt = name || ''
-  box.appendChild(img)
-  box.onclick = close
-  document.body.appendChild(box)
-  box.focus()
+  commit({ src, alt: name || '', label: t('gui.img.close') })
+  document.querySelector<HTMLElement>('.' + CLS)?.focus()
 }

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { SB_HIDE, SB_MIN, SB_PAD, hide, install, show, sync } from './scrollbars'
+import { SB_HIDE, SB_MIN, SB_PAD, hide, install, onResize, onScroll, show, sync } from './scrollbars'
 
 /* A scroller is only its geometry as far as this module is concerned, and
    happy-dom lays nothing out, so the numbers are stated. Defaults: a 200px
@@ -42,7 +42,12 @@ const vert = (): HTMLElement | undefined => thumbs().find((t) => t.dataset.axis 
 const px = (t: HTMLElement, prop: 'top' | 'left' | 'height' | 'width'): number => parseFloat(t.style[prop])
 
 beforeAll(() => {
+  /* The layer, then the two listeners the page registers for this module
+     (src/state/globalListeners.ts) -- both are the document's and the
+     window's for the page's life, so they go on once for the file. */
   install()
+  document.addEventListener('scroll', onScroll, true)
+  window.addEventListener('resize', onResize)
 })
 beforeEach(() => {
   vi.useFakeTimers()
