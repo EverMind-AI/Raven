@@ -180,16 +180,32 @@ async def test_remove_reaches_a_bundle_the_other_installer_cached(workspace, mon
     refused nearly everything the page listed as installed.
 
     The bundle goes whole, as the CLI's ``skill remove`` deletes it: one zip,
-    one folder, one skill. And a folder someone placed under ``hub/`` by hand
-    carries no stamp, so it is not this handler's to delete -- the same rule
-    ``MARKER`` enforces on the other layout.
+    one folder, one skill. Both layouts the installer produces are covered --
+    the wrapped one whose skill directory is named for the zip's lone folder,
+    and the flat one whose skill directory is the bundle itself -- because the
+    bundle is found from the path the skill table records for the name, not
+    from either folder's name. And a folder someone placed under ``hub/`` by
+    hand carries no stamp, so it is not this handler's to delete -- the same
+    rule ``MARKER`` enforces on the other layout.
     """
     monkeypatch.setattr(hub, "_refresh_pool", lambda _factory: None)
-    bundle = workspace / "hub" / "acme_tool@v0"
-    skill = bundle / "tool"
-    skill.mkdir(parents=True)
-    (skill / "SKILL.md").write_text("# tool")
-    (skill / hub.INSTALL_META).write_text(json.dumps({"slug": "acme_tool", "version": "v0", "source": "hub"}))
+    stamp = json.dumps({"slug": "x", "version": "v0", "source": "hub"})
+
+    # Wrapped: the zip held one <skill>/ folder, collapsed at install time, so
+    # the skill directory carries the folder's name.
+    wrapped = workspace / "hub" / "acme_tool@v0"
+    (wrapped / "tool").mkdir(parents=True)
+    (wrapped / "tool" / "SKILL.md").write_text("# tool")
+    (wrapped / "tool" / hub.INSTALL_META).write_text(stamp)
+
+    # Flat: SKILL.md at the bundle root, so the skill directory *is* the
+    # bundle and its folder name is <slug>@<version>. The name the table lists
+    # is the one the frontmatter declares, and matches neither folder.
+    flat = workspace / "hub" / "catalog-slug@v1"
+    flat.mkdir(parents=True)
+    (flat / "SKILL.md").write_text("---\nname: display-name\ndescription: d\n---\n# body\n")
+    (flat / hub.INSTALL_META).write_text(stamp)
+
     handmade = workspace / "hub" / "hand@v0" / "hand"
     handmade.mkdir(parents=True)
     (handmade / "SKILL.md").write_text("# hand")
@@ -198,11 +214,12 @@ async def test_remove_reaches_a_bundle_the_other_installer_cached(workspace, mon
         await skillhub.skillhub_remove({"name": "hand"})
     assert handmade.is_dir(), "an unstamped folder is not the hub's to remove"
 
-    out = await skillhub.skillhub_remove({"name": "tool"})
+    assert (await skillhub.skillhub_remove({"name": "display-name"})) == {"removed": True, "name": "display-name"}
+    assert not flat.exists(), "a flat bundle is found by the name its SKILL.md declares"
 
-    assert out == {"removed": True, "name": "tool"}
-    assert not bundle.exists(), "the bundle is the install unit, so the bundle is what goes"
-    assert handmade.is_dir(), "removing one bundle leaves the next one alone"
+    assert (await skillhub.skillhub_remove({"name": "tool"})) == {"removed": True, "name": "tool"}
+    assert not wrapped.exists(), "the bundle is the install unit, so the bundle is what goes"
+    assert handmade.is_dir(), "removing bundles leaves the unstamped folder alone"
 
 
 @pytest.mark.asyncio

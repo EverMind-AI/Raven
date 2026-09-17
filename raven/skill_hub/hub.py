@@ -29,7 +29,7 @@ from loguru import logger
 
 from raven.config.loader import load_config
 from raven.skill_hub.audit import INSTALL_META
-from raven.skill_hub.client import ALLOWED_SUFFIXES, MAX_ZIP_ENTRY_BYTES, MAX_ZIP_TOTAL_BYTES, SkillHubClient
+from raven.skill_hub.client import ALLOWED_SUFFIXES, MAX_ZIP_ENTRY_BYTES, MAX_ZIP_TOTAL_BYTES
 
 
 class SkillHubError(Exception):
@@ -625,30 +625,75 @@ async def install(skill_id: str, *, agent_loop_factory=None, if_absent: bool = F
     }
 
 
-def _bundle_for(root: Path, name: str) -> Path | None:
+def _catalogue(root: Path, agent_loop_factory):
+    """The skill table the page listed a name from, or None when none can be had.
+
+    The running loop's table first -- that is the one ``ext.list`` read when it
+    drew the name the caller is now asking to remove -- else a cold table over
+    the same workspace, built the way ``ext.list`` builds its own fallback. The
+    point is to answer "which directory is this name" from the same source
+    that produced the name, so a lookup here cannot disagree with the listing.
+    """
+    if agent_loop_factory is not None:
+        try:
+            loop = agent_loop_factory()
+            catalog = getattr(getattr(loop, "context", None), "skills", None)
+            if catalog is not None:
+                return catalog
+        except Exception:  # a broken loop should not make a removal impossible
+            pass
+    try:
+        from raven.memory_engine import LocalSkillCatalog
+
+        return LocalSkillCatalog(root.parent, start_watcher=False)
+    except Exception:
+        return None
+
+
+def _bundle_for(root: Path, name: str, agent_loop_factory=None) -> Path | None:
     """The ``<root>/hub/<slug>@<version>`` bundle whose skill is ``name``, or None.
 
     The market reaches the workspace by two installers with two layouts. The
     one this module drives puts a skill at ``<root>/<name>/`` under ``MARKER``.
     The one the context engine and the ``use_skill`` tool drive caches a whole
     bundle at ``<root>/hub/<slug>@<version>/`` and stamps ``INSTALL_META`` in
-    the skill directory inside it -- usually the bundle's lone wrapper folder,
-    which ``SkillHubClient._bundle_root`` collapses the same way here as at
-    install time, so the name compared is the one the catalogue lists.
+    the skill directory inside it.
+
+    The bundle is found from the name's own ``SKILL.md`` path, as the skill
+    table records it, not from any directory name: a skill's name is what its
+    frontmatter says, and the table keys on that regardless of the folder it
+    sits in. That matters twice here. A zip wrapped in a lone ``<skill>/``
+    folder is collapsed at install time, so the skill directory carries the
+    folder's name; a flat zip is not, so the skill directory *is* the bundle
+    and carries ``<slug>@<version>``. Comparing either to the name would miss
+    the other. The table's path is right for both.
 
     Only a stamped directory counts. A folder someone placed under ``hub/`` by
     hand carries no stamp and is left alone, which is the rule ``MARKER``
     already enforces on the other layout.
     """
-    hub_root = root / "hub"
-    try:
-        bundles = [d for d in hub_root.iterdir() if d.is_dir() and "@" in d.name]
-    except OSError:
+    hub_root = (root / "hub").resolve()
+    catalog = _catalogue(root, agent_loop_factory)
+    if catalog is None:
         return None
-    for bundle in bundles:
-        skill_dir = SkillHubClient._bundle_root(bundle)
-        if skill_dir.name == name and (skill_dir / INSTALL_META).is_file():
-            return bundle
+    try:
+        metas = catalog.gather_all_skills()
+    except Exception:
+        return None
+    for meta in metas:
+        if getattr(meta, "name", None) != name:
+            continue
+        path = getattr(meta, "path", None)
+        if not path:
+            continue
+        skill_dir = Path(path).parent.resolve()
+        try:
+            top = skill_dir.relative_to(hub_root).parts[0]
+        except (ValueError, IndexError):
+            continue
+        if "@" not in top or not (skill_dir / INSTALL_META).is_file():
+            continue
+        return hub_root / top
     return None
 
 
@@ -673,7 +718,7 @@ async def remove(skill_name: str, *, agent_loop_factory=None) -> dict:
         await asyncio.to_thread(shutil.rmtree, target)
         await asyncio.to_thread(_refresh_pool, agent_loop_factory)
         return {"removed": True, "name": name}
-    bundle = _bundle_for(root, name)
+    bundle = _bundle_for(root, name, agent_loop_factory)
     if bundle is None:
         raise SkillHubRequestError("no such installed skill", data={"name": skill_name})
     await asyncio.to_thread(shutil.rmtree, bundle)
