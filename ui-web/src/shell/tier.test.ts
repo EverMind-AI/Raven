@@ -5,27 +5,17 @@ import * as session from './session'
 import * as tier from './tier'
 import { resetSources, setSources } from '../state/sources'
 import { resetShell, setShell } from './bridge'
+import { mountPageRoot } from '../test/pageRoot'
 
 import type { Shell } from './bridge'
 import type { TierReply, TierSource } from './tier'
 
-/* The same nodes page.html carries, in the same nesting: the chip holds the icon
-   slot and the label and ships `hidden`, the panel holds the list. The wrapper
-   is `.dock-in` because that is the composer card there, and the card is what
-   the panel has to open clear of. */
+/* The chip and the panel are the page root's now (src/chrome/TierChip.tsx,
+   src/chrome/TierPop.tsx), so the fixture is the one band they render into --
+   the composer card comes with them, and the card is what the panel has to open
+   clear of. */
 function markup(): void {
-  document.body.innerHTML = `
-    <div class="dock-in">
-      <button class="chip" id="tierChip" aria-expanded="false" aria-haspopup="true" hidden>
-        <svg class="pico" viewBox="0 0 24 24" aria-hidden="true"></svg>
-        <span id="tierName"></span>
-      </button>
-      <div class="pop" id="tierPop" data-open="false">
-        <div class="hd"><span class="lab"></span></div>
-        <div id="tierList" role="radiogroup"></div>
-        <div class="note"></div>
-      </div>
-    </div>`
+  document.body.innerHTML = '<div class="dock"></div>'
 }
 
 /* `raven/config/schema.py:_TIER_TEXTS` verbatim, which is what the server
@@ -49,6 +39,8 @@ function source(): void {
   setSources({ tier: src })
 }
 
+let unmount = (): void => {}
+
 beforeEach(() => {
   setShell({ T: (key) => key, confirmAsk: () => {}, showPage: () => {} } as Shell)
   markup()
@@ -58,9 +50,12 @@ beforeEach(() => {
   asked = []
   answer = async (mode) => ({ mode: mode ?? 'high', availableModes: MENU })
   source()
+  unmount = mountPageRoot()
 })
 
 afterEach(() => {
+  unmount()
+  unmount = () => {}
   resetShell()
   document.body.innerHTML = ''
   tier._resetForTests()

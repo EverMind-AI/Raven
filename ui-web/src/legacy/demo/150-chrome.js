@@ -1,13 +1,11 @@
 /* What is left of the page's chrome: the copy button over a code block, the
-   rail's twin toggle, the two composer chips and the settings shortcut. The
-   Escape order is a table in ui-web/src/state/overlays.ts and the one keydown
-   that reads it, with the three shortcuts it shares a handler with, is
+   rail's twin toggle and the settings shortcut. The Escape order is a table in
+   ui-web/src/state/overlays.ts and the one keydown that reads it, with the
+   three shortcuts it shares a handler with, is
    ui-web/src/state/globalListeners.ts -- installed below from where the
    handler used to be added. */
 
 import { islands } from '../../islands'
-import { toggle as togglePerm } from '../../shell/perm'
-import { toggle as toggleTier } from '../../shell/tier'
 import { installEscapeChain } from '../../state/globalListeners'
 import { set as setRail } from '../../state/rail'
 import { watchNarrow } from '../../state/ws'
@@ -72,10 +70,9 @@ export function install() {
    the picker island against the provider list the page really has. This part
    carried a second one built from a fixture table -- a list of providers with
    an `on` flag that only the offline canvas ever had -- and it was replaced on
-   every page, because that install runs after this one. */
-
-  $('#permChip').onclick = () => togglePerm();
-  $('#tierChip').onclick = () => toggleTier();
+   every page, because that install runs after this one. The permission and
+   tier chips beside it are their own components' clicks now
+   (ui-web/src/chrome/PermChip.tsx, ui-web/src/chrome/TierChip.tsx). */
 
   /* The platform's own shortcut, same door as the foot row. */
   document.addEventListener('keydown', (e) => {

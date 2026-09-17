@@ -1,49 +1,46 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { resetShell } from './bridge'
 
-/* The stored tier is read once at module load, so each case that cares about it
-   has to seed localStorage and then import a fresh copy. resetModules plus a
-   dynamic import is the whole trick -- and the shell goes in after the reset,
-   through the bridge instance the fresh copy will read. */
-async function load(stored?: string | null): Promise<typeof import('./perm')> {
+import * as store from './perm'
+import { resetShell, setShell } from './bridge'
+import { mountPageRoot } from '../test/pageRoot'
+
+/* The stored tier is read when the store is reset, so a case that cares about
+   it seeds localStorage and then asks for the reset. This was resetModules plus
+   a fresh dynamic import, which a store cannot have: <PermChip/> and <PermPop/>
+   render from THIS copy of the module, and a second copy would be a store with
+   nothing subscribed to it. */
+async function load(stored?: string | null): Promise<typeof store> {
   localStorage.clear()
   if (stored != null) localStorage.setItem('raven.perm', stored)
-  const { resetModules } = await import('vitest').then((v) => ({ resetModules: v.vi.resetModules }))
-  resetModules()
-  await wire()
-  return import('./perm')
+  store._resetForTests()
+  return store
 }
 
-async function wire(): Promise<void> {
-  const bridge = await import('./bridge')
-  bridge.setShell({ T: (key) => key, confirmAsk: () => {}, showPage: () => {} })
+function wire(): void {
+  setShell({ T: (key) => key, confirmAsk: () => {}, showPage: () => {} })
 }
 
-/* The same three elements page.html carries, in the same nesting and with the
-   same tags: the chip holds the icon slot and the label, the panel holds the
-   list. `.pico` is the svg itself there, not a span around one. The wrapper is
-   `.dock-in` because that is the composer card in page.html, and the card is
-   what the panel has to clear. */
+/* The chip and the panel are the page root's now (src/chrome/PermChip.tsx,
+   src/chrome/PermPop.tsx), so the fixture is the one band they render into --
+   the composer card comes with them, and the card is what the panel has to
+   open clear of. */
 function markup(): void {
-  document.body.innerHTML = `
-    <div class="dock-in">
-      <button class="chip" id="permChip" aria-expanded="false" aria-haspopup="true">
-        <svg class="pico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-          <path d="M12 3.5 19 6v5.5c0 4-2.9 7.4-7 9-4.1-1.6-7-5-7-9V6l7-2.5Z"/>
-        </svg>
-        <span id="permName"></span>
-      </button>
-      <div class="pop" id="permPop" data-open="false"><div id="permList"></div></div>
-    </div>`
+  document.body.innerHTML = '<div class="dock"></div>'
 }
 
-beforeEach(async () => {
-  await wire()
+let unmount = (): void => {}
+
+beforeEach(() => {
+  wire()
   markup()
+  unmount = mountPageRoot()
 })
 
 afterEach(() => {
+  unmount()
+  unmount = () => {}
+  store._resetForTests()
   resetShell()
   document.body.innerHTML = ''
   localStorage.clear()

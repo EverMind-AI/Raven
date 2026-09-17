@@ -184,8 +184,9 @@ describe('the portal table', () => {
 })
 
 /* The reparenting itself, on the live module rather than on the markup: the
-   fixture is tier.test.ts's, because the card is what the panel has to open
-   clear of and `.dock-in` is that card. */
+   fixture is tier.test.ts's, which is the band the panel is rendered into
+   (src/chrome/TierPop.tsx) -- the composer card comes with it, and the card is
+   what the panel has to open clear of. */
 describe('a popover that has been opened', () => {
   const MENU = [
     { id: 'medium', name: 'Medium', description: 'The least effort a sub-agent is asked for.' },
@@ -193,24 +194,11 @@ describe('a popover that has been opened', () => {
     { id: 'max', name: 'Max', description: 'The most effort a sub-agent is asked for.' },
   ]
 
-  function markup(): void {
-    document.body.innerHTML = `
-      <div class="dock-in">
-        <button class="chip" id="tierChip" aria-expanded="false" aria-haspopup="true" hidden>
-          <svg class="pico" viewBox="0 0 24 24" aria-hidden="true"></svg>
-          <span id="tierName"></span>
-        </button>
-        <div class="pop" id="tierPop" data-open="false">
-          <div class="hd"><span class="lab"></span></div>
-          <div id="tierList" role="radiogroup"></div>
-          <div class="note"></div>
-        </div>
-      </div>`
-  }
+  let unmount = (): void => {}
 
   async function open(): Promise<HTMLElement> {
     setShell({ T: (key) => key, confirmAsk: () => {}, showPage: () => {} } as Shell)
-    markup()
+    document.body.innerHTML = '<div class="dock"></div>'
     tier._resetForTests()
     session._resetForTests()
     session.setCurrent('cli:one')
@@ -219,12 +207,15 @@ describe('a popover that has been opened', () => {
       set: async (mode): Promise<TierReply> => ({ mode: mode ?? 'high', availableModes: MENU }),
     }
     setSources({ tier: src })
+    unmount = mountPageRoot()
     await tier.load()
     tier.open()
     return document.getElementById('tierPop')!
   }
 
   function reset(): void {
+    unmount()
+    unmount = () => {}
     resetShell()
     document.body.innerHTML = ''
     tier._resetForTests()
