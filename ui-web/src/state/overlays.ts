@@ -36,8 +36,11 @@ import * as xa from '../features/xa/store'
 import * as caps from './caps'
 import * as detail from './detail'
 import { close as closeImage, isOpen as imageOpen } from './lightbox'
+import { byEscape } from './pages'
 import * as settingsDialog from './settings'
 import { ds } from './sources'
+
+import type { PageId } from './pages'
 
 export type Overlay = {
   /** The text the chain tested for this layer. */
@@ -59,8 +62,24 @@ const flagged = (id: string) => (): boolean => document.getElementById(id)?.data
    sheet that owns it is another root's (state/confirm.ts, the cron island). */
 const cancels = (id: string) => (): void => { document.getElementById(id)?.click() }
 
-/** The fourteen, in the order Escape reaches them. */
-export const ORDER: readonly Overlay[] = [
+/* What each page's own close is. Keyed by PageId rather than listed, so a new
+   module page is a compile error here rather than a page Escape cannot take
+   back -- which was one of the six registrations a new page could miss in
+   silence. The verb is the domain's; the order is the table's. */
+const CLOSERS: Record<PageId, () => void> = {
+  capsPage: caps.close,
+  xaPage: () => xa.close(),
+  connPage: () => connections.close(),
+  memPage: () => memory.close(),
+  pbPage: () => playbooks.closePage(),
+  kbPage: () => knowledge.close(),
+  cronPage: () => cron.close(),
+}
+
+/* The five layers Escape reaches before any page: an image, the confirm
+   dialog, the channel dialog raised over the entries page, the shared drawer
+   and the new-job sheet. */
+const ABOVE: readonly Overlay[] = [
   { id: '.lightbox', isOpen: imageOpen, close: closeImage },
   { id: '#veil', isOpen: flagged('veil'), close: cancels('cfNo') },
   /* After the confirm veil, before the page: a dialog raised over the entry
@@ -68,17 +87,26 @@ export const ORDER: readonly Overlay[] = [
   { id: '#connVeil', isOpen: flagged('connVeil'), close: () => connections.closeDialog() },
   { id: '#detail', isOpen: flagged('detail'), close: detail.close },
   { id: '#jobVeil', isOpen: flagged('jobVeil'), close: cancels('jobNo') },
-  { id: '#cronPage', isOpen: flagged('cronPage'), close: () => cron.close() },
-  { id: '#memPage', isOpen: flagged('memPage'), close: () => memory.close() },
-  { id: '#pbPage', isOpen: flagged('pbPage'), close: () => playbooks.closePage() },
-  { id: '#kbPage', isOpen: flagged('kbPage'), close: () => knowledge.close() },
-  { id: '#capsPage', isOpen: flagged('capsPage'), close: caps.close },
-  { id: '#xaPage', isOpen: flagged('xaPage'), close: () => xa.close() },
-  { id: '#connPage', isOpen: flagged('connPage'), close: () => connections.close() },
+]
+
+/* And the two beneath every page: the settings dialog, which is a flag rather
+   than an element, and the running turn. */
+const BELOW: readonly Overlay[] = [
   { id: 'setIsOpen()', isOpen: settingsDialog.isOpen, close: settingsDialog.close },
   /* The last resort: with nothing on screen to take back, Escape interrupts
      the running turn. */
   { id: 'turn.busy()', isOpen: turnBusy, close: () => ds('composer').stop() },
+]
+
+/** The fourteen, in the order Escape reaches them. */
+export const ORDER: readonly Overlay[] = [
+  ...ABOVE,
+  ...byEscape().map((page) => ({
+    id: `#${page.id}`,
+    isOpen: flagged(page.id),
+    close: CLOSERS[page.id],
+  })),
+  ...BELOW,
 ]
 
 /** Closes the first layer that is open. Whether one was is the answer. */

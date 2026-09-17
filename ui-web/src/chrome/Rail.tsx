@@ -54,6 +54,7 @@ import * as navfly from '../state/navfly'
 import * as rail from '../state/rail'
 import { MoreFly } from './MoreFly'
 
+import type { NavButton } from '../state/pages'
 import type { JSX } from 'react'
 
 /* The two icon buttons over the list. Neither carries a literal -- their words
@@ -98,7 +99,59 @@ function RailTop(): JSX.Element {
   )
 }
 
-/* The nav strip: the draft row, the four module rows, and the fold that holds
+/* The five rows that open a module page, in the order the strip renders them.
+   `button` is typed against the page table (state/pages.ts), so a row can only
+   light a button some page declares -- and the mark the rail writes is read off
+   that same table (features/rail/store.ts's markNew), which is the pair a page
+   used to be able to miss in silence.
+
+   The order here is the strip's, not the table's: the capabilities page's two
+   tabs come first because they are what a reader reaches for daily, while the
+   table's order is the one the pages sit in at the body. */
+const NAV_ROWS: ReadonlyArray<{
+  readonly button: NavButton
+  readonly key: string
+  readonly open: () => void
+  readonly icon: JSX.Element
+}> = [
+  {
+    button: 'skillBtn',
+    key: 'gui.tab.skills',
+    open: () => void openSkills(),
+    icon: <path d="M12 4l1.9 5.3L19 11l-5.1 1.7L12 18l-1.9-5.3L5 11l5.1-1.7Z" />,
+  },
+  {
+    button: 'plugBtn',
+    key: 'gui.tab.plugins',
+    open: () => void openPlugins(),
+    icon: <path d="M9 3.5v4.5M15 3.5v4.5M7 8h10v4.5a5 5 0 0 1-10 0zM12 17.5v3" />,
+  },
+  {
+    button: 'pbBtn',
+    key: 'gui.nav.pb',
+    open: () => openPlaybooks(),
+    icon: (
+      <>
+        <circle cx="5.5" cy="7" r="2" /><circle cx="5.5" cy="17" r="2" /><circle cx="18.5" cy="12" r="2" />
+        <path d="M7.5 7.6c5 1.4 6.5 2.6 9 3.9M7.5 16.4c5-1.4 6.5-2.6 9-3.9" />
+      </>
+    ),
+  },
+  {
+    button: 'kbBtn',
+    key: 'gui.nav.kb',
+    open: () => openKnowledge(),
+    icon: <path d="M5 4.5h9.5a2 2 0 0 1 2 2v13H7a2 2 0 0 1-2-2zM16.5 6.5H19v13h-2.5M8 8.5h5M8 12h5" />,
+  },
+  {
+    button: 'memBtn',
+    key: 'gui.nav.mem',
+    open: () => openMemory(),
+    icon: <path d="M12 3l8 4.5-8 4.5-8-4.5zM4 12.4l8 4.5 8-4.5M4 16.6l8 4.5 8-4.5" />,
+  },
+]
+
+/* The nav strip: the draft row, the five module rows, and the fold that holds
    the three set-up-once ones. */
 function RailNav(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
@@ -111,37 +164,14 @@ function RailNav(): JSX.Element {
         </svg>
         <span data-i18n="gui.new_task">{t('gui.new_task')}</span>
       </button>
-      <button className="navi" id="skillBtn" onClick={() => void openSkills()}>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-          <path d="M12 4l1.9 5.3L19 11l-5.1 1.7L12 18l-1.9-5.3L5 11l5.1-1.7Z" />
-        </svg>
-        <span data-i18n="gui.tab.skills">{t('gui.tab.skills')}</span>
-      </button>
-      <button className="navi" id="plugBtn" onClick={() => void openPlugins()}>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-          <path d="M9 3.5v4.5M15 3.5v4.5M7 8h10v4.5a5 5 0 0 1-10 0zM12 17.5v3" />
-        </svg>
-        <span data-i18n="gui.tab.plugins">{t('gui.tab.plugins')}</span>
-      </button>
-      <button className="navi" id="pbBtn" onClick={() => openPlaybooks()}>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-          <circle cx="5.5" cy="7" r="2" /><circle cx="5.5" cy="17" r="2" /><circle cx="18.5" cy="12" r="2" />
-          <path d="M7.5 7.6c5 1.4 6.5 2.6 9 3.9M7.5 16.4c5-1.4 6.5-2.6 9-3.9" />
-        </svg>
-        <span data-i18n="gui.nav.pb">{t('gui.nav.pb')}</span>
-      </button>
-      <button className="navi" id="kbBtn" onClick={() => openKnowledge()}>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-          <path d="M5 4.5h9.5a2 2 0 0 1 2 2v13H7a2 2 0 0 1-2-2zM16.5 6.5H19v13h-2.5M8 8.5h5M8 12h5" />
-        </svg>
-        <span data-i18n="gui.nav.kb">{t('gui.nav.kb')}</span>
-      </button>
-      <button className="navi" id="memBtn" onClick={() => openMemory()}>
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-          <path d="M12 3l8 4.5-8 4.5-8-4.5zM4 12.4l8 4.5 8-4.5M4 16.6l8 4.5 8-4.5" />
-        </svg>
-        <span data-i18n="gui.nav.mem">{t('gui.nav.mem')}</span>
-      </button>
+      {NAV_ROWS.map((row) => (
+        <button className="navi" id={row.button} key={row.button} onClick={row.open}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+            {row.icon}
+          </svg>
+          <span data-i18n={row.key}>{t(row.key)}</span>
+        </button>
+      ))}
       {/* Sub-agents / entrances / schedules live one level in: they are
            set-up-once surfaces,
            not daily destinations, and seven top-level rows buried the four

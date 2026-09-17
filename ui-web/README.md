@@ -17,7 +17,7 @@ fetches a second script.
 | `src/rpc/` | the typed gateway seam: the generated method contract, the gateway slot, the three transports and the offline fixture library |
 | `src/state/` | the stores every region reads, plus `lang/` and `session/` |
 | `src/chrome/` | the page's own furniture -- rail, chat header, dock, sheet rack, tooltip, chips -- plus `behaviour/`, the two it installs rather than renders |
-| `src/features/<domain>/` | one island per domain: its component, its store, its `source.ts`; `features/hosts.ts` holds the three detached nodes a tab re-attaches |
+| `src/features/<domain>/` | one island per domain: its component, its store, its `source.ts`, its `manifest.ts`; `features/manifests.ts` is where those declarations are assembled and `features/hosts.ts` holds the three detached nodes a tab re-attaches |
 | `src/components/` | the small components more than one region renders |
 | `src/lib/` | helpers with no store and no page of their own (`lib/dom.ts` is the page's `$`) |
 | `src/assets/` | icons served from `dist/assets` |

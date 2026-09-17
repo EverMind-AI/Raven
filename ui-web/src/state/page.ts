@@ -23,38 +23,27 @@
 
 import * as caps from './caps'
 import * as detail from './detail'
+import { PAGES, pageOf } from './pages'
 
-/** The seven module pages, keyed as their <section> ids. */
-export type PageId = 'capsPage' | 'xaPage' | 'connPage' | 'memPage' | 'pbPage' | 'kbPage' | 'cronPage'
+import type { PageId } from './pages'
 
-/* Which rail button each page lights up. Only one module page is open at a
-   time: they used to cover the whole window, so two open at once was invisible;
-   now that the rail stays put, the one behind shows through.
-
-   Named rather than derived, and the capabilities page's entry is a function
-   because that one section serves two modules and lights whichever tab stands
-   open. An outside gate reads this table against the rail's own list of the
-   buttons it writes (scripts/gates/rail-nav-registry.test.mjs), because a page
-   in here that the rail does not mark has no selected state at all and nothing
-   else fails. */
-const NAV_OF = {
-  capsPage: () => (caps.get().tab === 'plugin' ? 'plugBtn' : 'skillBtn'),
-  xaPage: 'moreBtn',
-  connPage: 'moreBtn',
-  memPage: 'memBtn',
-  pbPage: 'pbBtn',
-  kbPage: 'kbBtn',
-  cronPage: 'moreBtn',
-}
+export type { PageId }
 
 /** The pages, and the button each lights up -- what markNew asks of the page
- *  registry. The More rows are not in here: the nav flyout marks its own. */
+ *  registry. The More rows are not in here: the nav flyout marks its own.
+ *
+ *  Which button comes from the table (state/pages.ts); which of two is asked
+ *  here, because the one page with two is the capabilities page and the answer
+ *  is whichever of its tabs stands open -- and this module is where the tab is
+ *  already read. */
 export function navState(): { pages: string[]; btnOf(p: string): string | undefined } {
   return {
-    pages: Object.keys(NAV_OF),
+    pages: PAGES.map((page) => page.id),
     btnOf: (p) => {
-      const of = NAV_OF[p as keyof typeof NAV_OF]
-      return typeof of === 'function' ? of() : of
+      const buttons = pageOf(p)?.navButtons
+      if (!buttons) return undefined
+      if (buttons.length < 2) return buttons[0]
+      return caps.get().tab === 'plugin' ? 'plugBtn' : 'skillBtn'
     },
   }
 }
@@ -102,8 +91,8 @@ export function _resetForTests(): void {
 
 export function show(id: PageId | null): void {
   current = id
-  for (const p of Object.keys(NAV_OF)) {
-    document.getElementById(p)!.dataset.open = String(p === id)
+  for (const page of PAGES) {
+    document.getElementById(page.id)!.dataset.open = String(page.id === id)
   }
   /* From the top, every time: the scroller keeps its position across a close
      and reopen, so a page could greet the reader halfway down its own list. */

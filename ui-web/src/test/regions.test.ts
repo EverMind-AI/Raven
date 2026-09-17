@@ -30,23 +30,20 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { env } from 'node:process'
 
 import { App } from '../App'
+import { PAGES } from '../state/pages'
 import { bodySiblings, elementSnapshot } from './domSnapshot'
 
 /* The nineteen regions, in document order, keyed the way their golden files
-   are: by id, or by class for the one region that has no id (`div.app`). */
+   are: by id, or by class for the one region that has no id (`div.app`). The
+   seven module pages are the table that declares them (state/pages.ts), in its
+   order, so a page added there has a golden here rather than none. */
 const REGIONS = [
   'splash',
   'onb',
   'noJs',
   'app',
   'railShow',
-  'capsPage',
-  'xaPage',
-  'connPage',
-  'memPage',
-  'pbPage',
-  'kbPage',
-  'cronPage',
+  ...PAGES.map((page) => page.id),
   'jobVeil',
   'detail',
   'setVeil',
@@ -54,7 +51,7 @@ const REGIONS = [
   'connVeil',
   'menu',
   'toasts',
-] as const
+]
 
 const GOLDEN_DIR = 'src/test/__golden__'
 

@@ -24,6 +24,8 @@
  *   append   -- created at runtime and appended to the body.
  */
 
+import { PAGES } from './pages'
+
 export interface Portal {
   /** What the element is called; a CSS selector where it has one to itself. */
   readonly selector: string
@@ -38,39 +40,18 @@ export interface Portal {
   readonly bootKey?: string
 }
 
-/* The thirteen, in the order the design's portal table lists them. */
-export const PORTALS: readonly Portal[] = [
-  { selector: '.sbars', kind: 'append', z: '--z-scrollbars', at: 18, bootKey: 'div.sbars' },
-  { selector: 'pickHost', kind: 'append', z: '--z-picker', at: 19, bootKey: 'div' },
-  { selector: '#deskHost', kind: 'append', z: '--z-desk', at: 20, bootKey: 'div#deskHost' },
-  { selector: '.tipp', kind: 'append', z: '--z-tip', at: 21, bootKey: 'div.tipp' },
-  { selector: '#permPop', kind: 'reparent', z: '46', at: 'last' },
-  { selector: '#tierPop', kind: 'reparent', z: '46', at: 'last' },
-  { selector: 'button.lightbox', kind: 'append', z: '--z-lightbox', at: 'last' },
-  { selector: '.upshade', kind: 'append', z: '--z-shade', at: 'last' },
-  { selector: '.topfail', kind: 'append', z: '--z-failbar', at: 'last' },
-  { selector: 'bootErrorBar', kind: 'append', z: '99', at: 'last' },
-  { selector: 'input[type=file]', kind: 'append', z: '', at: 'last' },
-  { selector: '#menu', kind: 'static', z: '--z-menu', at: 16, bootKey: 'div#menu' },
-  { selector: '#toasts', kind: 'static', z: '--z-toast', at: 17, bootKey: 'div#toasts' },
-]
-
 /* The body's standing order after boot, as the goldens record it: seventeen
    static regions (#splash and #noJs are removed before the snapshot is taken)
    then the four appended while the page installs itself. Keyed by tag plus id,
    or tag plus classes when there is no id -- the model picker's wrapper has
-   neither, which is why one entry is a bare `div`. */
+   neither, which is why one entry is a bare `div`. The seven module pages are
+   the table in state/pages.ts, in its order, because that IS the order they
+   are rendered in (src/App.tsx). */
 export const BOOT_BODY_ORDER = [
   'div#onb',
   'div.app',
   'button#railShow',
-  'section#capsPage',
-  'section#xaPage',
-  'section#connPage',
-  'section#memPage',
-  'section#pbPage',
-  'section#kbPage',
-  'section#cronPage',
+  ...PAGES.map((page) => `section#${page.id}`),
   'div#jobVeil',
   'aside#detail',
   'div#setVeil',
@@ -82,7 +63,29 @@ export const BOOT_BODY_ORDER = [
   'div',
   'div#deskHost',
   'div.tipp',
-] as const
+]
+
+/* Where a boot-time layer stands among the body's children, read off the order
+   above rather than written down: one insertion into a page list used to
+   invalidate six absolute indices in this file and three more in its tests. */
+const at = (bootKey: string): number => BOOT_BODY_ORDER.indexOf(bootKey) + 1
+
+/* The thirteen, in the order the design's portal table lists them. */
+export const PORTALS: readonly Portal[] = [
+  { selector: '.sbars', kind: 'append', z: '--z-scrollbars', at: at('div.sbars'), bootKey: 'div.sbars' },
+  { selector: 'pickHost', kind: 'append', z: '--z-picker', at: at('div'), bootKey: 'div' },
+  { selector: '#deskHost', kind: 'append', z: '--z-desk', at: at('div#deskHost'), bootKey: 'div#deskHost' },
+  { selector: '.tipp', kind: 'append', z: '--z-tip', at: at('div.tipp'), bootKey: 'div.tipp' },
+  { selector: '#permPop', kind: 'reparent', z: '46', at: 'last' },
+  { selector: '#tierPop', kind: 'reparent', z: '46', at: 'last' },
+  { selector: 'button.lightbox', kind: 'append', z: '--z-lightbox', at: 'last' },
+  { selector: '.upshade', kind: 'append', z: '--z-shade', at: 'last' },
+  { selector: '.topfail', kind: 'append', z: '--z-failbar', at: 'last' },
+  { selector: 'bootErrorBar', kind: 'append', z: '99', at: 'last' },
+  { selector: 'input[type=file]', kind: 'append', z: '', at: 'last' },
+  { selector: '#menu', kind: 'static', z: '--z-menu', at: at('div#menu'), bootKey: 'div#menu' },
+  { selector: '#toasts', kind: 'static', z: '--z-toast', at: at('div#toasts'), bootKey: 'div#toasts' },
+]
 
 /** The four layers this module hands out, in the order they belong at the body. */
 export const LAYERS = ['sbars', 'picker', 'desk', 'tip'] as const

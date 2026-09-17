@@ -69,7 +69,9 @@ import * as menu from './state/menu'
 import * as rail from './state/rail'
 import * as settings from './state/settings'
 import * as toast from './state/toast'
+import { PAGES } from './state/pages'
 
+import type { Page as ModulePageRow } from './state/pages'
 import type { JSX } from 'react'
 
 /* A veil's own click, for the three dialogs that close when the reader clicks
@@ -282,21 +284,19 @@ function RailShow(): JSX.Element {
    and each page's own hero says the name bigger. It is still the page's
    accessible name through the aria-label above, which is why the two keys can
    differ (the memory page is announced by its hero's phrase). */
-function ModulePage({ id, aria, head, literal, body }: {
-  readonly id: string
-  readonly aria: string
-  readonly head: string
-  readonly literal: string
-  readonly body: string
-}): JSX.Element {
+function ModulePage({ page }: { readonly page: ModulePageRow }): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
+  /* Only the six whose interior is a heading reach this: the seventh declares
+     `own` and is rendered by its own file, so both keys are here. */
+  const aria = page.aria!
+  const head = page.head!
   return (
-    <section className="page" id={id} data-open="false" data-i18n-aria={aria} aria-label={lang.attr(aria)}>
+    <section className="page" id={page.id} data-open="false" data-i18n-aria={aria} aria-label={lang.attr(aria)}>
       <header>
         <h2 data-i18n={head}>{t(head)}</h2>
       </header>
       <div className="work">
-        <div className="wrap" id={body} />
+        <div className="wrap" id={page.bodyId} />
       </div>
     </section>
   )
@@ -331,16 +331,17 @@ export function App(): JSX.Element {
         </div>
       </div>
       <RailShow />
-      <CapsPage />
-      <ModulePage id="xaPage" aria="gui.page.agents" head="gui.page.agents" literal="子智能体" body="xaBody" />
-      {/* NOT a capability. A plugin is "what it can touch"; an entrance is
-          "where you find it". Same brand can be both (Slack plugin vs Slack
-          entrance) and the two point in opposite directions. */}
-      <ModulePage id="connPage" aria="gui.page.conn" head="gui.page.conn" literal="入口" body="connBody" />
-      <ModulePage id="memPage" aria="gui.mem.hero" head="gui.nav.mem" literal="记忆" body="memBody" />
-      <ModulePage id="pbPage" aria="gui.nav.pb" head="gui.nav.pb" literal="剧本" body="pbBody" />
-      <ModulePage id="kbPage" aria="gui.nav.kb" head="gui.nav.kb" literal="知识库" body="kbBody" />
-      <ModulePage id="cronPage" aria="gui.page.cron" head="gui.page.cron" literal="定时" body="cronBody" />
+      {/* The seven module pages, in the order state/pages.ts declares -- which
+          is the order they sit among the body's children, recorded by that
+          module's BOOT_BODY_ORDER and by the region goldens. The capabilities
+          page serves two modules and has a file of its own; the other six are
+          a heading and the empty box their island roots itself in.
+
+          One of them is NOT a capability: a plugin is "what it can touch",
+          while an entrance is "where you find it" -- the same brand can be
+          both (a Slack plugin and a Slack entrance) and the two point in
+          opposite directions. */}
+      {PAGES.map((page) => (page.own ? <CapsPage key={page.id} /> : <ModulePage key={page.id} page={page} />))}
       {/* The new-job sheet renders here from the cron island
           (src/features/cron/CronPage.tsx); only the veil is this file's. */}
       <div className="veil" id="jobVeil" data-open="false" />

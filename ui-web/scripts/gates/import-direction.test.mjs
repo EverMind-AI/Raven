@@ -41,13 +41,20 @@ import { describe, expect, it } from 'vitest'
 const SRC = new URL('../../src/', import.meta.url).pathname
 
 /* One rank per directory, lowest first: an import may point at its own rank or
-   at a higher number, never back. `features/hosts.ts` sits below the domains
-   because it is a leaf with no imports of its own (EXEMPT says why). */
+   at a higher number, never back.
+
+   Two files at the features level are not domains and are ranked as what they
+   are. `features/manifests.ts` is the assembly point -- every domain declares
+   into it, so it sits ABOVE them and a domain reading it is an upward edge,
+   which is what keeps every island out of every island's closure.
+   `features/hosts.ts` sits below them because it is a leaf with no imports of
+   its own (EXEMPT says why). */
 const RANK = {
   main: 0,
   app: 1,
   App: 2,
   chrome: 3,
+  'features/manifests': 3.5,
   features: 4,
   'features/hosts': 5,
   components: 6,
@@ -273,14 +280,15 @@ function bucket(rel) {
   if (rel === 'main.tsx') return 'main'
   if (rel === 'App.tsx') return 'App'
   if (rel === 'features/hosts.ts') return 'features/hosts'
+  if (rel === 'features/manifests.ts') return 'features/manifests'
   const dir = rel.split('/')[0]
   if (dir === 'features') return `features/${rel.split('/')[1]}`
   return dir
 }
 
-const rankOf = (name) => (name.startsWith('features/') && name !== 'features/hosts'
-  ? RANK.features
-  : RANK[name])
+/* A domain's bucket is `features/<domain>`, which the table does not list; the
+   two files that are not domains are listed by name. */
+const rankOf = (name) => (name in RANK ? RANK[name] : RANK.features)
 
 /* Vite's own resolution, for the specifiers that name a module in this tree:
    the file itself, a .ts/.tsx extension, or a directory's index. */
@@ -380,7 +388,9 @@ function violations() {
     const here = bucket(from)
     const there = bucket(to)
     if (here === there) continue
-    if (here.startsWith('features/') && there.startsWith('features/') && there !== 'features/hosts') {
+    if (here.startsWith('features/') && there.startsWith('features/')
+      && there !== 'features/hosts' && there !== 'features/manifests'
+      && here !== 'features/manifests') {
       const file = to.split('/')[2]
       if (file !== 'source.ts' && file !== 'types.ts') cross.push(edge)
       continue

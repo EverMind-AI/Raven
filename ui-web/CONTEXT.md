@@ -99,6 +99,27 @@ root or a writer fills it. `src/test/__golden__/region-*.txt` holds one golden
 per region, and `src/App.test.tsx` holds the order.
 _Avoid_: "layer" for this -- a layer is one of the four things `host()` appends.
 
+**Module page**:
+One row of `src/state/pages.ts`: a `<section>` id, the empty box its island
+fills, the rail button it lights, its rank in the Escape chain, and the keys its
+heading and accessible name speak. Seven rows, in the order they sit among the
+body's children -- and every table that names a page derives from them:
+`src/App.tsx`'s sections, `state/page.ts`'s `PageId` and open flags,
+`state/overlays.ts`'s Escape rows, `state/portals.ts`'s body order,
+`chrome/Rail.tsx`'s nav strip, `features/rail/store.ts`'s marks and
+`src/test/regions.test.ts`'s goldens. Adding a page is adding a row.
+_Avoid_: "page" for the whole document, or for a dialog -- the settings dialog
+and the model picker are overlays, not module pages.
+
+**Domain manifest**:
+`features/<domain>/manifest.ts` -- what one domain declares about itself: its
+name, the module page it owns, the seam keys it answers, and the root
+`src/main.tsx` mounts for it. `features/manifests.ts` is the assembly point that
+reads all nineteen; no domain may read it back.
+`scripts/gates/domain-shape.test.mjs` holds the files a domain has and
+`domain-registration.test.mjs` holds the manifest against the page table and the
+seam.
+
 **Chrome component**:
 A component under `src/chrome/` -- the page's own furniture (the rail, the chat
 header, the dock, the sheet rack, the tooltip, the two chips and their

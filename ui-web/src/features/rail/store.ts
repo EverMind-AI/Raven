@@ -1,3 +1,4 @@
+import { NAV_BUTTONS } from '../../state/pages'
 import { ds } from '../../state/sources'
 import { dropDraft } from '../composer/store'
 import { mark as navMark } from '../../state/navfly'
@@ -172,12 +173,12 @@ export function markNew(): void {
      are the flyout module's to write -- it is asked, not reached into, and it
      answers whether the group stood open. */
   if (navMark() && top === 'moreBtn') top = null
-  /* Named, not derived: `capsPage` lights skillBtn or plugBtn depending on which
-     tab stands open, so a set built from navState() would leave a stale mark on
-     whichever of the two it could not see. The list is therefore something a new
-     page has to be added to, and rail-nav-registry.test.mjs is what makes
-     forgetting it a failing test rather than a page with no selected get(). */
-  for (const id of ['newBtn', 'skillBtn', 'plugBtn', 'pbBtn', 'kbBtn', 'memBtn', 'moreBtn']) {
+  /* Every button a page can light, plus the draft row's, from the one table
+     that declares them (state/pages.ts): the capabilities page lights skillBtn
+     or plugBtn depending on which tab stands open, so the mark has to be
+     cleared on both whichever of the two `navState` can see. Adding a page to
+     that table is what adds it here. */
+  for (const id of NAV_BUTTONS) {
     const b = el(id)
     if (b) b.setAttribute('aria-current', String(id === top))
   }
