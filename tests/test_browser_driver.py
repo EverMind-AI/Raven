@@ -8,6 +8,7 @@ A real Chromium run belongs in tests/integration, not in the unit suite.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import pytest
@@ -396,6 +397,33 @@ async def test_tabs_lists_every_open_page_with_the_active_flag() -> None:
         ("https://a.test", False, False),
         ("https://b.test", True, True),
     ]
+
+
+async def test_tabs_number_the_agents_working_in_them_for_a_reader() -> None:
+    """The panel is neither agent, so ``yours``/``held`` say nothing to it.
+
+    What it can say is which agent is in which tab -- without that, two agents
+    browsing at once is one pane flickering between two pages for no stated
+    reason. The number follows an owner across a tab switch, or it names
+    nothing.
+    """
+    b = get_browser()
+    p1, p2, p3 = _FakePage("https://a.test"), _FakePage("https://b.test"), _FakePage("https://c.test")
+    _with_pages(b, [p1, p2, p3], active=0)
+    now = time.monotonic()
+    b._bind("session:main", p2, now)
+    b._bind("run:sub", p1, now + 0.1)
+
+    tabs = await b.tabs()
+    assert [(t["url"], t.get("agent")) for t in tabs] == [
+        ("https://a.test", 2),
+        ("https://b.test", 1),
+        ("https://c.test", None),
+    ]
+
+    b._bind("run:sub", p3, time.monotonic())
+    moved = await b.tabs()
+    assert [t.get("agent") for t in moved] == [None, 1, 2]
 
 
 async def test_tab_activate_switches_the_shared_page_and_restreams(monkeypatch: pytest.MonkeyPatch) -> None:

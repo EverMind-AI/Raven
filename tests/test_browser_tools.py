@@ -28,7 +28,7 @@ from raven.agent.tools.browser import (
 )
 from raven.agent.tools.registry import admit_tool
 from raven.browser import driver as driver_module
-from raven.browser.driver import MAX_TABS, Browser, _Owner, get_browser
+from raven.browser.driver import MAX_TABS, Browser, get_browser
 
 
 @pytest.fixture(autouse=True)
@@ -187,7 +187,7 @@ async def test_a_read_does_not_move_the_front_tab_but_an_act_does() -> None:
     b = get_browser()
     p0, p1 = _FakePage("https://a.test", "A"), _FakePage("https://b.test", "B")
     _running(b, [p0, p1], active=1)
-    b._s.owners["session:a"] = _Owner(p0, time.monotonic())
+    b._bind("session:a", p0, time.monotonic())
 
     await b._page_for("session:a", act=False)
     assert b._s.page is p1
@@ -201,7 +201,7 @@ async def test_an_idle_owner_loses_its_tab_to_the_next_one(monkeypatch: pytest.M
     b = get_browser()
     p0 = _FakePage("https://a.test", "A")
     _running(b, [p0])
-    b._s.owners["run:old"] = _Owner(p0, time.monotonic() - driver_module.OWNER_IDLE_S - 1)
+    b._bind("run:old", p0, time.monotonic() - driver_module.OWNER_IDLE_S - 1)
 
     page = await b._page_for("session:new")
 
@@ -213,7 +213,7 @@ async def test_an_owner_whose_tab_was_closed_is_rebound_on_its_next_call() -> No
     b = get_browser()
     p0, p1 = _FakePage("https://a.test", "A"), _FakePage("https://b.test", "B")
     _running(b, [p0, p1], active=1)
-    b._s.owners["session:a"] = _Owner(p0, time.monotonic())
+    b._bind("session:a", p0, time.monotonic())
     p0._closed = True
     b._s.context.pages.remove(p0)
 
@@ -226,8 +226,8 @@ async def test_owner_cannot_take_or_close_another_owners_tab() -> None:
     b = get_browser()
     p0, p1 = _FakePage("https://a.test", "A"), _FakePage("https://b.test", "B")
     _running(b, [p0, p1])
-    b._s.owners["run:other"] = _Owner(p0, time.monotonic())
-    b._s.owners["session:me"] = _Owner(p1, time.monotonic())
+    b._bind("run:other", p0, time.monotonic())
+    b._bind("session:me", p1, time.monotonic())
 
     taken = await b.tab_activate(0, owner="session:me")
     closed = await b.tab_close(0, owner="session:me")
@@ -245,7 +245,7 @@ async def test_the_reader_may_look_at_any_tab() -> None:
     b = get_browser()
     p0, p1 = _FakePage("https://a.test", "A"), _FakePage("https://b.test", "B")
     _running(b, [p0, p1], active=1)
-    b._s.owners["run:other"] = _Owner(p0, time.monotonic())
+    b._bind("run:other", p0, time.monotonic())
     before = time.monotonic()
 
     out = await b.tab_activate(0)
@@ -262,7 +262,7 @@ async def test_tab_limit_refuses_a_new_owner_rather_than_sharing() -> None:
     pages = [_FakePage(f"https://{i}.test") for i in range(MAX_TABS)]
     _running(b, pages)
     for i, p in enumerate(pages):
-        b._s.owners[f"run:{i}"] = _Owner(p, time.monotonic())
+        b._bind(f"run:{i}", p, time.monotonic())
 
     with pytest.raises(BrowserBusyError):
         await b._page_for("run:late")
@@ -272,7 +272,7 @@ async def test_a_popup_moves_its_opener_owner_to_the_new_tab() -> None:
     b = get_browser()
     p0 = _FakePage("https://a.test", "A")
     _running(b, [p0])
-    b._s.owners["session:a"] = _Owner(p0, time.monotonic())
+    b._bind("session:a", p0, time.monotonic())
     popup = _FakePage("https://a.test/help", "Help")
 
     async def opener() -> Any:
@@ -427,8 +427,8 @@ async def test_tabs_list_marks_the_owners_tab_and_the_held_ones(monkeypatch: pyt
     p0, p1 = _FakePage("https://a.test", "A"), _FakePage("https://b.test", "B")
     _running(b, [p0, p1])
     monkeypatch.setattr(type(b), "started", property(lambda self: True))
-    b._s.owners["run:other"] = _Owner(p0, time.monotonic())
-    b._s.owners["session:me"] = _Owner(p1, time.monotonic())
+    b._bind("run:other", p0, time.monotonic())
+    b._bind("session:me", p1, time.monotonic())
 
     out = await BrowserTabsTool().execute(action="list")
 

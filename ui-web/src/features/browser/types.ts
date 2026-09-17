@@ -10,6 +10,9 @@ export interface BrowserTabRow {
   title?: string
   active?: boolean
   loading?: boolean
+  /* Which agent is working in this tab, numbered by the server in the order
+     the agents claimed one. Absent when no agent holds it. */
+  agent?: number
 }
 
 /* The JSON header a screencast frame arrives with. */

@@ -911,9 +911,17 @@
       "en": "No browser on this server",
       "zh": "这个服务端没有浏览器"
     },
+    "gui.br.agent_tag": {
+      "en": "A{n}",
+      "zh": "A{n}"
+    },
     "gui.br.back": {
       "en": "Back",
       "zh": "后退"
+    },
+    "gui.br.by_agent": {
+      "en": "Agent {n} is working in this tab",
+      "zh": "智能体 {n} 正在使用这个标签页"
     },
     "gui.br.close": {
       "en": "Close the browser",

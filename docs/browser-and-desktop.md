@@ -48,6 +48,14 @@ tab is reported as `held` in `browser_tabs` and cannot be activated or closed
 by the model. A binding lapses after 10 minutes idle (`OWNER_IDLE_S`) or when
 its tab closes. A popup the owner's click opened becomes the owner's tab.
 
+Only the front tab streams, so the reader sees whichever tab acted last. To
+keep the other pages on screen the palette's Browser tab draws one card per
+tab -- the front one live, the rest holding the last frame seen of them -- and
+the driver numbers the tabs live owners hold (`agent` in `browser.tabs`, shown
+as `A1` / `A2` on the card and in the window's strip), so two agents browsing
+at once read as two pages with two owners rather than one pane flickering.
+Clicking a card brings that tab forward and opens the window on it.
+
 The reader's own hands (the panel's clicks, typing, tab switches, the address
 bar) are calls with no owner. They are stamped as a **touch**, and the owner's
 next readback carries `note: the user interacted with the browser since your
@@ -109,6 +117,9 @@ private ranges.
   adopted asynchronously: the click's readback may still describe the opener;
   the owner's next read lands on the popup.
 - Approval prompts show the ref id and site, not the element's label.
+- A card for a tab that has never been in front has no picture to show (the
+  stream only carries the front tab); it draws a dashed empty frame until the
+  reader or an agent brings that tab forward once.
 
 ## 2. Desktop control (macOS)
 

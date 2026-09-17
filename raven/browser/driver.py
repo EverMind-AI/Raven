@@ -173,6 +173,10 @@ _OPENS_TAB_JS = """
 class _Owner:
     page: Any
     seen: float
+    # When this owner first bound a tab, kept across rebinds: the reader's
+    # strip numbers the live owners in this order, and a number that moved
+    # every time an agent switched tabs would name nothing.
+    since: float
 
 
 @dataclass
@@ -461,6 +465,26 @@ class Browser:
         for key in [k for k, rec in self._s.owners.items() if not self._owner_live(rec, now)]:
             del self._s.owners[key]
 
+    def _bind(self, owner: str, page: Any, now: float) -> None:
+        """Bind an owner to a tab, keeping the stamp it was first bound at."""
+        prev = self._s.owners.get(owner)
+        self._s.owners[owner] = _Owner(page, now, prev.since if prev is not None else now)
+
+    def _owner_ranks(self) -> dict[int, int]:
+        """A small number per page a live owner holds, in binding order.
+
+        The reader has no owner of their own, so ``yours``/``held`` say nothing
+        to the panel; what it can say is *which* agent is in a tab, and a strip
+        that could not say even that is why two agents browsing at once looked
+        like one page flickering between them.
+        """
+        now = time.monotonic()
+        ranks: dict[int, int] = {}
+        live = sorted((r for r in self._s.owners.values() if self._owner_live(r, now)), key=lambda r: r.since)
+        for n, rec in enumerate(live, 1):
+            ranks.setdefault(id(rec.page), n)
+        return ranks
+
     def owner_of(self, page: Any) -> str | None:
         """Which live owner holds this page, if any."""
         now = time.monotonic()
@@ -504,7 +528,7 @@ class Browser:
             else:
                 page = await self._s.context.new_page()
                 self._wire(page)
-            self._s.owners[owner] = _Owner(page, now)
+            self._bind(owner, page, now)
         if act:
             await self._focus(page)
         return page
@@ -540,9 +564,11 @@ class Browser:
         """Every open tab, active flag included. Never starts Chromium.
 
         With an ``owner``, ``yours`` marks the tab bound to it and ``held``
-        the tabs another live owner is working in.
+        the tabs another live owner is working in. ``agent`` numbers the tabs
+        live owners hold, for a reader who is neither of them.
         """
         out: list[dict[str, Any]] = []
+        ranks = self._owner_ranks()
         mine = self._s.owners.get(owner) if owner is not None else None
         for i, p in enumerate(self._pages()):
             title = ""
@@ -557,6 +583,8 @@ class Browser:
                 "active": p is self._s.page,
                 "loading": bool(getattr(p, "_raven_loading", False)),
             }
+            if rank := ranks.get(id(p)):
+                row["agent"] = rank
             if owner is not None:
                 holder = self.owner_of(p)
                 row["yours"] = mine is not None and mine.page is p
@@ -571,7 +599,7 @@ class Browser:
         page = await self._s.context.new_page()
         self._wire(page)
         if owner is not None:
-            self._s.owners[owner] = _Owner(page, time.monotonic())
+            self._bind(owner, page, time.monotonic())
         else:
             self._s.touched = time.monotonic()
         await self._focus(page)
@@ -594,7 +622,7 @@ class Browser:
             holder = self.owner_of(page)
             if holder is not None and holder != owner:
                 return await self._state(error=f"tab {index} is being used by another agent", page=page)
-            self._s.owners[owner] = _Owner(page, time.monotonic())
+            self._bind(owner, page, time.monotonic())
         else:
             self._s.touched = time.monotonic()
         await self._focus(page)

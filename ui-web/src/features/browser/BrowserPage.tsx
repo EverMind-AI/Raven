@@ -289,6 +289,11 @@ function Tab({ tab }: { tab: BrowserTabRow }): JSX.Element {
     >
       {tab.loading ? <span className="ld" /> : <Fav url={tab.url} />}
       <span className="tt">{tab.title || tab.url.replace(/^https?:\/\//, '') || t('gui.br.tab_blank')}</span>
+      {tab.agent ? (
+        <span className="btab-agent" title={t('gui.br.by_agent', { n: tab.agent })}>
+          {t('gui.br.agent_tag', { n: tab.agent })}
+        </span>
+      ) : null}
       <button
         className="bx"
         title={t('gui.br.tab_close')}
