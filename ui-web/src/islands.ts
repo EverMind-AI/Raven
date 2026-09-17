@@ -17,7 +17,7 @@
 import * as approve from './features/composer/approve'
 import * as clarify from './features/composer/clarify'
 import * as composer from './features/composer/mount'
-import * as sheets from './features/composer/sheets'
+import * as sheets from './state/sheetRack'
 import * as connections from './features/connections/store'
 import { open as openConnections } from './features/connections/nav'
 import * as browser from './features/browser/mount'

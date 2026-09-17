@@ -7,7 +7,7 @@ import {
   remove as rackRemove,
   _resetForTests as rackReset,
   sync as rackSync,
-} from '../composer/sheets'
+} from '../../state/sheetRack'
 import { back as subBack, openDagNode, _resetForTests as subReset } from '../subagents/store'
 import { advance, forget, resume, run, settle, start, sync, touch, _resetForTests } from './mount'
 import { fold as storeFold } from './store'

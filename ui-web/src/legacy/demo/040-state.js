@@ -4,7 +4,7 @@ import { islands } from '../../islands'
 import { closeApproval as approvalClose, open as approveSheet, openApproval as approvalSheet } from '../../features/composer/approve'
 import { close as clarifyClose, open as clarifySheet } from '../../features/composer/clarify'
 import { drawQueue as queueDraw, dropDraft, loadDraft, parkDraft, queueClear, queuePush, queueRestore, queueShift, queueSnapshot, turn } from '../../features/composer/mount'
-import { add as sheetAdd, dropClass as sheetDropClass, forget as sheetsForget, remove as sheetRemove, session as sheetSession, sync as sheetsSync } from '../../features/composer/sheets'
+import { add as sheetAdd, dropClass as sheetDropClass, forget as sheetsForget, remove as sheetRemove, session as sheetSession, sync as sheetsSync } from '../../state/sheetRack'
 import { current as modelCurrent, setCurrent as modelSet } from '../../features/model/store'
 import { bootError, show as failureBar } from '../../shell/failure'
 import { show as menuAt } from '../../shell/menu'
@@ -40,7 +40,7 @@ function confirmAsk(title, body, label, fn) { confirm.ask(title, body, label, fn
    The rack that holds everything docking above the composer -- a clarify
    question, an approval request, a dag graph -- is the composer island's now,
    filed per conversation so that switching sessions cannot leave another one's
-   question sitting over the field. See ui-web/src/features/composer/sheets.ts for
+   question sitting over the field. See ui-web/src/state/sheetRack.ts for
    what that scoping is for and what it does not fix.
 
    What this part re-exports are the island's own verbs under the names every
