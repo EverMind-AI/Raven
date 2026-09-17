@@ -181,6 +181,39 @@ class TestMemory:
         assert seg.text == ""
         assert seg.meta["memory_hits"] == 0
 
+    async def test_a_benchmark_task_is_recalled_on_its_problem_statement(self, tmp_path: Path) -> None:
+        """The envelope is not the question.
+
+        A task id retrieves the wrong memory exactly -- the ingested pool
+        carries ids in its text too -- and a commit sha retrieves nothing while
+        diluting the embedding of everything that would have.
+        """
+        backend = _Backend([])
+        b = MemorySegmentBuilder(ContextBuilder(workspace=tmp_path).memory, backend=backend)
+        await b.build(
+            _ctx(
+                tmp_path,
+                "Fix this bug to solve the issue based on manual.yaml:\n"
+                "  instance_id: astropy__astropy-15082\n"
+                "  repo: astropy/astropy\n"
+                "  base_commit: c5e2521db013d9641999be9c79d1d807741bc39a\n"
+                "  problem_statement: Bugfix for collapses without masks\n"
+                "second line of the statement\n\n"
+                "manual.yaml is at /workspace/manual.yaml.\n\n"
+                "When you believe the task is complete, reply exactly:\nTASK_COMPLETE",
+            )
+        )
+        query = backend.calls[0]["query"]
+        assert query == "Bugfix for collapses without masks\nsecond line of the statement"
+        for envelope in ("instance_id", "base_commit", "c5e2521d", "manual.yaml", "TASK_COMPLETE"):
+            assert envelope not in query
+
+    async def test_an_ordinary_turn_is_recalled_whole(self, tmp_path: Path) -> None:
+        backend = _Backend([])
+        b = MemorySegmentBuilder(ContextBuilder(workspace=tmp_path).memory, backend=backend)
+        await b.build(_ctx(tmp_path, "what did we decide about the cache?"))
+        assert backend.calls[0]["query"] == "what did we decide about the cache?"
+
 
 class TestRecallHasATurnBudget:
     """Memory is an enhancement, not a precondition for answering.
