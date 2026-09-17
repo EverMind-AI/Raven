@@ -171,52 +171,13 @@ excess off leaves the subject's colour instead of a green fringe.
 **Under 20% keyed means it is not a cut-out.** The model painted a scene rather than a
 subject on the screen. Ask again with one subject and nothing behind it.
 
-## Helper modules
-
-Write them beside the build script, once:
-
-```
-raven-python -c "from pathlib import Path; from raven_ppt.services.assets.script_helpers import script_helper_files; [Path(n).write_text(t, encoding='utf-8') for n, t in script_helper_files().items()]"
-```
-
-Files: `ppt_layout.py`, `ppt_theme.py`, `ppt_icons.py`, `ppt_shapes.py`, `ppt_charts.py` and their
-JSON. Each module's docstring is its manual.
-
-```python
-from ppt_theme import THEMES
-from ppt_layout import page, heading, write, points, card, plane, rule, footer, table, table_size, picture_fit, formula, stack, Box, fits, text_size, GUTTER, BODY_PT, LEAD_PT, LABEL_PT
-from ppt_icons import add_icon, find_icons
-from ppt_shapes import connect, timeline
-
-T = {**THEMES[next(iter(THEMES))], "background": "#F8F7F3", "surface": "#FFFFFF", "foreground": "#1C3350",
-     "muted": "#6B7280", "accent": "#C2571B", "accent_soft": "#F3E2D6", "grid": "#D8D5CC",
-     "font_family": "Noto Sans", "cjk_font_family": "Noto Sans CJK SC"}
-FONT, HAN = T["font_family"], T["cjk_font_family"]
-
-slide = prs.slides.add_slide(prs.slide_layouts[6])
-plane(slide, Box(0, 0, 13.333, 7.5), T, tint="background", radius=False)
-frame = page(kicker=True, footer=True)
-heading(slide, frame, T, "Title", kicker="Section", font=FONT, cjk_font=HAN)
-for box, name in zip(frame.body.grid(3, 1), ("camera", "brain", "target")):
-    card(slide, box, T, icon=name, title="...", body=("...", "..."), font=FONT, cjk_font=HAN)
-footer(slide, frame.footer, T, note="Source: ...", font=FONT, cjk_font=HAN)
-```
-
-- `stack(box)` hands out bands: `down.take(h)`, `down.skip(GUTTER)`, `down.room` measures what is
-  left without taking it, `down.rest()` takes it.
-- `table_size(rows, T, box=down.room)` before `table(...)`; a table is as tall as its rows.
-- `picture_fit(slide, path, box, T, caption=...)` places a picture with its caption.
-- `formula(slide, box, tex, T, size=BODY_PT)` places a formula picture.
-- `connect(slide, box_a, box_b, T, kind="straight", arrow=True)` joins two boxes edge to edge.
-- Every drawing call returns what it covered as `.box`; the next thing goes at `.box.y1 + GUTTER`.
-
 ## Icons
 
 1304 outline icons ship beside this agent. Each carries its upstream tags, so search by what
 the unit is about.
 
 ```python
-from raven_ppt.services.assets.icons import icon_candidates, resolve_icon_name
+from raven_ppt.services.assets.icons import icon_candidates, icon_paths, resolve_icon_name
 
 icon_candidates("deadline")     # -> calendar_due
 icon_candidates("risk")         # -> warning
@@ -224,10 +185,71 @@ icon_candidates("inventory")    # -> building_warehouse
 resolve_icon_name("map-pin")    # -> map_pin
 ```
 
-In the script, `find_icons("risk")` from `ppt_icons` answers the same names, and
-`add_icon(slide, name, Inches(x), Inches(y), Inches(0.7), "#1C3350")` draws one; `card(icon=name)`
-places one on a card. Ask one concrete word at a time. An abstraction (`throughput`,
-`supply chain`) returns nothing usable. Do not pass `width_pt`.
+Ask one concrete word at a time. An abstraction (`throughput`, `supply chain`) returns
+nothing usable.
+
+`icon_paths(name)` returns the strokes on a 24x24 grid as `(op, coords)` pairs: `M` starts a
+run, `L` adds a point, `C` is a cubic carrying two control points then its endpoint. There is
+no `Z`. Draw them as freeforms:
+
+```python
+from pptx.dml.color import RGBColor
+from pptx.util import Emu, Pt
+from raven_ppt.services.assets.icons import icon_paths
+
+EMU, STYLE = 914400, "{http://schemas.openxmlformats.org/presentationml/2006/main}style"
+
+
+def icon_runs(name):
+    runs = []
+    for path in icon_paths(name):
+        run, here = [], None
+        for op, xy in path:
+            if op == "M":
+                if len(run) > 1:
+                    runs.append(run)
+                here = (xy[0], xy[1])
+                run = [here]
+            elif op == "L":
+                here = (xy[0], xy[1])
+                run.append(here)
+            elif op == "C" and here is not None:
+                (x0, y0), (x1, y1, x2, y2, x3, y3) = here, xy
+                for step in range(1, 9):
+                    t, u = step / 8, 1 - step / 8
+                    run.append((u**3 * x0 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t**3 * x3,
+                                u**3 * y0 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t**3 * y3))
+                here = (x3, y3)
+        if len(run) > 1:
+            runs.append(run)
+    return runs
+
+
+def add_icon(slide, name, left_in, top_in, size_in, rgb, width_pt=1.5):
+    scale, pen = size_in * EMU / 24.0, Pt(width_pt)
+    for run in icon_runs(name):
+        pts = [(left_in * EMU + x * scale, top_in * EMU + y * scale) for x, y in run]
+        xs, ys = [x for x, _ in pts], [y for _, y in pts]
+        dot = max(max(xs) - min(xs), max(ys) - min(ys)) < pen
+        if dot:
+            pts = [(xs[0], ys[0]), (xs[0] + pen, ys[0]), (xs[0] + pen, ys[0] + pen), (xs[0], ys[0] + pen)]
+        builder = slide.shapes.build_freeform(Emu(int(pts[0][0])), Emu(int(pts[0][1])))
+        builder.add_line_segments([(Emu(int(x)), Emu(int(y))) for x, y in pts[1:]], close=dot)
+        shape = builder.convert_to_shape()
+        if dot:
+            shape.fill.solid()
+            shape.fill.fore_color.rgb = RGBColor.from_string(rgb)
+            shape.line.fill.background()
+        else:
+            shape.fill.background()
+            shape.line.color.rgb = RGBColor.from_string(rgb)
+            shape.line.width = pen
+        for style in shape._element.findall(STYLE):
+            shape._element.remove(style)
+```
+
+A run whose whole span is thinner than the pen is one of upstream's dots: fill it rather than
+stroke it. The `p:style` element has to go or the theme adds a shadow.
 
 Where that import is unavailable, design the marks yourself. Do not generate them as
 pictures.

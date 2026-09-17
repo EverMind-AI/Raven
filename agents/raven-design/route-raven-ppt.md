@@ -15,14 +15,66 @@ Two things before each generation, in this order.
 
 Then write the prompt as subject, mood, and what to leave out. Name the region the title needs by side and by share -- "the left 55% of the canvas stays almost pure dark, reserved for title text" -- and say no text, no letters, no numbers: generated lettering comes out wrong in every language, and every word on the page is set by the typography. Render the page again afterwards and look at it, because the picture was for that page and only the composed page counts.
 
-Page furniture comes from the engine's helper modules and is not rewritten; what makes a page its own is drawn by hand. Before the build script, write the modules beside it, once:
+Every page is drawn here: the grid, the title row, the type, the marks, the diagrams, and the treatment of every picture placed -- a hairline or a frame, a shadow, a scrim under type laid over it, a crop to the shape the page wants, a full-bleed ground. Nothing about a page is settled by a default.
 
+Icons are packaged and do not have to be drawn by hand, generated, or taken off the web. `raven_ppt.services.assets.icons` sits beside this agent and holds 1304 Tabler outline icons, each carrying its upstream tags, so the search reads what a unit is *about* rather than what a file is called: `icon_candidates("deadline")` answers `calendar_due`, `icon_candidates("risk")` answers `warning`, `icon_candidates("inventory")` reaches `building_warehouse`. Ask one concrete word at a time; an abstraction ("throughput", "supply chain") comes back with nothing usable. `resolve_icon_name` takes the upstream spelling (`map-pin` -> `map_pin`). `icon_paths(name)` hands back that icon's strokes on a 24x24 grid as `(op, coords)` pairs: `M` starts a new run, `L` adds a point, `C` is a cubic carrying two control points then its endpoint, and there is no `Z`. Draw them as freeform shapes:
+
+```python
+from pptx.dml.color import RGBColor
+from pptx.util import Emu, Pt
+from raven_ppt.services.assets.icons import icon_paths
+
+EMU, STYLE = 914400, "{http://schemas.openxmlformats.org/presentationml/2006/main}style"
+
+
+def icon_runs(name):
+    runs = []
+    for path in icon_paths(name):
+        run, here = [], None
+        for op, xy in path:
+            if op == "M":
+                if len(run) > 1:
+                    runs.append(run)
+                here = (xy[0], xy[1])
+                run = [here]
+            elif op == "L":
+                here = (xy[0], xy[1])
+                run.append(here)
+            elif op == "C" and here is not None:
+                (x0, y0), (x1, y1, x2, y2, x3, y3) = here, xy
+                for step in range(1, 9):
+                    t, u = step / 8, 1 - step / 8
+                    run.append((u**3 * x0 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t**3 * x3,
+                                u**3 * y0 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t**3 * y3))
+                here = (x3, y3)
+        if len(run) > 1:
+            runs.append(run)
+    return runs
+
+
+def add_icon(slide, name, left_in, top_in, size_in, rgb, width_pt=1.5):
+    scale, pen = size_in * EMU / 24.0, Pt(width_pt)
+    for run in icon_runs(name):
+        pts = [(left_in * EMU + x * scale, top_in * EMU + y * scale) for x, y in run]
+        xs, ys = [x for x, _ in pts], [y for _, y in pts]
+        dot = max(max(xs) - min(xs), max(ys) - min(ys)) < pen
+        if dot:
+            pts = [(xs[0], ys[0]), (xs[0] + pen, ys[0]), (xs[0] + pen, ys[0] + pen), (xs[0], ys[0] + pen)]
+        builder = slide.shapes.build_freeform(Emu(int(pts[0][0])), Emu(int(pts[0][1])))
+        builder.add_line_segments([(Emu(int(x)), Emu(int(y))) for x, y in pts[1:]], close=dot)
+        shape = builder.convert_to_shape()
+        if dot:
+            shape.fill.solid()
+            shape.fill.fore_color.rgb = RGBColor.from_string(rgb)
+            shape.line.fill.background()
+        else:
+            shape.fill.background()
+            shape.line.color.rgb = RGBColor.from_string(rgb)
+            shape.line.width = pen
+        for style in shape._element.findall(STYLE):
+            shape._element.remove(style)
 ```
-raven-python -c "from pathlib import Path; from raven_ppt.services.assets.script_helpers import script_helper_files; [Path(n).write_text(t, encoding='utf-8') for n, t in script_helper_files().items()]"
-```
 
-That puts `ppt_layout.py`, `ppt_theme.py`, `ppt_icons.py`, `ppt_shapes.py` and `ppt_charts.py` in the working directory. Furniture from them: `page`, `heading`, `write`, `points`, `card`, `plane`, `rule`, `footer`, `table`, `table_size`, `picture_fit`, `formula`, `stack`, `Box`, `fits` and `text_size` from `ppt_layout` (`table` is the ordinary grid; merged cells, a header spanning columns, an icon or a colour inside a cell, or more columns than fit at 14pt are drawn by hand); `add_icon` and `find_icons` from `ppt_icons`; `connect`, `timeline` and `preset` from `ppt_shapes`; the chart functions from `ppt_charts`. Every drawing call takes a theme dict: start from `THEMES[next(iter(THEMES))]` in `ppt_theme` and copy it with the deck's own values -- `background`, `surface`, `foreground`, `muted`, `accent`, `accent_soft`, `grid`, `font_family`, `cjk_font_family`. Coordinates are inches in a `Box`; ask a region to divide itself (`page().body.grid(3, 1)`, `split_left`, `stack`) rather than typing coordinates. By hand, with python-pptx: a diagram, a polygon, a map, a custom arrow, a gradient, a hero number, a cover or section composition, and the treatment of every placed picture -- a hairline or a frame, a shadow, a scrim under type laid over it, a crop to the shape the page wants, a full-bleed background under a plane of ink. `picture_fit` places and captions; it does not treat.
-
-Generic marks -- a camera, a warning, a calendar -- come from the packaged icon set and are not drawn by hand or generated; the mark of a real thing -- a company's logo, a product's icon, a framework's badge -- is searched with `image_search`, downloaded and placed as a picture, and a deck that names companies or products carries their marks. `raven_ppt.services.assets.icons` sits beside this agent and holds 1304 Tabler outline icons, each carrying its upstream tags, so the search reads what a unit is *about* rather than what a file is called: `icon_candidates("deadline")` answers `calendar_due`, `icon_candidates("risk")` answers `warning`, `icon_candidates("inventory")` reaches `building_warehouse`; in the script, `find_icons("risk")` from `ppt_icons` answers the same names. Ask one concrete word at a time; an abstraction ("throughput", "supply chain") comes back with nothing usable. `resolve_icon_name` takes the upstream spelling (`map-pin` -> `map_pin`). `add_icon(slide, name, Inches(x), Inches(y), Inches(0.7), colour)` draws one: around 0.7in on a card, one weight and one colour across the deck, no filled coloured disc behind it, and no `width_pt`. Run the build script with `raven-python`, the interpreter on PATH that has `pptx` and `raven_ppt`; `python3` does not. Check with `raven-python -c "import raven_ppt, pptx"`. Do not look for a `.venv`, build one, or install python-pptx. If that import is not available here, design the marks yourself -- do not generate them as pictures. A formula that stacks (fraction, root, sum with limits): `formula(slide, box, tex, theme, size=...)` from `ppt_layout`, or `add_formula(slide, tex, left_in, top_in, size_pt=...)` from `raven_ppt.services.assets.formulas`. A sentence carrying symbols (`p(theta | D_A)`, `F_i`, `theta*`): `math_runs(paragraph, text, size_pt=...)` from the same module. Never leave `_A` or `^2` as characters, and never type a formula as a line of text.
+A run whose whole span is thinner than the pen is one of upstream's dots and is painted rather than stroked, which is what the `dot` branch is for; the `p:style` element has to go or the theme stamps a drop shadow under every stroke. An icon is a mark and not an illustration: around 0.7in on a card, one weight and one colour across the deck, and no filled coloured disc behind each one. Both imports live on the interpreter raven itself runs on, which is not the `python3` that PATH resolves to: probe with `python3 -c "import raven_ppt, pptx"` and, where that fails, run the build script on the raven installation's own `.venv/bin/python`, or put that interpreter's `site-packages` first on `sys.path` at the top of the script. `icons` is the module `icons.py` and not a directory, so listing that path comes back empty whether or not the package is there -- the import is the only thing that answers. If that import is not available here, design the marks yourself -- do not generate them as pictures.
 
 With no image credentials configured, say so plainly and carry those pages on typography, grid and colour. Do not claim a search or a generation you did not run.
