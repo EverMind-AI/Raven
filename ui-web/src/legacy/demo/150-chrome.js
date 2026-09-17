@@ -3,17 +3,15 @@
    Escape order is a table in ui-web/src/state/overlays.ts and the one keydown
    that reads it, with the three shortcuts it shares a handler with, is
    ui-web/src/state/globalListeners.ts -- installed below from where the
-   handler used to be added. The IME guard is the composer field's own, passed
-   along because demo/110-subagents.js still asks this file for it. */
+   handler used to be added. */
 
 import { islands } from '../../islands'
-import { composing } from '../../features/composer/store'
 import { toggle as togglePerm } from '../../shell/perm'
 import { toggle as toggleTier } from '../../shell/tier'
 import { installEscapeChain } from '../../state/globalListeners'
 import { set as setRail } from '../../state/rail'
+import { watchNarrow } from '../../state/ws'
 import { $, T } from './010-kernel.js'
-import { setWs, wsOpen } from './100-workspace.js'
 import { closeSet, setIsOpen } from './120-capabilities.js'
 import { isMac } from './130-settings.js'
 
@@ -65,8 +63,10 @@ export function install() {
    that brings it back, and it stays here while button#railShow is static
    markup. */
   $('#railShow').onclick = () => setRail(true);
-  tooNarrowToSplit = matchMedia('(max-width: 1040px)');
-  tooNarrowToSplit.addEventListener('change', (e) => { if (e.matches && wsOpen) setWs(false); });
+  /* What a match does is the panel's (src/state/ws.ts). The moment the query
+   is watched from stays here, because this table's install() is where the
+   boot's listener order is measured. */
+  tooNarrowToSplit = watchNarrow();
 
   /* The model chip's own menu is installed by live/120-settings.js: it opens
    the picker island against the provider list the page really has. This part
@@ -86,4 +86,4 @@ export function install() {
   });
 }
 
-export { composing, tooNarrowToSplit, openSettings, drawMoreFly }
+export { tooNarrowToSplit, openSettings, drawMoreFly }
