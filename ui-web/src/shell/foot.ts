@@ -10,7 +10,7 @@
  * the lang store (src/state/lang.ts) over the static attributes.
  */
 
-import { ds } from './bridge'
+import { ds } from '../state/sources'
 import { isMac, modKey } from './platform'
 
 import type { SettingsSource } from '../features/settings/types'

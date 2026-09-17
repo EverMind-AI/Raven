@@ -3,7 +3,8 @@ import { createRoot } from 'react-dom/client'
 import * as browser from '../browser/mount'
 import * as agents from '../subagents/mount'
 import * as deliveries from './deliveries'
-import { ds, shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
 import { copy } from '../../shell/clipboard'
 import { current as currentSession } from '../../shell/session'
 import { md } from '../../shell/prose'
@@ -11,7 +12,7 @@ import { md } from '../../shell/prose'
 import type { WorkspaceSnapshot, WorkspaceSource, WsFile, WsShared } from './types'
 import type { ReactElement } from 'react'
 import type { Root } from 'react-dom/client'
-import type { Shell } from '../../shell/bridge'
+import { panel } from '../../state/wsPanel'
 
 /* Page state, outside React on purpose: the legacy shell drives this panel
  * imperatively (the tab bar, the open/close buttons and the tool hooks all
@@ -80,12 +81,6 @@ function set(patch: Partial<WsIslandState>): void {
 
 export const source = (): WorkspaceSource => ds<WorkspaceSource>('workspace')
 
-function verb<K extends keyof Shell>(name: K): NonNullable<Shell[K]> {
-  const v = shell()[name]
-  if (!v) throw new Error(`RavenShell.${String(name)} is not wired`)
-  return v as NonNullable<Shell[K]>
-}
-
 export function copyToClip(text: string, done: string): void {
   copy(text, done)
 }
@@ -109,7 +104,7 @@ export function redraw(): void {
    run bumpWs() right after drawWs() and count on the render having marked
    them -- the React render itself lands later. */
 export function sync(): void {
-  const view = verb('wsView')()
+  const view = panel().view()
   const ws = shared()
   const bare = !ws.changes.length && !ws.urls.length
   const route: WsRoute = bare && !view.picked ? 'launch' : view.tab === 'file' ? 'file' : 'diff'
@@ -132,7 +127,7 @@ let root: Root | null = null
 export function draw(): void {
   const host = document.getElementById('wsBody')
   if (!host) return
-  const view = verb('wsView')()
+  const view = panel().view()
   /* Each tab island's root must leave while the DOM it owns is intact --
      BEFORE any wipe -- and the browser's frame watch must drop whenever this
      draw lands anywhere but a visible browser view: what its own drawWs
@@ -168,7 +163,7 @@ export function draw(): void {
 }
 
 export function pick(tab: string): void {
-  verb('wsPick')(tab)
+  panel().pick(tab)
 }
 
 /* ── file viewing ──────────────────────────────────────────────────── */
@@ -303,7 +298,7 @@ export function relToWorkspace(p: string): string | null {
    what a page without a desk has. */
 let deskFile: ((path: string) => void) | null = null
 
-export function setDeskOpener(fn: (path: string) => void): void {
+export function setDeskOpener(fn: ((path: string) => void) | null): void {
   deskFile = fn
 }
 
@@ -323,7 +318,7 @@ export function showFile(p: string): void {
   }
   const ws = shared()
   ws.file = makeFile(p)
-  verb('showWorkspace')('file')
+  panel().show('file')
 }
 
 /* Everything the island opens goes through the real viewer when the source

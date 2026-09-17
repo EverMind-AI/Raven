@@ -22,12 +22,11 @@ import { hasToolOk } from '../../rpc/capabilities'
 import { current as sessionCurrent } from '../../shell/session'
 import { show as toast } from '../../shell/toast'
 import { sources } from '../sources'
-import { T } from '../../legacy/demo/010-kernel.js'
-import { sheetSession, turn } from '../../legacy/demo/040-state.js'
-import { sessionDraw } from '../../legacy/demo/050-rail.js'
-import { ask, noteRow } from '../../legacy/demo/060-conversation.js'
-import { dagFlowFeed, killStatus, newStep, showStatus } from '../../legacy/demo/070-transcript.js'
-import { drawMeter, goState } from '../../legacy/demo/090-composer.js'
+import { T } from '../../i18n/t'
+import { drawMeter, goPaint as goState, turn } from '../../features/composer/mount'
+import { draw as sessionDraw } from '../../features/rail/store'
+import { session as sheetSession } from '../sheetRack'
+import { ask, noteRow } from './conversation'
 import { wsOnTool, wsOnToolDone } from '../../features/workspace/record'
 import { touchSession } from '../../features/rail/source'
 import { viewRuntime } from './registry'
@@ -112,7 +111,7 @@ export const STAGES: readonly Stage[] = [
   arm('episode.start', (rt) => {
     if (rt.st) { rt.st.seal() }
     flushSay(rt)
-    rt.st = newStep(); rt.steps.push(rt.st); rt.sawEpisode = true
+    rt.st = islands.transcript.step(); rt.steps.push(rt.st); rt.sawEpisode = true
   }),
 
   /* The server named the session. Replaces whatever the row shows without
@@ -127,7 +126,7 @@ export const STAGES: readonly Stage[] = [
   arm('session.naming_ended', (_rt, p) => { void namingEnded(p.session_id, p.reason) }),
 
   arm('notice', (rt, p) => {
-    killStatus()
+    islands.transcript.killStatus()
     /* Seals the open step first: this ends the turn, so the streamed prose
        above stays where it was said. */
     if (rt.st) { rt.st.seal(); rt.st = null }
@@ -137,17 +136,17 @@ export const STAGES: readonly Stage[] = [
 
   /* The smart-mode reviewer runs inside the tool dispatch; name the pause. */
   arm('permission.review', (_rt, p) => {
-    if (p.phase === 'started') showStatus(T('gui.perm.reviewing'))
-    else killStatus()
+    if (p.phase === 'started') islands.transcript.status(T('gui.perm.reviewing'))
+    else islands.transcript.killStatus()
   }),
 
   arm('thinking.delta', (rt, p) => {
-    killStatus()
+    islands.transcript.killStatus()
     ensureStep(rt).thinkAppend(p.text || '')
   }),
 
   arm('token.delta', (rt, p) => {
-    killStatus()
+    islands.transcript.killStatus()
     const st = ensureStep(rt)
     /* sayDelta folds a finished thought before the prose lands. */
     st.sayDelta(p.text || '')
@@ -156,7 +155,7 @@ export const STAGES: readonly Stage[] = [
   }),
 
   arm('tool.start', (rt, p) => {
-    killStatus()
+    islands.transcript.killStatus()
     const st = ensureStep(rt)
     /* The call id travels with the row: a `run_subagent_dag` names it on every
        progress event, and it is what binds the graph to this card rather than to
@@ -193,7 +192,7 @@ export const STAGES: readonly Stage[] = [
   }),
 
   arm('error', (rt, p) => {
-    killStatus()
+    islands.transcript.killStatus()
     /* A cancelled turn is the one "error" a person asked for; the event still
        matters when the cancel came from ANOTHER client on the same session. */
     if (p.reason === 'cancelled_by_client') {
@@ -232,7 +231,7 @@ export const STAGES: readonly Stage[] = [
   arm('dag.run_started', (_rt, p) => {
     /* The trail's delegation card paints the same events as the sheet below:
        one feed call per branch, before the sheet's own bookkeeping. */
-    dagFlowFeed('dag.run_started', p)
+    islands.transcript.dagFeed('dag.run_started', p)
     /* The graph arrives whole, before any node runs. Filed under the
        conversation it belongs to: a stage only ever runs for the conversation
        on screen, so the current key is the owning key on both paths. */
@@ -253,7 +252,7 @@ export const STAGES: readonly Stage[] = [
   }),
 
   arm('dag.node_updated', (_rt, p) => {
-    dagFlowFeed('dag.node_updated', p)
+    islands.transcript.dagFeed('dag.node_updated', p)
     /* Through the island rather than into the run's node map from here: what a
        report means to a node is one definition, next to the model it moves, and
        the copy that lived here had drifted into inventing a clock. */
@@ -261,14 +260,14 @@ export const STAGES: readonly Stage[] = [
   }),
 
   arm('dag.run_completed', (_rt, p) => {
-    dagFlowFeed('dag.run_completed', p)
+    islands.transcript.dagFeed('dag.run_completed', p)
     islands.dag.settle(sheetSession(), p)
   }),
 
   /* The trail card alone: the sheet shows one run at a time by design, so a
      replanned run's sheet just keeps showing the old graph until the new run's
      own dag.run_started arrives and replaces it wholesale. */
-  arm('dag.run_replanned', (_rt, p) => { dagFlowFeed('dag.run_replanned', p) }),
+  arm('dag.run_replanned', (_rt, p) => { islands.transcript.dagFeed('dag.run_replanned', p) }),
 
   /* Declared by the contract and drawn by nothing. Named rather than left to
      fall off the end, so that "the page does not render this" is a decision

@@ -4,24 +4,23 @@
  * about telling "no" apart from "nobody could say".
  */
 
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CHANNELS, chanName } from './catalogue'
 import { connSource, loadChannels } from './source'
 import { FixtureTransport } from '../../rpc/fixtureTransport'
-import { setShell } from '../../shell/bridge'
 import { setGateway } from '../../state/gateway'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as pageStore from '../../state/page'
+import * as confirmStore from '../../state/confirm'
 
-import type { Shell } from '../../shell/bridge'
 
 type StatusRow = { name: string } & Record<string, unknown>
 
-const shell = {
-  T: (key: string, vars?: Record<string, string | number>) =>
-    (vars ? `${key}(${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')})` : key),
-  confirmAsk: () => {},
-  showPage: () => {},
-} as unknown as Shell
+setTranslator((key: string, vars?: Record<string, unknown> | null) =>
+(vars ? `${key}(${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')})` : key))
+vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
 
 function answering(channels: StatusRow[], gatewayRunning = true): void {
   const transport = new FixtureTransport({})
@@ -32,7 +31,6 @@ function answering(channels: StatusRow[], gatewayRunning = true): void {
 const row = (id: string) => CHANNELS.find((c) => c.id === id)!
 
 beforeEach(() => {
-  setShell(shell)
   /* The rows are one shared array for the life of the page, so a case starts
      from the state the last one left -- the same thing a redraw does. */
   CHANNELS.forEach((c) => {

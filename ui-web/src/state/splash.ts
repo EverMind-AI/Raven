@@ -6,14 +6,23 @@
  * lift it at the right moment, which is this. A floor on its display time keeps
  * a fast boot from flashing it for two frames.
  *
- * Was hideSplash in legacy/demo/160-boot.js, where it sat beside the demo
- * shell's own boot steps; two of its three callers are the page's boot sequence
- * and the connection surface. The clock it measures from is marked by whoever
- * put the splash up (the demo shell's install, today); before that mark a call
- * lifts it at once, which is what an unset clock did there too.
+ * Two of its three callers are the page's boot sequence and the connection
+ * surface. The clock it measures from is marked by the page as it
+ * installs itself; before that mark a call lifts it at once, which is what an
+ * unset clock did there too.
+ *
+ * #noJs is the other pre-JavaScript shell and its whole lifetime is one line:
+ * if this bundle runs at all, the marker goes, and a reader still looking at it
+ * is a reader whose browser never ran it.
  */
 
 let started = 0
+
+/** The no-script marker, taken down because the script is running. */
+export function dropNoJs(): void {
+  const n = document.getElementById('noJs')
+  if (n) n.remove()
+}
 
 /** When the splash went up, for the floor below to measure from. */
 export function markStart(): void {

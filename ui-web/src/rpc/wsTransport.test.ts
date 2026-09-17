@@ -5,8 +5,8 @@ import { WsTransport } from './wsTransport'
 
 import type { ConnectionState } from './transport'
 
-/* The behaviour under test is the whole of the rpc client that used to live in
-   ui-web/src/legacy/live/020-rpc.js, so the first five cases are the ones
+/* The behaviour under test is the whole of the rpc client the page carried
+   before this one, so the first five cases are the ones
    scripts/rpc-connect.test.mjs made against that object, with its FakeSocket
    brought along. That file is gone; these are its cases. */
 

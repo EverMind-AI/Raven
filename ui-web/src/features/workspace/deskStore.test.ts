@@ -1,7 +1,7 @@
 /** Tests for floating workspace pane identity and session reset behavior. */
 
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as agents from '../subagents/store'
 import * as deliveries from './deliveries'
@@ -9,9 +9,11 @@ import * as desk from './deskStore'
 import * as workspace from './store'
 import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
 import { resetSources, setSources, sources } from '../../state/sources'
-import { resetShell, setShell } from '../../shell/bridge'
 
-import type { Shell } from '../../shell/bridge'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import { installWsPanel } from '../../test/wsPanel'
 import type { InstanceRow } from '../subagents/types'
 
 /* Recorded rather than ignored: the panel the desk lives in is legacy chrome,
@@ -29,13 +31,10 @@ function wire(): void {
     workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: true, openPath: () => {} },
     agents: { list: async () => [], instances: async () => agentRows },
   })
-  const fakeShell: Shell = {
-    T: (key) => key,
-    confirmAsk: (_title, _body, _label, fn) => fn(),
-    showPage: () => {},
-    workspaceSetOpen: (open) => { panelCalls.push(open) },
-  }
-  setShell(fakeShell)
+  setTranslator((key) => key)
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation((_title, _body, _label, fn) => fn())
+  installWsPanel({ setOpen: (open) => { panelCalls.push(open) } })
   localStorage.clear()
   sessionStorage.clear()
   sessionReset()
@@ -68,7 +67,7 @@ afterEach(() => {
   sessionReset()
   agents.reset()
   resetSources()
-  resetShell()
+  resetTranslator()
   localStorage.clear()
   sessionStorage.clear()
 })

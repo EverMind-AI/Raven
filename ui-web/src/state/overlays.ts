@@ -1,9 +1,9 @@
 /* What Escape takes back, and in which order.
  *
  * Fourteen layers can be on screen at once, and one key closes one of them.
- * Which one was a fourteen-branch if chain in the legacy chrome
- * (legacy/demo/150-chrome.js): a list of selectors read top to bottom, each
- * branch returning so the ones below it never ran.
+ * Which one was a fourteen-branch if chain in the page's chrome: a list of
+ * selectors read top to bottom, each branch returning so the ones below it
+ * never ran.
  *
  * It is an ordered table here, and a table rather than a stack on purpose. A
  * stack would close whatever was raised last, and the chain's order is not
@@ -27,10 +27,7 @@
  */
 
 import { busy as turnBusy } from '../features/composer/turn'
-import { closeXa } from '../legacy/demo/120-capabilities.js'
-import { closeCron, closeKb, closeMem } from '../legacy/demo/140-schedule.js'
-import { closeConn, connCloseDialog } from '../legacy/demo/145-connections.js'
-import { closePb } from '../legacy/demo/154-playbooks.js'
+import { islands } from '../islands'
 import { close as closeImage, isOpen as imageOpen } from '../shell/lightbox'
 import * as caps from './caps'
 import * as detail from './detail'
@@ -63,16 +60,16 @@ export const ORDER: readonly Overlay[] = [
   { id: '#veil', isOpen: flagged('veil'), close: cancels('cfNo') },
   /* After the confirm veil, before the page: a dialog raised over the entry
      list is what Escape should take back first. */
-  { id: '#connVeil', isOpen: flagged('connVeil'), close: connCloseDialog },
+  { id: '#connVeil', isOpen: flagged('connVeil'), close: () => islands.connections.closeDialog() },
   { id: '#detail', isOpen: flagged('detail'), close: detail.close },
   { id: '#jobVeil', isOpen: flagged('jobVeil'), close: cancels('jobNo') },
-  { id: '#cronPage', isOpen: flagged('cronPage'), close: closeCron },
-  { id: '#memPage', isOpen: flagged('memPage'), close: closeMem },
-  { id: '#pbPage', isOpen: flagged('pbPage'), close: closePb },
-  { id: '#kbPage', isOpen: flagged('kbPage'), close: closeKb },
+  { id: '#cronPage', isOpen: flagged('cronPage'), close: () => islands.cron.close() },
+  { id: '#memPage', isOpen: flagged('memPage'), close: () => islands.memory.close() },
+  { id: '#pbPage', isOpen: flagged('pbPage'), close: () => islands.playbooks.close() },
+  { id: '#kbPage', isOpen: flagged('kbPage'), close: () => islands.knowledge.close() },
   { id: '#capsPage', isOpen: flagged('capsPage'), close: caps.close },
-  { id: '#xaPage', isOpen: flagged('xaPage'), close: closeXa },
-  { id: '#connPage', isOpen: flagged('connPage'), close: closeConn },
+  { id: '#xaPage', isOpen: flagged('xaPage'), close: () => islands.xa.close() },
+  { id: '#connPage', isOpen: flagged('connPage'), close: () => islands.connections.close() },
   { id: 'setIsOpen()', isOpen: settingsDialog.isOpen, close: settingsDialog.close },
   /* The last resort: with nothing on screen to take back, Escape interrupts
      the running turn. */

@@ -1,9 +1,7 @@
 /* The workspace pane's own state: whether it stands, which view it shows,
  * whether it has taken the window, and how many changed files nobody has read.
  *
- * Was four module lets and six verbs in the legacy chrome
- * (legacy/demo/100-workspace.js) with the pane's buttons in a second part
- * (legacy/demo/110-subagents.js). Not to be confused with
+ * Four module lets and six verbs, and not to be confused with
  * features/workspace/store.ts, which is the ISLAND: what a view draws inside
  * #wsBody, and the record it draws from (features/workspace/record.ts). What is
  * here is the chrome around that box -- the pane, the tab strip and the two
@@ -27,17 +25,23 @@
  *     last drew, and only the next open repaints it.
  *
  * The four facts are exported as bindings as well as through view(), because
- * that is how the legacy parts and the three modules that ask "is the pane up"
- * read them: legacy/demo/100-workspace.js re-exports these under their old
- * names, the arrangement the catalogue's language column already has
- * (src/i18n/t.ts's `code`).
+ * that is how the three modules that ask "is the pane up" read them -- the
+ * arrangement the catalogue's language column already has (src/i18n/t.ts's
+ * `code`).
  */
 
 import { T } from '../i18n/t'
 import { islands } from '../islands'
 
+import { resetTranslator, setTranslator } from '../i18n/t'
 import type { DeskTab } from '../features/workspace/deskTypes'
-import type { WsPanelView } from '../shell/bridge'
+
+/** What the pane's chrome currently shows, for a caller that has to ask. */
+export interface WsPanelView {
+  tab: string
+  open: boolean
+  picked: boolean
+}
 
 /** Which view the pane shows: diff, file, browser or agents. */
 let tab = 'diff'
@@ -53,9 +57,9 @@ let picked = false
    user switched to meanwhile. */
 let epoch = 0
 
-/* Unguarded, as the legacy verbs were: every element below is markup the page
-   always has, and a missing one is a boot step that failed loudly rather than a
-   pane half open. */
+/* Unguarded on purpose: every element below is markup the page always has, and
+   a missing one is a boot step that failed loudly rather than a pane half
+   open. */
 const el = (id: string): HTMLElement => document.getElementById(id) as HTMLElement
 
 /* Expanded is a display mode, not a width: the pane leaves the grid and covers
@@ -125,6 +129,14 @@ export function setOpen(next: boolean, view?: string): void {
   bump()
 }
 
+/* Putting one view on screen: the pane opens if it is not already, and then the
+   view is picked. One verb because both callers mean exactly that, and a pick
+   against a collapsed pane would draw into a panel nobody can see. */
+export function show(view: string): void {
+  if (!open) setOpen(true)
+  pick(view)
+}
+
 /* Picking a view is a commitment: from then on that view shows its own empty
    note rather than being replaced by the launcher. */
 export function pick(view: string): void {
@@ -155,8 +167,8 @@ export function view(): WsPanelView {
 }
 
 /* `wasPicked` is unknown rather than boolean because the caller's is: a parked
-   runtime's pane state comes back off a snapshot, and the legacy verb coerced
-   it here. */
+   runtime's pane state comes back off a snapshot, and the coercion belongs
+   here. */
 export function restore(next: string, wasPicked: unknown): void {
   tab = next || 'diff'
   picked = !!wasPicked
@@ -189,9 +201,10 @@ export const showsTurn = (): boolean => open && tab !== 'agents'
    is deliberately no initial check: this is the window taking a standing pane
    down, not a rule about how narrow pages open.
 
-   The registration MOMENT belongs to the shortcut table that calls this
-   (legacy/demo/150-chrome.js), because it is one of the listeners the boot
-   order is measured over; what happens on a match belongs here. The query is
+   The registration MOMENT belongs to src/main.tsx, which calls this after
+   every listener the page registers itself, because it is one of the listeners
+   the boot order is measured over; what happens on a match belongs here. The
+   query is
    handed back for that caller to hold, so nothing keeps a reference to it here.
 */
 export function watchNarrow(): MediaQueryList {

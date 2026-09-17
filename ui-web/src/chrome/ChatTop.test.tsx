@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readFileSync } from 'node:fs'
 
+import { islands } from '../islands'
 import * as lang from '../state/lang'
 import { mountPageRoot } from '../test/pageRoot'
 
@@ -26,11 +27,10 @@ import { mountPageRoot } from '../test/pageRoot'
 
 /* The one verb the header calls, kept as a counter: renaming is the rail
    island's, and this file answers for the button rather than for the rename. */
-const renames = vi.hoisted(() => ({ n: 0 }))
-vi.mock('../legacy/demo/050-rail.js', async (original) => ({
-  ...(await original<Record<string, unknown>>()),
-  renameTitle: () => { renames.n += 1 },
-}))
+const renames = { n: 0 }
+vi.spyOn(islands.rail, 'rename').mockImplementation(() => {
+  renames.n += 1
+})
 
 /* Nothing: the page root renders the whole chat column, so a case gets the
    five regions here and the dock beside them by mounting it. */
@@ -133,10 +133,8 @@ describe('the chat column chrome', () => {
     expect(renames.n).toBe(1)
     /* React leaves an empty onclick on every element it takes a click of (the
        trap that makes clicks fire on iOS), so a second, imperative handler
-       would run beside this one rather than replace it. The demo layer's is
-       gone; this is the count over its source. */
+       would run beside this one rather than replace it. */
     expect(el('renameBtn').onclick).not.toBe(null)
-    expect(source('legacy/demo/150-chrome.js')).not.toMatch(/#renameBtn'\)\.onclick/)
   })
 })
 

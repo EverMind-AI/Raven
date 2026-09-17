@@ -27,7 +27,7 @@ import * as contextMenu from './contextMenu'
 import * as shellWindow from './shellWindow'
 import * as browser from '../features/browser/store'
 import * as composer from '../features/composer/mount'
-import * as boot from '../legacy/demo/160-boot.js'
+import * as boot from './boot'
 import * as chips from '../shell/chips'
 import * as menu from '../shell/menu'
 import * as panes from '../shell/panes'
@@ -56,7 +56,7 @@ const ORDER = [
   ['document', 'click', 'bubble', "a code block's copy button"],
   ['document', 'keydown', 'bubble', 'the Escape order and its three shortcuts'],
   ['document', 'keydown', 'bubble', 'the settings shortcut'],
-  ['window', 'load', 'bubble', 'the splash coming down (legacy/demo/160-boot)'],
+  ['window', 'load', 'bubble', 'the boot\'s load handler (state/boot)'],
   ['document', 'visibilitychange', 'bubble', 'the build watch (state/updates)'],
 ] as const
 

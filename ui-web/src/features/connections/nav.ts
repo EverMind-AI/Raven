@@ -6,12 +6,12 @@
  * come through here.
  */
 
-import { shell } from '../../shell/bridge'
 
 import { closeDialog, refresh } from './store'
+import * as page from '../../state/page'
 
 export function open(): void {
   closeDialog()
-  shell().showPage('connPage')
+  page.show('connPage')
   void refresh(true)
 }

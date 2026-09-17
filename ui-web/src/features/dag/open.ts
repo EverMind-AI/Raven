@@ -10,7 +10,7 @@
  */
 
 import { islands } from '../../islands'
-import { drawWs, setWs, wsOpen, wsPick } from '../../legacy/demo/100-workspace.js'
+import { panel } from '../../state/wsPanel'
 
 export function dagOpenNode(runId: string, n: { id: string; summary?: string | null }): void {
   islands.subagents.openDagNode(runId, n)
@@ -22,7 +22,8 @@ export function dagOpenNode(runId: string, n: { id: string; summary?: string | n
      The lines below are the pre-desk panel, where selecting the agents view
      was how the instance got on screen at all. */
   if (document.documentElement.classList.contains('desk-ready')) return
-  if (!wsOpen) setWs(true)
-  wsPick('agents')
-  drawWs()
+  const ws = panel()
+  if (!ws.view().open) ws.setOpen(true)
+  ws.pick('agents')
+  ws.draw()
 }

@@ -1,7 +1,8 @@
-import { ds, shell } from '../../shell/bridge'
+import { ds } from '../../state/sources'
 import * as detail from '../../state/detail'
 
 import type { MemItem, MemKind, MemStats, MemorySource } from './types'
+import * as page from '../../state/page'
 
 /* Page state, outside React on purpose: the legacy shell drives this page
  * imperatively (nav opens it, Esc closes it, a language flip redraws it),
@@ -90,13 +91,13 @@ export function refreshStats(): Promise<void> {
 }
 
 export function open(): void {
-  shell().showPage('memPage')
+  page.show('memPage')
   void refreshStats()
   void load()
 }
 
 export function close(): void {
-  shell().showPage(null)
+  page.show(null)
 }
 
 export function setKind(kind: MemKind): void {

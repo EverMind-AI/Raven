@@ -16,11 +16,11 @@
 import { islands } from '../../islands'
 import { draw as drawBanner } from '../../shell/banner'
 import { current as sessionCurrent } from '../../shell/session'
-import { $ } from '../../legacy/demo/010-kernel.js'
-import { down, queueRestore, queueSnapshot, sess, turn } from '../../legacy/demo/040-state.js'
-import { sessionDraw } from '../../legacy/demo/050-rail.js'
-import { drawMeter, goState } from '../../legacy/demo/090-composer.js'
-import { drawWs, wsOpen, wsRestore, wsView } from '../../legacy/demo/100-workspace.js'
+import { drawMeter, goPaint as goState, queueRestore, queueSnapshot, turn } from '../../features/composer/mount'
+import { $ } from '../../shell/dom'
+import { draw as sessionDraw } from '../../features/rail/store'
+import { draw as drawWs, open as wsOpen, restore as wsRestore, view as wsView } from '../ws'
+import { sess } from './rows'
 import { drop as dropHost, hold as holdHost } from './hosts'
 import { adoptRuntime, get, release, viewRuntime } from './registry'
 
@@ -93,5 +93,5 @@ export function resume(rt: SessionRuntime, apply?: (ev: unknown) => void): void 
   islands.transcript.nudge()
   drawMeter(); goState(); sessionDraw(); drawBanner()
   if (typeof drawWs === 'function' && wsOpen) drawWs()
-  down()
+  islands.transcript.down()
 }

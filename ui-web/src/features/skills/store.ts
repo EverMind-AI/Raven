@@ -1,4 +1,5 @@
-import { ds, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
 import { show as toast } from '../../shell/toast'
 import * as detail from '../../state/detail'
 

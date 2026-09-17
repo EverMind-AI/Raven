@@ -24,7 +24,7 @@
 import { createElement } from 'react'
 
 import { ClarifySheet } from '../../chrome/ClarifySheet'
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import * as drafts from '../../state/sheetDrafts'
 import { add as sheetAdd, dropClass, remove as sheetRemove, session } from '../../state/sheetRack'
 import { composing, dockLift } from './store'

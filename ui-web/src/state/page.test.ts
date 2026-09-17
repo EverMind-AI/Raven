@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 /* The open-page store, against what showPageBase did before it.
  *
- * Every effect below was one line of legacy/demo/120-capabilities.js, and the
- * two layers that used to wrap that function are subscribers now -- so the
+ * Every effect below was one line of the chrome's own `showPage`, and the two
+ * tabs that used to wrap that function are subscribers now -- so the
  * order is part of the contract: the seven flags, the scroll reset, the app
  * mark, the rail mark and the overlay closes all happen first, and only then
  * does each subscriber run, in the order it registered.
@@ -23,8 +23,8 @@ interface Fresh {
 
 /* Fresh module state per case: the store holds which page is open and a set of
    subscribers, and both would leak into the next case. The island bag is taken
-   from the same reset graph the store just got, the way the legacy harness
-   does it (scripts/legacy-part.mjs). */
+   from the same reset graph the store just got, the way
+   scripts/module-harness.mjs does it. */
 async function fresh(): Promise<Fresh> {
   vi.resetModules()
   const page = await import('./page')

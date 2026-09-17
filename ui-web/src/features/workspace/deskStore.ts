@@ -1,6 +1,6 @@
 /** State and actions for the floating workspace desk. */
 
-import { shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { slot } from '../../shell/persist'
 import { current as currentSession } from '../../shell/session'
 import { show as toast } from '../../shell/toast'
@@ -14,6 +14,7 @@ import * as workspace from './store'
 import type { AgentRow, InstanceRow } from '../subagents/types'
 import type { DeskDuo, DeskPane, DeskSplits, DeskState, DeskTab } from './deskTypes'
 import type { WsChange } from './types'
+import { panel } from '../../state/wsPanel'
 
 /* What a reload needs to put the desk back: what the reader OPENED, in the
    order they opened it, and where the frame put it.
@@ -212,7 +213,7 @@ function commit(patch: Partial<DeskState>): void {
 function revealWorkspace(): void {
   const split = document.getElementById('split')
   if (split && split.dataset.open === 'true') return
-  shell().workspaceSetOpen?.(true)
+  panel().setOpen(true)
 }
 
 /* `supersedes` names a pane this one REPLACES rather than joins: the same work
@@ -509,7 +510,7 @@ export function closePane(id: string): void {
        still standing down for them. */
     ...(panes.length ? {} : { paletteOpen: deskUp(currentSession()) }),
   })
-  if (!panes.length) shell().workspaceSetOpen?.(false)
+  if (!panes.length) panel().setOpen(false)
 }
 
 export function setActive(id: string): void {

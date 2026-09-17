@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { mountPageRoot } from '../test/pageRoot'
 import { open } from './open-url'
-import { resetShell, setShell } from './bridge'
+import { resetTranslator, setTranslator } from '../i18n/t'
 
 /* The notice renders from src/App.tsx into the standing #toasts host. */
 mountPageRoot()
@@ -11,7 +11,7 @@ mountPageRoot()
 afterEach(() => {
   vi.restoreAllMocks()
   document.body.innerHTML = ''
-  resetShell()
+  resetTranslator()
 })
 
 describe('the host URL action', () => {
@@ -23,7 +23,7 @@ describe('the host URL action', () => {
 
   it('copies a non-URL value and reports success', async () => {
     document.body.innerHTML = '<div id="toasts"></div>'
-    setShell({ T: () => 'copied', confirmAsk: () => {}, showPage: () => {} })
+    setTranslator(() => 'copied')
     const writeText = vi.fn(async () => {})
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
     open('/tmp/report.txt')
@@ -34,7 +34,7 @@ describe('the host URL action', () => {
 
   it('shows the original value when copying fails', async () => {
     document.body.innerHTML = '<div id="toasts"></div>'
-    setShell({ T: () => 'copied', confirmAsk: () => {}, showPage: () => {} })
+    setTranslator(() => 'copied')
     Object.defineProperty(navigator, 'clipboard', {
       value: { writeText: async () => Promise.reject(new Error('denied')) }, configurable: true,
     })

@@ -28,13 +28,13 @@ import { current as sessionCurrent, setCurrent as sessionSet } from '../../shell
 import { load as loadTier } from '../../shell/tier'
 import { show as toast } from '../../shell/toast'
 import { gateway } from '../gateway'
-import { $, T } from '../../legacy/demo/010-kernel.js'
-import { loadDraft, parkDraft, queueClear, sess, stop_, turn } from '../../legacy/demo/040-state.js'
-import { markNewCurrent, sessionDraw, sessionOpen, sessionReplace, sessionRows } from '../../legacy/demo/050-rail.js'
-import { pitch, unpitch } from '../../legacy/demo/060-conversation.js'
-import { killStatus, showStatus } from '../../legacy/demo/070-transcript.js'
-import { drawMeter, goState } from '../../legacy/demo/090-composer.js'
-import { setWs, wsReset } from '../../legacy/demo/100-workspace.js'
+import { T } from '../../i18n/t'
+import { $ } from '../../shell/dom'
+import { drawMeter, goPaint as goState, loadDraft, parkDraft, queueClear, turn } from '../../features/composer/mount'
+import { draw as sessionDraw, markNew as markNewCurrent } from '../../features/rail/store'
+import { reset as wsReset, setOpen as setWs } from '../ws'
+import { pitch, unpitch } from './conversation'
+import { open as sessionOpen, replace as sessionReplace, rows as sessionRows, sess } from './rows'
 import { dropAll as dropHeldHosts } from './hosts'
 import { park, resume as resumeInPlace } from './residency'
 import { drain, SessionRuntime, reset as resetTurnState } from './runtime'
@@ -177,7 +177,7 @@ export async function refreshList(): Promise<void> {
 /* ---- the switch -------------------------------------------------------- */
 
 function resetView(rt: SessionRuntime): void {
-  stop_(); turn.dispatch({ type: 'idle' }); queueClear()
+  turn.dispatch({ type: 'idle' }); queueClear()
   islands.transcript.stopStream()
   /* The turn state belongs to the conversation, so one that kept a turn while
      it was away keeps it: the wipe is for a conversation arrived at fresh,
@@ -193,8 +193,8 @@ function resetView(rt: SessionRuntime): void {
   /* Whatever is still on the stage, which is never the lane of a conversation
      that kept its turn: `park` above took that host off and filed it on the
      runtime it belongs to. */
-  $('#stage').innerHTML = ''
-  $('#flash').textContent = ''
+  $('#stage')!.innerHTML = ''
+  $('#flash')!.textContent = ''
   drawMeter(); goState(); drawBanner()
 }
 
@@ -223,8 +223,8 @@ export function switchToDraft(): void {
   void loadProviders(null, gen)
   void loadTier()
   void loadPermMode(null, gen)
-  $('#title').textContent = T('gui.new_task')
-  pitch(); sessionDraw(); $('#ta').focus()
+  $('#title')!.textContent = T('gui.new_task')
+  pitch(); sessionDraw(); $('#ta')!.focus()
 }
 
 export async function switchTo(s: SessRow): Promise<void> {
@@ -260,7 +260,7 @@ export async function switchTo(s: SessRow): Promise<void> {
   if (row && (row.status === 'done' || row.status === 'ask')) row.status = null
   markNewCurrent()
   resetView(rt)
-  $('#title').textContent = plainTitle(s.title)
+  $('#title')!.textContent = plainTitle(s.title)
   // A kept turn resumes in place of a disk reload: the transcript on disk does
   // not have the still-streaming content, the lane this conversation kept does.
   if (rt.events) {
@@ -358,7 +358,7 @@ export async function switchTo(s: SessRow): Promise<void> {
    turn missed while the socket was down are unrecoverable -- drop what every
    conversation kept and let re-opens rebuild from disk. */
 export async function reconnect(): Promise<void> {
-  killStatus()
+  islands.transcript.killStatus()
   for (const rt of byKey.values()) { rt.subscriptionId = null; rt.events = null; rt.host = null }
   dropHeldHosts()
   draft().subscriptionId = null
@@ -394,8 +394,8 @@ export async function reconnect(): Promise<void> {
     const heading = $('#title')
     const title = (open && open.title) || (heading && heading.textContent) || ''
     await sessionOpen({ id: current, title })
-    showStatus(T('gui.reconnected'))
-    setTimeout(killStatus, 2500)
+    islands.transcript.status(T('gui.reconnected'))
+    setTimeout(() => islands.transcript.killStatus(), 2500)
   } else if (current) {
     void subscribe(current)
   }

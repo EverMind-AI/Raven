@@ -1,9 +1,9 @@
 /* The offline library: one wire answer per method the page asks for.
  *
  * This is what `?stub=1` and a page opened from disk run on. It replaced a
- * second data layer -- twenty fixture sources registered onto the seam by
- * ui-web/src/legacy/demo/, each in its island's own shape -- with responses in
- * the contract's shape behind the one transport, so the offline page and the
+ * second data layer -- twenty fixture sources on the seam, each in its
+ * island's own shape -- with responses in the contract's shape behind the one
+ * transport, so the offline page and the
  * live page are the same program with a different socket. A field the contract
  * requires and a fixture omits is a compile error here, and a page that draws
  * the wrong thing offline is drawing the wrong thing live.

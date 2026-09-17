@@ -9,13 +9,13 @@
  * old_text and new_text, so the diff needs no backend support at all.
  *
  * The panel chrome around the record -- which view is up, the header badge,
- * the redraw -- is still the page's (src/legacy/demo/100-workspace.js), and
- * stage C folds it into the island.
+ * the redraw -- is the page's (src/state/ws.ts), not this module's.
  */
 
 import { islands } from '../../islands'
-import { T } from '../../legacy/demo/010-kernel.js'
-import { bumpWs, drawWs, wsOpen, wsShortPath, wsShowsTurn, wsTab } from '../../legacy/demo/100-workspace.js'
+import { T } from '../../i18n/t'
+import { sources } from '../../state/sources'
+import { panel } from '../../state/wsPanel'
 
 import type { WsChange, WsHunk, WsShared } from './types'
 
@@ -41,7 +41,7 @@ export function wsRecordChange(path: string, kind: string, hunk: WsHunk): WsChan
   const key = String(path)
   let c = WS.changes.find((x) => x.key === key && x.turn === WS.turn)
   if (!c) {
-    const shown = wsShortPath(key)
+    const shown = sources.workspace!.shortPath(key)
     const cut = shown.lastIndexOf('/')
     /* The newest change is the one you came here to read, so it arrives
        expanded. `auto` marks it as opened by us, so the next arrival folds it
@@ -74,11 +74,12 @@ export function wsOnTool(name: string, args: unknown, _silent?: boolean): void {
     WS.urls.unshift({ url: String(a.query), kind: 'search', at: T('gui.sess.just_now') })
   } else return
 
-  if (hit && wsOpen && wsTab === 'diff') hit.flash = true
+  const shown = panel().view()
+  if (hit && shown.open && shown.tab === 'diff') hit.flash = true
   /* Draw before counting: the Changes view marks rows seen as it renders, so
      counting first would flash a badge that the very next line clears. */
-  if (wsShowsTurn()) drawWs()
-  bumpWs()
+  if (panel().showsTurn()) panel().draw()
+  panel().bump()
 }
 
 export function wsOnToolDone(
@@ -99,8 +100,8 @@ export function wsOnToolDone(
       c.hunks.push(h); c.add += h.add; c.del += h.del
     }
   }
-  if (wsShowsTurn()) drawWs()
-  bumpWs()
+  if (panel().showsTurn()) panel().draw()
+  panel().bump()
 }
 
 /* ── resumed sessions ──────────────────────────────────────────────────
@@ -154,5 +155,5 @@ export function wsOnHistory(messages: StoredMessage[] | null | undefined): void 
   WS.urls.forEach((u) => { u.at = T('gui.ws.turn_earlier') })
   WS.changes.forEach((c) => { c.seen = true })
   WS.unseen = 0
-  bumpWs()
+  panel().bump()
 }

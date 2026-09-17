@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { loadPart, looseQuery } from '../../../scripts/legacy-part.mjs'
+import { loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
 
 type Pipeline = typeof import('../../state/session/pipeline')
 
@@ -24,12 +24,18 @@ async function startedRun(payload: Record<string, unknown>) {
     return import('../../state/session/pipeline')
   }, {
     fakes: {
+      'src/state/sheetRack': {
+        session: () => 'sess-1',
+      },
+      'src/shell/dom': {
+        $: looseQuery(),
+      },
       'src/shell/session': { current: () => 'sess-1' },
-      'demo/010-kernel.js': { $: looseQuery() },
-      'demo/040-state.js': { sheetSession: () => 'sess-1' },
-      'demo/070-transcript.js': { dagFlowFeed: () => {} },
     },
     islands: {
+      transcript: {
+        dagFeed: () => {},
+      },
       dag: {
         fromStarted: () => [],
         start: (key: string, run: Record<string, unknown>) => started.push({ key, run }),

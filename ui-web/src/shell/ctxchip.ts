@@ -15,7 +15,7 @@
 
 import { flushSync } from 'react-dom'
 
-import { shell } from './bridge'
+import { t } from '../i18n/t'
 
 /* The turn's own usage, as message.complete reports it (context_used /
    context_max). The state is the store's because the ring is: nothing else
@@ -86,7 +86,7 @@ export function draw(): void {
   const pct = Math.min(100, Math.max(0, Math.round((100 * used) / max)))
   /* One string for both, so a mouse and a screen reader are told the same
      thing rather than two versions of it. */
-  const tip = shell().T('gui.ctx.tip', {
+  const tip = t('gui.ctx.tip', {
     used: fmtTokens(used),
     max: fmtTokens(max),
     pct: String(pct),

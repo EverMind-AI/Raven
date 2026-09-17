@@ -7,7 +7,8 @@
  * paints the chosen model in its own tree.
  */
 
-import { ds, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
 import { show as toast } from '../../shell/toast'
 import { sources } from '../../state/sources'
 

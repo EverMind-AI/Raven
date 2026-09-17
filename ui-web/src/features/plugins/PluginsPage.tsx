@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import { shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { show as toast } from '../../shell/toast'
 import { CardSkeleton } from '../../shell/skeleton'
 import * as detail from '../../state/detail'
@@ -9,6 +9,7 @@ import * as store from './store'
 
 import type { Contribution, DetailEntry, InstalledRow, MarketItem, McpSnapshot } from './types'
 import type { CSSProperties, JSX } from 'react'
+import { useInTask } from '../composer/useInTask'
 
 /* The plugin tab is market-first: the page IS the catalog, and what you
    already have lives one level in (the installed button top-right, back
@@ -318,7 +319,7 @@ function McpCard({ row }: { row: InstalledRow }): JSX.Element | null {
               className="mini gold"
               onClick={(e) => {
                 e.stopPropagation()
-                shell().useInTask?.('gui.plug.use_prompt', m.name)
+                useInTask('gui.plug.use_prompt', m.name)
               }}
             >
               {t('gui.hub.use')}
@@ -444,7 +445,7 @@ function Progress({ s }: { s: store.PlugState }): JSX.Element | null {
               {pg.state === 'done' && (
                 <button
                   className="mini gold"
-                  onClick={() => shell().useInTask?.('gui.plug.use_prompt', pg.name)}
+                  onClick={() => useInTask('gui.plug.use_prompt', pg.name)}
                 >
                   {t('gui.hub.use')}
                 </button>
@@ -807,7 +808,7 @@ function MarketDetail({ id, s }: { id: string; s: store.PlugState }): JSX.Elemen
             ) : !lm || lm.enabled ? (
               <button
                 className="mini gold"
-                onClick={() => shell().useInTask?.('gui.plug.use_prompt', entry.name)}
+                onClick={() => useInTask('gui.plug.use_prompt', entry.name)}
               >
                 {t('gui.hub.use')}
               </button>
@@ -906,7 +907,7 @@ function InstDetail({ id }: { id: string }): JSX.Element | null {
           ) : m.enabled ? (
             <button
               className="mini gold"
-              onClick={() => shell().useInTask?.('gui.plug.use_prompt', m.name)}
+              onClick={() => useInTask('gui.plug.use_prompt', m.name)}
             >
               {t('gui.hub.use')}
             </button>

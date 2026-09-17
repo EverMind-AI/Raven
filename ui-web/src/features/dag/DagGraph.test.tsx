@@ -7,9 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { DagGraph, visibleLayers } from './DagGraph'
 import { CARD, SHEET } from './graph'
-import { resetShell, setShell } from '../../shell/bridge'
 
-import type { Shell } from '../../shell/bridge'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as pageStore from '../../state/page'
+import * as confirmStore from '../../state/confirm'
 import type { DagNode } from './types'
 import type { Root } from 'react-dom/client'
 
@@ -32,11 +33,9 @@ let host: HTMLDivElement
 let root: Root
 
 beforeEach(() => {
-  setShell({
-    T: (key, vars) => key + (vars ? ` ${JSON.stringify(vars)}` : ''),
-    confirmAsk: () => {},
-    showPage: () => {},
-  } satisfies Shell)
+  setTranslator((key, vars) => key + (vars ? ` ${JSON.stringify(vars)}` : ''))
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
@@ -44,7 +43,7 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => { root.unmount() })
-  resetShell()
+  resetTranslator()
   document.body.innerHTML = ''
   vi.restoreAllMocks()
 })

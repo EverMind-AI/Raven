@@ -4,10 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as session from './session'
 import * as tier from './tier'
 import { resetSources, setSources } from '../state/sources'
-import { resetShell, setShell } from './bridge'
 import { mountPageRoot } from '../test/pageRoot'
 
-import type { Shell } from './bridge'
+import { resetTranslator, setTranslator } from '../i18n/t'
 import type { TierReply, TierSource } from './tier'
 
 /* The chip and the panel are the page root's now (src/chrome/TierChip.tsx,
@@ -42,7 +41,7 @@ function source(): void {
 let unmount = (): void => {}
 
 beforeEach(() => {
-  setShell({ T: (key) => key, confirmAsk: () => {}, showPage: () => {} } as Shell)
+  setTranslator((key) => key)
   markup()
   tier._resetForTests()
   session._resetForTests()
@@ -56,7 +55,7 @@ beforeEach(() => {
 afterEach(() => {
   unmount()
   unmount = () => {}
-  resetShell()
+  resetTranslator()
   document.body.innerHTML = ''
   tier._resetForTests()
   session._resetForTests()

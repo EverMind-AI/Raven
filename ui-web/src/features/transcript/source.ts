@@ -15,11 +15,12 @@ import { current as sessionCurrent, setCurrent as sessionSet } from '../../shell
 import { show as toast } from '../../shell/toast'
 import { gateway } from '../../state/gateway'
 import { dagOpenNode } from '../dag/open'
-import { T } from '../../legacy/demo/010-kernel.js'
-import { sheetSession } from '../../legacy/demo/040-state.js'
-import { sessionDraw, sessionOpen, sessionRows } from '../../legacy/demo/050-rail.js'
-import { unpitch } from '../../legacy/demo/060-conversation.js'
-import { setWs } from '../../legacy/demo/100-workspace.js'
+import { T } from '../../i18n/t'
+import { draw as sessionDraw } from '../rail/store'
+import { session as sheetSession } from '../../state/sheetRack'
+import { unpitch } from '../../state/session/conversation'
+import { open as sessionOpen, rows as sessionRows } from '../../state/session/rows'
+import { panel } from '../../state/wsPanel'
 import { plainTitle } from '../rail/title'
 
 import type { SessRow } from '../rail/types'
@@ -79,7 +80,7 @@ export function openDagRun(runId: string): void {
       return
     }
   }
-  setWs(true, 'agents')
+  panel().setOpen(true, 'agents')
 }
 
 export const openDagNode = (runId: string, nodeId: string, summary?: string | null): void =>
@@ -123,7 +124,7 @@ export function openSpawn(agent: string, label: string): void {
   /* Same rule as dagOpenNode: `openRow` below raises the window, and in desk
    mode that is the whole answer. The panel's agents view is only needed where
    there are no windows. */
-  if (!document.documentElement.classList.contains('desk-ready')) setWs(true, 'agents')
+  if (!document.documentElement.classList.contains('desk-ready')) panel().setOpen(true, 'agents')
   const match = () => islands.subagents.rows().find((x) => x.kind !== 'dag'
     && (!label || plainTitle(x.label) === plainTitle(label))
     && (!agent || (x.agent || 'raven') === (agent || 'raven')))

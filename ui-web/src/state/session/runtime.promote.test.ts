@@ -5,7 +5,7 @@
  * first message, and the sub-agent roster's new-instance button, which needs a
  * conversation for the instance to live in. The part is driven as a module,
  * with its collaborators replaced per part and per export
- * (ui-web/scripts/legacy-part.mjs) -- so the draft is entered through the real
+ * (ui-web/scripts/module-harness.mjs) -- so the draft is entered through the real
  * `startDraft` and the promotion is the real one.
  *
  * What is pinned here is the ORDER, which is the part a reader cannot see and
@@ -21,7 +21,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { fakeGateway, loadPart, looseQuery } from '../../../scripts/legacy-part.mjs'
+import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
 
 type Runtime = typeof import('./runtime')
 type Registry = typeof import('./registry')
@@ -51,37 +51,41 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
      without them. */
   await loadPart(async () => { await import('./runtime'); return import('../install') }, {
     fakes: {
-      'src/shell/banner': { draw: () => {} },
-      'src/shell/tier': { load: () => {} },
-      'src/shell/session': { current: () => current, setCurrent: (id: string | null) => { current = id; log.push(`pointer:${String(id)}`) } },
-      'src/shell/toast': { show: (text: string) => log.push(`toast:${text}`) },
-      'demo/010-kernel.js': { $: looseQuery(), T: (key: string) => key },
-      'demo/040-state.js': {
-        claimDraft: (id: string | null) => log.push(`claimDraft:${String(id)}`),
+      'src/state/caps': { draw: () => {} },
+      'src/state/page': { show: () => {} },
+      'src/state/ws': { setOpen: () => {}, reset: () => {} },
+      'src/state/session/conversation': {
+        ask: () => {},
+        pitch: () => {},
+        splitAtts: (t: string) => ({ text: t, atts: [] }),
+        unpitch: () => {},
+      },
+      'src/state/session/rows': {
+        open: () => {},
+        replace: () => {},
+        rows: () => rows,
+        sess: (id: string) => rows.find((r) => r.id === id),
+      },
+      'src/features/rail/store': { markNew: () => {}, draw: () => log.push('draw') },
+      'src/state/sheetRack': { forget: () => {} },
+      'src/features/composer/mount': {
+        drawMeter: () => {},
+        goPaint: () => {},
         dropDraft: () => {},
         loadDraft: () => {},
         parkDraft: () => {},
         queueClear: () => {},
         queuePush: () => {},
         queueShift: () => null,
-        sheetsForget: () => {},
-        stop_: () => {},
         turn: { dispatch: () => {}, busy: () => false, snapshot: () => ({}), restore: () => {} },
       },
-      'demo/050-rail.js': {
-        markNewCurrent: () => {},
-        sessionDraw: () => log.push('draw'),
-        sessionOpen: () => {},
-        sessionReplace: () => {},
-        sessionRows: () => rows,
-      },
-      'demo/060-conversation.js': { ask: () => {}, pitch: () => {}, splitAtts: (t: string) => ({ text: t, atts: [] }), unpitch: () => {} },
-      'demo/070-transcript.js': { killStatus: () => {}, showStatus: () => {} },
-      'demo/090-composer.js': { drawMeter: () => {}, goState: () => {}, ta: { focus: () => {} } },
-      'demo/100-workspace.js': { setWs: () => {}, wsReset: () => {} },
+      'src/i18n/t': { T: (key: string) => key },
+      'src/shell/dom': { $: looseQuery() },
+      'src/shell/banner': { draw: () => {} },
+      'src/shell/tier': { load: () => {} },
+      'src/shell/session': { current: () => current, setCurrent: (id: string | null) => { current = id; log.push(`pointer:${String(id)}`) } },
+      'src/shell/toast': { show: (text: string) => log.push(`toast:${text}`) },
       'src/features/workspace/record': { wsOnHistory: () => {} },
-      'demo/120-capabilities.js': { drawCapsBadge: () => {}, showPage: () => {} },
-      'demo/152-skills.js': { drawCaps: () => {} },
       'src/features/rail/source': { rowPreview: (t: string) => t, touchSession: (id: string) => log.push(`touch:${id}`) },
       'src/state/session/residency': { park: () => {}, resume: () => {} },
       'src/features/model/source': {
@@ -97,7 +101,11 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
       },
       'src/features/workspace/source': { wsSetRoot: (root: string) => log.push(`wsRoot:${root}`) },
     },
-    islands: { rail: { endRename: () => {} } },
+    islands: {
+      rail: { endRename: () => {} },
+      composer: { claimDraft: (id: string | null) => log.push(`claimDraft:${String(id)}`) },
+      transcript: { killStatus: () => {}, status: () => {} },
+    },
   })
   const runtime = (await import('./runtime')) as Runtime
   const registry = (await import('./registry')) as Registry

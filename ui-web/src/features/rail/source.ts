@@ -13,9 +13,10 @@
 import { current as sessionCurrent, setCurrent as sessionSet } from '../../shell/session'
 import { show as toast } from '../../shell/toast'
 import { gateway } from '../../state/gateway'
-import { $, T } from '../../legacy/demo/010-kernel.js'
-import { sess } from '../../legacy/demo/040-state.js'
-import { sessionDraw, sessionReplace, sessionRows } from '../../legacy/demo/050-rail.js'
+import { T } from '../../i18n/t'
+import { $ } from '../../shell/dom'
+import { replace as sessionReplace, rows as sessionRows, sess } from '../../state/session/rows'
+import { draw as sessionDraw } from './store'
 import { plainTitle } from './title'
 
 import type { SessRow } from './types'

@@ -3,9 +3,9 @@
  *
  * The offline canvas's inventory, which three pages read: the tool rows in the
  * settings dialog, the installed shelf in the skills island, and the plugin
- * rows beside the market. It was three fixture tables in the island's own
- * shapes (ui-web/src/legacy/demo/030-fixtures.js); it is one wire answer now,
- * and the rows are built from it by the same mappers the live page uses -- so a
+ * rows beside the market. It was three fixture tables in the islands' own
+ * shapes; it is one wire answer now, and the rows are built from it by the
+ * same mappers the live page uses -- so a
  * tool's display name comes from the catalogue and its one-liner from this
  * `description`, which is why none of them are written here in Chinese any
  * more.

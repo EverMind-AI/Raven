@@ -16,7 +16,7 @@
 
 import { flushSync } from 'react-dom'
 
-import { t } from './bridge'
+import { t } from '../i18n/t'
 
 export interface Shot {
   readonly src: string

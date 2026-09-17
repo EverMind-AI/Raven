@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
-import { shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { copy } from '../../shell/clipboard'
 import { language } from '../../shell/platform'
 import * as store from './store'
@@ -9,8 +9,7 @@ import type { BrowserState } from './store'
 import type { BrowserTabRow, LinksSource, UrlRow } from './types'
 import type { CSSProperties, JSX, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 
-/* Mirrors the glyph paths the legacy renderer drew with (ICO in
-   ui-web/src/legacy/demo/100-workspace.js plus the inline ones in the old live part). */
+/* The glyph paths this view has always been drawn with. */
 const ICO = {
   web: 'M4.5 12h15M12 4.5c-4.5 4.5-4.5 10.5 0 15M12 4.5c4.5 4.5 4.5 10.5 0 15',
   ext: 'M10 6H6.5A2.5 2.5 0 0 0 4 8.5v9A2.5 2.5 0 0 0 6.5 20h9a2.5 2.5 0 0 0 2.5-2.5V14M14 4h6v6M20 4l-9 9',
@@ -397,7 +396,7 @@ function Stage({ s }: { s: BrowserState }): JSX.Element {
     const stage = stageRef.current
     if (!stage) return
     store.setStage(stage)
-    /* The stage view stamps the panel's layout mode, as the legacy draw did. */
+    /* The stage view stamps the panel's layout mode. */
     const host = store.hostEl()
     if (host) host.dataset.view = 'web'
     store.repaintLast()

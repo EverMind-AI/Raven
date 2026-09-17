@@ -13,7 +13,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { fakeGateway, loadPart } from './legacy-part.mjs'
+import { fakeGateway, loadPart } from './module-harness.mjs'
 
 /* `sources.agents.instanceSend` as the page installs it, with the real `mediaOf`
    and the real note text behind it -- the note is what splits the message. */
@@ -30,7 +30,7 @@ async function sender(calls) {
   return sources.agents.instanceSend
 }
 
-const { I18N } = await import('../src/legacy/demo/010-kernel.js')
+const { I18N } = await import('../src/i18n/t')
 const note = I18N.ui['gui.att.note'].en
 
 describe('the instance send', () => {

@@ -1,4 +1,5 @@
-import { ds, shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
 import { formatDuration } from '../../shell/duration'
 import { current as currentSession, onChange as onSessionChange } from '../../shell/session'
 import { sources } from '../../state/sources'
@@ -7,6 +8,7 @@ import { instanceCtxStatus, toInstanceCtx } from './history'
 
 import type { ComposerSource } from '../composer/types'
 import type { AgentRow, AgentsSource, InstanceCtx, InstanceRow, OpenItem, SubagentRow } from './types'
+import { panel } from '../../state/wsPanel'
 
 /* Page state, outside React on purpose: the legacy shell drives this view
  * imperatively (drawWs mounts and unmounts it per redraw, the dag sheet opens
@@ -1033,8 +1035,8 @@ export function hook(): void {
 
 function onPoll(): void {
   detailPollListeners.forEach((listener) => listener())
-  const shows = shell().wsShows
-  if (!shows || !shows('agents')) {
+  const shown = panel().view()
+  if (!(shown.open && shown.tab === 'agents')) {
     if (detailPollListeners.size) {
       refresh(true)
       refreshInstances(true)

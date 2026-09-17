@@ -2,8 +2,7 @@
  *
  * One sheet serves the whole page -- delete this conversation, forget this
  * document, replace this server -- and the asking used to be four DOM writes
- * and a module-level callback in the legacy chrome (confirmAsk,
- * legacy/demo/040-state.js): the title, the body and the yes button's label
+ * and a module-level callback: the title, the body and the yes button's label
  * were written by id, the answer was parked in a `let`, and the two buttons
  * were bound to it at install time.
  *
@@ -15,8 +14,8 @@
  * and the CSS shows the sheet from it.
  *
  * The question is committed synchronously, and that is a contract rather than a
- * detail. The flag goes up AFTER the text lands, the way the legacy verb wrote
- * them in that order, so no frame can show yesterday's question under today's
+ * detail. The flag goes up AFTER the text lands, the order the ask before this
+ * one wrote them in, so no frame can show yesterday's question under today's
  * veil -- and the ask is called from timers and socket replies as often as from
  * a click, where React would otherwise commit in a later task. Same reason the
  * page's own root is committed with flushSync at boot (src/main.tsx).
@@ -37,9 +36,8 @@ export type ConfirmState = {
 let state: ConfirmState = { open: false, title: null, body: '', label: null }
 const listeners = new Set<() => void>()
 
-/* The answer, beside the state rather than in it: nothing renders it, and the
-   legacy `cfFn` it replaces was one `let` for the same reason. Only yes has
-   one -- no caller of this dialog has ever wanted a no branch. */
+/* The answer, beside the state rather than in it: nothing renders it. Only yes
+   has one -- no caller of this dialog has ever wanted a no branch. */
 let onYes: (() => void) | null = null
 
 /** What the sheet is asking. */

@@ -9,10 +9,12 @@
  * cached detail must not outlive the listing it was taken alongside.
  */
 
-import { ds, shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
 import { show as toast } from '../../shell/toast'
 
 import type { PlaybookDetail, PlaybookRow, PlaybooksCredentialsGetResult, PlaybooksSource } from './types'
+import * as page from '../../state/page'
 
 export interface PlaybooksState {
   /* null = the list has not been read yet, which is not the same as an empty
@@ -287,12 +289,12 @@ export function visible(): PlaybookRow[] {
 }
 
 export function openPage(): void {
-  shell().showPage('pbPage')
+  page.show('pbPage')
   void load()
 }
 
 export function closePage(): void {
-  shell().showPage(null)
+  page.show(null)
 }
 
 /* A language flip changes no state here, but every visible string comes from

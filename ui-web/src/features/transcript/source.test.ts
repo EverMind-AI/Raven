@@ -10,7 +10,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { fakeGateway, loadPart, looseQuery } from '../../../scripts/legacy-part.mjs'
+import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
 
 import type { Sources } from '../../state/sources'
 
@@ -25,10 +25,16 @@ async function opener(calls: unknown[][], run: unknown) {
     return import('../../state/install')
   }, {
     fakes: {
+      'src/state/wsPanel': {
+        panel: () => ({ setOpen: (...args: unknown[]) => calls.push(['fallback', ...args]) }),
+      },
+      'src/state/sheetRack': {
+        session: () => 'a',
+      },
+      'src/shell/dom': {
+        $: looseQuery(),
+      },
       'src/shell/session': { current: () => 'a' },
-      'demo/010-kernel.js': { $: looseQuery() },
-      'demo/040-state.js': { sheetSession: () => 'a' },
-      'demo/100-workspace.js': { setWs: (...args: unknown[]) => calls.push(['fallback', ...args]) },
       'src/features/dag/open': {
         dagOpenNode: (runId: string, node: { id: string }) => calls.push(['node', runId, node.id]),
       },
@@ -71,14 +77,16 @@ async function nodeHarness({ rows = [{ kind: 'spawn', agent: 'raven', label: 'qc
     return import('../../state/install')
   }, {
     fakes: {
+      'src/state/wsPanel': {
+        panel: () => ({
+          view: () => ({ tab: 'diff', open: false, picked: false }),
+          setOpen: (open: boolean, tab?: string) => calls.push(['setWs', open, tab ?? null]),
+          pick: (tab: string) => calls.push(['wsPick', tab]),
+          draw: () => calls.push(['drawWs']),
+        }),
+      },
       'src/shell/session': { current: () => 's1' },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
-      'demo/100-workspace.js': {
-        wsOpen: false,
-        setWs: (open: boolean, tab?: string) => calls.push(['setWs', open, tab ?? null]),
-        wsPick: (tab: string) => calls.push(['wsPick', tab]),
-        drawWs: () => calls.push(['drawWs']),
-      },
     },
     islands: {
       subagents: {

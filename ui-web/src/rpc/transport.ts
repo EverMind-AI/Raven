@@ -40,10 +40,10 @@ export type BinaryHandler = (buf: ArrayBuffer) => void
  *   (lands with the first migrated feature, where it gets a consumer);
  * - `FixtureTransport` answering from recorded responses, no backend at all.
  *
- * The page's best idea -- a UI that runs without its engine (the demo layer
- * in ui-web/src/legacy/demo/) -- kept, with the checks turned on: today ui-web/src/legacy/live/
- * assigns over demo globals by name at runtime and DS entries are untyped,
- * so a rename in one layer breaks the other silently. An interface both
+ * The page's best idea -- a UI that runs without its engine -- kept, with the
+ * checks turned on: the two layers it used to take assigned over each other's
+ * globals by name at runtime and their seam entries were untyped, so a rename
+ * in one broke the other silently. An interface both
  * sides compile against is the same capability made checkable, and it is
  * what each feature's `source.ts` will be written against as it leaves the
  * concatenated script.

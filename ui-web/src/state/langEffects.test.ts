@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 /* The whole-page redraw a language pick asks for, and the order of it.
  *
- * Nineteen calls in `redrawAll` (legacy/live/120-settings.js) became this, and
- * the order was never pinned by anything inside this directory: the gate on it
+ * Nineteen calls in a hand-written `redrawAll` became this, and the order was
+ * never pinned by anything inside this directory: the gate on it
  * was a Python test outside ui-web that read the function's source text and
  * checked that every module page's renderer was named in it. That test goes with
  * the layer, so the order is asserted here instead -- as the sequence the calls
@@ -13,7 +13,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 
-import { loadPart } from '../../scripts/legacy-part.mjs'
+import { loadPart } from '../../scripts/module-harness.mjs'
 
 /** The nineteen, in redrawAll's order, minus the empty one. */
 const ORDER = [
@@ -64,17 +64,24 @@ async function harness({ busy = false, draft = false, session = 'cli:one' as str
   const step = (name: string) => () => { order.push(name) }
   const part = await loadPart(() => import('./langEffects'), {
     fakes: {
+      'src/features/rail/store': {
+        draw: step('sessionDraw'),
+      },
+      'src/state/session/rows': {
+        sess: (id: string) => ({ id }),
+        open: step('sessionOpen'),
+      },
       'src/shell/foot': { draw: step('drawFoot') },
       'src/shell/perm': { draw: step('drawPerm') },
       'src/shell/ctxchip': { draw: step('drawCtx') },
       'src/shell/session': { current: () => session },
       'src/features/model/chip': { label: step('modelLabel') },
-      'src/features/composer/mount': { drawQueue: step('queueDraw') },
+      'src/features/composer/mount': { drawQueue: step('queueDraw'),
+        turn: { busy: () => busy },
+      },
       'src/state/caps': { draw: step('caps.draw') },
       'src/state/detail': { close: step('detail.close') },
       'src/state/session/registry': { isDraft: () => draft },
-      'demo/040-state.js': { sess: (id: string) => ({ id }), turn: { busy: () => busy } },
-      'demo/050-rail.js': { sessionDraw: step('sessionDraw'), sessionOpen: step('sessionOpen') },
     },
     islands: Object.fromEntries(
       ISLAND_STEPS.map(([name, verb]) => [name, { [verb]: step(`${name}.${verb}`) }])

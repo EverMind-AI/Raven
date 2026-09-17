@@ -20,8 +20,6 @@ import { resolve } from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
-import { partNames } from './legacy-part.mjs'
-
 import { NOTIFICATION_METHODS } from '../src/rpc/notifications'
 
 /* The one name the page listens for that the server's list does not carry: an
@@ -45,13 +43,11 @@ function sideChannelMethods() {
 }
 
 /* Where a push handler can be installed: the page's own wiring, which registers
-   the seven that are not a turn's, the session pipeline, which took the
-   subscription envelope and the five requests that block a turn, and what is
-   left of the legacy layer. */
+   the seven that are not a turn's, and the session pipeline, which took the
+   subscription envelope and the five requests that block a turn. */
 const SITES = [
   'state/install.ts',
   'state/session/pipeline.ts',
-  ...partNames('demo').map((name) => `legacy/demo/${name}`),
 ]
 
 /** Every [file:line, name] the page registers a push handler for. */

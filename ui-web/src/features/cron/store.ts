@@ -1,7 +1,9 @@
-import { ds, shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
 import { show as toast } from '../../shell/toast'
 
 import type { CronDraft, CronJob, CronSource } from './types'
+import * as page from '../../state/page'
 
 /* Page state, outside React on purpose: the legacy shell drives this page
  * imperatively (nav opens it, Esc closes it, a finished turn refreshes it,
@@ -69,12 +71,12 @@ export function warm(): Promise<void> {
 
 export function open(): void {
   set({ viewId: null, draft: null })
-  shell().showPage('cronPage')
+  page.show('cronPage')
   void refresh()
 }
 
 export function close(): void {
-  shell().showPage(null)
+  page.show(null)
 }
 
 export function openDetail(j: CronJob): void {

@@ -1,18 +1,19 @@
 /* Every method name the page calls is one the contract declares.
  *
- * The legacy layer is plain JavaScript, so `gateway().call('sessoin.list', ...)`
- * type checks as readily as the spelling that exists -- the compiler only sees
- * the transport's signature where the caller is TypeScript. A misspelt name is
- * a -32601 at the moment a reader opens the page that makes it, which is the
- * one failure this refactor was supposed to end.
+ * Written against the legacy layer, which was plain JavaScript: there
+ * `gateway().call('sessoin.list', ...)` type checked as readily as the spelling
+ * that exists, because the compiler only saw the transport's signature where
+ * the caller was TypeScript. A misspelt name is a -32601 at the moment a reader
+ * opens the page that makes it, which is the one failure this refactor was
+ * supposed to end.
  *
- * So the names are collected from the source with the TypeScript API and held
- * to RPC_METHODS, which is generated from rpc-schema/openrpc.json. The feature
- * sources are read too, even though tsc already checks them: the unchecked
- * escape hatch below is a plain string on either side of the line, and this is
- * what keeps it to the two names it was opened for. They answer -32601 today
- * and must go on doing so rather than being typed into existence or silently
- * dropped.
+ * The layer is gone and tsc now sees every call site, so what this is still for
+ * is the unchecked escape hatch: `callUnchecked` takes a plain string on either
+ * side of the line, and this is what keeps it to the two names it was opened
+ * for. They answer -32601 today and must go on doing so rather than being typed
+ * into existence or silently dropped. The names are collected from the source
+ * with the TypeScript API and held to RPC_METHODS, which is generated from
+ * rpc-schema/openrpc.json.
  */
 
 import { readdirSync, readFileSync } from 'node:fs'
@@ -21,17 +22,15 @@ import { resolve } from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
-import { partNames } from './legacy-part.mjs'
-
 import { RPC_METHODS } from '../src/rpc/generated'
 
 /* The two undeclared names, and the only two allowed. Both are the manual
    plugin-add path in features/plugins/source.ts. */
 const UNCHECKED = ['raven.mcp.list', 'raven.mcp.set']
 
-/* Both legacy layers, every feature's source module, and the page's own wiring
-   and boot: the calls moved there as each domain left the layer, and the three
-   sets together are the page's whole traffic. Paths are from src/. */
+/* Every feature's source module and everything under state/: the calls moved
+   there as each domain left the legacy layer, and the two sets together are the
+   page's whole traffic. Paths are from src/. */
 const sourceModules = () => readdirSync(resolve(process.cwd(), 'src/features'), { withFileTypes: true })
   .filter((e) => e.isDirectory())
   .map((e) => `features/${e.name}/source.ts`)
@@ -39,14 +38,13 @@ const sourceModules = () => readdirSync(resolve(process.cwd(), 'src/features'), 
     try { readFileSync(resolve(process.cwd(), 'src', rel)); return true } catch { return false }
   })
 
-const FILES = [
-  ...['demo'].flatMap((layer) => partNames(layer).map((name) => `legacy/${layer}/${name}`)),
-  ...sourceModules(),
-  'state/boot.ts',
-  'state/connection.ts',
-  'state/install.ts',
-  'state/updates.ts',
-]
+/* Every .ts under state/, at any depth, tests excluded. */
+const stateModules = (dir = 'state') => readdirSync(resolve(process.cwd(), 'src', dir), { withFileTypes: true })
+  .flatMap((e) => (e.isDirectory()
+    ? stateModules(`${dir}/${e.name}`)
+    : e.name.endsWith('.ts') && !e.name.includes('.test.') ? [`${dir}/${e.name}`] : []))
+
+const FILES = [...sourceModules(), ...stateModules()]
 
 /* A `gateway().call(...)` or `gateway().binary(...)`: the callee is a property
    of a call to `gateway`, which is what tells it apart from `source.call(...)`

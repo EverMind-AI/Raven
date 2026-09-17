@@ -2,8 +2,8 @@
  *
  * The offline canvas has always had a canned conversation; what changed is
  * where it is plugged in. It used to be a replay engine calling the transcript
- * island's own verbs (ui-web/src/legacy/demo/080-replay.js), so the demo page
- * exercised a second painter and the live pipeline went untested by it. Here
+ * island's own verbs, so the offline page exercised a second painter and the
+ * live pipeline went untested by it. Here
  * the same script is pushed as `event` frames on the subscription the page
  * opened, on the transport's own timer -- so the offline page plays the turn
  * out over time through exactly the stage table the live page uses, and a

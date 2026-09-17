@@ -10,7 +10,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { ModelTagDefs, ModelTags } from '../../shell/model-tags'
 import { clearance } from '../../shell/popover'
 import { ProviderIcon, ProviderStatus } from '../../shell/provider-mark'

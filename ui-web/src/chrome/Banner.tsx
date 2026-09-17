@@ -14,9 +14,19 @@
 import { useSyncExternalStore } from 'react'
 
 import * as banner from '../shell/banner'
-import { shell, t } from '../shell/bridge'
+import { openPlugins } from '../features/plugins/nav'
+import { t } from '../i18n/t'
+import { islands } from '../islands'
 
 import type { JSX } from 'react'
+
+/* One verb for one action: this button opens the plugins page AND the websearch
+   entry on it, and a reader who lands on the page without the entry open has to
+   hunt for what the notice was talking about. */
+function openWebsearch(): void {
+  void openPlugins()
+  islands.plugins.openMarket('websearch')
+}
 
 export function Banner(): JSX.Element | null {
   const s = useSyncExternalStore(banner.subscribe, banner.get)
@@ -35,7 +45,7 @@ export function Banner(): JSX.Element | null {
     <div className="banner">
       <b>{t('gui.ws.notice_title')}</b>
       <span>{t('gui.ws.notice_body')}</span>
-      <button onClick={() => shell().openWebsearch?.()}>{t('gui.ws.notice_go')}</button>
+      <button onClick={() => openWebsearch()}>{t('gui.ws.notice_go')}</button>
       {/* Dismissable, unlike the fault above: an unconfigured capability is a
           suggestion, and the reader saying "not now" is an answer. */}
       <button className="x" aria-label={t('gui.ws.notice_dismiss')} onClick={() => banner.dismiss()}>&#10005;</button>

@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import { shell, t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { show as menuAt } from '../../shell/menu'
 import { SetupGroup, SetupRow } from '../../shell/setuprow'
 import { SheetFoot, SheetHead, StateLine } from '../../shell/setupsheet'
@@ -11,6 +11,8 @@ import * as store from './store'
 
 import type { CronDraft, CronJob, CronRun } from './types'
 import type { JSX } from 'react'
+import { ask as confirmAsk } from '../../state/confirm'
+import * as settingsDialog from '../../state/settingsDialog'
 
 /* The frequencies and the delivery routes the editor offers. Page data, not
    wire data: a job's own kind and expression come from `cron.list`, and these
@@ -52,7 +54,7 @@ function keepPlace(err: unknown): void {
 }
 
 function removeThenList(j: CronJob): void {
-  shell().confirmAsk(
+  confirmAsk(
     t('gui.cron.delete_title'),
     t('gui.cron.delete_body', { name: j.name }),
     t('gui.cron.delete'),
@@ -469,7 +471,7 @@ function JobForm({ draft }: { draft: CronDraft }): JSX.Element {
           <span>{t(DELIVER[draft.deliver] || DELIVER.app!)}</span>
           <span className="x">{t('gui.job.deliver_global')}</span>
           <span className="a">
-            <button className="mini ghost" onClick={() => void shell().openSet?.()}>
+            <button className="mini ghost" onClick={() => settingsDialog.open()}>
               {t('gui.job.deliver_open')}
             </button>
           </span>

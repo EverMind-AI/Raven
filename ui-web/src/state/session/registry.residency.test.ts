@@ -9,7 +9,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { fakeGateway, loadPart, looseQuery } from '../../../scripts/legacy-part.mjs'
+import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
 
 import * as turn from '../../features/composer/turn'
 import type { Sources } from '../sources'
@@ -56,25 +56,25 @@ async function harness(): Promise<{
      them. */
   await loadPart(() => import('./registry'), {
     fakes: {
-      'src/shell/session': { current: () => current },
-      'src/shell/banner': { draw: vi.fn() },
-      'demo/010-kernel.js': { $: looseQuery() },
-      'demo/040-state.js': {
-        down: vi.fn(),
+      'src/state/ws': {
+        draw: vi.fn(),
+        open: false,
+        restore: vi.fn(),
+        view: () => ({ tab: 'files', picked: null }),
+      },
+      'src/features/rail/store': { draw: vi.fn() },
+      'src/state/session/rows': { sess: (id: string) => rows.find((r) => r.id === id) },
+      'src/features/composer/mount': {
+        drawMeter: () => log.push('drawMeter'),
+        goPaint: vi.fn(),
         queueRestore,
         queueSnapshot: () => ['queued'],
-        sess: (id: string) => rows.find((r) => r.id === id),
         /* The island's own phase machine, which is what is under test here. */
         turn,
       },
-      'demo/050-rail.js': { sessionDraw: vi.fn() },
-      'demo/090-composer.js': { drawMeter: () => log.push('drawMeter'), goState: vi.fn() },
-      'demo/100-workspace.js': {
-        drawWs: vi.fn(),
-        wsOpen: false,
-        wsRestore: vi.fn(),
-        wsView: () => ({ tab: 'files', picked: null }),
-      },
+      'src/shell/dom': { $: looseQuery() },
+      'src/shell/session': { current: () => current },
+      'src/shell/banner': { draw: vi.fn() },
       /* What a buffered frame means, which is the pipeline's and not the
          residency rule's. */
       'src/state/session/runtime': { drain: drainQueue },
@@ -88,7 +88,7 @@ async function harness(): Promise<{
     islands: {
       composer: { liveAnchor: () => 42, setLiveAnchor: () => log.push('setLiveAnchor') },
       workspace: { snapshot: () => ({ ...workspace }), restore: workspaceRestore },
-      transcript: { nudge: vi.fn(), stopStream: vi.fn() },
+      transcript: { nudge: vi.fn(), stopStream: vi.fn(), down: vi.fn() },
     },
   })
   const registry = (await import('./registry')) as Registry
@@ -254,8 +254,9 @@ describe('forgetting a conversation subscription', () => {
     const asked: Array<[string, unknown]> = []
     await loadPart(async () => { await import('./runtime'); return import('./registry') }, {
       fakes: {
+        'src/i18n/t': { T: (key: string) => key },
+        'src/shell/dom': { $: looseQuery() },
         'src/shell/session': { current: () => 'a' },
-        'demo/010-kernel.js': { $: looseQuery(), T: (key: string) => key },
       },
     })
     const registry = (await import('./registry')) as Registry
@@ -288,8 +289,9 @@ describe('forgetting a conversation subscription', () => {
     const asked: Array<[string, unknown]> = []
     await loadPart(async () => { await import('./runtime'); return import('./registry') }, {
       fakes: {
+        'src/i18n/t': { T: (key: string) => key },
+        'src/shell/dom': { $: looseQuery() },
         'src/shell/session': { current: () => 'a' },
-        'demo/010-kernel.js': { $: looseQuery(), T: (key: string) => key },
       },
     })
     const registry = (await import('./registry')) as Registry

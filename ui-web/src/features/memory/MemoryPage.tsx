@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import { t } from '../../shell/bridge'
+import { t } from '../../i18n/t'
 import { subscribe as langSubscribe, tag as langTag } from '../../state/lang'
 import * as store from './store'
 

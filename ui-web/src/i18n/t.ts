@@ -11,6 +11,12 @@
  * which column of the catalogue to read, English until a pick arrives. The
  * other half -- whether a pick has been applied to the page at all -- is
  * src/state/lang.ts's `applied`, and that module is this one's only writer.
+ *
+ * `t` is the same lookup behind one indirection, and the islands call it rather
+ * than T. It was a verb on the strangler bridge for years -- an island read its
+ * words through the shell so that a case could hand it a translator that
+ * answers the key itself and then assert on the key. The bridge is gone; the
+ * seam is `setTranslator`, which is the whole of what those cases used it for.
  */
 
 import catalog from '../../../i18n/messages.json'
@@ -51,6 +57,29 @@ const T = (key: string, vars?: Record<string, unknown> | null, fallback?: string
   const e = I18N.ui[key] || {}
   return fillVars(e[code] != null ? e[code] : (e.en != null ? e.en : (fallback != null ? fallback : key)), vars)
 }
+
+/** What `t` asks. `fallback` is what to show when the catalogue has no entry. */
+export type Translator = (
+  key: string,
+  vars?: Record<string, unknown> | null,
+  fallback?: string | null,
+) => string
+
+let translate: Translator = T
+
+/* For a test: a translator that answers the key, so a case can assert on the
+   key rather than on a sentence the catalogue owns. The page never calls this. */
+export function setTranslator(fn: Translator): void {
+  translate = fn
+}
+
+/** Back to the catalogue, so a translator one case handed in does not outlive it. */
+export function resetTranslator(): void {
+  translate = T
+}
+
+/** An island's words. The catalogue, unless a case has replaced the lookup. */
+export const t: Translator = (key, vars, fallback) => translate(key, vars, fallback)
 
 const slashText = (id: string): SlashEntry => {
   const e = I18N.slash[id] || {}

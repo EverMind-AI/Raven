@@ -1,12 +1,9 @@
 /* The capabilities page: which tab it shows, what its filter bar says, and the
  * chrome around #capsBody.
  *
- * Was four things in three legacy parts: `extTab` and `capFilter` in
- * demo/120-capabilities.js, the chrome half of `drawCaps` in demo/152-skills.js
- * and of `drawPlugTab` in demo/153-plugins.js, and the filter bar's three
- * handlers in demo/150-chrome.js. One section serves two modules -- the skill
- * market and the plugin market -- so every one of those wrote the same handful
- * of elements from whichever tab was up, by id, on every draw.
+ * One section serves two modules -- the skill market and the plugin market --
+ * and each of them used to write the same handful of elements from whichever
+ * tab was up, by id, on every draw.
  *
  * All of it is state here, and src/chrome/CapsPage.tsx renders all of it: the
  * title, the search field's placeholder, the status pills' pressed flag, the two
@@ -15,9 +12,10 @@
  * bar's `display`, and the hero above the bar, which is a child of .wrap the
  * component renders in its place rather than a node inserted before it.
  *
- * The draw is dispatched from here rather than from a decorator chain. The two
- * tabs' renderers live in the parts that own the islands they draw, and this
- * declares the order their steps were visible in (see `draw`), the way
+ * The draw is dispatched from here rather than from a chain of decorators. The
+ * two tabs' renderers live beside the islands they draw (features/skills/tab.ts,
+ * features/plugins/tab.ts), and this declares the order their steps run in
+ * (see `draw`), the way
  * state/detail.ts declares the drawer's close order.
  *
  * Committed synchronously (flushSync), like the four stores stage C4 moved: a
@@ -145,10 +143,9 @@ function put(next: Partial<CapsState>): void {
 const field = (): HTMLInputElement | null => document.getElementById('cq') as HTMLInputElement | null
 
 /* What the two tab flips do after the switch itself: each island drops the
-   state it had. Registration order is the order the two decorators' effects
-   were visible in -- the reduce applied them from the inside out, so the skill
-   layer's ran before the plugin layer's (src/legacy/index.js installs 152 then
-   153). */
+   state it had. Registration order is the order the two tabs' effects are
+   visible in -- the skill tab's before the plugin tab's, which is the order
+   src/main.tsx installs them in. */
 export function onTab(fn: () => void): void {
   switched.add(fn)
 }
@@ -169,9 +166,9 @@ export function extSet(tab: Tab | null | undefined): void {
   for (const fn of [...switched]) fn()
 }
 
-/* Leaving the section. Was closeCaps in the legacy part, and the order is its:
-   the page flag first, then the shared drawer -- which is not on any page, so
-   closing the section does not reach it on its own. */
+/* Leaving the section, and the order is load-bearing: the page flag first,
+   then the shared drawer -- which is not on any page, so closing the section
+   does not reach it on its own. */
 export function close(): void {
   page.show(null)
   detail.close()
@@ -213,6 +210,14 @@ export function draw(): void {
   hooks.skill?.()
   hooks.pluginButton?.()
   hooks.hero?.()
+}
+
+/* A draw, but only while the page is open on the plugin tab: a plugin write
+   that lands with the page shut, or on the other tab, has nothing to repaint.
+   The island asks for this rather than calling `draw` itself, because "is my
+   page the one on screen" is the page's answer and not the island's. */
+export function drawIfOpenOnPlugins(): void {
+  if (page.get() === 'capsPage' && state.tab === 'plugin') draw()
 }
 
 /* The chrome a draw decides, in one commit: the six values are what the two

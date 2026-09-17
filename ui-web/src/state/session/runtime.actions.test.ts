@@ -12,7 +12,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { fakeGateway, loadPart, looseQuery } from '../../../scripts/legacy-part.mjs'
+import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
 
 import type { Sources } from '../sources'
 
@@ -39,29 +39,8 @@ async function harness({ rows }: { rows: Row[] }) {
     return import('../install')
   }, {
     fakes: {
-      'src/shell/session': {
-        current: () => current,
-        setCurrent: (id: string | null) => { current = id; calls.push(['sessionSet', id]) },
-      },
-      'src/features/rail/title': { plainTitle: (t: unknown) => String(t) },
-      'src/shell/toast': { show: (text: string) => calls.push(['toast', text]) },
-      'demo/010-kernel.js': {
-        $: looseQuery(),
-        /* Enough of the real thing to see WHICH conversation a message names. */
-        T: (key: string, vars?: unknown) => (vars ? `${key}:${JSON.stringify(vars)}` : key),
-      },
-      'demo/040-state.js': {
-        /* The dialog is not what is under test: say yes at once. */
-        confirmAsk: (_t: string, _b: string, _l: string, fn: () => void) => fn(),
-        down: () => calls.push(['down']),
-        sess: (id: string) => rows.find((r) => r.id === id),
-      },
-      'demo/050-rail.js': {
-        sessionDraw: () => calls.push(['sessionDraw']),
-        sessionOpen: (s: Row) => calls.push(['sessionOpen', s.id]),
-        sessionRows: () => rows,
-      },
-      'demo/060-conversation.js': {
+      'src/features/composer/mount': { drawMeter: () => calls.push(['drawMeter']) },
+      'src/state/session/conversation': {
         noteRow: (label: string) => {
           calls.push(['noteRow', label])
           return { set: () => {}, remove: () => calls.push(['lineRemove']) }
@@ -69,8 +48,37 @@ async function harness({ rows }: { rows: Row[] }) {
         noteSay: (_line: unknown, text: string) => calls.push(['noteSay', text]),
         pitch: () => calls.push(['pitch']),
       },
-      'demo/090-composer.js': { drawMeter: () => calls.push(['drawMeter']) },
+      'src/features/rail/store': {
+        draw: () => calls.push(['sessionDraw']),
+      },
+      'src/state/session/rows': {
+        sess: (id: string) => rows.find((r) => r.id === id),
+        open: (s: Row) => calls.push(['sessionOpen', s.id]),
+        rows: () => rows,
+      },
+      'src/state/confirm': {
+        /* The dialog is not what is under test: say yes at once. */
+        ask: (_t: string, _b: string, _l: string, fn: () => void) => fn(),
+      },
+      'src/i18n/t': {
+        /* Enough of the real thing to see WHICH conversation a message names. */
+        T: (key: string, vars?: unknown) => (vars ? `${key}:${JSON.stringify(vars)}` : key),
+      },
+      'src/shell/dom': {
+        $: looseQuery(),
+      },
+      'src/shell/session': {
+        current: () => current,
+        setCurrent: (id: string | null) => { current = id; calls.push(['sessionSet', id]) },
+      },
+      'src/features/rail/title': { plainTitle: (t: unknown) => String(t) },
+      'src/shell/toast': { show: (text: string) => calls.push(['toast', text]) },
       'src/state/updates': { showUpNote: () => {} },
+    },
+    islands: {
+      transcript: {
+        down: () => calls.push(['down']),
+      },
     },
   })
   const runtime = (await import('./runtime')) as Runtime
@@ -284,20 +292,32 @@ async function railHarness(
     return import('../install')
   }, {
     fakes: {
-      'src/shell/session': { current: () => current, setCurrent: (id: string | null) => { current = id } },
-      'demo/010-kernel.js': { $: looseQuery(), T: label },
-      'demo/040-state.js': {
-        confirmAsk: (_t: string, _b: string, _l: string, run: () => Promise<void>) => {
+      'src/state/session/rows': {
+        replace: () => {},
+        rows: () => rows,
+        sess: (id: string) => rows.find((r) => r.id === id),
+      },
+      'src/features/rail/store': {
+        draw: draws,
+      },
+      'src/state/sheetRack': {
+        forget: () => {},
+      },
+      'src/features/composer/mount': {
+        dropDraft: () => {},
+      },
+      'src/state/confirm': {
+        ask: (_t: string, _b: string, _l: string, run: () => Promise<void>) => {
           settled = run()
         },
-        dropDraft: () => {},
-        sheetsForget: () => {},
       },
-      'demo/050-rail.js': {
-        sessionDraw: draws,
-        sessionReplace: () => {},
-        sessionRows: () => rows,
+      'src/i18n/t': {
+        T: label,
       },
+      'src/shell/dom': {
+        $: looseQuery(),
+      },
+      'src/shell/session': { current: () => current, setCurrent: (id: string | null) => { current = id } },
       'src/shell/toast': { show: toast },
     },
     islands: {
@@ -465,16 +485,28 @@ async function bulkHarness(answers: Record<string, Answer | Error>) {
     return import('../boot')
   }, {
     fakes: {
-      'demo/010-kernel.js': { $: looseQuery(), T: label },
-      'demo/040-state.js': { dropDraft: () => {} },
-      'demo/050-rail.js': {
-        sessionReplace: (next: Row[]) => { live = next as Array<{ id: string; title: string }> },
-        sessionRows: () => live,
+      'src/state/session/rows': {
+        replace: (next: Row[]) => { live = next as Array<{ id: string; title: string }> },
+        rows: () => live,
+        sess: (id: string) => live.find((r) => r.id === id),
       },
-      'demo/130-settings.js': { drawSettings: () => {} },
+      'src/features/composer/mount': {
+        dropDraft: () => {},
+      },
+      'src/i18n/t': {
+        T: label,
+      },
+      'src/shell/dom': {
+        $: looseQuery(),
+      },
       'src/state/session/registry': { switchToDraft: () => {} },
       'src/shell/session': { current: () => null, setCurrent: () => {} },
       'src/shell/toast': { show: () => {} },
+    },
+    islands: {
+      settings: {
+        redraw: () => {},
+      },
     },
   })
   const runtime = (await import('./runtime')) as Runtime

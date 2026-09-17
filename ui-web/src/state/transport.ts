@@ -40,8 +40,8 @@ const later = (ms: number, fn: () => void): void => { setTimeout(fn, ms) }
 /**
  * The page's transport, canvases included.
  *
- * Called once, from main.tsx, before `installLegacy()` -- every source install
- * and the boot sequence itself read `gateway()`.
+ * Called once, from main.tsx, before the page's own wiring -- every source
+ * install and the boot sequence itself read `gateway()`.
  */
 export function chooseTransport(): RpcTransport {
   const base: RpcTransport = liveMode()
