@@ -11,6 +11,8 @@ what the harness does with them.
 import json
 from typing import Any
 
+from loguru import logger
+
 _TYPE_MAP = {
     "string": str,
     "integer": int,
@@ -22,12 +24,30 @@ _TYPE_MAP = {
 
 
 def cast_params(schema: dict[str, Any] | None, params: dict[str, Any]) -> dict[str, Any]:
-    """Apply safe schema-driven casts before validation."""
+    """Apply safe schema-driven casts before validation, and drop what the tool did not ask for.
+
+    Dropping rather than refusing: a stray key is a mistake in the call, not a
+    reason to fail work the tool could do, and a model that adds one gets on
+    with the task instead of a round trip about a field it invented.
+
+    Dropped rather than passed on, though, and that is the part that matters. A
+    ``**kwargs`` on an ``execute`` is a door into keyword arguments the schema
+    never offered -- ones the host fills for itself, which the caller then gets
+    to fill instead. It is a crash today (those arguments hold objects, not
+    JSON) and it is privilege the moment one of them takes a string.
+
+    Only the top level. Below it an unrecognised key is data: a free-form
+    ``inputs`` mapping means whatever its tool means by it.
+    """
     schema = schema or {}
     if schema.get("type", "object") != "object":
         return params
-
-    return _cast_object(params, schema)
+    cast = _cast_object(params, schema)
+    if not isinstance(cast, dict) or not (props := schema.get("properties")):
+        return cast
+    if extra := [key for key in cast if key not in props]:
+        logger.debug("tool call carried {} argument(s) the schema does not declare: {}", len(extra), ", ".join(extra))
+    return {key: value for key, value in cast.items() if key in props}
 
 
 def _cast_object(obj: Any, schema: dict[str, Any]) -> dict[str, Any]:

@@ -3,7 +3,6 @@
 import asyncio
 import time
 import uuid
-from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -32,6 +31,7 @@ from raven.agent.subagent.direct_chat import (
     DirectTurnMeta,
     NotAddressableError,
 )
+from raven.agent.subagent.dispatch_ledger import LEDGER_FILENAME, DispatchLedger
 from raven.agent.subagent.history import SpawnRecord, session_history_root
 from raven.agent.subagent.instance_state import InstanceState, instance_state_path
 from raven.agent.subagent.instances import get_registry, hold_handle, mint_handle
@@ -295,10 +295,15 @@ class SubagentManager:
         # throwing away the work already in flight.
         self._paused = False
         self._max_spawns_per_hour = max_spawns_per_hour
-        # Per-session spawn timestamps (monotonic), kept per session (not
-        # per-process) so one busy session can't throttle others. Each deque is
-        # pruned to the rolling window on access, so it self-bounds.
-        self._session_spawn_times: dict[str, deque[float]] = {}
+        # The rolling-hour budget, on disk under the agent home and keyed by
+        # session so one busy session cannot throttle others. On disk rather
+        # than in this object because the loop the budget exists to bound can
+        # outlive the process holding the count: a gateway that restarts comes
+        # back with an empty one, and two processes sharing a home each counted
+        # to the cap separately. See `raven.agent.subagent.dispatch_ledger`.
+        self._ledger = DispatchLedger(
+            Path(workspace) / "sessions" / LEDGER_FILENAME, window_seconds=_SPAWN_WINDOW_SECONDS
+        )
         # Which mode each direct-chat instance runs in, keyed
         # (session_key, agent, handle). In memory on purpose -- see
         # ``set_instance_mode`` for why it is not persisted, and why the host
@@ -688,18 +693,10 @@ class SubagentManager:
         """Charge one sub-agent dispatch to this session's rolling hour.
 
         False when the budget is spent. The window is per session (not
-        per-process) so one busy session cannot throttle others, and each deque
-        is pruned on access, so it self-bounds.
+        per-process) so one busy session cannot throttle others, and it lives on
+        disk so a restart does not hand the caller a fresh allowance.
         """
-        now = time.monotonic()
-        window = self._session_spawn_times.setdefault(quota_key, deque())
-        cutoff = now - _SPAWN_WINDOW_SECONDS
-        while window and window[0] < cutoff:
-            window.popleft()
-        if len(window) >= self._max_spawns_per_hour:
-            return False
-        window.append(now)
-        return True
+        return self._ledger.charge(quota_key, limit=self._max_spawns_per_hour)
 
     def charge_dag_run(self, session_key: str | None) -> str | None:
         """Charge one DAG run to the same budget as a spawn; the refusal, or None.
@@ -2150,10 +2147,9 @@ Read it against the plan this instance serves. If it reports finished work, resu
             t.cancel()
         if records:
             await asyncio.gather(*records, return_exceptions=True)
-        # Drop this session's rate-limit entry on teardown: pruning empties a
-        # deque but never removes the key, so without this the dict would keep
-        # one entry per session for the process's life.
-        self._session_spawn_times.pop(session_key, None)
+        # Drop this session's window on teardown: a cancelled session is not
+        # one whose recent dispatches should still be held against anything.
+        self._ledger.forget(session_key)
         return len(tasks)
 
     async def cancel_by_instance(self, session_key: str, agent: str, handle: str) -> bool:

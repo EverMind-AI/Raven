@@ -273,6 +273,8 @@ async def run_dag(
     desk: AdjudicationDesk | None = None,
     adjudication_timeout_s: float = 600.0,
     judge_node: "Callable[..., Awaitable[Any]] | None" = None,
+    on_node_start: "Callable[[str], Awaitable[None]] | None" = None,
+    unanswered: "Callable[[str, str], Awaitable[bool]] | None" = None,
     announce_exception: ExceptionAnnouncer | None = None,
     max_continuations: int = 2,
     origin: dict | None = None,
@@ -373,6 +375,10 @@ async def run_dag(
     successor run and finalizes this one. The successor itself is submitted
     by the caller, not here -- this run only reports its id back as
     ``DagRunResult.replanned_into``.
+
+    ``on_node_start``, when given, is called once per attempt as the node is
+    marked running and before it is rendered -- for a caller that needs to know
+    where things stood before this node touched them.
 
     ``judge_node``, when given, is called after a node completes or fails to
     decide whether it actually accomplished its task; a bad verdict suspends it
@@ -566,9 +572,11 @@ async def run_dag(
                         status,
                         errors,
                         continuations,
+                        output_paths=output_paths,
                         timeout_s=adjudication_timeout_s,
                         cancel=cancel,
                         released=released,
+                        unanswered=unanswered,
                     )
                     continue
                 if carried:
@@ -628,6 +636,8 @@ async def run_dag(
                         continuations=continuations,
                         desk=desk,
                         judge_node=judge_node,
+                        on_node_start=on_node_start,
+                        unanswered=unanswered,
                         announce_exception=announce_exception,
                         max_continuations=max_continuations,
                         origin=origin,
@@ -973,6 +983,7 @@ async def _apply_verdict(
     status: dict[str, str],
     errors: dict[str, str],
     output_paths: dict[str, str],
+    continuations: dict[str, str],
     node_output: str | None,
     attempt: int,
     desk: "AdjudicationDesk | None",
@@ -984,6 +995,7 @@ async def _apply_verdict(
     adjudication_timeout_s: float,
     control_reachable: "Callable[[], bool] | None" = None,
     control_advert: "Callable[[str], str | None] | None" = None,
+    unanswered: "Callable[[str, str], Awaitable[bool]] | None" = None,
     output_limited: bool = False,
 ) -> None:
     """Turn a finished node's verdict into a status, and report a bad one.
@@ -1024,9 +1036,23 @@ async def _apply_verdict(
     reason = verdict.what_is_missing or "The node did not accomplish its task."
     errors[node.id] = reason
     # A node that did not accomplish its task must not be readable as anyone's
-    # input, whatever happens next.
-    output_paths.pop(node.id, None)
+    # input, whatever happens next. Kept aside rather than dropped, because a
+    # caller that takes the finding on itself (see ``unanswered``) leaves the
+    # node standing, and a standing node's output is readable again.
+    produced = output_paths.pop(node.id, None)
     remaining = max_continuations - (attempt - 1)
+    if verdict.follow_up and remaining > 0:
+        # The judge already knows what to say, so there is nobody to ask. A
+        # command's judge holds the failing output; relaying that through a
+        # person, or through the main agent, would be asking them to read it
+        # out -- and on an unattended run there is nobody there to read it.
+        # Back to pending with the message parked, which is the same shape an
+        # adjudicated continuation takes, so the ready set picks it up next pass.
+        continuations[node.id] = verdict.follow_up
+        status[node.id] = "pending"
+        errors.pop(node.id, None)
+        logger.info("DAG node {} retries on its judge's own follow-up ({} left)", node.id, remaining - 1)
+        return
     answerable = _route_available(control_reachable)
     report = _exception_report(
         run_id=store.run_id,
@@ -1054,6 +1080,13 @@ async def _apply_verdict(
     if suspending:
         status[node.id] = "exception"
         desk.open(node.id)
+    elif await _recorded_instead(unanswered, node.id, reason, status, errors, output_paths, produced):
+        # Nobody could be asked, and the caller said it has the finding and will
+        # carry it forward itself -- a plan writing the question into a file a
+        # person reads between rounds. The node keeps whatever it produced and
+        # its dependents run, because failing it here would cascade a skip
+        # through the rest of the round over a question nobody was even asked.
+        return
     else:
         status[node.id] = "failed"
         if not answerable and remaining > 0:
@@ -1085,6 +1118,37 @@ async def _apply_verdict(
             errors[node.id] = (
                 f"The exception report could not be delivered in {REPORT_DELIVERY_ATTEMPTS} attempts: {failure}"
             )
+
+
+async def _recorded_instead(
+    unanswered: "Callable[[str, str], Awaitable[bool]] | None",
+    node_id: str,
+    reason: str,
+    status: dict[str, str],
+    errors: dict[str, str],
+    output_paths: dict[str, str],
+    produced: str | None,
+) -> bool:
+    """Offer an unanswerable finding to the caller, and let the node stand if it takes it.
+
+    False is today's behaviour and the default everywhere: the node failed and
+    its dependents are skipped. True is for a caller that runs unattended and
+    has somewhere durable to put the question -- there, stopping the whole round
+    over something nobody was asked is the worse of the two answers.
+    """
+    if unanswered is None:
+        return False
+    try:
+        if not await unanswered(node_id, reason):
+            return False
+    except Exception as exc:  # noqa: BLE001 - an unanswerable node must not also be an unrecordable one
+        logger.opt(exception=True).warning("DAG node {} unanswered hook raised: {}", node_id, exc)
+        return False
+    status[node_id] = "completed"
+    errors.pop(node_id, None)
+    if produced is not None:
+        output_paths[node_id] = produced
+    return True
 
 
 async def _record_outcome(store: DagRunStore, status: dict[str, str], *, cancelled: bool = False) -> None:
@@ -1149,9 +1213,11 @@ async def _await_adjudications(
     errors: dict[str, str],
     continuations: dict[str, str],
     *,
+    output_paths: dict[str, str] | None = None,
     timeout_s: float,
     cancel: asyncio.Event | None,
     released: asyncio.Event | None = None,
+    unanswered: "Callable[[str, str], Awaitable[bool]] | None" = None,
 ) -> None:
     """Block until every suspended node has an answer, the wait runs out, or one
     answer replans the graph.
@@ -1258,8 +1324,15 @@ async def _await_adjudications(
                     # Calling it a timeout would blame the agent for a silence
                     # its own replan is what ended.
                     continue
+                timed_out = f"Nothing was decided for {timeout_s:g}s, so the node timed out."
+                if await _recorded_instead(unanswered, nid, timed_out, status, errors, output_paths or {}, None):
+                    # Asked, and nobody came. For an unattended run that is the
+                    # expected answer rather than a failure: the question goes
+                    # somewhere a person will find it and the round finishes,
+                    # instead of the rest of it being skipped over silence.
+                    continue
                 status[nid] = "failed"
-                errors[nid] = f"Nothing was decided for {timeout_s:g}s, so the node timed out."
+                errors[nid] = timed_out
                 continue
             if answer.decision == CONTINUE and answer.message:
                 continuations[nid] = answer.message
@@ -1278,8 +1351,11 @@ async def _await_adjudications(
                 # `status` dict and only converts "running"/"exception"/"pending".
                 continue
             else:
+                abandoned = "The main agent abandoned this node."
+                if await _recorded_instead(unanswered, nid, abandoned, status, errors, output_paths or {}, None):
+                    continue
                 status[nid] = "failed"
-                errors[nid] = "The main agent abandoned this node."
+                errors[nid] = abandoned
     finally:
         if stop is not None and not stop.done():
             stop.cancel()
@@ -1340,6 +1416,8 @@ async def _run_group(
     continuations: dict[str, str] | None = None,
     desk: "AdjudicationDesk | None" = None,
     judge_node: "Callable[..., Awaitable[Any]] | None" = None,
+    on_node_start: "Callable[[str], Awaitable[None]] | None" = None,
+    unanswered: "Callable[[str, str], Awaitable[bool]] | None" = None,
     announce_exception: ExceptionAnnouncer | None = None,
     max_continuations: int = 2,
     origin: dict | None = None,
@@ -1391,6 +1469,8 @@ async def _run_group(
                 continuations=continuations,
                 desk=desk,
                 judge_node=judge_node,
+                on_node_start=on_node_start,
+                unanswered=unanswered,
                 announce_exception=announce_exception,
                 max_continuations=max_continuations,
                 origin=origin,
@@ -1530,6 +1610,8 @@ async def _run_node(
     continuations: dict[str, str] | None = None,
     desk: "AdjudicationDesk | None" = None,
     judge_node: "Callable[..., Awaitable[Any]] | None" = None,
+    on_node_start: "Callable[[str], Awaitable[None]] | None" = None,
+    unanswered: "Callable[[str, str], Awaitable[bool]] | None" = None,
     announce_exception: ExceptionAnnouncer | None = None,
     max_continuations: int = 2,
     origin: dict | None = None,
@@ -1552,6 +1634,16 @@ async def _run_node(
         # Set inside the gate, so a node still queued for a concurrency slot
         # stays `pending`: this is what tells a stop which nodes actually ran.
         status[node.id] = "running"
+        if on_node_start is not None:
+            # Inside the gate and before the first byte of work, because what a
+            # caller wants from this moment is a *baseline*: where the tree stood
+            # before this node touched it. Taken when the node was queued it would
+            # include whatever ran while it waited, and taken afterwards there is
+            # nothing left to compare against.
+            try:
+                await on_node_start(node.id)
+            except Exception as exc:  # noqa: BLE001 - a bookkeeping hook must not fail a node
+                logger.opt(exception=True).warning("DAG node {} start hook raised: {}", node.id, exc)
         await _emit(
             progress_publisher,
             "dag_node_updated",
@@ -1714,10 +1806,12 @@ async def _run_node(
                 status=status,
                 errors=errors,
                 output_paths=output_paths,
+                continuations=continuations if continuations is not None else {},
                 node_output=node_output,
                 attempt=attempt,
                 desk=desk,
                 judge_node=judge_node,
+                unanswered=unanswered,
                 announce_exception=announce_exception,
                 max_continuations=max_continuations,
                 origin=origin,

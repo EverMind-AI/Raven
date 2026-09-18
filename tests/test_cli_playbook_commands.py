@@ -626,3 +626,358 @@ def test_run_reads_a_stored_secret_and_scopes_the_carried_servers_credentials(li
     assert "from-the-store" not in r.stdout
     assert scopes["fn"]("local-pg") == "playbooks/audit"
     assert scopes["fn"]("deepwiki") is None
+
+
+@pytest.fixture
+def stints(tmp_path: Path):
+    """A config whose workspace is tmp, so the CLI looks for stints under it."""
+    cfg = tmp_path / "stint-config.json"
+    cfg.write_text(json.dumps({"agents": {"defaults": {"workspace": str(tmp_path)}}}), encoding="utf-8")
+    set_config_path(cfg)
+    yield tmp_path
+    set_config_path(None)  # type: ignore[arg-type]
+
+
+GROUP = "-Users-admin-workspace-ledger"
+"""A project-slugged session group, as a conversation launched in one has."""
+
+
+def _plan_on_disk(
+    workspace: Path,
+    *,
+    status: str = "running",
+    questions: list | None = None,
+    session_key: str = "",
+    stint_id: str = "stint-20260917T000000Z",
+    group: str = "",
+):
+    """A stint where the CLI looks for one, without running anything to make it.
+
+    ``group`` places it under a project-slugged directory, which is where a
+    conversation launched in a project really keeps its stints -- and is not the
+    directory a process with no project derives from the same session key.
+    """
+    from raven.agent.subagent.history import dag_root
+    from raven.session.manager import SessionManager
+    from raven.stint.record import STINTS_DIRNAME, StintRecord, StintStore
+
+    home = workspace / "sessions" / group / session_key.partition(":")[2] if group else None
+    store = StintStore(dag_root(home or SessionManager(workspace).session_dir(session_key)) / STINTS_DIRNAME)
+    record = StintRecord(
+        stint_id=stint_id,
+        playbook="game-dev",
+        spec={"mode": "stint", "name": "game-dev"},
+        workdir=str(workspace / "tree"),
+        branch=f"stint/{stint_id}",
+        round_index=2,
+        status=status,
+        questions=questions or [],
+        origin={"session_key": session_key} if session_key else {},
+    )
+    entry = record.open_round(1, "run-a")
+    entry.status = "completed"
+    entry.verify = [{"name": "build", "status": "failed", "command": "make", "returncode": 1, "duration_sec": 1.0}]
+    entry.violations = ["developer wrote 1 path(s) it may not write: reports/qa.md"]
+    record.open_round(2, "run-b")
+    store.write(record)
+    return store, record
+
+
+class TestWhoHoldsTheStintOpen:
+    """A stint dispatches each round in the background and opens the next from a
+    callback on the finished run's own task. On a gateway the host outlives the
+    turn; from a terminal the command *is* the host, and returning closes the
+    loop out from under the round -- the receipt says it started, the record
+    says running, and nothing ever ran."""
+
+    async def test_the_hold_returns_once_nothing_is_live(self) -> None:
+        from raven.cli.playbook_commands import hold_until_the_stints_end
+
+        class _Store:
+            @staticmethod
+            def list() -> list:
+                return []
+
+        class _Driver:
+            @staticmethod
+            def store_for(_key):
+                return _Store()
+
+        await hold_until_the_stints_end(_Driver(), every_sec=0.01)
+
+    async def test_the_hold_waits_while_a_round_is_still_going(self) -> None:
+        """The wait is the whole point: without it the command returns between
+        the receipt and the first round."""
+        from raven.cli.playbook_commands import hold_until_the_stints_end
+
+        class _Live:
+            live = True
+
+        class _Store:
+            def __init__(self) -> None:
+                self.reads = 0
+
+            def list(self) -> list:
+                self.reads += 1
+                return [_Live()] if self.reads < 3 else []
+
+        store = _Store()
+
+        class _Driver:
+            @staticmethod
+            def store_for(_key):
+                return store
+
+        await hold_until_the_stints_end(_Driver(), every_sec=0.01)
+
+        assert store.reads >= 3, "it stopped waiting while a stint was still live"
+
+
+class TestTheCommandsWeTellPeopleToRun:
+    """Every `raven playbook stint(s) <verb>` this build prints, against what it
+    registered.
+
+    Shipped once wrong in both directions: the verbs moved from a top-level
+    group to `stints`, and the messages that tell an operator how to extend or
+    take up a stint kept naming a group that answers `No such command`. A person
+    reaching for the one thing the message told them to reach for is exactly the
+    moment not to be wrong, and nothing else checks the string against the app.
+    """
+
+    @staticmethod
+    def _registered() -> dict[str, set[str]]:
+        from raven.cli.playbook_commands import playbook_app
+
+        found: dict[str, set[str]] = {}
+        for group in playbook_app.registered_groups:
+            app = group.typer_instance
+            found[group.name] = {c.name or "" for c in app.registered_commands} | {
+                g.name or "" for g in app.registered_groups
+            }
+        return found
+
+    def test_every_command_a_message_names_is_one_this_build_answers(self) -> None:
+        import re
+        import subprocess
+        from pathlib import Path
+
+        registered = self._registered()
+        root = Path(__file__).resolve().parent.parent
+        files = subprocess.run(
+            ["git", "ls-files", "raven", "docs"], capture_output=True, text=True, cwd=root, check=True
+        ).stdout.split()
+
+        wrong: list[str] = []
+        for name in files:
+            path = root / name
+            if path.suffix not in {".py", ".md"}:
+                continue
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                for match in re.finditer(r"raven playbook (stints?)\s+([a-z_]+)", line):
+                    group, verb = match.group(1), match.group(2)
+                    if verb not in registered.get(group, set()):
+                        wrong.append(f"{name}:{number}: {match.group(0)}")
+
+        assert wrong == [], "these name a command `raven playbook --help` does not offer:\n" + "\n".join(wrong)
+
+
+class TestPlanCommands:
+    @staticmethod
+    def _went_quiet(store, stint_id: str, seconds: float = 3600.0) -> None:
+        """Backdate the stamp, the way a host that died leaves it."""
+        import time
+
+        path = store.path_for(stint_id)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["touched_at_ms"] = int((time.time() - seconds) * 1000)
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    def test_the_list_stops_reporting_a_corpse_as_work_in_progress(self, stints: Path) -> None:
+        """A host that dies mid-round writes nothing on its way out. Left alone
+        the file says `running` for ever, and a person reads the list and waits
+        for a notification nobody is going to send."""
+        store, record = _plan_on_disk(stints, status="running")
+        self._went_quiet(store, record.stint_id)
+
+        result = runner.invoke(app, ["playbook", "stints", "list"])
+
+        assert result.exit_code == 0, result.output
+        assert store.read(record.stint_id).status == "interrupted"
+        assert "interrupted" in result.output, "the column said `running` about a stint nothing is advancing"
+
+    def test_the_list_leaves_a_stint_something_is_still_beating_for(self, stints: Path) -> None:
+        """The stamp is the whole reason this is safe to do on a read: a stint
+        another process is working looks exactly like one that died, until you
+        read when it was last touched."""
+        store, record = _plan_on_disk(stints, status="running")
+
+        result = runner.invoke(app, ["playbook", "stints", "list"])
+
+        assert result.exit_code == 0, result.output
+        assert store.read(record.stint_id).status == "running"
+
+    def test_plan_list_names_every_plan_and_where_it_got_to(self, stints: Path) -> None:
+        _plan_on_disk(stints)
+
+        result = runner.invoke(app, ["playbook", "stints", "list"])
+
+        assert result.exit_code == 0, result.output
+        assert "stint-20260917T000000Z" in result.output
+        assert "game-dev" in result.output
+        assert "running" in result.output
+
+    def test_a_plan_started_in_a_conversation_is_found_from_a_terminal(self, stints: Path) -> None:
+        """A stint lives beside the conversation that started it, and the person
+        asking here has a terminal instead of one. Reading a single session's
+        store reported a running stint as nothing having run at all."""
+        _plan_on_disk(stints, session_key="local:default", stint_id="stint-from-the-tui")
+
+        listed = runner.invoke(app, ["playbook", "stints", "list"])
+        opened = runner.invoke(app, ["playbook", "stints", "get", "stint-from-the-tui"])
+
+        assert listed.exit_code == 0, listed.output
+        assert "stint-from-the-tui" in listed.output
+        assert opened.exit_code == 0, opened.output
+        assert "stint/stint-from-the-tui" in opened.output
+
+    def test_a_plan_is_written_back_to_the_conversation_that_holds_it(self, stints: Path) -> None:
+        store, _ = _plan_on_disk(stints, session_key="local:default", stint_id="stint-from-the-tui")
+
+        result = runner.invoke(app, ["playbook", "stints", "stop", "stint-from-the-tui"])
+
+        assert result.exit_code == 0, result.output
+        assert store.read("stint-from-the-tui").status == "stopped"
+
+    def test_plan_list_says_so_when_nothing_has_run(self, stints: Path) -> None:
+        result = runner.invoke(app, ["playbook", "stints", "list"])
+
+        assert result.exit_code == 0
+        assert "No stints" in result.output
+
+    def test_plan_get_shows_the_checks_and_what_was_undone(self, stints: Path) -> None:
+        _plan_on_disk(stints)
+
+        result = runner.invoke(app, ["playbook", "stints", "get", "stint-20260917T000000Z"])
+
+        assert result.exit_code == 0, result.output
+        assert "build=failed" in result.output
+        assert "may not write" in result.output
+        assert "stint/stint-20260917T000000Z" in result.output
+
+    def test_an_unknown_plan_is_an_error_not_an_empty_report(self, stints: Path) -> None:
+        result = runner.invoke(app, ["playbook", "stints", "get", "stint-nope"])
+
+        assert result.exit_code == 1
+        assert "No stint" in result.output
+
+    def test_stopping_a_plan_lets_the_round_in_flight_finish(self, stints: Path) -> None:
+        store, _ = _plan_on_disk(stints)
+
+        result = runner.invoke(app, ["playbook", "stints", "stop", "stint-20260917T000000Z"])
+
+        assert result.exit_code == 0, result.output
+        assert "finishes and reports" in result.output
+        assert store.read("stint-20260917T000000Z").status == "stopped"
+
+    def test_stopping_a_finished_plan_says_so_rather_than_pretending(self, stints: Path) -> None:
+        _plan_on_disk(stints, status="finished")
+
+        result = runner.invoke(app, ["playbook", "stints", "stop", "stint-20260917T000000Z"])
+
+        assert result.exit_code == 0
+        assert "already finished" in result.output
+
+    def test_an_answer_is_kept_where_the_next_round_reads_it(self, stints: Path) -> None:
+        store, _ = _plan_on_disk(
+            stints, questions=[{"round": 1, "role": "planner", "text": "which of the two?", "answer": ""}]
+        )
+
+        result = runner.invoke(
+            app, ["playbook", "stints", "answer", "stint-20260917T000000Z", "-q", "0", "-t", "the second one"]
+        )
+
+        assert result.exit_code == 0, result.output
+        [question] = store.read("stint-20260917T000000Z").questions
+        assert question["answer"] == "the second one"
+        assert question["answered_at"]
+
+    def test_answering_a_question_that_is_not_there_is_refused(self, stints: Path) -> None:
+        _plan_on_disk(stints)
+
+        result = runner.invoke(app, ["playbook", "stints", "answer", "stint-20260917T000000Z", "-q", "3", "-t", "x"])
+
+        assert result.exit_code == 1
+        assert "no question 3" in result.output
+
+    def test_extend_hands_the_count_and_the_plan_s_own_session_to_the_driver(self, stints: Path, monkeypatch) -> None:
+        """The session the stint was started in, not this terminal's absence of
+        one: its earlier rounds' nodes are in that conversation."""
+        _plan_on_disk(stints, status="finished", session_key="tui:abc", group=GROUP)
+        driver = _CapturingDriver()
+        monkeypatch.setattr("raven.cli.playbook_commands._stint_driver", driver.built_for)
+
+        result = runner.invoke(app, ["playbook", "stints", "extend", "stint-20260917T000000Z", "--rounds", "3"])
+
+        assert result.exit_code == 0, result.output
+        assert driver.calls == [("extend", "stint-20260917T000000Z", 3, "tui:abc")]
+        # The conversation the stint was found in, not one derived from its key:
+        # deriving lands under `sessions/<channel>/`, where nothing has written,
+        # and the round would be opened somewhere the stint is not.
+        assert driver.home == stints / "sessions" / GROUP / "abc"
+
+    def test_resume_takes_up_a_paused_plan(self, stints: Path, monkeypatch) -> None:
+        """`stint pause` tells the person to take it up with `stint resume`. A
+        guard here that turned a paused stint away made that instruction false."""
+        _plan_on_disk(stints, status="paused", session_key="tui:abc")
+        driver = _CapturingDriver()
+        monkeypatch.setattr("raven.cli.playbook_commands._stint_driver", driver.built_for)
+
+        result = runner.invoke(app, ["playbook", "stints", "resume", "stint-20260917T000000Z"])
+
+        assert result.exit_code == 0, result.output
+        assert driver.calls == [("resume", "stint-20260917T000000Z", "tui:abc")]
+
+    def test_resume_says_so_for_a_plan_that_is_over(self, stints: Path, monkeypatch) -> None:
+        _plan_on_disk(stints, status="finished")
+        driver = _CapturingDriver()
+        monkeypatch.setattr("raven.cli.playbook_commands._stint_driver", driver.built_for)
+
+        result = runner.invoke(app, ["playbook", "stints", "resume", "stint-20260917T000000Z"])
+
+        assert result.exit_code == 0
+        assert "nothing left to take up" in result.output
+        assert driver.calls == []
+
+
+class _CapturingDriver:
+    """The rounds driver at the seam the stint commands build it through."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+        self.home: Path | None = None
+
+    def built_for(self, _config, home: Path) -> "_CapturingDriver":
+        self.home = home
+        return self
+
+    async def extend(self, stint_id: str, rounds: int, session_key: str | None) -> str:
+        self.calls.append(("extend", stint_id, rounds, session_key))
+        return f"{stint_id} may now run more rounds."
+
+    async def resume(self, stint_id: str, session_key: str | None) -> str:
+        self.calls.append(("resume", stint_id, session_key))
+        return f"{stint_id} taken up again."
+
+    def store_for(self, _session_key: str | None):
+        """What the command reads to decide whether to hold the terminal open.
+
+        Nothing live, so these tests exercise the answer rather than the wait:
+        a double that reported a live stint would hold the runner for ever.
+        """
+
+        class _Empty:
+            @staticmethod
+            def list() -> list:
+                return []
+
+        return _Empty()

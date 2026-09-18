@@ -8,18 +8,29 @@
  */
 
 import type {
+  StintDetail,
+  StintQuestionRow,
+  StintRoundRow,
+  StintRow,
   PlaybookCredentialParam,
   PlaybookCredentialServer,
   PlaybookDetail,
   PlaybookNode,
   PlaybookNodeShape,
   PlaybookParam,
+  PlaybookCarried,
+  PlaybookCheck,
+  PlaybookRole,
   PlaybookRow,
   PlaybooksCredentialsGetResult,
   PlaybooksOauthAuthorizeResult
 } from '../../rpc/generated'
 
 export type {
+  StintDetail,
+  StintQuestionRow,
+  StintRoundRow,
+  StintRow,
   PlaybookCredentialParam,
   PlaybookCredentialServer,
   PlaybookDetail,
@@ -27,6 +38,9 @@ export type {
   PlaybookNodeShape,
   PlaybookParam,
   PlaybookRow,
+  PlaybookCarried,
+  PlaybookCheck,
+  PlaybookRole,
   PlaybooksCredentialsGetResult,
   PlaybooksOauthAuthorizeResult
 }
@@ -47,4 +61,12 @@ export interface PlaybooksSource {
   clearSecret?(name: string, param: string): Promise<void>
   authorize?(name: string, server: string): Promise<PlaybooksOauthAuthorizeResult>
   clearOauth?(name: string, server: string): Promise<void>
+  /* The multi-round runs those playbooks started. Optional on the seam for the
+     same reason the credentials half is: a fixture shell and an older engine
+     carry no stints surface, and the tab then says so instead of failing to
+     draw. */
+  stints?(): Promise<StintRow[]>
+  stint?(stintId: string): Promise<StintDetail>
+  stopPlan?(stintId: string): Promise<StintDetail>
+  answerPlan?(stintId: string, question: number, text: string): Promise<StintDetail>
 }

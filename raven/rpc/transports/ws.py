@@ -531,7 +531,13 @@ def build_app(
     if static_dir is not None and (static_dir / "index.html").exists():
 
         async def index(_request: web.Request) -> web.FileResponse:
-            return web.FileResponse(static_dir / "index.html")
+            # `no-cache` is "keep it, but ask every time", not "do not keep it":
+            # the ETag still saves the transfer when nothing changed. Without it
+            # the response carries no caching header at all, browsers fall back
+            # to heuristic freshness, and a rebuilt page is served from cache
+            # without revalidating -- which looks exactly like a server that did
+            # not pick up the change, and is indistinguishable from one.
+            return web.FileResponse(static_dir / "index.html", headers={"Cache-Control": "no-cache"})
 
         app.router.add_get("/", index)
         assets = static_dir / "assets"

@@ -20,7 +20,16 @@ import { cardPlan, edge } from './shape'
 import * as store from './store'
 
 import type { Dims } from '../dag/graph'
-import type { PlaybookCredentialParam, PlaybookCredentialServer, PlaybookDetail, PlaybookNode, PlaybookRow } from './types'
+import type {
+  StintDetail,
+  StintQuestionRow,
+  StintRow,
+  PlaybookCredentialParam,
+  PlaybookCredentialServer,
+  PlaybookDetail,
+  PlaybookNode,
+  PlaybookRow
+} from './types'
 import type { JSX } from 'react'
 
 /* One geometry, always. The card's diagram has two metrics because a card
@@ -70,9 +79,9 @@ function Concept({ row }: { row: PlaybookRow }): JSX.Element {
       </svg>
     )
   }
-  const plan = cardPlan(row.nodes)
-  const at = new Map(plan.cells.map((c) => [c.id, c]))
-  const { W, H } = plan.metric
+  const stint = cardPlan(row.nodes)
+  const at = new Map(stint.cells.map((c) => [c.id, c]))
+  const { W, H } = stint.metric
   return (
     <svg
       className="pbrib"
@@ -82,7 +91,7 @@ function Concept({ row }: { row: PlaybookRow }): JSX.Element {
       preserveAspectRatio="xMidYMid meet"
       aria-hidden="true"
     >
-      <g transform={`translate(${Math.max(0, (268 - plan.width) / 2)} ${(84 - plan.height) / 2})`}>
+      <g transform={`translate(${Math.max(0, (268 - stint.width) / 2)} ${(84 - stint.height) / 2})`}>
         {row.nodes.map((n) =>
           n.depends_on.map((d) => {
             const a = at.get(d)
@@ -91,28 +100,28 @@ function Concept({ row }: { row: PlaybookRow }): JSX.Element {
             return <path key={`${d}-${n.id}`} className="pbedge" d={edge(a.x + W, a.y + H / 2, b.x, b.y + H / 2)} />
           })
         )}
-        {plan.clipAt
-          ? plan.cells
-              .filter((c) => c.x + W + plan.metric.GX >= (plan.clipAt as { x: number }).x)
+        {stint.clipAt
+          ? stint.cells
+              .filter((c) => c.x + W + stint.metric.GX >= (stint.clipAt as { x: number }).x)
               .map((c) => (
                 <path
                   key={'clip' + c.id}
                   className="pbedge cut"
-                  d={edge(c.x + W, c.y + H / 2, (plan.clipAt as { x: number }).x - 4, plan.height / 2)}
+                  d={edge(c.x + W, c.y + H / 2, (stint.clipAt as { x: number }).x - 4, stint.height / 2)}
                 />
               ))
           : null}
-        {plan.cells.map((c) => (
+        {stint.cells.map((c) => (
           <rect key={c.id} className="pbcell" x={c.x} y={c.y} width={W} height={H} rx={4} />
         ))}
-        {plan.rowOverflow.map((o) => (
+        {stint.rowOverflow.map((o) => (
           <text key={'ro' + o.x} className="pbmore" x={o.x + 2} y={o.y + H / 2 + 3.5}>
             {'+' + o.n}
           </text>
         ))}
-        {plan.clipAt && plan.hiddenSteps > 0 ? (
-          <text className="pbmore" x={plan.clipAt.x} y={plan.clipAt.y + 3.5}>
-            {t('gui.pb.more_steps', { n: plan.hiddenSteps })}
+        {stint.clipAt && stint.hiddenSteps > 0 ? (
+          <text className="pbmore" x={stint.clipAt.x} y={stint.clipAt.y + 3.5}>
+            {t('gui.pb.more_steps', { n: stint.hiddenSteps })}
           </text>
         ) : null}
       </g>
@@ -845,6 +854,143 @@ function CarriedServers({ servers }: { servers: NonNullable<PlaybookDetail['mcp_
   )
 }
 
+/* A multi-round playbook, as the person about to approve one has to read it.
+   Approving a run is approving these four things and nothing else: who runs,
+   what each of them may write, which commands execute on this machine, and when
+   it stops. The page showed an empty `prompts` box instead -- a stint playbook
+   has no such field -- which said a file full of roles and shell commands was
+   blank.
+
+   The commands are printed in full, unwrapped. They run here, and a truncated
+   one is the half a reader would have wanted to see. */
+function Stint({ stint }: { stint: NonNullable<PlaybookDetail['stint']> }): JSX.Element {
+  const none = t('gui.pb.role_nothing')
+  return (
+    <div className="pbstage prose">
+      <p className="pbsum">
+        {t('gui.pb.stint_budget', { n: stint.max_rounds })}
+        {stint.until ? ' ' + t('gui.pb.stint_until', { marker: stint.until }) : ''}
+        {' · '}
+        {t(stint.report === 'end' ? 'gui.pb.stint_at_end' : 'gui.pb.stint_every')}
+      </p>
+
+      <section className="pbsec">
+        <h2>{t('gui.pb.sec_roles')}</h2>
+        <table className="pbtbl">
+          <thead>
+            <tr>
+              <th>{t('gui.pb.col_role')}</th>
+              <th>{t('gui.pb.col_played_by')}</th>
+              <th>{t('gui.pb.col_after')}</th>
+              <th className="wide">{t('gui.pb.col_writes')}</th>
+              <th>{t('gui.pb.col_starts_from')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {stint.roles.map((role) => (
+              <tr key={role.label}>
+                <td className="nm">
+                  {role.label}
+                  {/* The only role whose output the stint reads when it decides
+                      whether to open another round. Said on the row, because
+                      every other row looks equally able to end it. */}
+                  {role.terminal && stint.until ? (
+                    <span className="tag">{t('gui.pb.role_terminal')}</span>
+                  ) : null}
+                </td>
+                <td className="ty">{role.agent}</td>
+                <td className="ds">{role.depends_on.join(', ') || <span className="gap">{none}</span>}</td>
+                <td className="ds">
+                  {role.owns.map((p) => (
+                    <span className="en" key={'o' + p}>
+                      {p}
+                    </span>
+                  ))}
+                  {role.appends.map((p) => (
+                    <span className="en" key={'a' + p}>
+                      {p + ' (' + t('gui.pb.role_appends') + ')'}
+                    </span>
+                  ))}
+                  {!role.owns.length && !role.appends.length ? <span className="gap">{none}</span> : null}
+                  {/* A declaration nothing undoes is a request, and a reader who
+                      took it for a fence would be wrong about the one thing
+                      this column exists to say. */}
+                  {role.enforce_write === 'soft' ? (
+                    <span className="tag warn">{t('gui.pb.role_write_soft')}</span>
+                  ) : null}
+                  {role.verify_after.length ? (
+                    <span className="en">{t('gui.pb.check_after', { roles: role.verify_after.join(', ') })}</span>
+                  ) : null}
+                </td>
+                <td className="ds">
+                  {role.reads.map((p) => (
+                    <span className="en" key={'r' + p}>
+                      {p}
+                    </span>
+                  ))}
+                  {!role.reads.length ? <span className="gap">{none}</span> : null}
+                  {role.enforce_read === 'hard' ? (
+                    <span className="tag">{t('gui.pb.role_read_hard')}</span>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="pbsec">
+        <h2>{t('gui.pb.sec_checks')}</h2>
+        {stint.checks.length ? (
+          <table className="pbtbl">
+            <thead>
+              <tr>
+                <th>{t('gui.pb.col_name')}</th>
+                <th className="wide">{t('gui.pb.col_command')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stint.checks.map((check) => (
+                <tr key={check.name}>
+                  <td className="nm">{check.name}</td>
+                  <td className="ds">
+                    <span className="en">{check.run}</span>
+                    <span className="en">{t('gui.pb.check_timeout', { n: check.timeout_sec })}</span>
+                    {check.needs_display ? <span className="tag">{t('gui.pb.check_display')}</span> : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p className="pbnone">{t('gui.pb.no_checks')}</p>
+        )}
+      </section>
+
+      <section className="pbsec">
+        <h2>{t('gui.pb.sec_carried')}</h2>
+        {stint.carried.length ? (
+          <span className="chips">
+            {stint.carried.map((entry) => (
+              <span className="tag" key={entry.path}>
+                {entry.path}
+                {entry.append
+                  ? ' · ' +
+                    t('gui.pb.carried_journal') +
+                    ' · ' +
+                    t('gui.pb.carried_window', { n: entry.recent_rounds, chars: entry.max_chars })
+                  : ''}
+              </span>
+            ))}
+          </span>
+        ) : (
+          <p className="pbnone">{t('gui.pb.no_carried')}</p>
+        )}
+      </section>
+    </div>
+  )
+}
+
 function Detail({ detail }: { detail: PlaybookDetail }): JSX.Element {
   const s = store.getState()
   const node = detail.nodes.find((n) => n.id === s.pickedNode) || null
@@ -888,7 +1034,13 @@ function Detail({ detail }: { detail: PlaybookDetail }): JSX.Element {
           {/* A prompt-mode playbook has no graph to show: what sits here is the
               guidance a model assembles one from, so the tab says that instead
               of naming a picture that is not there. */}
-          {t(detail.mode === 'dag' ? 'gui.pb.tab_graph' : 'gui.pb.tab_assembly')}
+          {t(
+            detail.mode === 'dag'
+              ? 'gui.pb.tab_graph'
+              : detail.mode === 'stint'
+                ? 'gui.pb.tab_stint'
+                : 'gui.pb.tab_assembly'
+          )}
         </button>
         <button className="pbtab" role="tab" aria-selected={s.tab === 'contract'} onClick={() => store.showTab('contract')}>
           {t('gui.pb.tab_contract')}
@@ -912,6 +1064,8 @@ function Detail({ detail }: { detail: PlaybookDetail }): JSX.Element {
             <Board detail={detail} picked={s.pickedNode} />
             <NodePanel node={node} carried={Object.keys(detail.mcp_servers || {})} />
           </>
+        ) : detail.stint ? (
+          <Stint stint={detail.stint} />
         ) : (
           /* One column, because there is no second thing: a panel beside this
              saying the graph is composed per run was a note about the absence
@@ -1072,6 +1226,139 @@ function OauthRow({
   )
 }
 
+function PlanCard({ row }: { row: StintRow }): JSX.Element {
+  return (
+    <button className={`pbcard pncard${row.live ? ' live' : ''}`} type="button" onClick={() => void store.openStint(row.stint_id)}>
+      <div className="pbtop">
+        <Tile name={row.playbook} />
+        <span className="pbname">{row.playbook}</span>
+        {row.live ? <span className="pnlive">{t('gui.pb.stint_live')}</span> : null}
+      </div>
+      <div className="pnmeta">
+        {row.max_rounds
+          ? t('gui.pb.stint_round', { n: String(row.round_index), max: String(row.max_rounds) })
+          : t('gui.pb.stint_rounds_run', { n: String(row.round_index) })}
+      </div>
+      {row.stop_reason ? <div className="pndim">{row.stop_reason}</div> : null}
+      {row.open_questions ? (
+        <div className="pnwait">{t('gui.pb.stint_waiting', { n: String(row.open_questions) })}</div>
+      ) : null}
+      <div className="pndim pnid">{row.stint_id}</div>
+    </button>
+  )
+}
+
+function PlanQuestion({
+  stintId,
+  index,
+  question
+}: {
+  stintId: string
+  index: number
+  question: StintQuestionRow
+}): JSX.Element {
+  const [text, setText] = useState('')
+  const answered = Boolean(question.answer.trim())
+  return (
+    <div className={`pnq${answered ? ' done' : ''}`}>
+      <div className="pnqhead">
+        <span className="pnqtag">{answered ? t('gui.pb.stint_answered') : t('gui.pb.stint_unanswered')}</span>
+        <span className="pndim">
+          {question.role} / {question.round}
+        </span>
+      </div>
+      <div className="pnqtext">{question.text}</div>
+      {answered ? (
+        <div className="pnqanswer">{question.answer}</div>
+      ) : (
+        <form
+          className="pnqform"
+          onSubmit={e => {
+            e.preventDefault()
+            if (!text.trim()) return
+            void store.answerPlan(stintId, index, text.trim())
+            setText('')
+          }}
+        >
+          <input
+            value={text}
+            placeholder={t('gui.pb.stint_answer_ph')}
+            aria-label={t('gui.pb.stint_answer')}
+            onChange={e => setText(e.currentTarget.value)}
+          />
+          <button className="mini" type="submit" disabled={!text.trim()}>
+            {t('gui.pb.stint_answer')}
+          </button>
+        </form>
+      )}
+    </div>
+  )
+}
+
+function StintDetailView({ detail }: { detail: StintDetail }): JSX.Element {
+  const stint = detail.stint
+  return (
+    <>
+      <div className="pmhero">
+        <button className="mini" type="button" onClick={store.closePlan}>
+          {t('gui.pb.stint_back')}
+        </button>
+        <h3>{stint.playbook}</h3>
+        {stint.live ? <span className="pnlive">{t('gui.pb.stint_live')}</span> : null}
+        {stint.live ? (
+          <button className="mini" type="button" onClick={() => void store.stopPlan(stint.stint_id)}>
+            {t('gui.pb.stint_stop')}
+          </button>
+        ) : null}
+      </div>
+      <div className="pndim">
+        {stint.stint_id} - {t('gui.pb.stint_tree')} {stint.workdir}
+        {stint.branch ? ` (${stint.branch})` : ''}
+      </div>
+      {stint.stop_reason ? <div className="pndim">{stint.stop_reason}</div> : null}
+      {stint.live ? <div className="pndim">{t('gui.pb.stint_stop_note')}</div> : null}
+      <table className="pntable">
+        <tbody>
+          {detail.rounds.map(round => (
+            <tr key={`${round.index}-${round.attempt}`}>
+              <td className="pnnum">{round.index}</td>
+              <td>{round.status}</td>
+              <td className="pndim">{round.checks.join(', ') || '-'}</td>
+              <td className="pndim">
+                {round.violations.length ? t('gui.pb.stint_undone', { n: String(round.violations.length) }) : ''}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {detail.rounds.flatMap(round =>
+        round.violations.map((note, i) => (
+          <div className="pnviol" key={`${round.index}-${i}`}>
+            {round.index}: {note}
+          </div>
+        ))
+      )}
+      {detail.questions.map((question, i) => (
+        <PlanQuestion key={`${question.round}-${i}`} stintId={stint.stint_id} index={i} question={question} />
+      ))}
+    </>
+  )
+}
+
+function Plans(): JSX.Element {
+  const s = store.getState()
+  if (s.openStint) return <StintDetailView detail={s.openStint} />
+  if (s.stints === null) return <div className="empty-note">{t('gui.pb.reading')}</div>
+  if (!s.stints.length) return <div className="empty-note">{t('gui.pb.stints_none')}</div>
+  return (
+    <div className="pbgrid">
+      {s.stints.map(row => (
+        <PlanCard key={row.stint_id} row={row} />
+      ))}
+    </div>
+  )
+}
+
 export function PlaybooksApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.getState)
   /* Arrow keys walk the graph once a step is picked: a canvas a reader has to
@@ -1094,5 +1381,22 @@ export function PlaybooksApp(): JSX.Element {
 
   if (s.openName && s.detail) return <Detail detail={s.detail} />
   if (s.openName) return <div className="empty-note">{t('gui.pb.reading')}</div>
-  return <Library />
+  return (
+    <>
+      <div className="pbviews">
+        {(['library', 'stints'] as const).map(view => (
+          <button
+            className={`mini${s.view === view ? ' on' : ''}`}
+            key={view}
+            type="button"
+            aria-pressed={s.view === view}
+            onClick={() => store.showView(view)}
+          >
+            {t(view === 'library' ? 'gui.pb.tab_library' : 'gui.pb.tab_plans')}
+          </button>
+        ))}
+      </div>
+      {s.view === 'stints' ? <Plans /> : <Library />}
+    </>
+  )
 }

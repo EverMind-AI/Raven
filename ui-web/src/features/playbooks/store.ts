@@ -12,7 +12,14 @@
 import { ds, shell, t } from '../../shell/bridge'
 import { show as toast } from '../../shell/toast'
 
-import type { PlaybookDetail, PlaybookRow, PlaybooksCredentialsGetResult, PlaybooksSource } from './types'
+import type {
+  StintDetail,
+  StintRow,
+  PlaybookDetail,
+  PlaybookRow,
+  PlaybooksCredentialsGetResult,
+  PlaybooksSource
+} from './types'
 
 export interface PlaybooksState {
   /* null = the list has not been read yet, which is not the same as an empty
@@ -39,11 +46,25 @@ export interface PlaybooksState {
   /* Per server: the authorization link the flow parked on, while it waits. */
   authUrls: Record<string, string>
   busy: Record<string, boolean>
+  /* Which half of the page is showing. The library is what a playbook *is*;
+     the runs are what it did, and they outlive the file -- a stint carries its
+     own copy of the spec it started with, so a run is still readable after the
+     playbook it came from was edited or deleted. */
+  view: PageView
+  /* null = the runs have not been read yet, which is not an empty list. */
+  stints: StintRow[] | null
+  plansErr: string
+  openStint: StintDetail | null
+  plansBusy: boolean
 }
+
+export type PageView = 'library' | 'stints'
 
 export type DetailTab = 'graph' | 'contract' | 'credentials'
 
 const NO_CREDS = { creds: null, credsLoading: false, authUrls: {}, busy: {} }
+
+const NO_PLANS = { stints: null, plansErr: '', openStint: null, plansBusy: false }
 
 const EMPTY: PlaybooksState = {
   rows: null,
@@ -54,7 +75,9 @@ const EMPTY: PlaybooksState = {
   loading: false,
   pickedNode: null,
   tab: 'graph',
-  ...NO_CREDS
+  view: 'library',
+  ...NO_CREDS,
+  ...NO_PLANS
 }
 
 let state = EMPTY
@@ -284,6 +307,74 @@ export function visible(): PlaybookRow[] {
   const q = state.query.trim().toLowerCase()
   if (!q) return rows
   return rows.filter(r => `${r.name} ${r.description}`.toLowerCase().includes(q))
+}
+
+export function showView(view: PageView): void {
+  set({ view })
+  if (view === 'stints' && state.stints === null) void loadStints()
+}
+
+export async function loadStints(): Promise<void> {
+  const read = source().stints
+  if (!read) {
+    /* An engine with no stints surface says so rather than drawing an empty
+       list, which reads as "you have never run one". */
+    set({ stints: [], plansErr: 'unsupported' })
+    return
+  }
+  try {
+    set({ stints: await read.call(source()), plansErr: '' })
+  } catch (e) {
+    set({ stints: [], plansErr: (e as Error)?.message || String(e) })
+  }
+}
+
+export async function openStint(stintId: string): Promise<void> {
+  const read = source().stint
+  if (!read) return
+  set({ plansBusy: true })
+  try {
+    set({ openStint: await read.call(source(), stintId), plansErr: '' })
+  } catch (e) {
+    set({ plansErr: (e as Error)?.message || String(e) })
+  } finally {
+    set({ plansBusy: false })
+  }
+}
+
+export function closePlan(): void {
+  set({ openStint: null })
+}
+
+export async function stopPlan(stintId: string): Promise<void> {
+  const stop = source().stopPlan
+  if (!stop) return
+  set({ plansBusy: true })
+  try {
+    const detail = await stop.call(source(), stintId)
+    /* The list is patched rather than re-read: a stop changes one row, and
+       re-reading would move the reader's place in a list that is sorted by
+       when each run started. */
+    set({ openStint: detail, stints: (state.stints || []).map(p => (p.stint_id === stintId ? detail.stint : p)) })
+  } catch (e) {
+    toast((e as Error)?.message || String(e))
+  } finally {
+    set({ plansBusy: false })
+  }
+}
+
+export async function answerPlan(stintId: string, question: number, text: string): Promise<void> {
+  const answer = source().answerPlan
+  if (!answer) return
+  set({ plansBusy: true })
+  try {
+    const detail = await answer.call(source(), stintId, question, text)
+    set({ openStint: detail, stints: (state.stints || []).map(p => (p.stint_id === stintId ? detail.stint : p)) })
+  } catch (e) {
+    toast((e as Error)?.message || String(e))
+  } finally {
+    set({ plansBusy: false })
+  }
 }
 
 export function openPage(): void {

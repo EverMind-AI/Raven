@@ -266,6 +266,95 @@ async def test_a_definition_with_neither_command_nor_url_never_reaches_the_detai
     assert carried["real"]["type"] == "streamableHttp"
 
 
+def _rounds_spec(name: str = "game-rounds") -> PlaybookSpec:
+    return PlaybookSpec.model_validate(
+        {
+            "name": name,
+            "description": "push a project forward one round at a time",
+            "taskSummary": "run the next round of the project",
+            "mode": "stint",
+            "confirm": True,
+            "triggers": {"keywords": ["round"]},
+            "memory": [{"path": "JOURNAL.md", "append": True, "recentRounds": 2}],
+            "verify": [{"name": "build", "run": "python3 -m compileall -q src", "timeoutSec": 300}],
+            "roles": [
+                {
+                    "as": "planner",
+                    "name": "Raven",
+                    "promptTemplate": "stint",
+                    "owns": ["reports/brief_{NN}.md"],
+                },
+                {
+                    "as": "qa",
+                    "name": "Raven",
+                    "dependsOn": ["planner"],
+                    "promptTemplate": "judge",
+                    "appends": [".stint/FIXLOG.md"],
+                    "reads": [".stint/SPEC.md"],
+                    "verifyAfter": ["build"],
+                },
+            ],
+            "stop": {"maxRounds": 30, "until": "NOTHING-LEFT"},
+        }
+    )
+
+
+async def test_get_carries_what_a_multi_round_run_asks_to_be_approved(library: PlaybookStore) -> None:
+    """The page had a binary view of a playbook -- a graph or assembly guidance
+    -- and a rounds file is neither, so it drew an empty prompts box for a file
+    full of roles and shell commands."""
+    library.save(_rounds_spec())
+
+    got = (await mod.playbooks_get({"name": "game-rounds"}))["playbook"]
+
+    stint = got["stint"]
+    assert [role["label"] for role in stint["roles"]] == ["planner", "qa"]
+    assert stint["roles"][1]["depends_on"] == ["planner"]
+    assert stint["roles"][0]["owns"] == ["reports/brief_{NN}.md"]
+    assert stint["roles"][1]["appends"] == [".stint/FIXLOG.md"]
+    assert stint["roles"][1]["verify_after"] == ["build"]
+    # The command runs on the reader's machine, and this is the one moment they
+    # are asked to approve that, so it goes out whole rather than named.
+    assert stint["checks"] == [
+        {"name": "build", "run": "python3 -m compileall -q src", "timeout_sec": 300.0, "needs_display": False}
+    ]
+    assert stint["carried"] == [{"path": "JOURNAL.md", "append": True, "recent_rounds": 2, "max_chars": 16000}]
+    assert (stint["max_rounds"], stint["until"], stint["report"]) == (30, "NOTHING-LEFT", "round")
+    METHOD_MODELS["playbooks.get"][1].model_validate({"playbook": got})
+
+
+async def test_get_marks_only_the_role_that_can_end_the_plan(library: PlaybookStore) -> None:
+    """The stint reads the output of the roles nothing waits on, and only those.
+    A page that marked every role would say two of them can end it."""
+    library.save(_rounds_spec())
+
+    stint = (await mod.playbooks_get({"name": "game-rounds"}))["playbook"]["stint"]
+
+    assert {role["label"]: role["terminal"] for role in stint["roles"]} == {"planner": False, "qa": True}
+
+
+async def test_get_says_nothing_about_rounds_for_a_playbook_that_has_none(library: PlaybookStore) -> None:
+    """An empty block would read as no roles, no checks and a budget of zero --
+    three statements about a stint that does not exist."""
+    library.save(_spec())
+
+    got = (await mod.playbooks_get({"name": "competitor-scan"}))["playbook"]
+
+    assert "stint" not in got
+    METHOD_MODELS["playbooks.get"][1].model_validate({"playbook": got})
+
+
+async def test_list_draws_a_multi_round_playbook_from_its_roles(library: PlaybookStore) -> None:
+    """It stores no nodes -- a round is compiled into them when it is dispatched
+    -- and answering with an empty shape drew a card with nothing on it."""
+    library.save(_rounds_spec())
+
+    [row] = (await mod.playbooks_list({}))["playbooks"]
+
+    assert row["nodes"] == [{"id": "planner", "depends_on": []}, {"id": "qa", "depends_on": ["planner"]}]
+    METHOD_MODELS["playbooks.list"][1].model_validate({"playbooks": [row]})
+
+
 async def test_get_reports_no_carried_servers_as_an_empty_mapping(library: PlaybookStore) -> None:
     """Which is most playbooks: every ``mcps`` name resolves against the machine."""
     library.save(_spec())
@@ -850,10 +939,10 @@ class _Plan:
 class _Runtime:
     """A stand-in for the loop's playbook runtime, recording how it was driven."""
 
-    def __init__(self, plan: object | None = None) -> None:
+    def __init__(self, stint: object | None = None) -> None:
         self.context: dict | None = None
         self.calls: list[dict] = []
-        self._plan = plan if plan is not None else _Plan()
+        self._plan = stint if stint is not None else _Plan()
 
     def set_context(self, *, channel, chat_id, session_key) -> None:
         self.context = {"channel": channel, "chat_id": chat_id, "session_key": session_key}
@@ -916,7 +1005,7 @@ async def test_a_run_answers_the_executors_own_plan(library: PlaybookStore) -> N
         "name": "competitor-scan",
         "kind": "dag",
         "reply": "DAG abc123: started 'competitor-scan' (3 steps)",
-    }, "the plan is relayed verbatim, run id included, not re-shaped here"
+    }, "the stint is relayed verbatim, run id included, not re-shaped here"
 
 
 @pytest.mark.asyncio
@@ -1370,3 +1459,131 @@ async def test_creating_with_no_runtime_refuses(library: PlaybookStore) -> None:
 
 def test_the_create_contract_is_mirrored_by_a_model_pair() -> None:
     assert "playbooks.create" in METHOD_MODELS
+
+
+class TestWhereThePageLooks:
+    """The glob behind ``_stint_stores``, which the fixture below stands in for."""
+
+    async def test_a_plan_started_in_any_conversation_reaches_the_page(self, tmp_path: Path, monkeypatch) -> None:
+        """A stint lives beside the conversation that started it, and the page
+        lists the machine's. Reading one conversation's store showed an empty
+        page while a stint was running."""
+        from raven.agent.subagent.history import dag_root
+        from raven.config.loader import set_config_path
+        from raven.session.manager import SessionManager
+        from raven.stint.record import STINTS_DIRNAME, StintRecord, StintStore
+
+        config = tmp_path / "config.json"
+        config.write_text(json.dumps({"agents": {"defaults": {"workspace": str(tmp_path)}}}), encoding="utf-8")
+        set_config_path(config)
+        sessions = SessionManager(tmp_path)
+        for key, stint_id in (("", "stint-terminal"), ("local:default", "stint-tui")):
+            store = StintStore(dag_root(sessions.session_dir(key)) / STINTS_DIRNAME)
+            store.write(StintRecord(stint_id=stint_id, playbook="game-dev", spec={"mode": "stint"}))
+        try:
+            answer = await mod.playbooks_stints_list({})
+            opened = await mod.playbooks_stints_get({"stint_id": "stint-tui"})
+        finally:
+            set_config_path(None)  # type: ignore[arg-type]
+
+        assert {row["stint_id"] for row in answer["stints"]} == {"stint-terminal", "stint-tui"}
+        assert opened["stint"]["stint_id"] == "stint-tui"
+
+
+class TestPlans:
+    """``playbooks.stints.*`` -- the page's view of a multi-round run."""
+
+    @pytest.fixture
+    def stints(self, tmp_path: Path, monkeypatch):
+        """A stint store the handlers resolve to, without an agent stack."""
+        from raven.stint.record import StintRecord, StintStore
+
+        store = StintStore(tmp_path / "stints")
+        monkeypatch.setattr(mod, "_stint_stores", lambda: [store])
+        record = StintRecord(
+            stint_id="stint-a",
+            playbook="game-dev",
+            spec={"mode": "stint", "stop": {"maxRounds": 30}},
+            workdir=str(tmp_path / "tree"),
+            branch="stint/stint-a",
+            round_index=2,
+            questions=[
+                {"round": 1, "role": "planner", "text": "which of the two?", "answer": ""},
+                {"round": 1, "role": "qa", "text": "is this good enough?", "answer": "yes"},
+            ],
+        )
+        first = record.open_round(1, "run-1")
+        first.status = "completed"
+        first.verify = [{"name": "build", "status": "failed"}, {"name": "tests", "status": "ok"}]
+        first.violations = ["developer wrote 1 path(s) it may not write: reports/qa.md"]
+        record.open_round(2, "run-2")
+        store.write(record)
+        return store
+
+    async def test_the_list_answers_what_a_row_needs_without_a_second_call(self, stints) -> None:
+        result = await mod.playbooks_stints_list({})
+
+        [row] = result["stints"]
+        assert row["stint_id"] == "stint-a"
+        assert row["round_index"] == 2 and row["max_rounds"] == 30
+        assert row["live"] is True
+        assert row["open_questions"] == 1, "answered ones are not what a badge counts"
+        assert row["branch"] == "stint/stint-a"
+
+    async def test_the_detail_carries_every_round_and_what_it_undid(self, stints) -> None:
+        detail = await mod.playbooks_stints_get({"stint_id": "stint-a"})
+
+        assert [entry["index"] for entry in detail["rounds"]] == [1, 2]
+        assert detail["rounds"][0]["checks"] == ["build=failed", "tests=ok"]
+        assert "may not write" in detail["rounds"][0]["violations"][0]
+        assert [q["answer"] for q in detail["questions"]] == ["", "yes"]
+
+    async def test_an_unknown_plan_is_an_error_not_an_empty_detail(self, stints) -> None:
+        with pytest.raises(RpcError):
+            await mod.playbooks_stints_get({"stint_id": "stint-nope"})
+
+    async def test_a_stop_lands_on_the_file_and_leaves_the_round_in_flight_alone(self, stints) -> None:
+        """The round is another process's; throwing away one already paid for
+        would be the worse of the two answers."""
+        detail = await mod.playbooks_stints_stop({"stint_id": "stint-a"})
+
+        assert detail["stint"]["status"] == "stopped"
+        assert detail["stint"]["live"] is False
+        assert stints.read("stint-a").stop_reason == "a person stopped the stint"
+        assert [entry["run_id"] for entry in detail["rounds"]] == ["run-1", "run-2"]
+
+    async def test_stopping_twice_is_not_an_error_and_does_not_rewrite_why(self, stints) -> None:
+        await mod.playbooks_stints_stop({"stint_id": "stint-a"})
+        record = stints.read("stint-a")
+        record.stop_reason = "the round budget of 30 is spent"
+        stints.write(record)
+
+        detail = await mod.playbooks_stints_stop({"stint_id": "stint-a"})
+
+        assert detail["stint"]["stop_reason"] == "the round budget of 30 is spent"
+
+    async def test_an_answer_is_kept_and_the_badge_drops(self, stints) -> None:
+        detail = await mod.playbooks_stints_answer({"stint_id": "stint-a", "question": 0, "text": "the second one"})
+
+        assert detail["questions"][0]["answer"] == "the second one"
+        assert detail["stint"]["open_questions"] == 0
+        assert stints.read("stint-a").questions[0]["answered_at"]
+
+    async def test_answering_a_question_that_is_not_there_is_refused(self, stints) -> None:
+        with pytest.raises(RpcError):
+            await mod.playbooks_stints_answer({"stint_id": "stint-a", "question": 9, "text": "x"})
+
+    async def test_every_plan_answer_satisfies_its_published_result_schema(self, stints) -> None:
+        for method, params in (
+            ("playbooks.stints.list", {}),
+            ("playbooks.stints.get", {"stint_id": "stint-a"}),
+            ("playbooks.stints.stop", {"stint_id": "stint-a"}),
+            ("playbooks.stints.answer", {"stint_id": "stint-a", "question": 0, "text": "ok"}),
+        ):
+            handler = {
+                "playbooks.stints.list": mod.playbooks_stints_list,
+                "playbooks.stints.get": mod.playbooks_stints_get,
+                "playbooks.stints.stop": mod.playbooks_stints_stop,
+                "playbooks.stints.answer": mod.playbooks_stints_answer,
+            }[method]
+            METHOD_MODELS[method][1].model_validate(await handler(params))

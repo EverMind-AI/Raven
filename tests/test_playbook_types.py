@@ -154,3 +154,101 @@ def test_a_playbook_may_ship_its_own_mcp_servers():
 
 def test_a_playbook_without_mcp_servers_writes_no_such_section():
     assert "mcpServers" not in _dag().block_dump()
+
+
+def _rounds(**over):
+    base = dict(
+        name="game-dev",
+        description="drive a game project forward one round at a time",
+        task_summary="run the next rounds of the game project",
+        mode="stint",
+        triggers=Triggers(keywords=["game"]),
+        roles=[
+            {"as": "planner", "name": "research-raven", "promptTemplate": "pick the work", "owns": ["reports/**"]},
+            {
+                "as": "developer",
+                "name": "code-raven",
+                "dependsOn": ["planner"],
+                "promptTemplate": "do the work",
+                "owns": ["src/**"],
+                "verifyAfter": ["build"],
+            },
+        ],
+        verify=[{"name": "build", "run": "make build"}],
+        stop={"maxRounds": 30},
+    )
+    base.update(over)
+    return PlaybookSpec(**base)
+
+
+def test_rounds_requires_roles_and_forbids_a_graph():
+    spec = _rounds()
+    assert [role.label for role in spec.roles] == ["planner", "developer"]
+    with pytest.raises(ValidationError, match="requires non-empty roles"):
+        _rounds(roles=[])
+    with pytest.raises(ValidationError, match="carries roles, not nodes or prompts"):
+        _rounds(prompts="assembly guidance")
+
+
+def test_the_other_modes_may_not_carry_a_rounds_section():
+    """Refused rather than ignored: a dag playbook carrying `verify` would read
+    as one that runs commands, and would not."""
+    with pytest.raises(ValidationError, match="must not carry verify"):
+        _dag(verify=[{"name": "build", "run": "make build"}])
+
+
+def test_a_role_table_that_could_not_compile_is_refused_at_load():
+    with pytest.raises(ValidationError, match="share the label"):
+        _rounds(
+            roles=[
+                {"as": "dev", "name": "code-raven", "promptTemplate": "a"},
+                {"as": "dev", "name": "research-raven", "promptTemplate": "b"},
+            ]
+        )
+    with pytest.raises(ValidationError, match="which no role answers to"):
+        _rounds(roles=[{"as": "dev", "name": "code-raven", "promptTemplate": "a", "dependsOn": ["ghost"]}])
+    with pytest.raises(ValidationError, match="depends on itself"):
+        _rounds(roles=[{"as": "dev", "name": "code-raven", "promptTemplate": "a", "dependsOn": ["dev"]}])
+    with pytest.raises(ValidationError, match="in a circle"):
+        _rounds(
+            roles=[
+                {"as": "a", "name": "code-raven", "promptTemplate": "x", "dependsOn": ["b"]},
+                {"as": "b", "name": "code-raven", "promptTemplate": "y", "dependsOn": ["a"]},
+            ]
+        )
+
+
+def test_a_role_cannot_be_measured_by_a_check_nobody_declared():
+    with pytest.raises(ValidationError, match="which no verify entry names"):
+        _rounds(verify=[{"name": "tests", "run": "pytest"}])
+
+
+def test_a_playbook_that_runs_commands_keeps_its_one_approval():
+    """`verify` is shell, and the plan's single confirm is what covers it."""
+    with pytest.raises(ValidationError, match="must keep confirm: true"):
+        _rounds(confirm=False)
+    assert _rounds(verify=None, roles=[{"as": "dev", "name": "code-raven", "promptTemplate": "a"}], confirm=False)
+
+
+def test_stop_until_is_a_marker_a_role_writes_not_an_expression():
+    assert _rounds(stop={"until": "verdict"}).stop.until == "verdict"
+    with pytest.raises(ValidationError, match="reads as one"):
+        _rounds(stop={"until": "tasks_open == 0"})
+
+
+def test_the_round_budget_has_a_ceiling_a_playbook_cannot_raise():
+    assert _rounds(stop=None).stop is None
+    with pytest.raises(ValidationError):
+        _rounds(stop={"maxRounds": 100})
+
+
+def test_a_role_row_is_a_delegate_row_with_the_round_on_it():
+    """Decision 2: one description of a worker, so the two cannot drift."""
+    from raven.playbook.agent_spec import DelegateEntry
+    from raven.playbook.stint_spec import RoleEntry
+
+    assert issubclass(RoleEntry, DelegateEntry)
+    assert set(DelegateEntry.model_fields) <= set(RoleEntry.model_fields)
+    # And the parent stays as narrow as it was: a field here is a field the
+    # per-turn worker-table generator could emit.
+    assert set(DelegateEntry.model_fields) == {"as_", "name", "playbook"}
