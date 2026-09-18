@@ -38,6 +38,7 @@ import { useSyncExternalStore } from 'react'
 
 import { RavenMark } from '../components/RavenMark'
 import { rename as renameSession } from '../features/rail/store'
+import { t } from '../i18n/t'
 import * as lang from '../state/lang'
 import { Banner } from './Banner'
 
@@ -123,7 +124,7 @@ export function ChatTop(): JSX.Element {
       />
       <div id="brand" aria-hidden="true">
         <span className="mk"><RavenMark height={52} /></span>
-        <span className="wl">Raven Agent</span>
+        <span className="wl">{t('gui.brand.hi')}</span>
       </div>
     </>
   )
