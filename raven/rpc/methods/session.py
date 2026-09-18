@@ -31,12 +31,13 @@ import json
 import os
 import re
 from contextlib import suppress
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
 from raven.config.loader import drain_migration_notices, load_config
+from raven.config.raven import load_raven_config
 from raven.providers.rates import resolve_context_window
 from raven.rpc.errors import ConfigValidationError, SessionTitleTooLongError, TurnInProgressError
 from raven.rpc.methods import turn as turn_module
@@ -591,6 +592,50 @@ def _session_to_list_item(info: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _as_local_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone().replace(tzinfo=None) if parsed.tzinfo is not None else parsed
+
+
+def _auto_archive_stale(mgr: Any, entries: list[dict]) -> None:
+    """Archive the sessions ``sessions.autoArchiveAfterDays`` says are stale.
+
+    Runs inside session.list because listing already reads every file's
+    metadata; the mark is one appended record per stale session and nothing
+    is loaded. Pinned sessions and any session that already carries the
+    ``archived`` key (True, or the False a restore writes) are left alone.
+    """
+    try:
+        after_days = load_raven_config().sessions.auto_archive_after_days
+    except Exception:
+        logger.exception("session.list: could not read sessions.autoArchiveAfterDays")
+        return
+    if not after_days:
+        return
+    cutoff = datetime.now() - timedelta(days=after_days)
+    for entry in entries:
+        meta = entry.get("metadata") or {}
+        if "archived" in meta or meta.get("pinned"):
+            continue
+        last = _as_local_datetime(entry.get("last_message_at")) or _as_local_datetime(entry.get("updated_at"))
+        if last is None or last >= cutoff:
+            continue
+        key = entry.get("key")
+        if not isinstance(key, str) or not key:
+            continue
+        try:
+            mgr.append_metadata_patch(key, {"archived": True, "archivedBy": "auto"})
+        except OSError:
+            logger.warning("session.list: could not auto-archive {}", key)
+            continue
+        entry["metadata"] = {**meta, "archived": True, "archivedBy": "auto"}
+
+
 async def session_list(
     params: dict,
     *,
@@ -613,9 +658,10 @@ async def session_list(
     if not isinstance(channels, list) or not channels:
         channels = ["tui"]
     channels = list(dict.fromkeys(channel for channel in channels if isinstance(channel, str) and channel))
-    entries = [
-        entry for entry in mgr.list_sessions(channels=channels) if not (entry.get("metadata") or {}).get("archived")
-    ]
+    entries = mgr.list_sessions(channels=channels)
+    _auto_archive_stale(mgr, entries)
+    want_archived = bool(params.get("archived", False))
+    entries = [e for e in entries if bool((e.get("metadata") or {}).get("archived")) is want_archived]
     entries.sort(key=lambda x: x.get("last_message_at") or x.get("updated_at") or "", reverse=True)
     limit = params.get("limit")
     if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0:
@@ -794,10 +840,10 @@ async def session_archive(
     config = load_config()
     mgr = manager_for(agent_loop, config)
     session = mgr.get_or_create(session_key)
-    if archived:
-        session.metadata["archived"] = True
-    else:
-        session.metadata.pop("archived", None)
+    # Restore writes an explicit False rather than dropping the key: the auto
+    # archive pass in session.list skips any session that carries the key, so
+    # a restored session stays out of its reach for good.
+    session.metadata["archived"] = archived
     if mgr.exists(session_key):
         try:
             mgr.save(session)

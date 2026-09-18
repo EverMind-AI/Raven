@@ -502,3 +502,94 @@ async def test_install_and_remove_match_their_declared_models(monkeypatch, _isol
         await rpc_plughub.plug_toggle({"name": "svc", "enabled": False}, agent_loop_factory=_factory(loop)),
     )
     _shape("plug.remove", await rpc_plughub.plug_remove({"name": "svc"}, agent_loop_factory=_factory(loop)))
+
+
+# ---------------------------------------------------------------------------
+# plug.retry / plug.revoke / plug.configure
+# ---------------------------------------------------------------------------
+
+
+async def test_retry_reconnects_one_server_without_a_browser(_isolated) -> None:
+    _isolated["cfg_path"].write_text(
+        json.dumps({"tools": {"mcpServers": {"svc": {"type": "streamableHttp", "url": "https://svc.example/mcp"}}}})
+    )
+    connected: list[tuple] = []
+
+    class _Manager(_FakeManager):
+        async def connect(self, name, cfg, *, executor_provider=None, interactive: bool = True):
+            connected.append((name, interactive))
+            self.state = "connected"
+            return {"name": name, "state": "connected", "tool_count": 3, "error": None}
+
+    loop = _FakeLoop("svc", "error")
+    loop.mcp_manager = _Manager("svc", "error")
+
+    out = await rpc_plughub.plug_retry({"name": "svc"}, agent_loop_factory=_factory(loop))
+
+    assert out["mcp"]["state"] == "connected"
+    assert connected == [("svc", False)]
+
+
+async def test_revoke_deletes_the_credential_and_disconnects(_isolated, monkeypatch) -> None:
+    import raven.mcp.oauth as oauth
+
+    deleted: list[str] = []
+    monkeypatch.setattr(oauth, "delete_credentials", lambda server, scope=None: deleted.append(server))
+    loop = _FakeLoop("svc", "connected")
+
+    out = await rpc_plughub.plug_revoke({"name": "svc"}, agent_loop_factory=_factory(loop))
+
+    assert deleted == ["svc"]
+    assert loop.mcp_manager.dropped == ["svc"]
+    assert out["name"] == "svc"
+
+
+async def test_configure_rewrites_only_the_templated_field(_isolated, monkeypatch) -> None:
+    entry = _entry("apikey")
+    entry["contributes"][0]["auth"]["fields"] = [
+        {"key": "K", "into": "headers.Authorization", "template": "Bearer {value}", "secret": True}
+    ]
+    _patch_catalog(monkeypatch, entry)
+    ledger_mod.write_ledger("svc", "1.0.0", [{"kind": "mcp", "server": "svc"}])
+    _isolated["cfg_path"].write_text(
+        json.dumps(
+            {
+                "tools": {
+                    "mcpServers": {
+                        "svc": {
+                            "type": "streamableHttp",
+                            "url": "https://svc.example/mcp",
+                            "auth": "apikey",
+                            "headers": {"Authorization": "Bearer old", "X-Keep": "yes"},
+                        }
+                    }
+                }
+            }
+        )
+    )
+    loop = _FakeLoop("svc", "connected")
+
+    await rpc_plughub.plug_configure({"name": "svc", "form": {"K": "new"}}, agent_loop_factory=_factory(loop))
+    srv = json.loads(_isolated["cfg_path"].read_text())["tools"]["mcpServers"]["svc"]
+    assert srv["headers"] == {"Authorization": "Bearer new", "X-Keep": "yes"}
+    assert srv["url"] == "https://svc.example/mcp"
+
+    await rpc_plughub.plug_configure({"name": "svc", "form": {"K": ""}}, agent_loop_factory=_factory(loop))
+    srv = json.loads(_isolated["cfg_path"].read_text())["tools"]["mcpServers"]["svc"]
+    assert srv["headers"]["Authorization"] == ""
+
+
+async def test_configure_refuses_a_server_without_a_ledger(_isolated, monkeypatch) -> None:
+    from raven.rpc.errors import ConfigValidationError
+
+    # The catalog does know a plugin of this name; only the ledger is missing,
+    # so the refusal below can come from nowhere else.
+    _patch_catalog(monkeypatch, _entry("apikey", entry_id="local"))
+    _isolated["cfg_path"].write_text(
+        json.dumps({"tools": {"mcpServers": {"local": {"type": "stdio", "command": "npx", "env": {"K": "old"}}}}})
+    )
+    with pytest.raises(ConfigValidationError):
+        await rpc_plughub.plug_configure(
+            {"name": "local", "form": {"K": "new"}}, agent_loop_factory=_factory(_FakeLoop("local", "connected"))
+        )
+    assert json.loads(_isolated["cfg_path"].read_text())["tools"]["mcpServers"]["local"]["env"] == {"K": "old"}

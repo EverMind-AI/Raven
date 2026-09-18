@@ -312,6 +312,7 @@ class UseSkillTool(Tool):
             slug=str(info.get("slug") or slug),
             version=str(info.get("version") or ""),
             trigger="use_skill",
+            score_safety=score,
         )
         logger.warning(
             "installed hub skill %s@%s via use_skill (score_safety=%s)",

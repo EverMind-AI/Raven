@@ -917,3 +917,173 @@ async def test_writing_without_the_plugin_is_a_typed_error(everos_toml):
         await rpc_console.settings_everos_set({"section": "llm", "fields": {"model": "m"}})
 
     assert "everos-memory" in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "key,good,bad,path",
+    [
+        ("agents.defaults.maxToolIterations", 120, 0, ("agents", "defaults", "maxToolIterations")),
+        ("agents.defaults.contextWindowTokens", 65536, 512, ("agents", "defaults", "contextWindowTokens")),
+        ("context.curatorModel", "deepseek-chat", 7, ("context", "curatorModel")),
+        ("context.curatorProvider", "deepseek", 7, ("context", "curatorProvider")),
+        ("sessionTitle.model", "deepseek-chat", 7, ("sessionTitle", "model")),
+        ("sessionTitle.provider", "deepseek", 7, ("sessionTitle", "provider")),
+        ("skillForge.llmGateModel", "deepseek-chat", 7, ("skillForge", "llmGateModel")),
+        ("skillForge.llmGateProvider", "deepseek", 7, ("skillForge", "llmGateProvider")),
+        ("sessions.autoArchiveAfterDays", 30, 0, ("sessions", "autoArchiveAfterDays")),
+    ],
+)
+async def test_settings_set_new_scalar_keys_write_and_refuse(cfg, key, good, bad, path):
+    r = await rpc_console.settings_set({"key": key, "value": good})
+    assert r["applied"] is True
+    node = _read(cfg)
+    for part in path:
+        node = node[part]
+    assert node == good
+    with pytest.raises(ConfigValidationError):
+        await rpc_console.settings_set({"key": key, "value": bad})
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "agents.defaults.contextWindowTokens",
+        "context.curatorModel",
+        "sessionTitle.provider",
+        "sessions.autoArchiveAfterDays",
+    ],
+)
+async def test_settings_set_nullable_keys_accept_null(cfg, key):
+    r = await rpc_console.settings_set({"key": key, "value": None})
+    assert r["applied"] is True
+    node = _read(cfg)
+    for part in key.split(".")[:-1]:
+        node = node[part]
+    assert node[key.split(".")[-1]] is None
+
+
+async def test_settings_set_warns_only_for_reload_only_keys(cfg):
+    warned = await rpc_console.settings_set({"key": "context.curatorModel", "value": "m"})
+    assert "reload" in warned["warning"].lower()
+    live = await rpc_console.settings_set({"key": "sessionTitle.model", "value": "m"})
+    assert "warning" not in live
+
+
+async def test_settings_set_blocklist_is_a_raw_list(cfg):
+    await rpc_console.settings_set({"key": "skillForge.blocklist", "value": ["codeword"]})
+    assert _read(cfg)["skillForge"]["blocklist"] == ["codeword"]
+    with pytest.raises(ConfigValidationError):
+        await rpc_console.settings_set({"key": "skillForge.blocklist", "value": "codeword"})
+
+
+async def test_settings_set_media_speech_selection_merges(cfg):
+    await rpc_console.settings_set({"key": "tools.media.speech", "value": {"model": "tts-1", "quality": "high"}})
+    await rpc_console.settings_set({"key": "tools.media.speech", "value": {"model": "tts-2", "quality": ""}})
+    assert _read(cfg)["tools"]["media"]["speech"] == {"model": "tts-2", "quality": ""}
+    with pytest.raises(ConfigValidationError):
+        await rpc_console.settings_set({"key": "tools.media.video", "value": {"model": "v"}})
+
+
+@pytest.mark.parametrize(
+    "parent,model_field,provider_field",
+    [("context", "curatorModel", "curatorProvider"), ("skillForge", "llmGateModel", "llmGateProvider")],
+)
+async def test_settings_set_pin_pairs_write_as_one_merged_object(cfg, parent, model_field, provider_field):
+    cfg.write_text(json.dumps({parent: {"keep": True}}), encoding="utf-8")
+    r = await rpc_console.settings_set(
+        {"key": parent, "value": {model_field: "deepseek-chat", provider_field: "deepseek"}}
+    )
+    assert "reload" in r["warning"].lower()
+    block = _read(cfg)[parent]
+    assert block == {"keep": True, model_field: "deepseek-chat", provider_field: "deepseek"}
+    await rpc_console.settings_set({"key": parent, "value": {model_field: None, provider_field: None}})
+    assert _read(cfg)[parent] == {"keep": True, model_field: None, provider_field: None}
+    with pytest.raises(ConfigValidationError):
+        await rpc_console.settings_set({"key": parent, "value": {model_field: "m"}})
+
+
+# ---------------------------------------------------------------------------
+# settings.usage: date range and daily buckets
+# ---------------------------------------------------------------------------
+
+
+def _iso(days_ago: int) -> str:
+    from datetime import date, timedelta
+
+    return (date.today() - timedelta(days=days_ago)).isoformat()
+
+
+def _telemetry_row(model: str, cost: float | None, *, cache_read: int = 0, cache_write: int | None = None) -> dict:
+    return {
+        "ts": "2026-09-01T00:00:00+00:00",
+        "schema_version": 2,
+        "model": model,
+        "input_tokens": 100,
+        "output_tokens": 10,
+        "cache_read_tokens": cache_read,
+        "cache_write_tokens": cache_write,
+        "cost_usd": cost,
+        "session_key": "web:s1",
+        "root_session_key": "web:s1",
+    }
+
+
+@pytest.fixture()
+def telemetry(cfg, tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+    tel = tmp_path / "telemetry"
+    tel.mkdir()
+
+    def write(days_ago: int, rows: list[dict]) -> None:
+        p = tel / f"usage-{_iso(days_ago)}.jsonl"
+        with p.open("a", encoding="utf-8") as fh:
+            for r in rows:
+                fh.write(json.dumps(r) + "\n")
+
+    return write
+
+
+async def test_usage_daily_buckets_cover_the_range_with_zero_days(telemetry):
+    telemetry(1, [_telemetry_row("a", 1.0)])
+    telemetry(
+        3,
+        [
+            _telemetry_row("a", 2.0),
+            {
+                "_type": "tool_call",
+                "schema_version": 2,
+                "name": "exec",
+                "tool_call_id": "c1",
+                "session_key": "web:s1",
+                "root_session_key": "web:s1",
+            },
+        ],
+    )
+    telemetry(6, [_telemetry_row("a", 9.0)])
+    r = await rpc_console.settings_usage({"from": _iso(4), "to": _iso(1)})
+    assert (r["from"], r["to"], r["days"]) == (_iso(4), _iso(1), 4)
+    assert [d["date"] for d in r["daily"]] == [_iso(4), _iso(3), _iso(2), _iso(1)]
+    assert [d["cost_usd"] for d in r["daily"]] == [None, 2.0, None, 1.0]
+    assert [d["calls"] for d in r["daily"]] == [0, 1, 0, 1]
+    assert r["llm"]["total"]["cost_usd"] == 3.0
+    assert r["tools"]["counts"] == [{"name": "exec", "count": 1}]
+
+
+async def test_usage_from_is_clamped_and_reversed_range_refused(telemetry):
+    r = await rpc_console.settings_usage({"from": _iso(400), "to": _iso(0)})
+    assert r["from"] == _iso(89)
+    assert r["days"] == 90
+    with pytest.raises(ConfigValidationError):
+        await rpc_console.settings_usage({"from": _iso(0), "to": _iso(1)})
+    with pytest.raises(ConfigValidationError):
+        await rpc_console.settings_usage({"from": "yesterday"})
+
+
+async def test_usage_from_to_win_over_days(telemetry):
+    telemetry(10, [_telemetry_row("a", 5.0)])
+    r = await rpc_console.settings_usage({"days": 30, "from": _iso(2), "to": _iso(0)})
+    assert r["llm"]["total"]["calls"] == 0
+    assert r["days"] == 3
+    r = await rpc_console.settings_usage({"days": 30})
+    assert r["llm"]["total"]["calls"] == 1
+    assert r["from"] == _iso(29)

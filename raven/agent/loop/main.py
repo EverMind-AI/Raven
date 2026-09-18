@@ -361,10 +361,14 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # ``SkillsSegmentBuilder.build``.
         self._last_injected_skill_sources: dict[str, str] = {}
 
+        from raven.config.live import LiveConfig, skill_blocklist
+
+        self._live_config = LiveConfig()
         self.context = ContextBuilder(
             workspace,
             skill_forge_config=skill_forge_config,
             now_fn=now_fn,
+            blocklist_reader=lambda: skill_blocklist(self._live_config),
         )
         self.sessions = session_manager or SessionManager(workspace)
         # Off switches with no config file behind them: an eval harness that
@@ -378,9 +382,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # take it out of a set captured before the process started, so a tool that
         # was off at launch could never be turned back on.
         self._disabled_tools = set(disabled_tools or [])
-        from raven.config.live import LiveConfig
-
-        self._live_config = LiveConfig()
         # Entries already reported as naming a tool this switch does not own, so
         # the notice lands once rather than on every MCP connect.
         self._disabled_tools_reserved_warned: set[str] = set()

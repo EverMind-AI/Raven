@@ -160,6 +160,36 @@ async def plug_auth(params: dict, *, agent_loop_factory: Any = None) -> dict:
         raise _as_rpc(e) from e
 
 
+async def plug_retry(params: dict, *, agent_loop_factory: Any = None) -> dict:
+    from raven.market.connect import retry
+
+    try:
+        return await retry(params.get("name"), _safe_loop(agent_loop_factory))
+    except PlugConnectError as e:
+        raise _as_rpc(e) from e
+
+
+async def plug_revoke(params: dict, *, agent_loop_factory: Any = None) -> dict:
+    from raven.market.connect import revoke
+
+    try:
+        return await revoke(params.get("name"), _safe_loop(agent_loop_factory))
+    except PlugConnectError as e:
+        raise _as_rpc(e) from e
+
+
+async def plug_configure(params: dict, *, agent_loop_factory: Any = None) -> dict:
+    from raven.market.connect import configure
+
+    form = params.get("form")
+    if form is not None and not isinstance(form, dict):
+        raise ConfigValidationError("form must be an object", data={"field": "form"})
+    try:
+        return await configure(params.get("name"), form or {}, _safe_loop(agent_loop_factory))
+    except PlugConnectError as e:
+        raise _as_rpc(e) from e
+
+
 def register_plughub_methods(dispatcher: "Dispatcher", *, agent_loop_factory: Any = None) -> None:
     """Register the plugin-market handlers on a dispatcher instance."""
 
@@ -175,10 +205,16 @@ def register_plughub_methods(dispatcher: "Dispatcher", *, agent_loop_factory: An
     dispatcher.register("plug.remove", bind(plug_remove))
     dispatcher.register("plug.toggle", bind(plug_toggle))
     dispatcher.register("plug.auth", bind(plug_auth))
+    dispatcher.register("plug.retry", bind(plug_retry))
+    dispatcher.register("plug.revoke", bind(plug_revoke))
+    dispatcher.register("plug.configure", bind(plug_configure))
 
 
 __all__ = [
     "plug_auth",
+    "plug_configure",
+    "plug_retry",
+    "plug_revoke",
     "plug_install",
     "plug_remove",
     "plug_toggle",

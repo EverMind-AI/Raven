@@ -1075,6 +1075,9 @@ class SessionListItem(_Strict):
 class SessionListParams(_Strict):
     limit: int | None = Field(default=None, description="Max sessions to return.")
     channels: list[str] | None = Field(default=None, description="Session channels to include; defaults to tui.")
+    archived: bool | None = Field(
+        default=None, description="True lists only archived sessions; absent or false lists the live ones."
+    )
 
 
 class SessionListResult(_Strict):
@@ -1453,6 +1456,7 @@ class ModelOptionProvider(_Strict):
     slug: str
     name: str
     homepage: str | None = None
+    key_url: str | None = None
     #: The vendor's own model index. Distinct from ``homepage`` on purpose: the
     #: question a settings page asks is "which model do I put here", and a
     #: marketing front page does not answer it.
@@ -1582,6 +1586,9 @@ class ModelAddModelParams(_Strict):
     slug: str
     model: str
     label: str | None = None
+    description: str | None = Field(
+        default=None, description="One line about the model; an empty string clears it, as it does for label."
+    )
     capabilities: list[str] | None = None
     input_modalities: list[str] | None = None
     output_modalities: list[str] | None = None
@@ -1590,6 +1597,39 @@ class ModelAddModelParams(_Strict):
 
 class ModelAddModelResult(_Strict):
     provider: ModelOptionProvider
+
+
+class ModelAddModelsParams(_Strict):
+    slug: str
+    models: list[str]
+    session_id: str | None = None
+
+
+class ModelAddModelsResult(_Strict):
+    provider: ModelOptionProvider
+
+
+class ModelSetFieldsParams(_Strict):
+    slug: str
+    fields: dict[str, JsonValue] = Field(
+        ...,
+        description="api_base, deployment, api_version, and extra_headers as a patch {name: value | null}.",
+    )
+
+
+class ModelOauthLoginParams(_Strict):
+    slug: str
+    session_id: str | None = None
+
+
+class ModelOauthLoginResult(_Strict):
+    verification_uri: str
+    user_code: str
+    expires_in: int = Field(..., description="Seconds the code stays valid; the gateway polls until then.")
+
+
+class ModelSetFieldsResult(_Strict):
+    previous: dict[str, JsonValue] = Field(..., description="Previous values, header values redacted.")
 
 
 class ModelRemoveModelParams(_Strict):
@@ -2393,6 +2433,12 @@ class McpSnapshot(_Strict):
             "client is attached, which is every connect started at assembly time."
         ),
     )
+    auth: Literal["none", "apikey", "oauth"] | None = Field(
+        default=None, description="How the server authenticates (ext.list rows only)."
+    )
+    credentialed: bool | None = Field(
+        default=None, description="Whether it holds the credential that mode needs (ext.list rows only)."
+    )
 
 
 class PlughubCatalogItem(_Strict):
@@ -2487,6 +2533,36 @@ class PlugAuthParams(_Strict):
 
 
 class PlugAuthResult(_Strict):
+    name: str
+    mcp: McpSnapshot | None = None
+
+
+class PlugRetryParams(_Strict):
+    name: str
+
+
+class PlugRetryResult(_Strict):
+    name: str
+    mcp: McpSnapshot | None = None
+
+
+class PlugRevokeParams(_Strict):
+    name: str
+
+
+class PlugRevokeResult(_Strict):
+    name: str
+    mcp: McpSnapshot | None = None
+
+
+class PlugConfigureParams(_Strict):
+    name: str
+    form: dict[str, str] = Field(
+        default_factory=dict, description="The catalog form's credential fields; an empty value clears one."
+    )
+
+
+class PlugConfigureResult(_Strict):
     name: str
     mcp: McpSnapshot | None = None
 
@@ -2994,6 +3070,14 @@ class ToolUsage(_Strict):
 class SettingsUsageParams(_Strict):
     session_key: str | None = None
     days: int | None = Field(default=None, description="Window to scan; 30 by default, capped at 90.")
+    from_: str | None = Field(
+        default=None, alias="from", description="First day (YYYY-MM-DD), inclusive; clamped to 90 days back."
+    )
+    to: str | None = Field(default=None, description="Last day (YYYY-MM-DD), inclusive; today when absent.")
+
+
+class DailyUsage(ApiUsageTotals):
+    date: str
 
 
 class SettingsUsageResult(_Strict):
@@ -3001,6 +3085,9 @@ class SettingsUsageResult(_Strict):
     sessions: list[str] = Field(default_factory=list)
     session_titles: dict[str, str] = Field(default_factory=dict)
     days: int
+    from_: str = Field(alias="from")
+    to: str
+    daily: list[DailyUsage] = Field(..., description="One entry per day of the range, zeros for days without a file.")
     llm: LlmUsage
     tools: ToolUsage
 
@@ -4294,9 +4381,10 @@ class ShellExecResult(_Strict):
 
 
 class SkillsManageParams(_Strict):
-    action: str = Field(..., description="One of list, inspect, search, browse, install.")
+    action: str = Field(..., description="One of list, inspect, search, browse, install, open.")
     query: str | None = None
     page: int | None = None
+    file: str | None = Field(default=None, description="`open`: a file name relative to the skill's directory.")
 
 
 class SkillsManageResult(_Strict):
@@ -4310,6 +4398,7 @@ class SkillsManageResult(_Strict):
     total: int | None = None
     total_pages: int | None = None
     installed: bool | None = Field(default=None, description="`install`.")
+    opened: bool | None = Field(default=None, description="`open`.")
     name: str | None = None
 
 
@@ -4383,6 +4472,9 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "plug.remove": (PlugRemoveParams, PlugRemoveResult),
     "plug.toggle": (PlugToggleParams, PlugToggleResult),
     "plug.auth": (PlugAuthParams, PlugAuthResult),
+    "plug.retry": (PlugRetryParams, PlugRetryResult),
+    "plug.revoke": (PlugRevokeParams, PlugRevokeResult),
+    "plug.configure": (PlugConfigureParams, PlugConfigureResult),
     "skillhub.search": (SkillhubSearchParams, SkillhubSearchResult),
     "skillhub.detail": (SkillhubDetailParams, SkillhubDetailResult),
     "skillhub.install": (SkillhubInstallParams, SkillhubInstallResult),
@@ -4472,6 +4564,9 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "model.save_key": (ModelSaveKeyParams, ModelSaveKeyResult),
     "model.disconnect": (ModelDisconnectParams, ModelDisconnectResult),
     "model.add_model": (ModelAddModelParams, ModelAddModelResult),
+    "model.add_models": (ModelAddModelsParams, ModelAddModelsResult),
+    "model.set_fields": (ModelSetFieldsParams, ModelSetFieldsResult),
+    "model.oauth_login": (ModelOauthLoginParams, ModelOauthLoginResult),
     "model.fetch_models": (ModelFetchModelsParams, ModelFetchModelsResult),
     "model.remove_model": (ModelRemoveModelParams, ModelRemoveModelResult),
     "model.endpoints": (ModelEndpointsParams, ModelEndpointsResult),

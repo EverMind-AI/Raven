@@ -354,6 +354,7 @@ class SkillsSegmentBuilder:
             slug=slug,
             version=version,
             trigger="auto_inject",
+            score_safety=score,
         )
 
     def _offers_deliver_files(self) -> bool:
