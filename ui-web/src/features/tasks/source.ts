@@ -1,27 +1,138 @@
-/* -- tasks: the source -------------------------------------------------
-   The tasks island talks to sources.tasks and knows nothing about where the
-   rows came from; this module is the two answers there are.
+/* -- tasks: the source --------------------------------------------------
+   Everything this domain knows about speaking to the gateway, plus the pure
+   functions that turn a `dag.node` / `subagent.context` answer into the one
+   `NodeRecord` shape the node panel reads.
 
-   There is no `tasks.*` method on the contract, so unlike every other domain
-   here this one has no gateway call to make. A page served by a raven gets the
-   empty list -- the honest answer for a panel whose server side has not landed
-   -- and a page with no gateway gets the stand-in rows, so the surface can be
-   opened and reviewed offline. Which one a page installs is the wiring's
-   decision (src/app/install.ts), the same place that decides every other seam.
+   `tasks.list` is the one read: a session's rows, or one row addressed by
+   (kind, id). Stopping a run is one call dispatched
+   by `row.kind` rather than two verbs the renderer has to choose between; a
+   node's own record is read on demand, never carried on the row.
+*/
 
-   When `tasks.list` lands on the contract, `tasksSource` becomes a gateway call
-   like its neighbours and `fixtureTasksSource` goes with ./fixtures.ts. */
+import { current as sessionCurrent } from '../../lib/session'
+import { gateway } from '../../rpc/gateway'
 
-import { TASK_FIXTURES } from './fixtures'
+import type {
+  DagNodeDetail, SubagentContextResult, TranscriptMessage,
+} from '../../rpc/generated'
+import type { NodeRecord, NodeStep, TaskKind, TaskNode, TaskRow, TasksSource } from './types'
 
-import type { TasksSource } from './types'
+const openKey = (): string => sessionCurrent() || ''
+
+/* Every call here is addressed to the conversation on screen; a node's record
+   is fetched fresh each time it is opened, per the contract's own reasoning --
+   a running node's record is not something a snapshot can hold. */
 
 export const tasksSource: TasksSource = {
-  list: () => Promise.resolve([]),
+  list: (sessionKey: string) =>
+    gateway().call('tasks.list', { session_key: sessionKey }).then((r) => r.tasks || []),
+  one: (kind: TaskKind, id: string) =>
+    gateway().call('tasks.list', { session_key: openKey(), kind, id })
+      .then((r) => (r.tasks && r.tasks[0]) || null),
+  /* A dag is stopped by its run id, whichever process started it; a spawn by
+     the handle it committed under (its instance, or its task id when nobody
+     named one -- `TaskRow.handle` already resolved that). */
+  stop: (row: TaskRow) => {
+    if (row.kind === 'dag') {
+      return gateway().call('subagent.interrupt', { subagent_id: row.id }).then((r) => !!r.found)
+    }
+    return gateway()
+      .call('subagent.cancel_instance', { session_key: openKey(), agent: row.agent || '', handle: row.handle || row.id })
+      .then((r) => !!r.found)
+  },
+  node: (row: TaskRow, node: TaskNode) => {
+    if (row.kind === 'dag') {
+      return gateway().call('dag.node', { run_id: row.id, node: node.node_id, session_key: openKey() })
+        .then((r) => fromDagNode(r.node))
+    }
+    return gateway().call('subagent.context', { id: node.node_id, session_id: openKey() })
+      .then((r) => fromSpawnContext(r))
+  },
+  roster: () => gateway().call('subagents.list', { probe: false }).then((r) => r.rows || []),
 }
 
-/* A copy per read: the panel holds what it is given, and a fixture handed out
-   by reference would carry one reader's edits into the next session's list. */
-export const fixtureTasksSource: TasksSource = {
-  list: () => Promise.resolve(TASK_FIXTURES.map((t) => ({ ...t }))),
+/* -- mapping a wire answer into one node's record ----------------------- */
+
+/* The first entry is the dispatch (the rendered prompt, upstream output
+   already fenced) when the transport wrote it as a plain `user` turn -- every
+   lane's `session.resume` shape does. */
+function splitDispatch(messages: TranscriptMessage[]): { dispatch: TranscriptMessage | null; rest: TranscriptMessage[] } {
+  const first = messages[0]
+  if (first && first.role === 'user') return { dispatch: first, rest: messages.slice(1) }
+  return { dispatch: null, rest: messages }
+}
+
+/* The trailing entry is the answer when it is a plain assistant turn -- one
+   with no tool call still open. A run that stopped mid-tool, or failed, or is
+   still going, ends in something else, and there is no answer to pull out. */
+function splitAnswer(messages: TranscriptMessage[]): { answer: TranscriptMessage | null; body: TranscriptMessage[] } {
+  const last = messages[messages.length - 1]
+  if (last && last.role === 'assistant' && !(last.tool_calls && last.tool_calls.length)) {
+    return { answer: last, body: messages.slice(0, -1) }
+  }
+  return { answer: null, body: messages }
+}
+
+/* Every step between the dispatch and the answer, in the order they
+   happened: a thought (an assistant entry's `reasoning_content`), a tool call
+   (matched to the later `role: 'tool'` entry that answers it by
+   `tool_call_id`), or a `role: 'console'` entry -- the live cli lane's
+   synthetic stand-in for a channel that keeps no transcript of its own
+   A `tool` entry with nothing pointing at it is a
+   result this page never asked to see rendered on its own row, so it is
+   consumed silently rather than drawn a second time. */
+export function stepsOf(messages: TranscriptMessage[]): NodeStep[] {
+  const results = new Map<string, TranscriptMessage>()
+  messages.forEach((m) => { if (m.role === 'tool' && m.tool_call_id) results.set(m.tool_call_id, m) })
+  const steps: NodeStep[] = []
+  messages.forEach((m) => {
+    if (m.role === 'tool') return
+    if (m.role === 'console') { steps.push({ kind: 'console', text: m.text || '' }); return }
+    if (m.role !== 'assistant') return
+    if (m.reasoning_content) steps.push({ kind: 'think', text: m.reasoning_content })
+    for (const call of m.tool_calls || []) {
+      const res = call.id ? results.get(call.id) : undefined
+      steps.push({
+        kind: 'tool',
+        id: call.id,
+        name: call.name,
+        args: call.arguments,
+        result: res ? (res.text ?? '') : null,
+        ok: res ? !/^(error|failed?)\b/i.test((res.text || '').trimStart()) : null,
+      })
+    }
+  })
+  return steps
+}
+
+function fromMessages(messages: TranscriptMessage[] | undefined, promptFallback: string | null): Omit<NodeRecord, 'outputTruncated'> {
+  const all = messages || []
+  const { dispatch, rest } = splitDispatch(all)
+  const { answer, body } = splitAnswer(rest)
+  return {
+    dispatch: dispatch ? (dispatch.text ?? null) : promptFallback,
+    steps: stepsOf(body),
+    answer: answer ? (answer.text ?? null) : null,
+  }
+}
+
+/* `dag.node`. The rendered prompt is a field of its own on the answer, ahead
+   of `messages` -- preferred over the messages' own first entry so a node
+   whose record has not been read (an empty `messages`) still shows what it
+   was asked. */
+export function fromDagNode(detail: DagNodeDetail): NodeRecord {
+  const mapped = fromMessages(detail.messages, detail.prompt ?? null)
+  return {
+    ...mapped,
+    dispatch: detail.prompt ?? mapped.dispatch,
+    outputTruncated: !!detail.output_truncated,
+  }
+}
+
+/* `subagent.context`. No `prompt` field of its own -- the first message is
+   the whole of it -- and no `output_truncated`: the field is a `dag.node`
+   fact about reading `.out.md`'s head, and spawn's answer is the last message
+   whole. */
+export function fromSpawnContext(ctx: SubagentContextResult): NodeRecord {
+  return { ...fromMessages(ctx.messages, null), outputTruncated: false }
 }

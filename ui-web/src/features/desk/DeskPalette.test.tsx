@@ -37,7 +37,12 @@ let agentRows: InstanceRow[] = []
 let taskRows: TaskRow[] = []
 
 const task = (id: string): TaskRow => ({
-  id, name: id, source: 'spawn', agent: 'raven', state: 'run', nodes: [],
+  id, kind: 'spawn', task_summary: id, status: 'running', agent: 'raven', handle: id,
+  counts: {
+    total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0,
+    interrupted: 0, exception: 0,
+  },
+  nodes: [],
 })
 
 /* Which tab's bubble, by the tab's own label -- the strip is three buttons and
@@ -87,7 +92,11 @@ function wire(): void {
       instances: async (key: string) => { asked.push(key); return agentRows },
     },
     /* What the tasks tab counts. */
-    tasks: { list: async () => taskRows },
+    tasks: {
+      list: async () => taskRows, one: async () => null, stop: async () => false,
+      node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false }),
+      roster: async () => [],
+    },
   })
   localStorage.clear()
   document.body.innerHTML = '<div id="split" data-open="true"></div>'
@@ -426,7 +435,7 @@ describe('the desk shelf', () => {
        it by this class -- the bubble being a sibling is what broke the
        positional rule it used to use. */
     expect([...document.querySelectorAll('.desk-tabs button .lb')].map((n) => n.textContent))
-      .toEqual(['gui.ws.deliverables', 'Diff', 'gui.ws.tasks'])
+      .toEqual(['gui.ws.deliverables', 'gui.ws.tasks', 'Diff'])
 
     await act(async () => {
       desk.set({ tab: 'deliverables' })

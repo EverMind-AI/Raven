@@ -210,7 +210,7 @@ const LEGACY_LOCAL = {
   settings: 0,
   skills: 4,
   subagents: 39,
-  tasks: 9,
+  tasks: 8,
   transcript: 74,
   workspace: 37,
 }
@@ -239,7 +239,7 @@ const LEGACY_EXPR = {
   rail: 2,
   settings: 0,
   skills: 2,
-  tasks: 6,
+  tasks: 5,
   subagents: 6,
   transcript: 26,
   workspace: 7,

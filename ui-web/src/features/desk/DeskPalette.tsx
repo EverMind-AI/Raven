@@ -19,14 +19,17 @@ import {
 } from './geometry'
 import * as desk from './store'
 
+import type { TaskFile, TaskNode, TaskRow } from '../tasks/types'
 import type { DeliveryRow } from '../workspace/types'
 import type { DeskGeometry, DeskTab } from './types'
 import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent } from 'react'
 
-/* The three tabs, each carrying what is new in it. The bubble is the same thing
-   on all three -- changes written, files delivered, background work started --
-   because a reader who is on one tab has exactly one question about the other
-   two, and it is the same question.
+/* The three tabs, in the prototype's own order (产物 · 任务 · diff), each
+   carrying its own badge. Two of the three carry what is new in them, because
+   a reader who is on one tab has exactly one question about the other two.
+   The tasks tab carries something else: how many are running right now,
+   which is what a reader who has already opened every task still wants to
+   know -- "new" would go quiet on it the moment they had looked once.
 
    The label is marked with a class rather than left to `span:last-child`: the
    bubble is a sibling, and the moment one existed the positional selector
@@ -35,16 +38,17 @@ import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent } from 'reac
 function DeskTabs({ value, onChange }: { value: DeskTab; onChange: (tab: DeskTab) => void }): JSX.Element {
   return (
     <div className="desk-tabs" role="tablist">
-      {(['deliverables', 'diff', 'tasks'] as DeskTab[]).map((tab) => {
+      {(['deliverables', 'tasks', 'diff'] as DeskTab[]).map((tab) => {
         const label = tab === 'diff' ? 'Diff'
           : tab === 'deliverables' ? t('gui.ws.deliverables') : t('gui.ws.tasks')
-        const fresh = desk.unseen(tab)
+        const fresh = tab === 'tasks' ? desk.runningTaskCount() : desk.unseen(tab)
         /* The count goes in the button's OWN name. An explicit `aria-label`
            replaces the whole subtree as the accessible name, so a label on the
            bubble inside it is never announced -- and `<i>` maps to a generic
            role, where `aria-label` does not apply at all. Hidden from the tree
            afterwards so the number is not read twice. */
-        const name = fresh ? `${label}, ${t('gui.ws.unseen_tab', { n: String(fresh) })}` : label
+        const countKey = tab === 'tasks' ? 'gui.ws.tasks_running_tab' : 'gui.ws.unseen_tab'
+        const name = fresh ? `${label}, ${t(countKey, { n: String(fresh) })}` : label
         return (
           <button key={tab} role="tab" aria-label={name} aria-selected={value === tab} onClick={() => onChange(tab)}>
             <DeskIcon kind={tab} />
@@ -100,9 +104,33 @@ function DeskEmpty({ kind, title, hint, sends }: {
 const counted = (key: string, n: number): string =>
   (n === 1 ? t(key) : t(key.replace('gui.ws.', 'gui.ws.n.'), { n: String(n) }))
 
+/* What a task's nodes wrote or changed, across every task -- beside the
+   session's own rows rather than instead of them: a sub-agent's writes never
+   reach the session's own change list. */
+interface TaskFileEntry { row: TaskRow; node: TaskNode; file: TaskFile }
+
+function taskFileEntries(op: 'write' | 'edit'): TaskFileEntry[] {
+  const out: TaskFileEntry[] = []
+  tasksStore.rows().forEach((row) => row.nodes.forEach((node) => node.files.forEach((file) => {
+    if (file.op === op) out.push({ row, node, file })
+  })))
+  return out
+}
+
+/* Every one of these opens the owning task rather than the bare file or diff:
+   the full picture -- the task's status, why it ended the way it did, the
+   node's own record -- is the task pane's, and a reader who clicked a file
+   this task wrote is a reader who wants that task open. */
+function openTaskNode(row: TaskRow, node: TaskNode): void {
+  desk.openDeskTask(row)
+  tasksStore.pickNode(`task:${row.kind}:${row.id}`, node.node_id)
+}
+
 function DiffNav(): JSX.Element {
+  useSyncExternalStore(tasksStore.subscribe, tasksStore.get)
   const changes = workspace.shared().changes
-  if (!changes.length) {
+  const taskDiffs = taskFileEntries('edit')
+  if (!changes.length && !taskDiffs.length) {
     /* The shelf's own count, so an empty Diff can say what the other bubble is
        counting. The palette's root already subscribes to the deliveries store,
        which is why reading it here needs nothing of its own. */
@@ -128,6 +156,24 @@ function DiffNav(): JSX.Element {
           </span>
         </button>
       ))}
+      {taskDiffs.length ? (
+        <>
+          <div className="desk-grp">{t('gui.ws.task_output')}</div>
+          {taskDiffs.map(({ row, node, file }) => (
+            <button
+              key={`${row.kind}:${row.id}:${node.node_id}:${file.path}`}
+              className="desk-row desk-diff-row"
+              onClick={() => openTaskNode(row, node)}
+            >
+              <span className="desk-name" title={file.path}>{file.path.split('/').pop() || file.path}</span>
+              <span className="chgs">
+                <i className="a">+{file.add}</i>
+                <i className="d">−{file.del}</i>
+              </span>
+            </button>
+          ))}
+        </>
+      ) : null}
     </div>
   )
 }
@@ -172,8 +218,10 @@ function DeliverableRow({ row, here }: { row: DeliveryRow; here: boolean }): JSX
    difference between what Raven wrote and what it gave you. */
 function DeliverablesNav(): JSX.Element {
   useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
+  useSyncExternalStore(tasksStore.subscribe, tasksStore.get)
   const rows = deliveries.list()
-  if (!rows.length) {
+  const taskFiles = taskFileEntries('write')
+  if (!rows.length && !taskFiles.length) {
     /* The changed-file count is the fact the reader is holding against this
        one. Not the unseen count the bubble shows: what they will find on the
        other tab is everything there, read or not. */
@@ -208,6 +256,26 @@ function DeliverablesNav(): JSX.Element {
     out.push(<div key={`grp:${key}`} className="desk-grp">{t(key)}</div>)
     group.forEach((row) => out.push(<DeliverableRow key={row.path} row={row} here={here(row)} />))
   })
+  if (taskFiles.length) {
+    out.push(<div key="grp:task" className="desk-grp">{t('gui.ws.task_output')}</div>)
+    taskFiles.forEach(({ row, node, file }) => {
+      const name = file.path.split('/').pop() || file.path
+      out.push(
+        <button
+          key={`${row.kind}:${row.id}:${node.node_id}:${file.path}`}
+          className="desk-row desk-dlv-row"
+          title={file.path}
+          onClick={() => openTaskNode(row, node)}
+        >
+          <span className="dlv-kind" data-kind={fileKind(name)}>{t('gui.arts.file')}</span>
+          <span className="desk-name">
+            <b>{name}</b>
+            <s>{[file.path, file.size != null ? deliveries.humanSize(file.size) : ''].filter(Boolean).join(' · ')}</s>
+          </span>
+        </button>,
+      )
+    })
+  }
   return <div className="desk-list">{out}</div>
 }
 

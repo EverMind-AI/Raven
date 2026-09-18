@@ -135,7 +135,7 @@ function remember(): void {
   })
 }
 
-const TABS: readonly DeskTab[] = ['deliverables', 'diff', 'tasks']
+const TABS: readonly DeskTab[] = ['deliverables', 'tasks', 'diff']
 
 /* What each tab is counting, as the identity of every item in it -- read from
    the source that tab draws from, so "what is in it" and "what is new in it"
@@ -149,8 +149,16 @@ const TABS: readonly DeskTab[] = ['deliverables', 'diff', 'tasks']
 export function idsOf(tab: DeskTab): string[] {
   if (tab === 'diff') return workspace.shared().changes.map((c) => `${c.key}:${c.turn}`)
   if (tab === 'deliverables') return deliveries.paths()
-  return tasks.rows().map((r) => r.id)
+  /* `kind:id`, never bare `id`: a spawn's record id and a dag's run id share
+     no namespace and can collide. */
+  return tasks.rows().map((r) => `${r.kind}:${r.id}`)
 }
+
+/* The tasks tab's own badge: how many are running right now, not how many
+   the reader has not seen -- a reader who has already opened every task once
+   still wants to know one is still going. The other two tabs keep counting
+   what is new. */
+export const runningTaskCount = (): number => tasks.running(tasks.rows()).length
 
 /* Whether the desk should be up for this conversation, when the reader has not
    said. The note in `palette.ts` states the rule and this is where it can be
@@ -494,8 +502,13 @@ export function openDeskAgent(row: InstanceRow, recordId?: string | null): void 
 }
 
 export function openDeskTask(row: TaskRow, supersedes?: string): void {
-  readItem('tasks', row.id)
-  addPane({ id: `task:${row.id}`, kind: 'task', row }, supersedes)
+  const key = `${row.kind}:${row.id}`
+  readItem('tasks', key)
+  addPane({ id: `task:${key}`, kind: 'task', row }, supersedes)
+  /* A graph of one node -- a spawn, or a single-node dag -- has no second
+     thing to pick, so opening on it is one click fewer rather than one more:
+     the reader would only have picked the one node there is. */
+  if (row.nodes.length === 1) tasks.pickNode(`task:${key}`, row.nodes[0]!.node_id)
 }
 
 export function openDeskAgentRecord(row: AgentRow): void {

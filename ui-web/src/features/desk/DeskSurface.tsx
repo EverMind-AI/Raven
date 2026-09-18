@@ -71,7 +71,7 @@ function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
          pane was headed by its id whatever the run knew about it. */
       ? pane.row.label || pane.row.node || pane.row.id || t('gui.ws.agents')
       : pane.kind === 'file' ? pane.file.path.split('/').pop() || pane.file.path
-        : pane.kind === 'task' ? pane.row.name : pane.change.name
+        : pane.kind === 'task' ? pane.row.task_summary || pane.row.id : pane.change.name
   return (
     <section
       ref={(el) => refPane(pane.id, el)}

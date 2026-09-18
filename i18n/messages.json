@@ -6015,10 +6015,6 @@
       "en": "Finished",
       "zh": "已结束"
     },
-    "gui.tasks.state_run": {
-      "en": "Running",
-      "zh": "进行中"
-    },
     "gui.tasks.artifacts_n": {
       "en": "{n} products",
       "zh": "{n} 个产物"
@@ -6039,41 +6035,9 @@
       "en": "No tasks yet. Delegating in the conversation, running a dag or running a playbook all line up here.",
       "zh": "还没有任务。对话里派活、run dag 或跑 playbook，都会在这里排成一条。"
     },
-    "gui.tasks.src_spawn": {
-      "en": "spawn",
-      "zh": "spawn"
-    },
-    "gui.tasks.src_dag": {
-      "en": "run dag",
-      "zh": "run dag"
-    },
-    "gui.tasks.src_playbook": {
-      "en": "playbook",
-      "zh": "playbook"
-    },
-    "gui.tasks.node_agent": {
-      "en": "Agent",
-      "zh": "执行"
-    },
-    "gui.tasks.node_status": {
-      "en": "Status",
-      "zh": "状态"
-    },
-    "gui.tasks.node_took": {
-      "en": "Took",
-      "zh": "耗时"
-    },
     "gui.tasks.artifacts_1": {
       "en": "1 product",
       "zh": "1 个产物"
-    },
-    "gui.tasks.state_wait": {
-      "en": "Pending",
-      "zh": "待办"
-    },
-    "gui.tasks.confirm": {
-      "en": "confirm before dispatch {v}",
-      "zh": "派发前确认 {v}"
     },
     "gui.tasks.record_tools": {
       "en": "{n} tool calls",
@@ -6094,18 +6058,6 @@
     "gui.tasks.rec_thought": {
       "en": "Thought",
       "zh": "已思考"
-    },
-    "gui.tasks.rec_unrecorded": {
-      "en": "This sub-agent (cli type) keeps no record of its process",
-      "zh": "该子智能体（cli 类型）不记录过程"
-    },
-    "gui.tasks.rec_pending": {
-      "en": "Not started yet",
-      "zh": "尚未开始"
-    },
-    "gui.tasks.tab_flow": {
-      "en": "Flow",
-      "zh": "执行流"
     },
     "gui.tasks.rec_unread": {
       "en": "No record read for this step yet",
@@ -7054,6 +7006,234 @@
     "gui.settings.providers.api_key_optional": {
       "en": "API Key (optional)",
       "zh": "API Key（可选）"
+    },
+    "gui.tasks.tab_context": {
+      "en": "Context",
+      "zh": "上下文"
+    },
+    "gui.tasks.step_all_done": {
+      "en": "{n} steps, all done",
+      "zh": "{n} 步全部完成"
+    },
+    "gui.tasks.step_stopped": {
+      "en": "{d} done, stopped at step {k}",
+      "zh": "{d} 步完成 · 停在第 {k} 步"
+    },
+    "gui.tasks.step_done": {
+      "en": "{n} done",
+      "zh": "{n} 步完成"
+    },
+    "gui.tasks.step_failed": {
+      "en": "{n} failed",
+      "zh": "{n} 步失败"
+    },
+    "gui.tasks.step_skipped": {
+      "en": "{n} not dispatched",
+      "zh": "{n} 步没派"
+    },
+    "gui.tasks.overflow_more": {
+      "en": "{n} more →",
+      "zh": "还有 {n} 条 →"
+    },
+    "gui.tasks.st_completed": {
+      "en": "Completed",
+      "zh": "已完成"
+    },
+    "gui.tasks.st_failed": {
+      "en": "Failed",
+      "zh": "失败"
+    },
+    "gui.tasks.st_interrupted": {
+      "en": "Interrupted",
+      "zh": "中断"
+    },
+    "gui.tasks.st_cancelled": {
+      "en": "Cancelled",
+      "zh": "已取消"
+    },
+    "gui.tasks.node_st_pending": {
+      "en": "Pending",
+      "zh": "待跑"
+    },
+    "gui.tasks.node_st_running": {
+      "en": "Running",
+      "zh": "进行中"
+    },
+    "gui.tasks.node_st_completed": {
+      "en": "Done",
+      "zh": "完成"
+    },
+    "gui.tasks.node_st_failed": {
+      "en": "Failed",
+      "zh": "失败"
+    },
+    "gui.tasks.node_st_skipped": {
+      "en": "Skipped",
+      "zh": "跳过"
+    },
+    "gui.tasks.node_st_cancelled": {
+      "en": "Cancelled",
+      "zh": "已取消"
+    },
+    "gui.tasks.node_st_interrupted": {
+      "en": "Interrupted",
+      "zh": "中断"
+    },
+    "gui.tasks.node_st_exception": {
+      "en": "Awaiting a decision",
+      "zh": "待裁决"
+    },
+    "gui.tasks.tokens_n": {
+      "en": "{n} tokens",
+      "zh": "{n} tokens"
+    },
+    "gui.tasks.tokens_none": {
+      "en": "usage not reported",
+      "zh": "不报用量"
+    },
+    "gui.tasks.no_output": {
+      "en": "no output",
+      "zh": "无输出"
+    },
+    "gui.tasks.tools_n": {
+      "en": "{n} tools",
+      "zh": "{n} 次工具"
+    },
+    "gui.tasks.tools_failed_n": {
+      "en": "{n} failed",
+      "zh": "{n} 次失败"
+    },
+    "gui.tasks.stop": {
+      "en": "Stop",
+      "zh": "停止"
+    },
+    "gui.tasks.why_at": {
+      "en": "stuck at: {name}",
+      "zh": "挂在：{name}"
+    },
+    "gui.tasks.why_interrupted": {
+      "en": "This run did not finish, and nobody is still running it. Nothing after the step it stopped at was dispatched.",
+      "zh": "这次运行没有跑完，也没有人在继续跑它。停住那一步之后的都没有派出去。"
+    },
+    "gui.tasks.why_failed_fallback": {
+      "en": "One step did not make it.",
+      "zh": "有一步没跑成。"
+    },
+    "gui.tasks.ctx_none": {
+      "en": "Not started yet.",
+      "zh": "还没开始。"
+    },
+    "gui.tasks.ctx_console": {
+      "en": "This node is running over the CLI channel, which keeps no live transcript.",
+      "zh": "该节点正在通过命令行通道运行，暂无实时记录可读。"
+    },
+    "gui.tasks.ctx_truncated": {
+      "en": "output_truncated -- only the first 20,000 characters of .out.md were read",
+      "zh": "output_truncated · 只读了 .out.md 的前 20000 字"
+    },
+    "gui.tasks.ctx_interrupted": {
+      "en": "The gateway went away partway through this step; the record stops here.",
+      "zh": "网关在这一步跑到一半没了，记录停在这里。"
+    },
+    "gui.tasks.loading": {
+      "en": "Loading...",
+      "zh": "读取中…"
+    },
+    "gui.tasks.skip_why_named": {
+      "en": "Upstream step \"{name}\" reached no conclusion, so this one was never dispatched.",
+      "zh": "上游「{name}」没有结论，这一步没派出去。"
+    },
+    "gui.tasks.skip_why": {
+      "en": "An upstream step reached no conclusion, so this one was never dispatched.",
+      "zh": "上游没有结论，这一步没派出去。"
+    },
+    "gui.tasks.continue_with": {
+      "en": "Continue chatting with {name}",
+      "zh": "继续和 {name} 对话"
+    },
+    "gui.tasks.assigned_to": {
+      "en": "Assigned to",
+      "zh": "派给"
+    },
+    "gui.tasks.left_blank": {
+      "en": "Left blank; the caller fills it in",
+      "zh": "留空，由调用方填"
+    },
+    "gui.tasks.agent_missing": {
+      "en": "This agent is not registered here -- go add it",
+      "zh": "本机没有这个子智能体，去注册"
+    },
+    "gui.tasks.instance_note": {
+      "en": "@{instance}, this conversation",
+      "zh": "@{instance} 这条会话"
+    },
+    "gui.tasks.skills": {
+      "en": "Skills",
+      "zh": "技能"
+    },
+    "gui.tasks.skills_none": {
+      "en": "No skills attached",
+      "zh": "没带技能"
+    },
+    "gui.tasks.mcps": {
+      "en": "MCP",
+      "zh": "MCP"
+    },
+    "gui.tasks.mcps_none": {
+      "en": "No MCP attached",
+      "zh": "没接 MCP"
+    },
+    "gui.tasks.inputs": {
+      "en": "Inputs",
+      "zh": "入参"
+    },
+    "gui.tasks.instruction": {
+      "en": "Instruction",
+      "zh": "指令"
+    },
+    "gui.tasks.instruction_template": {
+      "en": "Instruction template",
+      "zh": "指令模板"
+    },
+    "gui.tasks.instruction_pending": {
+      "en": "This step has not been dispatched yet, and has no instruction.",
+      "zh": "这一步还没派出去，也还没有指令。"
+    },
+    "gui.tasks.instruction_note": {
+      "en": "Not dispatched yet: the template's placeholders wait on upstream output, and are only final at dispatch.",
+      "zh": "还没派出去：模板里的占位符等上游产出填入，派发那一刻才定稿。"
+    },
+    "gui.tasks.call_label": {
+      "en": "Call",
+      "zh": "调用"
+    },
+    "gui.tasks.run_label": {
+      "en": "Run",
+      "zh": "运行"
+    },
+    "gui.tasks.copy": {
+      "en": "Copy",
+      "zh": "复制"
+    },
+    "gui.tasks.copied": {
+      "en": "Copied",
+      "zh": "已复制"
+    },
+    "gui.tasks.back": {
+      "en": "Back to the graph",
+      "zh": "回到图"
+    },
+    "gui.tasks.lane": {
+      "en": "@{instance}, same conversation",
+      "zh": "@{instance} 同一会话"
+    },
+    "gui.ws.task_output": {
+      "en": "Task output",
+      "zh": "任务产出"
+    },
+    "gui.ws.tasks_running_tab": {
+      "en": "{n} running",
+      "zh": "{n} 个进行中"
     }
   }
 }

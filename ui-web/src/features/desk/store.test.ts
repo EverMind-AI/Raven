@@ -28,7 +28,12 @@ let agentRows: InstanceRow[] = []
 let taskRows: TaskRow[] = []
 
 const taskRow = (id: string): TaskRow => ({
-  id, name: id, source: 'spawn', agent: 'raven', state: 'run', nodes: [],
+  id, kind: 'spawn', task_summary: id, status: 'running', agent: 'raven', handle: id,
+  counts: {
+    total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0,
+    interrupted: 0, exception: 0,
+  },
+  nodes: [],
 })
 
 function wire(): void {
@@ -39,7 +44,11 @@ function wire(): void {
   setSources({
     workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: true, openPath: () => {} },
     subagents: { list: async () => [], instances: async () => agentRows },
-    tasks: { list: async () => taskRows },
+    tasks: {
+      list: async () => taskRows, one: async () => null, stop: async () => false,
+      node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false }),
+      roster: async () => [],
+    },
   })
   setTranslator((key) => key)
   vi.spyOn(pageStore, 'show').mockImplementation(() => {})

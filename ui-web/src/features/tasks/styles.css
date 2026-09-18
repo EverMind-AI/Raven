@@ -22,3 +22,150 @@
   line-height: 1.7;
   color: var(--muted);
 }
+
+/* The list row's optional playbook chip, and the size a written file's chip
+   prints -- both small, muted, secondary facts beside the row's main text. */
+.tksrc, .tkkd {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* The status bar above a task's board: dot, status word, duration, step
+   line, and a stop action pushed to the far end. */
+.tkbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.tkbaract {
+  margin-left: auto;
+}
+
+/* The "why" banner: a red band for a failure, a cooler one for an
+   interruption, with a button underneath linking to the node it happened
+   on. */
+.tkwhy {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--clay) 12%, transparent);
+}
+.tkwhy.tkcold {
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+}
+.tkwhyat {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* The board's own frame, and the lane drawn behind the nodes that share one
+   stateful conversation. */
+.tkfork {
+  overflow: visible;
+}
+.tklane {
+  position: absolute;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  pointer-events: none;
+}
+.tklane b {
+  position: absolute;
+  top: -8px;
+  left: 8px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--ink);
+  padding: 0 4px;
+}
+
+/* The node panel's header: a back control, the title block, and the
+   subtitle line under it. */
+.tkback {
+  flex: none;
+}
+.tktt {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.tksub {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* The context tab: a console-only step, an ended-without-an-answer banner,
+   the output-truncated note, and the "continue chatting" dock. */
+.tkctx {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tkconsole {
+  font-size: 12px;
+  color: var(--muted);
+}
+.tkerrb {
+  font-size: 12px;
+  color: var(--clay);
+}
+.tktrunc {
+  font-size: 11px;
+  color: var(--muted);
+}
+.tkdock {
+  display: flex;
+  gap: 6px;
+}
+.tkdock input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The work-order tab: one row per field, the missing-agent warning, and the
+   footer naming the call/run id. */
+.tkorder {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tkfield {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tkfk {
+  font-size: 11px;
+  color: var(--muted);
+}
+.tkfv {
+  font-size: 12px;
+}
+.tkagent.tkmiss {
+  color: var(--clay);
+}
+.tkfix {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--clay);
+}
+.tkhd {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.tkspecid {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.tkspeccopy {
+  font-size: 11px;
+}

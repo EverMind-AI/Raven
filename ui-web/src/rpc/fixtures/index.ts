@@ -37,6 +37,7 @@ import { createSessions } from './sessions'
 import { createSettings } from './settings'
 import { createSkillhub } from './skillhub'
 import { createSubagents } from './subagents'
+import { createTasks } from './tasks'
 import { RUNS, createTurn } from './turn'
 
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
@@ -72,6 +73,7 @@ export function demoFixtures(env: FixtureEnv): Fixtures {
     ...createPlughub(env, ext).fixtures,
     ...createPlaybooks(env).fixtures,
     ...createSubagents(env).fixtures,
+    ...createTasks(env).fixtures,
     ...createMemory(env).fixtures,
     ...createFs(env).fixtures,
     ...createBrowser(env).fixtures,
