@@ -210,7 +210,13 @@ const LEGACY_LOCAL = {
   skills: 4,
   subagents: 39,
   tasks: 9,
-  transcript: 74,
+  /* Up by two. The transcript's turn shapes are `.turn` and `.msg` now, which
+     retires `.ask`, `.answer-turn` and `.b` -- three names for two. The row
+     rises anyway because the two modifiers those shapes carry, `.me` and
+     `.ai`, used to be written inside a className expression and are literal
+     attributes here: they moved onto this list from the one below, which falls
+     by one in the same change. */
+  transcript: 76,
   workspace: 37,
 }
 
@@ -240,7 +246,7 @@ const LEGACY_EXPR = {
   skills: 2,
   tasks: 6,
   subagents: 6,
-  transcript: 26,
+  transcript: 25,
   workspace: 7,
 }
 

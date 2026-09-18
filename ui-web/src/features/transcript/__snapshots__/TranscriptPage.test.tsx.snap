@@ -2,8 +2,8 @@
 
 exports[`transcript island, history > keeps its rendered shape 1`] = `
 "div[data-tsl=1]
-  div.ask.in
-    div.b
+  div.turn.me.in
+    div.msg.me
     div.ansfoot
       div.acts
         button[data-label=en:gui.answer.copy][data-tip=en:gui.answer.copy]
@@ -11,45 +11,47 @@ exports[`transcript island, history > keeps its rendered shape 1`] = `
             rect
             path
       span.turnmeta
-  div.tfold.open
-    button.tfh
-      span.lb
-      span.tm
-      svg.cv
-        path
-    div.tfb
-      div.step.in
-        div.think.tog
+  div.turn.ai
+    div.msg.ai
+      div.tfold.open
+        button.tfh
           span.lb
+          span.tm
           svg.cv
             path
-        div.cot
-        div.say.prose
-        div.wk
-          div.wrow.tog.sum.open
-            svg.ic
-              path
-            span.ar
-            span.chip.bad
-            svg.cv
-              path
-          div.wkin
-            div.wrow.tog
-              svg.ic
-                path
-              span.vb
+        div.tfb
+          div.step.in
+            div.think.tog
+              span.lb
               svg.cv
                 path
-            div.wrow.bad.tog
-              svg.ic
-                path
-              span.vb
-              span.err
-              svg.cv
-                path
-  div.answer.in
-    div.prose
-      p
+            div.cot
+            div.say.prose
+            div.wk
+              div.wrow.tog.sum.open
+                svg.ic
+                  path
+                span.ar
+                span.chip.bad
+                svg.cv
+                  path
+              div.wkin
+                div.wrow.tog
+                  svg.ic
+                    path
+                  span.vb
+                  svg.cv
+                    path
+                div.wrow.bad.tog
+                  svg.ic
+                    path
+                  span.vb
+                  span.err
+                  svg.cv
+                    path
+      div.answer.in
+        div.prose
+          p
     div.ansfoot
       div.acts
         button[data-label=en:gui.answer.copy][data-tip=en:gui.answer.copy]

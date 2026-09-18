@@ -2045,6 +2045,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.tasks.rec_unread': 'No record read for this step yet',
     'gui.tasks.canvas': 'Task graph - drag to pan, ctrl and scroll to zoom',
     'gui.tasks.pick_node': 'Pick a step to read it',
+    'gui.tasks.chat_on': 'Continue with {agent}',
     'gui.tasks.tab_order': 'Work order'
   },
   zh: {
@@ -3780,6 +3781,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.tasks.rec_unread': '尚未读取这一步的过程记录',
     'gui.tasks.canvas': '任务流程图 · 拖动平移，按住 ctrl 滚动缩放',
     'gui.tasks.pick_node': '选中一个步骤查看',
+    'gui.tasks.chat_on': '继续和 {agent} 对话',
     'gui.tasks.tab_order': '任务单'
   }
 } as Record<Locale, Record<string, string>>

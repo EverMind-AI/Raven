@@ -24,6 +24,38 @@
   --clay:     #b4402f;
   --gold:     #9a7016;
   --sky:      #2f6d9e;
+
+  /* ---- the sidebar and the conversation ----------------------------------
+     Six of the names below are the ones the ramp above could not say. A rail
+     and a page are both "surface" to that ramp, and so are a hovered row and a
+     selected one -- which is why the rail and the transcript drifted apart
+     every time one of them was touched. These say which surface is meant, so a
+     rule names the part rather than the shade.
+
+     Light takes the design's own values; dark is derived from this tree's warm
+     ramp rather than copied from it, because the design's dark is a neutral
+     grey and every other surface on this page -- workspace, playbooks, desk --
+     is warm. A neutral rail against a warm page is the one result neither
+     design wanted. */
+  --page:     #fafaf8;   /* the ground a conversation is read on */
+  --side-bg:  #ffffff;   /* the rail, one step lighter than the page */
+  --paper:    #ffffff;   /* a card laid on the page: an answer, a sheet */
+  --hover:    #ececea;   /* a row the pointer is on */
+  --selected: #eaeae7;   /* a row that is the one open */
+  --text-3:   #8a8a88;   /* a group label: quieter than muted, louder than faint */
+  --ph:       #b8b8b8;   /* placeholder text in a field */
+  /* The one high-contrast pair on the page: the send button, and the message
+     the reader wrote. Both invert in dark, which is why they are tokens and
+     not literals. */
+  --black:    #111111;
+  --bubble-me:    #2e2e2e;
+  --bubble-me-fg: #ffffff;
+  /* A card is lifted by a shadow in light and by a brighter rim in dark -- the
+     same job, two drawings -- so the rule names these and never a colour. */
+  --ring:     rgba(0, 0, 0, .03);
+  --ring-2:   rgba(0, 0, 0, .05);
+  --sh-soft:  rgba(0, 0, 0, .06);
+  --seg-on:   #ffffff;   /* the selected half of a segmented control */
   --shadow:   0 14px 34px -22px rgba(28, 27, 25, .35);
   /* Card elevation, two steps: resting and lifted. A tight contact shadow
      plus a wide low-alpha bloom -- paper raised off the desk, not a glow. */
@@ -60,11 +92,12 @@
   /* In px, not ch: a ch unit resolves against the font of whatever element
      uses it, so the banner (12.5px) and the transcript column (14.5px)
      computed different widths from the same token and their edges never
-     lined up. 744px leaves a ~700px reading measure -- around 45 CJK or 80
-     latin characters a line, which is where prose stops needing a head turn.
-     Transcript, banner and composer all read from this one token, so the
-     column and the field it is typed into always share an edge. */
-  --col: 744px;
+     lined up. This is the MEASURE -- the width text actually occupies -- and
+     the scroll column adds its own 36px gutters on top of it, which is why the
+     two rules below both spell `calc(var(--col) + 72px)`. Transcript, banner
+     and composer all read from this one token, so the column and the field it
+     is typed into always share an edge. */
+  --col: 760px;
 
   /* Ink and surface roles hoisted from rule-level hex literals. Rules that
      keep literal colors on purpose (theme-preview swatches, mask gradients,
@@ -129,6 +162,22 @@
     --clay:     #d96a5b;
     --gold:     #e0a030;
     --sky:      #6fa8d6;
+
+    /* Warm counterparts of the light block's six surfaces -- see there. */
+    --page:     #121109;
+    --side-bg:  #1a180f;
+    --paper:    #1e1c14;
+    --hover:    #241f15;
+    --selected: #2c2819;
+    --text-3:   #8f886f;
+    --ph:       #6b6450;
+    --black:    #f7f2e4;
+    --bubble-me:    #332f20;
+    --bubble-me-fg: #f7f2e4;
+    --ring:     rgba(255, 255, 255, .07);
+    --ring-2:   rgba(255, 255, 255, .14);
+    --sh-soft:  rgba(0, 0, 0, .5);
+    --seg-on:   #332f20;
     --shadow:   0 18px 40px -24px #000c;
     --elev:     0 1px 2px rgba(0, 0, 0, .45), 0 6px 16px -8px rgba(0, 0, 0, .5);
     --elev-up:  0 2px 5px rgba(0, 0, 0, .5), 0 16px 34px -12px rgba(0, 0, 0, .65);
@@ -144,6 +193,11 @@
   --line-soft: #2c2819; --text: #f7f2e4; --muted: #a39b82; --faint: #736c58;
   --link: #86abe4; --amber: #e8cf49; --amber-dp: #6f6114; --moss: #7fbf6a;
   --clay: #d96a5b; --gold: #e0a030; --sky: #6fa8d6; --shadow: 0 18px 40px -24px #000c;
+  --page: #121109; --side-bg: #1a180f; --paper: #1e1c14; --hover: #241f15;
+  --selected: #2c2819; --text-3: #8f886f; --ph: #6b6450; --black: #f7f2e4;
+  --bubble-me: #332f20; --bubble-me-fg: #f7f2e4;
+  --ring: rgba(255, 255, 255, .07); --ring-2: rgba(255, 255, 255, .14);
+  --sh-soft: rgba(0, 0, 0, .5); --seg-on: #332f20;
   --elev: 0 1px 2px rgba(0, 0, 0, .45), 0 6px 16px -8px rgba(0, 0, 0, .5);
   --elev-up: 0 2px 5px rgba(0, 0, 0, .5), 0 16px 34px -12px rgba(0, 0, 0, .65);
   --seam: -1px 0 0 rgba(0, 0, 0, .4), -16px 0 32px -16px rgba(0, 0, 0, .5);
@@ -155,6 +209,11 @@
   --line-soft: #f0f0f0; --text: #1a1a1a; --muted: #6b6b6b; --faint: #9d9d9d;
   --link: #3b6fd4; --amber: #a8801c; --amber-dp: #eee4c8; --moss: #3f7d2c;
   --clay: #b4402f; --gold: #9a7016; --sky: #2f6d9e;
+  --page: #fafaf8; --side-bg: #ffffff; --paper: #ffffff; --hover: #ececea;
+  --selected: #eaeae7; --text-3: #8a8a88; --ph: #b8b8b8; --black: #111111;
+  --bubble-me: #2e2e2e; --bubble-me-fg: #ffffff;
+  --ring: rgba(0, 0, 0, .03); --ring-2: rgba(0, 0, 0, .05);
+  --sh-soft: rgba(0, 0, 0, .06); --seg-on: #ffffff;
   --shadow: 0 14px 34px -22px rgba(26,26,26,.35);
   --elev: 0 1px 2px rgba(28, 27, 25, .05), 0 6px 16px -10px rgba(28, 27, 25, .14);
   --elev-up: 0 2px 4px rgba(28, 27, 25, .06), 0 14px 30px -12px rgba(28, 27, 25, .22);
@@ -230,8 +289,15 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* No rule at the seam: the rail's grey against the chat's white is the whole
    boundary, the way the reference renderer does it. The grip hover keeps the
    seam findable. */
+/* The rail is the lightest surface on the page, not a grey panel beside it:
+   --side-bg sits a step above --page, and the seam between them is a hairline
+   rather than a change of shade. Horizontal padding stays 0 -- the rows inset
+   themselves, and the header toggle has to keep the exact --edge offset its
+   collapsed twin is fixed at (see #railShow). */
 .rail {
-  background: var(--surface);
+  background: var(--side-bg);
+  border-right: 1px solid var(--line-soft);
+  padding: 8px 0 10px;
   display: flex; flex-direction: column; min-height: 0; position: relative;
 }
 
@@ -293,8 +359,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   flex: none; color: var(--faint); padding: 5px; border-radius: 6px;
   display: grid; place-items: center; line-height: 1;
 }
-.ghost-ic:hover { color: var(--text); background: var(--raised); }
-.ghost-ic[aria-expanded="true"] { color: var(--text); background: var(--raised); }
+.ghost-ic:hover { color: var(--text); background: var(--hover); }
+.ghost-ic[aria-expanded="true"] { color: var(--text); background: var(--hover); }
 /* The buttons written in markup size their own glyph; the ones built with ico()
    have no width or height attribute, and an unsized inline SVG collapses to
    nothing. One rule here rather than a size at every call site. */
@@ -342,7 +408,14 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 }
 .list .grp[aria-expanded="false"] .car svg { transform: rotate(0deg); }
 @media (prefers-reduced-motion: reduce) { .list .grp .car svg { transition: none; } }
-.list .grp .lab { padding: 0; flex: none; }
+/* The rail's group headings drop the mono uppercase eyebrow the rest of the
+   page uses for a label. A session list is already a column of short strings;
+   a tracked-out capitalised row above it competes with the names instead of
+   filing them, and --text-3 is the shade that sits between them. */
+.list .grp .lab {
+  padding: 0; flex: none; font-family: var(--sans); font-size: 12px;
+  letter-spacing: 0; text-transform: none; color: var(--text-3);
+}
 .list .grp .n {
   font-family: var(--mono); font-size: 10px; color: var(--faint);
   font-variant-numeric: tabular-nums; flex: none;
@@ -591,28 +664,29 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* One row shape for the whole rail -- the new-task action, the module links and
    every session line -- so the column reads as one list instead of three. */
 .navi, .sess {
-  position: relative; display: flex; align-items: center; gap: 9px; width: 100%;
-  padding: 5px 10px; border-radius: 6px; text-align: left; cursor: pointer;
-  font-size: 13.5px; color: var(--muted);
+  position: relative; display: flex; align-items: center; gap: 10px; width: 100%;
+  min-height: 32px; padding: 0 10px; border-radius: 8px; text-align: left; cursor: pointer;
+  font-size: 14px; color: var(--text);
 }
-.navi:hover, .sess:hover { background: var(--raised); color: var(--text); }
-/* Selected is not a stronger hover, and it is not a coloured block either: the
-   row lifts onto the page's own ground with a hairline ring and the faintest
-   shadow, so it reads as a raised chip against the rail rather than as a
-   highlighter stroke. The accent shrinks from a wash over the whole row to the
-   glyph alone -- one small precise amber mark carries "you are here", which is
-   all it was ever being asked to say. Hover stays neutral, so "where the
-   pointer is" and "where you are" still never read alike. */
+/* A row's label is the page's own text colour, and the glyph beside it is the
+   quiet one: the list reads as a list of names, with the icons as marks against
+   them rather than as a second column of equal weight. */
+.navi svg { color: var(--muted); }
+.navi:hover, .sess:hover { background: var(--hover); color: var(--text); }
+/* Selected and hovered are the same move at two depths -- one flat step of
+   ground, --hover then --selected -- and the weight of the label carries the
+   rest. The lift this row used to have (a ring plus a shadow, and an amber
+   glyph) was a third treatment on a surface that now has only two, and on a
+   white rail the ring had nothing left to separate the row from. */
 .navi[aria-current="true"], .sess[aria-current="true"] {
-  background: var(--ink); color: var(--text); font-weight: 500;
-  box-shadow: inset 0 0 0 1px var(--line-soft), 0 1px 2px rgba(0, 0, 0, .045);
+  background: var(--selected); color: var(--text); font-weight: 500;
 }
-.navi[aria-current="true"]:hover, .sess[aria-current="true"]:hover { background: var(--ink); }
-.navi[aria-current="true"] svg { color: var(--amber); }
+.navi[aria-current="true"]:hover, .sess[aria-current="true"]:hover { background: var(--selected); }
+.navi[aria-current="true"] svg { color: var(--text); }
 /* A module page covers the chat, so the page is where you are; the session
    behind it keeps a readable label but drops the lift rather than leaving two
    rows looking selected at once. */
-.app[data-page="on"] .sess[aria-current="true"] { background: none; box-shadow: none; font-weight: 400; }
+.app[data-page="on"] .sess[aria-current="true"] { background: none; font-weight: 400; }
 .navi svg, .sess svg { flex: none; }
 /* generic: it also rides on the workspace chip in the top bar */
 .bdg {
@@ -630,6 +704,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 
 /* ── main ──────────────────────────────────────────────────────────── */
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  background: var(--page);
   transition: padding-right .24s ease; }
 .main[data-shift="true"] { padding-right: 340px; }
 
@@ -777,11 +852,23 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* Bottom inset tracks the floating composer (--lift is the card's height plus
    its offset, published by dockLift), so the last message always clears the
    glass with room to spare -- growing exactly when the textarea does. */
-.col { max-width: var(--col); margin: 0 auto; padding: 22px 22px calc(var(--lift, 96px) + 26px); min-width: 0; }
+/* The transcript is a column of cards with one gap between them, not a stack of
+   blocks each carrying its own margin. A margin per kind meant every new kind
+   had to re-agree with its neighbours about the space between them, and a turn
+   whose last block happened to be a fold sat closer than one that ended in
+   prose. One gap here answers it for all of them. */
+.col {
+  max-width: calc(var(--col) + 72px); margin: 0 auto; min-width: 0;
+  padding: 26px 36px calc(var(--lift, 96px) + 26px);
+}
+/* The lane is what holds the turns -- `.col` is the measure they sit in, and a
+   stage can carry more than one lane -- so the column rhythm belongs here, on
+   the element the turns are actually children of. */
+.col > [data-tsl] { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 
 .banner {
   /* minus the column's side padding, so the card lines up with the prose edge */
-  max-width: calc(var(--col) - 44px); margin: 14px auto 0; padding: 9px 14px;
+  max-width: var(--col); margin: 14px auto 0; padding: 9px 14px;
   display: flex; align-items: center; gap: 10px;
   border: 1px solid var(--line); border-left: 2px solid var(--gold);
   border-radius: 0 8px 8px 0; background: var(--surface); font-size: 12.5px;
@@ -796,7 +883,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .banner.bad { border-left-color: var(--clay); }
 .banner.bad b { color: var(--clay); }
 
-.flash { max-width: var(--col); margin: 0 auto; padding: 10px 22px 0;
+.flash { max-width: calc(var(--col) + 72px); margin: 0 auto; padding: 10px 36px 0;
   font-family: var(--mono); font-size: 11.5px; color: var(--gold); }
 
 /* ── first run ─────────────────────────────────────────────────────── */
@@ -841,23 +928,39 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* Attachments stack above the bubble rather than inside it: a handed-over file
    is a thing, the sentence is what was said about it, and one bubble holding
    both made the picture look like punctuation. */
-.ask { display: flex; flex-direction: column; align-items: flex-end; margin: 30px 0 22px; }
-.ask .b {
-  max-width: 78%; background: var(--raised); border-radius: 15px 15px 4px 15px;
-  padding: 9px 15px; white-space: pre-wrap; line-height: 1.6;
-  overflow-wrap: break-word;
+/* One turn, two shapes. What the reader wrote is a bubble that ends where the
+   sentence ends, pulled to their side of the column; what the agent answered is
+   a card of constant width. The card does not track its own length on purpose:
+   a column of cards whose widths follow their word counts reads as a ragged
+   edge, and the rhythm of this column is meant to be one turn, not one
+   sentence. */
+.turn { display: flex; flex-direction: column; min-width: 0; }
+.turn.me { align-self: flex-end; align-items: flex-end; max-width: 70%; }
+.turn.ai { align-self: stretch; width: 100%; }
+.msg.me {
+  background: var(--bubble-me); color: var(--bubble-me-fg);
+  border-radius: 9px; padding: 11px 16px; line-height: 1.6;
+  white-space: pre-wrap; overflow-wrap: break-word;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .08);
+}
+/* Lifted off the page rather than drawn on it: a contact shadow plus a hairline
+   rim, which is one treatment with two drawings -- the shadow carries it in
+   light, the rim in dark, where a shadow on a dark ground says nothing. */
+.msg.ai {
+  background: var(--paper); border-radius: 12px; padding: 6px 16px 12px;
+  box-shadow: 0 1px 4px var(--sh-soft), 0 0 0 1px var(--ring);
 }
 /* Folded long message: ~12 lines, fading out instead of cutting mid-glyph. */
-.ask .b.clip {
+.msg.me.clip {
   max-height: 20em; overflow: hidden;
   -webkit-mask-image: linear-gradient(180deg, #000 70%, transparent 100%);
   mask-image: linear-gradient(180deg, #000 70%, transparent 100%);
 }
-.ask .qfold {
+.turn.me .qfold {
   font-size: 12px; color: var(--muted); margin-top: 3px;
   padding: 2px 8px; border-radius: 6px;
 }
-.ask .qfold:hover { color: var(--text); background: var(--surface); }
+.turn.me .qfold:hover { color: var(--text); background: var(--surface); }
 
 .step { margin: 10px 0; min-width: 0; }
 /* One spacing for every step, deliberately not "more room once this step has
@@ -1549,7 +1652,6 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* turn fold: once the answer lands, everything that led to it collapses to a
    single line, and a hairline separates that line from the answer below */
 .tfold { margin: 14px 0 12px; }
-.tfold + .answer { margin-top: 0; }
 /* One hard left edge for the transcript: whatever a line leads with — an icon,
    a chevron, or its own first word — starts on that edge. Its rows sit right
    underneath, so the gap stays small enough to read as one block. */
@@ -1678,7 +1780,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .say { margin: 12px 0 2px; }
 .cot { overflow-wrap: anywhere; }
 
-.answer { margin-top: 20px; position: relative; }
+.answer { position: relative; }
 .acts { display: flex; align-items: center; gap: 1px; margin-top: 8px; }
 .acts button {
   position: relative; width: 27px; height: 27px; display: grid; place-items: center;
@@ -1694,15 +1796,14 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    a turn is just what was said, and the actions and the time arrive when they
    can be used. The row keeps its space either way, so nothing shifts on hover
    -- and focus reveals it too, since a keyboard has no pointer to hover with. */
-.answer .acts, .answer .turnmeta, .answer-turn > .ansfoot .acts,
-.answer-turn > .ansfoot .turnmeta, .ask .acts, .ask .turnmeta {
+.answer .acts, .answer .turnmeta, .turn.ai > .ansfoot .acts,
+.turn.ai > .ansfoot .turnmeta, .turn.me .acts, .turn.me .turnmeta {
   opacity: 0; transition: opacity .12s;
 }
-.answer:hover .acts, .answer:hover .turnmeta, .ask:hover .acts, .ask:hover .turnmeta,
+.answer:hover .acts, .answer:hover .turnmeta,
 .answer:focus-within .acts, .answer:focus-within .turnmeta,
-.ask:focus-within .acts, .ask:focus-within .turnmeta,
-.answer-turn:hover > .ansfoot .acts, .answer-turn:hover > .ansfoot .turnmeta,
-.answer-turn:focus-within > .ansfoot .acts, .answer-turn:focus-within > .ansfoot .turnmeta { opacity: 1; }
+.turn:hover .acts, .turn:hover .turnmeta,
+.turn:focus-within .acts, .turn:focus-within .turnmeta { opacity: 1; }
 /* Any control can carry its label in a hover pill instead of on the row: set
    data-tip and the row stays icons only. .tipdn prefers the pill below, for
    controls docked against the top of the window.
@@ -1977,7 +2078,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    that ghosting IS the transition, which is why the old fade band above the
    composer is gone. Only the card takes pointer events; the gutter around it
    still belongs to the page. */
-.dock { position: absolute; left: 0; right: 0; bottom: 18px; padding: 0 22px;
+.dock { position: absolute; left: 0; right: 0; bottom: 22px; padding: 0 36px;
   z-index: 5; pointer-events: none; }
 /* Below the card, not inside it: a legal-ish caption printed on the glass
    would read as part of the reader's own draft.
@@ -1996,24 +2097,20 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
      source, not a flat translucent rect. The inset white line is the rim
      catching that light -- it is what sells the pane as glass in dark mode
      and disappears harmlessly into the light theme. */
-  --rim: inset 0 1px 0 color-mix(in oklab, #fff 9%, transparent);
-  background: linear-gradient(
-    color-mix(in oklab, var(--ink) 76%, transparent),
-    color-mix(in oklab, var(--ink) 60%, transparent));
-  -webkit-backdrop-filter: blur(26px) saturate(1.5);
-  backdrop-filter: blur(26px) saturate(1.5);
-  /* No drawn outline: a 1px line is what makes a floating thing look pasted
-     on. The edge is only where the glass stops blurring, held by shadow and
-     the rim light; the near-invisible border is just an anti-fringe seam. */
-  border: 1px solid color-mix(in oklab, var(--line) 40%, transparent);
-  border-radius: 18px;
-  padding: 12px 14px; transition: border-color .15s;
-  box-shadow: var(--rim), 0 1px 2px rgba(0, 0, 0, .05), 0 6px 16px -8px rgba(0, 0, 0, .1),
-    0 12px 32px -14px rgba(0, 0, 0, .18), 0 32px 72px -26px rgba(0, 0, 0, .28);
+  background: var(--paper);
+  border: 0; border-radius: 20px;
+  padding: 12px 12px 10px 16px;
+  transition: box-shadow .15s;
+  box-shadow: 0 2px 14px var(--sh-soft), 0 0 0 1px var(--ring);
 }
+/* The card answers focus by deepening, which is the only state it has. The blur
+   and the rim light it used to carry were reading the transcript through it,
+   and a composer that shows what is behind it competes with the one thing on
+   this page the reader is actually making. */
+.dock-in:focus-within { box-shadow: 0 4px 20px var(--sh-soft), 0 0 0 1px var(--ring-2); }
 /* Drag-over highlight moved up from the field: the card is the drop target
    the reader sees. */
-.dock-in:has(.field.drop) { border-color: var(--amber); }
+.dock-in:has(.field.drop) { box-shadow: 0 4px 20px var(--sh-soft), 0 0 0 1px var(--amber); }
 
 /* ── the work indicator ───────────────────────────────────────────────────
    One glyph for "this is happening now", in every place that used to say it in
@@ -2129,7 +2226,7 @@ textarea:focus, textarea:focus-visible,
 .ansfoot { display: flex; align-items: center; gap: 8px; margin-top: 6px; margin-left: -5px; flex-wrap: wrap; }
 .ansfoot .acts { margin-top: 0; }
 /* Mirrored against the right edge the bubble is aligned to. */
-.ask > .ansfoot { flex-direction: row-reverse; margin-left: 0; margin-right: -5px; }
+.turn.me > .ansfoot { flex-direction: row-reverse; margin-left: 0; margin-right: -5px; }
 .turnmeta { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
 .field.drop { border-color: var(--amber); background: color-mix(in oklab, var(--amber) 6%, var(--ink)); }
 .tool-btn {
@@ -2140,7 +2237,7 @@ textarea:focus, textarea:focus-visible,
 .tool-btn:hover { color: var(--text); background: var(--raised); }
 .go {
   flex: none; width: 30px; height: 30px; border-radius: 50%;
-  background: var(--text); color: var(--ink); display: grid; place-items: center;
+  background: var(--black); color: var(--ink); display: grid; place-items: center;
   transition: opacity .15s, background .15s;
 }
 .go:disabled { opacity: .22; cursor: default; }
@@ -5298,7 +5395,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    is what the transcript scrolls under, and a reserve left at the old height
    is a blank band that reads as the answer having been cut off. */
 .instance-dock .dock-in { max-width: var(--col); padding: 10px 12px; border-radius: 16px;
-  box-shadow: var(--rim), 0 1px 3px rgba(0, 0, 0, .06); }
+  box-shadow: 0 1px 3px var(--sh-soft), 0 0 0 1px var(--ring); }
 .instance-dock .field textarea { min-height: 40px; }
 .instance-dock .under { justify-content: space-between; }
 .legacy-instance-send { display: none; }
