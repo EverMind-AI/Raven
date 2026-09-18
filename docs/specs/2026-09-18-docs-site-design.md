@@ -78,6 +78,43 @@ reader-visible and is not worth overriding the plugin default for.
 self-hosting, because it answers a question a reader arrives with ("how do I open
 the web UI") rather than a step within a longer procedure.
 
+## Presentation
+
+The navigation is sectioned rather than flat: `Home`, `Getting Started` and
+`Reference` are top-level entries, which Material renders as a tab row that swaps
+the sidebar beneath it. Five pages do not support more sections than that; a tab
+per page would be the shape of a sectioned site without its function, which is
+that a reader can see the whole of one area at once.
+
+The landing page is a directory of linked cards rather than prose. A list of
+links reads as a paragraph to be worked through; cards make the four
+destinations, and the three ordered steps before them, scannable in one pass.
+Both are one screen, so the difference is entirely in how fast a reader who
+already knows what they want can leave the page.
+
+**Navigation labels are the one piece of reader-visible text that lives in
+`mkdocs.yml` rather than in a page.** They therefore need `nav_translations` per
+locale, and no comparison of the two languages' Markdown can detect their
+absence: the pages are identical whether or not the labels are translated. The
+build reports the count it applied (`Translated 7 navigation elements to 'zh'`),
+which is the signal to read. The Chinese pages also drop the brand's italic
+serif accent word, because Cormorant Garamond carries no CJK glyphs and the
+accent would silently fall back to another face.
+
+The brand skin in `docs-site/docs/stylesheets/evermind.css` remaps Material's own
+CSS custom properties onto the EverMind token set, then resets the corners
+Material hardcodes rather than reading from a variable.
+
+**It has to be CSS alone.** Material's documented customisation path is
+`theme.custom_dir` with Jinja partials under `overrides/`, and those are `.html`:
+`scripts/check_large_files.py` holds `.html` in `BLOCKED_ASSET_EXTENSIONS` and
+fails any commit adding one outside `bridge/`, `ui-web/` and `ui-tui/`. A future
+maintainer reaching for a template override will hit that gate rather than a
+review comment, so the constraint is recorded here and not in the stylesheet
+alone. What it rules out is everything that needs new markup in the page chrome:
+a feedback widget, a last-updated line, a copy-page-as-Markdown control, and any
+footer card carrying more than the next page's title.
+
 ### Links out of the moved content
 
 The moved sections carry eight repository-relative links, four per language
@@ -200,6 +237,12 @@ Written before the content moves, each confirmed to fail first.
    and modules on disk (measured by running the test's regex against both files
    and against `raven/`). Duplicating the table into two pages without
    duplicating the guard would carry that gap into the new location.
+6. **A brand class a page uses is one the stylesheet defines, and the reverse.**
+   The `em-*` names in the pages and the rules in `evermind.css` are a contract
+   with no build step between them, so a rename on either side raises nothing and
+   reddens nothing; the only symptom is an element rendering unstyled. The guard
+   compares the two sets in both directions, which also catches a rule no page
+   reaches. Confirmed to fail first from each side in turn.
 
 ## Build and deployment
 
