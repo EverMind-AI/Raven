@@ -21,6 +21,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+from raven.agent.loop.failure_streak import failure_class, is_hard_tool_failure
 from raven.agent.tools import media_gen
 from raven.agent.tools.media_gen import ImageGenerateTool, SpeechGenerateTool, VideoGenerateTool
 
@@ -341,8 +342,10 @@ async def test_one_picture_failing_does_not_take_the_batch_with_it(monkeypatch, 
 
 
 async def test_a_picture_that_raises_is_that_picture_s_answer(monkeypatch, tmp_path) -> None:
-    """A reference outside a confined workspace raises rather than returning; the
-    batch gathers the exception as one result instead of losing every sibling."""
+    """A reference outside a confined workspace raises; that picture wears the
+    refusal as its own result instead of taking every sibling down with it. The
+    reason rides in ``detail``, because ``error`` is the streak's classification
+    key and a path interpolated into it would split one bad reference per file."""
     outside = tmp_path / "out.png"
     outside.write_bytes(_PNG)
     workspace = tmp_path / "ws"
@@ -358,7 +361,8 @@ async def test_a_picture_that_raises_is_that_picture_s_answer(monkeypatch, tmp_p
     out = json.loads(await tool.execute(prompts=[{"prompt": "cover"}, {"prompt": "logo", "images": [str(outside)]}]))
 
     assert out["success"] and out["failed"] == 1 and len(out["paths"]) == 1
-    assert "outside the workspace" in out["results"][1]["error"]
+    assert out["results"][1]["error"] == "could not read input image"
+    assert "outside the workspace" in out["results"][1]["detail"]
 
 
 async def test_the_pictures_of_a_batch_are_in_flight_at_once(monkeypatch, tmp_path) -> None:
@@ -529,7 +533,8 @@ async def test_a_call_with_no_prompt_at_all_says_what_to_send(monkeypatch, tmp_p
     )
 
     assert "nothing to generate" in json.loads(await tool.execute())["error"]
-    assert "index 1" in json.loads(await tool.execute(prompts=[{"prompt": "a"}, {"prompt": "  "}]))["error"]
+    blank = json.loads(await tool.execute(prompts=[{"prompt": "a"}, {"prompt": "  "}]))
+    assert blank["error"] == "a picture has no prompt" and blank["index"] == 1
 
 
 # ── the speech path: what the stream carries, and what the file becomes ──
@@ -933,3 +938,110 @@ def test_images_endpoint_accepts_openrouter_chat_style_usage(prompt, completion)
     assert usage["cost_usd"] == 0.04
     assert usage["cache_read_tokens"] is None
     assert usage["cache_write_tokens"] is None
+
+
+# ── what the loop reads off these envelopes ──
+
+
+def _class_of(answer: str) -> str:
+    return failure_class(answer)
+
+
+async def test_one_dead_endpoint_is_one_streak_class(monkeypatch, tmp_path) -> None:
+    """The loop breaks a tool-failure loop at two, keyed on ``(tool, failure_class)``,
+    and an envelope is classified by its ``error`` string alone. A vendor body carries
+    a request id, so a body interpolated into that key gave every call its own class
+    and the stop-repeating nudge was unreachable for this whole tool."""
+    bodies = iter(
+        [
+            '{"error":{"message":"upstream unavailable","request_id":"req_aaa111"}}',
+            '{"error":{"message":"upstream unavailable","request_id":"req_bbb222"}}',
+        ]
+    )
+    tool = _image_tool(
+        monkeypatch,
+        lambda _r: httpx.Response(500, text=next(bodies)),
+        model="google/gemini-2.5-flash-image",
+        workspace=tmp_path / "ws",
+    )
+
+    first = await tool.execute("a circle")
+    second = await tool.execute("a square")
+
+    assert _class_of(first) == _class_of(second)
+    # Not vacuous: both have to COUNT as failures for the streak to reach two at all.
+    assert is_hard_tool_failure(first) and is_hard_tool_failure(second)
+    # And the body the model needs is still in front of it, one key over.
+    assert "req_aaa111" in json.loads(first)["detail"]
+
+
+async def test_two_different_statuses_stay_two_classes(monkeypatch, tmp_path) -> None:
+    """The control on the test above, and the failure mode it must not cause: a model
+    that hit a missing model and then a server fault has changed what it is doing, and
+    folding those together would fire the nudge at a model still adapting."""
+    statuses = iter([404, 500])
+    tool = _image_tool(
+        monkeypatch,
+        lambda _r: httpx.Response(next(statuses), text='{"error":"no"}'),
+        model="google/gemini-2.5-flash-image",
+        workspace=tmp_path / "ws",
+    )
+
+    assert _class_of(await tool.execute("a circle")) != _class_of(await tool.execute("a square"))
+
+
+async def test_a_reference_it_cannot_read_is_one_class_across_files(monkeypatch, tmp_path) -> None:
+    """The same rule where the variable part is a path rather than a request id."""
+    tool = _image_tool(
+        monkeypatch,
+        lambda _r: httpx.Response(200, json=_chat_reply()),
+        model="google/gemini-2.5-flash-image",
+        workspace=tmp_path / "ws",
+    )
+
+    first = await tool.execute("a circle", images=[str(tmp_path / "gone-a.png")])
+    second = await tool.execute("a square", images=[str(tmp_path / "gone-b.png")])
+
+    assert _class_of(first) == _class_of(second)
+    assert "gone-a.png" in json.loads(first)["detail"]
+
+
+async def test_two_transports_dying_the_same_way_are_one_class(tmp_path) -> None:
+    """The catch-all, where the exception's own text spells the host it failed to
+    reach. Two hosts behind one dead network are one cause; a different exception
+    type is not, which is the other half the type keeps apart."""
+
+    async def dies(exc: Exception, prompt: str) -> str:
+        # Each transport gets its own patch window: patching over a live patch
+        # would leave every tool here sharing the first one's transport.
+        with pytest.MonkeyPatch.context() as mp:
+
+            def handler(_r: httpx.Request) -> httpx.Response:
+                raise exc
+
+            tool = _image_tool(mp, handler, model="google/gemini-2.5-flash-image", workspace=tmp_path / "ws")
+            return await tool.execute(prompt)
+
+    first = await dies(httpx.ConnectError("[Errno 61] Connection refused to a.example"), "a circle")
+    second = await dies(httpx.ConnectError("[Errno 61] Connection refused to b.example"), "a square")
+    other = await dies(httpx.ReadError("the reader gave up"), "a star")
+
+    assert _class_of(first) == _class_of(second)
+    assert _class_of(first) != _class_of(other)
+    assert "a.example" in json.loads(first)["detail"]
+
+
+async def test_a_denied_call_still_names_the_proxy_it_needs(monkeypatch, tmp_path) -> None:
+    """Splitting the envelope must not cost the operator the one thing a 403 is
+    worth saying: the media calls can be routed through a configured proxy."""
+    tool = _image_tool(
+        monkeypatch,
+        lambda _r: httpx.Response(403, text="denied"),
+        model="google/gemini-2.5-flash-image",
+        workspace=tmp_path / "ws",
+    )
+
+    answer = json.loads(await tool.execute("a circle"))
+
+    assert answer["error"] == "HTTP 403"
+    assert "tools.media.proxy" in answer["hint"]

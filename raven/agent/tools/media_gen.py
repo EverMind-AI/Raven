@@ -240,15 +240,21 @@ class _OpenRouterMediaTool(Tool):
         return message
 
     def _format_http_error(self, e: httpx.HTTPStatusError) -> str:
+        # The status, not the body: ``failure_class`` keys the loop's tool-failure
+        # streak on this envelope's ``error`` alone, and a vendor body carries a
+        # request id, so interpolating it splits one dead endpoint into a class per
+        # call and the stop-repeating nudge never fires. The body moves to ``detail``,
+        # which keeps it in front of the model and inside ``is_hard_tool_failure``'s
+        # transient-marker scan. The same rule governs every envelope below.
         body = e.response.text[:400]
-        hint = ""
+        answer: dict[str, Any] = {"error": f"HTTP {e.response.status_code}", "detail": body}
         if e.response.status_code == 403:
-            hint = (
-                " | Request denied (HTTP 403). You can route media calls through a "
+            answer["hint"] = (
+                "Request denied (HTTP 403). You can route media calls through a "
                 "proxy via tools.media.proxy (or HTTPS_PROXY) and retry."
             )
         logger.error("{} HTTP {}: {}", self.name, e.response.status_code, body)
-        return json.dumps({"error": f"HTTP {e.response.status_code}: {body}{hint}"}, ensure_ascii=False)
+        return json.dumps(answer, ensure_ascii=False)
 
 
 _IMAGE_API_MODELS = (
@@ -558,7 +564,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             )
         blank = next((i for i, spec in enumerate(wanted) if not str(spec.get("prompt") or "").strip()), None)
         if blank is not None:
-            return json.dumps({"error": f"the picture at index {blank} has no prompt"}, ensure_ascii=False)
+            return json.dumps({"error": "a picture has no prompt", "index": blank}, ensure_ascii=False)
         if len(wanted) == 1:
             return await self._generate_one(wanted[0], _safe_stem(wanted[0].get("filename")), model, output_dir)
         stems = _distinct_stems(wanted)
@@ -598,7 +604,9 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                 paths.extend(reply["paths"])
             else:
                 item["error"] = reply.get("error") or "no image returned"
-                for key in ("note", "finish_reason", "retryable"):
+                # ``detail`` travels with ``error``: the reason a picture failed is
+                # there now rather than in ``error``, which carries only the class.
+                for key in ("detail", "note", "finish_reason", "retryable"):
                     if reply.get(key) is not None:
                         item[key] = reply[key]
             if reply.get("model"):
@@ -640,7 +648,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                 for ref in images[:6]:
                     content.append(self._image_part(ref))
             except OSError as e:
-                return json.dumps({"error": f"could not read input image: {e}"}, ensure_ascii=False)
+                return json.dumps({"error": "could not read input image", "detail": str(e)}, ensure_ascii=False)
         else:
             content = prompt
 
@@ -664,7 +672,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             return self._format_http_error(e)
         except Exception as e:
             logger.error("image_generate error: {}", e)
-            return json.dumps({"error": str(e)}, ensure_ascii=False)
+            return json.dumps({"error": type(e).__name__, "detail": str(e)}, ensure_ascii=False)
 
         out_images = msg.get("images") or []
         if not out_images:
@@ -720,7 +728,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             # edits form takes the bytes behind it.
             refs = [self._image_part(ref) for ref in (images or [])[:16]]
         except OSError as e:
-            return json.dumps({"error": f"could not read input image: {e}"}, ensure_ascii=False)
+            return json.dumps({"error": "could not read input image", "detail": str(e)}, ensure_ascii=False)
         try:
             async with httpx.AsyncClient(proxy=self._proxy, timeout=300.0) as client:
                 if openrouter:
@@ -745,7 +753,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                             fetched = await guarded_fetch(client, url, what="image reference")
                             if fetched is None:
                                 return json.dumps(
-                                    {"error": f"input image {url} refused: not a fetchable public target"},
+                                    {"error": "input image refused: not a fetchable public target", "url": url},
                                     ensure_ascii=False,
                                 )
                             fetched.raise_for_status()
@@ -772,7 +780,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             return self._format_http_error(e)
         except Exception as e:
             logger.error("image_generate error: {}", e)
-            return json.dumps({"error": str(e)}, ensure_ascii=False)
+            return json.dumps({"error": type(e).__name__, "detail": str(e)}, ensure_ascii=False)
         paths: list[str] = []
         for item in items:
             encoded = item.get("b64_json") if isinstance(item, dict) else None
@@ -866,7 +874,7 @@ class SpeechGenerateTool(_OpenRouterMediaTool):
             return self._format_http_error(e)
         except Exception as e:
             logger.error("text_to_speech error: {}", e)
-            return json.dumps({"error": str(e)}, ensure_ascii=False)
+            return json.dumps({"error": type(e).__name__, "detail": str(e)}, ensure_ascii=False)
 
         if not pcm:
             return json.dumps(
@@ -1107,7 +1115,7 @@ class VideoGenerateTool(_OpenRouterMediaTool):
             return self._format_http_error(e)
         except Exception as e:
             logger.error("video_generate error: {}", e)
-            return json.dumps({"error": str(e)}, ensure_ascii=False)
+            return json.dumps({"error": type(e).__name__, "detail": str(e)}, ensure_ascii=False)
 
         path = self._output_path("mp4")
         path.write_bytes(data)

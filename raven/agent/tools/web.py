@@ -796,7 +796,9 @@ class WebFetchTool(Tool):
         max_chars = maxChars or self.max_chars
         is_valid, error_msg = validate_url_target(url)
         if not is_valid:
-            return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
+            # The same rule as the handlers below: most of these reasons name the
+            # hostname, and a reader whose every target is refused is one cause.
+            return json.dumps({"error": "URL validation failed", "detail": error_msg, "url": url}, ensure_ascii=False)
 
         try:
             logger.debug("WebFetch[{}]: {}", self.provider, "proxy enabled" if self.proxy else "direct connection")

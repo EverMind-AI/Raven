@@ -55,7 +55,7 @@ def workspace():
         # by the textual tests: the payload starts with "{" and spells the key
         # '"error":' rather than "error:".
         ('{"error": "Jina API key not configured", "url": "https://a.example"}', True),
-        ('{"error": "URL validation failed: blocked host", "url": "https://a.example"}', True),
+        ('{"error": "URL validation failed", "detail": "blocked host", "url": "https://a.example"}', True),
         ('{"url": "https://a.example", "text": "the page", "length": 9}', False),
         # Transient markers are tested before the envelope, so a retryable failure
         # stays retryable however it is wrapped.
@@ -76,7 +76,7 @@ def test_different_envelope_failures_are_different_classes():
     every envelope classified alike, a blocked URL followed by a reader's HTTP refusal
     would fire the stop-repeating nudge at a model that had changed both its cause and
     its approach -- the case this whole function exists to keep apart."""
-    blocked = '{"error": "URL validation failed: blocked host", "url": "https://a.example"}'
+    blocked = '{"error": "URL validation failed", "detail": "blocked host", "url": "https://a.example"}'
     refused = '{"error": "Jina answered HTTP 403", "url": "https://b.example"}'
     keyless = '{"error": "Jina API key not configured. Set it in the config", "url": "https://c.example"}'
 
