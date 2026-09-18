@@ -10253,6 +10253,13 @@
               "type": "string"
             }
           },
+          "extra_headers": {
+            "type": "object",
+            "description": "Custom request headers by name, each value redacted.",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
           "total_models": {
             "type": "integer"
           },

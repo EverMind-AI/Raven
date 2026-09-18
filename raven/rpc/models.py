@@ -1481,6 +1481,8 @@ class ModelOptionProvider(_Strict):
     protocols: dict[str, str] = Field(default_factory=dict)
     protocol_overrides: dict[str, str] = Field(default_factory=dict)
     model_labels: dict[str, ModelLabel] | None = None
+    #: Custom request headers by name, each value redacted.
+    extra_headers: dict[str, str] = Field(default_factory=dict)
     total_models: int
     needs_api_base: bool
     #: Addresses to pick between, empty for the providers that have only one.

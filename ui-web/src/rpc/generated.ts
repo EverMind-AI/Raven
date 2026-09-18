@@ -772,6 +772,12 @@ export interface ModelOptionProvider {
   protocol_overrides?: {
     [k: string]: string;
   };
+  /**
+   * Custom request headers by name, each value redacted.
+   */
+  extra_headers?: {
+    [k: string]: string;
+  };
   total_models: number;
   needs_api_base: boolean;
   platforms?: {

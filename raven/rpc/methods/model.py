@@ -381,6 +381,11 @@ def _build_provider_entry(
         "auth_type": kind,
         "key_env": (spec.env_key or None) if spec else None,
         "api_base": info.get("api_base"),
+        # Each header's name with its value redacted: the advanced card lists
+        # what is configured and removes by name, and never sees a value.
+        "extra_headers": (_redact_headers(getattr(section, "extra_headers", None) or {}) or {})
+        if section is not _UNLOADED
+        else {},
         # `display_api_base`, not `default_api_base`: the pane wants the vendor
         # address even where the spec states none for its own use.
         "default_api_base": (spec.display_api_base or None) if spec else None,

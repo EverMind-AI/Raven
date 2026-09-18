@@ -1792,3 +1792,24 @@ async def test_oauth_login_refuses_a_key_provider_and_a_second_start(fake_home: 
     monkeypatch.setattr(oauth_login, "start", busy)
     with pytest.raises(ConfigValidationError):
         await model_oauth_login({"slug": "openai_codex"})
+
+
+async def test_options_lists_extra_headers_by_name_only(fake_home: Path) -> None:
+    """The advanced card removes headers by name and must never see a value."""
+    _write_config(
+        fake_home,
+        {
+            "providers": {
+                "openai": {
+                    "apiKey": "sk-x",
+                    "extraHeaders": {"X-Auth": "secret-1234", "APP-Code": "code-5678"},
+                }
+            },
+        },
+    )
+    result = await model_options({})
+    entry = _entry(result, "openai")
+    assert set(entry["extra_headers"]) == {"X-Auth", "APP-Code"}
+    for value in entry["extra_headers"].values():
+        assert value and "secret" not in value and "code-5678" not in value
+    assert _entry(result, "anthropic")["extra_headers"] == {}
