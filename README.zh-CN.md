@@ -67,7 +67,7 @@ Raven 的模块化架构面向 harness 自我演进和子 Agent 创建。借助 
   <a href="https://github.com/user-attachments/assets/75f60aa2-3e2f-42fb-aa51-aa111bf078d0"><img src="https://github.com/user-attachments/assets/75f60aa2-3e2f-42fb-aa51-aa111bf078d0" alt="DataAgentBench (2026-08-24 Live): Raven-Code with Opus-5 achieves 0.8762 Pass@1" width="100%"></a>
 </p>
 
-<p align="center"><em>Raven-Code 在数据分析任务的 DataAgentBench 上领先（2026-08-24 Live）</em></p>
+<p align="center"><em>Raven-Code 在数据分析任务的 DataAgentBench 上排名第一（2026-08-24 Live）</em></p>
 
 ### Raven-Design
 
@@ -77,7 +77,7 @@ Raven 的模块化架构面向 harness 自我演进和子 Agent 创建。借助 
   <a href="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9"><img src="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9" alt="PresentBench: Raven-Design, Claude Code, and public leaderboard scores" width="100%"></a>
 </p>
 
-<p align="center"><em>Raven-Design 在 PresentBench 幻灯片生成测试中领先</em></p>
+<p align="center"><em>Raven-Design 在 PresentBench 幻灯片生成测试中排名第一</em></p>
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/061b5818-595b-4392-b9b6-53a1effb8347"><img src="https://github.com/user-attachments/assets/061b5818-595b-4392-b9b6-53a1effb8347" alt="Visual Design: Raven-Design, Claude Code, and Hermes on ArtifactsBench Dashboard, ArtifactsBench SVG, and GDPVal" width="100%"></a>
