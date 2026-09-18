@@ -46,7 +46,8 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from raven.contracts.agent_conduct import AgentConduct, Intake, StepView, Verdict
+    from raven.agent.harness.conducts import Intake, Verdict
+    from raven.contracts.agent_conduct import AgentConduct, StepView
     from raven.contracts.assembled import AssembledContext, TokenBudget
     from raven.contracts.context import TurnContext
     from raven.contracts.llm_provider import LLMProvider, LLMResponse

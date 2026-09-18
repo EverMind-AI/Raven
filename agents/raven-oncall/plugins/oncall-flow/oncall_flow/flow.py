@@ -57,7 +57,7 @@ from oncall_flow.instrument import is_concluded, log_event
 from oncall_flow.tools import base as tools_base
 from oncall_flow.window import campaign_for_window, task_fingerprint
 from raven.agent.hook.conduct import ConductHook
-from raven.contracts.agent_conduct import Accept, AgentConduct, End, StepView, Verdict
+from raven.contracts.agent_conduct import Accept, AgentConduct, Answer, End, StepView
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 
 if TYPE_CHECKING:
@@ -478,7 +478,7 @@ class OncallConduct(AgentConduct):
             )
         return None
 
-    async def review(self, step: StepView) -> Verdict:
+    async def review(self, step: StepView) -> Answer:
         if not step.tools_ran:
             # The close reads the ops_check_later result, so it waits for the
             # iteration's tools to have run.

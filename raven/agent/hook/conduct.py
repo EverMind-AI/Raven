@@ -22,6 +22,8 @@ from typing import Any
 
 from raven.agent.harness import current_harness
 from raven.agent.harness.conducts import (
+    Intake,
+    Verdict,
     compose_addendum,
     compose_advice,
     compose_intake,
@@ -29,6 +31,8 @@ from raven.agent.harness.conducts import (
     compose_review,
     compose_salvage,
     compose_tools,
+    read_intake,
+    read_verdict,
 )
 from raven.contracts.agent_conduct import AgentConduct, ConductFactory, StepView
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
@@ -197,7 +201,16 @@ class ConductHook(AgentHook):
         return replace(decision, notes=[*decision.notes, *trail])
 
     @staticmethod
-    def _decide(verdict) -> HookDecision:
+    def _decide(answer) -> HookDecision:
+        """A verdict rendered as the decision the composite merges.
+
+        Read through ``read_verdict`` whatever the answer arrived as: the
+        default role hands over the shape this seat knows, and a replaced role
+        may hand over the mapping a participant answered with, or something
+        this seat cannot read at all -- which is an accept, because a role must
+        not be able to halt a turn by answering badly.
+        """
+        verdict = answer if isinstance(answer, Verdict) else read_verdict(answer)
         # Both, de-duplicated: ``Resample`` takes its reason positionally, so an
         # author writes one there and often the same sentence again as a note.
         # Reading only the note dropped the line a conduct that wrote just the
@@ -215,11 +228,15 @@ class ConductHook(AgentHook):
         return HookDecision(notes=notes)
 
     async def _intake(self, text: str, step: StepView, conduct: AgentConduct):
-        """What this turn reads in, decided by the Memory role when one is bound."""
+        """What this turn reads in, decided by the Memory role when one is bound.
+
+        Read here, so that a replaced role may answer with the mapping a
+        participant answered with rather than with this seat's own shape."""
         harness = current_harness()
         if harness is None:
             return await compose_intake(text, step, [conduct])
-        return await harness.memory.read_inbound(text, step, [conduct])
+        answer = await harness.memory.read_inbound(text, step, [conduct])
+        return answer if answer is None or isinstance(answer, Intake) else read_intake(answer, text=text)
 
     async def _advise(self, step: StepView, conduct: AgentConduct) -> str | None:
         """The turn guidance, decided by the Planning role when one is bound."""
@@ -247,7 +264,8 @@ class ConductHook(AgentHook):
         harness = current_harness()
         if harness is None:
             return await compose_addendum(step, [conduct])
-        return await harness.memory.compose_addendum(step, [conduct])
+        answer = await harness.memory.compose_addendum(step, [conduct])
+        return answer if answer is None or isinstance(answer, Intake) else read_intake(answer)
 
     async def _record(self, step: StepView, reply: str | None, conduct: AgentConduct):
         """What the turn's record is stamped with, merged by Memory."""
@@ -375,7 +393,8 @@ class ConductHook(AgentHook):
         # carries no appended note, because the composite drops the notes it
         # accumulated the moment a hook answers with one of those.
         note = await self._advise(step, conduct)
-        verdict = await self._review(step, conduct)
+        answer = await self._review(step, conduct)
+        verdict = answer if isinstance(answer, Verdict) else read_verdict(answer)
         decision = self._decide(verdict)
         if not verdict.accepted:
             return self._with_trail(seat, decision)

@@ -42,9 +42,9 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.agent.harness.conducts import compose_addendum, compose_intake, compose_record
+from raven.agent.harness.conducts import Intake, compose_addendum, compose_intake, compose_record
 from raven.agent.window import compaction, shrink
-from raven.contracts.agent_conduct import AgentConduct, Intake, StepView
+from raven.contracts.agent_conduct import AgentConduct, StepView
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.harness import MemoryModule, ShrinkResult, WindowPressure, WindowState
 from raven.providers.base import send_max_tokens

@@ -25,7 +25,7 @@ from code_flow.tools.read_state import Owner, ReadSessions, forget_session, owne
 from code_flow.tools.todo import STORES, TodoStore
 from raven.agent import workdir
 from raven.agent.hook.conduct import ConductHook
-from raven.contracts.agent_conduct import AgentConduct, Intake, StepView
+from raven.contracts.agent_conduct import AgentConduct, Answer, StepView
 
 if TYPE_CHECKING:
     from raven.plugins.context import PluginContext
@@ -140,7 +140,7 @@ class CodeConduct(AgentConduct):
         self._instructions: tuple[Any, str] | None = None
         self._pending_note: str | None = None
 
-    async def intake(self, text: str, step: StepView) -> Intake | None:
+    async def intake(self, text: str, step: StepView) -> Answer | None:
         # Commands return before iteration or after_send, so they must not
         # create an in-flight mark for a turn that will never report back.
         if (text or "").strip().lower() in {"/new", "/help"}:
@@ -187,7 +187,7 @@ class CodeConduct(AgentConduct):
         self._pending_note = note
         return note
 
-    async def system_addendum(self, step: StepView) -> Intake | None:
+    async def system_addendum(self, step: StepView) -> Answer | None:
         if not self._flow_enabled:
             return None
         cwd = workdir.current()

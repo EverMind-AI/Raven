@@ -424,3 +424,50 @@ async def test_every_verb_the_roles_seat_goes_through_them():
         "judge_step",
         "rescue",
     }, f"a verb bypassed its role: {sorted(set(asked))}"
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_answer_is_silence_rather_than_a_refusal():
+    """The third invariant: a participant that answers badly has said nothing.
+    It matters most for the verbs that can halt a turn -- a generated function
+    returning a stray string must not be able to stop the loop with it."""
+
+    class Nonsense:
+        async def review(self, step):
+            return "not a verdict at all"
+
+        async def intake(self, text, step):
+            return ["neither", "is", "this"]
+
+        async def salvage(self, step):
+            return {"not": "a reply"}
+
+    hook = ConductHook("probe", Nonsense)
+    stands = await hook.before_execute_tools(_ctx(iteration=1))
+    assert stands.rollback is False and stands.short_circuit_result is None
+
+    inbound = await hook.before_user_inbound(_ctx(inbound_content="q"))
+    assert inbound.modified_content is None and inbound.short_circuit_result is None
+
+    answerless = await hook.terminal_answerless(_ctx())
+    assert answerless.short_circuit_result is None, "a salvage that is not text is not a reply"
+
+
+@pytest.mark.asyncio
+async def test_a_participant_answers_with_a_mapping_it_could_have_built_itself():
+    """The builders are a convenience; the contract is the mapping. A
+    participant that writes the keys by hand is answering the same thing, which
+    is what lets a generated function answer at all."""
+
+    class ByHand:
+        async def review(self, step):
+            return {
+                "verdict": "resample",
+                "reason": "written by hand",
+                "inject": [{"role": "user", "content": "again"}],
+            }
+
+    decision = await ConductHook("probe", ByHand).before_execute_tools(_ctx(iteration=1))
+    assert decision.rollback is True
+    assert decision.rollback_inject == [{"role": "user", "content": "again"}]
+    assert decision.notes == ["written by hand"]

@@ -30,7 +30,7 @@ from loguru import logger
 from raven.agent.hook.composite import CompositeHook
 from raven.agent.hook.conduct import ConductHook
 from raven.agent.loop import TURN_ASK_KIND_KEY, TURN_BUDGETS_KEY
-from raven.contracts.agent_conduct import Accept, AgentConduct, End, Intake, Resample, StepView, Verdict
+from raven.contracts.agent_conduct import Accept, AgentConduct, Answer, End, Intake, Resample, StepView
 from raven.contracts.loop_hooks import HookDecision
 from research_flow.config import FlowConfig
 from research_flow.gates.ask_user import (
@@ -960,7 +960,7 @@ class ResearchFlowConduct(AgentConduct):
         self._ran[key] = (step, decision)
         return decision
 
-    def _verdict(self, decision: HookDecision) -> Verdict:
+    def _verdict(self, decision: HookDecision) -> Answer:
         if decision.short_circuit_result is not None:
             return End(decision.short_circuit_result)
         if decision.rollback:
@@ -971,7 +971,7 @@ class ResearchFlowConduct(AgentConduct):
             )
         return Accept()
 
-    async def intake(self, text: str, step: StepView) -> Intake | None:
+    async def intake(self, text: str, step: StepView) -> Answer | None:
         decision = await self._phase("before_user_inbound", step, self._ctx(step, inbound=text))
         if decision.short_circuit_result is not None:
             return Intake(text=text, reply=decision.short_circuit_result)
@@ -990,13 +990,13 @@ class ResearchFlowConduct(AgentConduct):
             decision = await self._phase("after_iteration", step, self._ctx(step))
         return decision.append_note or None
 
-    async def system_addendum(self, step: StepView) -> Intake | None:
+    async def system_addendum(self, step: StepView) -> Answer | None:
         decision = await self._phase("before_iteration", step, self._ctx(step))
         if decision.short_circuit_result is not None:
             return Intake(text="", reply=decision.short_circuit_result)
         return None
 
-    async def review(self, step: StepView) -> Verdict:
+    async def review(self, step: StepView) -> Answer:
         phase = "after_iteration" if step.tools_ran else "before_execute_tools"
         return self._verdict(await self._phase(phase, step, self._ctx(step)))
 
