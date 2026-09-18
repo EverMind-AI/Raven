@@ -50,7 +50,7 @@ from pathlib import Path
 
 from raven.agent import workdir
 from raven.agent.hook.conduct import ConductHook
-from raven.contracts.agent_conduct import Accept, AgentConduct, Intake, Resample, StepView, Verdict
+from raven.contracts.agent_conduct import Accept, AgentConduct, Answer, Intake, Resample, StepView
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 from raven.utils.workspace import sync_workspace_templates
 from raven_ppt.plugin import ledger, materials
@@ -380,7 +380,7 @@ class PptConduct(AgentConduct):
         self._journal_window(root, step)
         return self._ledger_after_compaction(step, root)
 
-    async def intake(self, text: str, step: StepView) -> Intake | None:
+    async def intake(self, text: str, step: StepView) -> Answer | None:
         self._engine.seed_once()
         bound = workdir.current()
         if bound is None or not text or not text.strip():
@@ -405,7 +405,7 @@ class PptConduct(AgentConduct):
         standing = _standing_decks(root)
         return Intake(text=text + materials.describe(staged, root / MATERIALS_DIRNAME, root / OUT_DIRNAME, standing))
 
-    async def review(self, step: StepView) -> Verdict:
+    async def review(self, step: StepView) -> Answer:
         """Send a turn back when the model stops talking before the deck is published.
 
         The loop ends a turn on the first reply without a tool call, whatever the

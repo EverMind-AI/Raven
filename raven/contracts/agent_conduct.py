@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 __tier__ = "factory_loop"
 
@@ -75,41 +75,31 @@ class StepView:
     """The loop's iteration cap this turn, for a conduct that paces itself against it."""
 
 
-@dataclass(frozen=True)
-class Intake:
-    """What ``intake`` hands back: the text the turn goes on with, or a reply
-    that ends it before any model call (a fail-closed sentinel, a command)."""
+Answer = Mapping[str, Any]
+"""What a verb hands back: a plain mapping, or None for "nothing to say".
 
-    text: str
-    reply: Any | None = None
-    note: str | None = None
+Pure data on purpose. A participant is not only a plugin: a dispatch's own
+judgements and anything generated for one answer the same verbs, and a
+generated function can build a dict where it cannot build a host class. The
+host reads these into its own shapes, vets them there, and treats a mapping it
+cannot read as silence -- the third invariant, and the reason nothing here
+carries behaviour.
 
-
-@dataclass(frozen=True)
-class Verdict:
-    """What ``review`` hands back about one step.
-
-    ``accept`` lets the step stand. ``resample`` sends the loop back to the
-    model call with ``inject`` appended to the transcript (a reviewer's
-    objection, a reconcile nudge) and ``overrides`` on the next call.
-    ``end`` closes the turn with ``reply``. The loop executes the verdict and
-    bounds how many resamples a turn may spend; the conduct only pronounces.
-    """
-
-    kind: Literal["accept", "resample", "end"]
-    reason: str | None = None
-    inject: Sequence[dict[str, Any]] | None = None
-    overrides: dict[str, Any] | None = None
-    reply: Any | None = None
-    note: str | None = None
-
-    @property
-    def accepted(self) -> bool:
-        return self.kind == "accept"
+The keys each verb reads are named on it. The four builders below write them,
+so a hand-written conduct keeps saying ``Resample("too thin")`` rather than
+spelling the mapping out.
+"""
 
 
-def Accept(note: str | None = None) -> Verdict:  # noqa: N802 - reads as the verdict it is
-    return Verdict("accept", note=note)
+def Intake(text: str, reply: Any | None = None, note: str | None = None) -> dict[str, Any]:  # noqa: N802
+    """The text a turn goes on with, or a reply that ends it before any model
+    call (a fail-closed sentinel, a command)."""
+    return {"text": text, "reply": reply, "note": note}
+
+
+def Accept(note: str | None = None) -> dict[str, Any]:  # noqa: N802 - reads as the verdict it is
+    """The step stands."""
+    return {"verdict": "accept", "note": note}
 
 
 def Resample(  # noqa: N802
@@ -118,12 +108,22 @@ def Resample(  # noqa: N802
     inject: Sequence[dict[str, Any]] | None = None,
     overrides: dict[str, Any] | None = None,
     note: str | None = None,
-) -> Verdict:
-    return Verdict("resample", reason=reason, inject=inject, overrides=overrides, note=note)
+) -> dict[str, Any]:
+    """Send the loop back to the model call, with ``inject`` appended to the
+    transcript and ``overrides`` on that one call. The loop bounds how many
+    resamples a turn may spend; a participant only pronounces."""
+    return {
+        "verdict": "resample",
+        "reason": reason,
+        "inject": list(inject) if inject else None,
+        "overrides": dict(overrides) if overrides else None,
+        "note": note,
+    }
 
 
-def End(reply: Any, note: str | None = None) -> Verdict:  # noqa: N802
-    return Verdict("end", reply=reply, note=note)
+def End(reply: Any, note: str | None = None) -> dict[str, Any]:  # noqa: N802
+    """Close the turn with this reply."""
+    return {"verdict": "end", "reply": reply, "note": note}
 
 
 class AgentConduct:
@@ -137,7 +137,7 @@ class AgentConduct:
     None) and after it.
     """
 
-    async def intake(self, text: str, step: StepView) -> Intake | None:
+    async def intake(self, text: str, step: StepView) -> Answer | None:
         """The inbound text, reshaped, or a reply that ends the turn here."""
         return None
 
@@ -146,28 +146,39 @@ class AgentConduct:
 
         Usually narrower, and not required to be: a conduct may hand back an
         array carrying a tool its own product contributes, which is what the
-        research flow does with its escalation tool. Handing a name back is not
-        granting it -- ``ToolRegistry.execute`` still adjudicates every call, so
-        the product's own withholding stands whatever this returns."""
+        research flow does with its escalation tool. Handing a definition back
+        is not granting it -- ``ToolRegistry.execute`` still adjudicates every
+        call, so the product's own withholding stands whatever this returns.
+
+        Definitions rather than names, and so deliberately out of step with the
+        Charter's ``tools`` field, which is a name tuple. A name is enough to
+        narrow and not enough to contribute: the tool a participant adds for one
+        iteration has no entry in the registry to look a schema up from. Aligning
+        the two would mean moving that contribution to Capability, which is a
+        larger change than this seam, and is why the mismatch is written down
+        here rather than papered over."""
         return None
 
     async def advise(self, step: StepView) -> str | None:
         """One note for the next model call, or nothing."""
         return None
 
-    async def system_addendum(self, step: StepView) -> Intake | None:
+    async def system_addendum(self, step: StepView) -> Answer | None:
         """Text this agent adds after the system prefix for this call, or a reply
         that ends the turn because nothing of it fits. ``step.transcript`` shows
         the prefix without any earlier addendum of this conduct's: the host takes
         the previous one out before asking and splices the new one in after."""
         return None
 
-    async def review(self, step: StepView) -> Verdict:
-        """Whether this step stands."""
-        return Accept()
+    async def review(self, step: StepView) -> Answer | None:
+        """Whether this step stands: ``Accept()``, ``Resample(...)`` or
+        ``End(reply)``, or None for the same thing ``Accept()`` says."""
+        return None
 
-    async def salvage(self, step: StepView) -> Any | None:
-        """A reply for a turn that ended without one, or nothing."""
+    async def salvage(self, step: StepView) -> str | None:
+        """The reply text for a turn that ended without one, or nothing. A
+        string rather than any object the host happens to accept, so that what
+        a generated participant can say is what every participant may say."""
         return None
 
     async def outbound(self, reply: str, step: StepView) -> str | None:
@@ -215,6 +226,6 @@ __all__ = [
     "End",
     "Intake",
     "Resample",
+    "Answer",
     "StepView",
-    "Verdict",
 ]

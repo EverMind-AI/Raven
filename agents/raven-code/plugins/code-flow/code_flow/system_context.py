@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from raven.contracts.agent_conduct import Intake
+from raven.contracts.agent_conduct import Answer, Intake
 from raven.providers.base import send_max_tokens
 from raven.providers.binding import active_binding
 from raven.utils.tokens import estimate_prompt_tokens
@@ -37,7 +37,7 @@ def sized_addendum(
     *,
     window: int | None = None,
     pending_note: str | None = None,
-) -> Intake | None:
+) -> Answer | None:
     """The system addition this call carries, sized to fit, or the reply that ends the turn.
 
     ``transcript`` is the prompt as the call will send it, without any earlier

@@ -23,8 +23,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from raven.agent.harness.conducts import compose_review, compose_salvage
-from raven.contracts.agent_conduct import AgentConduct, StepView, Verdict
+from raven.agent.harness.conducts import Verdict, compose_review, compose_salvage
+from raven.contracts.agent_conduct import AgentConduct, StepView
 from raven.contracts.harness import ActionModule, ActionRequest
 
 if TYPE_CHECKING:

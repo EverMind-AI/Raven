@@ -67,7 +67,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from raven.agent import workdir
-from raven.contracts.agent_conduct import Accept, AgentConduct, Intake, Resample, StepView, Verdict
+from raven.contracts.agent_conduct import Accept, AgentConduct, Answer, Intake, Resample, StepView
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 from raven.memory_engine.skill_local.registry import SkillRegistry
 from raven.utils.paths import mint_slug
@@ -299,7 +299,7 @@ class DesignConduct(AgentConduct):
         workdir.repoint(own)
         return own
 
-    async def intake(self, text: str, step: StepView) -> Intake | None:
+    async def intake(self, text: str, step: StepView) -> Answer | None:
         # D1 clause 2: hooks fire before slash dispatch, so a command-shaped
         # inbound must pass through untouched or "/new" stops working; a blank
         # one has nothing to classify.
@@ -354,7 +354,7 @@ class DesignConduct(AgentConduct):
                 logger.warning("design-engine: task-state projection failed: %s", exc)
         return "\n\n".join(blocks) or None
 
-    async def system_addendum(self, step: StepView) -> Intake | None:
+    async def system_addendum(self, step: StepView) -> Answer | None:
         """Nothing to add to the prefix; the seat where a turn that has no
         session directory is ended before its first call."""
         if self._blocked is None:
@@ -362,7 +362,7 @@ class DesignConduct(AgentConduct):
         blocked, self._blocked = self._blocked, None
         return Intake(text="", reply=blocked)
 
-    async def review(self, step: StepView) -> Verdict:
+    async def review(self, step: StepView) -> Answer:
         """Send the turn back once when its reply would carry a stale ledger.
 
         Decided from the ledger rather than from the prose: whether the reply
