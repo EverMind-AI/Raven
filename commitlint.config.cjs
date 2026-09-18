@@ -45,6 +45,11 @@ const TOP_LEVEL_TREES = [
   "ui-web",
 ];
 
+// Two files at the repository root rather than a tree, so no directory scan
+// reaches them -- but a change confined to install.sh and install.ps1 is as
+// scoped as one confined to ui-web/, and `*` says less than the truth about it.
+const ROOT_SURFACES = ["installer"];
+
 const PRODUCTS = ["raven-code", "raven-design", "raven-oncall", "raven-ppt", "raven-research"];
 
 // The plugin distributions beside the host wheel: each is its own package
@@ -70,6 +75,7 @@ const SCOPES = [
     ...ravenPackages(),
     "home",
     ...TOP_LEVEL_TREES,
+    ...ROOT_SURFACES,
     ...PRODUCTS,
     ...WHEEL_DISTRIBUTIONS,
     ...LEGACY_SCOPES,

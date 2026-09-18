@@ -190,7 +190,12 @@ def main() -> None:
     out = out.replace(ASSETV_MARK, _assets_stamp(), 1)
     dist = ROOT / "dist"
     dist.mkdir(exist_ok=True)
-    (dist / "index.html").write_text(out, encoding="utf-8")
+    # newline="" so the bytes are the string: the default translates every \n
+    # to os.linesep, which on Windows emits a CRLF page whose script payloads
+    # check-page.mjs can no longer extract (its `<script>\n` anchor needs the
+    # LF to be the next byte). The artifact ships in the wheel, so it must not
+    # depend on which platform assembled it either.
+    (dist / "index.html").write_text(out, encoding="utf-8", newline="")
     print(f"built dist/index.html ({len(out):,} bytes)")
 
     # Static assets stay files rather than data: URIs -- inlining 320 KB of
