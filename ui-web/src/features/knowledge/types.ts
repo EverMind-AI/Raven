@@ -219,7 +219,7 @@ export interface KbHit {
      comparable by value, so a surface showing both has to say which is which
      rather than printing them under one heading. Absent from a gateway that
      predates the field, which only ever searched by vector. */
-  retrieval?: 'vector' | 'keyword' 
+  retrieval?: 'vector' | 'keyword'
   document_id: string
   text: string
   /* Which piece of its document this was, and of how many. A chunk read on
