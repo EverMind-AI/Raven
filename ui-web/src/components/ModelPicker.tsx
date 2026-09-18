@@ -48,8 +48,8 @@ export function ModelPicker({ title, providers, current, onPick, onClose, emptyN
   const rows = sel ? hits(sel) : []
   const first = rows[0] ?? (q.trim() && !exact ? q.trim() : null)
   return (
-    <div className="mpick" role="dialog" aria-label={title}>
-      <div className="mpsearch">
+    <div className="mpk" role="dialog" aria-label={title}>
+      <div className="mpk-search">
         <span className="ttl">{title}</span>
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>
         <input
@@ -74,23 +74,23 @@ export function ModelPicker({ title, providers, current, onPick, onClose, emptyN
         />
         <button type="button" className="back" onClick={onClose}>{t('gui.cancel')}</button>
       </div>
-      <div className="mpbody">
-        <div className="mpleft">
+      <div className="mpk-body">
+        <div className="mpk-left">
           {shown.map((p) => (
-            <button key={p.id} type="button" className="mpp" aria-current={p.id === selId} onClick={() => setProv(p.id)}>
+            <button key={p.id} type="button" className="mpk-prov" aria-current={p.id === selId} onClick={() => setProv(p.id)}>
               <span>{p.name}</span><span className="c">{hits(p).length}</span>
               {current && current.provider === p.id && <span className="dot" />}
             </button>
           ))}
         </div>
-        <div className="mpright">
-          {!sel && <div className="mpempty">{emptyNote}</div>}
+        <div className="mpk-right">
+          {!sel && <div className="mpk-empty">{emptyNote}</div>}
           {sel && rows.map((m) => {
             const on = !!current && current.provider === sel.id && current.model === m
             const named = sel.labels && sel.labels[m]
             const win = named && named.context_window
             return (
-              <button key={m} type="button" className="mpm" aria-pressed={on} onClick={() => onPick(m, sel.id, false)}>
+              <button key={m} type="button" className="mpk-model" aria-pressed={on} onClick={() => onPick(m, sel.id, false)}>
                 <span>{(named && named.label) || m}</span>
                 {on && <span className="tick">{'✓'}</span>}
                 {win ? <span className="win">{Math.floor(win / 1000)}k</span> : null}
@@ -99,14 +99,14 @@ export function ModelPicker({ title, providers, current, onPick, onClose, emptyN
           })}
           {sel && q.trim() && !exact && (
             <>
-              {rows.length > 0 && <div className="mphr" />}
-              <button type="button" className="mpm add" onClick={() => onPick(q.trim(), sel.id, true)}>
+              {rows.length > 0 && <div className="mpk-hr" />}
+              <button type="button" className="mpk-model add" onClick={() => onPick(q.trim(), sel.id, true)}>
                 <span>{t('gui.model.pick_use', { id: q.trim() })}</span>
                 <span className="win">{t('gui.model.pick_add_to', { name: sel.name })}</span>
               </button>
             </>
           )}
-          {sel && !rows.length && !q.trim() && <div className="mpempty">{t('gui.model.pick_none')}</div>}
+          {sel && !rows.length && !q.trim() && <div className="mpk-empty">{t('gui.model.pick_none')}</div>}
         </div>
       </div>
     </div>

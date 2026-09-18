@@ -5,33 +5,38 @@
  * .modern/domains.css like a domain's styles.css, because the component imports
  * it.
  */
-.mpick {background:var(--paper); border:1px solid var(--line); border-radius:12px; box-shadow:var(--elev-up);
-.mpsearch {display:flex; align-items:center; gap:10px; padding:13px 16px; border-bottom:1px solid var(--line)}
-.mpsearch svg {width:15px; height:15px; flex:0 0 15px; fill:none; stroke:var(--faint); stroke-width:1.7; stroke-linecap:round}
-.mpsearch input {flex:1; font:inherit; font-size:15px; border:0; background:none; color:var(--text); outline:none}
-.mpsearch input::placeholder {color:var(--faint)}
-.mpbody {display:grid; grid-template-columns:200px 1fr; min-height:0; flex:1}
-.mpbody {grid-template-columns:140px 1fr}
-.mpleft {border-right:1px solid var(--line); overflow-y:auto; padding:8px}
-.mpright {overflow-y:auto; padding:8px 8px 12px}
-.mpp {display:flex; align-items:center; gap:8px; width:100%; text-align:left; font:inherit; font-size:14.5px;
-.mpp:hover {background:var(--surface)}
-.mpp[aria-current="true"] {background:var(--raised); font-weight:600}
-.mpp .c {margin-left:auto; color:var(--faint); font-size:12.5px; font-variant-numeric:tabular-nums}
-.mpp .dot {width:5px; height:5px; border-radius:99px; background:var(--amber); flex:0 0 5px}
-.mpm {display:flex; align-items:center; gap:10px; width:100%; text-align:left; font-family:var(--mono); font-size:14px;
-.mpm:hover {background:var(--surface)}
-.mpm .tick {margin-left:auto; color:var(--amber); font-size:14px}
-.mpm .win {margin-left:auto; color:var(--faint); font-size:11.5px; font-family:var(--sans)}
-.mpm .tick + .win {margin-left:8px}
-.mpempty {padding:22px 14px; color:var(--faint); font-size:13.5px; text-align:center}
-.mpp:focus-visible,.mpm:focus-visible {outline:2px solid var(--amber); outline-offset:-2px}
-.mphr {height:1px; background:var(--line-soft); margin:6px 4px}
-.mpm.opt {font-family:var(--sans)}
-.mpm[disabled] {opacity:.4; cursor:not-allowed}
-.mpm.add {color:var(--gold)}
-.mpsearch .back {font:inherit; font-size:12.5px; border:0; background:none; color:var(--muted); cursor:pointer; padding:2px 6px; border-radius:6px}
-.mpsearch .back:hover {color:var(--text); background:var(--raised)}
-.mpsearch .ttl {font-family:var(--disp); font-weight:600; font-size:15px}
-.mpsearch .ttl:empty {display:none}
-.mpsearch .ttl + svg {margin-left:6px}
+.mpk {background:var(--paper); border:1px solid var(--line); border-radius:12px; box-shadow:var(--elev-up);
+  width:min(720px, 100%); height:min(78vh, 560px); display:flex; flex-direction:column; overflow:hidden}
+.mpk-search {display:flex; align-items:center; gap:10px; padding:13px 16px; border-bottom:1px solid var(--line)}
+.mpk-search svg {width:15px; height:15px; flex:0 0 15px; fill:none; stroke:var(--faint); stroke-width:1.7; stroke-linecap:round}
+.mpk-search input {flex:1; font:inherit; font-size:15px; border:0; background:none; color:var(--text); outline:none}
+.mpk-search input::placeholder {color:var(--faint)}
+.mpk-body {display:grid; grid-template-columns:200px 1fr; min-height:0; flex:1}
+@media(max-width:560px) {
+  .mpk-body {grid-template-columns:140px 1fr}
+}
+.mpk-left {border-right:1px solid var(--line); overflow-y:auto; padding:8px}
+.mpk-right {overflow-y:auto; padding:8px 8px 12px}
+.mpk-prov {display:flex; align-items:center; gap:8px; width:100%; text-align:left; font:inherit; font-size:14.5px;
+  background:none; border:0; color:var(--text); padding:9px 11px; border-radius:8px; cursor:pointer}
+.mpk-prov:hover {background:var(--surface)}
+.mpk-prov[aria-current="true"] {background:var(--raised); font-weight:600}
+.mpk-prov .c {margin-left:auto; color:var(--faint); font-size:12.5px; font-variant-numeric:tabular-nums}
+.mpk-prov .dot {width:5px; height:5px; border-radius:99px; background:var(--amber); flex:0 0 5px}
+.mpk-model {display:flex; align-items:center; gap:10px; width:100%; text-align:left; font-family:var(--mono); font-size:14px;
+  background:none; border:0; color:var(--text); padding:9px 12px; border-radius:8px; cursor:pointer}
+.mpk-model:hover {background:var(--surface)}
+.mpk-model .tick {margin-left:auto; color:var(--amber); font-size:14px}
+.mpk-model .win {margin-left:auto; color:var(--faint); font-size:11.5px; font-family:var(--sans)}
+.mpk-model .tick + .win {margin-left:8px}
+.mpk-empty {padding:22px 14px; color:var(--faint); font-size:13.5px; text-align:center}
+.mpk-prov:focus-visible,.mpk-model:focus-visible {outline:2px solid var(--amber); outline-offset:-2px}
+.mpk-hr {height:1px; background:var(--line-soft); margin:6px 4px}
+.mpk-model.opt {font-family:var(--sans)}
+.mpk-model[disabled] {opacity:.4; cursor:not-allowed}
+.mpk-model.add {color:var(--gold)}
+.mpk-search .back {font:inherit; font-size:12.5px; border:0; background:none; color:var(--muted); cursor:pointer; padding:2px 6px; border-radius:6px}
+.mpk-search .back:hover {color:var(--text); background:var(--raised)}
+.mpk-search .ttl {font-family:var(--disp); font-weight:600; font-size:15px}
+.mpk-search .ttl:empty {display:none}
+.mpk-search .ttl + svg {margin-left:6px}

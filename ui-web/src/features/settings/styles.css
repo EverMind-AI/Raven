@@ -217,7 +217,6 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
 .settings-kvform input,.settings-kvform select {font:inherit; font-family:var(--mono); font-size:12.5px; border:1px solid var(--line);
   border-radius:7px; background:var(--surface); color:var(--text); padding:5px 9px; flex:1; min-width:110px}
 .settings-kvform select {font-family:var(--mono)}
-  width:min(720px, 100%); height:min(78vh, 560px); display:flex; flex-direction:column; overflow:hidden}
 .settings-padd {margin:10px 15px 6px; border-color:var(--line)}
 .settings-padd .settings-row .settings-k:empty {display:none}
 .settings-padd .settings-row:last-child {grid-template-columns:132px minmax(0,1fr)}
@@ -237,13 +236,16 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
 .settings-mlempty {padding:26px 14px; color:var(--faint); font-size:13px; text-align:center}
 .settings-mlf {display:flex; align-items:center; gap:8px; padding:9px 15px; border-top:1px solid var(--line-soft)}
 .settings-mini[disabled] {opacity:.45; cursor:not-allowed}
-.settings-ppcard .settings-mpsearch {padding:10px 14px}
-.settings-ppcard .settings-mpsearch input {font-size:14px}
-.settings-ppcard .settings-mpbody {grid-template-columns:190px 1fr}
-@media(max-width:560px) {
-}
-  background:none; border:0; color:var(--text); padding:9px 11px; border-radius:8px; cursor:pointer}
-  background:none; border:0; color:var(--text); padding:9px 12px; border-radius:8px; cursor:pointer}
+.settings-ctl {position:relative}
+.settings-ctl .mpk {position:absolute; top:calc(100% + 6px); right:0; z-index:30; width:min(560px, calc(100vw - 32px)); height:400px}
+.settings-ctl .mpk-search {padding:10px 14px}
+.settings-ctl .mpk-search input {font-size:14px}
+.settings-ctl .mpk-body {grid-template-columns:170px 1fr}
+.settings-ctl .mpk-prov {font-size:13.5px; padding:7px 10px}
+.settings-ctl .mpk-model {font-size:13px; padding:7px 10px}
+.settings-ppcard .mpk-search {padding:10px 14px}
+.settings-ppcard .mpk-search input {font-size:14px}
+.settings-ppcard .mpk-body {grid-template-columns:190px 1fr}
 .settings-tag2.settings-pick {cursor:pointer; font-family:var(--mono)}
 .settings-tag2.settings-pick:hover {border-color:var(--amber); color:var(--text)}
 .settings-spin {display:inline-block; width:11px; height:11px; margin-right:7px; vertical-align:-1px;

@@ -20,7 +20,7 @@ afterEach(() => {
 
 const role = (id: string) => ROLES.find((r) => r.id === id)!
 const pill = (roleName: string): HTMLElement => screen.getByLabelText(`gui.settings.roles.change {"role":"${roleName}"}`)
-const picker = (): HTMLElement => document.querySelector('.mpick') as HTMLElement
+const picker = (): HTMLElement => document.querySelector('.mpk') as HTMLElement
 const pick = async (roleName: string, model: string, providerName?: string): Promise<void> => {
   await act(async () => { fireEvent.click(pill(roleName)) })
   if (providerName) await act(async () => { fireEvent.click(within(picker()).getByText(providerName)) })
