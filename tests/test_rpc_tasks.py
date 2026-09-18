@@ -1,16 +1,17 @@
 """``tasks.list`` -- a run-level row per task, built off the three stores.
 
 Spawn rows are driven through a real spawn where the full pipeline matters
-(``SubagentManager.spawn``, exercising G1's file-recording hook end to end)
-and through ``SpawnRecord`` directly for the status ladder's edge cases, which
-need meta shapes ``SubagentManager`` itself never produces (a record with no
-``status`` key, an interrupted run). Dag rows are driven through
-``DagRunStore`` -- the graph and manifest are written by hand (a plain dict,
-the way ``docs/specs/2026-09-18-desk-tasks-list-design.md`` and
-``my_docs/specs/20260918_tasks_rpc_contract.md`` describe them), but the
-node registry is written through the store's own ``record_nodes`` /
-``record_outcome``, so a hard-stopped run's ``nodes.json`` looks exactly like
-the one ``_mark_stopped`` leaves behind.
+(``SubagentManager.spawn`` writing the record and its meta) and through
+``SpawnRecord`` directly for the status ladder's edge cases, which need meta
+shapes ``SubagentManager`` itself never produces (a record with no ``status``
+key, an interrupted run). The file-recording hook itself is covered where it
+lives, in ``tests/test_subagent_manager.py``; here a stand-in backend records
+the entry by hand and the test checks it comes through. Dag rows are driven
+through ``DagRunStore`` -- the graph and manifest are written by hand (a plain
+dict, the way ``docs/specs/2026-09-18-desk-tasks-list-design.md`` describes
+them), but the node registry is written through the store's own
+``record_nodes`` / ``record_outcome``, so a hard-stopped run's ``nodes.json``
+looks exactly like the one ``_mark_stopped`` leaves behind.
 """
 
 from __future__ import annotations
@@ -89,9 +90,9 @@ def _factory(loop: Any):
 async def _real_spawn(workspace: Path, task: str = "count the files", label: str = "counting") -> str:
     """One real spawn through ``SubagentManager``, awaited to completion.
 
-    Exercises G1 end to end: the stand-in backend calls the registry's real
-    ``write_file`` tool, so the recorded ``files`` entry is the one
-    ``raven_loop.py`` actually produced, not one this test fabricated.
+    The stand-in backend writes a file and records the entry the way the
+    in-process lane's hook would, so the test is about the record reaching
+    the row, not about the hook (``tests/test_subagent_manager.py`` has that).
     """
     import asyncio
 
@@ -509,6 +510,64 @@ async def test_a_live_runs_claimed_but_undispatched_node_reads_pending_with_no_c
     assert n2["status"] == "pending" and n2["started_at"] is None and n2["ended_at"] is None
     assert row["status"] == "running"
     assert row["counts"]["running"] == 1 and row["counts"]["pending"] == 1
+
+
+async def test_a_live_run_reads_each_node_from_its_own_instance_row(workspace: Path) -> None:
+    """The registry claims every node `running` at start; the instance rows are
+    where a live run's per-node truth is (`_write_node_status`): one done, one
+    executing, one not yet dispatched must read as three different statuses."""
+    from raven.agent.subagent.instances import get_registry
+
+    graph = {
+        "task_summary": "three steps in flight",
+        "nodes": [
+            {"id": "n1", "subagent": "Raven", "node_summary": "s1", "depends_on": [], "instance": None},
+            {"id": "n2", "subagent": "Raven", "node_summary": "s2", "depends_on": ["n1"], "instance": None},
+            {"id": "n3", "subagent": "Raven", "node_summary": "s3", "depends_on": ["n2"], "instance": None},
+        ],
+    }
+    session_dir = _session_dir(workspace)
+    await _make_run(session_dir, RUN_ID, graph, ["n1", "n2", "n3"])
+    await get_registry().upsert_dag_node(SESSION, RUN_ID, "n1", "Raven", "completed")
+    await get_registry().upsert_dag_node(SESSION, RUN_ID, "n2", "Raven", "running")
+    loop = _loop_stub(live_run_ids=frozenset({RUN_ID}))
+
+    row = (await tasks_list({"session_key": SESSION}, agent_loop_factory=_factory(loop)))["tasks"][0]
+    assert [n["status"] for n in row["nodes"]] == ["completed", "running", "pending"]
+    n1, n2, n3 = row["nodes"]
+    assert isinstance(n1["ended_at"], int) and n2["ended_at"] is None and n3["started_at"] is None
+    assert row["status"] == "running" and row["ended_at"] is None
+    assert row["counts"]["completed"] == 1 and row["counts"]["running"] == 1 and row["counts"]["pending"] == 1
+
+
+async def test_a_just_dispatched_run_sorts_above_older_finished_work(workspace: Path) -> None:
+    """A run no node has started yet has no `started_at`; its id's UTC stamp
+    says when it was minted, and that is what puts it at the top."""
+    session_dir = _session_dir(workspace)
+    old_id = "20260101T000000000000Z-0a0a0a0a"
+    new_id = "20260918T235959000000Z-b1b1b1b1"
+    old_store = await _make_run(session_dir, old_id, _GRAPH, ["n1", "n2"])
+    await old_store.write_manifest(
+        {"n1": _manifest_entry(status="completed"), "n2": _manifest_entry(status="completed")}
+    )
+    async with index_guard(old_store.registry_root):
+        await old_store.record_outcome({"n1": "completed", "n2": "completed"}, summary="ok")
+    await _make_run(session_dir, new_id, _GRAPH, ["n1", "n2"], registry_root=session_dir / "other")
+    loop = _loop_stub(live_run_ids=frozenset({new_id}))
+
+    rows = (await tasks_list({"session_key": SESSION}, agent_loop_factory=_factory(loop)))["tasks"]
+    assert [r["id"] for r in rows] == [new_id, old_id]
+    assert rows[0]["started_at"] is None and rows[0]["status"] == "running"
+
+
+async def test_a_run_dir_with_no_readable_graph_is_not_a_task(workspace: Path) -> None:
+    """A graph mid-write or corrupt has no node list; reporting it as a
+    completed run of zero steps is the one answer the record cannot support."""
+    session_dir = _session_dir(workspace)
+    await _make_run(session_dir, RUN_ID, _GRAPH, ["n1", "n2"])
+    (dag_root(session_dir) / RUN_ID / "graph.json").write_text('{"task_summary": "half', encoding="utf-8")
+
+    assert (await tasks_list({"session_key": SESSION}))["tasks"] == []
 
 
 async def test_a_node_no_layer_has_ever_heard_of_reads_pending(workspace: Path) -> None:

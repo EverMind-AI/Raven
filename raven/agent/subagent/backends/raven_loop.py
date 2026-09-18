@@ -27,6 +27,7 @@ from raven.agent.subagent.mcp_grant import (
     raven_loop_target,
     resolve_grant,
 )
+from raven.agent.subagent.tool_vocabulary import RAVEN_NAME
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry, call_failed
 from raven.agent.tools.shell import ExecTool
@@ -66,8 +67,9 @@ def _file_change_counts(file_change: Any, diff: str | None) -> tuple[int, int]:
     added, and an existing file is compared line-by-line with ``difflib``.
     """
     if diff:
-        add = sum(1 for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++"))
-        delete = sum(1 for line in diff.splitlines() if line.startswith("-") and not line.startswith("---"))
+        lines = diff.splitlines()
+        add = sum(1 for line in lines if line.startswith("+") and not line.startswith("+++"))
+        delete = sum(1 for line in lines if line.startswith("-") and not line.startswith("---"))
         return add, delete
     after_lines = file_change.after.splitlines()
     if file_change.before is None:
@@ -511,10 +513,13 @@ class RavenLoopBackend:
                     set_current_tool_call_id(tool_call.id)
                     result = await tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
                     if (file_change := getattr(result, "file_change", None)) is not None:
+                        # The op is the tool's, not the file's: a write over an
+                        # existing file is still a write, and `before` only
+                        # decides how many lines it replaced.
                         add, delete = _file_change_counts(file_change, getattr(result, "diff", None))
                         activity.note_file_change(
                             file_change.path,
-                            "write" if file_change.before is None else "edit",
+                            "edit" if "edit" in RAVEN_NAME.get(tool_call.name, tool_call.name) else "write",
                             add,
                             delete,
                             len(file_change.after.encode("utf-8")),

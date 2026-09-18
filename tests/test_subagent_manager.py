@@ -2192,6 +2192,58 @@ class _WriteThenEditProvider(LLMProvider):
         return LLMResponse(content="done", finish_reason="stop")
 
 
+class _WriteTwiceProvider(LLMProvider):
+    """Two ``write_file`` calls on the same path, then a final answer."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        from raven.providers.base import ToolCallRequest
+
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCallRequest(id="c1", name="write_file", arguments={"path": "notes.md", "content": "a\nb\nc\n"})
+                ],
+            )
+        if self.calls == 2:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCallRequest(id="c2", name="write_file", arguments={"path": "notes.md", "content": "a\nz\n"})
+                ],
+            )
+        return LLMResponse(content="done", finish_reason="stop")
+
+
+async def test_a_write_over_an_existing_file_is_still_a_write_with_removed_lines(tmp_path) -> None:
+    """The op is the tool's: a rewrite of an existing file is ``write`` (the
+    panel draws a file chip, not a diff chip), and ``before`` only decides how
+    many lines the rewrite replaced."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    backend = RavenLoopBackend(provider=_WriteTwiceProvider(), model="stub", agent_home=tmp_path)
+
+    with activity.collecting() as did:
+        await backend.run("write twice", task_id="n6", workspace=tmp_path, executor=None)
+
+    assert [f["op"] for f in did.files] == ["write", "write"]
+    second = did.files[1]
+    assert second["add"] == 1
+    assert second["del"] == 2
+    assert second["size"] == len(b"a\nz\n")
+
+
 async def test_an_edit_file_call_records_add_and_delete_counts(tmp_path) -> None:
     """An edit's ``op`` is ``edit`` (unlike a first write's ``write``) and its
     ``del`` count is non-zero, because it has a real ``before`` to diff against."""

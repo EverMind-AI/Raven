@@ -16,12 +16,14 @@ Bodies stay where they are: a node's messages, output and rendered prompt are
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from raven.agent.subagent.dag_store import REGISTRY_FILENAME, RUNNING, UNRECORDED
 from raven.agent.subagent.history import dag_root, nodes_root, session_history_root
 from raven.agent.subagent.instances import get_registry
+from raven.rpc.methods.instances import _graph_of
 from raven.rpc.methods.session import _safe_invoke_factory
 from raven.rpc.methods.subagent import (
     _label_from_prompt,
@@ -62,7 +64,10 @@ _PLAYBOOK_TAG_RE = re.compile(r"^[0-9a-f]{6}-")
 def _head(path: Path, limit: int) -> str | None:
     """The first ``limit`` characters of a file, or None when it does not exist."""
     try:
-        return path.read_text(encoding="utf-8", errors="replace")[:limit] if path.is_file() else None
+        if not path.is_file():
+            return None
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            return fh.read(limit)
     except OSError:
         return None
 
@@ -118,15 +123,30 @@ def _task_status(statuses: list[str]) -> str:
     return "completed"
 
 
-def _sort_key(row: dict[str, Any]) -> tuple[bool, int, str]:
-    """Newest first; a row with no start time sorts last, tied on its own id.
+_RUN_ID_STAMP_RE = re.compile(r"^(\d{8}T\d{6})(\d{6})Z-")
 
-    A dag row with no start falls back to its own id, which is the run id --
-    itself a UTC-prefixed, lexicographically sortable stamp -- so the fallback
-    is a plain id-descending sort rather than a second timestamp parse.
-    """
+
+def _run_id_epoch_ms(run_id: str) -> int | None:
+    """The moment a run id was minted, from its UTC prefix; None for any other id."""
+    match = _RUN_ID_STAMP_RE.match(run_id)
+    if match is None:
+        return None
+    try:
+        stamp = datetime.strptime(match.group(1), "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return int(stamp.timestamp() * 1000) + int(match.group(2)) // 1000
+
+
+def _sort_key(row: dict[str, Any]) -> tuple[int, str]:
+    """Newest first. A dag row no node has started yet -- the first seconds of
+    every run -- is placed by the moment its id was minted, so a just-dispatched
+    run heads the list instead of falling below every finished one; a spawn row
+    with no clock at all sorts last. Ties break on the id."""
     started = row.get("started_at")
-    return (started is not None, started or 0, row["id"])
+    if started is None and row.get("kind") == "dag":
+        started = _run_id_epoch_ms(str(row["id"]))
+    return (started if isinstance(started, int) else 0, row["id"])
 
 
 def _manager_of(agent_loop_factory: "AgentLoopFactory | None") -> Any:
@@ -255,6 +275,7 @@ def _spawn_rows(
 
 
 def _dag_node_state(
+    run_id: str,
     node_id: str,
     manifest_entry: dict[str, Any] | None,
     registry_nodes: dict[str, Any],
@@ -273,7 +294,10 @@ def _dag_node_state(
             return status, _int_or_none(manifest_entry.get("started_at")), _int_or_none(manifest_entry.get("ended_at"))
 
     reg_entry = registry_nodes.get(node_id)
-    if isinstance(reg_entry, dict):
+    # The registry is per session and an id can be claimed again by a later
+    # run once its first owner is done, so an entry another run wrote says
+    # nothing about this one.
+    if isinstance(reg_entry, dict) and reg_entry.get("run_id") in (None, run_id):
         status = reg_entry.get("status")
         # `unrecorded` is a sentinel `dag_store.read_session_nodes` computes
         # for an entry with no status of its own, not a value ever written --
@@ -321,15 +345,19 @@ def _replan_of(graph: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _dag_row(
+    session_dir: Path,
     run_dir: Path,
-    session_key: str,
     registry_nodes: dict[str, Any],
     instance_rows: list[dict[str, Any]],
     nodes_dir: Path,
     live_runs: set[str],
     playbook_names: list[str],
-) -> dict[str, Any]:
-    graph = _read_json(run_dir / "graph.json")
+) -> dict[str, Any] | None:
+    graph = _graph_of(session_dir, run_dir.name)
+    if not isinstance(graph.get("nodes"), list):
+        # No readable graph, no task: a dir mid-write (init writes the graph
+        # first) or a corrupt one must not read as a completed run of no steps.
+        return None
     manifest = _read_json(run_dir / "manifest.json")
     live = run_dir.name in live_runs
     by_node = {
@@ -338,7 +366,7 @@ def _dag_row(
         if row.get("kind") == "dag-node" and row.get("runId") == run_dir.name
     }
 
-    graph_nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+    graph_nodes = graph["nodes"]
     nodes: list[dict[str, Any]] = []
     statuses: list[str] = []
     starts: list[int] = []
@@ -348,7 +376,7 @@ def _dag_row(
             continue
         nid = gnode["id"]
         entry = manifest.get(nid) if isinstance(manifest.get(nid), dict) else None
-        status, started, ended = _dag_node_state(nid, entry, registry_nodes, by_node)
+        status, started, ended = _dag_node_state(run_dir.name, nid, entry, registry_nodes, by_node)
         if status in _NOT_LIVE_PENDING and not live:
             status = "interrupted"
         if status == "skipped":
@@ -442,10 +470,11 @@ def _dag_rows(
     nodes_dir = nodes_root(session_dir)
     playbook_names = _playbook_names()
 
-    return [
-        _dag_row(run_dir, session_key, registry_nodes, instance_rows, nodes_dir, live_runs, playbook_names)
+    rows = (
+        _dag_row(session_dir, run_dir, registry_nodes, instance_rows, nodes_dir, live_runs, playbook_names)
         for run_dir in run_dirs
-    ]
+    )
+    return [row for row in rows if row is not None]
 
 
 async def tasks_list(

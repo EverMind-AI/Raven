@@ -159,8 +159,10 @@ builders. The offline page answers `tasks.list` from `src/rpc/fixtures/tasks.ts`
 `rpc-schema/openrpc.json` is the source; `raven/rpc/models.py` mirrors it
 (`tests/test_rpc_schema_match.py`); both `ui-web/src/rpc/generated.ts` (`npm run gen`,
 `gen:check`) and `ui-tui/src/rpc/generated.ts` (`npm run gen:rpc`, `lint:rpc`) are
-regenerated. Fields with a meaningful null are declared `["<type>", "null"]` and
-required; `replan` is the one optional field. Timestamps are epoch milliseconds, as on
+regenerated. Fields with a meaningful null are declared `["<type>", "null"]` and left
+out of `required` (the schema-match test strips nullable fields from the pydantic side
+before comparing, so a nullable field listed as required fails); arrays and objects are
+non-null on the schema side. `replan` is the one optional object. Timestamps are epoch milliseconds, as on
 `DagSnapshotNode` and the `dag.*` events. Node status vocabulary is
 `DagSnapshotNodeStatus`. The agent field is `agent`, as on `SubagentCall` and
 `InstanceRow`.
