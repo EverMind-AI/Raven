@@ -451,7 +451,13 @@ def render_config(source: Path, partition: Path, mode: str | None = None, *, una
     if (config.get("memory") or {}).get("backend"):
         forge = config.setdefault("skillForge", {})
         forge.setdefault("discovery", "push")
-        forge.setdefault("router", {}).setdefault("weights", {}).setdefault("local", 0.0)
+        router_slice = forge.setdefault("router", {})
+        router_slice.setdefault("weights", {}).setdefault("local", 0.0)
+        # Trunk's budget of 2 was sized for the pull menu, not for injected
+        # bodies; the benchmarks this branch serves are scored at top-20
+        # (MemOS's own LOCOMO tables, and one of Mem0's published cutoffs), so
+        # an out-of-the-box run measures the same caliber as a configured one.
+        router_slice.setdefault("topK", 20)
     # The tool fence travels through the slice because a plugin factory cannot
     # read it: these tools replace the host's own by name, and the host grants
     # its own the workspace root only when tools.restrictToWorkspace is on.

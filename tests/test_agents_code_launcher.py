@@ -957,17 +957,21 @@ def test_a_wired_memory_backend_gets_the_push_lane(grounded, tmp_path):
     # The bundled demo skills outweigh any backend (0.96 > 0.9) and score on
     # common words; with a backend wired they would shadow every recalled row.
     assert rendered["skillForge"]["router"]["weights"]["local"] == 0.0
+    # Trunk's budget of 2 was sized for the pull menu; the benchmarks this
+    # branch serves score at top-20, and out-of-the-box must measure that.
+    assert rendered["skillForge"]["router"]["topK"] == 20
 
 
 def test_an_explicit_discovery_choice_wins_over_the_memory_default(grounded, tmp_path):
     source = tmp_path / "mem-pull.json"
     base = json.loads((RUN_PY.parent / "config.json").read_text())
     base["memory"] = {"backend": "memos", "memoryTopK": 0, "userId": "pool", "agentId": "pool"}
-    base["skillForge"] = {"discovery": "pull", "router": {"weights": {"local": 0.5}}}
+    base["skillForge"] = {"discovery": "pull", "router": {"topK": 3, "weights": {"local": 0.5}}}
     source.write_text(json.dumps(base))
     rendered = json.loads(grounded.render_config(source, tmp_path / "mem-pull-part").read_text())
     assert rendered["skillForge"]["discovery"] == "pull"
     assert rendered["skillForge"]["router"]["weights"]["local"] == 0.5
+    assert rendered["skillForge"]["router"]["topK"] == 3
 
 
 def test_without_a_memory_backend_the_skill_forge_stance_is_untouched(grounded, tmp_path):
