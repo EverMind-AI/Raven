@@ -112,7 +112,7 @@ conventions they are written to are `CONTRIBUTING.md` section 8.
 | `domain-shape` | the files a domain has and the name its root component exports |
 | `domain-registration` | every domain declared once, every page claimed by one domain, every seam key answered by one |
 | `store-shape` | one store shape and one set of verbs; the listener set lives only in `state/store.ts` |
-| `state-dom-touch` | how often each module in `state/` and `app/` may reach for an element, and zero for `lib/` and `components/` |
+| `state-dom-touch` | how often each module in `state/` and `app/` may reach for an element, how often the page frame -- `chrome/`, `App.tsx`, `main.tsx` -- may, and zero for `lib/` and `components/` |
 | `seam-assignment` | only `app/install.ts` puts a source on the data seam, plus the first frame's one pinned exception; `setSources` stays the test seam |
 | `island-lang` | every island's root subscribes to the language store |
 | `i18n-keys` | every literal key exists in the catalogue, sits under a namespace, and the namespace belongs to one domain |
@@ -122,7 +122,7 @@ conventions they are written to are `CONTRIBUTING.md` section 8.
 | `fixture-shape` | every offline responder answers the shape the contract declares, plus the fields it never sends |
 | `offline-coverage` | every method the page calls has an offline answer, or a reason it does not |
 | `fixture-now` | the offline library has no clock of its own |
-| `check-class-namespace` | a domain's class names carry the domain's prefix, in a `className` attribute or inside a `className={...}` expression; the shared and unprefixed debts may only shrink |
+| `check-class-namespace` | a domain's class names carry the domain's prefix, the page frame's carry `chrome-` and a shared component's carry its own file name, in a `className` attribute or inside a `className={...}` expression; the shared and unprefixed debts may only shrink, and a class no stylesheet defines is pinned by name |
 | `check-css` | the stylesheet's own declaration-level invariants |
 | `boot-order` | the page defers its first data-driven paint until every source is installed |
 | `first-run-model-setup` | a page with no provider configured sends every task action to Models |

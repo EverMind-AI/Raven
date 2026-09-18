@@ -22,6 +22,23 @@
  * elements nobody renders are handled: the pre-JavaScript splash it takes down,
  * the rail it holds on skeleton rows, and the rail-foot row the update notice
  * fills.
+ *
+ * The page frame -- src/chrome/, src/App.tsx and src/main.tsx -- is counted in
+ * FRAME instead, and its reaches are not violations of the rule above: that
+ * rule is about a second writer on a region a store already owns, and these are
+ * the page's own imperative behaviours. App.tsx portals into the body, the two
+ * popovers write into a list the page was served with, main.tsx mounts the
+ * island roots in the boxes that root committed, and chrome/behaviour/ is two
+ * modules that say in their own headers that they are behaviour rather than
+ * rendering: a grip drag writing one CSS variable, and scrollbar thumbs parked
+ * in a fixed layer over elements other layers drew. Counting them is what keeps
+ * a third such module from appearing unnoticed -- the counts may only fall, and
+ * a frame file that is not on the list may not reach for an element at all.
+ *
+ * Two of the twenty-six lines FRAME holds are a sentence in a module header
+ * that names document.body, and two more are React's own `createElement` in
+ * main.tsx, which the regex cannot tell from the document's. A budget that
+ * counts a little too much is the safe direction for a ratchet.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
@@ -70,6 +87,22 @@ const PINNED = {
   'app/updates.ts': 4,
 }
 
+/* The same, for the page frame's own imperative behaviours, which the header
+   says are not the rule's case. Down or gone: the numbers are what the frame
+   holds today, and a file absent from the list may not reach at all. */
+const FRAME = {
+  'App.tsx': 3,
+  'main.tsx': 5,
+  'chrome/FailureBar.tsx': 1,
+  'chrome/Lightbox.tsx': 1,
+  'chrome/PermPopover.tsx': 2,
+  'chrome/TierPopover.tsx': 2,
+  'chrome/UpgradeShade.tsx': 1,
+  'chrome/WsPane.tsx': 2,
+  'chrome/behaviour/panes.ts': 6,
+  'chrome/behaviour/scrollbars.ts': 3,
+}
+
 /* The two touches that are not a page element, registered one file at a time. */
 const EXEMPT = new Set(['lib/dom.ts', 'components/Ico.tsx'])
 
@@ -83,6 +116,9 @@ function* modules(dir) {
 
 /** Every module under one of src/'s directories, by its path from src/. */
 const layer = (dir) => [...modules(join(SRC, dir))].map((path) => relPath(SRC, path)).sort()
+
+/** The page frame: the chrome, and the two files that assemble the page. */
+const frame = () => [...layer('chrome'), 'App.tsx', 'main.tsx'].sort()
 
 const touches = (rel) => readFileSync(join(SRC, rel), 'utf8').split('\n').filter((line) => TOUCH.test(line))
 
@@ -104,7 +140,7 @@ function header(rel) {
    and never mentions one in its header is the case this catches. */
 const SAYS_WHY = /\bDOM\b|\bdocument\b|\belements?\b|\bnodes?\b|\bmarkup\b|#[A-Za-z]/
 
-describe('the state layer reaching for the page', () => {
+describe('which layer reaches for the page, and how often', () => {
   it('touches the DOM only where it is pinned, and never more often', () => {
     const over = []
     for (const rel of [...layer('state'), ...layer('app')]) {
@@ -114,6 +150,18 @@ describe('the state layer reaching for the page', () => {
       if (found > pinned) over.push(`${rel}: ${found} (pinned ${pinned})`)
     }
     expect(over, 'say in the module header why it reaches for an element, and lower another count instead')
+      .toEqual([])
+  })
+
+  it('holds the frame to the imperative behaviours it already has', () => {
+    const over = []
+    for (const rel of frame()) {
+      const found = touches(rel).length
+      if (!found) continue
+      const pinned = FRAME[rel] ?? 0
+      if (found > pinned) over.push(`${rel}: ${found} (pinned ${pinned})`)
+    }
+    expect(over, 'the frame installs behaviour rather than adding reaches: spend a count it already has')
       .toEqual([])
   })
 
@@ -143,9 +191,11 @@ describe('the state layer reaching for the page', () => {
   })
 
   it('pins every file it counts, and counts every file it pins', () => {
-    /* The table is read by name, so a renamed module would drop out of the
+    /* Both tables are read by name, so a renamed module would drop out of the
        count silently and a deleted one would leave a pin nothing tests. */
     const present = new Set([...layer('state'), ...layer('app')])
     expect(Object.keys(PINNED).filter((rel) => !present.has(rel))).toEqual([])
+    const framed = new Set(frame())
+    expect(Object.keys(FRAME).filter((rel) => !framed.has(rel))).toEqual([])
   })
 })

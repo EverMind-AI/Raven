@@ -203,9 +203,11 @@ page's wiring has run. Enforced by `import-direction`.
    the 30 pinned files in `state/` and `app/`, zero for `lib/` and
    `components/` (two registered exemptions: `lib/dom.ts` IS the page's `$`,
    and `components/Ico.tsx` builds detached SVG with `createElementNS`), and
-   every pinned module's header has to say why it reaches. `features/` and
-   `chrome/` are not counted -- rule (a) and (b) live there, so those two are
-   by review.
+   every pinned module's header has to say why it reaches. The page frame --
+   `chrome/`, `src/App.tsx`, `src/main.tsx` -- is counted in a table of its
+   own, `FRAME`, 26 lines over ten files: rule (b) is a budget, not a licence.
+   `features/` is not counted -- rule (a) lives there, so that one is by
+   review.
    The gate counts lines whose text matches, so a comment that merely mentions
    `querySelector` raises the count. Reword the comment; the number is a budget
    for the code.
@@ -346,6 +348,13 @@ the `cssPrefix` its manifest declares because it named its classes
 consistently before there was a rule (six do: `kb`, `pb`, `ob`, `pm`, `su`,
 `mem`).
 
+A class the page frame introduces -- `src/chrome/`, `src/App.tsx`,
+`src/main.tsx` -- is named `chrome-<rest>`, or exactly `chrome`. A class a
+shared component in `src/components/` introduces carries its own file's name in
+kebab-case (`Skeleton.tsx` names `skeleton-<rest>`, `SetupSheet.tsx` names
+`setup-sheet-<rest>`), and that component's root class may be the bare name.
+Both are styled from `page.css`, which is the only sheet either has.
+
 **Enforced by `check-class-namespace`** (run as a gate by
 `check-class-namespace.test.mjs` and as a CLI), with three shrink-only debts:
 `LEGACY_SHARED` (86 classes two or more domains name, pinned with how many
@@ -374,13 +383,25 @@ goes:
   It establishes the mechanism -- a domain's sheet, imported by its App,
   collected by Vite -- and says so in its header. No rule has moved yet.
 
-The gate's reach is every class a domain's non-test `.tsx` files name: the
-literal attribute `className="a b"`, and inside a `className={...}` expression
-every single-quoted, double-quoted and template-literal static chunk, split on
+The two namespaces beyond `features/` carry three more shrink-only lists in the
+same tool: `LEGACY_CHROME` (136 unprefixed classes, 103 in the frame and 33 in
+the components), `LEGACY_CHROME_EXPR` (10 more inside a `className={...}`
+expression, 1 and 9) and `UNSTYLED` (`.newrun`, the one class the frame's
+markup writes that no stylesheet defines). A name in the shared vocabulary
+passes there too, and so does a name already pinned in `LEGACY_SHARED` --
+counting the frame's use of a class two domains name would say the debt grew
+when nothing moved.
+
+The gate's reach is every class a domain's non-test `.tsx` files name, and the
+same for the frame's and the shared components': the literal attribute
+`className="a b"`, and inside a `className={...}` expression every
+single-quoted, double-quoted and template-literal static chunk, split on
 whitespace. A token glued to an interpolation is a stem rather than a class
 (`` `kbf-${family}` `` names `.kbf-md`, never `.kbf-`) and is not read as one.
 An expression cannot tell a class from a comparison operand, which is why its
-literals are counted in their own list rather than mixed into the other two.
+literals are counted in their own list rather than mixed into the other two,
+and why the defined-in-a-stylesheet half reads every attribute literal but
+only the prefixed literals of an expression.
 
 ## 8. Tests and gates
 
@@ -491,6 +512,9 @@ shrink-only: the way off a list is the fix.
 | Four modules hold module-level `let` with no reset | Three hold a React root a reset would have to unmount; the fourth is a pinned store | `store-shape`'s `NO_RESET` |
 | `lang.attr(key)` survives beside `t(key)` | It answers `undefined` until a language is picked, which is what keeps nine `data-tip` and twenty-four `aria-label` attributes off the first frame of a page nobody has picked for -- exactly what the served markup carries. Turning them into `t()` would change the DOM the boot and region goldens record | `state/lang/store.ts`'s `picked`, `i18n-keys`'s `KEYED` regex |
 | 86 shared class names, 342 unprefixed local ones and 91 unprefixed inside a `className={...}` | The rules are in `page.css`, whose bytes are what the two boot goldens and the region goldens are taken from; they move a domain at a time. The third list is an upper bound: an expression literal may be a comparison operand rather than a class | `check-class-namespace`'s `LEGACY_SHARED`, `LEGACY_LOCAL` and `LEGACY_EXPR` |
+| 136 unprefixed classes in the two namespaces beyond `features/`, 10 more inside a `className={...}` | 103 and 1 in the page frame, 33 and 9 in the shared components. There is no `chrome/styles.css` to move a rule into, so these come down by renaming in `page.css`, in a commit that changes the DOM the goldens record | `check-class-namespace`'s `LEGACY_CHROME` and `LEGACY_CHROME_EXPR` |
+| `.newrun` is written and never styled | `src/chrome/Rail.tsx` puts it on the new-session button and no rule defines it; taking it out edits `src/test/__golden__/region-app.txt`. `src/components/SetupSheet.tsx` writes two more from inside an expression (`.badtx`, `.warntx`), where the check cannot tell a class from a comparison operand and so does not read them | `check-class-namespace`'s `UNSTYLED` |
+| 26 imperative reaches for an element in the page frame | Not the rule's case: a portal at the body, two popovers filling a served list, the island mount boxes, and `chrome/behaviour/`'s grip drag and overlay scrollbars, which are behaviour rather than rendering and own no component tree. Counted so a third such module cannot appear unnoticed | `state-dom-touch`'s `FRAME` |
 | `.xaedit` keeps its old prefix | Five `page.css` rules scope it; it renames with them | `check-class-namespace`'s `LEGACY_LOCAL.extAgents` |
 | 205 optional contract fields the fixtures never send | Most are one state this canvas is deliberately in; the header names the few a page really draws and this library has never exercised | `fixture-shape`'s `UNSENT` |
 | 18 methods with no offline answer | Each entry says why the offline page has nothing to answer with | `offline-coverage`'s `EXEMPT` |

@@ -46,8 +46,35 @@
 // instead of a wrong verdict about a shared class -- and the prefix rule's
 // inverse (a prefixed class the stylesheets define) holds over them as it does
 // over the attribute literals.
+//
+// Two namespaces beyond features/, read the same way and pinned the same way:
+//
+//   chrome      -- src/chrome/**.tsx plus src/App.tsx and src/main.tsx, the
+//                  page's own frame. A class it introduces is named
+//                  `chrome-<rest>`, or exactly `chrome`.
+//   components  -- src/components/**.tsx, the components more than one region
+//                  renders. There the namespace is the file, because that is
+//                  what owns the markup: Skeleton.tsx names `skeleton-<rest>`,
+//                  SetupSheet.tsx names `setup-sheet-<rest>`, and a component's
+//                  own root class may be the bare name (`agent-mark`).
+//
+// A name in SHARED passes in both, as it does in a domain, and so does a name
+// already on LEGACY_SHARED: that row is the debt of a class two domains name,
+// and counting the frame's use of it again would say the debt grew when nothing
+// moved. LEGACY_SHARED itself stays scoped to features for the same reason --
+// the frame renders the page every domain sits in, so most of the page-wide
+// names it writes would read as one more domain and all 86 rows would move
+// without a class changing. What these two still owe is pinned per namespace:
+//
+//   LEGACY_CHROME      -- how many of a namespace's classes carry no prefix.
+//   LEGACY_CHROME_EXPR -- the same count inside a `className={...}` expression.
+//   UNSTYLED           -- a class the markup writes that no stylesheet defines.
+//
+// Down or gone, all three. A name the frame and one domain both write is a row
+// on both sides, and either can retire its own: this counts what a namespace
+// owes, not how many names the page has.
 import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -175,6 +202,41 @@ const LEGACY_EXPR = {
   subagents: 6,
   transcript: 26,
   workspace: 7,
+}
+
+// The same two counts for the page frame and the shared components, whose
+// classes are almost all still in styles/page.css: `chrome` is one namespace
+// and `components` is one per file (the header says which). Down or gone.
+//
+// The frame's rules are the ones that cannot move a domain at a time -- there
+// is no chrome/styles.css to move them into, and page.css is where the boot
+// goldens take their bytes from -- so these two come down by renaming, in a
+// commit that changes the DOM the goldens record.
+const LEGACY_CHROME = {
+  chrome: 103,
+  components: 33,
+}
+
+const LEGACY_CHROME_EXPR = {
+  chrome: 1,
+  components: 9,
+}
+
+// A class the markup writes that no stylesheet defines: a rule renamed or
+// deleted from under the markup, which no rendering test can see. Down or gone,
+// and going away edits the served markup -- `.newrun` is in
+// src/test/__golden__/region-app.txt -- so it is not a delete in a commit that
+// changes no DOM. An empty list is a namespace that was measured and owes
+// nothing.
+//
+// src/components/SetupSheet.tsx writes two more of these from inside an
+// expression (`badtx`, `warntx`). The check below does not read an unprefixed
+// expression literal, because that is where a comparison operand looks exactly
+// like a class; both are real, and both go when that span's two states get a
+// rule or a name.
+const UNSTYLED = {
+  chrome: ['newrun'],
+  components: [],
 }
 
 const domains = readdirSync(join(src, 'features'))
@@ -421,14 +483,133 @@ for (const domain of domains) {
   try { sheets.push(readFileSync(join(src, 'features', domain, 'styles.css'), 'utf8')) } catch { /* not every domain has one */ }
 }
 const css = sheets.join('\n')
+const styled = (c) => new RegExp(`\\.${c}(?![\\w-])`).test(css)
 const undefined_ = []
 for (const domain of domains) {
   for (const c of new Set([...named.get(domain), ...inExpr.get(domain)])) {
     if (!c.startsWith(prefixes.get(domain))) continue
-    if (!new RegExp(`\\.${c}(?![\\w-])`).test(css)) undefined_.push(`features/${domain} uses .${c}`)
+    if (!styled(c)) undefined_.push(`features/${domain} uses .${c}`)
   }
 }
 if (undefined_.length) fail(`${undefined_.join(', ')}, which no stylesheet defines`)
+
+/* The page frame and the shared components, on the same three rules: the
+   namespace's prefix, the same two debts, and the stylesheets defining what the
+   markup names. The frame is one namespace over many files; a component is a
+   namespace of its own, so `PascalCase.tsx` is read as the prefix its classes
+   carry. */
+const kebab = (file) => basename(file, '.tsx').replace(/([a-z\d])([A-Z])/g, '$1-$2').toLowerCase()
+const carries = (c, prefix) => c === prefix || c.startsWith(`${prefix}-`)
+const NAMESPACES = [
+  {
+    name: 'chrome',
+    reach: 'src/chrome/**.tsx, src/App.tsx and src/main.tsx',
+    files: [...components(join(src, 'chrome')), join(src, 'App.tsx'), join(src, 'main.tsx')],
+    prefix: () => 'chrome',
+  },
+  {
+    name: 'components',
+    reach: 'src/components/**.tsx',
+    files: components(join(src, 'components')),
+    prefix: (file) => kebab(file),
+  },
+]
+
+const nsOver = []
+const nsExprOver = []
+const nsDead = []
+const nsStale = []
+let nsClasses = 0
+let nsLiterals = 0
+for (const ns of NAMESPACES) {
+  /* Each name with the prefixes of the files that write it: two components may
+     name the same class, and it is that component's own prefix each is held to. */
+  const attrNames = new Map()
+  const exprNames = new Map()
+  const add = (into, c, prefix) => {
+    if (!into.has(c)) into.set(c, new Set())
+    into.get(c).add(prefix)
+  }
+  for (const file of ns.files) {
+    const text = readFileSync(file, 'utf8')
+    const prefix = ns.prefix(file)
+    for (const m of text.matchAll(/className="([^"{]+)"/g)) {
+      for (const c of m[1].trim().split(/\s+/)) if (c) add(attrNames, c, prefix)
+    }
+    for (const expr of expressions(text)) {
+      for (const c of tokensIn(expr)) add(exprNames, c, prefix)
+    }
+  }
+  if (!attrNames.size) {
+    fail(`${ns.reach} name no class, which means this check is reading the wrong files`)
+  }
+  nsClasses += attrNames.size
+  nsLiterals += exprNames.size
+
+  const prefixed = (c, where) => [...where].some((prefix) => carries(c, prefix))
+  const owed = (from, already) => {
+    const out = []
+    for (const [c, where] of from) {
+      if (SHARED.has(c) || LEGACY_SHARED[c] !== undefined || already?.has(c)) continue
+      if (!prefixed(c, where)) out.push(c)
+    }
+    return out.sort()
+  }
+  const debt = owed(attrNames)
+  const exprDebt = owed(exprNames, attrNames)
+  const ratchet = (found, pinned, what, into) => {
+    if (pinned === undefined) into.push(`${ns.name}: ${found.length} ${what}, not on the list`)
+    else if (found.length > pinned) {
+      into.push(`${ns.name}: ${found.length} ${what}, pinned ${pinned} -- ${found.map((c) => `.${c}`).join(', ')}`)
+    } else if (found.length < pinned) {
+      nsStale.push(`${ns.name}: ${found.length} ${what} now, pinned ${pinned}, lower it`)
+    }
+  }
+  ratchet(debt, LEGACY_CHROME[ns.name], 'unprefixed', nsOver)
+  ratchet(exprDebt, LEGACY_CHROME_EXPR[ns.name], 'unprefixed in expressions', nsExprOver)
+
+  /* Every attribute literal, because an attribute is a class and nothing else,
+     plus the expression literals that carry the prefix -- the rest of an
+     expression is where an operand is indistinguishable from a class. */
+  const dead = [...attrNames.keys()].filter((c) => !styled(c))
+  for (const [c, where] of exprNames) {
+    if (!attrNames.has(c) && prefixed(c, where) && !styled(c)) dead.push(c)
+  }
+  dead.sort()
+  const known = UNSTYLED[ns.name]
+  if (known === undefined) {
+    nsDead.push(`${ns.name} has no UNSTYLED list of its own`)
+  } else {
+    for (const c of dead) if (!known.includes(c)) nsDead.push(`${ns.name} writes .${c}, which no stylesheet defines`)
+    for (const c of known) if (!dead.includes(c)) nsStale.push(`${ns.name}: .${c} is styled or gone now, delete the pin`)
+  }
+}
+const namespaces = new Set(NAMESPACES.map((ns) => ns.name))
+for (const name of new Set([...Object.keys(LEGACY_CHROME), ...Object.keys(LEGACY_CHROME_EXPR), ...Object.keys(UNSTYLED)])) {
+  if (!namespaces.has(name)) nsStale.push(`${name}: no such namespace, delete the pin`)
+}
+
+if (nsOver.length) {
+  fail(
+    `${nsOver.join('; ')}. A class the page's frame introduces is named 'chrome-...' and a shared ` +
+      "component's is named after its own file ('skeleton-...' for Skeleton.tsx), with the rule in " +
+      'src/styles/page.css, which is the sheet both namespaces are styled from.',
+  )
+}
+if (nsExprOver.length) {
+  fail(
+    `${nsExprOver.join('; ')}. Same rule inside a className expression as outside one: the ` +
+      "namespace's prefix -- 'chrome-...' for the frame, the component's own file name for a " +
+      'shared component.',
+  )
+}
+if (nsDead.length) {
+  fail(
+    `${nsDead.join('; ')}. Take the class out of the markup, in a commit that says which golden ` +
+      'lines moved, or pin it in UNSTYLED with the reason it is still written.',
+  )
+}
+if (nsStale.length) fail(`${nsStale.join('; ')}. The chrome and components lists are down-or-gone too.`)
 
 const classes = [...named.values()].reduce((n, used) => n + used.size, 0)
 const literals = [...inExpr.values()].reduce((n, used) => n + used.size, 0)
@@ -436,5 +617,10 @@ console.log(
   `check-class-namespace: OK (${classes} classes and ${literals} expression literals across ` +
     `${domains.length} domains; ${Object.keys(LEGACY_SHARED).length} shared, ` +
     `${Object.values(LEGACY_LOCAL).reduce((a, b) => a + b, 0)} unprefixed and ` +
-    `${Object.values(LEGACY_EXPR).reduce((a, b) => a + b, 0)} unprefixed in expressions pinned)`,
+    `${Object.values(LEGACY_EXPR).reduce((a, b) => a + b, 0)} unprefixed in expressions pinned. ` +
+    `${nsClasses} classes and ${nsLiterals} expression literals across the ` +
+    `${NAMESPACES.length} namespaces beyond features/, chrome and components; ` +
+    `${Object.values(LEGACY_CHROME).reduce((a, b) => a + b, 0)} unprefixed, ` +
+    `${Object.values(LEGACY_CHROME_EXPR).reduce((a, b) => a + b, 0)} unprefixed in expressions ` +
+    `and ${Object.values(UNSTYLED).reduce((n, list) => n + list.length, 0)} unstyled pinned)`,
 )
