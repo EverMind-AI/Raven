@@ -381,15 +381,21 @@ node scripts/check-page.mjs         # reads dist/, so build first
 
 `eslint.config.js` reads the repo root's `eslint.base.mjs` -- the same factory
 `ui-tui` uses, on the versions that tree resolves to, so the two front ends
-lint on one engine. What this tree adds is the React hooks rules and four deliberate
-departures, each with its reason in the config: type imports last and a block
+lint on one engine. What this tree adds is the React hooks rules --
+`rules-of-hooks` as an error, `exhaustive-deps` as a warning because the rule
+cannot tell an effect that deliberately runs once on a value it reads from a
+stale closure (six of those) -- and the four places the base's rules do not fit
+this tree, each with its reason in the config: type imports last and a block
 comment as a partition boundary (the default hoists an import above the
 module's own header), `curly` off (2,063 one-line guards), a test may name the
-type of a module it loads dynamically, and `react-hooks/rules-of-hooks` as a
-warning while two known cases stand (section 11).
+type of a module it loads dynamically, and the gates under `scripts/`, which
+are node scripts rather than part of the page.
 
-`tsconfig.json` runs `strict`, `noUncheckedIndexedAccess` and `noUnusedLocals`.
-`noUnusedParameters` is off (section 11).
+`tsconfig.json` runs `strict`, `noUncheckedIndexedAccess`, `noUnusedLocals` and
+`noUnusedParameters`. A parameter the body does not read is deleted; it keeps
+its place behind a leading underscore only where a caller's arity puts
+something the body does need after it -- a fixture factory's `_env`, an
+override responder's `_p` in front of `next`.
 
 ## 10. Adding or rewriting a domain
 
@@ -435,8 +441,6 @@ shrink-only: the way off a list is the fix.
 | 18 methods with no offline answer | Each entry says why the offline page has nothing to answer with | `offline-coverage`'s `EXEMPT` |
 | 21 files inside a runtime cycle, in four components | The session knot is the large one; `state/session/naming.ts` is in it because it was carved out of `runtime.ts`, which already was. Inverting `runtime.ts`'s two calls into it is the way back to 20 | `import-direction`'s `CYCLES` and `IN_CYCLES` |
 | 59 cross-domain edges, eight of them the desk's | Splitting the desk out of `features/workspace/` turned eight intra-domain edges into cross-domain ones. Same imports, same runtime edges, two domains | `import-direction`'s `CROSS` |
-| `react-hooks/rules-of-hooks` is a warning | `features/composer/useInTask.ts` is not a hook and only its name says otherwise (six call sites); `features/transcript/TranscriptPage.tsx`'s `CallRow` calls `useTick` after two early returns, safe only because a call's `kind` never changes under its key. The fix for the second is to split the component | `eslint.config.js` |
-| `noUnusedParameters` is off | Eight sites, none mechanical: a declared prop, a fixture factory's `env`, a responder's `p` -- names a caller passes and the body does not read | `tsconfig.json`, `eslint.config.js` |
 | `curly` is off | 2,063 one-line guards | `eslint.config.js` |
 | `rpc-schema/openrpc.json` disagrees with its own descriptions in three places | `CronJobInfo.next_run_at_ms` / `last_run_at_ms` are sent as null against an integer schema, and `PlaybookNode.skills` / `mcps` describe three states against an array schema. `Wire<T>` is this page's accommodation; the schema is the cure, and it is outside `ui-web/` | `src/rpc/fixtureTransport.ts`'s header |
 | `make lint-ui` does not run `npm run lint` yet | The `Makefile` is outside `ui-web/`. The line to add to its `lint-ui` target is `npm run lint --prefix ui-web`, between `gen:check` and `type-check`, matching `lint-tui`'s order | `README.md`'s note |

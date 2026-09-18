@@ -2,7 +2,7 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import * as useInTaskModule from '../../features/composer/useInTask'
+import * as startTaskWithModule from '../../features/composer/startTaskWith'
 import { setTranslator } from '../../i18n/t'
 import * as capsStore from '../../state/caps'
 import * as confirmStore from '../../state/confirm'
@@ -97,7 +97,7 @@ function install(
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
   vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   vi.spyOn(pageStore, 'show').mockImplementation((id) => shellCalls.push(['showPage', id]))
-  vi.spyOn(useInTaskModule, 'useInTask').mockImplementation((key, name) => shellCalls.push(['useInTask', `${key}:${name}`]))
+  vi.spyOn(startTaskWithModule, 'startTaskWith').mockImplementation((key, name) => shellCalls.push(['startTaskWith', `${key}:${name}`]))
   vi.spyOn(capsStore, 'drawIfOpenOnPlugins').mockImplementation(() => shellCalls.push(['plugRedraw', null]))
   setSources({ plugins: source })
   document.body.innerHTML =

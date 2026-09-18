@@ -521,7 +521,7 @@ describe('rail island', () => {
      still has focus -- could slip past entirely. Telling the source from
      inside the commit is what closes that. */
   describe('renaming the current session', () => {
-    function edit(h: Harness): HTMLInputElement {
+    function edit(): HTMLInputElement {
       const host = mount()
       const it_ = rowItems(host, 'second task').find(x => x !== '-' && x.label === 'gui.sess.rename') as MenuItem
       act(() => it_.fn())
@@ -541,9 +541,9 @@ describe('rail island', () => {
     }
 
     it('tells the source on Enter, which is the case a blur listener missed', () => {
-      const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
+      install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
       const said = wire()
-      const inp = edit(h)
+      const inp = edit()
       inp.value = 'renamed by hand'
       key(inp, 'Enter')
       expect(said).toEqual([['b', 'renamed by hand']])
@@ -553,24 +553,24 @@ describe('rail island', () => {
     })
 
     it('tells the source on blur too', () => {
-      const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
+      install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
       const said = wire()
-      const inp = edit(h)
+      const inp = edit()
       inp.value = 'renamed by leaving'
       act(() => inp.dispatchEvent(new FocusEvent('blur')))
       expect(said).toEqual([['b', 'renamed by leaving']])
     })
 
     it('says nothing on escape, or when the title did not change', () => {
-      const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
+      install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
       const said = wire()
-      const inp = edit(h)
+      const inp = edit()
       inp.value = 'thrown away'
       key(inp, 'Escape')
       expect(said).toEqual([])
       expect(document.getElementById('title')!.textContent).toBe('second task')
 
-      const again = edit(h)
+      const again = edit()
       again.value = 'second task'
       key(again, 'Enter')
       expect(said).toEqual([])
@@ -578,7 +578,7 @@ describe('rail island', () => {
 
     it('renames with no source verb at all', () => {
       const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
-      const inp = edit(h)
+      const inp = edit()
       inp.value = 'offline rename'
       expect(() => key(inp, 'Enter')).not.toThrow()
       expect(h.state.rows[1]!.title).toBe('offline rename')
@@ -591,9 +591,9 @@ describe('rail island', () => {
        first had already put the heading back, so recovering was down to which
        of the two won. One commit per editor closes all of it. */
     it('ignores the blur that committing with Enter itself causes', () => {
-      const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
+      install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
       const said = wire()
-      const inp = edit(h)
+      const inp = edit()
       inp.value = 'named once'
       key(inp, 'Enter')
 
@@ -618,7 +618,7 @@ describe('rail island', () => {
     it('hands the heading back when a conversation switch needs it', () => {
       const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
       const said = wire()
-      const inp = edit(h)
+      const inp = edit()
       inp.value = 'named on the way out'
       expect(document.getElementById('title')).toBeNull()
 

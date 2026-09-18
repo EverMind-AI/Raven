@@ -6,7 +6,7 @@ import { t } from '../../i18n/t'
 import * as detail from '../../state/detail'
 import * as lang from '../../state/lang'
 import { show as toast } from '../../state/toast'
-import { useInTask } from '../composer/useInTask'
+import { startTaskWith } from '../composer/startTaskWith'
 import * as store from './store'
 
 import type { Contribution, DetailEntry, InstalledRow, MarketItem, McpSnapshot } from './types'
@@ -96,7 +96,7 @@ export function PluginsApp(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
     <>
-      {s.view === 'installed' ? <Installed s={s} /> : <Market s={s} />}
+      {s.view === 'installed' ? <Installed /> : <Market s={s} />}
       {s.drawer ? <DrawerHost key={`${s.drawer.kind}:${s.drawer.id}`} drawer={s.drawer} s={s} /> : null}
     </>
   )
@@ -211,7 +211,7 @@ function MarketCard({ it, s }: { it: MarketItem; s: store.PlugState }): JSX.Elem
 
 /* ── installed view ──────────────────────────────────────────────── */
 
-function Installed({ s }: { s: store.PlugState }): JSX.Element {
+function Installed(): JSX.Element {
   // A pending-auth install is not installed yet: it stays a market-side
   // waiting card until its authentication settles.
   const py = store.pyRows()
@@ -322,7 +322,7 @@ function McpCard({ row }: { row: InstalledRow }): JSX.Element | null {
               className="mini gold"
               onClick={(e) => {
                 e.stopPropagation()
-                useInTask('gui.plug.use_prompt', m.name)
+                startTaskWith('gui.plug.use_prompt', m.name)
               }}
             >
               {t('gui.hub.use')}
@@ -448,7 +448,7 @@ function Progress({ s }: { s: store.PlugState }): JSX.Element | null {
               {pg.state === 'done' && (
                 <button
                   className="mini gold"
-                  onClick={() => useInTask('gui.plug.use_prompt', pg.name)}
+                  onClick={() => startTaskWith('gui.plug.use_prompt', pg.name)}
                 >
                   {t('gui.hub.use')}
                 </button>
@@ -811,7 +811,7 @@ function MarketDetail({ id, s }: { id: string; s: store.PlugState }): JSX.Elemen
             ) : !lm || lm.enabled ? (
               <button
                 className="mini gold"
-                onClick={() => useInTask('gui.plug.use_prompt', entry.name)}
+                onClick={() => startTaskWith('gui.plug.use_prompt', entry.name)}
               >
                 {t('gui.hub.use')}
               </button>
@@ -910,7 +910,7 @@ function InstDetail({ id }: { id: string }): JSX.Element | null {
           ) : m.enabled ? (
             <button
               className="mini gold"
-              onClick={() => useInTask('gui.plug.use_prompt', m.name)}
+              onClick={() => startTaskWith('gui.plug.use_prompt', m.name)}
             >
               {t('gui.hub.use')}
             </button>

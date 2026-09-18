@@ -440,11 +440,21 @@ const shortOr = (p: string): string => {
 
 /* ── call rows ─────────────────────────────────────────────────────────── */
 
-const CallRow = memo(function CallRow({ lane, seg, c }: { lane: Lane; seg: StepData; c: CallData }): ReactElement {
+const CallRow = memo(function CallRow({ lane, c }: { lane: Lane; c: CallData }): ReactElement {
   useSeg(lane, c)
+  if (c.kind === 'dag') return <DagCard lane={lane} c={c} />
+  if (c.kind !== 'plain') return <DelegRow lane={lane} c={c} />
+  return <PlainCallRow lane={lane} c={c} />
+})
+
+/* The clock and the fold ref sit here rather than in CallRow, whose other two
+   kinds do not have them: a hook after an early return is a hook the next kind
+   added to that branch reorders. Memoising this one would take its redraws
+   away instead -- a call is mutated in place, so these props never differ, and
+   the version CallRow subscribes to above is the only thing that brings the
+   row back. The two other kinds are memoised because each subscribes itself. */
+function PlainCallRow({ lane, c }: { lane: Lane; c: CallData }): ReactElement {
   const rowRef = useRef<HTMLDivElement | null>(null)
-  if (c.kind === 'dag') return <DagCard lane={lane} seg={seg} c={c} />
-  if (c.kind !== 'plain') return <DelegRow lane={lane} seg={seg} c={c} />
   const withDtl = c.done && hasDtl(c)
   const flip = (): void => pinRow(rowRef.current, () => store.toggleCall(lane, c))
   const cls = 'wrow'
@@ -490,7 +500,7 @@ const CallRow = memo(function CallRow({ lane, seg, c }: { lane: Lane; seg: StepD
       {withDtl && c.open ? <Dtl c={c} open={c.open} /> : null}
     </>
   )
-})
+}
 
 /* One elapsed clock per running card, self-stopping. */
 function DelegState({ state, err, extra }: { state: string; err?: string; extra?: string }): ReactElement {
@@ -504,7 +514,7 @@ function DelegState({ state, err, extra }: { state: string; err?: string; extra?
   )
 }
 
-const DelegRow = memo(function DelegRow({ lane, seg, c }: { lane: Lane; seg: StepData; c: CallData }): ReactElement {
+const DelegRow = memo(function DelegRow({ lane, c }: { lane: Lane; c: CallData }): ReactElement {
   useSeg(lane, c)
   const rowRef = useRef<HTMLDivElement | null>(null)
   const elapsed = useTick(!c.done, c.t0)
@@ -777,7 +787,7 @@ function DagNodePanel({ lane, c, n }: { lane: Lane; c: CallData; n: DagNode }): 
   )
 }
 
-const DagCard = memo(function DagCard({ lane, seg, c }: { lane: Lane; seg: StepData; c: CallData }): ReactElement {
+const DagCard = memo(function DagCard({ lane, c }: { lane: Lane; c: CallData }): ReactElement {
   useSeg(lane, c)
   const rowRef = useRef<HTMLDivElement | null>(null)
   const flip = (): void => pinRow(rowRef.current, () => store.toggleCall(lane, c))
@@ -996,7 +1006,7 @@ const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg: StepDa
           ) : null}
         </div>
         <div className="wkin" hidden={wkinHidden}>
-          {wkinHidden ? null : seg.calls.map((c) => <CallRow key={c.id} lane={lane} seg={seg} c={c} />)}
+          {wkinHidden ? null : seg.calls.map((c) => <CallRow key={c.id} lane={lane} c={c} />)}
         </div>
       </div>
     </div>
@@ -1320,8 +1330,8 @@ const askIfGone = (url: string): Promise<boolean> =>
     .then((res) => !res.ok && GONE.has(res.status))
     .catch(() => false)
 
-const DeliveryTile = memo(function DeliveryTile({ row, preview, single }: {
-  row: DeliveryRow; preview: ArtifactRow | null; single: boolean
+const DeliveryTile = memo(function DeliveryTile({ row, preview }: {
+  row: DeliveryRow; preview: ArtifactRow | null
 }): ReactElement {
   const [state, setState] = useState<'probe' | 'ready' | 'missing'>(row.missing ? 'missing' : 'probe')
   const [shot, setShot] = useState<'draw' | 'broken'>('draw')
@@ -1422,7 +1432,7 @@ const ArtsView = memo(function ArtsView({ lane, seg }: { lane: Lane; seg: ArtsDa
         </div>
         <div className={'atiles' + (deliveries.length === 1 ? ' single' : '')}>
           {shownDeliveries.map((row) => <DeliveryTile key={row.path} row={row}
-            preview={previews.get(row.path) || null} single={deliveries.length === 1} />)}
+            preview={previews.get(row.path) || null} />)}
         </div>
         {deliveryRest > 0 || seg.deliveriesOpen ? <button className="amore"
           aria-expanded={seg.deliveriesOpen} onClick={() => store.toggleArts(lane, seg, 'deliveries')}>

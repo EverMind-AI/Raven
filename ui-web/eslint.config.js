@@ -78,16 +78,10 @@ export default [
     files: ['src/**/*.{ts,tsx}'],
     plugins: { 'react-hooks': reactHooks },
     rules: {
-      /* A warning rather than an error, for two reasons this pass may not fix:
-         features/composer/useInTask.ts is not a hook and only the convention
-         says otherwise (six call sites), and transcript/TranscriptPage.tsx's
-         CallRow calls useTick after two early returns -- safe only because a
-         call's `kind` never changes under its key, and the fix is to split the
-         component, which is not a lint sweep's to do. */
-      'react-hooks/rules-of-hooks': 'warn',
-      /* Also a warning, the way ui-tui has it: several of this tree's effects
-         deliberately run once on a value they also read, and the rule cannot
-         tell those from a stale closure. */
+      'react-hooks/rules-of-hooks': 'error',
+      /* A warning where its sibling above is an error, the way ui-tui has it:
+         several of this tree's effects deliberately run once on a value they
+         also read, and the rule cannot tell those from a stale closure. */
       'react-hooks/exhaustive-deps': 'warn',
       '@typescript-eslint/no-explicit-any': 'error',
     },

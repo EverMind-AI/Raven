@@ -6,7 +6,7 @@ import { t } from '../../i18n/t'
 import { text as reachText } from '../../lib/reach'
 import * as detail from '../../state/detail'
 import * as lang from '../../state/lang'
-import { useInTask } from '../composer/useInTask'
+import { startTaskWith } from '../composer/startTaskWith'
 import * as store from './store'
 
 import type { SkillsState } from './store'
@@ -304,7 +304,7 @@ function SkillInstalled(): JSX.Element {
                     className="mini gold"
                     onClick={(e) => {
                       e.stopPropagation()
-                      useInTask('gui.hub.use_prompt', c.name)
+                      startTaskWith('gui.hub.use_prompt', c.name)
                     }}
                   >
                     {t('gui.hub.use')}
@@ -365,7 +365,7 @@ function SkillDetail({ s, drawer }: { s: SkillsState; drawer: NonNullable<Skills
         {busy ? (
           <span className="pnote">{t('gui.hub.working')}</span>
         ) : installed ? (
-          <button className="mini gold" onClick={() => useInTask('gui.hub.use_prompt', name)}>
+          <button className="mini gold" onClick={() => startTaskWith('gui.hub.use_prompt', name)}>
             {t('gui.hub.use')}
           </button>
         ) : (

@@ -396,7 +396,7 @@ describe('the write surface', () => {
     let calls = 0
     let release: (b: KbBase) => void = () => {}
     source({
-      create: (name: string) => {
+      create: () => {
         calls += 1
         return new Promise<KbBase>((r) => (release = r))
       },

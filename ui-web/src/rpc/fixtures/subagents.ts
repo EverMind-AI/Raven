@@ -269,7 +269,7 @@ export function deskDemoOverrides(
        showing the conversation's tier, so a switch has to move it here too.
        Answered by the transport underneath -- the rung really is the
        conversation's to change -- and only remembered here. */
-    'session.set_mode': async (p, next) => {
+    'session.set_mode': async (_p, next) => {
       const r = await next()
       if (r && r.mode) tier = r.mode
       return r
