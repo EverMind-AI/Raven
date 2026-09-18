@@ -937,6 +937,7 @@ class WiringMixin:
                     registry=skill_registry,
                     min_safety=self._skill_min_safety,
                     blocklist=self._skill_blocklist,
+                    blocklist_reader=self._skill_blocklist_reader,
                 ),
             )
             # Pull-mode discovery: search on the model's own terms through the
@@ -947,6 +948,7 @@ class WiringMixin:
                     hub_wired=self._skill_hub_client is not None,
                     min_safety=self._skill_min_safety,
                     blocklist=self._skill_blocklist,
+                    blocklist_reader=self._skill_blocklist_reader,
                 ),
             )
             self.tools.register(
@@ -955,6 +957,7 @@ class WiringMixin:
                     registry=skill_registry,
                     min_safety=self._skill_min_safety,
                     blocklist=self._skill_blocklist,
+                    blocklist_reader=self._skill_blocklist_reader,
                     auto_install=self._skill_auto_install,
                     install_audit_path=(
                         self.workspace / "skills" / "hub" / "installs.jsonl"

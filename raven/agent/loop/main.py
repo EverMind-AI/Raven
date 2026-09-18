@@ -447,6 +447,10 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             getattr(getattr(skill_forge_router_config, "hub", None), "min_safety", 0.7),
         )
         self._skill_blocklist = list(getattr(skill_forge_config, "blocklist", None) or [])
+        # What the three skill tools screen against, asked per call: the list
+        # at construction is the one the operator had when the loop started,
+        # and a skill enabled on the settings page has to stop being refused.
+        self._skill_blocklist_reader = lambda: skill_blocklist(self._live_config)
         self._skill_auto_install = str(getattr(skill_forge_config, "auto_install", "auto") or "auto")
 
         self.context_engine: "ContextEngine"

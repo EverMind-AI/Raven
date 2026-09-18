@@ -95,10 +95,11 @@ class ReadSkillTool(Tool):
         *,
         min_safety: float = 0.7,
         blocklist: "Iterable[str] | None" = None,
+        blocklist_reader: "Callable[[], frozenset[str]] | None" = None,
     ) -> None:
         self._client = client
         self._registry = registry
-        self._policy = SkillPolicy.create(min_safety=min_safety, blocklist=blocklist)
+        self._policy = SkillPolicy.create(min_safety=min_safety, blocklist=blocklist, blocklist_reader=blocklist_reader)
 
     @property
     def name(self) -> str:
@@ -139,7 +140,7 @@ class ReadSkillTool(Tool):
             return "Error: 'skill_id' is required — a skill's qualified id like 'local/<name>' or 'hub/<slug>'."
         source, native = split_qualified_id(skill_id)
 
-        if is_blocked(self._policy.blocklist, native):
+        if is_blocked(self._policy.blocked_now(), native):
             return f"Error: skill {native!r} is on the operator blocklist (skillForge.blocklist) and cannot be read."
 
         if source != "hub":
@@ -149,7 +150,7 @@ class ReadSkillTool(Tool):
                     f"Error: no {source} skill {native!r} found. Its body may "
                     f"already be present in the '# Skills' context."
                 )
-            if is_blocked(self._policy.blocklist, meta.name):
+            if is_blocked(self._policy.blocked_now(), meta.name):
                 return f"Error: skill {meta.name!r} is on the operator blocklist (skillForge.blocklist) and cannot be read."
             return f"## {meta.name}\n{meta.content}"
 
@@ -200,6 +201,7 @@ class UseSkillTool(Tool):
         *,
         min_safety: float = 0.7,
         blocklist: "Iterable[str] | None" = None,
+        blocklist_reader: "Callable[[], frozenset[str]] | None" = None,
         auto_install: str = "auto",
         install_audit_path: "Path | None" = None,
     ) -> None:
@@ -208,6 +210,7 @@ class UseSkillTool(Tool):
         self._policy = SkillPolicy.create(
             min_safety=min_safety,
             blocklist=blocklist,
+            blocklist_reader=blocklist_reader,
             auto_install=auto_install,
         )
         self._install_audit_path = install_audit_path
@@ -249,7 +252,7 @@ class UseSkillTool(Tool):
             return "Error: 'skill_id' is required — a skill's qualified id like 'hub/<slug>'."
         source, native = split_qualified_id(skill_id)
 
-        if is_blocked(self._policy.blocklist, native):
+        if is_blocked(self._policy.blocked_now(), native):
             return f"Error: skill {native!r} is on the operator blocklist (skillForge.blocklist) and cannot be used."
 
         if source == "hub":
@@ -362,10 +365,11 @@ class FindSkillTool(Tool):
         hub_wired: bool = False,
         min_safety: float = 0.7,
         blocklist: "Iterable[str] | None" = None,
+        blocklist_reader: "Callable[[], frozenset[str]] | None" = None,
     ) -> None:
         self._get_router = get_router
         self._hub_wired = hub_wired
-        self._policy = SkillPolicy.create(min_safety=min_safety, blocklist=blocklist)
+        self._policy = SkillPolicy.create(min_safety=min_safety, blocklist=blocklist, blocklist_reader=blocklist_reader)
 
     @property
     def name(self) -> str:
@@ -419,7 +423,7 @@ class FindSkillTool(Tool):
             # low score_safety is dropped (the authoritative hub check runs
             # on the detail metadata in read_skill / use_skill).
             meta = getattr(h, "meta", None) or {}
-            if is_blocked(self._policy.blocklist, getattr(h, "name", None), meta.get("skill_id"), meta.get("slug")):
+            if is_blocked(self._policy.blocked_now(), getattr(h, "name", None), meta.get("skill_id"), meta.get("slug")):
                 continue
             if refuses_low_safety(meta.get("score_safety"), self._policy.min_safety):
                 continue

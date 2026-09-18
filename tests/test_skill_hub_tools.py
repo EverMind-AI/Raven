@@ -120,6 +120,28 @@ class TestReadSkill:
         out = await ReadSkillTool(registry=reg).execute(skill_id="local/x")
         assert "local body" in out
 
+    async def test_the_blocklist_is_read_per_call(self, tmp_path: Path) -> None:
+        """Enabling a skill stops the refusal without restarting the loop.
+
+        The tool's policy is built once when the loop wires its tools, so a
+        screen reading the construction-time list keeps refusing a skill the
+        operator has since switched back on -- with nothing in the product to
+        undo it.
+        """
+        meta = _meta(tmp_path, "x", "local body", with_scripts=False)
+        reg = _FakeRegistry({("builtin", "x"): meta})
+        live: set[str] = {"x"}
+        tool = ReadSkillTool(registry=reg, blocklist=["x"], blocklist_reader=lambda: frozenset(live))
+
+        out = await tool.execute(skill_id="local/x")
+        assert out.startswith("Error") and "blocklist" in out
+
+        live.discard("x")
+        assert "local body" in await tool.execute(skill_id="local/x")
+
+        live.add("x")
+        assert (await tool.execute(skill_id="local/x")).startswith("Error")
+
     async def test_local_missing_errors(self) -> None:
         out = await ReadSkillTool(registry=_FakeRegistry({})).execute(
             skill_id="local/nope",

@@ -197,7 +197,7 @@ class SkillPolicy:
         strength, because they are about the skill rather than its body."""
         slug = str(next((i for i in (meta.get("slug"), meta.get("name"), *extra_identifiers) if i), "?"))
         if is_blocked(
-            self.blocklist,
+            self.blocked_now(),
             meta.get("slug"),
             meta.get("name"),
             meta.get("skill_id"),
