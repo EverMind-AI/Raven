@@ -195,7 +195,7 @@ verify-templates:
 	python3 plugins-dist/ppt-engine/fetch_templates.py --verify
 
 docs-serve:
-	uv run --group docs mkdocs serve -f docs-site/mkdocs.yml
+	uv run --frozen --python $(PYTHON_VERSION) --group docs mkdocs serve -f docs-site/mkdocs.yml
 
 docs-build:
-	uv run --group docs mkdocs build -f docs-site/mkdocs.yml --strict
+	uv run --frozen --python $(PYTHON_VERSION) --group docs mkdocs build -f docs-site/mkdocs.yml --strict
