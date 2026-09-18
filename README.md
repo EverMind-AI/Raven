@@ -21,7 +21,7 @@
   <a href="https://github.com/user-attachments/assets/4ae8ac91-2f0c-4c81-aa7c-c15526bd77af"><img src="https://github.com/user-attachments/assets/4ae8ac91-2f0c-4c81-aa7c-c15526bd77af" alt="Raven one surface, all agents workflow" width="100%"></a>
 </p>
 
-<p align="center"><em>One Surface, All Agents: Raven generates DAGs and orchestrates multiple specialized agents to complete complex tasks.</em></p>
+<p align="center"><em>One Surface, All Agents: Raven generates DAGs and orchestrates multiple specialized agents for complex tasks.</em></p>
 
 Raven is **The Harness of Harnesses**—a self-evolving multi-agent orchestration ecosystem. As a **Host Agent**, it brings specialized agents together through one unified surface to delegate tasks, coordinate execution, and integrate results. Its long-term vision is to extend this orchestration across devices, environments, and domains.
 
