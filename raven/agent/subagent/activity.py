@@ -64,6 +64,11 @@ class RunActivity:
     # failed and which then said nothing new left a record indistinguishable from
     # a run that worked, and the caller reading it announced success.
     tool_failures: list[str] = field(default_factory=list)
+    # One entry per file a writing tool touched, in the order it happened:
+    # ``{path, op: write|edit, add, del, size}``. Only the in-process lane fills
+    # this (see ``backends/raven_loop.py``) -- the acp and cli lanes see no tool
+    # result to record one from.
+    files: list[dict[str, Any]] = field(default_factory=list)
     tokens_in: int | None = None
     tokens_out: int | None = None
     thought_chars: int = 0
@@ -167,6 +172,8 @@ class RunActivity:
             meta["tool_calls"] = self.tool_calls
         if self.tool_failures:
             meta["tool_failures"] = self.tool_failures
+        if self.files:
+            meta["files"] = self.files
         if self.tokens_in is not None:
             meta["tokens_in"] = self.tokens_in
         if self.tokens_out is not None:
@@ -334,6 +341,16 @@ def note_tool_call(name: str) -> None:
     _touch(activity)
     if len(activity.tool_calls) < _MAX_TOOL_CALLS:
         activity.tool_calls.append(name)
+
+
+def note_file_change(path: str, op: str, add: int, delete: int, size: int) -> None:
+    """Record one file a tool wrote or edited, in the order it happened."""
+    activity = _current.get()
+    if activity is None or not isinstance(path, str) or not path:
+        return
+    _touch(activity)
+    if len(activity.files) < _MAX_TOOL_CALLS:
+        activity.files.append({"path": path, "op": op, "add": add, "del": delete, "size": size})
 
 
 def note_tool_failure(name: str) -> None:
@@ -555,6 +572,7 @@ __all__ = [
     "note_alive",
     "note_closing",
     "note_console",
+    "note_file_change",
     "note_frames",
     "note_output_limit",
     "note_response_meta",

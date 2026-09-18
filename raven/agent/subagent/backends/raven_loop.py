@@ -7,6 +7,7 @@ and ``_build_subagent_prompt``, extracted verbatim so a spawned sub-agent's
 
 from __future__ import annotations
 
+import difflib
 import json
 from collections.abc import Awaitable, Callable, Collection, Sequence
 from pathlib import Path
@@ -53,6 +54,32 @@ def _live_exec_extra_deny() -> list[str] | None:
     permission gates a delegated shell the same call it gates a direct one.
     """
     return exec_extra_deny_patterns(_LIVE_CONFIG)
+
+
+def _file_change_counts(file_change: Any, diff: str | None) -> tuple[int, int]:
+    """Added/removed line counts for one file change, preferring the tool's own diff.
+
+    A unified diff, when the tool produced one, is counted directly. A rewrite
+    the tool dropped for being too large to render (or a write with no prior
+    content to diff against) has no ``diff``, so the two contents are compared
+    directly: a new file (``before is None``) counts every line of ``after`` as
+    added, and an existing file is compared line-by-line with ``difflib``.
+    """
+    if diff:
+        add = sum(1 for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++"))
+        delete = sum(1 for line in diff.splitlines() if line.startswith("-") and not line.startswith("---"))
+        return add, delete
+    after_lines = file_change.after.splitlines()
+    if file_change.before is None:
+        return len(after_lines), 0
+    before_lines = file_change.before.splitlines()
+    add = delete = 0
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, before_lines, after_lines).get_opcodes():
+        if tag in ("insert", "replace"):
+            add += j2 - j1
+        if tag in ("delete", "replace"):
+            delete += i2 - i1
+    return add, delete
 
 
 def build_subagent_prompt(
@@ -483,6 +510,15 @@ class RavenLoopBackend:
                     activity.note_tool_call(tool_call.name)
                     set_current_tool_call_id(tool_call.id)
                     result = await tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
+                    if (file_change := getattr(result, "file_change", None)) is not None:
+                        add, delete = _file_change_counts(file_change, getattr(result, "diff", None))
+                        activity.note_file_change(
+                            file_change.path,
+                            "write" if file_change.before is None else "edit",
+                            add,
+                            delete,
+                            len(file_change.after.encode("utf-8")),
+                        )
                     # Recorded beside the call, so the run's account says how
                     # its calls went and not only that it made them. Through the
                     # registry's own predicate: a call refused before dispatch

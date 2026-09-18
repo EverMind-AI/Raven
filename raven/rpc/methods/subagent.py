@@ -311,7 +311,7 @@ def _dag_rows(root: Path, session_id: str, live_runs: set[str]) -> list[dict[str
                         "ended_at": entry.get("ended_at")
                         or (reg.get("updatedAtMs") if status not in ("pending", "running") else None),
                     }
-                if status in ("pending", "running") and not live:
+                if status in ("pending", "running", "exception") and not live:
                     status = "interrupted"
             # A skipped node never ran: it has no transcript, no cost and no
             # clock -- a row for it pads the list with entries that open onto

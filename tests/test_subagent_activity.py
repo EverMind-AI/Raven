@@ -56,3 +56,25 @@ def test_a_lane_that_never_takes_the_slot_is_never_stamped():
         loser = activity.RunActivity()
         with activity.watching_instance(loser, KEY):
             assert loser.turn_started_at_ms is None
+
+
+def test_note_file_change_is_recorded_in_order_and_reaches_as_meta():
+    with activity.collecting() as run:
+        activity.note_file_change("a.py", "write", 3, 0, 42)
+        activity.note_file_change("b.py", "edit", 1, 1, 10)
+
+    assert run.files == [
+        {"path": "a.py", "op": "write", "add": 3, "del": 0, "size": 42},
+        {"path": "b.py", "op": "edit", "add": 1, "del": 1, "size": 10},
+    ]
+    assert run.as_meta()["files"] == run.files
+
+
+def test_as_meta_omits_files_when_nothing_was_written():
+    """Omitted rather than an empty list: a reader treats a missing key and an
+    empty one alike here, and the manifest / spawn meta this feeds already
+    drops every other empty field the same way."""
+    with activity.collecting() as run:
+        pass
+
+    assert "files" not in run.as_meta()

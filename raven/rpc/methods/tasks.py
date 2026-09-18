@@ -15,12 +15,426 @@ Bodies stay where they are: a node's messages, output and rendered prompt are
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from raven.agent.subagent.dag_store import REGISTRY_FILENAME, UNRECORDED
+from raven.agent.subagent.history import dag_root, nodes_root, session_history_root
+from raven.agent.subagent.instances import get_registry
+from raven.rpc.methods.session import _safe_invoke_factory
+from raven.rpc.methods.subagent import (
+    _label_from_prompt,
+    _live_dag_run_ids,
+    _NodeFiles,
+    _read_json,
+    _read_meta,
+    _session_dir,
+    _spawn_node_ids,
+)
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
 
     from .turn import AgentLoopFactory
+
+_MAX_ERROR_CHARS = 500
+
+# A node status a run nothing is executing any more must not keep reading as
+# non-terminal; the three-state rule is `read_run_reconciled`'s (`dag_resume.py`).
+_NOT_LIVE_PENDING = ("pending", "running", "exception")
+
+_SPAWN_META_STATUS = {
+    "running": "running",
+    "completed": "completed",
+    "failed": "failed",
+    "aborted": "failed",
+    "cancelled": "cancelled",
+}
+
+_COUNT_KEYS = ("pending", "running", "completed", "failed", "skipped", "cancelled", "interrupted", "exception")
+
+# `_namespace_run` (`raven/playbook/executor.py`) tags every node id of one run
+# with the same random hex, right after the sanitized playbook name.
+_PLAYBOOK_TAG_RE = re.compile(r"^[0-9a-f]{6}-")
+
+
+def _head(path: Path, limit: int) -> str | None:
+    """The first ``limit`` characters of a file, or None when it does not exist."""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")[:limit] if path.is_file() else None
+    except OSError:
+        return None
+
+
+def _clip(text: Any) -> str | None:
+    """An in-memory string capped at the wire's error-length promise."""
+    return text[:_MAX_ERROR_CHARS] if isinstance(text, str) else None
+
+
+def _int_or_none(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _tool_counts(source: dict[str, Any]) -> tuple[int | None, int | None]:
+    """``(tool_call_count, tool_failure_count)``, null where the lane never said."""
+    calls = source.get("tool_calls")
+    failures = source.get("tool_failures")
+    return (
+        len(calls) if isinstance(calls, list) else None,
+        len(failures) if isinstance(failures, list) else None,
+    )
+
+
+def _files_of(source: dict[str, Any]) -> list[dict[str, Any]]:
+    files = source.get("files")
+    return files if isinstance(files, list) else []
+
+
+def _counts(statuses: list[str]) -> dict[str, int]:
+    counts = {key: 0 for key in _COUNT_KEYS}
+    for status in statuses:
+        if status in counts:
+            counts[status] += 1
+    counts["total"] = len(statuses)
+    return counts
+
+
+def _task_status(statuses: list[str]) -> str:
+    """The task-status ladder, first rule that matches (contract section 2.5)."""
+    present = set(statuses)
+    if "failed" in present:
+        return "failed"
+    if "interrupted" in present:
+        return "interrupted"
+    if present & {"pending", "running", "exception"}:
+        return "running"
+    if present & {"cancelled", "skipped"}:
+        return "cancelled"
+    return "completed"
+
+
+def _sort_key(row: dict[str, Any]) -> tuple[bool, int, str]:
+    """Newest first; a row with no start time sorts last, tied on its own id.
+
+    A dag row with no start falls back to its own id, which is the run id --
+    itself a UTC-prefixed, lexicographically sortable stamp -- so the fallback
+    is a plain id-descending sort rather than a second timestamp parse.
+    """
+    started = row.get("started_at")
+    return (started is not None, started or 0, row["id"])
+
+
+def _manager_of(agent_loop_factory: "AgentLoopFactory | None") -> Any:
+    return getattr(_safe_invoke_factory(agent_loop_factory), "subagents", None)
+
+
+def _live_spawn_handles(agent_loop_factory: "AgentLoopFactory | None", session_key: str) -> set[tuple[str, str]]:
+    """The (agent, handle) pairs this gateway process is still running for one session."""
+    manager = _manager_of(agent_loop_factory)
+    if manager is None:
+        return set()
+    try:
+        return manager.live_handles(session_key)
+    except Exception:  # noqa: BLE001 - liveness is advisory, never fatal
+        return set()
+
+
+def _playbook_names() -> list[str]:
+    """Every playbook the library currently holds, best-effort.
+
+    A misconfigured playbooks directory must not break the task list -- it
+    should just mean no run in it derives a playbook name.
+    """
+    try:
+        from raven.rpc.methods.playbooks import _store
+
+        return list(_store().list_ids())
+    except Exception:  # noqa: BLE001 - the derived field is optional, the read is not
+        return []
+
+
+def _derive_playbook(first_node_id: str | None, names: list[str]) -> str | None:
+    """The playbook that dispatched this run, from its first node's id prefix.
+
+    ``_namespace_run`` rewrites every node id to ``<sanitized name>-<6
+    hex>-<original id>`` before dispatch, so matching that shape against the
+    library's names recovers the source without a declared field on the graph.
+    The longest matching name wins a prefix collision (``scan`` vs.
+    ``scan-report``).
+    """
+    if not first_node_id:
+        return None
+    best: str | None = None
+    for name in names:
+        prefix = re.sub(r"[^A-Za-z0-9_-]+", "-", name) + "-"
+        if not first_node_id.startswith(prefix):
+            continue
+        if not _PLAYBOOK_TAG_RE.match(first_node_id[len(prefix) :]):
+            continue
+        if best is None or len(name) > len(best):
+            best = name
+    return best
+
+
+def _spawn_row(files: "_NodeFiles", agent_loop_factory: "AgentLoopFactory | None", session_key: str) -> dict[str, Any]:
+    meta = _read_meta(files)
+    raw_status = str(meta.get("status") or "")
+    error_present = files.path("error.md").is_file()
+    has_output = files.path("out.md").is_file()
+
+    status = _SPAWN_META_STATUS.get(raw_status)
+    if status is None:
+        status = "failed" if error_present else ("completed" if has_output else "running")
+    agent = str(meta.get("agent") or "")
+    handle = str(meta.get("handle") or "")
+    if status == "running" and (agent, handle) not in _live_spawn_handles(agent_loop_factory, session_key):
+        status = "interrupted"
+
+    # `.error.md` and `.out.md` are written by the same `finish`, never both --
+    # except an `aborted` run, which stops on a terminal safety decision and
+    # writes its explanation to `.out.md` (`ABORTED_ACTION_RESULT`), leaving no
+    # `.error.md` at all.
+    if error_present:
+        error = _head(files.path("error.md"), _MAX_ERROR_CHARS)
+    elif raw_status == "aborted":
+        error = _head(files.path("out.md"), _MAX_ERROR_CHARS)
+    else:
+        error = None
+
+    started_at = _int_or_none(meta.get("started_at_ms"))
+    ended_at = _int_or_none(meta.get("ended_at_ms"))
+    call_count, failure_count = _tool_counts(meta)
+
+    node: dict[str, Any] = {
+        "node_id": files.node_id,
+        "node_summary": meta.get("task_summary") or None,
+        "agent": agent,
+        "instance": meta.get("handle") or None,
+        "status": status,
+        "depends_on": [],
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "error": error,
+        "tokens_in": _int_or_none(meta.get("tokens_in")),
+        "tokens_out": _int_or_none(meta.get("tokens_out")),
+        "tool_call_count": call_count,
+        "tool_failure_count": failure_count,
+        "has_output": has_output,
+        "prompt_template": None,
+        "files": _files_of(meta),
+    }
+    task_summary = meta.get("task_summary") or meta.get("label") or _label_from_prompt(files) or None
+    return {
+        "id": files.node_id,
+        "kind": "spawn",
+        "task_summary": task_summary,
+        "status": status,
+        "playbook": None,
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "agent": meta.get("agent"),
+        "handle": meta.get("handle"),
+        "counts": _counts([status]),
+        "nodes": [node],
+    }
+
+
+def _spawn_rows(
+    session_dir: Path, agent_loop_factory: "AgentLoopFactory | None", session_key: str, only_id: str | None
+) -> list[dict[str, Any]]:
+    root = nodes_root(session_dir)
+    ids = _spawn_node_ids(session_dir)
+    if only_id is not None:
+        ids = [nid for nid in ids if nid == only_id]
+    return [_spawn_row(_NodeFiles(root, nid), agent_loop_factory, session_key) for nid in ids]
+
+
+def _dag_node_state(
+    node_id: str,
+    manifest_entry: dict[str, Any] | None,
+    registry_nodes: dict[str, Any],
+    instance_rows_by_node: dict[str, dict[str, Any]],
+) -> tuple[str, int | None, int | None]:
+    """One node's status and timestamps, first source that has a value.
+
+    Manifest (a finalized run) first, then the session's own node registry
+    (which is where a hard stop's ``cancelled`` / ``skipped`` land -- the
+    manifest never gets written for one), then the instance registry's
+    ``dag-node`` row, then ``pending`` for a node that never got even that far.
+    """
+    if manifest_entry is not None:
+        status = manifest_entry.get("status")
+        if isinstance(status, str) and status:
+            return status, _int_or_none(manifest_entry.get("started_at")), _int_or_none(manifest_entry.get("ended_at"))
+
+    reg_entry = registry_nodes.get(node_id)
+    if isinstance(reg_entry, dict):
+        status = reg_entry.get("status")
+        # `unrecorded` is a sentinel `dag_store.read_session_nodes` computes
+        # for an entry with no status of its own, not a value ever written --
+        # but a raw entry could still lack the key, so it is treated the same.
+        if isinstance(status, str) and status and status != UNRECORDED:
+            return status, _int_or_none(reg_entry.get("started_at_ms")), _int_or_none(reg_entry.get("ended_at_ms"))
+
+    row = instance_rows_by_node.get(node_id)
+    if isinstance(row, dict):
+        status = row.get("status")
+        if isinstance(status, str) and status:
+            ended = row.get("updatedAtMs") if status not in _NOT_LIVE_PENDING else None
+            return status, _int_or_none(row.get("createdAtMs")), _int_or_none(ended)
+
+    return "pending", None, None
+
+
+def _dag_has_output(node_id: str, manifest_entry: dict[str, Any] | None, registry_entry: Any, nodes_dir: Path) -> bool:
+    output_file = manifest_entry.get("output_file") if manifest_entry else None
+    if output_file:
+        try:
+            return Path(output_file).is_file()
+        except OSError:
+            return False
+    if isinstance(registry_entry, dict) and "has_output" in registry_entry:
+        return bool(registry_entry.get("has_output"))
+    return (nodes_dir / f"{node_id}.out.md").is_file()
+
+
+def _replan_of(graph: dict[str, Any]) -> dict[str, Any] | None:
+    """The link ``graph.json`` carries when a replan superseded this run."""
+    replan = graph.get("replan")
+    if not isinstance(replan, dict) or not replan.get("run_id"):
+        return None
+    return {
+        "run_id": str(replan["run_id"]),
+        "from_node": replan.get("from_node"),
+        "reason": replan.get("reason"),
+        "started": bool(replan.get("started")),
+        "error": replan.get("error"),
+    }
+
+
+def _dag_row(
+    run_dir: Path,
+    session_key: str,
+    registry_nodes: dict[str, Any],
+    instance_rows: list[dict[str, Any]],
+    nodes_dir: Path,
+    live_runs: set[str],
+    playbook_names: list[str],
+) -> dict[str, Any]:
+    graph = _read_json(run_dir / "graph.json")
+    manifest = _read_json(run_dir / "manifest.json")
+    live = run_dir.name in live_runs
+    by_node = {
+        row.get("nodeId"): row
+        for row in instance_rows
+        if row.get("kind") == "dag-node" and row.get("runId") == run_dir.name
+    }
+
+    graph_nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+    nodes: list[dict[str, Any]] = []
+    statuses: list[str] = []
+    starts: list[int] = []
+    ends: list[int] = []
+    for gnode in graph_nodes:
+        if not isinstance(gnode, dict) or not isinstance(gnode.get("id"), str):
+            continue
+        nid = gnode["id"]
+        entry = manifest.get(nid) if isinstance(manifest.get(nid), dict) else None
+        status, started, ended = _dag_node_state(nid, entry, registry_nodes, by_node)
+        if status in _NOT_LIVE_PENDING and not live:
+            status = "interrupted"
+        call_count, failure_count = _tool_counts(entry or {})
+        node: dict[str, Any] = {
+            "node_id": nid,
+            "node_summary": gnode.get("node_summary") or None,
+            "agent": ((entry or {}).get("subagent") or gnode.get("subagent") or ""),
+            "instance": (entry.get("instance") if entry is not None and "instance" in entry else gnode.get("instance")),
+            "status": status,
+            "depends_on": list(gnode.get("depends_on") or []),
+            "started_at": started,
+            "ended_at": ended,
+            "error": _clip((entry or {}).get("error")),
+            "tokens_in": _int_or_none((entry or {}).get("tokens_in")),
+            "tokens_out": _int_or_none((entry or {}).get("tokens_out")),
+            "tool_call_count": call_count,
+            "tool_failure_count": failure_count,
+            "has_output": _dag_has_output(nid, entry, registry_nodes.get(nid), nodes_dir),
+            "prompt_template": gnode.get("prompt_template") or None,
+            "files": _files_of(entry or {}),
+        }
+        if gnode.get("inputs") is not None:
+            node["inputs"] = gnode["inputs"]
+        if gnode.get("skills") is not None:
+            node["skills"] = list(gnode["skills"])
+        if gnode.get("mcps") is not None:
+            node["mcps"] = list(gnode["mcps"])
+        nodes.append(node)
+        statuses.append(status)
+        if isinstance(started, int):
+            starts.append(started)
+        if isinstance(ended, int):
+            ends.append(ended)
+
+    replan = _replan_of(graph)
+    if replan is not None:
+        # `_apply_replan` marks the exception node(s) `failed` before
+        # `_finalize` runs, so the ladder below would already read this row
+        # `failed` -- but a replan that started reads as a hand-off, not a
+        # failure, and one that never started names why in `replan.error`.
+        task_status = "cancelled" if replan["started"] else "failed"
+    else:
+        task_status = _task_status(statuses)
+
+    row: dict[str, Any] = {
+        "id": run_dir.name,
+        "kind": "dag",
+        "task_summary": graph.get("task_summary") or None,
+        "status": task_status,
+        "playbook": _derive_playbook(nodes[0]["node_id"] if nodes else None, playbook_names),
+        "started_at": min(starts) if starts else None,
+        "ended_at": max(ends) if ends and task_status != "running" else None,
+        "agent": None,
+        "handle": None,
+        "counts": _counts(statuses),
+        "nodes": nodes,
+    }
+    if replan is not None:
+        row["replan"] = replan
+    return row
+
+
+def _dag_rows(
+    session_dir: Path,
+    session_key: str,
+    agent_loop_factory: "AgentLoopFactory | None",
+    only_id: str | None,
+) -> list[dict[str, Any]]:
+    try:
+        run_dirs = sorted(
+            (p for p in dag_root(session_dir).iterdir() if p.is_dir()), key=lambda p: p.name, reverse=True
+        )
+    except OSError:
+        return []
+    if only_id is not None:
+        run_dirs = [p for p in run_dirs if p.name == only_id]
+    if not run_dirs:
+        return []
+
+    registry = _read_json(session_history_root(session_dir) / REGISTRY_FILENAME)
+    registry_nodes = registry.get("nodes") if isinstance(registry.get("nodes"), dict) else {}
+    try:
+        instance_rows = get_registry().list_instances(session_key)
+    except Exception:  # noqa: BLE001 - the overlay is an improvement, not a dependency
+        instance_rows = []
+    live_runs = _live_dag_run_ids(agent_loop_factory)
+    nodes_dir = nodes_root(session_dir)
+    playbook_names = _playbook_names()
+
+    return [
+        _dag_row(run_dir, session_key, registry_nodes, instance_rows, nodes_dir, live_runs, playbook_names)
+        for run_dir in run_dirs
+    ]
 
 
 async def tasks_list(
@@ -37,7 +451,25 @@ async def tasks_list(
     session_key = str(params.get("session_key") or "")
     if not session_key:
         return {"tasks": []}
-    return {"tasks": []}
+
+    try:
+        session_dir = _session_dir(session_key, agent_loop_factory)
+    except OSError:
+        return {"tasks": []}
+
+    kind = params.get("kind")
+    want = kind if kind in ("spawn", "dag") else None
+    raw_id = params.get("id")
+    task_id = str(raw_id) if want is not None and raw_id else None
+
+    tasks: list[dict[str, Any]] = []
+    if want in (None, "spawn"):
+        tasks.extend(_spawn_rows(session_dir, agent_loop_factory, session_key, task_id if want == "spawn" else None))
+    if want in (None, "dag"):
+        tasks.extend(_dag_rows(session_dir, session_key, agent_loop_factory, task_id if want == "dag" else None))
+
+    tasks.sort(key=_sort_key, reverse=True)
+    return {"tasks": tasks}
 
 
 def register_tasks_methods(
