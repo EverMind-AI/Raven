@@ -142,7 +142,17 @@ _MEMORIZE_TIMEOUT_S: float = 360.0
 # sized by what the caller loses when they run out: a read that overruns costs
 # the turn its recalled memory, a write that overruns costs that turn's memory
 # permanently, and neither is worth a minute of the user's time.
-_RECALL_TIMEOUT_S: float = 4.0
+# 4.0 held while recall meant a handful of episodes off a local server. The agent
+# track on a hosted pool is a different operation: it fuses agent_case and
+# agent_skill through a cross-encoder, and the skill router over-fetches 2x, so
+# one turn asks for 40 rows. Measured against the hosted service on six unseen
+# queries: 10.2 / 15.0 / 19.9 / 20.8 / 26.0 / 33.9 s. Every one of those was a
+# timeout, and a timeout here is silent -- recall returns empty, the # Skills
+# segment renders nothing, and the arm scores as if it had no memory at all.
+# 45 clears the measured worst case with headroom. It is deliberately not the
+# store budget: a read that overruns costs the turn its memory, and that is the
+# cost being bought back here.
+_RECALL_TIMEOUT_S: float = 45.0
 _STORE_TIMEOUT_S: float = 10.0
 # ...and an append is not flat work: EverOS may carve a boundary out of any
 # add, which runs a model, so the cost follows how much is handed over. A turn
