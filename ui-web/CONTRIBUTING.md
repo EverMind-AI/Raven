@@ -321,17 +321,22 @@ consistently before there was a rule (six do: `kb`, `pb`, `ob`, `pm`, `su`,
 `mem`).
 
 **Enforced by `check-class-namespace`** (run as a gate by
-`check-class-namespace.test.mjs` and as a CLI), with two shrink-only debts:
+`check-class-namespace.test.mjs` and as a CLI), with three shrink-only debts:
 `LEGACY_SHARED` (86 classes two or more domains name, pinned with how many
-domains each reaches) and `LEGACY_LOCAL` (how many of a domain's own classes
-are still unprefixed, 342 in total). A new shared class fails; one more
-unprefixed class in a domain fails. Moving a domain's rules out of `page.css`
-into its own sheet is what lowers a number.
+domains each reaches), `LEGACY_LOCAL` (how many of a domain's own classes are
+still unprefixed, 342 in total) and `LEGACY_EXPR` (the same count for the
+literals inside a `className={...}` expression, 91 in total). A new shared
+class fails; one more unprefixed class in a domain fails, in an attribute or in
+an expression. Moving a domain's rules out of `page.css` into its own sheet is
+what lowers a number.
 
-The gate's reach is `className="..."` in a domain's non-test `.tsx` files. A
-class assembled at runtime (`className={...}`) is outside it on purpose -- a
-literal inside such an expression is as often a comparison operand as a class
--- so a prefix inside an expression is by review.
+The gate's reach is every class a domain's non-test `.tsx` files name: the
+literal attribute `className="a b"`, and inside a `className={...}` expression
+every single-quoted, double-quoted and template-literal static chunk, split on
+whitespace. A token glued to an interpolation is a stem rather than a class
+(`` `kbf-${family}` `` names `.kbf-md`, never `.kbf-`) and is not read as one.
+An expression cannot tell a class from a comparison operand, which is why its
+literals are counted in their own list rather than mixed into the other two.
 
 ## 8. Tests and gates
 
@@ -436,9 +441,8 @@ shrink-only: the way off a list is the fix.
 | Four more non-store subscriber groups | `app/connection.ts` and `lib/session.ts` are watcher lists rather than stores; `state/caps.ts`'s `switched` and `state/lang/store.ts`'s `afterwards` are second groups beside a store's own subscribers | `store-shape`'s `LISTENERS` |
 | Four modules hold module-level `let` with no reset | Three hold a React root a reset would have to unmount; the fourth is a pinned store | `store-shape`'s `NO_RESET` |
 | `lang.attr(key)` survives beside `t(key)` | It answers `undefined` until a language is picked, which is what keeps nine `data-tip` and twenty-four `aria-label` attributes off the first frame of a page nobody has picked for -- exactly what the served markup carries. Turning them into `t()` would change the DOM the boot and region goldens record | `state/lang/store.ts`'s `picked`, `i18n-keys`'s `KEYED` regex |
-| 86 shared class names and 342 unprefixed local ones | The rules are in `page.css`, whose bytes are what the two boot goldens and the region goldens are taken from; they move a domain at a time | `check-class-namespace`'s `LEGACY_SHARED` and `LEGACY_LOCAL` |
+| 86 shared class names, 342 unprefixed local ones and 91 unprefixed inside a `className={...}` | The rules are in `page.css`, whose bytes are what the two boot goldens and the region goldens are taken from; they move a domain at a time. The third list is an upper bound: an expression literal may be a comparison operand rather than a class | `check-class-namespace`'s `LEGACY_SHARED`, `LEGACY_LOCAL` and `LEGACY_EXPR` |
 | `.xaedit` keeps its old prefix | Five `page.css` rules scope it; it renames with them | `check-class-namespace`'s `LEGACY_LOCAL.extAgents` |
-| Three casts left in `rpc/fixtures/turn.ts` | `:340` and `:380` narrow a script table's loose data into `ToolArgs`; `:383` builds a pushed frame with `as unknown as TurnEvent`. The last is the same "check off" the answers were cleared of, but it is on a push rather than an answer, and clearing it means typing the script table's rows as the dag event union first | by review |
 | 205 optional contract fields the fixtures never send | Most are one state this canvas is deliberately in; the header names the few a page really draws and this library has never exercised | `fixture-shape`'s `UNSENT` |
 | 18 methods with no offline answer | Each entry says why the offline page has nothing to answer with | `offline-coverage`'s `EXEMPT` |
 | 17 files inside a runtime cycle, in two components | The session knot is the large one; `state/session/naming.ts` is in it because it was carved out of `runtime.ts`, which already was. Inverting `runtime.ts`'s two calls into it is the way back to 16 | `import-direction`'s `CYCLES` and `IN_CYCLES` |

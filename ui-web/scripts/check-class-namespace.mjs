@@ -15,26 +15,37 @@
 // hard-coded prefix, over a 6,000-line global stylesheet. The prefixes are read
 // from the domains themselves now (features/<domain>/manifest.ts: the directory
 // name, or the `cssPrefix` six of them declare because they named their classes
-// consistently before there was a rule), and the two debts the tree carries are
-// pinned below and may only shrink:
+// consistently before there was a rule), and the three debts the tree carries
+// are pinned below and may only shrink:
 //
 //   LEGACY_SHARED -- a class two or more domains name that is not page
 //                    vocabulary. A NEW one fails; an existing one reaching one
 //                    more domain fails.
 //   LEGACY_LOCAL  -- how many of a domain's own classes are still unprefixed.
 //                    One more fails.
+//   LEGACY_EXPR   -- how many unprefixed classes a domain names from inside a
+//                    `className={...}` expression. One more fails.
 //
-// So the tree is green as it stands and neither debt can grow, which is what
-// makes features/<domain>/styles.css usable: a domain's new rules go in its own
-// sheet under its own prefix (features/extAgents/styles.css says how), and the
-// rules already in styles/page.css come across a domain at a time, each move
-// lowering a number here.
+// So the tree is green as it stands and no debt can grow, which is what makes
+// features/<domain>/styles.css usable: a domain's new rules go in its own sheet
+// under its own prefix (features/extAgents/styles.css says how), and the rules
+// already in styles/page.css come across a domain at a time, each move lowering
+// a number here.
 //
-// Reach: `className="..."` in a domain's non-test .tsx files. No .ts under
-// features/ names a class today, and a class assembled at runtime
-// (`className={...}`) is outside this -- a literal inside such an expression is
-// as often a comparison operand as a class, and a gate that reported those
-// would be reporting the wrong thing.
+// Reach: every class a domain's non-test .tsx files name, whether the attribute
+// is a literal (`className="a b"`) or an expression (`className={...}`) -- and
+// inside an expression, every single-quoted, double-quoted and template-literal
+// static chunk, split on whitespace. A token glued to an interpolation is a stem
+// rather than a class (`kbf-${family}` names `.kbf-md`, never `.kbf-`), so it is
+// not read as one. No .ts under features/ names a class today.
+//
+// What an expression cannot tell apart is a class from a comparison operand:
+// `state === 'bad' ? 'v err' : 'v'` names .v and .err and reads 'bad' as a class
+// too. So the expression literals are counted in LEGACY_EXPR rather than mixed
+// into the two lists above -- an operand there costs a row on one domain's count
+// instead of a wrong verdict about a shared class -- and the prefix rule's
+// inverse (a prefixed class the stylesheets define) holds over them as it does
+// over the attribute literals.
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -118,6 +129,35 @@ const LEGACY_LOCAL = {
   workspace: 38,
 }
 
+// The same count for the classes a domain names from inside a `className={...}`
+// expression, and on the same terms: down or gone, a zero stays on the list.
+// Separate from LEGACY_LOCAL because the two are not measured the same way -- an
+// expression literal may be a comparison operand rather than a class (the header
+// says why), so a row here is an upper bound on a debt where a row there is the
+// debt. A name in both places is counted once, by LEGACY_LOCAL.
+const LEGACY_EXPR = {
+  browser: 3,
+  composer: 3,
+  connections: 5,
+  cron: 1,
+  dag: 3,
+  desk: 2,
+  extAgents: 1,
+  installed: 0,
+  knowledge: 0,
+  memory: 1,
+  model: 3,
+  onboard: 2,
+  playbooks: 7,
+  plugins: 2,
+  rail: 2,
+  settings: 13,
+  skills: 2,
+  subagents: 6,
+  transcript: 28,
+  workspace: 7,
+}
+
 const domains = readdirSync(join(src, 'features'))
   .filter((name) => statSync(join(src, 'features', name)).isDirectory())
   .sort()
@@ -141,20 +181,115 @@ const components = (dir, out = []) => {
   return out
 }
 
+/* The expression after each `className={`, to its balanced closing brace --
+   quotes and nested `${}` skipped, so a brace inside a string does not end it. */
+const expressions = (text) => {
+  const out = []
+  let at = text.indexOf('className={')
+  while (at !== -1) {
+    let i = at + 'className={'.length
+    const start = i
+    let depth = 1
+    while (i < text.length && depth > 0) {
+      const ch = text[i]
+      if (ch === '{') depth += 1
+      else if (ch === '}') depth -= 1
+      else if (ch === "'" || ch === '"' || ch === '`') i = endOfString(text, i)
+      i += 1
+    }
+    out.push(text.slice(start, i - 1))
+    at = text.indexOf('className={', i)
+  }
+  return out
+}
+
+/* The index of the quote that closes the one at `i`. */
+const endOfString = (text, i) => {
+  const quote = text[i]
+  let j = i + 1
+  while (j < text.length && text[j] !== quote) {
+    if (text[j] === '\\') { j += 2; continue }
+    if (quote === '`' && text[j] === '$' && text[j + 1] === '{') { j = endOfHole(text, j + 1) + 1; continue }
+    j += 1
+  }
+  return j
+}
+
+/* The index of the brace that closes the `${` whose brace is at `i`. */
+const endOfHole = (text, i) => {
+  let j = i + 1
+  let depth = 1
+  while (j < text.length && depth > 0) {
+    const ch = text[j]
+    if (ch === '{') depth += 1
+    else if (ch === '}') depth -= 1
+    else if (ch === "'" || ch === '"' || ch === '`') j = endOfString(text, j)
+    j += 1
+  }
+  return j - 1
+}
+
+/* Every class token of the static strings in one expression. A chunk that an
+   interpolation runs into is a stem, not a class, so the token on that side of
+   it is dropped; anything unquoted is an identifier, which is a variable. */
+const tokensIn = (expr) => {
+  const out = []
+  const take = (text, glueStart, glueEnd) => {
+    const parts = text.split(/\s+/)
+    if (glueStart) parts[0] = ''
+    if (glueEnd) parts[parts.length - 1] = ''
+    for (const c of parts) if (c) out.push(c)
+  }
+  let i = 0
+  while (i < expr.length) {
+    const ch = expr[i]
+    if (ch === "'" || ch === '"') {
+      const end = endOfString(expr, i)
+      take(expr.slice(i + 1, end), false, false)
+      i = end + 1
+      continue
+    }
+    if (ch === '`') {
+      const end = endOfString(expr, i)
+      let at = i + 1
+      let glueStart = false
+      while (at < end) {
+        const hole = expr.indexOf('${', at)
+        if (hole === -1 || hole >= end) break
+        take(expr.slice(at, hole), glueStart, true)
+        glueStart = true
+        at = endOfHole(expr, hole + 1) + 1
+      }
+      take(expr.slice(at, end), glueStart, false)
+      i = end + 1
+      continue
+    }
+    i += 1
+  }
+  return out
+}
+
 const prefixes = new Map(domains.map((domain) => [domain, prefixOf(domain)]))
 const named = new Map()
+const inExpr = new Map()
 for (const domain of domains) {
   const files = components(join(src, 'features', domain))
   const used = new Set()
+  const fromExpr = new Set()
   for (const file of files) {
-    for (const m of readFileSync(file, 'utf8').matchAll(/className="([^"{]+)"/g)) {
+    const text = readFileSync(file, 'utf8')
+    for (const m of text.matchAll(/className="([^"{]+)"/g)) {
       for (const c of m[1].trim().split(/\s+/)) if (c) used.add(c)
+    }
+    for (const expr of expressions(text)) {
+      for (const c of tokensIn(expr)) fromExpr.add(c)
     }
   }
   if (files.length && !used.size) {
     fail(`features/${domain} renders ${files.length} component(s) and names no class, which means this check is reading the wrong files`)
   }
   named.set(domain, used)
+  inExpr.set(domain, fromExpr)
 }
 
 const owners = new Map()
@@ -190,6 +325,25 @@ for (const domain of domains) {
   }
 }
 
+/* The same, for the literals inside `className={...}`. A name the domain also
+   writes as an attribute is already on one of the two lists above. */
+const exprOver = []
+const fromExpr = new Map(domains.map((domain) => [domain, []]))
+for (const [domain, used] of inExpr) {
+  for (const c of used) {
+    if (SHARED.has(c) || named.get(domain).has(c)) continue
+    if (!c.startsWith(prefixes.get(domain))) fromExpr.get(domain).push(c)
+  }
+}
+for (const domain of domains) {
+  const found = fromExpr.get(domain).length
+  const pinned = LEGACY_EXPR[domain]
+  if (pinned === undefined) exprOver.push(`${domain}: ${found} unprefixed in expressions, not on the list`)
+  else if (found > pinned) {
+    exprOver.push(`${domain}: ${found} unprefixed in expressions, pinned ${pinned} -- ${fromExpr.get(domain).sort().map((c) => `.${c}`).join(', ')}`)
+  }
+}
+
 if (unpinnedShared.length) {
   fail(
     `${unpinnedShared.join(', ')} ${unpinnedShared.length === 1 ? 'is named' : 'are named'} by more than one ` +
@@ -210,6 +364,12 @@ if (localOver.length) {
       'features/<domain>/styles.css.',
   )
 }
+if (exprOver.length) {
+  fail(
+    `${exprOver.join('; ')}. Same rule inside a className expression as outside one: the domain's ` +
+      'prefix, and the rule in features/<domain>/styles.css.',
+  )
+}
 
 /* Down or gone, the other half: a pin the tree has outgrown has to come off,
    or the numbers stop meaning anything a year from now. */
@@ -224,11 +384,15 @@ for (const domain of domains) {
   if (pinned !== undefined && local.get(domain).length < pinned) {
     stale.push(`${domain}: ${local.get(domain).length} unprefixed now, pinned ${pinned}, lower it`)
   }
+  const pinnedExpr = LEGACY_EXPR[domain]
+  if (pinnedExpr !== undefined && fromExpr.get(domain).length < pinnedExpr) {
+    stale.push(`${domain}: ${fromExpr.get(domain).length} unprefixed in expressions now, pinned ${pinnedExpr}, lower it`)
+  }
 }
-for (const domain of Object.keys(LEGACY_LOCAL)) {
+for (const domain of new Set([...Object.keys(LEGACY_LOCAL), ...Object.keys(LEGACY_EXPR)])) {
   if (!prefixes.has(domain)) stale.push(`${domain}: no such domain, delete the pin`)
 }
-if (stale.length) fail(`${stale.join('; ')}. Both lists above are down-or-gone.`)
+if (stale.length) fail(`${stale.join('; ')}. All three lists above are down-or-gone.`)
 
 /* And the reverse of the prefix rule: a class a domain owns must be a class the
    stylesheets define. A prefixed name nothing styles is a rule that was renamed
@@ -239,8 +403,8 @@ for (const domain of domains) {
 }
 const css = sheets.join('\n')
 const undefined_ = []
-for (const [domain, used] of named) {
-  for (const c of used) {
+for (const domain of domains) {
+  for (const c of new Set([...named.get(domain), ...inExpr.get(domain)])) {
     if (!c.startsWith(prefixes.get(domain))) continue
     if (!new RegExp(`\\.${c}(?![\\w-])`).test(css)) undefined_.push(`features/${domain} uses .${c}`)
   }
@@ -248,8 +412,10 @@ for (const [domain, used] of named) {
 if (undefined_.length) fail(`${undefined_.join(', ')}, which no stylesheet defines`)
 
 const classes = [...named.values()].reduce((n, used) => n + used.size, 0)
+const literals = [...inExpr.values()].reduce((n, used) => n + used.size, 0)
 console.log(
-  `check-class-namespace: OK (${classes} classes across ${domains.length} domains; ` +
-    `${Object.keys(LEGACY_SHARED).length} shared and ${Object.values(LEGACY_LOCAL).reduce((a, b) => a + b, 0)} ` +
-    'unprefixed pinned)',
+  `check-class-namespace: OK (${classes} classes and ${literals} expression literals across ` +
+    `${domains.length} domains; ${Object.keys(LEGACY_SHARED).length} shared, ` +
+    `${Object.values(LEGACY_LOCAL).reduce((a, b) => a + b, 0)} unprefixed and ` +
+    `${Object.values(LEGACY_EXPR).reduce((a, b) => a + b, 0)} unprefixed in expressions pinned)`,
 )

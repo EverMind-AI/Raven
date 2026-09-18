@@ -121,7 +121,7 @@ conventions they are written to are `CONTRIBUTING.md` section 8.
 | `fixture-shape` | every offline responder answers the shape the contract declares, plus the fields it never sends |
 | `offline-coverage` | every method the page calls has an offline answer, or a reason it does not |
 | `fixture-now` | the offline library has no clock of its own |
-| `check-class-namespace` | a domain's class names carry the domain's prefix; the shared and unprefixed debts may only shrink |
+| `check-class-namespace` | a domain's class names carry the domain's prefix, in a `className` attribute or inside a `className={...}` expression; the shared and unprefixed debts may only shrink |
 | `check-css` | the stylesheet's own declaration-level invariants |
 | `boot-order` | the page defers its first data-driven paint until every source is installed |
 | `first-run-model-setup` | a page with no provider configured sends every task action to Models |

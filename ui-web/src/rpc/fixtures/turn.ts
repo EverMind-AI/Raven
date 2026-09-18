@@ -17,27 +17,10 @@
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
 import type { ResultOf, TurnEvent } from '../generated'
 
-/* One entry of a script, in the shorthand the replay used: `t` is the kind,
-   `d` the gap in ms since the previous entry, and the rest is the kind's own
-   payload. Kept as the script's own shape rather than written out as wire
-   frames, because the shape a person edits and the shape the page consumes are
-   different jobs -- `framesOf` below translates. */
-export interface ScriptEvent {
-  t: string
-  d?: number
-  s?: number
-  x?: string
-  id?: number
-  n?: string
-  a?: unknown
-  ok?: boolean
-  r?: string
-  ms?: number
-  diff?: string[]
-  meta?: Record<string, unknown>
-  k?: string
-  p?: Record<string, unknown>
-}
+/* A tool's arguments as the wire carries them. A script entry gives either the
+   whole argument object -- which is what the workspace record and the dag card
+   need -- or the one string the card labels the row with. */
+type ToolArgs = Extract<TurnEvent, { type: 'tool.start' }>['payload']['arguments']
 
 export interface DeliveryFile {
   path: string
@@ -47,6 +30,38 @@ export interface DeliveryFile {
   media_type: string
   description?: string
 }
+
+/* The one metadata a script's completions carry, and what the shelf and
+   `deliverables.list` read back out of it. A type alias rather than an
+   interface on purpose: the contract types `metadata` as an index signature,
+   and only a type literal is assignable to one without an assertion. */
+type DeliveryMeta = { raven_delivery: { files: DeliveryFile[] } }
+
+/* The two dag frames the graph conversation pushes. Unlike every other kind,
+   a dag entry's `p` IS the wire payload, so it is typed as the contract's own
+   -- and the pairing of `k` with `p` is what makes each frame build without an
+   assertion. */
+type DagEntry =
+  | { t: 'dag'; k: 'dag.run_started'; p: Extract<TurnEvent, { type: 'dag.run_started' }>['payload'] }
+  | { t: 'dag'; k: 'dag.node_updated'; p: Extract<TurnEvent, { type: 'dag.node_updated' }>['payload'] }
+
+/* One entry of a script, in the shorthand the replay used: `t` is the kind,
+   `d` the gap in ms since the previous entry, and the rest is the kind's own
+   payload -- a union over `t` rather than one bag of optionals, so the fields
+   an entry carries are its kind's and `framesOf` builds each frame from a
+   narrowed entry. Kept as the script's own shape rather than written out as
+   wire frames, because the shape a person edits and the shape the page
+   consumes are different jobs -- `framesOf` below translates. */
+export type ScriptEvent = { d?: number } & (
+  | { t: 'ep' }
+  | { t: 'think'; s?: number; x: string }
+  | { t: 'say'; x: string }
+  | { t: 'answer'; x: string }
+  | { t: 't+'; id: number; n: string; a?: string | ToolArgs }
+  | { t: 't-'; id: number; r: string; ok?: boolean; ms?: number; diff?: string[]; meta?: DeliveryMeta }
+  | DagEntry
+  | { t: 'end' }
+)
 
 export interface Run {
   key: string
@@ -329,15 +344,11 @@ const pickRun = (s: string): Run => (/超时|timeout|登录|bug|修|fix|报错|�
 const eventsFor = (run: Run, websearchOn: boolean): ScriptEvent[] =>
   (run.key === 'gtm' && websearchOn && run.evOk) ? run.evOk : run.ev
 
-/* A tool's arguments as the wire carries them. A script entry gives either the
-   whole argument object -- which is what the workspace record and the dag card
-   need -- or the one string the card labels the row with, and the live frame
-   carries both fields, so a string becomes the argument the tool would have
-   been called with plus the label. */
-type ToolArgs = Extract<TurnEvent, { type: 'tool.start' }>['payload']['arguments']
-
-function argumentsOf(name: string, a: unknown): ToolArgs {
-  if (a && typeof a === 'object') return a as ToolArgs
+/* The live frame carries both fields, so a script entry that gives the label
+   string becomes the argument the tool would have been called with plus the
+   label. */
+function argumentsOf(name: string, a: string | ToolArgs | undefined): ToolArgs {
+  if (a && typeof a === 'object') return a
   const s = String(a == null ? '' : a)
   if (name === 'exec') return { command: s }
   if (name === 'web_fetch') return { url: s }
@@ -345,6 +356,12 @@ function argumentsOf(name: string, a: unknown): ToolArgs {
   if (name === 'spawn') return { label: s }
   return { path: s }
 }
+
+/* One arm per kind, because `{ type: e.k, payload: e.p }` off the union pairs
+   either kind with either payload -- which is not a frame the contract
+   declares, and tsc is right to refuse it. */
+const dagFrame = (e: DagEntry): TurnEvent =>
+  (e.k === 'dag.run_started' ? { type: e.k, payload: e.p } : { type: e.k, payload: e.p })
 
 const TYPE_MS = 24
 const CHUNK = /[\s\S]{1,26}/g
@@ -367,22 +384,22 @@ function framesOf(run: Run, websearchOn: boolean, turnId: string): Frame[] {
       episode += 1
       frames.push({ after, event: { type: 'episode.start', payload: { index: episode } } })
     } else if (e.t === 'think') {
-      frames.push({ after, event: { type: 'thinking.delta', payload: { text: e.x || '' } } })
+      frames.push({ after, event: { type: 'thinking.delta', payload: { text: e.x } } })
     } else if (e.t === 'say') {
-      frames.push({ after, event: { type: 'token.delta', payload: { text: e.x || '' } } })
+      frames.push({ after, event: { type: 'token.delta', payload: { text: e.x } } })
     } else if (e.t === 't+') {
       frames.push({ after, event: { type: 'tool.start', payload: {
-        tool_call_id: String(e.id), name: e.n || '', arguments: argumentsOf(e.n || '', e.a),
+        tool_call_id: String(e.id), name: e.n, arguments: argumentsOf(e.n, e.a),
         display: typeof e.a === 'string' ? e.a : null } } })
     } else if (e.t === 't-') {
       frames.push({ after, event: { type: 'tool.complete', payload: {
-        tool_call_id: String(e.id), result_preview: e.r || '', truncated: false,
-        ok: e.ok !== false, ...(e.meta ? { metadata: e.meta as ToolArgs } : {}),
+        tool_call_id: String(e.id), result_preview: e.r, truncated: false,
+        ok: e.ok !== false, ...(e.meta ? { metadata: e.meta } : {}),
         ...(e.diff ? { diff: e.diff.join('\n') } : {}) } } })
     } else if (e.t === 'dag') {
-      frames.push({ after, event: { type: e.k, payload: e.p || {} } as unknown as TurnEvent })
+      frames.push({ after, event: dagFrame(e) })
     } else if (e.t === 'answer') {
-      const parts = (e.x || '').match(CHUNK) || []
+      const parts = e.x.match(CHUNK) || []
       parts.forEach((part, i) => {
         frames.push({ after: i === 0 ? after : TYPE_MS, event: { type: 'token.delta', payload: { text: part } } })
       })
@@ -420,18 +437,18 @@ function historyOf(run: Run, websearchOn: boolean, at: number): ResultOf<'sessio
     pending.length = 0
   }
   for (const e of eventsFor(run, websearchOn)) {
-    if (e.t === 'think') think += e.x || ''
-    else if (e.t === 'say') say += e.x || ''
+    if (e.t === 'think') think += e.x
+    else if (e.t === 'say') say += e.x
     else if (e.t === 't+') {
-      pending.push({ id: String(e.id), name: e.n || '',
-        args: JSON.stringify(argumentsOf(e.n || '', e.a)) })
+      pending.push({ id: String(e.id), name: e.n,
+        args: JSON.stringify(argumentsOf(e.n, e.a)) })
     } else if (e.t === 't-') {
       flush()
       messages.push({ role: 'tool', name: nameOfCall(run, websearchOn, String(e.id)),
-        tool_call_id: String(e.id), text: e.r || '', timestamp: String(at) })
+        tool_call_id: String(e.id), text: e.r, timestamp: String(at) })
     } else if (e.t === 'answer') {
       flush()
-      messages.push({ role: 'assistant', text: e.x || '', timestamp: String(at), duration_ms: run.use.wall })
+      messages.push({ role: 'assistant', text: e.x, timestamp: String(at), duration_ms: run.use.wall })
     }
   }
   flush()
@@ -439,16 +456,18 @@ function historyOf(run: Run, websearchOn: boolean, at: number): ResultOf<'sessio
 }
 
 const nameOfCall = (run: Run, websearchOn: boolean, id: string): string => {
-  const start = eventsFor(run, websearchOn).find((e) => e.t === 't+' && String(e.id) === id)
-  return (start && start.n) || ''
+  for (const e of eventsFor(run, websearchOn)) {
+    if (e.t === 't+' && String(e.id) === id) return e.n
+  }
+  return ''
 }
 
 /** The first line of what a script answers, which is what a finished turn
     leaves on its conversation's row. */
 function previewOf(run: Run, websearchOn: boolean): string {
-  const answers = eventsFor(run, websearchOn).filter((e) => e.t === 'answer')
+  const answers = eventsFor(run, websearchOn).flatMap((e) => (e.t === 'answer' ? [e.x] : []))
   const last = answers[answers.length - 1]
-  return String((last && last.x) || '').trim().split('\n')[0]!.slice(0, 60)
+  return (last || '').trim().split('\n')[0]!.slice(0, 60)
 }
 
 /** What the canvas has to know about the conversation a turn runs in. */
@@ -483,8 +502,7 @@ export function createTurn(env: FixtureEnv, host: TurnHost, websearchOn: () => b
   const filesOf = (run: Run): DeliveryFile[] => {
     const files: DeliveryFile[] = []
     for (const e of eventsFor(run, websearchOn())) {
-      const delivery = e.meta && (e.meta as { raven_delivery?: { files?: DeliveryFile[] } }).raven_delivery
-      if (delivery && delivery.files) files.push(...delivery.files)
+      if (e.t === 't-' && e.meta) files.push(...e.meta.raven_delivery.files)
     }
     return files
   }
