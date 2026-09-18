@@ -518,6 +518,15 @@ class _BlocklistRegistryView:
         self._reader = reader
         self._logged: frozenset[str] | None = None
 
+    def revision(self) -> frozenset[str]:
+        """What a cached view of this registry would have to be rebuilt for.
+
+        The pool holds a BM25 index over what `list_all` returned; the only
+        thing that changes what it returns without a file event is this list,
+        so the list is the token.
+        """
+        return self._reader()
+
     def list_all(self) -> list[SkillMeta]:
         blocklist = self._reader()
         rows = self._registry.list_all()

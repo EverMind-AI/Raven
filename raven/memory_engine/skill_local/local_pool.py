@@ -68,6 +68,14 @@ class LocalPool:
         self._registry = registry
         self._metas: list[SkillMeta] = []
         self._bm25: _BM25Okapi | None = None
+        # What the registry looked like when the index was built, for a
+        # registry that can say. A view that hides rows on a rule the caller
+        # edits at runtime -- the skill blocklist -- answers `revision()` with
+        # that rule, and `search` rebuilds when it no longer matches: file
+        # events are what `rebuild_index` is called for, and a config edit
+        # raises none, so without this a skill switched off on the settings
+        # page keeps surfacing from the snapshot until the process restarts.
+        self._revision: object = None
         # Plain Lock (not RLock): no method re-enters another.
         self._lock = threading.Lock()
         # Eager initial build — matches the rest of the service which
@@ -84,11 +92,13 @@ class LocalPool:
         previously captured references and finish against a consistent
         snapshot.
         """
+        revision = self._revision_of()
         metas = self._registry.list_all()
         if not metas:
             with self._lock:
                 self._metas = []
                 self._bm25 = None
+                self._revision = revision
             return
         tokenized_corpus = [_tokenize(_format_skill_text(m)) for m in metas]
         bm25 = _BM25Okapi(tokenized_corpus)
@@ -100,12 +110,28 @@ class LocalPool:
         with self._lock:
             self._metas = metas_snapshot
             self._bm25 = bm25
+            self._revision = revision
+
+    def _revision_of(self) -> object:
+        """The registry's own token for what it would list, or None.
+
+        None for a registry that does not answer, which is every registry but
+        the blocklist view -- those keep the pre-existing behaviour of holding
+        the index until something calls `rebuild_index`.
+        """
+        fn = getattr(self._registry, "revision", None)
+        return fn() if callable(fn) else None
 
     def search(self, query: str, top_k: int = 50) -> list[ScoredSkill]:
         """Return top-K matches by BM25 over the prebuilt index."""
         query_tokens = _tokenize(query)
         if not query_tokens:
             return []
+        revision = self._revision_of()
+        with self._lock:
+            stale = revision != self._revision
+        if stale:
+            self.rebuild_index()
         with self._lock:
             bm25 = self._bm25
             metas = self._metas

@@ -40,16 +40,29 @@ def test_blocklist_flipped_on_disk_applies_without_a_rebuild(tmp_path: Path) -> 
     def names() -> set[str]:
         return {m.name for m in catalog.pool._registry.list_all()}
 
+    def hits() -> set[str]:
+        """What retrieval actually returns.
+
+        The registry view above is what the pool reads when it builds its
+        index; this is the path a turn takes. They are asserted together
+        because only the second one fails when the index is stale: the pool
+        rebuilds on file events, and a settings switch raises none.
+        """
+        return {h.name for h in catalog.pool.search("codeword")}
+
     assert not catalog._is_blocked("codeword")
     assert names() == {"codeword", "other"}
+    assert "codeword" in hits()
 
     _write_config(cfg, ["codeword"])
     assert catalog._is_blocked("codeword")
     assert names() == {"other"}
+    assert "codeword" not in hits()
 
     _write_config(cfg, [])
     assert not catalog._is_blocked("codeword")
     assert names() == {"codeword", "other"}
+    assert "codeword" in hits()
 
 
 def test_without_a_reader_the_config_list_still_applies(tmp_path: Path) -> None:

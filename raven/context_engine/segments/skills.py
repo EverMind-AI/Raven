@@ -40,7 +40,7 @@ from raven.skill_hub.policy import SkillPolicy, is_blocked
 from raven.tracing import trace
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable
     from pathlib import Path
 
     from raven.contracts.llm_provider import LLMProvider
@@ -70,6 +70,7 @@ class SkillsSegmentBuilder:
         list_subagents: "Any | None" = None,
         min_safety: float = 0.7,
         blocklist: "Iterable[str] | None" = None,
+        blocklist_reader: "Callable[[], frozenset[str]] | None" = None,
         auto_install: str = "auto",
         install_audit_path: "Path | None" = None,
     ) -> None:
@@ -88,6 +89,7 @@ class SkillsSegmentBuilder:
             min_safety=min_safety,
             blocklist=blocklist,
             auto_install=auto_install,
+            blocklist_reader=blocklist_reader,
         )
         self._install_audit_path = install_audit_path
         self._audited_installs: set[str] = set()
@@ -135,10 +137,14 @@ class SkillsSegmentBuilder:
         )
 
         # ── ②b Blocklist — hard drop across every source ──────────────
-        if self._policy.blocklist:
+        # Asked per turn rather than read off the policy: the settings page
+        # writes the list while this loop runs, and a switch has to reach the
+        # next turn in both directions.
+        blocklist = self._policy.blocked_now()
+        if blocklist:
             kept: list["RouterHit"] = []
             for c in candidates:
-                if is_blocked(self._policy.blocklist, c.name, c.meta.get("skill_id")):
+                if is_blocked(blocklist, c.name, c.meta.get("skill_id")):
                     log.warning("dropping blocklisted skill from pool: %s", c.qualified_id)
                 else:
                     kept.append(c)

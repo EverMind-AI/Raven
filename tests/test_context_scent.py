@@ -143,6 +143,31 @@ async def test_menu_enforces_blocklist_and_safety_bar():
     assert res.skill_ids == ["hub/clean"]
 
 
+async def test_menu_screens_against_the_list_on_disk_now():
+    """Both directions of the settings switch, at advertising time.
+
+    The policy is built once for the life of a loop, so a list frozen there
+    answers the switch that was thrown before it and no other. The reader is
+    what a running gateway hands it.
+    """
+    hits = [_Hit("hub/codeword", "the one being switched"), _Hit("hub/clean", "fine")]
+    live: set[str] = set()
+    policy = SkillPolicy.create(min_safety=0.7, blocklist=["codeword"], blocklist_reader=lambda: frozenset(live))
+    menu = ScentMenu(_Router(hits), policy=policy)
+
+    # Off the list now, even though the policy was built with it on.
+    res = await menu.build("统计一下渠道覆盖率数据", [])
+    assert res.skill_ids == ["hub/codeword", "hub/clean"]
+
+    live.add("codeword")
+    res = await menu.build("统计一下渠道覆盖率数据", [])
+    assert res.skill_ids == ["hub/clean"]
+
+    live.discard("codeword")
+    res = await menu.build("统计一下渠道覆盖率数据", [])
+    assert res.skill_ids == ["hub/codeword", "hub/clean"]
+
+
 async def test_menu_survives_the_session_persist_strip():
     # AgentLoop._save_turn keeps only what follows the envelope's first
     # blank line, so the menu must live inside the first paragraph — a
