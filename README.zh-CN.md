@@ -21,7 +21,7 @@
   <a href="https://github.com/user-attachments/assets/ef64cd3b-a48f-4516-9a30-47fe47a750be"><img src="https://github.com/user-attachments/assets/ef64cd3b-a48f-4516-9a30-47fe47a750be" alt="Raven unified surface and agent workflow" width="100%"></a>
 </p>
 
-<p align="center"><em>统一入口，协同所有 Agent：Raven 连接研究、编程、设计和无人值守工作流。</em></p>
+<p align="center"><em>统一入口，协同所有 Agent：Raven 生成并编排任务 DAG，驱动多个专业 Agent 协作完成复杂任务。</em></p>
 
 Raven 是 **The Harness of Harnesses**——一个持续自我演进的多 Agent 编排生态。作为 **Host Agent（宿主 Agent）**，它通过统一入口连接专业 Agent，负责任务委派、执行协调和结果整合。Raven 的长期目标是将这种编排能力扩展到不同设备、环境和领域。
 
