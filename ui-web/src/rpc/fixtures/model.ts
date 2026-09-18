@@ -84,6 +84,7 @@ const wire = (e: Entry, current: string): Provider => ({
   configured_models: e.models, total_models: e.models.length,
   needs_api_base: !!e.needs_api_base, warning: '',
   key_url: e.key_url ?? null,
+  extra_headers: {},
   ...(e.default_api_base ? { default_api_base: e.default_api_base } : {}),
 })
 
@@ -130,6 +131,15 @@ export function createModel(_env: FixtureEnv): ModelFixture {
         })),
         status: 'ok',
       }),
+      'model.add_models': (p) => {
+        const row = find(p.slug)
+        for (const m of p.models) if (row && !row.models.includes(m)) row.models.push(m)
+        return { provider: wire(row || rows[0]!, provider) }
+      },
+      'model.set_fields': (p) => ({ previous: Object.fromEntries(Object.keys(p.fields).map((k) => [k, null])) }),
+      /* A device flow with no vendor behind it: the code is shown and never
+         lands, which is the page's "waiting" state. */
+      'model.oauth_login': () => ({ verification_uri: 'https://example.com/device', user_code: 'ABCD-1234', expires_in: 900 }),
       'model.set_protocol': (p) => ({
         provider: wire(find((p as { slug: string }).slug) || rows[0]!, provider),
       }),

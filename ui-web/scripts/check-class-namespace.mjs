@@ -159,16 +159,13 @@ const SHARED = new Set([
 // end of a row here can retire it: move the rule into one domain's styles.css
 // and prefix it there, or put the name in SHARED on purpose.
 const LEGACY_SHARED = {
-  a: 4, act: 3, ag: 2, body: 3, btn: 3, cap: 6, cfind: 2, chev: 2, chgs: 2,
-  cmd: 3, ct: 3, d: 5, dact: 3, empty: 2, faint: 2, ff: 2, foot: 4, gap: 3,
-  'ghost-ic': 3, grp: 2, h: 4, hd: 6, hubcard: 2, hubgrid: 2, hubpage: 2, ic: 5,
-  icb: 2, k: 4, kd: 3, key: 5, l1: 5, l2: 5, lb: 4, led: 2, mk: 2, n: 8, none: 2,
-  note: 2, okpill: 2, one: 3, perr: 3, ph: 2, pill: 2, pmback: 3, pmcard: 2,
+  a: 4, act: 3, ag: 2, body: 2, btn: 3, cap: 6, cfind: 2, chev: 2, chgs: 2,
+  cmd: 2, ct: 2, d: 4, dact: 3, empty: 2, faint: 2, foot: 4, gap: 3,
+  'ghost-ic': 3, h: 3, hd: 5, hubcard: 2, hubgrid: 2, hubpage: 2, ic: 5, k: 3, kd: 3, key: 5, l1: 5, l2: 5, lb: 3, mk: 2, n: 7, none: 2, okpill: 2, one: 2, perr: 2, ph: 2, pill: 2, pmback: 3, pmcard: 2,
   pmchips: 2, pmcnt: 2, pmdesc: 3, pmdhead: 4, pmdmeta: 4, pmhead: 2, pmhero: 5,
-  pmid: 2, pmnm: 2, pmpub: 2, pmsec: 4, pmsign: 2, pnote: 4,
-  'provider-choice-action': 2, rm: 3, row: 3, sheet: 2, shot: 3, sk: 4, skel: 4,
-  srow: 2, step: 2, sulist: 3, sustate: 2, swi: 3, sz: 2, t: 3, tag: 3, tick: 2,
-  tipdn: 3, tm: 2, top: 2, v: 3, val: 2, w: 4, warn: 3, wkg: 3, wsnote: 2, wt: 2,
+  pmid: 2, pmnm: 2, pmpub: 2, pmsec: 4, pmsign: 2, pnote: 3,
+  'provider-choice-action': 2, rm: 2, row: 3, sheet: 2, shot: 3, sk: 4, skel: 4, step: 2, sulist: 3, sustate: 2, swi: 2, sz: 2, t: 2, tag: 2,
+  tipdn: 3, tm: 2, top: 2, v: 3, val: 2, w: 3, warn: 2, wkg: 3, wsnote: 2, wt: 2,
 }
 
 // How many of a domain's own classes -- the ones no other domain names -- still
@@ -187,8 +184,8 @@ const LEGACY_LOCAL = {
      `.caret` in transcript, the last of them written into a string of HTML. */
   browser: 25,
   composer: 9,
-  connections: 5,
-  cron: 13,
+  connections: 6,
+  cron: 15,
   /* Up from 7, and every one of the six is a class that MOVED here rather than
      a new one: the pan-and-zoom viewport the playbook page carried became
      features/dag/Board.tsx so the task board could read it too, and its
@@ -201,12 +198,12 @@ const LEGACY_LOCAL = {
   installed: 0,
   knowledge: 0,
   memory: 6,
-  model: 5,
+  model: 6,
   onboard: 1,
   playbooks: 13,
   plugins: 3,
-  rail: 10,
-  settings: 81,
+  rail: 11,
+  settings: 0,
   skills: 4,
   subagents: 39,
   tasks: 9,
@@ -236,7 +233,7 @@ const LEGACY_EXPR = {
   playbooks: 7,
   plugins: 2,
   rail: 2,
-  settings: 13,
+  settings: 0,
   skills: 2,
   tasks: 6,
   subagents: 6,

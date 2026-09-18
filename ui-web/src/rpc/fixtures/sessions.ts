@@ -111,6 +111,7 @@ export function createSessions(env: FixtureEnv, turn: () => TurnFixture): Sessio
     pinned: !!s.pin,
   })
 
+  const archived: Fixture[] = []
   const find = (id: string | undefined): Fixture | undefined => rows.find((s) => s.id === id)
   const drop = (id: string | undefined): void => {
     const at = rows.findIndex((s) => s.id === id)
@@ -122,7 +123,7 @@ export function createSessions(env: FixtureEnv, turn: () => TurnFixture): Sessio
     setRun: (id, key) => { const s = find(id); if (s) s.run = key },
     setPreview: (id, preview) => { const s = find(id); if (s) s.last = preview },
     fixtures: {
-      'session.list': () => ({ sessions: rows.map(wire) }),
+      'session.list': (p) => ({ sessions: (p.archived ? archived : rows).map(wire) }),
       'session.create': () => {
         minted += 1
         const s: Fixture = { id: `n${minted}`, ago: 0, title: '', last: '', run: null }
@@ -148,10 +149,17 @@ export function createSessions(env: FixtureEnv, turn: () => TurnFixture): Sessio
         if (s) s.pin = !!p.pinned
         return { pinned: !!p.pinned, session_key: p.session_id || '', pending: false }
       },
+      /* Archiving moves the row to the archived shelf, which `session.list
+         {archived: true}` answers from; restoring moves it back. */
       'session.archive': (p) => {
-        if (p.archived) drop(p.session_id)
-        else if (!find(p.session_id)) {
-          rows.unshift({ id: p.session_id, ago: 0, title: '', last: '', run: null })
+        if (p.archived) {
+          const s = find(p.session_id)
+          drop(p.session_id)
+          if (s) archived.unshift(s)
+        } else if (!find(p.session_id)) {
+          const at = archived.findIndex((s) => s.id === p.session_id)
+          const back = at >= 0 ? archived.splice(at, 1)[0]! : { id: p.session_id, ago: 0, title: '', last: '', run: null }
+          rows.unshift(back)
         }
         return { archived: !!p.archived, session_key: p.session_id || '', pending: false }
       },

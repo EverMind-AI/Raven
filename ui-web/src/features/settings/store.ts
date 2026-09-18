@@ -1,3 +1,16 @@
+/* The settings dialog's state and verbs.
+ *
+ * Page state, outside React on purpose: three of the callers that drive this
+ * dialog are not React. The platform's settings shortcut opens it
+ * (state/globalListeners.ts), the whole-page language repaint bumps its epoch
+ * (state/lang/effects.ts) and the boot repaints it once the gateway answers
+ * (app/boot.ts) -- so the state lives in a plain store those three can call,
+ * and the component subscribes.
+ *
+ * The open section is synced from the shared slot (state/settings.ts) on
+ * every draw: the chrome jumps the dialog to a section by writing that slot
+ * before asking for the repaint.
+ */
 import { t } from '../../i18n/t'
 import { settingsTab } from '../../state/settings'
 import * as settingsDialog from '../../state/settings'
@@ -6,94 +19,106 @@ import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
 
 import type {
+  ArchivedSession,
   ModelCandidate,
-  ProviderOp,
   SettingsSnapshot,
   SettingsSource,
+  SkillDetail,
+  UsageRange,
   UsageStats,
 } from './types'
 
-/* Page state, outside React on purpose: three of the callers that drive this
- * dialog are not React. The platform's settings shortcut opens it
- * (state/globalListeners.ts), the whole-page language repaint bumps its epoch
- * (state/lang/effects.ts) and the boot repaints it once the gateway answers
- * (app/boot.ts) -- so the state lives in a plain store those three can call,
- * and the component subscribes.
- *
- * The open tab is NOT here: the chrome jumps the dialog to a section by
- * writing the shared slot (ui-web/src/state/settings.ts) before asking for
- * the repaint below, and the store syncs from it on every draw.
- */
+export type SectionId = 'general' | 'usage' | 'model' | 'skills' | 'tools' | 'plugins' | 'archive' | 'about'
+export const SECTIONS: SectionId[] = ['general', 'usage', 'model', 'skills', 'tools', 'plugins', 'archive', 'about']
 
-export interface SettingsState {
-  tab: string
-  snap: SettingsSnapshot
-  loaded: boolean
-  /* Remounts the whole panel subtree on every draw, so uncontrolled inputs
-     restart from the freshly loaded values -- the same full rebuild the
-     legacy drawSettings performed with innerHTML. */
-  epoch: number
-  mdlAdv: boolean
-  memEdit: string | null
-  /* The tool whose credential editor is unfolded, one at a time. In the store
-     rather than the component because every draw remounts the panel. */
-  toolKeyEdit: string | null
-  /* undefined = never answered (drawn as loading), null = no counter behind
-     the page (the demo's no-data note). */
-  usageSession: string
-  usage: UsageStats | null | undefined
-  /* The provider the pane is showing, or null before anything is picked --
-     the page resolves that to the first connected one rather than storing a
-     default, so a refresh that connects a provider moves the pane with it. */
-  provOpen: string | null
-  /* The drawer over the settings dialog: which provider it is for, and whether
-     it is filling a model in by hand or showing what the provider serves.
-     Holding the slug rather than a boolean is what lets it name the provider it
-     will write to, and survive the redraw a save triggers. */
-  drawer: { slug: string; mode: 'add' | 'list' } | null
-  addErr: string
-  /* The fetched catalogue, kept beside the drawer rather than inside it: a
-     redraw must not drop three hundred rows that cost a network round trip. */
-  fetch: { busy: boolean; rows: ModelCandidate[]; status: string; error: string }
-  provErr: string
-  provBusy: boolean
-  provFocus: boolean
-  /* The provider whose key was just saved while its model list was empty, or
-     null. A connected provider that lends the picker nothing is the one dead
-     end this pane can leave you in -- the key worked, so nothing looks wrong,
-     and the next question ("why is it not in the model picker") is asked
-     somewhere else entirely. Held here rather than in the panel because the
-     save remounts it. */
-  modelNudge: string | null
+/* The vendor-list sheet under a provider's models card: what the vendor
+   answered, what is ticked, and the typed filter. Kept here rather than in
+   the component because every write remounts the page. */
+export interface Sheet {
+  slug: string
+  q: string
+  sel: string[]
+  state: 'loading' | 'ready' | 'failed'
+  items: ModelCandidate[]
 }
 
+/* A device flow in progress: the code the vendor's page asks for, and when
+   it stops being valid. */
+export interface Oauth {
+  slug: string
+  uri: string
+  code: string
+  until: number
+  expired: boolean
+}
+
+export interface SettingsState {
+  tab: SectionId
+  snap: SettingsSnapshot
+  loaded: boolean
+  /* Remounts the page subtree on every draw, so uncontrolled inputs restart
+     from the freshly loaded values. */
+  epoch: number
+  /* The page-side refusal under the current page, or ''. */
+  err: string
+  /* Writes in flight, by a key the row chooses; drawn as "connecting". */
+  busy: string[]
+  range: UsageRange & { kind: string }
+  /* undefined = never answered (drawn as loading), null = the counter did not
+     answer. */
+  usage: UsageStats | null | undefined
+  /* The provider whose detail is open, or null for the list. */
+  provider: string | null
+  /* The slug picked in the add-provider block, or null when it is closed. */
+  provAdd: string | null
+  sheet: Sheet | null
+  hdrAdd: string | null
+  ovlAdd: string | null
+  chatCfg: boolean
+  /* The role whose model picker is open, or null. */
+  picker: string | null
+  oauth: Oauth | null
+  skill: string | null
+  detail: SkillDetail | null
+  skq: string
+  toolOpen: string | null
+  plugOpen: string | null
+  archived: ArchivedSession[] | null
+}
+
+const emptySnap = (): SettingsSnapshot => ({
+  raw: {}, configPath: '~/.raven/config.json', everos: null, providers: [],
+  curProvider: '', model: '', tools: [], skills: [], mcp: [],
+})
+
 const initial = (): SettingsState => ({
-  tab: 'usage',
-  snap: {
-    raw: {}, configPath: '~/.raven/config.json', everos: null, providers: [],
-    curProvider: '', model: '', toolGroups: [], tools: [],
-  },
+  tab: 'general',
+  snap: emptySnap(),
   loaded: false,
   epoch: 0,
-  mdlAdv: false,
-  memEdit: null,
-  toolKeyEdit: null,
-  usageSession: '',
+  err: '',
+  busy: [],
+  range: { kind: '30', ...lastDays(30) },
   usage: undefined,
-  provOpen: null,
-  drawer: null,
-  addErr: '',
-  fetch: { busy: false, rows: [], status: '', error: '' },
-  provErr: '',
-  provBusy: false,
-  provFocus: false,
-  modelNudge: null,
+  provider: null,
+  provAdd: null,
+  sheet: null,
+  hdrAdd: null,
+  ovlAdd: null,
+  chatCfg: false,
+  picker: null,
+  oauth: null,
+  skill: null,
+  detail: null,
+  skq: '',
+  toolOpen: null,
+  plugOpen: null,
+  archived: null,
 })
 
 const store = makeStore<SettingsState>(initial())
 let lazy = false
-let usageBusy = false
-let usageAt = 0
+let oauthTimer: ReturnType<typeof setInterval> | null = null
 
 export const { get, subscribe } = store
 
@@ -104,7 +129,26 @@ export function set(patch: Partial<SettingsState>): void {
 
 export const source = (): SettingsSource => ds('settings')
 
-const curTab = (): string => settingsTab.id ?? get().tab
+/* ISO day, local time: the range the usage page asks for is the reader's
+   calendar, and the server reads the same wall clock. */
+export function isoDay(d: Date): string {
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${m}-${day}`
+}
+
+/** Today and the n-1 days before it. */
+export function lastDays(n: number): UsageRange {
+  const to = new Date()
+  const from = new Date(to)
+  from.setDate(to.getDate() - (n - 1))
+  return { from: isoDay(from), to: isoDay(to) }
+}
+
+const curTab = (): SectionId => {
+  const id = settingsTab.id ?? get().tab
+  return (SECTIONS as string[]).includes(id) ? (id as SectionId) : 'general'
+}
 
 export async function refresh(): Promise<void> {
   set({ loaded: true })
@@ -117,10 +161,9 @@ export async function refresh(): Promise<void> {
 }
 
 /* Where the boot's own draw step and the language repaint land (app/boot.ts,
-   state/lang/effects.ts). The first draw schedules the fixture (or rpc) load on
-   a task boundary rather than inline: the boot list draws before every source
-   is on the seam, and the deferral lets the real one win it before anything is
-   fetched. */
+   state/lang/effects.ts). The first draw schedules the load on a task boundary
+   rather than inline: the boot list draws before every source is on the seam,
+   and the deferral lets the real one win it before anything is fetched. */
 export function redraw(): void {
   set({ tab: curTab(), epoch: get().epoch + 1 })
   if (!lazy) {
@@ -132,313 +175,157 @@ export function redraw(): void {
 }
 
 /* Load, draw, then lift the veil, in that order, so the dialog never greets
-   with fixture rows. */
+   with stale rows. */
 export async function open(): Promise<void> {
-  lazy = true
-  set({ tab: curTab() })
   await refresh()
+  redraw()
   settingsDialog.open()
-  /* The counters are read when the tab comes up, the way the legacy usage
-     page read them on every draw. The poll only keeps them current after
-     that, and only while the dialog stays open. */
-  if (get().tab === 'usage') void usageLoad()
 }
 
 export async function openModels(): Promise<void> {
-  setTab('model')
+  settingsTab.id = 'model'
   await open()
 }
 
 export async function openProviderModels(slug: string): Promise<void> {
-  setTab('model')
-  set({ provOpen: slug, modelNudge: slug })
+  settingsTab.id = 'model'
+  set({ provider: slug })
   await open()
 }
 
+/* A section pick closes every drawer of the section it leaves. */
 export function setTab(id: string): void {
   settingsTab.id = id
-  /* The drawer belongs to the model page. Left open across a tab change it
-     would come back over whatever section is showing, addressed to a provider
-     nobody is looking at any more. */
-  set({ tab: id, drawer: null, epoch: get().epoch + 1 })
-  if (id === 'usage') void usageLoad()
-}
-
-export type WriteOutcome = 'ok' | 'notlive' | 'err'
-
-const isNotLive = (e: unknown): boolean => !!(e as { notLive?: boolean }).notLive
-
-/* One whitelisted dotted key per control. The rpc source reloads and toasts
-   on its own; 'notlive' is the fixture's tag, rendered by the caller as the
-   in-row refusal so nothing sits between "writes through" and "refuses". */
-export async function write(key: string, value: unknown): Promise<WriteOutcome> {
-  try {
-    const snap = await source().set(key, value)
-    set({ snap, epoch: get().epoch + 1 })
-    return 'ok'
-  } catch (e) {
-    if (isNotLive(e)) return 'notlive'
-    set({ epoch: get().epoch + 1 })
-    return 'err'
-  }
-}
-
-export async function everosSave(
-  section: string,
-  fields: Record<string, string> | null,
-  borrowFrom?: string,
-): Promise<WriteOutcome> {
-  try {
-    const snap = await source().everosSet(section, fields, borrowFrom)
-    set({ snap, memEdit: null, epoch: get().epoch + 1 })
-    return 'ok'
-  } catch (e) {
-    if (isNotLive(e)) return 'notlive'
-    set({ epoch: get().epoch + 1 })
-    return 'err'
-  }
-}
-
-export function memEditSet(sec: string): void {
-  set({ memEdit: get().memEdit === sec ? null : sec, epoch: get().epoch + 1 })
-}
-
-export function toolKeyToggle(id: string): void {
-  set({ toolKeyEdit: get().toolKeyEdit === id ? null : id, epoch: get().epoch + 1 })
-}
-
-export function advToggle(): void {
-  set({ mdlAdv: !get().mdlAdv, epoch: get().epoch + 1 })
-}
-
-/* Which provider the right-hand pane is showing. A selection, not a toggle:
-   the pane is always showing one, so clicking the row you are already on must
-   not empty it. */
-export function provSelect(id: string): void {
-  if (get().provOpen === id) return
-  /* No `epoch` bump. That counter remounts the whole panel so uncontrolled
-     fields restart from freshly loaded values, and a remounted rail is a new
-     element scrolled back to the top -- picking a provider near the bottom of
-     forty threw the list back to the first one. Nothing here needs the rebuild:
-     the pane is keyed by the provider it shows, so it remounts on its own and
-     its fields pick up the new section. */
-  set({ provOpen: id, provErr: '', provFocus: true, modelNudge: null })
-}
-
-export function addModelOpen(slug: string): void {
-  set({ drawer: { slug, mode: 'add' }, addErr: '', modelNudge: null })
-}
-
-export function addModelClose(): void {
-  if (get().drawer === null) return
-  set({ drawer: null, addErr: '' })
-}
-
-/* Open the catalogue drawer and ask, in that order: the panel has to be on
-   screen while the round trip happens, or a slow provider reads as a button
-   that did nothing. */
-export async function fetchModelsOpen(slug: string): Promise<void> {
-  /* Drawer state only, so no `epoch` bump: the drawer lives outside the keyed
-     panel and a rebuild would only cost the rail its scroll position. */
   set({
-    drawer: { slug, mode: 'list' },
-    addErr: '',
-    fetch: { busy: true, rows: [], status: '', error: '' },
-    modelNudge: null,
+    tab: curTab(), err: '', provider: null, provAdd: null, sheet: null, hdrAdd: null, ovlAdd: null,
+    picker: null, skill: null, detail: null, toolOpen: null, plugOpen: null,
   })
-  const ask = source().fetchModels
-  if (!ask) {
-    set({ fetch: { busy: false, rows: [], status: '', error: t('gui.set.not_live') } })
+}
+
+/* Every write the pages make: the row's key is busy while it runs, a fresh
+   snapshot lands when it resolves, and a refusal the source already toasted
+   (its { handled } tag) only redraws. Resolves to whether it went through. */
+export async function run(key: string, work: () => Promise<SettingsSnapshot | void>): Promise<boolean> {
+  set({ busy: [...get().busy, key], err: '' })
+  try {
+    const snap = await work()
+    if (snap) set({ snap, epoch: get().epoch + 1 })
+    return true
+  } catch (e) {
+    if (!(e as { handled?: boolean }).handled) {
+      toast(t('gui.plug.op_failed', { err: (e as Error).message || String(e) }))
+    }
+    return false
+  } finally {
+    set({ busy: get().busy.filter((k) => k !== key) })
+  }
+}
+
+export const write = (key: string, value: unknown): Promise<boolean> =>
+  run(`set:${key}`, () => source().set(key, value))
+
+export const isBusy = (key: string): boolean => get().busy.includes(key)
+
+/* A page-side refusal: nothing is written, the page says why. */
+export function refuse(msg: string): void {
+  set({ err: msg })
+}
+
+export async function usageLoad(range: UsageRange & { kind: string }): Promise<void> {
+  set({ range, usage: undefined })
+  let u: UsageStats | null = null
+  try {
+    u = await source().usage(range)
+  } catch (e) {
+    toast(t('gui.op.load_failed', { detail: (e as Error).message || String(e) }))
+  }
+  if (get().range === range) set({ usage: u })
+}
+
+export async function archivedLoad(): Promise<void> {
+  try {
+    set({ archived: await source().archived() })
+  } catch (e) {
+    toast(t('gui.op.load_failed', { detail: (e as Error).message || String(e) }))
+    set({ archived: [] })
+  }
+}
+
+export async function skillOpen(name: string): Promise<void> {
+  set({ skill: name, detail: null })
+  try {
+    const detail = await source().inspectSkill(name)
+    if (get().skill === name) set({ detail })
+  } catch {
+    /* toasted by the source; the detail stays on its loading note */
+  }
+}
+
+/* Open the vendor-list sheet for a provider and ask what it serves. A vendor
+   with no list endpoint answers a status other than ok, and the sheet then
+   takes a typed id alone. */
+export async function sheetOpen(slug: string): Promise<void> {
+  set({ sheet: { slug, q: '', sel: [], state: 'loading', items: [] } })
+  let items: ModelCandidate[] = []
+  let ok = false
+  try {
+    const r = await source().fetchModels(slug)
+    items = r.models || []
+    ok = r.status === 'ok'
+  } catch {
+    ok = false
+  }
+  const sheet = get().sheet
+  if (sheet && sheet.slug === slug) set({ sheet: { ...sheet, state: ok ? 'ready' : 'failed', items } })
+}
+
+export function sheetPatch(patch: Partial<Sheet>): void {
+  const sheet = get().sheet
+  if (sheet) set({ sheet: { ...sheet, ...patch } })
+}
+
+export function sheetToggle(id: string): void {
+  const sheet = get().sheet
+  if (!sheet) return
+  const sel = sheet.sel.includes(id) ? sheet.sel.filter((m) => m !== id) : [...sheet.sel, id]
+  set({ sheet: { ...sheet, sel } })
+}
+
+/* Start a device flow and watch for it to land: the provider turns connected
+   on a later `model.options`, so the page polls that read until it does or the
+   code expires. */
+export async function oauthStart(slug: string): Promise<void> {
+  oauthStop()
+  let r
+  try {
+    r = await source().oauthLogin(slug)
+  } catch {
     return
   }
-  try {
-    const out = await ask(slug)
-    /* Dropped if the drawer moved on: a second provider's list must not land
-       under the first one's heading. */
-    if (get().drawer?.slug !== slug || get().drawer?.mode !== 'list') return
-    set({ fetch: { busy: false, rows: out.models || [], status: out.status || '', error: out.error || '' } })
-  } catch (e) {
-    if (get().drawer?.slug !== slug) return
-    set({ fetch: { busy: false, rows: [], status: 'error', error: errText(e) } })
-  }
+  const until = Date.now() + Math.max(30, r.expires_in) * 1000
+  set({ oauth: { slug, uri: r.verification_uri, code: r.user_code, until, expired: false } })
+  oauthTimer = setInterval(() => { void oauthPoll() }, OAUTH_POLL_MS)
 }
 
-/* Add or drop one row of the fetched list, and flip that row where it stands.
-   The list is the drawer's own get(), so a snapshot refresh does not touch it
-   -- without this the row a person just added still offers to add it. */
-export async function catalogueToggle(slug: string, row: ModelCandidate): Promise<void> {
-  const params: Record<string, unknown> = row.added
-    ? { slug, model: row.id }
-    : {
-        slug,
-        model: row.id,
-        ...(row.label && row.label !== row.id ? { label: row.label } : {}),
-        ...(row.capabilities?.length ? { capabilities: row.capabilities } : {}),
-        ...(row.input_modalities?.length ? { input_modalities: row.input_modalities } : {}),
-        ...(row.output_modalities?.length ? { output_modalities: row.output_modalities } : {}),
-      }
-  const before = row.added
-  await providerRun(before ? 'remove_model' : 'add_model', params)
-  if (get().provErr) return
-  set({
-    fetch: {
-      ...get().fetch,
-      rows: get().fetch.rows.map((r) => (r.id === row.id ? { ...r, added: !before } : r)),
-    },
-  })
+export const OAUTH_POLL_MS = 3000
+
+async function oauthPoll(): Promise<void> {
+  const o = get().oauth
+  if (!o) { oauthStop(); return }
+  await refresh()
+  const p = get().snap.providers.find((x) => x.id === o.slug)
+  if (p && p.on) { oauthStop(); set({ oauth: null }); return }
+  if (Date.now() > o.until) { oauthStop(); set({ oauth: { ...o, expired: true } }) }
 }
 
-/* Every row the list is currently showing, one call at a time. Sequential
-   because each write rewrites the config file: fired together they race, and
-   the last writer wins with a list missing everything the others added. */
-export async function catalogueAddAll(slug: string, rows: ModelCandidate[]): Promise<void> {
-  for (const row of rows) {
-    if (row.added) continue
-    await catalogueToggle(slug, row)
-    if (get().provErr) return
-  }
+export function oauthStop(): void {
+  if (oauthTimer) clearInterval(oauthTimer)
+  oauthTimer = null
 }
 
-/* Add a model with what the person stated about it, and shut the drawer only
-   if it lands. A refusal -- a duplicate id, a provider that went away -- has to
-   stay in front of the form that caused it, with the fields still filled. */
-export async function addModelSave(params: Record<string, unknown>): Promise<void> {
-  if (get().provBusy) return
-  set({ provBusy: true, addErr: '' })
-  try {
-    const snap = await source().provider('add_model', params)
-    set({ snap, provBusy: false, drawer: null, addErr: '', epoch: get().epoch + 1 })
-  } catch (e) {
-    const msg = errText(e)
-    set({ provBusy: false, addErr: msg, epoch: get().epoch + 1 })
-  }
-}
-
-/* Validation refusals land where the legacy provErr did: in the open form. */
-export function provSay(msg: string): void {
-  set({ provErr: msg, epoch: get().epoch + 1 })
-}
-
-export function clearProvFocus(): void {
-  set({ provFocus: false })
-}
-
-/* What a refused provider write says to the reader. Shared by the two callers
-   so a demo-mode refusal reads the same wherever it lands. */
-function errText(e: unknown): string {
-  const err = e as { data?: { detail?: string }; message?: string }
-  return isNotLive(e) ? t('gui.set.not_live') : (err.data && err.data.detail) || err.message || String(e)
-}
-
-export async function providerRun(op: ProviderOp, params: Record<string, unknown>): Promise<void> {
-  if (get().provBusy) return
-  set({ provBusy: true, provErr: '' })
-  try {
-    const snap = await source().provider(op, params)
-    set({ snap, provBusy: false, epoch: get().epoch + 1, modelNudge: emptyAfterConnect(op, params, snap) })
-  } catch (e) {
-    set({ provBusy: false, provErr: errText(e), epoch: get().epoch + 1 })
-  }
-}
-
-/* Which provider to point at its model list, after a write that answered.
- *
- * Only a key save raises it: that is the moment a provider becomes usable and
- * therefore the moment an empty list starts costing something. A removal that
- * empties the list is the reader deliberately emptying it, and nagging them
- * about what they just did is not a reminder. */
-function emptyAfterConnect(op: ProviderOp, params: Record<string, unknown>, snap: SettingsSnapshot): string | null {
-  if (op !== 'save_key') return null
-  const slug = typeof params.slug === 'string' ? params.slug : ''
-  const row = snap.providers.find((p) => p.id === slug)
-  return row && !(row.configured ?? []).length ? slug : null
-}
-
-/* The default-model picker is page chrome (features/model); the source hands
-   the island a door to it. Returns false when no picker is behind the page. */
-export function pickDefault(anchor: HTMLElement): boolean {
-  const s = source()
-  if (!s.pickModel) return false
-  s.pickModel(anchor, () => {
-    /* Both halves of the default pair: a cross-provider pick moves the default
-       badge with the model, or the page keeps marking the old provider until a
-       reload. */
-    const src = source()
-    set({
-      snap: {
-        ...get().snap,
-        model: src.model(),
-        curProvider: src.defaultProvider ? src.defaultProvider() : get().snap.curProvider,
-      },
-      epoch: get().epoch + 1,
-    })
-  })
-  return true
-}
-
-export function checkUpdate(btn: HTMLButtonElement): void {
-  void source().checkUpdate(btn)
-}
-
-/* Every open re-reads the counters; the floor keeps the redraw-triggered
-   re-asks from spinning, and a failed refresh keeps the numbers it already
-   has rather than reporting "no usage" for a dropped call. */
-export function usageSelect(session: string): void {
-  set({ usageSession: session, usage: undefined })
-  usageAt = 0
-  void usageLoad()
-}
-
-export async function usageLoad(): Promise<void> {
-  if (usageBusy || Date.now() - usageAt < 3000) return
-  usageBusy = true
-  const selected = get().usageSession
-  let usage = get().usage
-  try {
-    usage = await source().usage(selected || undefined)
-  } catch {
-    if (usage === undefined) {
-      usage = {
-        days: 30,
-        from: '',
-        to: '',
-        daily: [],
-        llm: { total: {
-          calls: 0, input_tokens: 0, output_tokens: 0, cost_usd: null,
-          cache_read_tokens: null, cache_write_tokens: null, cost_missing_calls: 0,
-          cache_read_missing_calls: 0, cache_write_missing_calls: 0, legacy_cost_calls: 0,
-        }, models: [] },
-        tools: { total: 0, counts: [] },
-      }
-    }
-  }
-  usageBusy = false
-  if (selected !== get().usageSession) { void usageLoad(); return }
-  usageAt = Date.now()
-  set({ usage })
-}
-
-/* Test seam: back to the boot state, timers and floors included. A fresh
-   initial() rather than the store's own, because this state nests objects and a
-   shared one would carry a case's writes into the next. */
 export function _resetForTests(): void {
+  oauthStop()
+  store._resetForTests()
   store.set(initial())
   lazy = false
-  usageBusy = false
-  usageAt = 0
-  settingsTab.id = null
-}
-
-/* One key, one write. A pin is only meaningful as a pair, so the backend takes
-   both halves under the block's own key and stores them in a single
-   atomic_update under the config lock.
-
-   Two writes and a rollback is what this replaced, and neither half of that
-   worked: a connection dropping between the writes left a new model paired
-   with the old provider, and the rollback had to travel the same dead
-   connection to undo it; two pickers saving at once could interleave their
-   per-key writes into a pair neither of them chose, with every write
-   succeeding. Refusals now happen before anything is written. */
-export async function writePin(pinKey: string, fields: Record<string, string>): Promise<WriteOutcome> {
-  return write(pinKey, fields)
 }

@@ -28,7 +28,7 @@ import { redraw as redrawSettings } from './store'
    backend: system.version carries the answer. */
 export async function checkUpdate(btn: HTMLButtonElement): Promise<void> {
   const was = btn.textContent
-  btn.textContent = t('gui.set.checking'); btn.disabled = true
+  btn.textContent = t('gui.settings.about.checking'); btn.disabled = true
   try {
     /* check:true = fetch now, not the daily cache: the button says check for
        updates, and a person who just clicked it is asking about now. */
@@ -44,11 +44,11 @@ export async function checkUpdate(btn: HTMLButtonElement): Promise<void> {
        console, and "nothing happened" is indistinguishable from a broken
        check. */
     btn.disabled = false
-    btn.textContent = t('gui.set.abt.latest')
+    btn.textContent = t('gui.settings.about.latest')
     setTimeout(() => { btn.textContent = was }, 2200)
     return
   } catch (e) {
-    btn.textContent = t('gui.set.abt.check_fail')
+    btn.textContent = t('gui.settings.about.check_fail')
     setTimeout(() => { btn.textContent = was }, 2600)
     if (window.console) console.error('[update check]', e)
   }
