@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { setTranslator } from '../../i18n/t'
@@ -2382,10 +2382,16 @@ describe('renaming and deleting a base', () => {
         target: { value: 'staff handbook' },
       })
     })
+    /* `show` drops a notice raised with no #toasts in the document, and this
+       file's helper creates that host at assertion time -- too late. Whether
+       one was already standing came down to what the test before this left
+       behind, which is why the same file passed alone and timed out in the
+       full run. Raise it before the click, and one second is plenty. */
+    toastHost()
     await act(async () => {
       ;(screen.getByText('gui.kb.save').closest('button') as HTMLButtonElement).click()
-      await Promise.resolve()
     })
+    await waitFor(() => expect(toasts()).toHaveLength(1))
 
     expect(toasts()).toEqual(['a knowledge base called staff handbook already exists'])
     expect(document.getElementById('kbrename')).not.toBeNull()

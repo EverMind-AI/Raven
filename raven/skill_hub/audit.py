@@ -61,6 +61,7 @@ def write_install_meta(
     version: str = "",
     trigger: str,
     source: str = "hub",
+    score_safety: float | None = None,
 ) -> None:
     """Stamp ``.install-meta.json`` into the skill directory, once.
 
@@ -80,6 +81,7 @@ def write_install_meta(
         "version": version,
         "source": source,
         "trigger": trigger,
+        "score_safety": score_safety,
         "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     try:

@@ -15,6 +15,8 @@ import asyncio
 import json
 import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, get_args
 
@@ -61,6 +63,28 @@ def _hub_marker_name() -> str | None:
 # ---------------------------------------------------------------------------
 # ext.list
 # ---------------------------------------------------------------------------
+
+
+def _mcp_credential_state(name: str, sc: Any) -> tuple[str, bool]:
+    """How a server authenticates and whether it holds what that needs.
+
+    OAuth: a stored token. API key: the templated header or env entry the
+    install wrote, non-empty. None: nothing to hold. Read from the config and
+    the credential store only, never the catalog -- this runs on every page load.
+    """
+    auth = str(getattr(sc, "auth", "none") or "none")
+    if auth == "oauth":
+        try:
+            from raven.mcp.oauth import has_stored_tokens
+
+            return auth, bool(has_stored_tokens(name))
+        except Exception:
+            logger.exception("ext.list: could not read the credential store for {}", name)
+            return auth, False
+    if auth == "apikey":
+        values = {**dict(getattr(sc, "headers", None) or {}), **dict(getattr(sc, "env", None) or {})}
+        return auth, any(str(v).strip() for v in values.values())
+    return "none", True
 
 
 async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
@@ -193,6 +217,7 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
                     }
                 row["enabled"] = bool(getattr(sc, "enabled", True))
                 row["auth_url"] = pending_url(name)
+                row["auth"], row["credentialed"] = _mcp_credential_state(name, sc)
                 mcp.append(row)
         except Exception:
             logger.exception("ext.list: config mcp merge failed")
@@ -568,7 +593,7 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
             disable_channel(name)
         return {"applied": True, "previous": not value}
 
-    if key in ("plugins.disabled", "tools.disabledTools"):
+    if key in ("plugins.disabled", "tools.disabledTools", "skillForge.blocklist"):
         if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
             raise ConfigValidationError(f"{key} must be a list of strings")
         return _write_raw_key(key, value)
@@ -602,6 +627,10 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
             # to follow the write or they keep running on the key this call
             # just replaced.
             refresh_env_file()
+        if key in _RELOAD_ONLY_KEYS:
+            from raven.i18n import t
+
+            written["warning"] = t(_APPLIES_AFTER_RELOAD)
         return written
 
     raise ConfigValidationError(f"key not writable via settings.set: {key}")
@@ -611,7 +640,18 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
 #: the write merges instead of replacing. ``sessionTitle`` carries enabled, the
 #: timeout and the width gate beside its pin, and a replacing write would drop
 #: every one of them.
-_MERGED_KEYS = frozenset({"tools.media.image", "sessionTitle", "translate", "knowledge"})
+_MERGED_KEYS = frozenset(
+    {
+        "tools.media.image",
+        "tools.media.speech",
+        "tools.media.video",
+        "sessionTitle",
+        "context",
+        "skillForge",
+        "translate",
+        "knowledge",
+    }
+)
 
 
 def _as_written(node: dict, name: str) -> str:
@@ -733,14 +773,32 @@ def _chk_pin_model(key: str):
     return chk
 
 
+def _configured_provider_section(slug: str) -> bool:
+    """Whether this config holds a section for ``slug``."""
+    try:
+        from raven.config.loader import get_config_path, read_raw_or_raise
+
+        providers = read_raw_or_raise(get_config_path()).get("providers")
+    except Exception:  # noqa: BLE001 - an unreadable config proves nothing exists
+        return False
+    return isinstance(providers, dict) and slug in providers
+
+
 def _chk_pin_provider(key: str):
     """A pin's provider half: a configured provider's slug, or empty to unset.
 
-    Checked against the registry rather than against the config: naming a
+    Known to the registry, or already a section in this config: naming a
     provider that has no credentials yet is an ordinary order of operations
     (pick the model, then go and add the key), while naming one that does not
     exist is a typo that would otherwise surface as a silent fallback to the
     conversation's model.
+
+    The config half is not a loophole, it is the other half of the same
+    question. Raven carries no spec for every vendor LiteLLM can reach, and a
+    section the operator wrote is proof the vendor exists -- so a pin the
+    wizard stored through one surface could not be edited through this one,
+    which is how a working DeepInfra endpoint became uneditable on the page
+    that exists to edit it.
     """
     inner = _chk_str(key, 100)
 
@@ -753,7 +811,7 @@ def _chk_pin_provider(key: str):
         from raven.providers.registry import canonical_provider_name, find_by_name
 
         slug = canonical_provider_name(text)
-        if find_by_name(slug) is None:
+        if find_by_name(slug) is None and not _configured_provider_section(slug):
             raise ConfigValidationError(f"{key}: no provider named {text!r}")
         return slug
 
@@ -803,6 +861,32 @@ def _chk_image_selection(value: Any) -> dict:
 # no confirmation step, so it must not contain the settings that decide what an
 # attacker who reaches it can then do. Editing the config file for those is the
 # friction, and it is the point.
+def _chk_int_or_null(key: str, lo: int, hi: int):
+    inner = _chk_int(key, lo, hi)
+
+    def chk(v: Any) -> int | None:
+        return None if v is None else inner(v)
+
+    return chk
+
+
+#: Bound when the agent loop is built, so a write lands in the file but the
+#: running gateway keeps the old value until it reloads. The reply says so.
+_RELOAD_ONLY_KEYS = frozenset(
+    {
+        "agents.defaults.maxToolIterations",
+        "agents.defaults.contextWindowTokens",
+        "context.curatorModel",
+        "context.curatorProvider",
+        "skillForge.llmGateModel",
+        "skillForge.llmGateProvider",
+        "context",
+        "skillForge",
+    }
+)
+_APPLIES_AFTER_RELOAD = "Saved. Applies after the next gateway reload or restart."
+
+
 _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "tools.exec.timeout": _chk_int("tools.exec.timeout", 5, 3600),
     "tools.web.search.apiKey": _chk_str("tools.web.search.apiKey", 200),
@@ -842,12 +926,63 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "agents.defaults.enablePersonalization": _chk_bool("agents.defaults.enablePersonalization"),
     "agents.defaults.reasoningEffort": _chk_enum("agents.defaults.reasoningEffort", "minimal", "low", "medium", "high"),
     "permissions.mode": _chk_enum("permissions.mode", "ask", "smart", "full"),
+    "agents.defaults.maxToolIterations": _chk_int("agents.defaults.maxToolIterations", 1, 200),
+    "agents.defaults.contextWindowTokens": _chk_int_or_null("agents.defaults.contextWindowTokens", 1024, 100_000_000),
+    "context.curatorModel": _chk_pin_model("context.curatorModel"),
+    "context.curatorProvider": _chk_pin_provider("context.curatorProvider"),
+    "skillForge.llmGateModel": _chk_pin_model("skillForge.llmGateModel"),
+    "skillForge.llmGateProvider": _chk_pin_provider("skillForge.llmGateProvider"),
+    # The two pins as one write each, the way sessionTitle already is: a pair
+    # written a key at a time can be left half-changed by a dropped connection.
+    "context": _chk_pin_pair("context", "curatorModel", "curatorProvider"),
+    "skillForge": _chk_pin_pair("skillForge", "llmGateModel", "llmGateProvider"),
+    # The same selection object the image tool takes; the three media tools
+    # share one config shape.
+    "tools.media.speech": _chk_image_selection,
+    "tools.media.video": _chk_image_selection,
+    "sessions.autoArchiveAfterDays": _chk_int_or_null("sessions.autoArchiveAfterDays", 1, 3650),
 }
 
 
 # ---------------------------------------------------------------------------
 # settings.usage — every API the agent burns: LLM calls and tool calls
 # ---------------------------------------------------------------------------
+
+
+def _parse_day(value: Any, field: str):
+    """An ISO date (``YYYY-MM-DD``) or None; anything else is refused."""
+    if value is None or value == "":
+        return None
+    from datetime import date
+
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        raise ConfigValidationError(f"{field} must be a date like 2026-09-17") from None
+
+
+def _usage_range(params: dict):
+    """The days a usage query covers: ``from``/``to`` when given (inclusive,
+    clamped to 90 days back), else ``days`` back from today."""
+    from datetime import date, timedelta
+
+    today = date.today()
+    earliest = today - timedelta(days=89)
+    frm = _parse_day(params.get("from"), "from")
+    to = _parse_day(params.get("to"), "to")
+    if frm is not None or to is not None:
+        to = min(to or today, today)
+        frm = max(frm or earliest, earliest)
+        if frm > to:
+            raise ConfigValidationError("from must not be after to")
+    else:
+        days = params.get("days")
+        days = days if isinstance(days, int) and not isinstance(days, bool) else 30
+        days = max(1, min(days, 90))
+        to = today
+        frm = today - timedelta(days=days - 1)
+    dates = [frm + timedelta(days=i) for i in range((to - frm).days + 1)]
+    return frm, to, dates
 
 
 async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
@@ -859,13 +994,12 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
     file mtime falls inside the window. Both scans are read-only and bounded
     by ``days`` (default 30, max 90).
     """
-    from datetime import date, datetime, timedelta
+    from datetime import datetime, timedelta
 
     from raven.config.loader import load_config
 
-    days = params.get("days")
-    days = days if isinstance(days, int) and not isinstance(days, bool) else 30
-    days = max(1, min(days, 90))
+    frm, to, dates = _usage_range(params)
+    days = len(dates)
 
     from raven.providers.usage import reported_cost, token_count
 
@@ -896,9 +1030,10 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
     from raven.config.loader import raven_home
 
     tel_dir = raven_home() / "telemetry"
-    today = date.today()
-    for i in range(days):
-        p = tel_dir / f"usage-{(today - timedelta(days=i)).isoformat()}.jsonl"
+    daily: dict[str, dict[str, Any]] = {d.isoformat(): {"date": d.isoformat(), **empty_totals()} for d in dates}
+    for day in dates:
+        day_key = day.isoformat()
+        p = tel_dir / f"usage-{day_key}.jsonl"
         if not p.is_file():
             continue
         try:
@@ -925,7 +1060,7 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
             acc = models.setdefault(name, {"model": name, **empty_totals()})
             cost = reported_cost(row.get("cost_usd")) if row.get("schema_version") == 2 else None
             legacy = row.get("schema_version") != 2 and row.get("estimated_cost_usd") is not None
-            for target in (acc, total):
+            for target in (acc, total, daily[day_key]):
                 target["calls"] += 1
                 target["legacy_cost_calls"] += int(legacy)
                 for key, value, missing in (
@@ -945,8 +1080,8 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
     tool_total = 0
     telemetry_tool_ids: set[str] = set()
     try:
-        for i in range(days):
-            p = tel_dir / f"usage-{(today - timedelta(days=i)).isoformat()}.jsonl"
+        for day in dates:
+            p = tel_dir / f"usage-{day.isoformat()}.jsonl"
             if not p.is_file():
                 continue
             try:
@@ -966,10 +1101,16 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
             except Exception:
                 continue
         sess_root = Path(load_config().workspace_path) / "sessions"
-        cutoff = (datetime.now() - timedelta(days=days)).timestamp()
+        # Both ends, because the range is a window rather than a floor: the
+        # daily telemetry files this falls back for are read for the selected
+        # days only, so a transcript touched after `to` would add tool calls
+        # the other two tallies of the same reply do not have.
+        cutoff = datetime.combine(frm, datetime.min.time()).timestamp()
+        until = datetime.combine(to + timedelta(days=1), datetime.min.time()).timestamp()
         for p in sess_root.glob("*/*.jsonl"):
             try:
-                if p.stat().st_mtime < cutoff:
+                mtime = p.stat().st_mtime
+                if mtime < cutoff or mtime >= until:
                     continue
                 lines = p.read_text(encoding="utf-8").splitlines()
             except Exception:
@@ -1011,6 +1152,9 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
 
     return {
         "days": days,
+        "from": frm.isoformat(),
+        "to": to.isoformat(),
+        "daily": list(daily.values()),
         "session_key": selected_session,
         "sessions": sorted(sessions),
         "session_titles": session_titles,
@@ -1129,6 +1273,7 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
         clear_everos_section,
         embedding_is_env_managed,
         everos_has_own_embedding,
+        host_embedding_section,
         set_everos_section,
     )
 
@@ -1201,10 +1346,25 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
         # model and a provider and holds no credential of its own, so an
         # address or a key sent here is refused rather than dropped: a value
         # accepted and discarded reads to the caller as one that was stored.
+        # The card renders the resolved address, because a reader configuring an
+        # endpoint wants to see where it goes -- and the row then sends it back
+        # on every save. An address equal to what the provider already answers
+        # with is this page echoing what it was shown, the same shape as the
+        # redacted key the borrow path already drops; refusing it made the row
+        # unsaveable without emptying a field nobody had touched. An address
+        # that differs is an instruction, and the block has no place for it.
+        # Only the address, and only when it matches: the card renders it as a
+        # `defaultValue`, so every save carries it back whether or not anyone
+        # touched it. The key is a placeholder rather than a value, so one that
+        # arrives here was typed on purpose and still has nowhere to live.
+        shown = host_embedding_section().get("base_url", "")
+        if shown and clean.get("base_url", "").rstrip("/") == shown.rstrip("/"):
+            clean.pop("base_url")
         stray = sorted(k for k in ("base_url", "api_key") if k in clean)
         if stray:
             raise ConfigValidationError(
-                f"{' and '.join(stray)} belongs to the provider, not to raven's embedding endpoint"
+                f"{' and '.join(stray)} belongs to the provider, not to raven's embedding endpoint; "
+                "pick the provider that serves this model instead"
             )
         from raven.config.update import EmbeddingPinError, embedding_model_change, set_embedding_endpoint
 
@@ -1593,9 +1753,6 @@ async def fs_reveal(params: dict, *, agent_loop_factory=None) -> dict:
     use. Fenced exactly like the viewer (``resolve_readable``): a path the page
     may not render is not one it may pop a Finder window on either.
     """
-    import subprocess
-    import sys
-
     from raven.rpc.files import resolve_readable
 
     raw = str(params.get("path") or "").strip()
@@ -1656,9 +1813,6 @@ async def fs_open(params: dict, *, agent_loop_factory=None) -> dict:
     ``app`` is placed as a single argv element, never concatenated into a
     command line and never passed to a shell.
     """
-    import subprocess
-    import sys
-
     from raven.rpc.files import resolve_readable
 
     raw = str(params.get("path") or "").strip()
@@ -1679,6 +1833,12 @@ async def fs_open(params: dict, *, agent_loop_factory=None) -> dict:
         target = resolve_readable(str(p))
     except (ValueError, PermissionError, FileNotFoundError, IsADirectoryError, OSError) as e:
         raise ConfigValidationError(str(e)) from None
+    _open_with_system(target, app)
+    return {"ok": True, **({"app": app} if app else {})}
+
+
+def _open_with_system(target: Path, app: str = "") -> None:
+    """Hand ``target`` to the desktop's opener (or to ``app``), on this host."""
     if sys.platform == "darwin":
         argv = ["open", "-a", app, str(target)] if app else ["open", str(target)]
     elif sys.platform.startswith("win"):
@@ -1693,7 +1853,6 @@ async def fs_open(params: dict, *, agent_loop_factory=None) -> dict:
         subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as e:
         raise ConfigValidationError(f"open failed: {e}") from None
-    return {"ok": True, **({"app": app} if app else {})}
 
 
 async def fs_read(params: dict, *, agent_loop_factory=None) -> dict:

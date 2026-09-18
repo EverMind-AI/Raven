@@ -428,6 +428,25 @@ export interface ApiUsageTotals {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "DailyUsage".
+ */
+export interface DailyUsage {
+  date: string;
+  calls: number;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cache_read_tokens?: number | null;
+  cost_usd?: number | null;
+  cache_write_tokens?: number | null;
+  cost_missing_calls: number;
+  cache_read_missing_calls: number;
+  cache_write_missing_calls: number;
+  legacy_cost_calls: number;
+  input_missing_calls?: number;
+  output_missing_calls?: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "LlmUsage".
  */
 export interface LlmUsage {
@@ -607,6 +626,14 @@ export interface McpSnapshot {
    * The authorization URL this server is parked on, when it is. Carried on the pull because the `oauth.pending` notification that also carries it is dropped when no client is attached, which is every connect started at assembly time.
    */
   auth_url?: string;
+  /**
+   * How the server authenticates (ext.list rows only).
+   */
+  auth?: ('none' | 'apikey' | 'oauth') | null;
+  /**
+   * Whether it holds the credential that mode needs (ext.list rows only).
+   */
+  credentialed?: boolean | null;
 }
 /**
  * What the install actually landed, which is what uninstall replays.
@@ -882,6 +909,10 @@ export interface ModelOptionProvider {
   name: string;
   homepage?: string;
   /**
+   * Where the vendor hands out API keys; null when the registry has no console link.
+   */
+  key_url?: string | null;
+  /**
    * The vendor's own model index. Distinct from `homepage`: the question a settings page asks is which model to put here, and a marketing front page does not answer it.
    */
   docs?: string;
@@ -910,6 +941,12 @@ export interface ModelOptionProvider {
    * Explicit user protocol overrides keyed by model id.
    */
   protocol_overrides?: {
+    [k: string]: string;
+  };
+  /**
+   * Custom request headers by name, each value redacted.
+   */
+  extra_headers?: {
     [k: string]: string;
   };
   total_models: number;
@@ -2035,6 +2072,10 @@ export interface SessionListParams {
    * Session channels to include; defaults to tui.
    */
   channels?: string[];
+  /**
+   * True lists only archived sessions; absent or false lists the live ones.
+   */
+  archived?: boolean | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -2581,6 +2622,10 @@ export interface ModelAddModelParams {
   slug: string;
   model: string;
   label?: string;
+  /**
+   * One line about the model; an empty string clears it, as it does for label.
+   */
+  description?: string;
   capabilities?: string[];
   input_modalities?: string[];
   output_modalities?: string[];
@@ -2592,6 +2637,64 @@ export interface ModelAddModelParams {
  */
 export interface ModelAddModelResult {
   provider: ModelOptionProvider;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelAddModelsParams".
+ */
+export interface ModelAddModelsParams {
+  slug: string;
+  models: string[];
+  session_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelAddModelsResult".
+ */
+export interface ModelAddModelsResult {
+  provider: ModelOptionProvider;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelSetFieldsParams".
+ */
+export interface ModelSetFieldsParams {
+  slug: string;
+  fields: {
+    [k: string]: JsonValue;
+  };
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelSetFieldsResult".
+ */
+export interface ModelSetFieldsResult {
+  /**
+   * Previous values, header values redacted.
+   */
+  previous: {
+    [k: string]: JsonValue;
+  };
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelOauthLoginParams".
+ */
+export interface ModelOauthLoginParams {
+  slug: string;
+  session_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelOauthLoginResult".
+ */
+export interface ModelOauthLoginResult {
+  verification_uri: string;
+  user_code: string;
+  /**
+   * Seconds the code stays valid; the gateway polls until then.
+   */
+  expires_in: number;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -3411,6 +3514,14 @@ export interface McpSnapshot1 {
    * The authorization URL this server is parked on, when it is. Carried on the pull because the `oauth.pending` notification that also carries it is dropped when no client is attached, which is every connect started at assembly time.
    */
   auth_url?: string;
+  /**
+   * How the server authenticates (ext.list rows only).
+   */
+  auth?: ('none' | 'apikey' | 'oauth') | null;
+  /**
+   * Whether it holds the credential that mode needs (ext.list rows only).
+   */
+  credentialed?: boolean | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -3459,6 +3570,54 @@ export interface PlugAuthParams {
  * via the `definition` "PlugAuthResult".
  */
 export interface PlugAuthResult {
+  name: string;
+  mcp?: McpSnapshot;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlugRetryParams".
+ */
+export interface PlugRetryParams {
+  name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlugRetryResult".
+ */
+export interface PlugRetryResult {
+  name: string;
+  mcp?: McpSnapshot;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlugRevokeParams".
+ */
+export interface PlugRevokeParams {
+  name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlugRevokeResult".
+ */
+export interface PlugRevokeResult {
+  name: string;
+  mcp?: McpSnapshot;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlugConfigureParams".
+ */
+export interface PlugConfigureParams {
+  name: string;
+  form?: {
+    [k: string]: string;
+  };
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlugConfigureResult".
+ */
+export interface PlugConfigureResult {
   name: string;
   mcp?: McpSnapshot;
 }
@@ -3814,6 +3973,10 @@ export interface SettingsSetParams {
 export interface SettingsSetResult {
   applied: boolean;
   previous: JsonValue;
+  /**
+   * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
+   */
+  warning?: string | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -3825,6 +3988,14 @@ export interface SettingsUsageParams {
    */
   days?: number;
   session_key?: string | null;
+  /**
+   * First day (YYYY-MM-DD), inclusive; clamped to 90 days back.
+   */
+  from?: string | null;
+  /**
+   * Last day (YYYY-MM-DD), inclusive; today when absent.
+   */
+  to?: string | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -3832,6 +4003,12 @@ export interface SettingsUsageParams {
  */
 export interface SettingsUsageResult {
   days: number;
+  from: string;
+  to: string;
+  /**
+   * One entry per day of the range, zeros for days without a file.
+   */
+  daily: DailyUsage[];
   llm: LlmUsage;
   tools: ToolUsage;
   session_key?: string | null;
@@ -3890,6 +4067,10 @@ export interface SettingsEverosSetParams {
  */
 export interface SettingsEverosSetResult {
   applied: boolean;
+  /**
+   * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
+   */
+  warning?: string | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -5400,11 +5581,15 @@ export interface ShellExecResult {
  */
 export interface SkillsManageParams {
   /**
-   * One of list, inspect, search, browse, install.
+   * One of list, inspect, search, browse, install, open.
    */
   action: string;
   query?: string;
   page?: number;
+  /**
+   * `open`: a file name relative to the skill's directory.
+   */
+  file?: string | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -5418,7 +5603,7 @@ export interface SkillsManageResult {
     [k: string]: string[];
   };
   /**
-   * `inspect`: one skill's metadata, {} when unknown.
+   * `inspect`: one skill's metadata (name, description, category, path, body, files, always, hub, hub_id, install), {} when unknown.
    */
   info?: {
     [k: string]: JsonValue;
@@ -5443,6 +5628,10 @@ export interface SkillsManageResult {
    */
   installed?: boolean;
   name?: string;
+  /**
+   * `open`.
+   */
+  opened?: boolean | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

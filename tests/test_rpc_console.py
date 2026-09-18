@@ -86,6 +86,23 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         # chip and /perm) since the gate landed; this lets the settings panel
         # write the default a new conversation starts on.
         "permissions.mode",
+        # The settings page's model page. Two more pins of the sessionTitle
+        # shape (curator, skill gate) with their pair keys, the speech and video
+        # selections in the image selection's shape, and three integers: the
+        # tool-iteration cap, the context window override and the auto-archive
+        # age. None names an address or carries a key; the pins reach only
+        # providers the deployment has already credentialed.
+        "context.curatorModel",
+        "context.curatorProvider",
+        "skillForge.llmGateModel",
+        "skillForge.llmGateProvider",
+        "context",
+        "skillForge",
+        "tools.media.speech",
+        "tools.media.video",
+        "agents.defaults.maxToolIterations",
+        "agents.defaults.contextWindowTokens",
+        "sessions.autoArchiveAfterDays",
     }
 
 
@@ -1632,3 +1649,91 @@ async def test_image_selection_leaves_are_writable(settings_cfg, key, value):
 
     await console_module.settings_set({"key": f"tools.media.image.{key}", "value": value})
     assert json.loads(settings_cfg.read_text())["tools"]["media"]["image"][key] == value
+
+
+async def test_ext_list_reports_how_each_server_authenticates_and_whether_it_can(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The panel draws its 'needs setup' chip and its credential form from two
+    facts the row used to lack: the auth mode and whether the credential is
+    there. Read from config and the credential store, never the catalog."""
+
+    def _server(**kw) -> SimpleNamespace:
+        base = dict(
+            enabled=True, type=None, command=None, url="https://example.invalid/mcp", auth="none", headers={}, env={}
+        )
+        base.update(kw)
+        return SimpleNamespace(**base)
+
+    cfg = SimpleNamespace(
+        tools=SimpleNamespace(
+            mcp_servers={
+                "oauthed": _server(auth="oauth"),
+                "oauth_bare": _server(auth="oauth"),
+                "keyed": _server(auth="apikey", headers={"Authorization": "Bearer x"}),
+                "key_bare": _server(auth="apikey", headers={"Authorization": ""}),
+                "plain": _server(),
+            }
+        )
+    )
+    from raven.config import loader as config_loader
+    from raven.config import raven as raven_config
+
+    monkeypatch.setattr(config_loader, "load_config", lambda: cfg)
+    monkeypatch.setattr(
+        raven_config,
+        "load_raven_config",
+        lambda: SimpleNamespace(skill_forge=None, plugins=SimpleNamespace(disabled=[])),
+    )
+    monkeypatch.setattr(console_module, "_hub_marker_name", lambda: None)
+    from raven.mcp import oauth as oauth_module
+
+    monkeypatch.setattr(oauth_module, "pending_url", lambda name: None)
+    monkeypatch.setattr(oauth_module, "has_stored_tokens", lambda name, scope=None: name == "oauthed")
+
+    class _Catalog:
+        def gather_all_skills(self):
+            return []
+
+    class _Manager:
+        def status(self):
+            return []
+
+    from raven.agent.tools.registry import ToolRegistry
+
+    loop = SimpleNamespace(
+        context=SimpleNamespace(skills=_Catalog()), tools=ToolRegistry(), mcp_manager_if_started=_Manager()
+    )
+    rows = {m["name"]: m for m in (await console_module.ext_list({}, agent_loop_factory=lambda: loop))["mcp"]}
+
+    assert (rows["oauthed"]["auth"], rows["oauthed"]["credentialed"]) == ("oauth", True)
+    assert (rows["oauth_bare"]["auth"], rows["oauth_bare"]["credentialed"]) == ("oauth", False)
+    assert (rows["keyed"]["auth"], rows["keyed"]["credentialed"]) == ("apikey", True)
+    assert (rows["key_bare"]["auth"], rows["key_bare"]["credentialed"]) == ("apikey", False)
+    assert (rows["plain"]["auth"], rows["plain"]["credentialed"]) == ("none", True)
+
+
+def test_mcp_credential_state_reads_a_broken_token_store_as_not_credentialed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    import raven.mcp.oauth as oauth
+
+    def broken(name: str) -> bool:
+        raise OSError("store unreadable")
+
+    monkeypatch.setattr(oauth, "has_stored_tokens", broken)
+    assert console_module._mcp_credential_state("svc", SimpleNamespace(auth="oauth")) == ("oauth", False)
+
+
+def test_configured_provider_section_reads_an_unreadable_config_as_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from raven.config import loader
+
+    def broken(path):
+        raise OSError("gone")
+
+    monkeypatch.setattr(loader, "read_raw_or_raise", broken)
+    assert console_module._configured_provider_section("anthropic") is False

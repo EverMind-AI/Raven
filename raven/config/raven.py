@@ -1447,6 +1447,14 @@ class SessionTitleConfig(_Base):
     once instead of holding a placeholder until its grace period runs out."""
 
 
+class SessionsConfig(_Base):
+    """Session housekeeping the settings page controls."""
+
+    auto_archive_after_days: int | None = None
+    """``session.list`` archives an unpinned session whose last message is
+    older than this many days. None turns the pass off."""
+
+
 class SubagentDagConfig(_Base):
     """Judging a finished DAG node, and adjudicating the ones that did not succeed.
 
@@ -1572,6 +1580,7 @@ class RavenConfig(_Base):
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     tracing: TracingConfig = Field(default_factory=TracingConfig)
     session_title: SessionTitleConfig = Field(default_factory=SessionTitleConfig)
+    sessions: SessionsConfig = Field(default_factory=SessionsConfig)
     translate: TranslateConfig = Field(default_factory=TranslateConfig)
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     subagent_dag: SubagentDagConfig = Field(default_factory=SubagentDagConfig)
@@ -1614,7 +1623,12 @@ def load_raven_config(config_path: Path | None = None) -> RavenConfig:
         # floor, so legacy leaves reach their new home before the blocks are
         # extracted (the base loader persisted the rewrite; this is the
         # in-memory twin for the extension blocks).
-        data = _migrate_config(data, pop_extension_keys=False, from_version=_migration_version(actual_path))
+        data = _migrate_config(
+            data,
+            pop_extension_keys=False,
+            from_version=_migration_version(actual_path),
+            config_path=actual_path,
+        )
         for key in EXTENSION_KEYS:
             if key in data and data[key] is not None:
                 overrides[key] = data[key]

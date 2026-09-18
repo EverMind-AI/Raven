@@ -365,7 +365,7 @@ def _inspect_config_health(config: Any, *, fix: bool) -> ConfigHealth:
                 "base reads it there for now, but it stops working the moment the memory plugin "
                 "is not the configured backend -- which has nothing to do with indexing documents."
             )
-            health.fixes.append("copy the embedding endpoint into raven's own embedding block")
+            health.fixes.append(_EMBEDDING_FIX)
             move_embedding = True
 
     if fix and health.fixes:
@@ -374,18 +374,34 @@ def _inspect_config_health(config: Any, *, fix: bool) -> ConfigHealth:
             raw = read_raw_or_raise(path)
             raw.get("agents", {}).get("defaults", {}).pop("contextWindowTokens", None)
             raw.get("agents", {}).get("defaults", {}).pop("context_window_tokens", None)
+            moved = True
             if move_embedding:
                 from raven.knowledge._embedding import adopt_legacy_endpoint
 
-                adopt_legacy_endpoint(raw)
+                # The move only lands when a configured provider answers at
+                # that address. Reporting it applied regardless told an operator
+                # the endpoint had been carried across while it sat exactly
+                # where it was, and the next run offered the same fix again.
+                moved = adopt_legacy_endpoint(raw)
             _write_config_preserving_mode(path, raw)
         except Exception as exc:  # noqa: BLE001 -- reported, never fatal
             health.findings.append(f"could not write the fix: {exc}")
         else:
-            health.applied = list(health.fixes)
-            health.fixes = []
+            unmoved = _EMBEDDING_FIX if move_embedding and not moved else ""
+            health.applied = [f for f in health.fixes if f != unmoved]
+            health.fixes = [f for f in health.fixes if f == unmoved]
+            if unmoved:
+                health.findings.append(
+                    "  the endpoint names an address no configured provider answers at, so there is "
+                    "nowhere for its key to live -- add that provider, or choose an embedding model "
+                    "in settings"
+                )
 
     return health
+
+
+_EMBEDDING_FIX = "copy the embedding endpoint into raven's own embedding block"
+"""Named once: the applied/remaining split below compares against it."""
 
 
 def _write_config_preserving_mode(path: "Path", raw: dict) -> None:

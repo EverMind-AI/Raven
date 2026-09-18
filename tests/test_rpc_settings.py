@@ -224,6 +224,47 @@ class TestEmbeddingCardFollowsTheEndpointHome:
                 }
             )
 
+    async def test_the_address_the_card_showed_is_an_echo_not_an_instruction(
+        self, everos_toml, tmp_path, monkeypatch
+    ) -> None:
+        """The row renders the resolved address as a `defaultValue`, so every
+        save carries it back whether or not anyone touched it. Refusing that
+        made the row unsaveable without first emptying a field nobody had
+        edited -- changing only the model came back as an error."""
+        import json
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text(
+            json.dumps(
+                {
+                    "embedding": {"model": "old-model", "provider": "siliconflow"},
+                    "providers": {"siliconflow": {"apiKey": "sk", "apiBase": "https://api.siliconflow.cn/v1"}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        raven_home.set_config_path(cfg)
+        everos_toml.write_text('[llm]\nmodel = "m"\n', encoding="utf-8")
+
+        r = await rpc_console.settings_everos_set(
+            {
+                "section": "embedding",
+                "fields": {"model": "new-model", "base_url": "https://api.siliconflow.cn/v1"},
+            }
+        )
+
+        assert r["applied"] is True
+        assert json.loads(cfg.read_text(encoding="utf-8"))["embedding"] == {
+            "model": "new-model",
+            "provider": "siliconflow",
+        }
+
+        # An address that differs is an instruction, and there is nowhere to put it.
+        with pytest.raises(ConfigValidationError, match="belongs to the provider"):
+            await rpc_console.settings_everos_set(
+                {"section": "embedding", "fields": {"base_url": "https://elsewhere.test/v1"}}
+            )
+
     async def test_half_a_pin_is_refused_from_either_end(self, everos_toml, tmp_path, monkeypatch) -> None:
         """Both halves or neither. A model with nobody to serve it reads as
         configured on every screen while every reader resolves it to nothing;
@@ -635,6 +676,65 @@ class TestAPinIsWrittenAsOneThing:
         assert block["model"] is None and block["provider"] is None
 
 
+class TestAPinCanNameAnyProviderThisConfigHolds:
+    """Raven carries no spec for every vendor LiteLLM can reach.
+
+    Checking a pin's provider against the registry alone made a working
+    endpoint uneditable on the page that exists to edit it: the wizard stored
+    `provider: deepinfra`, every reader resolved it, and this surface called it
+    a provider that does not exist.
+    """
+
+    async def test_a_section_in_the_config_is_proof_the_vendor_exists(self, cfg):
+        from raven.config.update_providers import set_provider_fields
+        from raven.providers.registry import find_by_name
+
+        assert find_by_name("deepinfra") is None, "the point of this test is a vendor with no spec"
+        set_provider_fields("deepinfra", {"api_key": "sk-di", "api_base": "https://api.deepinfra.com/v1/openai"})
+
+        r = await rpc_console.settings_set(
+            {"key": "embedding", "value": {"model": "Qwen/Qwen3-Embedding-8B", "provider": "deepinfra"}}
+        )
+
+        assert r["applied"] is True
+        assert _read(cfg)["embedding"] == {"model": "Qwen/Qwen3-Embedding-8B", "provider": "deepinfra"}
+
+    async def test_a_name_nothing_holds_is_still_a_typo(self, cfg):
+        """The check still earns its keep: a misspelling would otherwise
+        surface as a silent fallback to the conversation's model."""
+        with pytest.raises(ConfigValidationError, match="no provider named"):
+            await rpc_console.settings_set({"key": "embedding", "value": {"model": "m", "provider": "deepinfr"}})
+
+
+class TestClearingTheEmbeddingPin:
+    """The picker's "inherit" option sends both halves empty.
+
+    Dropping empty values before the write made that a no-op the caller was
+    told had applied: the picker snapped back to the old pair on the next load,
+    and editing the file by hand was the only way to unset it.
+    """
+
+    async def test_both_halves_empty_removes_the_block(self, cfg):
+        from raven.config.update_providers import set_provider_fields
+
+        set_provider_fields("openai", {"api_key": "sk-openai"})
+        await rpc_console.settings_set(
+            {"key": "embedding", "value": {"model": "text-embedding-3-small", "provider": "openai"}}
+        )
+
+        r = await rpc_console.settings_set({"key": "embedding", "value": {"model": "", "provider": ""}})
+
+        assert r["applied"] is True
+        assert "embedding" not in _read(cfg)
+        assert r["previous"] == {"model": "text-embedding-3-small", "provider": "openai"}
+
+    async def test_clearing_what_was_never_set_is_not_an_error(self, cfg):
+        r = await rpc_console.settings_set({"key": "embedding", "value": {"model": "", "provider": ""}})
+
+        assert r["applied"] is True
+        assert "embedding" not in _read(cfg)
+
+
 class TestTheEmbeddingPinHasOneWayIn:
     """Two writers for one block is one writer that checks and one that does
     not. The settings page's pin row wrote raw -- no provider check, and no
@@ -817,3 +917,214 @@ async def test_writing_without_the_plugin_is_a_typed_error(everos_toml):
         await rpc_console.settings_everos_set({"section": "llm", "fields": {"model": "m"}})
 
     assert "everos-memory" in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "key,good,bad,path",
+    [
+        ("agents.defaults.maxToolIterations", 120, 0, ("agents", "defaults", "maxToolIterations")),
+        ("agents.defaults.contextWindowTokens", 65536, 512, ("agents", "defaults", "contextWindowTokens")),
+        ("context.curatorModel", "deepseek-chat", 7, ("context", "curatorModel")),
+        ("context.curatorProvider", "deepseek", 7, ("context", "curatorProvider")),
+        ("sessionTitle.model", "deepseek-chat", 7, ("sessionTitle", "model")),
+        ("sessionTitle.provider", "deepseek", 7, ("sessionTitle", "provider")),
+        ("skillForge.llmGateModel", "deepseek-chat", 7, ("skillForge", "llmGateModel")),
+        ("skillForge.llmGateProvider", "deepseek", 7, ("skillForge", "llmGateProvider")),
+        ("sessions.autoArchiveAfterDays", 30, 0, ("sessions", "autoArchiveAfterDays")),
+    ],
+)
+async def test_settings_set_new_scalar_keys_write_and_refuse(cfg, key, good, bad, path):
+    r = await rpc_console.settings_set({"key": key, "value": good})
+    assert r["applied"] is True
+    node = _read(cfg)
+    for part in path:
+        node = node[part]
+    assert node == good
+    with pytest.raises(ConfigValidationError):
+        await rpc_console.settings_set({"key": key, "value": bad})
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "agents.defaults.contextWindowTokens",
+        "context.curatorModel",
+        "sessionTitle.provider",
+        "sessions.autoArchiveAfterDays",
+    ],
+)
+async def test_settings_set_nullable_keys_accept_null(cfg, key):
+    r = await rpc_console.settings_set({"key": key, "value": None})
+    assert r["applied"] is True
+    node = _read(cfg)
+    for part in key.split(".")[:-1]:
+        node = node[part]
+    assert node[key.split(".")[-1]] is None
+
+
+async def test_settings_set_warns_only_for_reload_only_keys(cfg):
+    warned = await rpc_console.settings_set({"key": "context.curatorModel", "value": "m"})
+    assert "reload" in warned["warning"].lower()
+    live = await rpc_console.settings_set({"key": "sessionTitle.model", "value": "m"})
+    assert "warning" not in live
+
+
+async def test_settings_set_blocklist_is_a_raw_list(cfg):
+    await rpc_console.settings_set({"key": "skillForge.blocklist", "value": ["codeword"]})
+    assert _read(cfg)["skillForge"]["blocklist"] == ["codeword"]
+    with pytest.raises(ConfigValidationError):
+        await rpc_console.settings_set({"key": "skillForge.blocklist", "value": "codeword"})
+
+
+async def test_settings_set_media_speech_selection_merges(cfg):
+    await rpc_console.settings_set({"key": "tools.media.speech", "value": {"model": "tts-1", "quality": "high"}})
+    await rpc_console.settings_set({"key": "tools.media.speech", "value": {"model": "tts-2", "quality": ""}})
+    assert _read(cfg)["tools"]["media"]["speech"] == {"model": "tts-2", "quality": ""}
+    with pytest.raises(ConfigValidationError):
+        await rpc_console.settings_set({"key": "tools.media.video", "value": {"model": "v"}})
+
+
+@pytest.mark.parametrize(
+    "parent,model_field,provider_field",
+    [("context", "curatorModel", "curatorProvider"), ("skillForge", "llmGateModel", "llmGateProvider")],
+)
+async def test_settings_set_pin_pairs_write_as_one_merged_object(cfg, parent, model_field, provider_field):
+    cfg.write_text(json.dumps({parent: {"keep": True}}), encoding="utf-8")
+    r = await rpc_console.settings_set(
+        {"key": parent, "value": {model_field: "deepseek-chat", provider_field: "deepseek"}}
+    )
+    assert "reload" in r["warning"].lower()
+    block = _read(cfg)[parent]
+    assert block == {"keep": True, model_field: "deepseek-chat", provider_field: "deepseek"}
+    await rpc_console.settings_set({"key": parent, "value": {model_field: None, provider_field: None}})
+    assert _read(cfg)[parent] == {"keep": True, model_field: None, provider_field: None}
+    with pytest.raises(ConfigValidationError):
+        await rpc_console.settings_set({"key": parent, "value": {model_field: "m"}})
+
+
+# ---------------------------------------------------------------------------
+# settings.usage: date range and daily buckets
+# ---------------------------------------------------------------------------
+
+
+def _iso(days_ago: int) -> str:
+    from datetime import date, timedelta
+
+    return (date.today() - timedelta(days=days_ago)).isoformat()
+
+
+def _telemetry_row(model: str, cost: float | None, *, cache_read: int = 0, cache_write: int | None = None) -> dict:
+    return {
+        "ts": "2026-09-01T00:00:00+00:00",
+        "schema_version": 2,
+        "model": model,
+        "input_tokens": 100,
+        "output_tokens": 10,
+        "cache_read_tokens": cache_read,
+        "cache_write_tokens": cache_write,
+        "cost_usd": cost,
+        "session_key": "web:s1",
+        "root_session_key": "web:s1",
+    }
+
+
+@pytest.fixture()
+def telemetry(cfg, tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+    tel = tmp_path / "telemetry"
+    tel.mkdir()
+
+    def write(days_ago: int, rows: list[dict]) -> None:
+        p = tel / f"usage-{_iso(days_ago)}.jsonl"
+        with p.open("a", encoding="utf-8") as fh:
+            for r in rows:
+                fh.write(json.dumps(r) + "\n")
+
+    return write
+
+
+async def test_usage_daily_buckets_cover_the_range_with_zero_days(telemetry):
+    telemetry(1, [_telemetry_row("a", 1.0)])
+    telemetry(
+        3,
+        [
+            _telemetry_row("a", 2.0),
+            {
+                "_type": "tool_call",
+                "schema_version": 2,
+                "name": "exec",
+                "tool_call_id": "c1",
+                "session_key": "web:s1",
+                "root_session_key": "web:s1",
+            },
+        ],
+    )
+    telemetry(6, [_telemetry_row("a", 9.0)])
+    r = await rpc_console.settings_usage({"from": _iso(4), "to": _iso(1)})
+    assert (r["from"], r["to"], r["days"]) == (_iso(4), _iso(1), 4)
+    assert [d["date"] for d in r["daily"]] == [_iso(4), _iso(3), _iso(2), _iso(1)]
+    assert [d["cost_usd"] for d in r["daily"]] == [None, 2.0, None, 1.0]
+    assert [d["calls"] for d in r["daily"]] == [0, 1, 0, 1]
+    assert r["llm"]["total"]["cost_usd"] == 3.0
+    assert r["tools"]["counts"] == [{"name": "exec", "count": 1}]
+
+
+def _transcript(home, name: str, days_ago: int, calls: list[str]) -> None:
+    """One session file whose tool calls the fallback scan may or may not count.
+
+    The scan reads a transcript when its mtime is inside the window, so the
+    mtime is what the case is about; the rows themselves are the same either
+    way.
+    """
+    import os
+    from datetime import datetime, timedelta
+
+    d = home / "workspace" / "sessions" / "tui"
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / f"{name}.jsonl"
+    rows = [{"_type": "metadata", "key": f"tui:{name}", "metadata": {"title": name}}]
+    rows.append({"role": "assistant", "tool_calls": [{"id": f"{name}-1", "name": c} for c in calls]})
+    f.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    when = (datetime.now() - timedelta(days=days_ago)).timestamp()
+    os.utime(f, (when, when))
+
+
+async def test_usage_tool_scan_is_bounded_at_both_ends(telemetry, tmp_path):
+    """A transcript touched after `to` is outside the window the reply reports.
+
+    The LLM and telemetry-tool tallies read the selected days' files only, so
+    counting a transcript modified later made one reply disagree with itself:
+    the tool total covered a wider range than the dates beside it.
+    """
+    _transcript(tmp_path, "inside", 4, ["exec"])
+    _transcript(tmp_path, "after", 0, ["read_file", "read_file"])
+    _transcript(tmp_path, "before", 40, ["grep"])
+
+    r = await rpc_console.settings_usage({"from": _iso(5), "to": _iso(3)})
+    assert r["tools"]["counts"] == [{"name": "exec", "count": 1}]
+    assert r["tools"]["total"] == 1
+
+    # And the same scan does count it once the range reaches that day.
+    r = await rpc_console.settings_usage({"from": _iso(5), "to": _iso(0)})
+    assert sorted(c["name"] for c in r["tools"]["counts"]) == ["exec", "read_file"]
+    assert r["tools"]["total"] == 3
+
+
+async def test_usage_from_is_clamped_and_reversed_range_refused(telemetry):
+    r = await rpc_console.settings_usage({"from": _iso(400), "to": _iso(0)})
+    assert r["from"] == _iso(89)
+    assert r["days"] == 90
+    with pytest.raises(ConfigValidationError):
+        await rpc_console.settings_usage({"from": _iso(0), "to": _iso(1)})
+    with pytest.raises(ConfigValidationError):
+        await rpc_console.settings_usage({"from": "yesterday"})
+
+
+async def test_usage_from_to_win_over_days(telemetry):
+    telemetry(10, [_telemetry_row("a", 5.0)])
+    r = await rpc_console.settings_usage({"days": 30, "from": _iso(2), "to": _iso(0)})
+    assert r["llm"]["total"]["calls"] == 0
+    assert r["days"] == 3
+    r = await rpc_console.settings_usage({"days": 30})
+    assert r["llm"]["total"]["calls"] == 1
+    assert r["from"] == _iso(29)

@@ -92,6 +92,45 @@ function asStrings(value: Json): string[] {
    empty, which is what the walk probe caught. */
 const clone = (value: Record<string, Json>): Record<string, Json> => JSON.parse(JSON.stringify(value))
 
+const RELOAD_ONLY = new Set([
+  'agents.defaults.maxToolIterations',
+  'agents.defaults.contextWindowTokens',
+  'context.curatorModel',
+  'context.curatorProvider',
+  'skillForge.llmGateModel',
+  'skillForge.llmGateProvider',
+  'context',
+  'skillForge',
+])
+const RELOAD_WARNING = 'Saved. Applies after the next gateway reload or restart.'
+
+const isoDay = (ms: number): string => new Date(ms).toISOString().slice(0, 10)
+const DAY_MS = 86_400_000
+
+/* The gateway's range rule (raven/rpc/methods/console.py _usage_range): from/to
+   inclusive and clamped to 90 days back, else `days` back from today. */
+function usageRange(p: { from?: string | null; to?: string | null; days?: number | null }, nowMs: number) {
+  const today = Date.UTC(new Date(nowMs).getUTCFullYear(), new Date(nowMs).getUTCMonth(), new Date(nowMs).getUTCDate())
+  const earliest = today - 89 * DAY_MS
+  const parse = (v: string | null | undefined): number | null => (v ? Date.parse(`${v}T00:00:00Z`) : null)
+  let from: number
+  let to: number
+  const f = parse(p.from)
+  const t = parse(p.to)
+  if (f !== null || t !== null) {
+    to = Math.min(t ?? today, today)
+    from = Math.max(f ?? earliest, earliest)
+    if (from > to) from = to
+  } else {
+    const days = Math.max(1, Math.min(typeof p.days === 'number' ? p.days : 30, 90))
+    to = today
+    from = today - (days - 1) * DAY_MS
+  }
+  const dates: string[] = []
+  for (let at = from; at <= to; at += DAY_MS) dates.push(isoDay(at))
+  return { from: isoDay(from), to: isoDay(to), dates }
+}
+
 function pick(from: Record<string, Json>, key: string): Json | undefined {
   return key.split('.').reduce<Json | undefined>((at, part) => (
     at && typeof at === 'object' ? (at as Record<string, Json>)[part] : undefined
@@ -105,6 +144,8 @@ const ZERO_TOTALS: ResultOf<'settings.usage'>['llm']['total'] = {
   calls: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
   cost_usd: 0, cost_missing_calls: 0, cache_read_missing_calls: 0,
   cache_write_missing_calls: 0, legacy_cost_calls: 0,
+  input_missing_calls: 0,
+  output_missing_calls: 0,
 }
 
 export interface SettingsFixture {
@@ -157,17 +198,26 @@ export function createSettings(env: FixtureEnv, ext: ExtFixture): SettingsFixtur
         put(config, p.key, p.value)
         if (p.key === 'tools.disabledTools') ext.disabledTools = asStrings(p.value)
         if (p.key === 'plugins.disabled') ext.disabledPlugins = asStrings(p.value)
-        return { applied: true, previous: null }
+        /* The same keys the gateway says this about (raven/rpc/methods/console.py
+           _RELOAD_ONLY_KEYS): a value the loop binds at build time. */
+        return { applied: true, previous: null, warning: RELOAD_ONLY.has(p.key) ? RELOAD_WARNING : null }
       },
       /* Nothing has been spent on this canvas, so the usage panel draws an
-         empty ledger rather than a number nothing produced. */
-      'settings.usage': () => ({
-        days: 30,
-        llm: { total: ZERO_TOTALS, models: [] },
-        tools: { total: 0, counts: [] },
-      }),
+         empty ledger rather than a number nothing produced -- one zero bucket
+         per day of whatever range is asked for, the way the gateway answers. */
+      'settings.usage': (p) => {
+        const { from, to, dates } = usageRange(p, env.now())
+        return {
+          days: dates.length,
+          from,
+          to,
+          daily: dates.map((date) => ({ date, ...ZERO_TOTALS })),
+          llm: { total: ZERO_TOTALS, models: [] },
+          tools: { total: 0, counts: [] },
+        }
+      },
       'settings.everos': () => ({ sections: {}, config_path: '~/.raven/config.json', available: false }),
-      'settings.everosSet': () => ({ applied: true }),
+      'settings.everosSet': () => ({ applied: true, warning: null }),
       'session.set_mode': (p) => {
         const mode = (p as { mode?: string }).mode
         if (mode) tier = mode

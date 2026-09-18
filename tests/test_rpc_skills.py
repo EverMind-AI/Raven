@@ -85,6 +85,12 @@ async def test_inspect_returns_the_fields_the_panel_renders() -> None:
         "description": "ship a release",
         "category": "workspace",
         "path": "/w/deploy/SKILL.md",
+        "body": "",
+        "files": [],
+        "always": False,
+        "hub": False,
+        "hub_id": "",
+        "install": None,
     }
 
 
@@ -181,3 +187,110 @@ async def test_an_unknown_action_is_a_typed_error() -> None:
 async def test_no_live_registry_is_a_typed_error() -> None:
     with pytest.raises(InternalError, match="registry"):
         await skills_manage({"action": "list"}, agent_loop_factory=_factory(None))
+
+
+# ---------------------------------------------------------------------------
+# inspect carries the detail page's fields; open stays inside the skill
+# ---------------------------------------------------------------------------
+
+
+def _real_skill(tmp_path: Path, name: str, *, hub: bool = False, meta: dict | None = None) -> _Meta:
+    import json
+
+    d = tmp_path / name
+    d.mkdir()
+    (d / "SKILL.md").write_text(f"# {name}\n\nBody.\n", encoding="utf-8")
+    (d / "helper.py").write_text("print(1)\n", encoding="utf-8")
+    if hub:
+        (d / ".skillhub.json").write_text(json.dumps({"id": f"hub/{name}@v2"}), encoding="utf-8")
+    if meta is not None:
+        (d / ".install-meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    m = _Meta(name, f"{name} does things", "workspace", str(d / "SKILL.md"))
+    m.always = name == "always_one"
+    return m
+
+
+async def test_inspect_carries_body_files_and_install_meta(tmp_path: Path) -> None:
+    stamp = {
+        "slug": "weather",
+        "version": "v2",
+        "source": "hub",
+        "trigger": "use_skill",
+        "score_safety": 0.9,
+        "installed_at": "2026-09-01T00:00:00+00:00",
+    }
+    meta = _real_skill(tmp_path, "weather", hub=True, meta=stamp)
+    info = (
+        await skills_manage({"action": "inspect", "query": "weather"}, agent_loop_factory=_factory(_Registry([meta])))
+    )["info"]
+    assert info["body"].startswith("# weather")
+    assert info["files"] == ["SKILL.md", "helper.py"]
+    assert (info["hub"], info["hub_id"]) == (True, "hub/weather@v2")
+    assert info["install"] == {
+        "installed_at": "2026-09-01T00:00:00+00:00",
+        "version": "v2",
+        "trigger": "use_skill",
+        "source": "hub",
+        "score_safety": 0.9,
+    }
+    assert info["always"] is False
+
+
+async def test_inspect_without_a_stamp_reports_null_install_and_always(tmp_path: Path) -> None:
+    meta = _real_skill(tmp_path, "always_one")
+    info = (
+        await skills_manage(
+            {"action": "inspect", "query": "always_one"}, agent_loop_factory=_factory(_Registry([meta]))
+        )
+    )["info"]
+    assert info["install"] is None
+    assert info["hub"] is False
+    assert info["always"] is True
+
+
+async def test_open_launches_a_file_inside_the_skill_and_refuses_outside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.rpc.errors import ConfigValidationError
+    from raven.rpc.methods import console as console_module
+
+    meta = _real_skill(tmp_path, "codeword")
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+    opened: list[Path] = []
+    monkeypatch.setattr(console_module, "_open_with_system", lambda target, app="": opened.append(target))
+    factory = _factory(_Registry([meta]))
+
+    assert await skills_manage(
+        {"action": "open", "query": "codeword", "file": "helper.py"}, agent_loop_factory=factory
+    ) == {"opened": True}
+    assert opened == [(tmp_path / "codeword" / "helper.py").resolve()]
+    with pytest.raises(ConfigValidationError):
+        await skills_manage(
+            {"action": "open", "query": "codeword", "file": "../config.json"}, agent_loop_factory=factory
+        )
+    with pytest.raises(ConfigValidationError):
+        await skills_manage({"action": "open", "query": "codeword", "file": "missing.txt"}, agent_loop_factory=factory)
+    assert len(opened) == 1
+
+
+def test_hub_marker_and_install_meta_tolerate_a_corrupt_stamp(tmp_path: Path) -> None:
+    from raven.rpc.methods.skills import _hub_marker, _install_meta
+    from raven.skill_hub.hub import MARKER
+
+    skill = tmp_path / "corrupt"
+    skill.mkdir()
+    assert _hub_marker(skill) == (False, "")
+    assert _install_meta(skill) is None
+    (skill / MARKER).write_text("{not json", encoding="utf-8")
+    (skill / ".install-meta.json").write_text("{not json", encoding="utf-8")
+    assert _hub_marker(skill) == (True, "")
+    assert _install_meta(skill) is None
+
+
+async def test_open_of_an_unknown_skill_is_a_typed_error() -> None:
+    from raven.rpc.errors import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError, match="unknown skill"):
+        await skills_manage(
+            {"action": "open", "query": "nobody", "file": "SKILL.md"}, agent_loop_factory=_factory(_Registry([]))
+        )

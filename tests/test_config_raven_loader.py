@@ -299,6 +299,90 @@ def test_the_old_everos_spelling_is_migrated_not_merely_tolerated(stub_config_pa
     assert cfg.skill_forge.extraction.max_skills_top_k == 7
 
 
+class TestTheRetiredEndpointShapeStillLoads:
+    """The block used to carry the address and the key itself.
+
+    `EmbeddingConfig` forbids extras, so a config still holding them does not
+    load at all -- every command that reads the extension blocks ends in a
+    traceback rather than in a degraded feature.
+    """
+
+    def test_the_endpoint_is_adopted_onto_the_provider_that_answers_there(self, stub_config_path: Path) -> None:
+        import json
+
+        from raven.config.loader import load_config
+
+        _write_config(
+            stub_config_path,
+            {
+                "embedding": {
+                    "model": "Qwen/Qwen3-Embedding-8B",
+                    "baseUrl": "https://api.deepinfra.com/v1/openai",
+                    "apiKey": "k-di",
+                },
+                "providers": {"deepinfra": {"apiKey": "k-di", "apiBase": "https://api.deepinfra.com/v1/openai"}},
+            },
+        )
+
+        cfg = ec_module.load_raven_config()
+        load_config()
+
+        assert cfg.embedding.model == "Qwen/Qwen3-Embedding-8B"
+        assert cfg.embedding.provider == "deepinfra"
+        assert json.loads(stub_config_path.read_text(encoding="utf-8"))["embedding"] == {
+            "model": "Qwen/Qwen3-Embedding-8B",
+            "provider": "deepinfra",
+        }
+
+    def test_an_install_that_already_consumed_v8_is_still_repaired(self, stub_config_path: Path) -> None:
+        """Generation 8 shipped the move without this repair.
+
+        So a config can carry the stamp and the shape that cannot load at the
+        same time: the base loader pops the extension keys, validates, and
+        stamps 8, while the extension read then fails on the two retired
+        fields. A repair gated on 8 would never reach that install.
+        """
+        import json
+
+        from raven.config.loader import load_config
+
+        _write_config(
+            stub_config_path,
+            {
+                "embedding": {"model": "m", "baseUrl": "https://api.siliconflow.cn/v1", "apiKey": "k"},
+                "providers": {"siliconflow": {"apiKey": "sk"}},
+            },
+        )
+        stub_config_path.with_suffix(".migrations.json").write_text(json.dumps({"version": 8}), encoding="utf-8")
+
+        cfg = ec_module.load_raven_config()
+        load_config()
+
+        assert cfg.embedding.model == "m" and cfg.embedding.provider == "siliconflow"
+        assert json.loads(stub_config_path.read_text(encoding="utf-8"))["embedding"] == {
+            "model": "m",
+            "provider": "siliconflow",
+        }
+
+    def test_an_endpoint_nobody_answers_for_goes_whole(self, stub_config_path: Path) -> None:
+        """Not half of it. A model left with no provider is a pin every reader
+        resolves to nothing while every screen reads it as configured."""
+        import json
+
+        from raven.config.loader import load_config
+
+        _write_config(
+            stub_config_path,
+            {"embedding": {"model": "m", "baseUrl": "https://nobody.test/v1", "apiKey": "k"}},
+        )
+
+        cfg = ec_module.load_raven_config()
+        load_config()
+
+        assert not cfg.embedding.model and not cfg.embedding.provider
+        assert "embedding" not in json.loads(stub_config_path.read_text(encoding="utf-8"))
+
+
 def test_the_rename_reaches_the_file_not_only_the_load(stub_config_path: Path) -> None:
     """A migration that only runs in memory is a shim every load pays for, and
     a config file that goes on naming a block after the backend it never
@@ -341,3 +425,15 @@ def test_the_new_name_wins_when_a_config_somehow_carries_both(stub_config_path: 
     cfg = ec_module.load_raven_config()
 
     assert cfg.skill_forge.extraction.max_skills_top_k == 9
+
+
+def test_sessions_block_defaults_to_no_auto_archive(stub_config_path: Path) -> None:
+    _write_config(stub_config_path, {"sessions": {}})
+    cfg = ec_module.load_raven_config()
+    assert cfg.sessions.auto_archive_after_days is None
+
+
+def test_sessions_block_reads_camel_case_days(stub_config_path: Path) -> None:
+    _write_config(stub_config_path, {"sessions": {"autoArchiveAfterDays": 30}})
+    cfg = ec_module.load_raven_config()
+    assert cfg.sessions.auto_archive_after_days == 30

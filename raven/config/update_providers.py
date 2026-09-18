@@ -867,6 +867,58 @@ def _load_provider_models(name: str, data: dict[str, Any]) -> tuple[type, list[s
     return cls, list(getattr(instance, "models", []) or [])
 
 
+def provider_extra_headers(name: str, *, config_path: Path | None = None) -> dict[str, str]:
+    """The provider's custom headers as stored, values included.
+
+    For a writer that merges a patch into them; every reading face redacts
+    the values (``_redact_headers``), which is why this is not one of those.
+    """
+    name = canonical_provider_name(name)
+    data = read_raw_or_raise(config_path or get_config_path())
+    section = _raw_section(data, name)
+    headers = section.get("extraHeaders") or section.get("extra_headers") or {}
+    return {str(k): str(v) for k, v in headers.items()} if isinstance(headers, dict) else {}
+
+
+def add_provider_models(
+    name: str,
+    models: list[str],
+    *,
+    config_path: Path | None = None,
+) -> list[str]:
+    """Append several model ids to a provider's curated list in one write.
+
+    Ids already present (by identity, not spelling) are skipped. Returns the
+    new model list. Raises KeyError for an unknown provider.
+    """
+    from raven.providers.wire import merge_key
+
+    name = canonical_provider_name(name)
+    path = config_path or get_config_path()
+
+    def _apply(_text: str | None) -> tuple[str | None, list[str]]:
+        data = read_raw_or_raise(path)
+        cls, current = _load_provider_models(name, data)
+        known = {merge_key(name, m) for m in current}
+        added = False
+        for model in models:
+            key = merge_key(name, model)
+            if key in known:
+                continue
+            known.add(key)
+            current.append(model)
+            added = True
+        if not added:
+            return None, current
+        section = _raw_section(data, name)
+        section["models"] = current
+        validated = cls.model_validate(section)
+        _write_raw_section(data, name, validated.model_dump(by_alias=True))
+        return json.dumps(data, indent=2, ensure_ascii=False), current
+
+    return atomic_update(path, _apply)
+
+
 def add_provider_model(
     name: str,
     model: str,
@@ -914,7 +966,16 @@ def add_provider_model(
             # has no parameter to be restated with at all, so a wholesale write
             # loses it every time. Re-adding corrects the tags it names and
             # leaves the rest of the row alone.
-            overlays[model] = {**(overlays.get(model) or {}), **overlay}
+            merged = {**(overlays.get(model) or {}), **overlay}
+            # An empty string is how a caller clears a field it can otherwise
+            # only restate; None would be "unstated" and leave it alone.
+            merged = {k: v for k, v in merged.items() if v != ""}
+            # A row with no name, no description and no tags says nothing;
+            # dropping it keeps the file from filling with empty rows.
+            if any(v for v in merged.values()):
+                overlays[model] = merged
+            else:
+                overlays.pop(model, None)
             section["modelOverlay"] = overlays
             section.pop("model_overlay", None)
         validated = cls.model_validate(section)
@@ -1109,6 +1170,29 @@ _PROVIDER_BASE_URL_FALLBACK = {
     "deepseek": "https://api.deepseek.com/v1",
     "openrouter": "https://openrouter.ai/api/v1",
 }
+
+
+def provider_serving_at(base_url: str, *, config_path: Path | None = None) -> str | None:
+    """Which configured provider answers at ``base_url``, if any.
+
+    The migrations' one hard part: a retired block stored an address, the
+    block replacing it names a provider, and only the configured providers can
+    say which of them is that address. Compared on the host and path with a
+    trailing slash removed, because the two spellings are the same endpoint and
+    the config may hold either.
+    """
+    want = base_url.rstrip("/")
+    for row in list_providers(config_path=config_path):
+        name = str(row.get("name") or "")
+        if not name:
+            continue
+        try:
+            resolved = resolve_provider_credentials(name, config_path=config_path)
+        except Exception:  # noqa: BLE001 - one unusable provider must not stop the search
+            continue
+        if resolved and resolved[0].rstrip("/") == want:
+            return name
+    return None
 
 
 def resolve_provider_credentials(name: str, *, config_path: Path | None = None) -> tuple[str, str] | None:
@@ -1966,6 +2050,7 @@ __all__ = [
     "lend_provider_credentials",
     "resolve_main_model",
     "provider_field_specs",
+    "provider_serving_at",
     "resolve_provider_credentials",
     "list_providers",
     "get_provider_config",

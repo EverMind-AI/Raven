@@ -250,7 +250,7 @@ def _refused_by_policy(hit: Any, policy: SkillPolicy) -> bool:
     detail metadata.
     """
     meta = getattr(hit, "meta", None) or {}
-    if is_blocked(policy.blocklist, getattr(hit, "name", None), meta.get("skill_id"), meta.get("slug")):
+    if is_blocked(policy.blocked_now(), getattr(hit, "name", None), meta.get("skill_id"), meta.get("slug")):
         logger.debug("scent menu: dropping blocklisted skill {}", hit.qualified_id)
         return True
     if refuses_low_safety(meta.get("score_safety"), policy.min_safety):

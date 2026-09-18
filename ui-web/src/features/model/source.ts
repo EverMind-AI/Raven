@@ -96,6 +96,7 @@ export async function loadProviders(sid?: string | null, gen?: number): Promise<
   providersLive = (mo.providers || []).filter((p) => !HIDDEN_PROVIDERS.has(p.slug)).map((p) => ({
     id: p.slug, name: p.name, homepage: p.homepage || '', models: p.models || [], on: p.authenticated,
     docs: p.docs || '',
+    keyUrl: p.key_url || '', headers: p.extra_headers || {},
     // What the section actually lists, as against `models` above -- the picker's
     // offer, which folds in a curated shortlist nobody added. The settings page
     // manages the first and the composer chooses from the second.

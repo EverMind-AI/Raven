@@ -361,10 +361,14 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # ``SkillsSegmentBuilder.build``.
         self._last_injected_skill_sources: dict[str, str] = {}
 
+        from raven.config.live import LiveConfig, skill_blocklist
+
+        self._live_config = LiveConfig()
         self.context = ContextBuilder(
             workspace,
             skill_forge_config=skill_forge_config,
             now_fn=now_fn,
+            blocklist_reader=lambda: skill_blocklist(self._live_config),
         )
         self.sessions = session_manager or SessionManager(workspace)
         # Off switches with no config file behind them: an eval harness that
@@ -378,9 +382,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # take it out of a set captured before the process started, so a tool that
         # was off at launch could never be turned back on.
         self._disabled_tools = set(disabled_tools or [])
-        from raven.config.live import LiveConfig
-
-        self._live_config = LiveConfig()
         # Entries already reported as naming a tool this switch does not own, so
         # the notice lands once rather than on every MCP connect.
         self._disabled_tools_reserved_warned: set[str] = set()
@@ -446,6 +447,10 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             getattr(getattr(skill_forge_router_config, "hub", None), "min_safety", 0.7),
         )
         self._skill_blocklist = list(getattr(skill_forge_config, "blocklist", None) or [])
+        # What the three skill tools screen against, asked per call: the list
+        # at construction is the one the operator had when the loop started,
+        # and a skill enabled on the settings page has to stop being refused.
+        self._skill_blocklist_reader = lambda: skill_blocklist(self._live_config)
         self._skill_auto_install = str(getattr(skill_forge_config, "auto_install", "auto") or "auto")
 
         self.context_engine: "ContextEngine"
@@ -479,6 +484,10 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 skill_forge_config=skill_forge_config,
                 skill_hub_client=self._skill_hub_client,
                 provider_pool=provider_pool,
+                # The same reader the catalog gets: the pool drop and the
+                # scent menu screen against the list on disk now, so a skill
+                # switched off -- or back on -- reaches the next turn.
+                blocklist_reader=lambda: skill_blocklist(self._live_config),
             )
 
         # The four strategy roles this generation runs on. Assembled here

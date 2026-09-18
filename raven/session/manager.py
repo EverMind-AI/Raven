@@ -611,6 +611,25 @@ class SessionManager:
             logger.warning("Failed to load session {}: {}", key, e)
             return None
 
+    def append_metadata_patch(self, key: str, patch: dict[str, Any]) -> None:
+        """Fold ``patch`` into a session's metadata by appending one record.
+
+        The last metadata record wins on load, so appending is enough -- and
+        the transcript is never read, which is what lets a housekeeping pass
+        touch hundreds of sessions without loading any of them.
+        """
+        path = self.session_path(key)
+        if not path.is_file():
+            return
+        last, _count, _last_ts, _first, _preview = self._scan_file(path)
+        if last is None:
+            return
+        merged = {**(last.get("metadata") or {}), **patch}
+        locked_append(path, [json.dumps({**last, "metadata": merged}, ensure_ascii=False)])
+        cached = self._cache.get(key)
+        if cached is not None:
+            cached.metadata.update(patch)
+
     def save(self, session: Session) -> None:
         """Save a session to disk.
 

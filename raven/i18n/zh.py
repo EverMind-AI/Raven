@@ -5,6 +5,7 @@ boundary test keeps every other module free of CJK text.
 """
 
 MESSAGES: dict[str, str] = {
+    "Saved. Applies after the next gateway reload or restart.": "已保存。下次网关重载或重启后生效。",
     "OpenRouter (recommended - one key, many models)": "OpenRouter(推荐 · 一个 Key 调用多家模型)",
     "The least effort a sub-agent is asked for.": "子代理被要求付出的最少努力。",
     "The middle amount of effort, between the other two.": "居中的投入，介于另外两档之间。",
@@ -40,6 +41,9 @@ MESSAGES: dict[str, str] = {
     "[accent](optional, advised)[/accent]": "[accent]（可选，建议配置）[/accent]",
     "Recommended: [bold]qwen/qwen3-reranker-8b[/bold]": "推荐 [bold]qwen/qwen3-reranker-8b[/bold]",
     "rerank quality may degrade": "rerank 精度可能下降",
+    "Embedding model changed from {was} to {now}. Anything already indexed was built with the "
+    "old one and cannot be searched with the new one: rebuild each knowledge base, and re-index "
+    "whatever the memory backend has stored.": "embedding \u6a21\u578b\u5df2\u4ece {was} \u6539\u4e3a {now}\u3002\u5df2\u7d22\u5f15\u7684\u5185\u5bb9\u662f\u7528\u65e7\u6a21\u578b\u5efa\u7684\uff0c\u65b0\u6a21\u578b\u641c\u4e0d\u5230\uff1a\u8bf7\u91cd\u5efa\u6bcf\u4e2a\u77e5\u8bc6\u5e93\uff0c\u5e76\u4e3a\u8bb0\u5fc6\u540e\u7aef\u5df2\u5b58\u7684\u5185\u5bb9\u91cd\u5efa\u7d22\u5f15\u3002",
     "  [dim]Skipped rerank; memory retrieval still works.[/dim]": "  [dim]已跳过 rerank，记忆检索仍可用。[/dim]",
     "Memory multimodal": "记忆多模态",
     "Lets Raven understand and recall images / PDFs / audio as memory.": "让 Raven 把图片 / PDF / 音频也作为记忆来理解和检索。",

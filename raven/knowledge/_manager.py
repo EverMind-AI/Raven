@@ -132,7 +132,8 @@ class KnowledgeManager:
         config = self._embedding or load_embedding_config()
         if config is None:
             raise KnowledgeError(
-                "no embedding endpoint is configured; set [embedding] in the EverOS config before using a knowledge base"
+                "no embedding endpoint is configured; pick an embedding model and the provider that serves it "
+                "before using a knowledge base"
             )
         return embedding_client(config)
 
