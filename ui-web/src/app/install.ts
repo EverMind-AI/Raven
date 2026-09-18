@@ -32,6 +32,7 @@ import { bannerSource, settingsSource } from '../features/settings/source'
 import { skillsSource } from '../features/skills/source'
 import { agentsSource, startAgentHeartbeat } from '../features/subagents/source'
 import { fixtureTasksSource, tasksSource } from '../features/tasks/source'
+import { reset as resetTasks } from '../features/tasks/store'
 import {
   branch, cleanPreview, dagRun, okOf, openDagNode, openDagRun, openSpawn, spawnList, spawnRecord,
 } from '../features/transcript/source'
@@ -55,6 +56,7 @@ import { reconnect, switchToDraft } from '../state/session/registry'
 import { installComposerActions, installSlashActions } from '../state/session/runtime'
 import { ds, sources } from '../state/sources'
 import { show as toast } from '../state/toast'
+import { onReset as onWsReset } from '../state/ws'
 import { installConnectionUI, onReconnect, surface } from './connection'
 import { showUpNote } from './updates'
 
@@ -316,6 +318,12 @@ export function installActions(): void {
   page.onShow('markNav', markNew)
   page.onShow('closeConnDialog', closeConnDialog)
   page.onShow('closeCronSheet', closeCronSheet)
+  /* A different conversation is a different set of tasks: carrying them across
+     would attribute one conversation's background work to another, and the
+     strip above the composer outlives the switch, so nothing would ask for the
+     rows the new conversation has. Registered here for the same reason the
+     three slots above are: state/ws.ts does not import features/. */
+  onWsReset('tasks', resetTasks)
 
   $('#newBtn')!.onclick = () => {
     if (openModelsForMissingProvider()) return
