@@ -24,8 +24,10 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
+      - name: Set up Python
+        run: uv python install 3.12
       - run: uv run --frozen --group docs mkdocs build -f docs-site/mkdocs.yml --strict
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5.0.0
         with:
           path: docs-site/site
 
@@ -35,6 +37,9 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    concurrency:
+      group: docs-pages-deploy
+      cancel-in-progress: false
     permissions:
       pages: write
       id-token: write
@@ -43,4 +48,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5.0.1
