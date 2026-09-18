@@ -1813,3 +1813,32 @@ async def test_options_lists_extra_headers_by_name_only(fake_home: Path) -> None
     for value in entry["extra_headers"].values():
         assert value and "secret" not in value and "code-5678" not in value
     assert _entry(result, "anthropic")["extra_headers"] == {}
+
+
+async def test_add_models_and_set_fields_name_an_unknown_provider(fake_home: Path) -> None:
+    _write_config(fake_home, {"providers": {}})
+    with pytest.raises(ConfigValidationError):
+        await model_module.model_add_models({"slug": "nobody_home", "models": ["m"]})
+    with pytest.raises(ConfigValidationError):
+        await model_module.model_set_fields({"slug": "nobody_home", "fields": {"api_base": "https://x"}})
+
+
+@pytest.mark.parametrize(
+    ("raised", "expected", "text"),
+    [
+        (LookupError("no device flow"), NotSupportedError, "no device flow"),
+        (RuntimeError("already waiting"), ConfigValidationError, "already waiting"),
+        (ValueError("vendor said no"), ConfigValidationError, "could not start"),
+    ],
+)
+async def test_oauth_login_maps_each_failure_to_the_pages_vocabulary(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch, raised: Exception, expected: type, text: str
+) -> None:
+    from raven.providers import oauth_login
+
+    async def failing(slug: str) -> dict:
+        raise raised
+
+    monkeypatch.setattr(oauth_login, "start", failing)
+    with pytest.raises(expected, match=text):
+        await model_module.model_oauth_login({"slug": "minimax_global"})

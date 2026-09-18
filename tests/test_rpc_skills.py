@@ -271,3 +271,26 @@ async def test_open_launches_a_file_inside_the_skill_and_refuses_outside(
     with pytest.raises(ConfigValidationError):
         await skills_manage({"action": "open", "query": "codeword", "file": "missing.txt"}, agent_loop_factory=factory)
     assert len(opened) == 1
+
+
+def test_hub_marker_and_install_meta_tolerate_a_corrupt_stamp(tmp_path: Path) -> None:
+    from raven.rpc.methods.skills import _hub_marker, _install_meta
+    from raven.skill_hub.hub import MARKER
+
+    skill = tmp_path / "corrupt"
+    skill.mkdir()
+    assert _hub_marker(skill) == (False, "")
+    assert _install_meta(skill) is None
+    (skill / MARKER).write_text("{not json", encoding="utf-8")
+    (skill / ".install-meta.json").write_text("{not json", encoding="utf-8")
+    assert _hub_marker(skill) == (True, "")
+    assert _install_meta(skill) is None
+
+
+async def test_open_of_an_unknown_skill_is_a_typed_error() -> None:
+    from raven.rpc.errors import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError, match="unknown skill"):
+        await skills_manage(
+            {"action": "open", "query": "nobody", "file": "SKILL.md"}, agent_loop_factory=_factory(_Registry([]))
+        )

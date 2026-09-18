@@ -2698,3 +2698,65 @@ async def test_auto_archive_never_loads_transcripts(tmp_path: Path, monkeypatch:
     await session_list({})
     assert loads == []
     assert len((await session_list({"archived": True}))["sessions"]) == 50
+
+
+def test_as_local_datetime_answers_none_for_anything_but_an_iso_string() -> None:
+    assert session_module._as_local_datetime(None) is None
+    assert session_module._as_local_datetime("") is None
+    assert session_module._as_local_datetime("yesterday") is None
+    assert session_module._as_local_datetime(1_700_000_000) is None
+    parsed = session_module._as_local_datetime("2026-09-01T00:00:00Z")
+    assert parsed is not None and parsed.tzinfo is None
+
+
+def test_auto_archive_pass_leaves_everything_alone_when_the_config_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken():
+        raise RuntimeError("config unreadable")
+
+    monkeypatch.setattr(session_module, "load_raven_config", broken)
+    touched: list[str] = []
+    mgr = SimpleNamespace(append_metadata_patch=lambda key, patch: touched.append(key))
+    entries = [{"key": "tui:old", "metadata": {}, "last_message_at": "2000-01-01T00:00:00+00:00"}]
+    session_module._auto_archive_stale(mgr, entries)
+    assert touched == [] and "archived" not in entries[0]["metadata"]
+
+
+def test_auto_archive_pass_skips_a_keyless_entry_and_survives_a_write_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        session_module,
+        "load_raven_config",
+        lambda: SimpleNamespace(sessions=SimpleNamespace(auto_archive_after_days=30)),
+    )
+
+    def failing(key: str, patch: dict) -> None:
+        raise OSError("disk full")
+
+    mgr = SimpleNamespace(append_metadata_patch=failing)
+    stale = "2000-01-01T00:00:00+00:00"
+    entries = [
+        {"key": None, "metadata": {}, "last_message_at": stale},
+        {"key": "tui:old", "metadata": {}, "last_message_at": stale},
+    ]
+    session_module._auto_archive_stale(mgr, entries)
+    assert all("archived" not in e["metadata"] for e in entries)
+
+
+def test_append_metadata_patch_is_a_no_op_for_a_missing_or_headless_file_and_updates_the_cache(
+    tmp_path: Path,
+) -> None:
+    mgr = SessionManager(tmp_path)
+    mgr.append_metadata_patch("tui:absent", {"archived": True})
+    assert not mgr.session_path("tui:absent").exists()
+    headless = mgr.session_path("tui:headless")
+    headless.parent.mkdir(parents=True, exist_ok=True)
+    headless.write_text(json.dumps({"role": "user", "content": "no metadata record"}) + "\n", encoding="utf-8")
+    mgr.append_metadata_patch("tui:headless", {"archived": True})
+    assert headless.read_text(encoding="utf-8").count("\n") == 1
+    live = mgr.get_or_create("tui:cached")
+    mgr.save(live)
+    mgr.append_metadata_patch("tui:cached", {"archived": True, "archivedBy": "auto"})
+    assert live.metadata["archived"] is True and live.metadata["archivedBy"] == "auto"

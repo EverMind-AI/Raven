@@ -1711,3 +1711,29 @@ async def test_ext_list_reports_how_each_server_authenticates_and_whether_it_can
     assert (rows["keyed"]["auth"], rows["keyed"]["credentialed"]) == ("apikey", True)
     assert (rows["key_bare"]["auth"], rows["key_bare"]["credentialed"]) == ("apikey", False)
     assert (rows["plain"]["auth"], rows["plain"]["credentialed"]) == ("none", True)
+
+
+def test_mcp_credential_state_reads_a_broken_token_store_as_not_credentialed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    import raven.mcp.oauth as oauth
+
+    def broken(name: str) -> bool:
+        raise OSError("store unreadable")
+
+    monkeypatch.setattr(oauth, "has_stored_tokens", broken)
+    assert console_module._mcp_credential_state("svc", SimpleNamespace(auth="oauth")) == ("oauth", False)
+
+
+def test_configured_provider_section_reads_an_unreadable_config_as_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from raven.config import loader
+
+    def broken(path):
+        raise OSError("gone")
+
+    monkeypatch.setattr(loader, "read_raw_or_raise", broken)
+    assert console_module._configured_provider_section("anthropic") is False

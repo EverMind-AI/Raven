@@ -593,3 +593,24 @@ async def test_configure_refuses_a_server_without_a_ledger(_isolated, monkeypatc
             {"name": "local", "form": {"K": "new"}}, agent_loop_factory=_factory(_FakeLoop("local", "connected"))
         )
     assert json.loads(_isolated["cfg_path"].read_text())["tools"]["mcpServers"]["local"]["env"] == {"K": "old"}
+
+
+@pytest.mark.parametrize("verb", ["plug_retry", "plug_revoke", "plug_configure"])
+async def test_the_connection_verbs_translate_a_refusal_into_the_rpc_vocabulary(
+    monkeypatch: pytest.MonkeyPatch, verb: str
+) -> None:
+    from raven.market import connect
+    from raven.market.connect import PlugConnectError
+
+    async def refuse(*args, **kwargs):
+        raise PlugConnectError("no such MCP server", data={"field": "name", "name": "ghost"})
+
+    monkeypatch.setattr(connect, verb.removeprefix("plug_"), refuse)
+    with pytest.raises(ConfigValidationError, match="no such MCP server") as excinfo:
+        await getattr(rpc_plughub, verb)({"name": "ghost", "form": {}})
+    assert excinfo.value.data == {"field": "name", "name": "ghost"}
+
+
+async def test_configure_refuses_a_form_that_is_not_an_object() -> None:
+    with pytest.raises(ConfigValidationError, match="form must be an object"):
+        await rpc_plughub.plug_configure({"name": "svc", "form": "token=x"})

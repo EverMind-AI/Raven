@@ -108,3 +108,153 @@ def test_minimax_starter_hands_over_the_pair_then_saves_the_token(
     assert handed[0][:2] == ("https://platform.minimax.io/oauth-authorize", "ABCD")
     assert 0 < handed[0][2] <= 60
     assert load_token("global") is not None
+
+
+def test_supports_names_only_the_providers_with_a_device_flow() -> None:
+    assert oauth_login.supports("minimax_global") and oauth_login.supports("github_copilot")
+    assert not oauth_login.supports("deepseek")
+
+
+async def test_a_starter_that_fails_after_the_pair_only_logs_it() -> None:
+    """The page already has its code; the vendor's later failure is the
+    poller's business, not the caller's."""
+
+    def fake(resolve):
+        resolve("https://v.example/device", "LATE", 5)
+        raise RuntimeError("code expired before it was entered")
+
+    oauth_login._STARTERS["fake_vendor"] = fake
+    reply = await oauth_login.start("fake_vendor")
+    assert reply["user_code"] == "LATE"
+    task = oauth_login.pending().get("fake_vendor")
+    if task is not None:
+        await asyncio.gather(task, return_exceptions=True)
+    assert oauth_login.pending() == {}
+
+
+class _FakeChatgptAuth:
+    made: list["_FakeChatgptAuth"] = []
+
+    def __init__(self) -> None:
+        self.requests = 0
+        _FakeChatgptAuth.made.append(self)
+
+    def _request_device_code(self) -> dict[str, str]:
+        self.requests += 1
+        return {"user_code": "CODE-1", "device_code": "dev-1"}
+
+    def _login_device_code(self) -> None:
+        self._request_device_code()
+
+
+def _fake_module(name: str, **attrs):
+    import types
+
+    mod = types.ModuleType(name)
+    for k, v in attrs.items():
+        setattr(mod, k, v)
+    return mod
+
+
+def test_openai_codex_starter_hands_over_the_code_the_driver_mints(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
+    from raven.providers import chatgpt_token, litellm_setup
+
+    cleared: list[bool] = []
+    monkeypatch.setattr(litellm_setup, "import_litellm", lambda: None)
+    monkeypatch.setattr(chatgpt_token, "clear_abandoned_device_code", lambda: cleared.append(True) or True)
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.llms.chatgpt.authenticator",
+        _fake_module("litellm.llms.chatgpt.authenticator", Authenticator=_FakeChatgptAuth),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.llms.chatgpt.common_utils",
+        _fake_module("litellm.llms.chatgpt.common_utils", CHATGPT_DEVICE_VERIFY_URL="https://chatgpt.com/device"),
+    )
+    handed: list[tuple[str, str, int]] = []
+    oauth_login._openai_codex(lambda uri, code, ttl: handed.append((uri, code, ttl)))
+    assert cleared == [True]
+    assert handed == [("https://chatgpt.com/device", "CODE-1", oauth_login.DEFAULT_TTL_S)]
+    assert _FakeChatgptAuth.made[-1].requests == 1
+
+
+class _FakeCopilotAuth:
+    polls_before_token = 1
+    token_dir: Path | None = None
+
+    def __init__(self) -> None:
+        self.polls = 0
+        self.access_token_file = str((_FakeCopilotAuth.token_dir or Path(".")) / "token")
+        self.api_key_read = False
+
+    def _get_device_code(self) -> dict:
+        return {
+            "verification_uri": "https://github.com/login/device",
+            "user_code": "GH-42",
+            "device_code": "d",
+            "expires_in": 30,
+        }
+
+    def _poll_for_access_token(self, device_code: str) -> str:
+        self.polls += 1
+        if self.polls <= self.polls_before_token:
+            raise TimeoutError("still waiting")
+        return "gho_token"
+
+    def _ensure_token_dir(self) -> None:
+        Path(self.access_token_file).parent.mkdir(parents=True, exist_ok=True)
+
+    def get_api_key(self) -> str:
+        self.api_key_read = True
+        return "key"
+
+
+def test_github_copilot_starter_hands_over_the_pair_and_keeps_polling_past_the_drivers_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sys
+
+    from raven.providers import litellm_setup
+
+    monkeypatch.setattr(litellm_setup, "import_litellm", lambda: None)
+    _FakeCopilotAuth.token_dir = tmp_path
+    _FakeCopilotAuth.polls_before_token = 1
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.llms.github_copilot.authenticator",
+        _fake_module("litellm.llms.github_copilot.authenticator", Authenticator=_FakeCopilotAuth),
+    )
+    handed: list[tuple[str, str, int]] = []
+    oauth_login._github_copilot(lambda uri, code, ttl: handed.append((uri, code, ttl)))
+    assert handed == [("https://github.com/login/device", "GH-42", 30)]
+    assert (tmp_path / "token").read_text(encoding="utf-8") == "gho_token"
+
+
+def test_github_copilot_starter_gives_up_when_the_code_expires_unentered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sys
+
+    from raven.providers import litellm_setup
+
+    monkeypatch.setattr(litellm_setup, "import_litellm", lambda: None)
+
+    class Expired(_FakeCopilotAuth):
+        def _get_device_code(self) -> dict:
+            return {**super()._get_device_code(), "expires_in": 1}
+
+        def _poll_for_access_token(self, device_code: str) -> str:
+            raise TimeoutError("still waiting")
+
+    _FakeCopilotAuth.token_dir = tmp_path
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.llms.github_copilot.authenticator",
+        _fake_module("litellm.llms.github_copilot.authenticator", Authenticator=Expired),
+    )
+    with pytest.raises(RuntimeError, match="expired"):
+        oauth_login._github_copilot(lambda *a: None)
+    assert not (tmp_path / "token").exists()
