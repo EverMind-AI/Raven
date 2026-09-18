@@ -4,7 +4,7 @@ The host has already selected history. The allowance includes tools and the
 active model's full reply ceiling; the transcript is never shrunk to make room
 for product instructions -- when they do not fit, they are truncated, and when
 even the notice cannot fit, the turn is ended with the fix named. The splice
-itself (and taking the previous iteration's addition back out) is the conduct
+itself (and taking the previous iteration's addition back out) is the participant
 adapter's job; this module only answers what the addition should say.
 """
 
@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from raven.contracts.agent_conduct import Answer, Intake
+from raven.contracts.participant import Answer, Intake
 from raven.providers.base import send_max_tokens
 from raven.providers.binding import active_binding
 from raven.utils.tokens import estimate_prompt_tokens
@@ -41,7 +41,7 @@ def sized_addendum(
     """The system addition this call carries, sized to fit, or the reply that ends the turn.
 
     ``transcript`` is the prompt as the call will send it, without any earlier
-    addition of this conduct's (the adapter strips that before asking).
+    addition of this participant's (the adapter strips that before asking).
     ``pending_note`` is counted in the sizing because it lands on the prompt in
     the same call. Nothing to add answers nothing; a prompt with no system
     message to splice into ends the turn with the fix named.

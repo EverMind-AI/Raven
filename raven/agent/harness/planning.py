@@ -14,7 +14,7 @@ research flow's sufficiency and spin-breaker gates ride it). So this module
 stays a pass-through, and a replacement that wants to plan is expected to
 change the messages a turn runs on, not to intercept ahead of it.
 
-``advise`` is that per-iteration seat, made a verb: what the conducts of this
+``advise`` is that per-iteration seat, made a verb: what the participants of this
 agent want said to the model before its next call, composed here.
 """
 
@@ -22,9 +22,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from raven.agent.harness.conducts import compose_advice
-from raven.contracts.agent_conduct import AgentConduct, StepView
+from raven.agent.harness.participants import compose_advice
 from raven.contracts.harness import PlanningModule, PlanningRequest, PlanningResult
+from raven.contracts.participant import AgentParticipant, StepView
 
 
 class DefaultPlanning:
@@ -33,8 +33,8 @@ class DefaultPlanning:
     async def prepare(self, request: PlanningRequest) -> PlanningResult:
         return PlanningResult(messages=request.messages)
 
-    async def guide(self, step: StepView, conducts: Sequence[AgentConduct]) -> str | None:
-        return await compose_advice(step, conducts)
+    async def ask_advice(self, step: StepView, participants: Sequence[AgentParticipant]) -> str | None:
+        return await compose_advice(step, participants)
 
 
 def bind(planning: DefaultPlanning) -> PlanningModule:
@@ -48,7 +48,7 @@ def bind(planning: DefaultPlanning) -> PlanningModule:
     """
     if not isinstance(planning, PlanningModule):
         raise TypeError(
-            f"{type(planning).__name__} cannot serve as the Planning role: it must provide prepare and guide"
+            f"{type(planning).__name__} cannot serve as the Planning role: it must provide prepare and ask_advice"
         )
     return planning
 

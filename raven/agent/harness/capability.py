@@ -19,12 +19,12 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
-from raven.agent.harness.conducts import compose_tools
+from raven.agent.harness.participants import compose_tools
 from raven.contracts.harness import CapabilityRequest, CapabilitySelection
 
 if TYPE_CHECKING:
     from raven.agent.tools.registry import ToolRegistry
-    from raven.contracts.agent_conduct import AgentConduct, StepView
+    from raven.contracts.participant import AgentParticipant, StepView
 
 
 class DefaultCapability:
@@ -41,10 +41,10 @@ class DefaultCapability:
     async def select(self, request: CapabilityRequest) -> CapabilitySelection:
         return CapabilitySelection(tools=self._registry_provider().get_definitions())
 
-    async def offer(
-        self, offered: list[dict[str, Any]], step: "StepView", conducts: "Sequence[AgentConduct]"
+    async def ask_select_tools(
+        self, offered: list[dict[str, Any]], step: "StepView", participants: "Sequence[AgentParticipant]"
     ) -> list[dict[str, Any]] | None:
-        return await compose_tools(offered, step, conducts)
+        return await compose_tools(offered, step, participants)
 
 
 __all__ = ["DefaultCapability"]

@@ -399,7 +399,7 @@ def test_an_injected_role_is_asked_instead_of_the_default() -> None:
     asked: list[str] = []
 
     class Loud:
-        def judge(self, name, params, prior):
+        def ask_judge(self, name, params, prior, participants=()):
             asked.append(name)
             return ["the role said no"]
 
@@ -413,13 +413,13 @@ def test_a_dispatch_brings_its_judgements_as_a_participant() -> None:
     """The Charter answers the same verb a plugin answers, rather than being
     read by the role itself. That is what lets a judgement generated for one
     dispatch join the same list later."""
-    from raven.agent.subagent.charter import participants
+    from raven.agent.subagent.charter import charter_participants
 
-    assert participants() == (), "no charter bound, no participant"
+    assert charter_participants() == (), "no charter bound, no participant"
     with charter_scope(Charter(prompt="just a brief")):
-        assert participants() == (), "a charter with no judgements brings none"
+        assert charter_participants() == (), "a charter with no judgements brings none"
     with charter_scope(_rules()):
-        brought = participants()
+        brought = charter_participants()
         assert len(brought) == 1
         assert brought[0].judge("write_file", {"path": "/etc/passwd"}, []) == [
             "write under ./out/",
@@ -439,8 +439,10 @@ def test_a_plugins_own_rules_speak_before_the_dispatchs() -> None:
 
     action = DefaultAction()
     with charter_scope(_rules()):
-        assert action.judge("write_file", {"path": "/etc/passwd"}, [], [Product()]) == ["the product refuses this one"]
-        assert action.judge("write_file", {"path": "/etc/passwd"}, []) == [
+        assert action.ask_judge("write_file", {"path": "/etc/passwd"}, [], [Product()]) == [
+            "the product refuses this one"
+        ]
+        assert action.ask_judge("write_file", {"path": "/etc/passwd"}, []) == [
             "write under ./out/",
             "read it first",
         ]
@@ -455,7 +457,7 @@ def test_a_participant_that_says_nothing_lets_the_next_one_speak() -> None:
             return []
 
     with charter_scope(_rules()):
-        assert DefaultAction().judge("write_file", {"path": "/etc/passwd"}, [], [Quiet()]) == [
+        assert DefaultAction().ask_judge("write_file", {"path": "/etc/passwd"}, [], [Quiet()]) == [
             "write under ./out/",
             "read it first",
         ]

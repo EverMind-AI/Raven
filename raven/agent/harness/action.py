@@ -23,9 +23,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from raven.agent.harness.conducts import Verdict, compose_judge, compose_review, compose_salvage
-from raven.contracts.agent_conduct import AgentConduct, StepView
+from raven.agent.harness.participants import Verdict, compose_judge, compose_review, compose_salvage
 from raven.contracts.harness import ActionModule, ActionRequest
+from raven.contracts.participant import AgentParticipant, StepView
 
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMResponse
@@ -34,12 +34,12 @@ if TYPE_CHECKING:
 class DefaultAction:
     """Dispatch one model call: streaming when a sink is attached, else retrying."""
 
-    def judge(
+    def ask_judge(
         self,
         name: str,
         params: Mapping[str, Any],
         prior: Sequence[tuple[str, Mapping[str, Any]]],
-        conducts: Sequence[AgentConduct] = (),
+        participants: Sequence[AgentParticipant] = (),
     ) -> list[str]:
         """Why any participant refuses this call, or an empty list.
 
@@ -59,15 +59,15 @@ class DefaultAction:
         defect into checks that quietly stop applying, which is the failure a
         refusal exists to prevent.
         """
-        from raven.agent.subagent.charter import participants
+        from raven.agent.subagent.charter import charter_participants
 
-        return compose_judge(name, params, prior, [*conducts, *participants()])
+        return compose_judge(name, params, prior, [*participants, *charter_participants()])
 
-    async def judge_step(self, step: StepView, conducts: Sequence[AgentConduct]) -> Verdict:
-        return await compose_review(step, conducts)
+    async def ask_review(self, step: StepView, participants: Sequence[AgentParticipant]) -> Verdict:
+        return await compose_review(step, participants)
 
-    async def rescue(self, step: StepView, conducts: Sequence[AgentConduct]) -> Any | None:
-        return await compose_salvage(step, conducts)
+    async def ask_salvage(self, step: StepView, participants: Sequence[AgentParticipant]) -> Any | None:
+        return await compose_salvage(step, participants)
 
     async def decide(self, request: ActionRequest) -> "LLMResponse":
         if request.on_token_delta is not None or request.on_reasoning_delta is not None:
@@ -99,7 +99,7 @@ def bind(action: DefaultAction) -> ActionModule:
     """
     if not isinstance(action, ActionModule):
         raise TypeError(
-            f"{type(action).__name__} cannot serve as the Action role: it must provide decide, judge, judge_step and rescue"
+            f"{type(action).__name__} cannot serve as the Action role: it must provide decide, ask_judge, ask_review and ask_salvage"
         )
     return action
 

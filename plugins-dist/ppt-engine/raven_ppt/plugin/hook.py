@@ -49,9 +49,9 @@ from importlib.resources import files as pkg_files
 from pathlib import Path
 
 from raven.agent import workdir
-from raven.agent.hook.conduct import ConductHook
-from raven.contracts.agent_conduct import Accept, AgentConduct, Answer, Intake, Resample, StepView
+from raven.agent.hook.participant import ParticipantHook
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.participant import Accept, AgentParticipant, Answer, Intake, Resample, StepView
 from raven.utils.workspace import sync_workspace_templates
 from raven_ppt.plugin import ledger, materials
 from raven_ppt.services import tier
@@ -232,7 +232,7 @@ def _session_dirname(session_key: str) -> str:
 class _DeckEngine:
     """What the ppt engine keeps for the whole process: the identity seat and
     the per-root material bookkeeping. One per plugin instance; every turn's
-    conduct is built over the same one."""
+    participant is built over the same one."""
 
     def __init__(self, home: Path | None = None, *, deck_per_session: bool = True) -> None:
         self.home = home
@@ -266,7 +266,7 @@ class _DeckEngine:
         return books
 
 
-class PptConduct(AgentConduct):
+class PptParticipant(AgentParticipant):
     """Material staging in, deck verification out, per turn.
 
     One instance per turn: the marks taken when the turn began and the nudges
@@ -359,7 +359,7 @@ class PptConduct(AgentConduct):
         nothing. The first iteration is where every turn passes.
         """
         if step.response is not None:
-            # Asked before the call and after it; this conduct advises before.
+            # Asked before the call and after it; this participant advises before.
             return None
         bound = workdir.current()
         if bound is None:
@@ -434,7 +434,7 @@ class PptConduct(AgentConduct):
         if bound is not None:
             # The tool results of this iteration are in the window now, the ask_user
             # answer among them, and the next iteration compacts before any other
-            # verb of this conduct fires: an answer not journaled here can be
+            # verb of this participant fires: an answer not journaled here can be
             # summarised out of the window unseen.
             self._journal_window(Path(bound), step)
         response = step.response
@@ -556,10 +556,10 @@ class PptConduct(AgentConduct):
         return reply + announced
 
 
-def ppt_hook(home: Path | None = None, *, deck_per_session: bool = True) -> ConductHook:
-    """The engine's seat in the hook chain: one conduct per turn over one engine."""
+def ppt_hook(home: Path | None = None, *, deck_per_session: bool = True) -> ParticipantHook:
+    """The engine's seat in the hook chain: one participant per turn over one engine."""
     engine = _DeckEngine(home, deck_per_session=deck_per_session)
-    return ConductHook("ppt_engine", lambda: PptConduct(engine))
+    return ParticipantHook("ppt_engine", lambda: PptParticipant(engine))
 
 
 def _decks_before(root: Path) -> dict[Path, float]:
@@ -667,7 +667,7 @@ __all__ = [
     "UNFINISHED_NUDGE",
     "UNFINISHED_NUDGES",
     "MisconfiguredEngineHook",
-    "PptConduct",
+    "PptParticipant",
     "ppt_hook",
     "REFUSED_UNRECORDED",
     "seed_identity",
