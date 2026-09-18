@@ -130,8 +130,6 @@ def _invoke_agent_capturing_session(
     """Run ``agent -m`` with the provider and AgentLoop stubbed out, capturing
     the session_id that reaches the spine turn (req.conversation is the session
     key, mirroring the old session_key arg)."""
-    import os as _os
-
     from raven.config.loader import save_config
     from raven.config.schema import Config
     from raven.spine import Text, TurnOutcome, Usage
@@ -171,10 +169,6 @@ def _invoke_agent_capturing_session(
         async def close_mcp(self) -> None:
             pass
 
-    # The -m path hard-exits via os._exit(0) (torch segfault guard); make it a
-    # catchable SystemExit so the CliRunner sees a clean exit instead of the
-    # whole pytest process dying.
-    monkeypatch.setattr(_os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
     monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: object())
     monkeypatch.setattr("raven.agent.loop.AgentLoop", _StubAgentLoop)
     monkeypatch.setattr("raven.cli.agent_commands._wait_for_background_work", _skip_background_grace)
@@ -456,8 +450,6 @@ def test_agent_auth_error_exit_nonzero_with_guidance(
     to raise the same exception shape litellm raises on an OpenRouter 401 —
     no network involved.
     """
-    import os as _os
-
     from raven.config.loader import save_config
     from raven.config.schema import Config
     from raven.spine import Text, TurnOutcome, Usage
@@ -515,7 +507,6 @@ def test_agent_auth_error_exit_nonzero_with_guidance(
         async def close_mcp(self) -> None:
             pass
 
-    monkeypatch.setattr(_os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
     monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: object())
     monkeypatch.setattr("raven.agent.loop.AgentLoop", _AuthFailAgentLoop)
     monkeypatch.setattr("raven.core.plugin_stack.maybe_build_memory_backend", lambda *a, **k: None)
@@ -683,8 +674,6 @@ def test_workspace_sync_debug_detail_lifts_with_raven_logging(tmp_path: Path) ->
 def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, turn_summary_off: bool = False):
     """Run ``agent -m`` with a stub AgentLoop that reports LLM usage through
     the TokenWise after-hook, mirroring how the real loop feeds UsageTracker."""
-    import os as _os
-
     from raven.config.loader import save_config
     from raven.config.schema import Config
     from raven.contracts.token_strategy import UsageSnapshot
@@ -734,7 +723,6 @@ def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *,
         async def close_mcp(self) -> None:
             pass
 
-    monkeypatch.setattr(_os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
     monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: object())
     monkeypatch.setattr("raven.agent.loop.AgentLoop", _StubAgentLoop)
     monkeypatch.setattr("raven.cli.agent_commands._wait_for_background_work", _skip_background_grace)
