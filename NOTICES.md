@@ -45,13 +45,27 @@ retained in `LICENSES/`.
   `naive_merge_docx` and the delimiter helpers around it (`rag/nlp/__init__.py`,
   `rag/nlp/delim.py`, `common/token_utils.py`): the delimiter field syntax, the
   build-then-merge arrangement, the rule that a table or a figure stands as its
-  own chunk, and the tokenizer the sizes are counted with. The table and figure
-  parser layout follows `deepdoc.parser` the same way; each module names its
-  origin in its own docstring.
+  own chunk, and the tokenizer the sizes are counted with.
+  `raven/knowledge/parser/excel_parser.py` follows `deepdoc.parser.excel_parser`
+  in shape: a row labelled by its header is the unit, the sheet name travels
+  with a row when it names something, and the same file renders whole as HTML
+  tables or as markdown. `raven/knowledge/_vision.py` carries a port of the
+  figure-describing prompt (`rag/prompts/vision_llm_figure_describe_prompt.md`
+  and its with-context variant), and `raven/knowledge/parser/image_parser.py`
+  follows `deepdoc.parser.figure_parser.VisionFigureParser` in what it asks a
+  vision model for and in carrying the prose around a figure into the call. The
+  parser package's layout follows `deepdoc.parser` the same way; each module
+  names its origin in its own docstring.
 - Modifications: rewritten rather than vendored -- it carries no RAGFlow
   import, is written against this package's Section and Chunk shapes, keeps the
   positional metadata RAGFlow discards, and answers a tokenizer failure with an
-  estimate rather than with zero.
+  estimate rather than with zero. The spreadsheet parser reads the formats with
+  the standard library and LibreOffice instead of openpyxl and pandas, which
+  this install does not carry, and renders every sheet where RAGFlow's markdown
+  renders the first. The figure path drops the OCR ladder RAGFlow puts in front
+  of the vision model -- there is no OCR engine in this tree -- and the two
+  prompts are merged into one template whose context sections are omitted when
+  there is no context, rather than rendered empty.
 
 ## agentscope (web-service framework)
 - Upstream source: https://github.com/agentscope-ai/agentscope

@@ -42,22 +42,43 @@ layout engine to invent them is not something a parser can do.
 
 from __future__ import annotations
 
+import asyncio
 import os
+import posixpath
 import re
 import zipfile
 from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from io import BytesIO
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from xml.etree import ElementTree as ET
 
+from loguru import logger
+
+from raven.knowledge._notes import note
 from raven.knowledge._sections import SECTION_ORDINAL
 from raven.knowledge._types import Section, TextBlock
 from raven.knowledge.parser import BBox, ElementSpan, LayoutType, ParserBase, section_metadata
 
+if TYPE_CHECKING:
+    from raven.knowledge._vision import VisionModel
+
 _DOCUMENT_PART = "word/document.xml"
 _STYLES_PART = "word/styles.xml"
+_RELS_PART = "word/_rels/document.xml.rels"
+
+#: How many figures are described at once. A document is one item in an
+#: indexing queue that runs documents one at a time, so this is the whole
+#: concurrency against the endpoint -- low enough to stay under a rate limit a
+#: reader did not raise, high enough that a report with thirty figures is not
+#: thirty round trips end to end.
+_FIGURE_CONCURRENCY = 4
+
+#: Characters of the prose either side of a figure sent with it. About a
+#: paragraph: enough to name what the picture is of, short enough that the
+#: picture stays the subject of the call.
+_FIGURE_CONTEXT_CHARS = 600
 
 _TWIPS_PER_POINT = 20.0
 _EMU_PER_POINT = 12700.0
@@ -181,6 +202,10 @@ class _Element:
     page_end: int
     bbox: BBox
     heading_level: int | None = None
+    #: For a figure, the relationship id of the picture it draws. Carried
+    #: rather than the bytes because the walk runs over the XML alone, and the
+    #: package is what resolves an id to a part.
+    rel_id: str = ""
 
 
 @dataclass
@@ -202,6 +227,19 @@ class DocxParser(ParserBase):
     supported_media_types: list[str] = [
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ]
+
+    def __init__(self, model: "VisionModel | None" = None) -> None:
+        """
+        Args:
+            model (`VisionModel | None`):
+                What describes the pictures in the document. ``None`` (the
+                default) resolves the configured ``vision`` pin per parse, so
+                configuring one reaches the next upload without a restart.
+                Unset there too, the document still parses -- a figure keeps
+                whatever its author wrote as alt text, which is what this
+                parser did before it could see at all.
+        """
+        self._model = model
 
     @classmethod
     def supported_extensions(cls) -> list[str]:
@@ -242,6 +280,12 @@ class DocxParser(ParserBase):
             with zipfile.ZipFile(source) as package:
                 document = ET.fromstring(package.read(_DOCUMENT_PART))
                 styles = _read_styles(package)
+                body = _find(document, "body")
+                elements = list(_Reader(styles).read(body)) if body is not None else []
+                # Read inside the package, before anything is awaited: the
+                # descriptions are fetched concurrently below, and several
+                # coroutines reading one ZipFile is not a thing to rely on.
+                pictures = _pictures(package, elements)
         except KeyError as error:
             raise ValueError(
                 f"{filename!r} is not a Word document: the package has no {_DOCUMENT_PART}",
@@ -249,8 +293,7 @@ class DocxParser(ParserBase):
         except (zipfile.BadZipFile, ET.ParseError) as error:
             raise ValueError(f"Failed to read {filename!r} as a Word document: {error}") from error
 
-        body = _find(document, "body")
-        elements = list(_Reader(styles).read(body)) if body is not None else []
+        await _describe_figures(elements, pictures, filename, model=self._model)
         return _sections_from(elements, filename)
 
 
@@ -449,6 +492,7 @@ class _Reader:
             page_number=self._page,
             page_end=self._page,
             bbox=_figure_bbox(node, band, self._geometry),
+            rel_id=_figure_rel_id(node),
         )
 
     def _table(self, node: ET.Element) -> _Element | None:
@@ -718,6 +762,169 @@ def _events(node: ET.Element) -> Iterator[tuple[str, Any]]:
                 yield from _events(branch)
         else:
             yield from _events(child)
+
+
+def _figure_rel_id(node: ET.Element) -> str:
+    """Which picture a drawing draws, as the relationship id it names.
+
+    ``a:blip/@r:embed`` for an embedded picture, and nothing for a drawing that
+    is not one -- a text box, a chart, a shape. ``r:link`` is deliberately not
+    read: it points at a file on the author's disk or a URL, neither of which
+    is in the package, so there would be nothing to describe.
+    """
+    for descendant in node.iter():
+        if _local(descendant.tag) != "blip":
+            continue
+        embedded = _attr(descendant, "embed")
+        if embedded:
+            return embedded
+    return ""
+
+
+def _read_relationships(package: zipfile.ZipFile) -> dict[str, str]:
+    """Relationship id -> the part it points at, as a package path.
+
+    Targets are written relative to the part that declares them, which for
+    ``word/document.xml`` means relative to ``word/``. An absolute target (one
+    written with a leading slash) is already a package path and keeps its
+    shape without it.
+    """
+    try:
+        root = ET.fromstring(package.read(_RELS_PART))
+    except (KeyError, ET.ParseError):
+        return {}
+
+    targets: dict[str, str] = {}
+    for node in root:
+        if _local(node.tag) != "Relationship":
+            continue
+        rel_id, target = _attr(node, "Id"), _attr(node, "Target")
+        if not rel_id or not target or (_attr(node, "TargetMode") or "") == "External":
+            continue
+        targets[rel_id] = target.lstrip("/") if target.startswith("/") else posixpath.normpath(f"word/{target}")
+    return targets
+
+
+def _pictures(package: zipfile.ZipFile, elements: list[_Element]) -> dict[int, bytes]:
+    """The bytes behind each figure, keyed by its index in ``elements``.
+
+    Read eagerly for the figures the walk actually found, rather than for every
+    image part in the package: a Word file carries the header logo and every
+    icon a theme ships, and none of them is in the body.
+    """
+    wanted = [(index, element.rel_id) for index, element in enumerate(elements) if element.rel_id]
+    if not wanted:
+        return {}
+    targets = _read_relationships(package)
+    pictures: dict[int, bytes] = {}
+    for index, rel_id in wanted:
+        part = targets.get(rel_id)
+        if not part:
+            continue
+        try:
+            pictures[index] = package.read(part)
+        except KeyError:
+            # A relationship naming a part the package does not hold. The
+            # document is still readable; this one figure has no picture.
+            logger.debug("docx: {} points at {!r}, which is not in the package", rel_id, part)
+    return pictures
+
+
+async def _describe_figures(
+    elements: list[_Element],
+    pictures: dict[int, bytes],
+    filename: str,
+    *,
+    model: "VisionModel | None",
+) -> None:
+    """Fill each figure's text in with what a model sees in it, in place.
+
+    Optional by design, and the asymmetry with the image parser is deliberate:
+    an upload that is nothing but a picture has nothing to index without a
+    description, while a document is worth indexing whether or not its figures
+    were described. So no vision model, a model that refuses, one picture that
+    will not decode -- each of those costs the figures their description and
+    nothing else.
+
+    The prose on either side goes with the picture, because a figure rarely
+    explains itself: the sentence introducing it names what it is of, and
+    without that a model describes a bar chart as a bar chart.
+
+    Every picture that ends up undescribed leaves a note (see
+    ``raven.knowledge._notes``), which the manager writes onto the document.
+    The file is still indexed and still searchable; what the note says is that
+    part of it is not in the index, which is not otherwise discoverable -- the
+    row says ready and the answers are merely worse.
+    """
+    if not pictures:
+        return
+    if model is None:
+        from raven.knowledge._vision import load_vision_model
+
+        model = load_vision_model()
+    if model is None:
+        note(
+            f"{len(pictures)} picture(s) in this file were not read: no vision model is configured "
+            "(Settings, Default models)."
+        )
+        return
+
+    ordered = sorted(pictures)
+    if len(ordered) > model.max_figures:
+        logger.warning(
+            "knowledge: {} holds {} figures and the limit is {}; the rest keep their captions",
+            filename,
+            len(ordered),
+            model.max_figures,
+        )
+        note(f"only the first {model.max_figures} of {len(ordered)} pictures in this file were read.")
+        ordered = ordered[: model.max_figures]
+
+    limit = asyncio.Semaphore(_FIGURE_CONCURRENCY)
+    refusals: list[str] = []
+
+    async def describe(index: int) -> tuple[int, str]:
+        async with limit:
+            try:
+                return index, await model.describe(
+                    pictures[index],
+                    context_above=_text_around(elements, index, -1),
+                    context_below=_text_around(elements, index, 1),
+                )
+            except Exception as exc:  # noqa: BLE001 - one figure, not the document
+                logger.warning("knowledge: a figure in {} could not be described: {}", filename, exc)
+                refusals.append(str(exc))
+                return index, ""
+
+    for index, description in await asyncio.gather(*(describe(index) for index in ordered)):
+        if not description:
+            continue
+        # The author's own alt text first, the model's reading after it: one is
+        # a label somebody chose and the other is what is in the picture, and
+        # the label is the better thing for an eye to land on.
+        existing = elements[index].text.strip()
+        elements[index].text = f"{existing}\n{description}" if existing else description
+
+    if refusals:
+        # One note for the lot, carrying the first reason: a reader acts on
+        # what the endpoint said, and it says the same thing forty times.
+        note(f"{len(refusals)} of {len(ordered)} pictures in this file could not be read: {refusals[0]}")
+
+
+def _text_around(elements: list[_Element], index: int, step: int) -> str:
+    """The nearest prose on one side of a figure, bounded.
+
+    Nearest rather than everything in the section: the paragraph beside a
+    figure is what refers to it, and three pages of unrelated text would push
+    that out of the model's attention rather than adding to it.
+    """
+    at = index + step
+    while 0 <= at < len(elements):
+        element = elements[at]
+        if element.layout is not LayoutType.FIGURE and element.text.strip():
+            return element.text.strip()[:_FIGURE_CONTEXT_CHARS]
+        at += step
+    return ""
 
 
 def _figure_text(node: ET.Element) -> str:

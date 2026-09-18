@@ -1,7 +1,17 @@
 import { shell, t } from '../../shell/bridge'
 import { show as toast } from '../../shell/toast'
 
-import type { KbBase, KbChunk, KbChunkQuery, KbDoc, KbHit, KbSettings, KbStatus, KnowledgeSource } from './types'
+import type {
+  KbBase,
+  KbChunk,
+  KbChunkQuery,
+  KbDoc,
+  KbHit,
+  KbProvider,
+  KbSettings,
+  KbStatus,
+  KnowledgeSource,
+} from './types'
 
 /* What an RPC failure actually said.
  *
@@ -189,12 +199,18 @@ export async function load(): Promise<void> {
   }
 }
 
-export async function create(name: string, description = '', embedding = true): Promise<void> {
+export async function create(
+  name: string,
+  description = '',
+  embedding = true,
+  model = '',
+  provider = '',
+): Promise<void> {
   const trimmed = name.trim()
   if (!trimmed || state.busy) return
   set({ busy: true })
   try {
-    await source().create(trimmed, description, embedding)
+    await source().create(trimmed, description, embedding, model, provider)
     await load()
   } catch (e) {
     /* Creating measures the model's width against the endpoint, so it reaches
@@ -665,6 +681,10 @@ export const DEFAULTS: Required<KbSettings> = {
   /* Empty means the configured endpoint, which is where a base built today
      gets its model. */
   embedding_provider: '',
+  /* Never restored to a default: the base's own model is what its vectors were
+     made by, and Restore Defaults is about chunking, not about dropping an
+     index. Present because the type is exhaustive. */
+  embedding_model: '',
 }
 
 /* One base's settings, defaulted field by field rather than wholesale: a base
@@ -680,37 +700,46 @@ export function settingsOf(base: KbBase): Required<KbSettings> {
     image_context_size: base.image_context_size ?? DEFAULTS.image_context_size,
     file_processing: base.file_processing ?? DEFAULTS.file_processing,
     embedding_provider: base.embedding_provider ?? DEFAULTS.embedding_provider,
+    embedding_model: base.embedding_model,
   }
 }
 
-/* Providers this install has a credential for, for the picker that repairs a
-   base whose endpoint moved.
+/* Every embedding model this install can reach, grouped by provider: what the
+   picker offers, both for a base being created and for one being moved onto
+   another model.
 
-   Read once, when the settings panel is opened, and kept: the list changes
-   when somebody edits their providers, which is not something that happens
-   while this dialog is up. An install whose provider list cannot be read
-   offers an empty picker rather than failing the dialog -- the base is still
-   readable, and the field is the only part that needs it. */
-let providers: string[] = []
+   Read once, when a dialog carrying the picker opens, and kept: the list
+   changes when somebody edits their providers, which is not something that
+   happens while a dialog is up. An install whose providers cannot be read
+   offers a picker holding only what the base already has rather than failing
+   the dialog -- the rest of it is still usable. */
+let models: KbProvider[] = []
 
-export function providerChoices(): string[] {
-  return providers
+export function embeddingChoices(): KbProvider[] {
+  return models
+}
+
+/* Fetched on the way into a dialog that shows the picker, rather than with the
+   page: it is a round trip per open at worst and none at all for a reader who
+   never opens one. */
+export function loadEmbeddingModels(): void {
+  if (models.length) return
+  void (async () => {
+    try {
+      models = await source().embeddingModels()
+      set({})
+    } catch {
+      /* The picker falls back to what the base already names; nothing else on
+         the panel depends on it. Inside the try rather than on a `.catch`
+         because a source too old to have the call at all throws here rather
+         than rejecting, and that would take the dialog down with it. */
+    }
+  })()
 }
 
 export function openSettings(): void {
   set({ settings: true })
-  void loadProviders()
-}
-
-async function loadProviders(): Promise<void> {
-  if (providers.length) return
-  try {
-    const found = await source().providers()
-    providers = found
-    set({})
-  } catch {
-    /* The picker stays empty; nothing else on the panel depends on it. */
-  }
+  loadEmbeddingModels()
 }
 
 export function closeSettings(): void {
@@ -726,6 +755,10 @@ export async function saveSettings(values: KbSettings): Promise<void> {
     /* Replaced from the answer rather than from what was sent: the engine is
        what decides, and a field it refused or adjusted has to show as it is. */
     set({ bases: state.bases.map((b) => (b.id === saved.id ? saved : b)), settings: false })
+    /* A model change rebuilds the base: every row is back in the queue with no
+       chunks, and a file list still saying `ready` beside a count that is now
+       zero describes the base as it was a second ago. */
+    if (values.embedding_model !== undefined) await reopen(baseId)
     toast(t('gui.kb.set_saved'))
   } catch (e) {
     toast((e as Error)?.message || String(e))
@@ -845,6 +878,10 @@ export function redraw(): void {
 export function _resetForTests(): void {
   state = EMPTY
   listeners.clear()
+  /* The model list too, for the same reason as the state: it is cached for the
+     life of the page, so a test would otherwise pick a picker whose options
+     came from the source the test before it installed. */
+  models = []
   /* The timer and the token too: a test that types without waiting out the
      debounce would otherwise fire into the next test's source. */
   cancelSearch()
@@ -896,7 +933,7 @@ export function fileFamily(doc: KbDoc): string {
   if (['doc', 'docx', 'odt', 'rtf'].includes(ext)) return 'doc'
   if (['xls', 'xlsx', 'ods', 'csv', 'tsv'].includes(ext)) return 'sheet'
   if (['ppt', 'pptx', 'odp'].includes(ext)) return 'slide'
-  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif'].includes(ext)) return 'image'
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif', 'tif', 'tiff'].includes(ext)) return 'image'
   if (['json', 'xml', 'yaml', 'yml', 'html', 'htm'].includes(ext)) return 'data'
   return 'file'
 }

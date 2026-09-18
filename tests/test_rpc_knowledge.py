@@ -19,6 +19,7 @@ class _FakeBase:
         self.name = name
         self.description = "notes"
         self.embedding_model = "bge-m3"
+        self.embedding_provider = "siliconflow"
         self.dimensions = 1024
         self.created_at = "2026-08-24T00:00:00"
         self.updated_at = "2026-08-24T00:01:00"
@@ -32,6 +33,8 @@ class _FakeManager:
         self._docs = docs
         self.asked: list[str] = []
         self.create_raises: Exception | None = None
+        self.switch_raises: Exception | None = None
+        self.switched: tuple[str, str] | None = None
 
     def list_bases(self) -> list[_FakeBase]:
         return list(self._bases)
@@ -48,19 +51,43 @@ class _FakeManager:
     def get_base(self, base_id: str):
         return next((b for b in self._bases if b.id == base_id), None)
 
-    async def create_base(self, *, name: str, description: str = "", embedding: bool = True):
+    async def create_base(
+        self,
+        *,
+        name: str,
+        description: str = "",
+        embedding: bool = True,
+        embedding_model: str = "",
+        embedding_provider: str = "",
+    ):
         if self.create_raises is not None:
             raise self.create_raises
         made = _FakeBase(f"b{len(self._bases) + 1}", name)
         made.description = description
+        if embedding_model:
+            made.embedding_model = embedding_model
+            made.embedding_provider = embedding_provider
         # An empty model is how a base with no vectors is recorded, which is
         # what every reader tests for.
         if not embedding:
             made.embedding_model = ""
+            made.embedding_provider = ""
             made.dimensions = 0
         self.created_with_embedding = embedding
         self._bases.append(made)
         return made
+
+    async def switch_embedding(self, base_id: str, *, model: str, provider: str = ""):
+        if self.switch_raises is not None:
+            raise self.switch_raises
+        base = self.get_base(base_id)
+        if base is None:
+            return None
+        self.switched = (model, provider)
+        base.embedding_model = model
+        base.embedding_provider = provider if model else ""
+        base.dimensions = 1024 if model else 0
+        return base
 
     def rename_base(self, base_id: str, *, name=None, description=None):
         base = self.get_base(base_id)
@@ -90,12 +117,16 @@ def _no_leak():
 async def test_status_reports_the_model_when_embedding_is_configured(monkeypatch) -> None:
     class _Config:
         model = "bge-m3"
+        provider = "siliconflow"
 
     monkeypatch.setattr("raven.knowledge.load_embedding_config", lambda: _Config())
 
     out = await kb.knowledge_status({})
 
     assert (out["configured"], out["model"]) == (True, "bge-m3")
+    # The provider travels with it: the page preselects the pair in the picker
+    # a base is created from, and a model id alone cannot be selected with.
+    assert out["provider"] == "siliconflow"
     # Reported so a surface walking a folder can filter by what this build can
     # actually index, rather than by a list written down beside it.
     assert ".md" in out["extensions"]
@@ -185,6 +216,7 @@ async def test_creating_a_base_answers_the_row_the_list_would_show() -> None:
         "name",
         "description",
         "embedding_model",
+        "embedding_provider",
         "dimensions",
         "created_at",
         "updated_at",
@@ -290,6 +322,7 @@ class _FakeDoc:
         source: str = "handbook.md",
         origin: str = "file",
         origin_ref: str = "",
+        warning: str = "",
     ) -> None:
         self.id = doc_id
         self.base_id = "b1"
@@ -303,6 +336,38 @@ class _FakeDoc:
         self.updated_at = "2026-08-24T00:00:00"
         self.origin = origin
         self.origin_ref = origin_ref
+        self.warning = warning
+
+
+async def test_a_row_carries_what_the_parse_could_not_do(monkeypatch) -> None:
+    """A warning is not an error and does not replace the status: the document
+    is ready and searchable, and the line says which part of it is not in the
+    index."""
+    manager = _FakeManager([_FakeBase("b1", "handbook")], {})
+    manager.list_documents = lambda base_id: [  # type: ignore[assignment]
+        _FakeDoc("d1", "ready", warning="2 of 5 pictures in this file could not be read: rate limited")
+    ]
+    kb._set_manager_for_tests(manager)
+
+    out = await kb.knowledge_documents_list({"base_id": "b1"})
+
+    row = out["documents"][0]
+    assert row["status"] == "ready"
+    assert row["error"] == ""
+    assert "2 of 5 pictures" in row["warning"]
+
+
+async def test_a_row_with_nothing_to_report_carries_an_empty_warning(monkeypatch) -> None:
+    """Never absent: the page reads the field, and a gateway answering nothing
+    for it would have every row look warned or none of them, depending on how
+    the page spelled the check."""
+    manager = _FakeManager([_FakeBase("b1", "handbook")], {})
+    manager.list_documents = lambda base_id: [_FakeDoc("d1", "ready")]  # type: ignore[assignment]
+    kb._set_manager_for_tests(manager)
+
+    out = await kb.knowledge_documents_list({"base_id": "b1"})
+
+    assert out["documents"][0]["warning"] == ""
 
 
 def _fence(monkeypatch, tmp_path: Path, *, restrict: bool = True) -> None:
@@ -968,6 +1033,115 @@ async def test_the_overlap_is_judged_against_what_the_base_will_hold() -> None:
 
     await kb.knowledge_bases_settings({"base_id": "b1", "chunk_overlap": 100})
     assert wrote == [{"chunk_overlap": 100}]
+
+
+async def test_a_picked_model_is_what_the_base_is_built_on() -> None:
+    """The page offers every embedding model the install can reach, so the pair
+    it picked has to reach the engine -- a base built on the configured pin
+    whatever was chosen is a picker that decides nothing."""
+    manager = _FakeManager([], {})
+    kb._set_manager_for_tests(manager)
+
+    out = await kb.knowledge_bases_create(
+        {"name": "handbook", "embedding_model": "text-embedding-3-large", "embedding_provider": "openai"}
+    )
+
+    assert out["base"]["embedding_model"] == "text-embedding-3-large"
+    assert out["base"]["embedding_provider"] == "openai"
+
+
+async def test_a_base_created_without_a_pair_takes_the_configured_pin() -> None:
+    """Which is what every base was built on before the choice existed."""
+    manager = _FakeManager([], {})
+    kb._set_manager_for_tests(manager)
+
+    out = await kb.knowledge_bases_create({"name": "handbook"})
+
+    assert out["base"]["embedding_model"] == "bge-m3"
+
+
+async def test_sending_a_model_rebuilds_the_base_rather_than_writing_a_field() -> None:
+    """The collection is sized to the model's width and holds vectors that
+    model made, so this is a rebuild -- which is why it does not go through
+    the settings write beside it."""
+    manager, wrote, base = _settings_manager()
+    kb._set_manager_for_tests(manager)
+
+    out = await kb.knowledge_bases_settings(
+        {"base_id": "b1", "embedding_model": "text-embedding-3-large", "embedding_provider": "openai"}
+    )
+
+    assert manager.switched == ("text-embedding-3-large", "openai")
+    # And not written twice: the rebuild records the provider that served the
+    # width it measured, so a settings write of the same key would be a second
+    # opinion about it.
+    assert wrote == []
+    assert out["base"]["embedding_model"] == "text-embedding-3-large"
+
+
+async def test_an_empty_model_turns_embedding_off() -> None:
+    """The one choice that used to be fixed at creation."""
+    manager, _, _ = _settings_manager()
+    kb._set_manager_for_tests(manager)
+
+    out = await kb.knowledge_bases_settings({"base_id": "b1", "embedding_model": ""})
+
+    assert manager.switched == ("", "")
+    assert out["base"]["embedding_model"] == ""
+
+
+async def test_the_provider_alone_still_only_moves_the_address() -> None:
+    """Sent without a model it is the repair it has always been: the same model
+    reached through another account, with nothing to rebuild."""
+    manager, wrote, _ = _settings_manager()
+    kb._set_manager_for_tests(manager)
+
+    await kb.knowledge_bases_settings({"base_id": "b1", "embedding_provider": "dashscope"})
+
+    assert wrote == [{"embedding_provider": "dashscope"}]
+    assert manager.switched is None
+
+
+async def test_a_model_that_cannot_be_embedded_with_is_the_callers_mistake() -> None:
+    """So the panel shows the sentence rather than "internal error" -- and the
+    base is untouched, because the width is measured before anything drops."""
+    from raven.knowledge import KnowledgeError
+
+    manager, _, base = _settings_manager()
+    manager.switch_raises = KnowledgeError("provider 'openai' has no usable credential")
+    kb._set_manager_for_tests(manager)
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await kb.knowledge_bases_settings({"base_id": "b1", "embedding_model": "text-embedding-3-large"})
+
+    assert "no usable credential" in str(caught.value)
+    assert base.embedding_model == "bge-m3"
+
+
+async def test_the_settings_land_before_the_documents_are_requeued() -> None:
+    """A rebuild re-cuts every document, and it should cut them by the numbers
+    the same call just wrote rather than by the ones it replaced."""
+    manager, wrote, _ = _settings_manager()
+    order: list[str] = []
+    configure = manager.configure_base
+
+    def _configure(base_id, **settings):
+        order.append("settings")
+        return configure(base_id, **settings)
+
+    switch = manager.switch_embedding
+
+    async def _switch(base_id, **kwargs):
+        order.append("rebuild")
+        return await switch(base_id, **kwargs)
+
+    manager.configure_base = _configure  # type: ignore[assignment]
+    manager.switch_embedding = _switch  # type: ignore[assignment]
+    kb._set_manager_for_tests(manager)
+
+    await kb.knowledge_bases_settings({"base_id": "b1", "chunk_size": 1024, "embedding_model": "bge-large"})
+
+    assert order == ["settings", "rebuild"]
 
 
 async def test_settings_for_a_base_that_is_gone_say_so() -> None:

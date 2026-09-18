@@ -208,6 +208,14 @@ class KnowledgeDocumentRecord:
     updated_at: str
     chunk_count: int = 0
     error: str = ""
+    #: What went wrong while parsing that did not stop it.
+    #:
+    #: Not a second error field: a document carrying one of these *is* indexed
+    #: and *is* searchable, and what the line says is that part of it did not
+    #: make it in -- pictures nothing could read, most often. Left on its own
+    #: the case is undiscoverable, because the row says ready and the only
+    #: symptom is that a search about the missing part answers worse.
+    warning: str = ""
     #: Which kind of data source this came in as. Defaulted rather than
     #: required so a registry written before the field existed still loads --
     #: every document in one is a file, which is what the default says.
@@ -395,6 +403,45 @@ class RecordStore:
         self._save()
         return updated
 
+    def rebuild_base(
+        self,
+        base_id: str,
+        *,
+        embedding_model: str,
+        dimensions: int,
+        embedding_provider: str = "",
+    ) -> KnowledgeBaseRecord | None:
+        """Record a base on a different model, and requeue everything in it.
+
+        Not a setting, which is why it is not ``configure_base``: the vectors a
+        base holds were made by the model it names, and a base that names
+        another one holds vectors nothing will ever match. So the two halves
+        move together -- the caller rebuilds the collection, and every document
+        goes back to ``pending`` here, in the same write, because a row left
+        saying ``ready`` would be claiming chunks that no longer exist.
+
+        An empty ``embedding_model`` is the base being turned off: it keeps its
+        documents and is never searched by vector again.
+        """
+        record = self._bases.get(base_id)
+        if record is None:
+            return None
+        updated = replace(
+            record,
+            embedding_model=embedding_model,
+            dimensions=dimensions,
+            embedding_provider=embedding_provider,
+            updated_at=_now(),
+        )
+        self._bases[base_id] = updated
+        now = _now()
+        for document in [d for d in self._documents.values() if d.base_id == base_id]:
+            self._documents[document.id] = replace(
+                document, status="pending", chunk_count=0, error="", warning="", updated_at=now
+            )
+        self._save()
+        return updated
+
     def delete_base(self, base_id: str) -> bool:
         """Drop a base and every document record under it.
 
@@ -456,12 +503,14 @@ class RecordStore:
         *,
         chunk_count: int | None = None,
         error: str = "",
+        warning: str = "",
     ) -> KnowledgeDocumentRecord | None:
-        """Move a document's state, clearing the previous error.
+        """Move a document's state, clearing the previous error and warning.
 
-        The error is cleared rather than kept unless this call sets one: a
-        retry that succeeds must not leave the failure that prompted it on
-        screen next to a document the page now calls ready.
+        Both are cleared rather than kept unless this call sets them: a retry
+        that succeeds must not leave the failure that prompted it on screen
+        next to a document the page now calls ready, and a reindex that reached
+        the vision endpoint must not keep saying its pictures were skipped.
         """
         record = self._documents.get(document_id)
         if record is None:
@@ -471,6 +520,7 @@ class RecordStore:
             status=status,
             chunk_count=record.chunk_count if chunk_count is None else chunk_count,
             error=error,
+            warning=warning,
             updated_at=_now(),
         )
         self._documents[document_id] = updated
@@ -502,6 +552,7 @@ class RecordStore:
             status="pending",
             chunk_count=0,
             error="",
+            warning="",
             updated_at=_now(),
         )
         self._documents[document_id] = updated

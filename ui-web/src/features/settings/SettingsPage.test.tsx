@@ -1621,7 +1621,7 @@ describe('default model pins', () => {
         {
           id: 'openai',
           name: 'OpenAI',
-          models: ['gpt-5.5', 'text-embedding-3-large', 'gpt-image-2'],
+          models: ['gpt-5.5', 'text-embedding-3-large', 'gpt-image-2', 'qwen-vl'],
           configured: [],
           on: true,
           kind: 'api_key',
@@ -1629,6 +1629,7 @@ describe('default model pins', () => {
             'gpt-5.5': { capabilities: ['function-call'], output_modalities: ['text'] },
             'text-embedding-3-large': { capabilities: ['embedding'] },
             'gpt-image-2': { capabilities: ['image-generation'], output_modalities: ['image'] },
+            'qwen-vl': { capabilities: ['image-recognition'], input_modalities: ['text', 'image'] },
           },
         },
         { id: 'anthropic', name: 'Anthropic', models: ['claude-opus-4-5'], on: false, kind: 'api_key' },
@@ -1653,8 +1654,39 @@ describe('default model pins', () => {
     /* The embedding slot is the sharp one: a text id chosen here is not a
        degraded answer, it is a vector store that cannot be searched. */
     expect(optionsOf('gui.set.dm.embed')).toEqual(['gui.set.dm.inherit', 'text-embedding-3-large'])
-    expect(optionsOf('gui.set.dm.quick')).toEqual(['gui.set.dm.inherit', 'gpt-5.5'])
-    expect(optionsOf('gui.set.dm.translate')).toEqual(['gui.set.dm.inherit', 'gpt-5.5'])
+    expect(optionsOf('gui.set.dm.quick')).toEqual(['gui.set.dm.inherit', 'gpt-5.5', 'qwen-vl'])
+    expect(optionsOf('gui.set.dm.translate')).toEqual(['gui.set.dm.inherit', 'gpt-5.5', 'qwen-vl'])
+  })
+
+  it('offers the vision slot only models that take an image in', async () => {
+    /* Which no kind can express: a model that reads a picture is a text model,
+       and the model that *draws* one is the opposite of what this slot wants --
+       picking it would send an image to an endpoint that only emits them. */
+    await openDefaults()
+
+    expect(optionsOf('gui.set.dm.vision')).toEqual(['gui.set.dm.vision_off', 'qwen-vl'])
+  })
+
+  it('says unset means off on the vision row, not inherit', async () => {
+    /* Every other pin falls back to the conversation's model. An indexing run
+       has no conversation, so this one falls back to doing nothing, and the
+       empty option has to say which. */
+    await openDefaults()
+
+    expect((screen.getByLabelText('gui.set.dm.vision') as HTMLSelectElement).value).toBe('')
+    expect(optionsOf('gui.set.dm.vision')[0]).toBe('gui.set.dm.vision_off')
+  })
+
+  it('writes the vision pin as a pair like every other', async () => {
+    const { calls } = await openDefaults()
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('gui.set.dm.vision'), {
+        target: { value: 'openai::qwen-vl' },
+      })
+    })
+
+    expect(calls).toEqual([['set', { key: 'vision', value: { model: 'qwen-vl', provider: 'openai' } }]])
   })
 
   it('lays out default model copy on the left and controls on the right', async () => {

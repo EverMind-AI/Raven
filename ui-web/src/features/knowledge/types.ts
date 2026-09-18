@@ -34,6 +34,15 @@ export interface KbBase {
   embedding_reach?: string
 }
 
+/* One provider and the embedding models it serves, as the picker offers them.
+   Grouped rather than flat because the group is the answer to "whose
+   credential pays for this", which a bare model id does not carry. */
+export interface KbProvider {
+  id: string
+  name: string
+  models: string[]
+}
+
 /* What the settings panel can write. Every field optional: the ones left out
    are untouched, so a panel need not send back what it did not change. */
 export interface KbSettings {
@@ -45,8 +54,12 @@ export interface KbSettings {
   table_context_size?: number
   image_context_size?: number
   file_processing?: string
-  /* Not the model or the width, which are what the collection was built to. */
+  /* Where the base's model is reached. Sent alone it moves only the address. */
   embedding_provider?: string
+  /* The model itself. Not a setting: sending it rebuilds the base, because
+     the collection is sized to the model's width and holds vectors that model
+     made. Empty turns embedding off. */
+  embedding_model?: string
 }
 
 /* One document and where its indexing got to. `error` is empty unless `status`
@@ -61,6 +74,12 @@ export interface KbDoc {
   status: string
   chunk_count: number
   error: string
+  /* What the parse could not do, on a document that was indexed anyway. Not a
+     second `error`: this row is `ready` and searchable, and the line says
+     which part of the file is not in the index -- pictures no model could
+     read, most often. Optional so a gateway that predates it still answers a
+     shape this page can read. */
+  warning?: string
   created_at: string
   updated_at: string
   /* Which kind of data source this arrived through. A folder is not one of
@@ -76,6 +95,9 @@ export interface KbDoc {
 export interface KbStatus {
   configured: boolean
   model: string
+  /* Who serves that model. The pair is what the picker preselects with: a
+     model id on its own names no credential and matches no option. */
+  provider?: string
   /* Extensions this build can index, each with its leading dot. What a folder
      walk filters by -- reported rather than listed in the page, because which
      formats are parseable moves with the optional extras installed. */
@@ -89,15 +111,22 @@ export interface KnowledgeSource {
   status(): Promise<KbStatus>
   bases(): Promise<KbBase[]>
   /* ``embedding`` false makes a base that keeps its documents and is never
-     searched by vector. Not revisable: a collection's width is fixed when it
-     is made, so the choice belongs to creation or nowhere. */
-  create(name: string, description: string, embedding?: boolean): Promise<KbBase>
+     searched by vector. ``model`` and ``provider`` are the pair the picker
+     chose; left out, the base is built on the configured default. */
+  create(
+    name: string,
+    description: string,
+    embedding?: boolean,
+    model?: string,
+    provider?: string,
+  ): Promise<KbBase>
   /* A base's name, which is the one thing about it that carries no index
      consequence. Refused when another base already holds it. */
   rename(id: string, name: string): Promise<KbBase>
   remove(id: string): Promise<unknown>
-  /* Write one base's settings. Not the embedding model: the store is sized to
-     its vector width, so changing it is a rebuild rather than a setting. */
+  /* Write one base's settings. Sending `embedding_model` is the exception: it
+     rebuilds the base rather than writing a value, and every document in it
+     goes back to the queue to be indexed again. */
   settings(baseId: string, values: KbSettings): Promise<KbBase>
   documents(baseId: string): Promise<KbDoc[]>
   /* Two calls behind one name: the bytes go up through `fs.upload`, which is
@@ -129,10 +158,10 @@ export interface KnowledgeSource {
   /* Rewrite one piece, re-embedding it so the vector says what it says.
      Its id changes with its text, because ids are derived from content. */
   updateChunk(documentId: string, chunkId: string, text: string): Promise<KbChunk>
-  /* The providers this install holds a credential for, by slug. What the
-     picker offers for a base whose model is served somewhere other than the
-     configured endpoint. */
-  providers(): Promise<string[]>
+  /* Every embedding model this install can reach, grouped by the provider
+     serving it. What both pickers offer: the one a base is created with and
+     the one that moves an existing base onto another model. */
+  embeddingModels(): Promise<KbProvider[]>
   /* Take one document out. The page's only way past a row that will not
      index: without it the base around it is the smallest thing that can be
      deleted. */

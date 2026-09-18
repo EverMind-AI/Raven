@@ -42,6 +42,13 @@ class TextParser(ParserBase):
         "application/json",
         "application/xml",
         "application/x-yaml",
+        # Rich text, read as the text it is written in. An RTF body is markup
+        # -- `{\rtf1\ansi ... \par}` -- so what gets indexed is the source
+        # rather than the words a reader sees, control words and all. That is
+        # the trade this makes: a searchable-ish file instead of one the engine
+        # refuses, with the same converter the legacy Word path uses standing
+        # by for when the noise stops being worth it.
+        "application/rtf",
     ]
     """Standard IANA media types this parser handles."""
 
@@ -63,6 +70,7 @@ class TextParser(ParserBase):
             ".markdown",
             ".md",
             ".rst",
+            ".rtf",
             ".txt",
             ".xml",
             ".yaml",

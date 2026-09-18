@@ -82,7 +82,10 @@ function source(over: Partial<KnowledgeSource> = {}): void {
       index: async (id: string) => doc({ id, status: 'ready', chunk_count: 2 }),
       search: async () => ({ hits: [], search_ms: 0, embed_ms: 0 }),
       chunks: async () => ({ chunks: [], total: 0 }),
-      providers: async () => ['siliconflow', 'dashscope'],
+      embeddingModels: async () => [
+        { id: 'siliconflow', name: 'SiliconFlow', models: ['BAAI/bge-large-zh-v1.5', 'BAAI/bge-m3'] },
+        { id: 'dashscope', name: 'DashScope', models: ['text-embedding-v4'] },
+      ],
       switchChunks: async () => 0,
       deleteChunks: async () => 0,
       createChunk: async (_d: string, text: string) => ({ chunk_index: 9, total_chunks: 10, text, manual: true }),
@@ -510,6 +513,68 @@ describe('the write surface', () => {
     expect(document.querySelector('.kbtable .td.err')).toBeNull()
   })
 
+  it('marks a searchable file that part of itself did not make it into', async () => {
+    /* The case the mark exists for: the row says ready, the file is searchable,
+       and a search about the pictures in it answers worse for a reason nothing
+       on the page would otherwise state. */
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [
+        doc({
+          id: 'd1',
+          source: 'report.docx',
+          status: 'ready',
+          chunk_count: 7,
+          warning: '2 of 5 pictures in this file could not be read: rate limited',
+        }),
+      ],
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+
+    const status = document.querySelector('.kbtable .td.s-ready') as HTMLElement
+    expect(status.getAttribute('title')).toContain('2 of 5 pictures')
+    expect(status.querySelector('.kbdocwarn')).not.toBeNull()
+    /* Still ready, and still counted: a warning is not a failure. */
+    expect(status.textContent).toContain('gui.kb.doc_ready')
+  })
+
+  it('leaves an unwarned row unmarked', async () => {
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd1', status: 'ready', chunk_count: 7 })],
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+
+    expect(document.querySelector('.kbdocwarn')).toBeNull()
+    expect((document.querySelector('.kbtable .td.s-ready') as HTMLElement).getAttribute('title')).toBeNull()
+  })
+
+  it('shows the failure rather than the warning when a row has both', async () => {
+    /* It cannot in practice -- a document that failed has no parse to warn
+       about -- but the cell has to pick one, and the reason it did not index is
+       the more urgent of the two. */
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [
+        doc({ id: 'd1', status: 'failed', error: 'embedding endpoint returned 404', warning: 'a picture' }),
+      ],
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+
+    const status = document.querySelector('.kbtable .td.s-failed') as HTMLElement
+    expect(status.getAttribute('title')).toBe('embedding endpoint returned 404')
+    expect(status.querySelector('.kbdocwarn')).toBeNull()
+  })
+
   it('does not answer into a panel the reader has left', async () => {
     /* Opening b1 then b2 must not paint b1 documents under b2. */
     let release: (d: never[]) => void = () => {}
@@ -843,32 +908,54 @@ describe('the create dialog', () => {
   }
 
   it('takes a name and an embedding model, and creates with them', async () => {
-    const made: Array<[string, boolean | undefined]> = []
+    const made: Array<[string, boolean | undefined, string | undefined, string | undefined]> = []
     source({
-      status: async () => ({ configured: true, model: 'bge-m3' }),
-      create: async (name: string, _d: string, embedding?: boolean) => {
-        made.push([name, embedding])
+      status: async () => ({ configured: true, model: 'BAAI/bge-m3', provider: 'siliconflow' }),
+      create: async (name: string, _d: string, embedding?: boolean, model?: string, provider?: string) => {
+        made.push([name, embedding, model, provider])
         return base({ id: 'b1', name })
       },
     })
     await mount()
     await openDialog()
 
-    /* Disabled is a real choice, not the absence of one: a base nobody means
-       to search by vector should not be made to carry an index. */
-    const opts = [...document.querySelectorAll('#kbembed option')].map((o) => o.textContent)
-    expect(opts).toEqual(['gui.kb.embed_off', 'bge-m3'])
+    /* Every model the install can reach, grouped by who serves it, with the
+       configured default preselected -- and Disabled as a real choice, not the
+       absence of one. */
+    const picker = document.getElementById('kbembed') as HTMLSelectElement
+    expect(picker.value).toBe('siliconflow::BAAI/bge-m3')
+    expect([...picker.options].map((o) => o.value)).toEqual([
+      '',
+      'siliconflow::BAAI/bge-large-zh-v1.5',
+      'siliconflow::BAAI/bge-m3',
+      'dashscope::text-embedding-v4',
+    ])
 
     const field = document.getElementById('kbname') as HTMLInputElement
     await act(async () => {
       fireEvent.change(field, { target: { value: 'handbook' } })
     })
     await act(async () => {
+      fireEvent.change(picker, { target: { value: 'dashscope::text-embedding-v4' } })
+    })
+    await act(async () => {
       screen.getByText('gui.kb.create').click()
     })
 
-    expect(made).toEqual([['handbook', true]])
+    expect(made).toEqual([['handbook', true, 'text-embedding-v4', 'dashscope']])
     expect(document.querySelector('.kbdlg')).toBeNull()
+  })
+
+  it('offers the configured model even when it is not in any provider list', async () => {
+    /* A select whose value matches no option draws as empty, which would tell
+       a reader the base they are about to make has no model. */
+    source({ status: async () => ({ configured: true, model: 'house-embed', provider: 'custom' }) })
+    await mount()
+    await openDialog()
+
+    const picker = document.getElementById('kbembed') as HTMLSelectElement
+    expect(picker.value).toBe('custom::house-embed')
+    expect([...picker.options].map((o) => o.textContent)).toContain('house-embed')
   })
 
   it('makes a base with no vectors when the model is left Disabled', async () => {
@@ -890,8 +977,8 @@ describe('the create dialog', () => {
     await act(async () => {
       fireEvent.change(field, { target: { value: 't3' } })
     })
-    // Disabled is the option the select opens on when nothing is picked.
-    expect((document.getElementById('kbembed') as HTMLSelectElement).value).toBe('bge-m3')
+    // The configured pair is the option the select opens on.
+    expect((document.getElementById('kbembed') as HTMLSelectElement).value).toBe('::bge-m3')
     await act(async () => {
       fireEvent.change(document.getElementById('kbembed') as HTMLSelectElement, { target: { value: '' } })
     })
@@ -900,6 +987,33 @@ describe('the create dialog', () => {
     })
 
     expect(made).toEqual([['t3', false]])
+  })
+
+  it('sends no model at all when Disabled is picked', async () => {
+    /* Not the model beside an `embedding: false`: a base with no vectors has
+       no model, and sending one would be describing an index it does not
+       have. */
+    const made: Array<[boolean | undefined, string | undefined]> = []
+    source({
+      create: async (_n: string, _d: string, embedding?: boolean, model?: string) => {
+        made.push([embedding, model])
+        return base({ id: 'b1', name: 't3', embedding_model: '' })
+      },
+    })
+    await mount()
+    await openDialog()
+
+    await act(async () => {
+      fireEvent.change(document.getElementById('kbname') as HTMLInputElement, { target: { value: 't3' } })
+    })
+    await act(async () => {
+      fireEvent.change(document.getElementById('kbembed') as HTMLSelectElement, { target: { value: '' } })
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.create').click()
+    })
+
+    expect(made).toEqual([[false, '']])
   })
 
   it('says Disabled on a base that has no model of its own', async () => {
@@ -2332,39 +2446,190 @@ describe('the knowledge base settings', () => {
        that would be offering a repair that fails. */
     await openSettings({}, { embedding_model: 'BAAI/bge-large-zh-v1.5', embedding_provider: 'siliconflow' })
 
-    const row = field('gui.kb.set_embed')
-    const picker = row.querySelector('select') as HTMLSelectElement
-    expect(picker.value).toBe('siliconflow')
-    expect(row.textContent).toContain('BAAI/bge-large-zh-v1.5')
+    const picker = field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement
+    expect(picker.value).toBe('siliconflow::BAAI/bge-large-zh-v1.5')
     const offered = [...picker.options].map((o) => o.value)
     expect(offered).toContain('')
-    expect(offered).toContain('dashscope')
+    expect(offered).toContain('dashscope::text-embedding-v4')
   })
 
-  it('shows no picker for a base that was made without embedding', async () => {
-    /* Nothing to reach, so nothing to point somewhere else. */
+  it('offers a base with no embedding a model to turn it on with', async () => {
+    /* It used to offer nothing at all: the choice was made once, at creation,
+       and a base made without vectors stayed that way or was rebuilt by hand.
+       It is the same rebuild as any other switch, so it is the same control. */
     await openSettings({}, { embedding_model: '' })
 
-    const row = field('gui.kb.set_embed')
-    expect(row.querySelector('select')).toBeNull()
-    expect(row.textContent).toContain('gui.kb.embed_off')
+    const picker = field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement
+    expect(picker.value).toBe('')
+    expect([...picker.options].map((o) => o.value)).toContain('siliconflow::BAAI/bge-m3')
   })
 
-  it('shows the embedding model without offering to change it', async () => {
-    /* The store is sized to its vector width when the base is created, so a
-       way to change the model here would be a way to invalidate every vector
-       in the base. The provider beside it is a different matter -- it moves
-       where the same model is reached, and no vector depends on that. */
-    await openSettings({}, { embedding_model: 'BAAI/bge-large-zh-v1.5', embedding_provider: 'siliconflow' })
+  it('keeps a base on its own model when it is served somewhere the list does not offer', async () => {
+    /* A select whose value matches no option draws as empty, which would tell
+       a reader their base has no model when it has one. */
+    await openSettings({}, { embedding_model: 'house-embed', embedding_provider: 'custom' })
 
-    const row = field('gui.kb.set_embed')
-    expect(row.textContent).toContain('BAAI/bge-large-zh-v1.5')
-    expect(row.querySelector('input')).toBeNull()
-    /* The one control is the provider picker, and no option in it is a
-       model. */
-    const controls = [...row.querySelectorAll('select')]
-    expect(controls.length).toBe(1)
-    expect([...controls[0]!.options].map((o) => o.value)).not.toContain('BAAI/bge-large-zh-v1.5')
+    const picker = field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement
+    expect(picker.value).toBe('custom::house-embed')
+    expect([...picker.options].map((o) => o.textContent)).toContain('house-embed')
+  })
+
+  it('reads a prefixed id and the recorded spelling as one model', async () => {
+    /* A provider stores its models under its own prefix and the prefix comes
+       off before the request goes out, so the picker offers
+       `siliconflow/BAAI/bge-m3` for a base that records `BAAI/bge-m3`. Read as
+       two, the reader is offered both and picking the one they are already on
+       counts as a rebuild. */
+    const saved = await openSettings(
+      {
+        embeddingModels: async () => [
+          { id: 'siliconflow', name: 'SiliconFlow', models: ['siliconflow/BAAI/bge-m3'] },
+        ],
+      },
+      { embedding_model: 'BAAI/bge-m3', embedding_provider: 'siliconflow', documents: 3 },
+    )
+
+    const picker = field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement
+    expect(picker.value).toBe('siliconflow::siliconflow/BAAI/bge-m3')
+    expect([...picker.options].map((o) => o.value)).toEqual(['', 'siliconflow::siliconflow/BAAI/bge-m3'])
+    expect(field('gui.kb.set_embed').textContent).not.toContain('gui.kb.set_embed_moved')
+
+    await act(async () => {
+      fireEvent.change(picker, { target: { value: 'siliconflow::siliconflow/BAAI/bge-m3' } })
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.set_save').click()
+    })
+
+    expect(confirms).toEqual([])
+    expect(saved[0]).not.toHaveProperty('embedding_model')
+  })
+
+  it('records a provider for a base that has none without calling it a rebuild', async () => {
+    /* A base written before providers were recorded names a model and nobody
+       to serve it, which means "wherever this is configured". Naming one is
+       the repair it has always been, not a move -- the vectors are the ones
+       that model makes wherever it is reached from. */
+    const saved = await openSettings(
+      {},
+      { embedding_model: 'BAAI/bge-m3', embedding_provider: '', documents: 3 },
+    )
+
+    const picker = field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement
+    expect(picker.value).toBe('siliconflow::BAAI/bge-m3')
+    await act(async () => {
+      fireEvent.change(picker, { target: { value: 'siliconflow::BAAI/bge-m3' } })
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.set_save').click()
+    })
+
+    expect(confirms).toEqual([])
+    expect(saved[0]).toMatchObject({ embedding_provider: 'siliconflow' })
+    expect(saved[0]).not.toHaveProperty('embedding_model')
+  })
+
+  it('tells one model from another that ends the same way', async () => {
+    /* `BAAI/bge-m3` and `bge-m3` are two models; only a provider's own prefix
+       comes off on the way to the endpoint. */
+    await openSettings({}, { embedding_model: 'bge-m3', embedding_provider: '' })
+
+    const picker = field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement
+    expect(picker.value).toBe('::bge-m3')
+    expect([...picker.options].map((o) => o.textContent)).toContain('bge-m3')
+  })
+
+  it('sends the model only when it moved, and asks first', async () => {
+    /* A panel saving a slider must not drop the index, and a reader changing
+       the model has to be told what it costs before it happens rather than
+       after. */
+    const saved = await openSettings(
+      {},
+      { embedding_model: 'BAAI/bge-large-zh-v1.5', embedding_provider: 'siliconflow', documents: 3 },
+    )
+
+    await act(async () => {
+      ;(document.querySelector('.kbsets input[type="range"]') as HTMLInputElement).value = '9'
+      fireEvent.change(document.querySelector('.kbsets input[type="range"]') as HTMLInputElement, {
+        target: { value: '9' },
+      })
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.set_save').click()
+    })
+    expect(saved[0]).not.toHaveProperty('embedding_model')
+    expect(confirms).toEqual([])
+  })
+
+  it('rebuilds the base when another model is picked', async () => {
+    const saved = await openSettings(
+      {},
+      { embedding_model: 'BAAI/bge-large-zh-v1.5', embedding_provider: 'siliconflow', documents: 3 },
+    )
+
+    const picker = field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement
+    await act(async () => {
+      fireEvent.change(picker, { target: { value: 'dashscope::text-embedding-v4' } })
+    })
+    /* Said where the picking happens, before the confirmation says it again
+       with the number of documents. */
+    expect(field('gui.kb.set_embed').textContent).toContain('gui.kb.set_embed_moved')
+
+    await act(async () => {
+      screen.getByText('gui.kb.set_save').click()
+    })
+
+    expect(confirms[0]).toContain('"count":3')
+    expect(saved[0]).toMatchObject({
+      embedding_model: 'text-embedding-v4',
+      embedding_provider: 'dashscope',
+    })
+  })
+
+  it('re-reads the file list after a rebuild', async () => {
+    /* The rows are all back in the queue with no chunks. A list still saying
+       ready beside a count of zero describes the base as it was a second
+       ago. */
+    let reads = 0
+    await openSettings(
+      {
+        documents: async () => {
+          reads += 1
+          return [doc({ id: 'd1', status: reads > 1 ? 'pending' : 'ready', chunk_count: reads > 1 ? 0 : 4 })]
+        },
+      },
+      { embedding_model: 'BAAI/bge-m3', embedding_provider: 'siliconflow', documents: 1 },
+    )
+
+    await act(async () => {
+      fireEvent.change(field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement, {
+        target: { value: 'dashscope::text-embedding-v4' },
+      })
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.set_save').click()
+    })
+
+    expect(reads).toBeGreaterThan(1)
+    expect(screen.getByText('gui.kb.doc_pending')).toBeTruthy()
+  })
+
+  it('asks nothing of a base with no documents', async () => {
+    /* There is no index to lose, and a confirmation nobody needs is one more
+       click through a dialog. */
+    const saved = await openSettings({}, { embedding_model: 'BAAI/bge-m3', embedding_provider: 'siliconflow', documents: 0 })
+
+    await act(async () => {
+      fireEvent.change(field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement, {
+        target: { value: '' },
+      })
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.set_save').click()
+    })
+
+    expect(confirms).toEqual([])
+    expect(saved[0]).toMatchObject({ embedding_model: '' })
   })
 
   it('lists the processors it will offer, every one of them unavailable', async () => {

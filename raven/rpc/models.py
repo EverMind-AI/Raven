@@ -3631,6 +3631,9 @@ class KnowledgeStatusResult(_Strict):
 
     configured: bool
     model: str
+    #: Who serves that model. The two together are what a picker selects with:
+    #: a model id names no credential, so half the pin cannot be preselected.
+    provider: str = ""
     #: Filename extensions some registered parser can index, each with its
     #: leading dot. What a surface that walks a folder filters by; it moves
     #: with the optional extras installed, so it is reported rather than
@@ -3650,6 +3653,9 @@ class KnowledgeBase(_Strict):
     name: str
     description: str
     embedding_model: str
+    #: Which account that model is reached through. Empty means the configured
+    #: endpoint -- what every base built before the pair was recorded says.
+    embedding_provider: str = ""
     dimensions: int
     created_at: str
     updated_at: str
@@ -3701,6 +3707,11 @@ class KnowledgeDocument(_Strict):
     status: str
     chunk_count: int
     error: str
+    #: What the parse could not do, on a document that was indexed anyway --
+    #: pictures no model could read, most often. Not a second ``error``: this
+    #: row is searchable, and the line says which part of the file is not in
+    #: the index. Empty when there was nothing to report.
+    warning: str = ""
     created_at: str
     updated_at: str
     #: Which kind of data source this arrived through: ``file``, ``note`` or
@@ -3716,9 +3727,13 @@ class KnowledgeBasesCreateParams(_Strict):
     description: str | None = None
     #: Whether the base is searched by vector. False is a base that keeps its
     #: documents and is never embedded -- the choice a surface offers as
-    #: "Disabled", and one that cannot be changed afterwards, because a
-    #: collection's width is fixed when it is made.
+    #: "Disabled".
     embedding: bool = True
+    #: The model to build the base on, and who serves it. Omitted, the base is
+    #: built on the configured pin; a surface that offers a picker sends the
+    #: pair it picked, because a model id alone names no credential.
+    embedding_model: str | None = None
+    embedding_provider: str | None = None
 
 
 class KnowledgeBasesCreateResult(_Strict):
@@ -3740,9 +3755,10 @@ class KnowledgeBasesRenameResult(_Strict):
 class KnowledgeBasesSettingsParams(_Strict):
     """Every field is optional; the ones left out are untouched.
 
-    The embedding model is deliberately not among them: the collection is
-    sized to its width, so changing it is a rebuild of every vector in the
-    base rather than a setting."""
+    ``embedding_model`` is the one field that is not a setting: the collection
+    is sized to the model's width and holds vectors that model made, so sending
+    it rebuilds the base -- the collection is made again and every document
+    goes back to the queue. Empty turns embedding off."""
 
     base_id: str
     top_k: int | None = None
@@ -3750,9 +3766,12 @@ class KnowledgeBasesSettingsParams(_Strict):
     separator: str | None = None
     table_context_size: int | None = None
     image_context_size: int | None = None
-    #: Where this base's model is reached. Not the model or the width, which
-    #: are what the collection was built to and cannot move.
+    #: Where this base's model is reached. Sent alone, it only moves the
+    #: address the same model is called at, which costs nothing.
     embedding_provider: str | None = None
+    #: The model itself. Sent, the base is rebuilt onto it; empty turns
+    #: embedding off. Every document is requeued either way.
+    embedding_model: str | None = None
     chunk_size: int | None = None
     chunk_overlap: int | None = None
     file_processing: str | None = None

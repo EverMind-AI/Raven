@@ -8,6 +8,7 @@ pretending to be a model.
 
 from __future__ import annotations
 
+import base64
 from dataclasses import replace
 
 import pytest
@@ -120,6 +121,59 @@ def manager(tmp_path, monkeypatch):
     return mgr
 
 
+#: The smallest PNG that decodes: one transparent pixel. What the parser is
+#: routed by is the filename, and what the vision path needs is bytes Pillow
+#: will open.
+_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
+
+
+class _StubVision:
+    """A vision model that answers without a network."""
+
+    max_figures = 64
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.calls: list[tuple[str, str]] = []
+
+    async def describe(self, image: bytes, *, mime: str = "", context_above: str = "", context_below: str = "") -> str:
+        self.calls.append((context_above, context_below))
+        return self.text
+
+
+def _docx_with_picture() -> bytes:
+    """A minimal Word package holding one paragraph and one embedded picture."""
+    import io
+    import zipfile
+
+    namespaces = (
+        'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+    )
+    body = (
+        "<w:p><w:r><w:t>alpha alpha discussion of the first topic.</w:t></w:r></w:p>"
+        '<w:p><w:r><w:drawing><wp:inline><wp:docPr id="1" name="Picture 1"/>'
+        '<a:graphic><a:graphicData><a:blip r:embed="rId7"/></a:graphicData></a:graphic>'
+        "</wp:inline></w:drawing></w:r></w:p>"
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as package:
+        package.writestr("word/document.xml", f"<w:document {namespaces}><w:body>{body}</w:body></w:document>")
+        package.writestr(
+            "word/_rels/document.xml.rels",
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId7" Target="media/image1.png" '
+            'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"/>'
+            "</Relationships>",
+        )
+        package.writestr("word/media/image1.png", _PNG)
+    return buffer.getvalue()
+
+
 MARKDOWN = b"""# Handbook
 
 ## Alpha section
@@ -205,7 +259,7 @@ async def test_an_unparseable_upload_fails_that_document_only(manager) -> None:
     """One bad upload must not stop the queue behind it, and the reason
     belongs on the row the person who uploaded it is looking at."""
     base = await manager.create_base(name="handbook")
-    bad = manager.add_document(base.id, filename="picture.png", content=b"\x89PNG")
+    bad = manager.add_document(base.id, filename="firmware.bin", content=b"\x00\x01\x02")
     good = manager.add_document(base.id, filename="ok.md", content=MARKDOWN)
 
     await manager.index_pending()
@@ -213,6 +267,75 @@ async def test_an_unparseable_upload_fails_that_document_only(manager) -> None:
     assert manager.get_document(bad.id).status == "failed"
     assert "no parser" in manager.get_document(bad.id).error
     assert manager.get_document(good.id).status == "ready"
+
+
+async def test_an_image_with_no_vision_model_fails_with_the_reason(manager, monkeypatch) -> None:
+    """A picture has no text of its own, so a build that cannot look at one has
+    nothing to index -- and the row has to say that rather than reporting a
+    document with no chunks as ready."""
+    monkeypatch.setattr("raven.knowledge._vision.load_vision_model", lambda: None)
+    base = await manager.create_base(name="handbook")
+    picture = manager.add_document(base.id, filename="chart.png", content=_PNG)
+    good = manager.add_document(base.id, filename="ok.md", content=MARKDOWN)
+
+    await manager.index_pending()
+
+    assert manager.get_document(picture.id).status == "failed"
+    assert "no vision model is configured" in manager.get_document(picture.id).error
+    assert manager.get_document(good.id).status == "ready"
+
+
+async def test_an_image_is_indexed_as_one_chunk(manager, monkeypatch) -> None:
+    """One picture, one chunk, however much the model had to say about it: the
+    section is marked as a figure, and the chunker never splits one."""
+    described = ("A bar chart. " * 400).strip()
+    monkeypatch.setattr(
+        "raven.knowledge._vision.load_vision_model",
+        lambda: _StubVision(described),
+    )
+    base = await manager.create_base(name="handbook")
+    picture = manager.add_document(base.id, filename="chart.png", content=_PNG)
+
+    indexed = await manager.index_document(picture.id)
+
+    assert indexed.status == "ready"
+    assert indexed.chunk_count == 1
+    chunks, _ = await manager.document_chunks(picture.id)
+    assert chunks[0].chunk.text == described
+
+
+async def test_a_picture_nobody_could_read_warns_on_a_searchable_row(manager, monkeypatch) -> None:
+    """The case this warning exists for: the document indexed, the row says
+    ready, and half of what the file shows is not in the index. Nothing else
+    would ever tell a reader -- a search about the missing part just answers
+    worse."""
+    monkeypatch.setattr("raven.knowledge._vision.load_vision_model", lambda: None)
+    base = await manager.create_base(name="handbook")
+    doc = manager.add_document(base.id, filename="report.docx", content=_docx_with_picture())
+
+    indexed = await manager.index_document(doc.id)
+
+    assert indexed.status == "ready", "still indexed, still searchable"
+    assert indexed.chunk_count >= 1
+    assert "no vision model is configured" in indexed.warning
+    assert indexed.error == "", "a warning is not a failure"
+
+
+async def test_the_warning_goes_when_the_reindex_reads_the_picture(manager, monkeypatch) -> None:
+    """Otherwise a row keeps reporting a gap that has since been filled."""
+    monkeypatch.setattr("raven.knowledge._vision.load_vision_model", lambda: None)
+    base = await manager.create_base(name="handbook")
+    doc = manager.add_document(base.id, filename="report.docx", content=_docx_with_picture())
+    assert (await manager.index_document(doc.id)).warning
+
+    monkeypatch.setattr("raven.knowledge._vision.load_vision_model", lambda: _StubVision("A bar chart."))
+    assert (await manager.index_document(doc.id)).warning == ""
+
+
+async def test_a_document_that_parsed_whole_carries_no_warning(manager) -> None:
+    base, doc = await _ready_base(manager)
+
+    assert doc.warning == ""
 
 
 async def test_indexing_a_document_whose_base_is_gone_fails_it(manager) -> None:
@@ -422,6 +545,100 @@ async def test_a_base_can_be_pointed_at_the_provider_that_still_serves_it(manage
     hits = (await manager.search([base.id], "alpha", top_k=1)).hits
 
     assert hits and served_elsewhere.calls == [["alpha"]]
+
+
+async def test_a_base_can_be_built_on_a_picked_model(manager, endpoints) -> None:
+    """The page offers every embedding model the install can reach, so the pair
+    it picked is what the base is built on -- not the configured pin, which is
+    only the default the picker starts on."""
+    picked = endpoints.serve("picked-model")
+
+    base = await manager.create_base(name="handbook", embedding_model="picked-model", embedding_provider="openai")
+
+    assert (base.embedding_model, base.embedding_provider) == ("picked-model", "openai")
+    assert picked.probes == 1, "the width was measured against the model that was picked"
+    assert manager.stub.probes == 0, "and the configured one was never asked"
+
+
+async def test_switching_the_model_rebuilds_what_the_base_holds(manager, endpoints) -> None:
+    """The vectors in the collection were made by the old model, and no query
+    embedded by the new one lands anywhere near them. So the documents go back
+    to the queue rather than staying ready against an index that is gone."""
+    base, doc = await _ready_base(manager)
+    endpoints.serve("second-model")
+
+    switched = await manager.switch_embedding(base.id, model="second-model", provider="openai")
+
+    assert (switched.embedding_model, switched.embedding_provider) == ("second-model", "openai")
+    assert [d.status for d in manager.list_documents(base.id)] == ["pending"]
+    assert manager.get_document(doc.id).chunk_count == 0
+
+
+async def test_the_requeued_documents_index_on_the_new_model(manager, endpoints) -> None:
+    """Which is the point of requeueing them: the blob is still on disk, so a
+    reindex is all it takes to have the base searchable again."""
+    base, _ = await _ready_base(manager)
+    second = endpoints.serve("second-model")
+    await manager.switch_embedding(base.id, model="second-model", provider="openai")
+
+    assert await manager.index_pending() == 1
+
+    hits = (await manager.search([base.id], "alpha", top_k=1)).hits
+    assert hits and "first topic" in hits[0].chunk.text
+    assert ["alpha"] in second.calls, "the query went to the model the base now holds"
+
+
+async def test_the_same_model_through_another_account_is_not_a_rebuild(manager, endpoints) -> None:
+    """Nothing about the vectors changed -- only the address the next call goes
+    out on -- so requeueing every document would be work for nothing."""
+    base, doc = await _ready_base(manager)
+    endpoints.serve("stub-embed")
+
+    switched = await manager.switch_embedding(base.id, model="stub-embed", provider="siliconflow")
+
+    assert switched.embedding_provider == "siliconflow"
+    assert manager.get_document(doc.id).status == "ready"
+
+
+async def test_a_model_that_cannot_be_reached_leaves_the_base_alone(manager, endpoints) -> None:
+    """The width is measured before anything is dropped, so a picked model that
+    refuses costs the reader a message rather than their index."""
+    base, doc = await _ready_base(manager)
+    endpoints.refuse("second-model", EmbeddingError("this endpoint does not serve it"))
+
+    with pytest.raises(EmbeddingError):
+        await manager.switch_embedding(base.id, model="second-model", provider="openai")
+
+    assert manager.get_base(base.id).embedding_model == "stub-embed"
+    assert manager.get_document(doc.id).status == "ready"
+    assert (await manager.search([base.id], "alpha", top_k=1)).hits
+
+
+async def test_embedding_can_be_turned_off_and_on_again(manager, endpoints) -> None:
+    """The one choice that used to be fixed at creation: a base made without a
+    model was rebuilt or nothing, and now it is the same call as any other
+    switch."""
+    base, doc = await _ready_base(manager)
+
+    off = await manager.switch_embedding(base.id, model="")
+    assert (off.embedding_model, off.dimensions, off.embedding_provider) == ("", 0, "")
+    assert not manager.embeds(off)
+
+    endpoints.serve("stub-embed")
+    on = await manager.switch_embedding(base.id, model="stub-embed", provider="openai")
+    assert manager.embeds(on)
+    assert await manager.index_pending() >= 1
+    assert manager.get_document(doc.id).status == "ready"
+
+
+async def test_switching_to_what_the_base_already_has_changes_nothing(manager) -> None:
+    base, doc = await _ready_base(manager)
+    before = manager.get_base(base.id)
+
+    same = await manager.switch_embedding(base.id, model=before.embedding_model, provider=before.embedding_provider)
+
+    assert same == before
+    assert manager.get_document(doc.id).status == "ready"
 
 
 async def test_a_new_base_records_who_served_its_model(manager) -> None:

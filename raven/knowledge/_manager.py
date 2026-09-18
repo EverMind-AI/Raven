@@ -28,6 +28,7 @@ from raven.knowledge._embedding import (
     load_embedding_config,
 )
 from raven.knowledge._naive_chunker import NaiveChunker
+from raven.knowledge._notes import collecting, joined
 from raven.knowledge._records import (
     DEFAULT_TOP_K,
     DocumentOrigin,
@@ -38,9 +39,12 @@ from raven.knowledge._records import (
 from raven.knowledge._structure import StructuredTextParser
 from raven.knowledge._types import Chunk, StoredChunk, TextBlock, VectorRecord, VectorSearchResult
 from raven.knowledge._vector_store import VectorStoreBase
+from raven.knowledge._vision import VisionError
 from raven.knowledge.parser import LayoutType, ParserBase, section_metadata
 from raven.knowledge.parser.doc_parser import LegacyDocParser
 from raven.knowledge.parser.docx_parser import DocxParser
+from raven.knowledge.parser.excel_parser import ExcelParser
+from raven.knowledge.parser.image_parser import ImageParser
 from raven.knowledge.parser.text_parser import TextParser
 
 
@@ -161,9 +165,16 @@ def _default_parsers() -> list[ParserBase]:
     headings in, and TextParser has to stay behind it for CSV, JSON, YAML,
     RST and plain text, which would otherwise have no parser at all. The two
     Word parsers claim media types no other parser here answers to, so their
-    position is free.
+    position is free -- but the spreadsheet parser has to come before the plain
+    one, because both claim `text/csv` and a row of separated values read as
+    prose indexes the separators.
+
+    The image parser is registered whether or not a vision model is configured:
+    what it claims does not change with the config, and a file picker that
+    stopped offering pictures the moment a pin was cleared would look like the
+    build had lost the ability to read them.
     """
-    return [StructuredTextParser(), DocxParser(), LegacyDocParser(), TextParser()]
+    return [StructuredTextParser(), DocxParser(), LegacyDocParser(), ExcelParser(), ImageParser(), TextParser()]
 
 
 def supported_extensions() -> list[str]:
@@ -221,6 +232,28 @@ class KnowledgeManager:
         if config is None:
             raise KnowledgeError(
                 "no embedding endpoint is configured; set [embedding] in the EverOS config before using a knowledge base"
+            )
+        return embedding_client(config)
+
+    def _client_named(self, provider: str, model: str) -> EmbeddingClient:
+        """The client for a model a reader picked, on the provider serving it.
+
+        The pair is what a picker offers and what a base records: a model id
+        names no credential, so the provider is the half that says where the
+        call goes out. An empty provider means the configured endpoint asked
+        for that model -- what a base written before providers were recorded
+        falls back to, and what a caller holding an injected endpoint (a test,
+        an embedder) is pointing at.
+        """
+        configured = self._embedding or load_embedding_config()
+        if configured is not None and configured.model == model and (not provider or configured.provider == provider):
+            return embedding_client(configured)
+        if not provider:
+            return embedding_client(asking_for(self._endpoint(), model))
+        config = embedding_config_for(provider, model)
+        if config is None:
+            raise KnowledgeError(
+                f"provider {provider!r} has no usable credential, so {model!r} cannot be embedded through it"
             )
         return embedding_client(config)
 
@@ -382,15 +415,26 @@ class KnowledgeManager:
 
     # ── bases ─────────────────────────────────────────────────────
 
-    async def create_base(self, *, name: str, description: str = "", embedding: bool = True) -> KnowledgeBaseRecord:
+    async def create_base(
+        self,
+        *,
+        name: str,
+        description: str = "",
+        embedding: bool = True,
+        embedding_model: str = "",
+        embedding_provider: str = "",
+    ) -> KnowledgeBaseRecord:
         """A new base, with or without vectors.
+
+        ``embedding_model`` names the model to build it on, with
+        ``embedding_provider`` saying who serves it. Left out, the base is
+        built on the configured pin -- which is what every base was built on
+        before the choice existed, and what the page offers as the default.
 
         ``embedding=False`` is a base that keeps its documents and is never
         searched by vector: no model, no width, and no collection to size. The
         case is real -- a place to put files that the agent reads whole, or
-        that a person opens from the page -- and it is the one shape that must
-        not quietly acquire an index, because a base built with a model cannot
-        be un-built without a rebuild.
+        that a person opens from the page.
 
         The absence is recorded as an empty model and a zero width, which is
         what every reader here already tests for.
@@ -398,14 +442,17 @@ class KnowledgeManager:
         self._refuse_taken_name(name)
         if not embedding:
             return self._records.create_base(name=name, embedding_model="", dimensions=0, description=description)
-        client = self._client()
+        client = self._client_named(embedding_provider, embedding_model) if embedding_model else self._client()
         width = await self._width_of(client)
         record = self._records.create_base(
             name=name,
             embedding_model=client.model,
             dimensions=width,
             description=description,
-            embedding_provider=getattr(client, "provider", ""),
+            # What the endpoint says it is, falling back to what was asked for:
+            # a client built from a resolved provider carries it, and one built
+            # from an injected config may not.
+            embedding_provider=getattr(client, "provider", "") or embedding_provider,
         )
         # The collection is named for the id, not the display name: a rename
         # is an edit, and a collection that followed it would strand its rows.
@@ -457,10 +504,63 @@ class KnowledgeManager:
         """Write the settings a reader can change after the base exists.
 
         Not the embedding model: the collection is sized to its width, so
-        changing it is a rebuild of every vector in the base rather than a
-        setting, and the stale-base check exists because that is detectable.
+        moving it is a rebuild of every vector in the base rather than a
+        setting. :meth:`switch_embedding` is that rebuild.
         """
         return self._records.configure_base(base_id, **settings)
+
+    async def switch_embedding(self, base_id: str, *, model: str, provider: str = "") -> KnowledgeBaseRecord | None:
+        """Move a base onto another embedding model, rebuilding what it holds.
+
+        Not a setting, and not reversible by undoing it: the vectors in the
+        collection were made by the old model, and no query embedded by the new
+        one lands anywhere near them. So the collection is dropped and made
+        again at the new model's width, and every document goes back to the
+        queue to be cut and embedded a second time from the blob it was stored
+        with. Nothing a reader typed is lost; what is lost is the indexing, and
+        that is what re-running it restores.
+
+        An empty ``model`` turns embedding off: the base keeps its documents
+        and holds no vectors. The reverse -- turning it on -- is the same call
+        with a model, which is why a base created without one is no longer
+        stuck that way.
+
+        The width is measured before anything is dropped. A model that cannot
+        be reached therefore leaves the base exactly as it was, rather than
+        emptying it and failing.
+        """
+        base = self._records.get_base(base_id)
+        if base is None:
+            return None
+        if base.embedding_model == model and base.embedding_provider == provider:
+            return base
+
+        client = None
+        if model:
+            # Resolved before anything is compared, because a base records the
+            # id its endpoint is called with and a picker offers the id the
+            # provider is configured under -- which are the same model spelled
+            # two ways wherever a storage prefix is involved.
+            client = self._client_named(provider, model)
+            model, provider = client.model, getattr(client, "provider", "") or provider
+            if base.embedding_model == model:
+                # The same model through a different account is not a rebuild:
+                # the vectors are the ones this model makes wherever it is
+                # served from, and only the address has moved.
+                if base.embedding_provider == provider:
+                    return base
+                return self._records.configure_base(base_id, embedding_provider=provider)
+
+        width = await self._width_of(client) if client is not None else 0
+        await self._store.delete_collection(base_id)
+        if model:
+            await self._store.create_collection(base_id, width)
+        return self._records.rebuild_base(
+            base_id,
+            embedding_model=model,
+            dimensions=width,
+            embedding_provider=provider if model else "",
+        )
 
     async def delete_base(self, base_id: str) -> bool:
         """Drop the base, its documents, their blobs and the collection.
@@ -635,9 +735,9 @@ class KnowledgeManager:
             # collection already holds, or it is unfindable by any query.
             client = self._client_for(base)
             await self._assert_current(base, client)
-            chunks = await self._chunks_for(record, base)
+            chunks, warning = await self._chunks_for(record, base)
             if not chunks:
-                return self._records.set_status(document_id, "ready", chunk_count=0)
+                return self._records.set_status(document_id, "ready", chunk_count=0, warning=warning)
             texts = [chunk.text for chunk in chunks]
             vectors = await client.embed(texts)
             ids = chunk_ids_for(document_id, texts)
@@ -655,10 +755,15 @@ class KnowledgeManager:
                     for v, c, i in zip(vectors, chunks, ids, strict=True)
                 ],
             )
-        except (KnowledgeError, EmbeddingError, ValueError, OSError) as exc:
+        except (KnowledgeError, EmbeddingError, VisionError, ValueError, OSError) as exc:
             logger.warning("knowledge: indexing {} failed: {}", record.source, exc)
             return self._records.set_status(document_id, "failed", error=str(exc))
-        return self._records.set_status(document_id, "ready", chunk_count=len(chunks))
+        # Ready, and carrying whatever the parse could not do. The two are not
+        # in tension: the document is indexed and searchable, and the warning
+        # says which part of it is not in the index -- which nothing else would
+        # ever tell a reader, because a file with half its figures missing
+        # looks exactly like one with none.
+        return self._records.set_status(document_id, "ready", chunk_count=len(chunks), warning=warning)
 
     def _indexed_document(self, document_id: str) -> tuple[KnowledgeDocumentRecord, KnowledgeBaseRecord] | None:
         """The document and its base, when the pair can hold chunks at all.
@@ -921,15 +1026,25 @@ class KnowledgeManager:
             image_context_size=base.image_context_size,
         )
 
-    async def _chunks_for(self, record: KnowledgeDocumentRecord, base: KnowledgeBaseRecord) -> list[Chunk]:
+    async def _chunks_for(self, record: KnowledgeDocumentRecord, base: KnowledgeBaseRecord) -> tuple[list[Chunk], str]:
+        """This document's chunks, and what the parse could not do.
+
+        The second half is the parse's own notes -- a picture no model could
+        read, a figure budget the file ran past. None of them stops the
+        document being indexed, and all of them are invisible without a channel
+        of their own: the row would say ready, the file would be searchable,
+        and the part that never made it in would show up only as an answer
+        that is quietly worse.
+        """
         content = self.read_document(record.id)
         if content is None:
             raise KnowledgeError("the uploaded file is missing from the store")
         parser = self._parser_for(record.media_type)
         if parser is None:
             raise KnowledgeError(f"no parser for {record.media_type}")
-        sections = await parser.parse(content, record.source)
-        return await self._chunker_for(base).chunk(sections)
+        with collecting() as notes:
+            sections = await parser.parse(content, record.source)
+        return await self._chunker_for(base).chunk(sections), joined(notes)
 
     async def index_pending(self) -> int:
         """Index everything queued, oldest first. Returns how many were tried."""

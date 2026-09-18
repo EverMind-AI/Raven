@@ -21,6 +21,7 @@ from raven.knowledge import (
     DEFAULT_SEPARATOR,
     DEFAULT_TOP_K,
     DuplicateBaseNameError,
+    EmbeddingError,
     KnowledgeError,
 )
 from raven.rpc.errors import ConfigValidationError, InternalError
@@ -69,6 +70,10 @@ async def knowledge_status(_params: dict[str, Any]) -> dict[str, Any]:
     return {
         "configured": config is not None,
         "model": config.model if config is not None else "",
+        # Who serves it. The page pairs the two to preselect the default in the
+        # picker a new base is made from: a model id names no credential, so
+        # half the pin is not enough to select with.
+        "provider": config.provider if config is not None else "",
         # Read off the parsers rather than listed here: which formats can be
         # indexed moves with the optional extras installed, and a surface that
         # walks a folder has to filter by today's answer. Not through the
@@ -95,6 +100,10 @@ def _base_row(manager: KnowledgeManager, base: Any) -> dict[str, Any]:
         "name": base.name,
         "description": base.description,
         "embedding_model": base.embedding_model,
+        # The other half of the pair: which account that model is reached
+        # through. Without it the settings picker cannot show a base its own
+        # endpoint, and every base reads as being on the configured one.
+        "embedding_provider": str(getattr(base, "embedding_provider", "") or ""),
         "dimensions": base.dimensions,
         "created_at": base.created_at,
         "updated_at": base.updated_at,
@@ -125,11 +134,14 @@ async def knowledge_bases_create(params: dict[str, Any]) -> dict[str, Any]:
     sizes the collection to something no vector fits, and that surfaces at the
     first insert with nothing pointing back here.
 
+    ``embedding_model`` and ``embedding_provider`` are the pair the page picked,
+    and the configured pin is what a caller that sends neither gets -- which is
+    what every base was built on before the choice existed.
+
     ``embedding=false`` makes a base with no model at all, which is the one
-    case that reaches no endpoint and cannot fail that way. It is also the one
-    choice here that cannot be revised later: a collection's width is fixed
-    when it is created, so a base made without one is rebuilt rather than
-    switched.
+    case that reaches no endpoint and cannot fail that way. Revising it later
+    is ``knowledge.bases.settings``, which rebuilds the collection rather than
+    editing a field.
     """
     name = str(params.get("name") or "").strip()
     if not name:
@@ -140,6 +152,8 @@ async def knowledge_bases_create(params: dict[str, Any]) -> dict[str, Any]:
             name=name,
             description=str(params.get("description") or ""),
             embedding=params.get("embedding", True) is not False,
+            embedding_model=str(params.get("embedding_model") or "").strip(),
+            embedding_provider=str(params.get("embedding_provider") or "").strip(),
         )
     except DuplicateBaseNameError as exc:
         # The caller's mistake, not the gateway's: reported as a validation
@@ -214,6 +228,12 @@ async def knowledge_bases_settings(params: dict[str, Any]) -> dict[str, Any]:
     that saves one slider should not have to send the rest back unchanged, and
     a field this build does not know about yet cannot be blanked by one that
     does.
+
+    ``embedding_model`` is the exception to "a field is a setting": sent, it
+    rebuilds the base rather than writing a value, because the collection is
+    sized to the model's width and the vectors in it were made by that model.
+    Sending it empty turns embedding off. Sent alone, ``embedding_provider``
+    still only moves where the same model is reached.
     """
     base_id = str(params.get("base_id") or "")
     manager = _base_or_refuse(base_id)
@@ -232,7 +252,11 @@ async def knowledge_bases_settings(params: dict[str, Any]) -> dict[str, Any]:
         settings["smart_chunking"] = bool(params["smart_chunking"])
     if params.get("separator") is not None:
         settings["separator"] = str(params["separator"])
-    if params.get("embedding_provider") is not None:
+    # Only when the model is not being moved: the rebuild below records the
+    # provider that actually served the width it measured, and a settings write
+    # of the same key would be a second, unchecked opinion about it.
+    switching = params.get("embedding_model") is not None
+    if params.get("embedding_provider") is not None and not switching:
         settings["embedding_provider"] = str(params["embedding_provider"]).strip()
     for name in ("table_context_size", "image_context_size"):
         size = _bounded(params, name, 0, CONTEXT_MAX)
@@ -250,9 +274,32 @@ async def knowledge_bases_settings(params: dict[str, Any]) -> dict[str, Any]:
     if lap >= size:
         raise ConfigValidationError("chunk_overlap must be smaller than chunk_size")
 
-    base = manager.configure_base(base_id, **settings)
+    # Skipped when nothing was sent but the model: a settings write with no
+    # settings in it is a file rewritten to say what it already said.
+    base = manager.configure_base(base_id, **settings) if settings else existing
     if base is None:
         raise ConfigValidationError(f"no such base: {base_id}")
+
+    if switching:
+        # After the settings, not before: the documents this requeues are
+        # re-cut on the way back in, and they should be cut by the numbers
+        # this same call just wrote rather than by the ones it replaced.
+        try:
+            base = await manager.switch_embedding(
+                base_id,
+                model=str(params.get("embedding_model") or "").strip(),
+                provider=str(params.get("embedding_provider") or "").strip(),
+            )
+        except (KnowledgeError, EmbeddingError) as exc:
+            # The picked pair cannot be embedded with, which is the caller's
+            # choice to correct: reported as a refusal so the panel shows the
+            # sentence rather than "internal error". Nothing was dropped -- the
+            # width is measured before the collection is touched.
+            raise ConfigValidationError(str(exc)) from None
+        except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
+            raise InternalError(f"could not switch the embedding model: {exc}") from exc
+        if base is None:
+            raise ConfigValidationError(f"no such base: {base_id}")
     return {"base": _base_row(manager, base)}
 
 
@@ -301,6 +348,11 @@ def _doc_row(doc: Any) -> dict[str, Any]:
         "status": doc.status,
         "chunk_count": doc.chunk_count,
         "error": doc.error or "",
+        # What the parse could not do, on a document that was indexed anyway.
+        # Empty on every row that had nothing to report, and never a second
+        # spelling of `error`: a row carries one or the other, because a
+        # document that failed has no parse to warn about.
+        "warning": str(getattr(doc, "warning", "") or ""),
         "created_at": doc.created_at,
         "updated_at": doc.updated_at,
         "origin": getattr(doc, "origin", "file"),

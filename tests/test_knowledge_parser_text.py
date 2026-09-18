@@ -61,3 +61,27 @@ def test_a_box_lifts_to_the_widest_edges_of_its_parts():
     box = BBox(x0=72.0, x1=300.0).union(BBox(x0=108.0, x1=540.0, top=90.0))
 
     assert box.model_dump(exclude_none=True) == {"x0": 72.0, "x1": 540.0, "top": 90.0}
+
+
+def test_rich_text_is_read_as_the_text_it_is_written_in() -> None:
+    """RTF goes to this parser, which reads the file as it is: the words are
+    there, and so is the markup around them.
+
+    A `.rtf` is not prose -- it is `{\\rtf1\\ansi ... \\par}` -- so what reaches
+    the index is the source, control words and all. That is the trade: a file
+    that answers a search badly rather than one the engine refuses. Converting
+    it the way a legacy `.doc` is converted would give the words alone.
+    """
+    body = rb"{\rtf1\ansi\deff0 Latency rose in the second quarter.\par}"
+
+    sections = _parse(body, "notes.rtf")
+
+    assert len(sections) == 1
+    text = sections[0].content.text
+    assert "Latency rose in the second quarter." in text, "the words are indexed"
+    assert "\\rtf1" in text, "and so is the markup, which is the cost of reading it this way"
+
+
+def test_the_text_parser_claims_rich_text() -> None:
+    assert "application/rtf" in TextParser.supported_media_types
+    assert ".rtf" in TextParser.supported_extensions()

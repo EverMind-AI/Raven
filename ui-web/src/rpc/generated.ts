@@ -1434,6 +1434,10 @@ export interface KnowledgeBase {
   name: string;
   description: string;
   embedding_model: string;
+  /**
+   * Which account this base reaches its model through. Empty means the configured endpoint, which is what every base built before the pair was recorded says.
+   */
+  embedding_provider?: string;
   dimensions: number;
   created_at: string;
   updated_at: string;
@@ -1473,6 +1477,10 @@ export interface KnowledgeDocument {
   status: string;
   chunk_count: number;
   error: string;
+  /**
+   * What the parse could not do, on a document that was indexed anyway -- pictures no model could read, most often. Not a second `error`: the document is searchable, and this says which part of it is not in the index.
+   */
+  warning?: string;
   created_at: string;
   updated_at: string;
   origin?: string;
@@ -3854,6 +3862,10 @@ export interface KnowledgeStatusParams {}
 export interface KnowledgeStatusResult {
   configured: boolean;
   model: string;
+  /**
+   * Who serves the configured model. The two together are what a picker selects with: a model id names no credential, so half the pin cannot be preselected.
+   */
+  provider?: string;
   extensions?: string[];
 }
 export interface KnowledgeBasesListParams {}
@@ -3864,6 +3876,14 @@ export interface KnowledgeBasesCreateParams {
   name: string;
   description?: string;
   embedding?: boolean;
+  /**
+   * The model to build the base on. Omitted, the configured pin is used.
+   */
+  embedding_model?: string;
+  /**
+   * Who serves that model. A model id names no credential, so the pair travels together.
+   */
+  embedding_provider?: string;
 }
 export interface KnowledgeBasesCreateResult {
   base: KnowledgeBase;
@@ -3887,6 +3907,10 @@ export interface KnowledgeBasesSettingsParams {
   table_context_size?: number;
   image_context_size?: number;
   embedding_provider?: string;
+  /**
+   * The model this base holds vectors from. Not a setting: sending it rebuilds the base -- the collection is made again at the new width and every document goes back to the queue. Empty turns embedding off.
+   */
+  embedding_model?: string;
 }
 export interface KnowledgeBasesSettingsResult {
   base: KnowledgeBase;

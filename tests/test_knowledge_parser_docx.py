@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import zipfile
 
@@ -15,6 +16,7 @@ _NAMESPACES = (
     'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
     'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
     'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+    'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
     'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
 )
 
@@ -439,3 +441,224 @@ def test_a_paragraph_survives_chunking_whole() -> None:
     assert len(chunks) > 1, "the document is too big for one chunk, so this is a real test"
     for paragraph in paragraphs:
         assert sum(paragraph in chunk.text for chunk in chunks) == 1, paragraph[:24]
+
+
+# ── figures described by a model ──────────────────────────────────
+
+_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
+
+
+class _Vision:
+    """A describer that answers without a network, and records its context."""
+
+    max_figures = 64
+
+    def __init__(self, text: str = "A bar chart.", error: Exception | None = None) -> None:
+        self.text = text
+        self.error = error
+        self.calls: list[tuple[bytes, str, str]] = []
+
+    async def describe(self, image: bytes, *, mime: str = "", context_above: str = "", context_below: str = "") -> str:
+        self.calls.append((image, context_above, context_below))
+        if self.error is not None:
+            raise self.error
+        return self.text
+
+
+def _docx_with_picture(body: str, *, parts: dict[str, bytes] | None = None, rels: str | None = None) -> bytes:
+    """A package whose document part is ``body`` and which carries a picture."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as package:
+        package.writestr("[Content_Types].xml", _CONTENT_TYPES)
+        package.writestr("_rels/.rels", _PACKAGE_RELS)
+        package.writestr(
+            "word/document.xml", f"<w:document {_NAMESPACES}><w:body>{body}{_SECTION}</w:body></w:document>"
+        )
+        package.writestr("word/styles.xml", _STYLES)
+        package.writestr(
+            "word/_rels/document.xml.rels",
+            rels
+            if rels is not None
+            else (
+                '<?xml version="1.0"?>'
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="rId7" Target="media/image1.png" '
+                'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"/>'
+                "</Relationships>"
+            ),
+        )
+        for name, payload in (parts or {"word/media/image1.png": _PNG}).items():
+            package.writestr(name, payload)
+    return buffer.getvalue()
+
+
+def _picture(rel_id: str = "rId7", alt: str = "") -> str:
+    description = f' descr="{alt}"' if alt else ""
+    return (
+        f'<w:p><w:r><w:drawing><wp:inline><wp:docPr id="1" name="Picture 1"{description}/>'
+        f'<a:graphic><a:graphicData><a:blip r:embed="{rel_id}"/></a:graphicData></a:graphic>'
+        "</wp:inline></w:drawing></w:r></w:p>"
+    )
+
+
+def test_a_figure_is_described_by_the_model() -> None:
+    """The point of the whole path: an image in a document has no text, so
+    without this the section around it is indexed as if the picture were not
+    there."""
+    vision = _Vision()
+
+    sections = asyncio.run(DocxParser(vision).parse(_docx_with_picture(_picture()), "report.docx"))
+
+    assert "A bar chart." in sections[0].content.text
+    assert vision.calls[0][0] == _PNG, "the picture out of the package, not a placeholder"
+
+
+def test_the_prose_around_a_figure_goes_with_it() -> None:
+    """A figure rarely explains itself: the sentence introducing it names what
+    it is of, and without that a model describes a bar chart as a bar chart."""
+    vision = _Vision()
+    body = _p("Revenue held up in the second quarter.") + _picture() + _p("The third quarter is not in yet.")
+
+    asyncio.run(DocxParser(vision).parse(_docx_with_picture(body), "report.docx"))
+
+    _, above, below = vision.calls[0]
+    assert above == "Revenue held up in the second quarter."
+    assert below == "The third quarter is not in yet."
+
+
+def test_the_alt_text_stays_in_front_of_the_description() -> None:
+    """One is a label somebody chose and the other is what is in the picture."""
+    sections = asyncio.run(DocxParser(_Vision()).parse(_docx_with_picture(_picture(alt="Figure 4")), "report.docx"))
+
+    assert sections[0].content.text.startswith("Figure 4")
+    assert "A bar chart." in sections[0].content.text
+
+
+def test_a_described_figure_is_its_own_chunk() -> None:
+    """The span the parser already recorded is what makes it one: a figure is
+    never split on a delimiter and never merged with the paragraph beside it."""
+    from raven.knowledge._naive_chunker import NaiveChunker
+
+    vision = _Vision(text="The chart shows revenue. " * 200)
+    body = _p("Before.") + _picture() + _p("After.")
+
+    sections = asyncio.run(DocxParser(vision).parse(_docx_with_picture(body), "report.docx"))
+    chunks = asyncio.run(NaiveChunker(chunk_size=64, image_context_size=0).chunk(sections))
+
+    assert sum(chunk.text.startswith("The chart shows revenue.") for chunk in chunks) == 1
+
+
+def test_an_undescribed_picture_is_reported_rather_than_only_logged() -> None:
+    """The document is indexed either way. What the note carries is that part
+    of it is not in the index, which a row saying ready cannot say."""
+    from raven.knowledge._notes import collecting
+
+    vision = _Vision(error=RuntimeError("rate limited"))
+    body = _p("Revenue held up.") + _picture()
+
+    with collecting() as notes:
+        sections = asyncio.run(DocxParser(vision).parse(_docx_with_picture(body), "report.docx"))
+
+    assert sections[0].content.text == "Revenue held up.", "the text still parsed"
+    assert "1 of 1 pictures" in notes[0]
+    assert "rate limited" in notes[0], "the endpoint's own words, not a category"
+
+
+def test_an_unconfigured_model_is_reported_too() -> None:
+    """The most common of the three, and the one with a fix: a reader who never
+    set a vision model has no way to know their figures are being skipped."""
+    from raven.knowledge._notes import collecting
+
+    with collecting() as notes:
+        asyncio.run(DocxParser(None).parse(_docx_with_picture(_picture()), "report.docx"))
+
+    assert "no vision model is configured" in notes[0]
+    assert "Settings" in notes[0]
+
+
+def test_a_document_with_no_pictures_reports_nothing() -> None:
+    """A note on every Word file would be noise, and the mark it draws on the
+    row would stop meaning anything."""
+    from raven.knowledge._notes import collecting
+
+    with collecting() as notes:
+        asyncio.run(DocxParser(None).parse(_docx(_p("Revenue held up.")), "report.docx"))
+
+    assert notes == []
+
+
+def test_the_figure_cap_says_so_rather_than_stopping_quietly() -> None:
+    """Otherwise a capped run looks like a model that had nothing to say about
+    the last hundred pictures."""
+    from raven.knowledge._notes import collecting
+
+    vision = _Vision()
+    vision.max_figures = 2
+
+    with collecting() as notes:
+        asyncio.run(DocxParser(vision).parse(_docx_with_picture("".join(_picture() for _ in range(5))), "r.docx"))
+
+    assert "only the first 2 of 5 pictures" in notes[0]
+
+
+def test_no_vision_model_leaves_the_document_exactly_as_it_was(monkeypatch) -> None:
+    """The asymmetry with an uploaded picture, and it is deliberate: a document
+    is worth indexing whether or not its figures were described."""
+    monkeypatch.setattr("raven.knowledge._vision.load_vision_model", lambda: None)
+    body = _p("Revenue held up.") + _picture(alt="Figure 4")
+
+    sections = asyncio.run(DocxParser().parse(_docx_with_picture(body), "report.docx"))
+
+    assert sections[0].content.text == "Revenue held up.\n\nFigure 4"
+
+
+def test_a_figure_that_cannot_be_described_costs_only_its_description() -> None:
+    vision = _Vision(error=RuntimeError("rate limited"))
+    body = _p("Revenue held up.") + _picture(alt="Figure 4")
+
+    sections = asyncio.run(DocxParser(vision).parse(_docx_with_picture(body), "report.docx"))
+
+    assert sections[0].content.text == "Revenue held up.\n\nFigure 4"
+
+
+def test_a_relationship_pointing_nowhere_is_not_a_failure() -> None:
+    """A package can name a part it does not hold. The document is still
+    readable; that one figure has no picture."""
+    vision = _Vision()
+    sections = asyncio.run(
+        DocxParser(vision).parse(_docx_with_picture(_p("Revenue held up.") + _picture(rel_id="rId99")), "report.docx")
+    )
+
+    assert vision.calls == []
+    assert sections[0].content.text == "Revenue held up."
+
+
+def test_an_externally_linked_picture_is_not_fetched() -> None:
+    """``r:link`` points at the author's disk or a URL. Neither is in the
+    package, and a parser is no place to start fetching one."""
+    vision = _Vision()
+    rels = (
+        '<?xml version="1.0"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId7" Target="https://example.com/chart.png" TargetMode="External" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"/>'
+        "</Relationships>"
+    )
+
+    asyncio.run(DocxParser(vision).parse(_docx_with_picture(_picture(), rels=rels), "report.docx"))
+
+    assert vision.calls == []
+
+
+def test_the_figure_limit_stops_a_document_costing_a_call_a_picture() -> None:
+    """Past the cap a figure keeps whatever text it had. Stopping quietly would
+    look like a model that had nothing to say."""
+    vision = _Vision()
+    vision.max_figures = 2
+    body = "".join(_picture(alt=f"Figure {n}") for n in range(5))
+
+    asyncio.run(DocxParser(vision).parse(_docx_with_picture(body), "report.docx"))
+
+    assert len(vision.calls) == 2

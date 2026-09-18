@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 
-import { t } from '../../shell/bridge'
+import { shell, t } from '../../shell/bridge'
 import { md as mdHtml } from '../../shell/prose'
 import { ProviderIcon, ravenIconPath } from '../../shell/provider-mark'
 import { open as openSettings, setTab as setSettingsTab } from '../settings/store'
@@ -22,14 +22,110 @@ function Soon({ label, className = 'mini ghost' }: { label: string; className?: 
   )
 }
 
-/* Name and embedding model, the two facts a base is created with. The model
-   cannot be changed afterwards -- vector width is fixed when the collection is
-   made -- so it is asked for here rather than offered as a setting later. */
-function CreateDialog({ model, onClose }: { model: string; onClose: () => void }): JSX.Element {
+/* A model and the provider serving it, as one value.
+
+   One control rather than two fields, and the same one in both dialogs: an
+   embedding endpoint is a pair -- a model id names no credential, and neither
+   half is worth reading without the other -- so picking them apart is how a
+   base ends up naming a model its provider does not serve. Grouped by
+   provider, because the group is the answer to "whose credential pays for
+   this".
+
+   A value the list does not hold is shown as an option of its own, so the
+   select never draws empty: an empty select would tell a reader their base has
+   no model when it has one. */
+function EmbeddingPicker({
+  id,
+  value,
+  onPick,
+}: {
+  id?: string
+  value: string
+  onPick: (pair: string) => void
+}): JSX.Element {
+  const groups = store.embeddingChoices()
+  const listed = groups.flatMap((p) => p.models.map((m) => `${p.id}::${m}`))
+  const match = listed.find((pair) => samePair(pair, value))
+  return (
+    <select
+      id={id}
+      className="mini kbmodels"
+      value={match ?? value}
+      onChange={(e) => onPick(e.currentTarget.value)}
+    >
+      {/* Disabled is a real choice, not the absence of one: a base nobody
+          means to search by vector should not be made to carry an index. */}
+      <option value="">{t('gui.kb.embed_off')}</option>
+      {/* Before the groups, so it reads as the current value: the list has not
+          arrived yet, or no longer offers what this base was built on. */}
+      {!match && value !== '' && <option value={value}>{modelOf(value)}</option>}
+      {groups.map((p) => (
+        <optgroup key={p.id} label={p.name}>
+          {p.models.map((m) => (
+            <option key={`${p.id}::${m}`} value={`${p.id}::${m}`}>
+              {m}
+            </option>
+          ))}
+        </optgroup>
+      ))}
+    </select>
+  )
+}
+
+/* The two halves of a `provider::model` pair. Split on the first separator so
+   a model id carrying one of its own survives the round trip. */
+function pairOf(value: string): { provider: string; model: string } {
+  const at = value.indexOf('::')
+  if (at < 0) return { provider: '', model: value }
+  return { provider: value.slice(0, at), model: value.slice(at + 2) }
+}
+
+function modelOf(value: string): string {
+  return pairOf(value).model
+}
+
+/* Whether two pairs name the same model.
+
+   Not string equality, for two reasons the engine already knows about and the
+   page has to agree with, or it offers a reader both spellings of one model
+   and calls picking the one they are on a rebuild.
+
+   A provider stores its models under its own prefix and that prefix comes off
+   before the request is sent, so `siliconflow::siliconflow/BAAI/bge-m3` in the
+   picker and `siliconflow::BAAI/bge-m3` on the base are one model.
+
+   And a base written before providers were recorded names a model and nobody
+   to serve it, which means "wherever this is configured" -- so an empty
+   provider matches any, and naming one for such a base records where it is
+   reached rather than moving it. */
+function samePair(a: string, b: string): boolean {
+  if (a === b) return true
+  const one = pairOf(a)
+  const two = pairOf(b)
+  if (!one.model || !two.model) return false
+  if (one.provider && two.provider && one.provider !== two.provider) return false
+  return wireModel(one) === wireModel(two)
+}
+
+/* A model id as the request carries it: the provider's own prefix off, every
+   other prefix left alone. `BAAI/` in `BAAI/bge-m3` is the maker, not the
+   account, and stripping it would read two different models as one. */
+function wireModel({ provider, model }: { provider: string; model: string }): string {
+  const head = `${provider}/`
+  return provider && model.startsWith(head) ? model.slice(head.length) : model
+}
+
+/* Name and embedding model, the two facts a base is created with. The model is
+   asked for here because it decides the width of the collection, and the
+   configured default is what the picker starts on. */
+function CreateDialog({ pair, onClose }: { pair: string; onClose: () => void }): JSX.Element {
   const [name, setName] = useState('')
-  const [embed, setEmbed] = useState(model)
+  const [embed, setEmbed] = useState(pair)
   const field = useRef<HTMLInputElement>(null)
-  useEffect(() => field.current?.focus(), [])
+  useEffect(() => {
+    field.current?.focus()
+    store.loadEmbeddingModels()
+  }, [])
 
   const submit = (): void => {
     if (!name.trim()) return
@@ -37,7 +133,8 @@ function CreateDialog({ model, onClose }: { model: string; onClose: () => void }
     // rather than a default one: sending only the name is what produced a base
     // that was asked for as Disabled and came back carrying the configured
     // model.
-    void store.create(name, '', embed !== '')
+    const picked = pairOf(embed)
+    void store.create(name, '', embed !== '', picked.model, picked.provider)
     onClose()
   }
   return (
@@ -67,17 +164,7 @@ function CreateDialog({ model, onClose }: { model: string; onClose: () => void }
         <label className="fl" htmlFor="kbembed">
           {t('gui.kb.embed_model')}
         </label>
-        <select
-          id="kbembed"
-          className="mini"
-          value={embed}
-          onChange={(e) => setEmbed(e.currentTarget.value)}
-        >
-          {/* Disabled is a real choice, not the absence of one: a base nobody
-              means to search by vector should not be made to carry an index. */}
-          <option value="">{t('gui.kb.embed_off')}</option>
-          {model && <option value={model}>{model}</option>}
-        </select>
+        <EmbeddingPicker id="kbembed" value={embed} onPick={setEmbed} />
         {!embed && <div className="hint">{t('gui.kb.embed_off_note')}</div>}
 
         <div className="kbacts">
@@ -736,10 +823,11 @@ function Field({ label, help, children }: { label: string; help: string; childre
 
 /* One base's settings.
 
-   The embedding model is shown and not offered: the vector store is sized to
-   its width when the base is created, so changing it is a rebuild of every
-   vector rather than a preference. The stale-base check exists because that
-   mismatch has to be detectable; a dropdown here would be a way to cause it. */
+   The embedding model is offered here as well as at creation, and it is the
+   one control on the panel that is not a preference: the collection is sized
+   to the model's width and holds vectors that model made, so moving it drops
+   the index and sends every document back to be cut and embedded again. That
+   is said out loud before it happens rather than discovered afterwards. */
 function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.Element {
   const saved = store.settingsOf(base)
   const [topK, setTopK] = useState(saved.top_k)
@@ -749,7 +837,8 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
   const [lap, setLap] = useState(String(saved.chunk_overlap))
   const [tableCtx, setTableCtx] = useState(String(saved.table_context_size ?? 0))
   const [imageCtx, setImageCtx] = useState(String(saved.image_context_size ?? 0))
-  const [provider, setProvider] = useState(base.embedding_provider ?? '')
+  const own = base.embedding_model ? `${base.embedding_provider ?? ''}::${base.embedding_model}` : ''
+  const [embed, setEmbed] = useState(own)
   const [adv, setAdv] = useState(true)
 
   const close = (): void => store.closeSettings()
@@ -762,7 +851,8 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
     setTableCtx('0')
     setImageCtx('0')
   }
-  const save = (): void => {
+  const write = (): void => {
+    const picked = pairOf(embed)
     void store.saveSettings({
       top_k: topK,
       smart_chunking: smart,
@@ -771,8 +861,26 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
       chunk_overlap: Number(lap),
       table_context_size: Number(tableCtx),
       image_context_size: Number(imageCtx),
-      embedding_provider: provider,
+      embedding_provider: picked.provider,
+      // Only when it moved. Sent unchanged it would still be a rebuild call,
+      // and a panel saving a slider must not drop the base's index.
+      ...(samePair(embed, own) ? {} : { embedding_model: picked.model }),
     })
+  }
+  /* Asked once, and only when there is something to lose: a base with no
+     documents has no index to drop, and a confirmation nobody needs is one
+     more click through a dialog that says something the next one will not. */
+  const save = (): void => {
+    if (samePair(embed, own) || !base.documents) {
+      write()
+      return
+    }
+    shell().confirmAsk(
+      t('gui.kb.set_embed_switch'),
+      t('gui.kb.set_embed_switch_body', { count: base.documents }),
+      t('gui.kb.set_embed_switch_go'),
+      write,
+    )
   }
   /* The two numbers are typed, so they can be mid-edit and empty or nonsense;
      saving those would ask the engine to refuse them. */
@@ -797,35 +905,15 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
 
         {/* One value, not two fields: an embedding endpoint is a provider and
             a model together -- a model id does not name a credential, and
-            neither half is worth reading without the other. The model is fixed
-            because the collection was sized to its width; the provider is the
-            half that can move, which is the repair for a base whose endpoint
-            changed under it. */}
+            neither half is worth reading without the other. */}
         <Field label={t('gui.kb.set_embed')} help={t('gui.kb.set_embed_help')}>
-          {base.embedding_model ? (
-            <div className="kbembed">
-              {/* The base's own provider is always among the options, even
-                  when the list cannot be read: a select whose value matches no
-                  option shows as empty, which would tell a reader their base
-                  has no provider when it has one. */}
-              <select value={provider} onChange={(e) => setProvider(e.currentTarget.value)}>
-                <option value="">{t('gui.kb.set_provider_configured')}</option>
-                {[...new Set([provider, ...store.providerChoices()])]
-                  .filter(Boolean)
-                  .map((slug) => (
-                    <option key={slug} value={slug}>
-                      {slug}
-                    </option>
-                  ))}
-              </select>
-              <span className="sep">/</span>
-              <span className="mdl" title={base.embedding_model}>
-                {base.embedding_model}
-              </span>
-            </div>
-          ) : (
-            <div className="kbfixed">{t('gui.kb.embed_off')}</div>
-          )}
+          <div className="kbembed">
+            <EmbeddingPicker value={embed} onPick={setEmbed} />
+            {/* What picking another one costs, where the picking happens. The
+                confirmation on save says it again with the number of
+                documents; this is what a reader sees before they decide. */}
+            {!samePair(embed, own) && <span className="kbwarn">{t('gui.kb.set_embed_moved')}</span>}
+          </div>
         </Field>
 
         <Field label={t('gui.kb.set_topk')} help={t('gui.kb.set_topk_help')}>
@@ -1209,9 +1297,19 @@ function DocRow({ doc, busy, picked }: { doc: KbDoc; busy: boolean; picked: bool
       {/* The reason rides on the status rather than under the row. A red line
           beneath every failure pushed the rows apart and made a list of files
           hard to scan; the status is where a reader is already looking when
-          they want to know what went wrong. */}
-      <div className={`${td} st s-${doc.status}`} title={doc.error || undefined}>
+          they want to know what went wrong.
+
+          A warning rides there too, and means something different: the file
+          was indexed and is searchable, and part of it did not make it in --
+          pictures no model could read, most often. Without the mark the row
+          says ready and the only symptom is a search that answers worse. */}
+      <div className={`${td} st s-${doc.status}`} title={doc.error || doc.warning || undefined}>
         {t('gui.kb.doc_' + doc.status)}
+        {!doc.error && doc.warning && (
+          <span className="kbdocwarn" role="img" aria-label={t('gui.kb.doc_warned')}>
+            {'\u26a0'}
+          </span>
+        )}
       </div>
       {/* A dash rather than a zero for a document that has not been through
           the chunker: one that failed, one still queued, and one in a base
@@ -1931,7 +2029,12 @@ export function KnowledgeApp(): JSX.Element {
           )}
         </div>
       </div>
-      {creating && <CreateDialog model={s.status?.model ?? ''} onClose={() => setCreating(false)} />}
+      {creating && (
+        <CreateDialog
+          pair={s.status?.model ? `${s.status.provider ?? ''}::${s.status.model}` : ''}
+          onClose={() => setCreating(false)}
+        />
+      )}
       {s.dialog?.kind === 'note' && <NoteDialog doc={s.dialog.doc} busy={s.busy} />}
       {s.dialog?.kind === 'url' && <UrlDialog busy={s.busy} />}
       {s.dialog?.kind === 'chunk' && <ChunkDialog chunk={s.dialog.chunk} busy={s.chunkBusy} />}

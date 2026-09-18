@@ -7151,6 +7151,10 @@
             "model": {
               "type": "string"
             },
+            "provider": {
+              "type": "string",
+              "description": "Who serves the configured model. The two together are what a picker selects with: a model id names no credential, so half the pin cannot be preselected."
+            },
             "extensions": {
               "type": "array",
               "items": {
@@ -7212,6 +7216,22 @@
           "required": false,
           "schema": {
             "type": "boolean"
+          }
+        },
+        {
+          "name": "embedding_model",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "The model to build the base on. Omitted, the configured pin is used."
+          }
+        },
+        {
+          "name": "embedding_provider",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Who serves that model. A model id names no credential, so the pair travels together."
           }
         }
       ],
@@ -7345,6 +7365,14 @@
           "required": false,
           "schema": {
             "type": "string"
+          }
+        },
+        {
+          "name": "embedding_model",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "The model this base holds vectors from. Not a setting: sending it rebuilds the base -- the collection is made again at the new width and every document goes back to the queue. Empty turns embedding off."
           }
         }
       ],
@@ -11946,6 +11974,10 @@
           "embedding_model": {
             "type": "string"
           },
+          "embedding_provider": {
+            "type": "string",
+            "description": "Which account this base reaches its model through. Empty means the configured endpoint, which is what every base built before the pair was recorded says."
+          },
           "dimensions": {
             "type": "integer"
           },
@@ -12027,6 +12059,10 @@
           },
           "error": {
             "type": "string"
+          },
+          "warning": {
+            "type": "string",
+            "description": "What the parse could not do, on a document that was indexed anyway -- pictures no model could read, most often. Not a second `error`: the document is searchable, and this says which part of it is not in the index."
           },
           "created_at": {
             "type": "string"

@@ -3187,10 +3187,6 @@
       "en": "The provider recorded for {model} has no usable credential, so nothing here can be indexed or searched. Give that provider a key, or point this base at another one in settings.",
       "zh": "为 {model} 记录的提供方没有可用凭据，因此这里的内容无法索引，也无法检索。请为该提供方配置密钥，或在设置中改为其他提供方。"
     },
-    "gui.kb.set_provider_configured": {
-      "en": "As configured",
-      "zh": "跟随配置"
-    },
     "gui.kb.name": {
       "en": "Name",
       "zh": "名称"
@@ -3246,6 +3242,10 @@
     "gui.kb.doc_ready": {
       "en": "Searchable",
       "zh": "可检索"
+    },
+    "gui.kb.doc_warned": {
+      "en": "Indexed, but part of this file was not read",
+      "zh": "已建立索引，但文件中有部分内容未被读取"
     },
     "gui.kb.doc_failed": {
       "en": "Failed",
@@ -4442,6 +4442,22 @@
     "gui.set.dm.translate_note": {
       "en": "Reserved for translation. Nothing calls it yet, so setting it changes nothing today.",
       "zh": "为翻译预留。目前尚无调用方，设置后暂不生效。"
+    },
+    "gui.set.dm.vision": {
+      "en": "Vision model",
+      "zh": "视觉模型"
+    },
+    "gui.set.dm.vision_note": {
+      "en": "What reads a picture. Knowledge bases describe uploaded images, and figures inside documents, with it.",
+      "zh": "用于读图的模型。知识库使用它描述上传的图片，以及文档内的插图。"
+    },
+    "gui.set.dm.vision_off": {
+      "en": "Not set -- pictures are not read",
+      "zh": "未设置：不读取图片"
+    },
+    "gui.set.dm.vision_warn": {
+      "en": "Only models that accept an image as input are offered. Unset, an uploaded image cannot be indexed and a figure inside a document keeps only its caption.",
+      "zh": "仅列出可以图片作为输入的模型。未设置时，上传的图片无法建立索引，文档内的插图也只保留其说明文字。"
     },
     "gui.set.grp.agent": {
       "en": "Agent",
@@ -7208,8 +7224,24 @@
       "zh": "向量模型"
     },
     "gui.kb.set_embed_help": {
-      "en": "The endpoint this base was built with: who serves the model, and which model. The model and its vector width are fixed -- the collection was sized to them -- but where it is reached can move, and that is the repair for a base whose endpoint changed under it.",
-      "zh": "该知识库建立时所用的端点：由谁提供，以及使用哪个模型。模型及其向量维度是固定的（向量库按其维度创建），但获取模型的提供方可以更改，这也是端点变更后修复知识库的方式。"
+      "en": "Which model this base holds vectors from, and who serves it. Changing the model rebuilds the base: the index is dropped and every document is cut and embedded again on the new model.",
+      "zh": "该知识库的向量来自哪个模型，以及由谁提供。更换模型会重建知识库：原有索引被丢弃，所有文档将在新模型上重新分块并向量化。"
+    },
+    "gui.kb.set_embed_moved": {
+      "en": "Saving rebuilds this base",
+      "zh": "保存后将重建该知识库"
+    },
+    "gui.kb.set_embed_switch": {
+      "en": "Change the embedding model?",
+      "zh": "更换嵌入模型？"
+    },
+    "gui.kb.set_embed_switch_body": {
+      "en": "The vectors this base holds were made by the model it is on now, so they go. Its {count} documents are kept and go back to the queue, to be indexed again on the new model.",
+      "zh": "该知识库现有向量由当前模型生成，将被丢弃。其中 {count} 个文档会保留并重新排队，在新模型上再次建立索引。"
+    },
+    "gui.kb.set_embed_switch_go": {
+      "en": "Change and rebuild",
+      "zh": "更换并重建"
     },
     "gui.kb.set_topk": {
       "en": "Top K",

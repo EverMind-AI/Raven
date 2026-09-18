@@ -16,21 +16,11 @@ one with anyway. Going to ``.docx`` keeps the structure the format still has.
 
 from __future__ import annotations
 
-import asyncio
-import os
-import tempfile
-from pathlib import Path
-
-from loguru import logger
-
 from raven.knowledge._types import Section
 from raven.knowledge.parser import ParserBase
+from raven.knowledge.parser._office import TIMEOUT_S as _TIMEOUT_S
+from raven.knowledge.parser._office import converted
 from raven.knowledge.parser.docx_parser import DocxParser
-
-#: Long enough for a large document on a cold LibreOffice, short enough that a
-#: conversion which will never finish does not hold an indexing run open. The
-#: viewer's own renderer uses the same order of magnitude.
-_TIMEOUT_S = 120.0
 
 
 class LegacyDocParser(ParserBase):
@@ -64,45 +54,5 @@ class LegacyDocParser(ParserBase):
                 produced nothing. Both are reported as the document's own
                 error, where the reader who can act on them is looking.
         """
-        from raven.utils.office import convert, find_soffice, install_hint
-
-        executable = find_soffice()
-        if executable is None:
-            raise ValueError(
-                f"{filename!r} is a legacy Word document, which needs LibreOffice to read: {install_hint()}"
-            )
-
-        with tempfile.TemporaryDirectory(prefix="raven-doc-") as scratch:
-            room = Path(scratch)
-            source = room / "source.doc"
-            if isinstance(file, str):
-                if not os.path.isfile(file):
-                    raise FileNotFoundError(f"{filename!r}: no such file: {file!r}")
-                source.write_bytes(Path(file).read_bytes())
-            else:
-                source.write_bytes(file)
-
-            staged = room / "out"
-            staged.mkdir()
-            # Off the event loop: LibreOffice is a subprocess that takes
-            # seconds, and indexing runs in the gateway process, which is also
-            # answering the page that is watching the document's status.
-            try:
-                done = await asyncio.to_thread(
-                    convert,
-                    source,
-                    staged,
-                    executable=executable,
-                    timeout_s=self.timeout_s,
-                    target="docx",
-                )
-            except (OSError, TimeoutError) as exc:
-                raise ValueError(f"Failed to convert {filename!r} with LibreOffice: {exc}") from exc
-
-            if not done.produced:
-                logger.debug("knowledge: soffice said {!r} / {!r}", done.stdout[-400:], done.stderr[-400:])
-                raise ValueError(
-                    f"LibreOffice could not convert {filename!r} (exit {done.returncode}); "
-                    "the file may be corrupt or password-protected"
-                )
-            return await DocxParser().parse(done.produced[0].read_bytes(), filename)
+        docx = await converted(file, filename, target="docx", suffix=".doc", timeout_s=self.timeout_s)
+        return await DocxParser().parse(docx, filename)

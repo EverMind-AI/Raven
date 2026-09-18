@@ -5527,11 +5527,17 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   font-size: 12px; padding: 2px 6px; border-radius: 7px; max-width: 168px;
   border: 1px solid var(--line-soft); background: var(--bg); color: var(--text);
 }
-.kbembed .sep { color: var(--muted); }
-.kbembed .mdl {
-  font-family: var(--mono, ui-monospace, monospace); font-size: 11.5px; color: var(--muted);
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
+/* A model id is long and the row it sits in is narrow, so the control takes
+   what it can and ellipsizes rather than pushing the dialog wider. */
+.kbmodels { min-width: 0; max-width: 220px; text-overflow: ellipsis; }
+/* Said beside the control that causes it: picking another model drops the
+   index, and the reader should see that while they are still deciding. */
+.kbembed .kbwarn { flex: none; font-size: 11px; color: var(--amber); }
+/* A file that is indexed and searchable but missing a part of itself. Beside
+   the status rather than under the row: a second line per warned file is what
+   makes a list of files unscannable, and the status is where a reader already
+   looks. */
+.kbdocwarn { margin-left: 5px; color: var(--amber); font-size: 11px; cursor: help; }
 .kbunreach {
   flex: none; cursor: pointer; font-size: 11px; font-weight: 600;
   color: var(--amber); background: none;
@@ -5706,10 +5712,6 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   color: var(--faint); font: 600 9.5px/12px var(--serif); text-align: center; cursor: help;
 }
 .kbhelp:hover, .kbhelp:focus { color: var(--text); border-color: var(--muted); outline: none; }
-/* What the model is, not a way to change it: the store is sized to its width
-   when the base is made. */
-.kbfixed { font-family: var(--mono); font-size: 11.5px; color: var(--muted);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kbsetc .kbslide { flex: 1 1 auto; display: flex; flex-direction: column;
   align-items: stretch; gap: 2px; max-width: 260px; }
 .kbslide b { align-self: flex-end; font-size: 13px; }
