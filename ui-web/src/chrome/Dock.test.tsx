@@ -97,13 +97,15 @@ afterEach(() => {
 })
 
 describe('the dock', () => {
-  it('renders the band with the four children page.html had, in order', () => {
+  /* Two, where page.html had four: the five characters that used to perch on
+     the composer were the landing page's decoration, and the landing page is
+     the composer on its own now. The running strip is a third child only while
+     something is running -- it renders nothing at all otherwise. */
+  it('renders the band with the children page.html had, in order', () => {
     render()
     expect(Array.from(dock().children).map((child) => child.id || child.className)).toEqual([
-      'crew crew-back',
       'sheetRack',
       'dock-in',
-      'crew crew-front',
     ])
   })
 
@@ -117,7 +119,6 @@ describe('the dock', () => {
     ]) {
       expect(document.querySelectorAll(`#${id}`), id).toHaveLength(1)
     }
-    expect(dock().querySelectorAll('.crew .rv')).toHaveLength(5)
   })
 
   /* What the goldens drop: they record tag, id, class and data-*, so a deleted
@@ -140,9 +141,6 @@ describe('the dock', () => {
     expect(el('tierChip').hidden).toBe(true)
     expect(el('ctxChip').hidden).toBe(true)
     expect((el('go') as HTMLButtonElement).disabled).toBe(true)
-    for (const crew of dock().querySelectorAll('.crew')) {
-      expect(crew.getAttribute('aria-hidden')).toBe('true')
-    }
   })
 
   /* The warning class and the order it lands in. It was a classList.toggle, so

@@ -101,10 +101,18 @@ div.app
         div#wsGrip.grip
         div#brand
           span.mk
+            svg
+              rect
+              path
+              circle
+              ellipse
+              ellipse
+              circle
+              circle
+              path
+              path
           span.wl
         div.dock
-          div.crew.crew-back
-            img.rv.rv-content
           div#sheetRack.sheets
           div.dock-in
             div#queued.queued
@@ -148,11 +156,6 @@ div.app
                 span#tierPopLab.lab
               div#tierList
               div.note
-          div.crew.crew-front
-            img.rv.rv-main
-            img.rv.rv-research
-            img.rv.rv-coding
-            img.rv.rv-data
       aside#ws.ws
         div.ws-top
           div#wsTabs.wseg

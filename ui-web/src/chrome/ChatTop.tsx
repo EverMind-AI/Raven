@@ -36,6 +36,7 @@
 
 import { useSyncExternalStore } from 'react'
 
+import { RavenMark } from '../components/RavenMark'
 import { rename as renameSession } from '../features/rail/store'
 import * as lang from '../state/lang'
 import { Banner } from './Banner'
@@ -121,9 +122,7 @@ export function ChatTop(): JSX.Element {
         aria-label={lang.attr('gui.resize_ws')}
       />
       <div id="brand" aria-hidden="true">
-        {/* Empty until there is artwork to put in it: #brand .mk:empty hides
-            the slot, so the emptiness is what the rule reads. */}
-        <span className="mk" />
+        <span className="mk"><RavenMark height={52} /></span>
         <span className="wl">Raven Agent</span>
       </div>
     </>
