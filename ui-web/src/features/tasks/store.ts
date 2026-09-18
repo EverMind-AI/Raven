@@ -65,10 +65,13 @@ export const rows = (): TaskRow[] => store.get().rows
 
 export async function refresh(): Promise<void> {
   const src = source()
-  if (!src || !src.list) {
-    patch({ rows: [], loaded: true })
-    return
-  }
+  /* Unasked, which is not the same as empty. The strip above the composer is in
+     the first frame -- App renders synchronously, and the page's wiring runs
+     after it -- so its own effect asks before `sources.tasks` is on. Claiming a
+     load there answered "no tasks" for the rest of the session, because the
+     effect only asks again when `loaded` goes back to false. The wiring asks
+     once the seam is on (src/app/install.ts). */
+  if (!src || !src.list) return
   const got = await src.list()
   patch({ rows: Array.isArray(got) ? got : [], loaded: true })
 }

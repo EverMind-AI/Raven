@@ -32,7 +32,7 @@ import { bannerSource, settingsSource } from '../features/settings/source'
 import { skillsSource } from '../features/skills/source'
 import { agentsSource, startAgentHeartbeat } from '../features/subagents/source'
 import { fixtureTasksSource, tasksSource } from '../features/tasks/source'
-import { reset as resetTasks } from '../features/tasks/store'
+import { refresh as refreshTasks, reset as resetTasks } from '../features/tasks/store'
 import {
   branch, cleanPreview, dagRun, okOf, openDagNode, openDagRun, openSpawn, spawnList, spawnRecord,
 } from '../features/transcript/source'
@@ -278,6 +278,10 @@ export function installPushes(): void {
   /* A delegated run in flight has to move on screen without being reopened, and
      there is no push for it -- so the subagents source polls. */
   startAgentHeartbeat()
+  /* The tasks panel's first read, now that its seam is on. The strip that shows
+     the running rows is rendered in the first frame, before any of this, so the
+     ask it makes for itself finds no source and is not the one that lands. */
+  void refreshTasks()
 }
 
 /* ── the actions: controls whose answer belongs to the session ────────────── */
