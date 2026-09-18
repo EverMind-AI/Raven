@@ -230,20 +230,20 @@ async def test_a_bound_harness_decides_what_a_conducts_verdict_does():
     assert (await hook.after_iteration(ctx)).rollback is True, "unbound: the conduct's own verdict"
 
     class Lenient:
-        async def review(self, step, conducts):
+        async def judge_step(self, step, conducts):
             assert len(conducts) == 1, "the seat hands the module this turn's conducts"
             return Accept(note="action: overruled")
 
-        async def salvage(self, step, conducts):
+        async def rescue(self, step, conducts):
             return "the module's own salvage"
 
     class Louder:
-        async def advise(self, step, conducts):
+        async def guide(self, step, conducts):
             assert len(conducts) == 1
             return "planning: the module's own advice"
 
     class Rewriting:
-        async def intake(self, text, step, conducts):
+        async def read_inbound(self, text, step, conducts):
             assert len(conducts) == 1
             return Intake(text=f"{text} (as the module reads it)")
 

@@ -151,7 +151,7 @@ class ConductHook(AgentHook):
         return seat
 
     @staticmethod
-    def _step(ctx: Any, *, tools_ran: bool = False) -> StepView:
+    def _step(ctx: Any, *, phase: str) -> StepView:
         # ``getattr`` throughout: the loop hands a full ``AgentHookContext``,
         # a phase-level test hands the two fields it cares about.
         meta = getattr(ctx, "metadata", None) or {}
@@ -166,7 +166,7 @@ class ConductHook(AgentHook):
             rollbacks=int(meta.get("hook_rollbacks", 0) or 0),
             mode=meta.get("mode"),
             mode_overlay=_frozen(meta.get("mode_overlay")),
-            tools_ran=tools_ran,
+            phase=phase,
             tools=_readonly(getattr(ctx, "tools", None)),
             window=getattr(ctx, "context_window_tokens", None) or None,
             max_iterations=getattr(ctx, "max_iterations", None) or None,
@@ -211,33 +211,33 @@ class ConductHook(AgentHook):
         harness = current_harness()
         if harness is None:
             return await compose_intake(text, step, [conduct])
-        return await harness.memory.intake(text, step, [conduct])
+        return await harness.memory.read_inbound(text, step, [conduct])
 
     async def _advise(self, step: StepView, conduct: AgentConduct) -> str | None:
         """The turn guidance, decided by the Planning role when one is bound."""
         harness = current_harness()
         if harness is None:
             return await compose_advice(step, [conduct])
-        return await harness.planning.advise(step, [conduct])
+        return await harness.planning.guide(step, [conduct])
 
     async def _review(self, step: StepView, conduct: AgentConduct):
         """The verdict on this step, decided by the Action role when one is bound."""
         harness = current_harness()
         if harness is None:
             return await compose_review(step, [conduct])
-        return await harness.action.review(step, [conduct])
+        return await harness.action.judge_step(step, [conduct])
 
     async def _salvage(self, step: StepView, conduct: AgentConduct):
         """What a turn with no answer sends, decided by the Action role when bound."""
         harness = current_harness()
         if harness is None:
             return await compose_salvage(step, [conduct])
-        return await harness.action.salvage(step, [conduct])
+        return await harness.action.rescue(step, [conduct])
 
     async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
         seat = self._seat(ctx, fresh=True)
         text = getattr(ctx, "inbound_content", None) or ""
-        intake = await self._intake(text, self._step(ctx), seat.conduct)
+        intake = await self._intake(text, self._step(ctx, phase="user_inbound"), seat.conduct)
         if intake is None:
             return self._with_trail(seat, HookDecision())
         notes = [intake.note] if intake.note else []
@@ -254,7 +254,7 @@ class ConductHook(AgentHook):
         # so what the conduct sizes its text against is the prefix it will be
         # spliced into, and a turn that adds nothing this call leaves nothing.
         self._strip_addendum(ctx, seat)
-        step = self._step(ctx)
+        step = self._step(ctx, phase="iteration")
         offered = getattr(ctx, "tools", None)
         narrowed = await conduct.select_tools(list(offered or []), step) if offered is not None else None
         note = await self._advise(step, conduct)
@@ -330,13 +330,15 @@ class ConductHook(AgentHook):
 
     async def before_execute_tools(self, ctx: AgentHookContext) -> HookDecision:
         seat = self._seat(ctx)
-        return self._with_trail(seat, self._decide(await self._review(self._step(ctx), seat.conduct)))
+        return self._with_trail(
+            seat, self._decide(await self._review(self._step(ctx, phase="execute_tools"), seat.conduct))
+        )
 
     async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
         seat = self._seat(ctx)
         conduct = seat.conduct
         # After the iteration, whatever the model proposed has run.
-        step = self._step(ctx, tools_ran=True)
+        step = self._step(ctx, phase="after_iteration")
         # Advice first and observation always: the six hooks this seat replaces
         # were separate entries in the chain, so one that counted something
         # counted it whether or not a later one ended the turn. What the loop is
@@ -345,7 +347,6 @@ class ConductHook(AgentHook):
         # accumulated the moment a hook answers with one of those.
         note = await self._advise(step, conduct)
         verdict = await self._review(step, conduct)
-        await conduct.observe(step)
         decision = self._decide(verdict)
         if not verdict.accepted:
             return self._with_trail(seat, decision)
@@ -353,14 +354,14 @@ class ConductHook(AgentHook):
 
     async def terminal_answerless(self, ctx: AgentHookContext) -> HookDecision:
         seat = self._seat(ctx)
-        salvaged = await self._salvage(self._step(ctx), seat.conduct)
+        salvaged = await self._salvage(self._step(ctx, phase="answerless"), seat.conduct)
         answer = HookDecision() if salvaged is None else HookDecision(short_circuit_result=salvaged)
         return self._with_trail(seat, answer)
 
     async def after_send(self, ctx: AgentHookContext) -> HookDecision:
         seat = self._seat(ctx)
         conduct = seat.conduct
-        step = self._step(ctx)
+        step = self._step(ctx, phase="sent")
         reply = getattr(ctx, "outbound_content", None) or ""
         sending = await conduct.outbound(reply, step)
         filed = await conduct.archive(step, reply or None)

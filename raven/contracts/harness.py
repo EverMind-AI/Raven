@@ -187,7 +187,7 @@ class MemoryModule(Protocol):
         """Post-turn hook: the engine updates its manifest or archives here."""
         ...
 
-    async def intake(self, text: str, step: "StepView", conducts: "Sequence[AgentConduct]") -> "Intake | None":
+    async def read_inbound(self, text: str, step: "StepView", conducts: "Sequence[AgentConduct]") -> "Intake | None":
         """What the turn's inbound text becomes before anything is assembled:
         each conduct's ``intake`` in order, threaded, until one ends the turn.
         Memory's because it decides what the model is shown; the seat that asks
@@ -224,7 +224,7 @@ class PlanningModule(Protocol):
 
     async def prepare(self, request: PlanningRequest) -> PlanningResult: ...
 
-    async def advise(self, step: "StepView", conducts: "Sequence[AgentConduct]") -> str | None:
+    async def guide(self, step: "StepView", conducts: "Sequence[AgentConduct]") -> str | None:
         """The note for the next model call, composed from what each conduct
         advises -- before the call and after it. Planning's because it is the
         one per-iteration steer a harness may give the model."""
@@ -313,14 +313,14 @@ class ActionModule(Protocol):
         """
         ...
 
-    async def review(self, step: "StepView", conducts: "Sequence[AgentConduct]") -> "Verdict":
+    async def judge_step(self, step: "StepView", conducts: "Sequence[AgentConduct]") -> "Verdict":
         """Whether one step of the turn stands, composed from each conduct's
         ``review``: the first that ends or resamples it decides. ``judge`` is
         the same question asked of one tool call before it runs; this is asked
         of the model's whole step, before its tools run and after."""
         ...
 
-    async def salvage(self, step: "StepView", conducts: "Sequence[AgentConduct]") -> Any | None:
+    async def rescue(self, step: "StepView", conducts: "Sequence[AgentConduct]") -> Any | None:
         """A reply for a turn that ended without one, the first a conduct offers."""
         ...
 
