@@ -28,10 +28,10 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent.hook.composite import CompositeHook
-from raven.agent.hook.conduct import ConductHook
+from raven.agent.hook.participant import ParticipantHook
 from raven.agent.loop import TURN_ASK_KIND_KEY, TURN_BUDGETS_KEY
-from raven.contracts.agent_conduct import Accept, AgentConduct, Answer, End, Intake, Resample, StepView
 from raven.contracts.loop_hooks import HookDecision
+from raven.contracts.participant import Accept, AgentParticipant, Answer, End, Intake, Resample, StepView
 from research_flow.config import FlowConfig
 from research_flow.gates.ask_user import (
     AskUserGate,
@@ -892,8 +892,8 @@ class ResearchFlow:
             open_product_ledger(f"{os.getpid()}-{next(_TURN_SEQ)}")
 
 
-class ResearchFlowConduct(AgentConduct):
-    """One turn of the research flow: the chain, run over a context the conduct builds.
+class ResearchFlowParticipant(AgentParticipant):
+    """One turn of the research flow: the chain, run over a context the participant builds.
 
     The gates keep their six phases and the composite keeps its merge rules;
     what this class adds is the seam. Every phase's ``GateCtx`` is built from
@@ -1014,8 +1014,8 @@ class ResearchFlowConduct(AgentConduct):
         return dict(observers) if isinstance(observers, dict) and observers else None
 
 
-class ResearchFlowHook(ConductHook):
-    """The single contributed hook: one research conduct per turn over one flow.
+class ResearchFlowHook(ParticipantHook):
+    """The single contributed hook: one research participant per turn over one flow.
 
     Kept as a named class because its constructor is the product's assembly
     surface -- the plugin and a shelf of tests build it with the flow's
@@ -1046,7 +1046,7 @@ class ResearchFlowHook(ConductHook):
             context_window_tokens=context_window_tokens,
             session_gear=session_gear,
         )
-        super().__init__("research_flow", lambda: ResearchFlowConduct(self.flow))
+        super().__init__("research_flow", lambda: ResearchFlowParticipant(self.flow))
 
     @property
     def name(self) -> str:
@@ -1078,7 +1078,7 @@ class ResearchFlowHook(ConductHook):
 
 __all__ = [
     "ResearchFlow",
-    "ResearchFlowConduct",
+    "ResearchFlowParticipant",
     "ResearchFlowHook",
     "SessionGear",
     "ToolHandles",

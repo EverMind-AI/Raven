@@ -262,7 +262,7 @@ class CharterParticipant:
         return judge(name, params, prior)
 
 
-def participants() -> tuple[CharterParticipant, ...]:
+def charter_participants() -> tuple[CharterParticipant, ...]:
     """The participants this dispatch brings, or none when it brought no
     judgements. Asked after the plugins' own, so a product's rules speak first."""
     charter = current_charter()

@@ -21,7 +21,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from raven.contracts.agent_conduct import AgentConduct, StepView
+from raven.contracts.participant import AgentParticipant, StepView
 
 _KINDS = ("accept", "resample", "end")
 
@@ -102,12 +102,12 @@ def read_intake(answer: Any, *, text: str = "") -> Intake | None:
     )
 
 
-async def compose_intake(text: str, step: StepView, conducts: Sequence[AgentConduct]) -> Intake | None:
+async def compose_intake(text: str, step: StepView, participants: Sequence[AgentParticipant]) -> Intake | None:
     current = text
     notes: list[str] = []
     changed = False
-    for conduct in conducts:
-        intake = read_intake(await conduct.intake(current, step), text=current)
+    for participant in participants:
+        intake = read_intake(await participant.intake(current, step), text=current)
         if intake is None:
             continue
         if intake.note:
@@ -122,15 +122,15 @@ async def compose_intake(text: str, step: StepView, conducts: Sequence[AgentCond
     return Intake(text=current, note="\n".join(notes) or None)
 
 
-async def compose_advice(step: StepView, conducts: Sequence[AgentConduct]) -> str | None:
-    notes = [note for conduct in conducts if (note := _text(await conduct.advise(step)))]
+async def compose_advice(step: StepView, participants: Sequence[AgentParticipant]) -> str | None:
+    notes = [note for participant in participants if (note := _text(await participant.advise(step)))]
     return "\n\n".join(notes) or None
 
 
-async def compose_review(step: StepView, conducts: Sequence[AgentConduct]) -> Verdict:
+async def compose_review(step: StepView, participants: Sequence[AgentParticipant]) -> Verdict:
     accepted: list[Verdict] = []
-    for conduct in conducts:
-        verdict = read_verdict(await conduct.review(step))
+    for participant in participants:
+        verdict = read_verdict(await participant.review(step))
         if not verdict.accepted:
             return verdict
         accepted.append(verdict)
@@ -149,9 +149,9 @@ async def compose_review(step: StepView, conducts: Sequence[AgentConduct]) -> Ve
     )
 
 
-async def compose_salvage(step: StepView, conducts: Sequence[AgentConduct]) -> str | None:
-    for conduct in conducts:
-        salvaged = await conduct.salvage(step)
+async def compose_salvage(step: StepView, participants: Sequence[AgentParticipant]) -> str | None:
+    for participant in participants:
+        salvaged = await participant.salvage(step)
         if isinstance(salvaged, str) and salvaged:
             return salvaged
     return None
@@ -161,7 +161,7 @@ def compose_judge(
     name: str,
     params: Mapping[str, Any],
     prior: Sequence[tuple[str, Mapping[str, Any]]],
-    conducts: Sequence[AgentConduct],
+    participants: Sequence[AgentParticipant],
 ) -> list[str]:
     """Why any participant refuses this call, the first that does deciding it.
 
@@ -170,21 +170,21 @@ def compose_judge(
     same refusal would read as one confused reason. Synchronous, because the
     verb is.
     """
-    for conduct in conducts:
-        refusals = conduct.judge(name, params, prior)
+    for participant in participants:
+        refusals = participant.judge(name, params, prior)
         said = [line for line in refusals if isinstance(line, str) and line] if refusals else []
         if said:
             return said
     return []
 
 
-async def compose_addendum(step: StepView, conducts: Sequence[AgentConduct]) -> Intake | None:
+async def compose_addendum(step: StepView, participants: Sequence[AgentParticipant]) -> Intake | None:
     """Every participant's system addendum, joined in order; the first that
     answers with a reply instead ends the turn and the joining stops there."""
     texts: list[str] = []
     notes: list[str] = []
-    for conduct in conducts:
-        addendum = read_intake(await conduct.system_addendum(step))
+    for participant in participants:
+        addendum = read_intake(await participant.system_addendum(step))
         if addendum is None:
             continue
         if addendum.note:
@@ -199,14 +199,14 @@ async def compose_addendum(step: StepView, conducts: Sequence[AgentConduct]) -> 
 
 
 async def compose_record(
-    step: StepView, reply: str | None, conducts: Sequence[AgentConduct]
+    step: StepView, reply: str | None, participants: Sequence[AgentParticipant]
 ) -> dict[str, dict[str, Any]] | None:
     """What every participant files on the turn's record, merged by observer
     name: a later one's counters join an earlier one's rather than replacing
     them, so two participants stamping the same name both survive."""
     filed: dict[str, dict[str, Any]] = {}
-    for conduct in conducts:
-        stamped = await conduct.archive(step, reply)
+    for participant in participants:
+        stamped = await participant.archive(step, reply)
         if not isinstance(stamped, Mapping):
             continue
         for name, counters in stamped.items():
@@ -216,15 +216,15 @@ async def compose_record(
 
 
 async def compose_tools(
-    offered: list[dict[str, Any]], step: StepView, conducts: Sequence[AgentConduct]
+    offered: list[dict[str, Any]], step: StepView, participants: Sequence[AgentParticipant]
 ) -> list[dict[str, Any]] | None:
     """The tool array each participant leaves for the next, threaded in order.
     None when nobody changed it, so the seat can tell "no opinion" from "this
     array"."""
     current = list(offered)
     changed = False
-    for conduct in conducts:
-        answer = await conduct.select_tools(list(current), step)
+    for participant in participants:
+        answer = await participant.select_tools(list(current), step)
         if not isinstance(answer, Sequence) or isinstance(answer, str):
             continue
         rows = [row for row in answer if isinstance(row, Mapping)]

@@ -9,13 +9,13 @@ not the loop itself. Memory assembles the window the model sees and decides how
 a transcript is made to fit again mid-turn, Planning may prepare turn guidance,
 Capability picks the tool definitions one iteration exposes, and Action produces
 one usable model response and judges a call against the dispatch's Charter.
-Each also answers for the conducts seated on it: Memory their intake, Planning
+Each also answers for the participants seated on it: Memory their intake, Planning
 their advice, Action their review and salvage.
 
-``Sequence[AgentConduct]`` on those four, and not one conduct, because a seat
+``Sequence[AgentParticipant]`` on those four, and not one participant, because a seat
 speaks for more than a plugin: a dispatch's own judgements and anything
 generated for it join the same list once they are materialised. Today a seat
-holds the one conduct its plugin wrote, so a process running two plugins asks
+holds the one participant its plugin wrote, so a process running two plugins asks
 the role twice, once per seat -- composing *across* plugins stays where it has
 always been, in the hook composite, and the role composes the participants of
 the seat that asked. Everything else the turn does --
@@ -46,11 +46,11 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from raven.agent.harness.conducts import Intake, Verdict
-    from raven.contracts.agent_conduct import AgentConduct, StepView
+    from raven.agent.harness.participants import Intake, Verdict
     from raven.contracts.assembled import AssembledContext, TokenBudget
     from raven.contracts.context import TurnContext
     from raven.contracts.llm_provider import LLMProvider, LLMResponse
+    from raven.contracts.participant import AgentParticipant, StepView
 
 __tier__ = "factory_loop"
 
@@ -188,32 +188,36 @@ class MemoryModule(Protocol):
         """Post-turn hook: the engine updates its manifest or archives here."""
         ...
 
-    async def compose_addendum(self, step: "StepView", conducts: "Sequence[AgentConduct]") -> "Intake | None":
+    async def ask_system_addendum(
+        self, step: "StepView", participants: "Sequence[AgentParticipant]"
+    ) -> "Intake | None":
         """What this call adds to the system message, composed from each
-        conduct's ``system_addendum``: the texts joined in order, and the first
-        conduct that answers with a reply instead ends the turn.
+        participant's ``system_addendum``: the texts joined in order, and the first
+        participant that answers with a reply instead ends the turn.
 
         Memory's because the system message is part of the window it assembles.
         The splicing itself stays with the seat -- a role says what the text is,
         the shell says where it goes and takes it back out next call."""
         ...
 
-    async def file_record(
-        self, step: "StepView", reply: str | None, conducts: "Sequence[AgentConduct]"
+    async def ask_archive(
+        self, step: "StepView", reply: str | None, participants: "Sequence[AgentParticipant]"
     ) -> "Mapping[str, Mapping[str, Any]] | None":
-        """What the turn's record is stamped with, merged from each conduct's
-        ``archive``: observer name to counters, later conducts merging into
+        """What the turn's record is stamped with, merged from each participant's
+        ``archive``: observer name to counters, later participants merging into
         earlier ones rather than replacing them.
 
         Memory's because it is the turn's own account of itself, filed where the
         window's other bookkeeping is filed."""
         ...
 
-    async def read_inbound(self, text: str, step: "StepView", conducts: "Sequence[AgentConduct]") -> "Intake | None":
+    async def ask_intake(
+        self, text: str, step: "StepView", participants: "Sequence[AgentParticipant]"
+    ) -> "Intake | None":
         """What the turn's inbound text becomes before anything is assembled:
-        each conduct's ``intake`` in order, threaded, until one ends the turn.
+        each participant's ``intake`` in order, threaded, until one ends the turn.
         Memory's because it decides what the model is shown; the seat that asks
-        hands over the conducts it speaks for and renders the answer."""
+        hands over the participants it speaks for and renders the answer."""
         ...
 
 
@@ -246,8 +250,8 @@ class PlanningModule(Protocol):
 
     async def prepare(self, request: PlanningRequest) -> PlanningResult: ...
 
-    async def guide(self, step: "StepView", conducts: "Sequence[AgentConduct]") -> str | None:
-        """The note for the next model call, composed from what each conduct
+    async def ask_advice(self, step: "StepView", participants: "Sequence[AgentParticipant]") -> str | None:
+        """The note for the next model call, composed from what each participant
         advises -- before the call and after it. Planning's because it is the
         one per-iteration steer a harness may give the model."""
         ...
@@ -280,10 +284,10 @@ class CapabilityModule(Protocol):
 
     async def select(self, request: CapabilityRequest) -> CapabilitySelection: ...
 
-    async def offer(
-        self, offered: list[dict[str, Any]], step: "StepView", conducts: "Sequence[AgentConduct]"
+    async def ask_select_tools(
+        self, offered: list[dict[str, Any]], step: "StepView", participants: "Sequence[AgentParticipant]"
     ) -> list[dict[str, Any]] | None:
-        """The tool array this iteration carries, composed from each conduct's
+        """The tool array this iteration carries, composed from each participant's
         ``select_tools``: threaded, so each sees what the one before it left.
 
         A seat, not the point where it takes effect. ``select`` is still what
@@ -331,12 +335,12 @@ class ActionModule(Protocol):
 
     async def decide(self, request: ActionRequest) -> "LLMResponse": ...
 
-    def judge(
+    def ask_judge(
         self,
         name: str,
         params: Mapping[str, Any],
         prior: Sequence[tuple[str, Mapping[str, Any]]],
-        conducts: "Sequence[AgentConduct]" = (),
+        participants: "Sequence[AgentParticipant]" = (),
     ) -> list[str]:
         """Why this call must not run, or an empty list, composed from each
         participant's ``judge``: the first that refuses decides, since a veto
@@ -354,15 +358,15 @@ class ActionModule(Protocol):
         """
         ...
 
-    async def judge_step(self, step: "StepView", conducts: "Sequence[AgentConduct]") -> "Verdict":
-        """Whether one step of the turn stands, composed from each conduct's
+    async def ask_review(self, step: "StepView", participants: "Sequence[AgentParticipant]") -> "Verdict":
+        """Whether one step of the turn stands, composed from each participant's
         ``review``: the first that ends or resamples it decides. ``judge`` is
         the same question asked of one tool call before it runs; this is asked
         of the model's whole step, before its tools run and after."""
         ...
 
-    async def rescue(self, step: "StepView", conducts: "Sequence[AgentConduct]") -> Any | None:
-        """A reply for a turn that ended without one, the first a conduct offers."""
+    async def ask_salvage(self, step: "StepView", participants: "Sequence[AgentParticipant]") -> Any | None:
+        """A reply for a turn that ended without one, the first a participant offers."""
         ...
 
 

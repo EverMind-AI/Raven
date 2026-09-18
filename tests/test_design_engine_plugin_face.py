@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import pytest
 
 from raven.agent import workdir
-from raven.agent.hook.conduct import ConductHook
+from raven.agent.hook.participant import ParticipantHook
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
 from raven.agent.tools.filesystem import ReadFileTool, WriteFileTool
@@ -34,7 +34,7 @@ from raven_design.plugin import (
 from raven_design.plugin.config import EngineConfig
 from raven_design.plugin.hook import (
     FOUNDATION_SKILL_ID,
-    DesignConduct,
+    DesignParticipant,
     MisconfiguredEngineHook,
     completion_notice,
     render_selection_block,
@@ -48,9 +48,9 @@ SHIPPED_SLICE = json.loads((REPO / "agents" / "raven-design" / "config.json").re
 ]
 
 
-def _seated(conduct: DesignConduct) -> ConductHook:
-    """The conduct in the hook chain, one instance for the test the way one turn has one."""
-    return ConductHook("design_engine", lambda: conduct)
+def _seated(participant: DesignParticipant) -> ParticipantHook:
+    """The participant in the hook chain, one instance for the test the way one turn has one."""
+    return ParticipantHook("design_engine", lambda: participant)
 
 
 def _ctx(config: dict) -> SimpleNamespace:
@@ -131,11 +131,11 @@ def test_strict_slice_typing_refuses_coercion_and_unknown_keys():
 
 def test_the_shipped_product_slice_casts_the_hook_with_the_full_catalog():
     hook = make_hook(_fresh(SHIPPED_SLICE))
-    assert isinstance(hook, ConductHook)
-    conduct = hook.factory()
-    assert isinstance(conduct, DesignConduct)
-    assert len(conduct._selector.cards) == 15
-    assert conduct._manager is None, "the shipped slice carries no stateRoot until the launcher renders one"
+    assert isinstance(hook, ParticipantHook)
+    participant = hook.factory()
+    assert isinstance(participant, DesignParticipant)
+    assert len(participant._selector.cards) == 15
+    assert participant._manager is None, "the shipped slice carries no stateRoot until the launcher renders one"
 
 
 def test_render_factories_decline_without_the_render_extra(monkeypatch):
@@ -240,7 +240,9 @@ async def test_shared_directory_mode_retains_existing_files_and_task_state(tmp_p
         str(tmp_path),
         [{"operation": "initialize", "state": {"goal": "Existing design", "items": [{"title": "Finish it"}]}}],
     )
-    hook = _seated(DesignConduct(EngineConfig.from_slice({"enabled": True, "workdirPerSession": False}), None, manager))
+    hook = _seated(
+        DesignParticipant(EngineConfig.from_slice({"enabled": True, "workdirPerSession": False}), None, manager)
+    )
     ctx = AgentHookContext(session_key="acp:a", inbound_content="continue", iteration=1)
     with workdir.bind(tmp_path):
         await hook.before_user_inbound(ctx)
@@ -321,7 +323,7 @@ async def test_concurrent_sessions_keep_files_state_and_completion_separate(tmp_
     assert manager.get(str(root))["goal"] == "Legacy shared task"
     assert workdir.current() is None
 
-    resumed = _seated(DesignConduct(EngineConfig.from_slice(config), None, TaskStateManager(tmp_path / "state")))
+    resumed = _seated(DesignParticipant(EngineConfig.from_slice(config), None, TaskStateManager(tmp_path / "state")))
     with workdir.bind(root):
         ctx = AgentHookContext(session_key="acp:a", iteration=1)
         decision = await resumed.before_iteration(ctx)
@@ -335,7 +337,7 @@ async def test_concurrent_sessions_keep_files_state_and_completion_separate(tmp_
 
 @pytest.mark.asyncio
 async def test_session_folder_names_preserve_distinct_full_keys(tmp_path):
-    hook = _seated(DesignConduct(EngineConfig.from_slice({"enabled": True}), None, None))
+    hook = _seated(DesignParticipant(EngineConfig.from_slice({"enabled": True}), None, None))
     keys = [
         "acp:alpha",
         "tui:alpha",
@@ -374,7 +376,7 @@ async def test_session_directory_rejects_redirected_children(tmp_path, phase, li
         target.mkdir()
     elif target_kind == "missing":
         target = outside / "missing"
-    hook = _seated(DesignConduct(EngineConfig.from_slice({"enabled": True}), None, None))
+    hook = _seated(DesignParticipant(EngineConfig.from_slice({"enabled": True}), None, None))
     ctx = AgentHookContext(session_key="acp:linked", inbound_content="draw a poster", iteration=1)
     with workdir.bind(root):
         await hook.before_user_inbound(ctx)
@@ -411,7 +413,7 @@ async def test_repointed_session_is_revalidated_before_iteration(tmp_path, link_
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "secret.txt").write_text("Outside workspace sentinel")
-    hook = _seated(DesignConduct(EngineConfig.from_slice({"enabled": True}), None, None))
+    hook = _seated(DesignParticipant(EngineConfig.from_slice({"enabled": True}), None, None))
     ctx = AgentHookContext(session_key="acp:replaced", inbound_content="draw a poster", iteration=1)
     with workdir.bind(root):
         await hook.before_user_inbound(ctx)
@@ -437,7 +439,7 @@ async def test_session_directory_accepts_a_symlinked_workspace_root(tmp_path):
     alias = tmp_path / "workspace-alias"
     alias.symlink_to(root, target_is_directory=True)
     ctx = AgentHookContext(session_key="acp:alias", inbound_content="draw a poster", iteration=1)
-    hook = _seated(DesignConduct(EngineConfig.from_slice({"enabled": True}), None, None))
+    hook = _seated(DesignParticipant(EngineConfig.from_slice({"enabled": True}), None, None))
     with workdir.bind(alias):
         assert (await hook.before_user_inbound(ctx)).short_circuit_result is None
         own = workdir.current()
@@ -458,7 +460,7 @@ async def test_session_directory_accepts_a_symlinked_workspace_root(tmp_path):
 @pytest.mark.asyncio
 async def test_command_shaped_and_blank_inbounds_pass_untouched(tmp_path):
     stub = _StubSelector(_selection())
-    hook = _seated(DesignConduct(EngineConfig.from_slice(SHIPPED_SLICE), stub, None))
+    hook = _seated(DesignParticipant(EngineConfig.from_slice(SHIPPED_SLICE), stub, None))
     for text in ("/new", "  /model haiku", "", "   ", None):
         with workdir.bind(tmp_path):
             decision = await hook.before_user_inbound(AgentHookContext(session_key="acp:s1", inbound_content=text))
@@ -470,7 +472,7 @@ async def test_command_shaped_and_blank_inbounds_pass_untouched(tmp_path):
 
 @pytest.mark.asyncio
 async def test_the_selection_block_rides_below_a_separator_with_local_ids():
-    hook = _seated(DesignConduct(EngineConfig.from_slice(SHIPPED_SLICE), _StubSelector(_selection()), None))
+    hook = _seated(DesignParticipant(EngineConfig.from_slice(SHIPPED_SLICE), _StubSelector(_selection()), None))
     decision = await hook.before_user_inbound(AgentHookContext(session_key="acp:s1", inbound_content="design a logo"))
     rewritten = decision.modified_content
     assert rewritten.startswith("design a logo\n\n---\n")
@@ -484,7 +486,7 @@ async def test_the_selection_block_rides_below_a_separator_with_local_ids():
 @pytest.mark.asyncio
 async def test_a_selection_failure_outside_the_selectors_guard_passes_untouched():
     hook = _seated(
-        DesignConduct(EngineConfig.from_slice(SHIPPED_SLICE), _StubSelector(error=RuntimeError("boom")), None)
+        DesignParticipant(EngineConfig.from_slice(SHIPPED_SLICE), _StubSelector(error=RuntimeError("boom")), None)
     )
     decision = await hook.before_user_inbound(AgentHookContext(session_key="acp:s1", inbound_content="design a logo"))
     assert decision.modified_content is None and decision.short_circuit_result is None
@@ -635,7 +637,7 @@ async def test_loop_stops_when_session_directory_is_unsafe(tmp_path, origin, obs
     provider = _ScriptedProvider([_text_response("The unsafe turn must not reach the model")])
     selector = _StubSelector(_selection())
     manager = TaskStateManager(tmp_path / "state")
-    hook = _seated(DesignConduct(EngineConfig.from_slice({"enabled": True}), selector, manager))
+    hook = _seated(DesignParticipant(EngineConfig.from_slice({"enabled": True}), selector, manager))
     loop = _loop(tmp_path / "home", provider, [hook])
     with workdir.bind(root):
         result = await loop._process_message(_req("draw a poster"), origin=origin)
@@ -652,7 +654,7 @@ async def test_task_state_projection_rides_append_note_per_iteration(tmp_path):
     manager = TaskStateManager(tmp_path / "ts")
     seen_keys: list[str] = []
 
-    class Probe(DesignConduct):
+    class Probe(DesignParticipant):
         async def advise(self, step):
             note = await super().advise(step)
             key = self._state_key()
@@ -689,7 +691,7 @@ async def test_task_state_projection_rides_append_note_per_iteration(tmp_path):
 @pytest.mark.asyncio
 async def test_completion_notice_rides_after_send(tmp_path):
     manager = TaskStateManager(tmp_path / "ts")
-    hook = _seated(DesignConduct(EngineConfig.from_slice(SHIPPED_SLICE), None, manager))
+    hook = _seated(DesignParticipant(EngineConfig.from_slice(SHIPPED_SLICE), None, manager))
     with workdir.bind(tmp_path):
         key = str(tmp_path)
         manager.apply(
@@ -715,7 +717,7 @@ async def test_stale_ledger_sends_the_turn_back_once(tmp_path):
     the judge should see.
     """
     manager = TaskStateManager(tmp_path / "ts")
-    hook = _seated(DesignConduct(EngineConfig.from_slice(SHIPPED_SLICE), None, manager))
+    hook = _seated(DesignParticipant(EngineConfig.from_slice(SHIPPED_SLICE), None, manager))
 
     def iteration(response: LLMResponse, meta: dict) -> AgentHookContext:
         return AgentHookContext(session_key="s1", iteration=1, messages=[], response=response, metadata=meta)
@@ -756,7 +758,7 @@ async def test_history_keeps_the_users_words_not_the_selector_cards(tmp_path):
     persisted user row keeps the user's own words -- and the memory store's
     payload is read from that restored slice, so the block structurally
     cannot reach extraction."""
-    hook = _seated(DesignConduct(EngineConfig.from_slice(SHIPPED_SLICE), _StubSelector(_selection()), None))
+    hook = _seated(DesignParticipant(EngineConfig.from_slice(SHIPPED_SLICE), _StubSelector(_selection()), None))
     provider = _ScriptedProvider([_text_response("on it")])
     loop = _loop(tmp_path, provider, [hook])
 
@@ -790,7 +792,7 @@ async def test_a_cancelled_turn_still_keeps_the_users_words(tmp_path):
         def get_default_model(self):
             return "fake/model"
 
-    hook = _seated(DesignConduct(EngineConfig.from_slice(SHIPPED_SLICE), _StubSelector(_selection()), None))
+    hook = _seated(DesignParticipant(EngineConfig.from_slice(SHIPPED_SLICE), _StubSelector(_selection()), None))
     provider = _CancellingProvider()
     loop = _loop(tmp_path, provider, [hook])
 
@@ -826,7 +828,7 @@ async def test_the_reply_carries_the_git_changes_appendix_in_a_checkout(tmp_path
     (repo / "logo.svg").write_text("<svg/>")
 
     manager = TaskStateManager(tmp_path / "ts")
-    hook = _seated(DesignConduct(EngineConfig.from_slice(SHIPPED_SLICE), None, manager))
+    hook = _seated(DesignParticipant(EngineConfig.from_slice(SHIPPED_SLICE), None, manager))
     with workdir.bind(repo):
         manager.apply(
             str(repo),
@@ -844,7 +846,7 @@ async def test_the_reply_carries_the_git_changes_appendix_in_a_checkout(tmp_path
 
 @pytest.mark.asyncio
 async def test_a_clean_checkout_still_answers_and_a_plain_directory_passes_untouched(tmp_path):
-    hook = _seated(DesignConduct(EngineConfig.from_slice(SHIPPED_SLICE), None, None))
+    hook = _seated(DesignParticipant(EngineConfig.from_slice(SHIPPED_SLICE), None, None))
 
     repo = tmp_path / "clean"
     repo.mkdir()

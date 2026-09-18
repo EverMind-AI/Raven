@@ -1,12 +1,12 @@
-"""The adapter that lets a conduct sit in the hook chain: one turn, one instance.
+"""The adapter that lets a participant sit in the hook chain: one turn, one instance.
 
-``ConductHook`` is an ``AgentHook`` the composite runs like any other. Each
-phase builds a ``StepView`` from the hook context, asks the conduct the verbs
+``ParticipantHook`` is an ``AgentHook`` the composite runs like any other. Each
+phase builds a ``StepView`` from the hook context, asks the participant the verbs
 that belong to that phase, and renders the answers as a ``HookDecision`` --
 so the loop's timing, the composite's merge rules and the rollback budget are
-untouched, and the conduct never sees the context.
+untouched, and the participant never sees the context.
 
-A new conduct is made from the factory the first time a turn's context is
+A new participant is made from the factory the first time a turn's context is
 seen: the loop builds one ``AgentHookContext`` per turn and mutates it across
 iterations, so the context's identity is the turn's. ``before_user_inbound``
 also starts a fresh one, since it is the turn's first phase whenever it runs
@@ -21,7 +21,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from raven.agent.harness import current_harness
-from raven.agent.harness.conducts import (
+from raven.agent.harness.participants import (
     Intake,
     Verdict,
     compose_addendum,
@@ -34,12 +34,12 @@ from raven.agent.harness.conducts import (
     read_intake,
     read_verdict,
 )
-from raven.contracts.agent_conduct import AgentConduct, ConductFactory, StepView
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.participant import AgentParticipant, ParticipantFactory, StepView
 
 
 class _Row(dict):
-    """One message as a conduct sees it: a dict that refuses to be written.
+    """One message as a participant sees it: a dict that refuses to be written.
 
     A ``dict`` subclass rather than ``MappingProxyType`` because every reader on
     the other side of this seam asks ``isinstance(m, dict)`` -- the loop's own
@@ -56,7 +56,7 @@ class _Row(dict):
     __slots__ = ()
 
     def _refuse(self, *_args: Any, **_kwargs: Any) -> None:
-        raise TypeError("a StepView row is read-only: a conduct answers by returning, never by writing to the step")
+        raise TypeError("a StepView row is read-only: a participant answers by returning, never by writing to the step")
 
     __setitem__ = _refuse
     __delitem__ = _refuse
@@ -68,15 +68,15 @@ class _Row(dict):
 
 
 def _frozen(value: Any) -> Any:
-    """A mapping a conduct cannot write through, or the value unchanged."""
+    """A mapping a participant cannot write through, or the value unchanged."""
     return _Row(value) if isinstance(value, Mapping) else value
 
 
 def _readonly(rows: Any) -> tuple[Any, ...]:
-    """The loop's own rows, published so a conduct cannot edit them.
+    """The loop's own rows, published so a participant cannot edit them.
 
     ``tuple`` freezes the sequence; the mappings inside it are the very objects
-    the loop prompts with, so a plain tuple would let a conduct rewrite the
+    the loop prompts with, so a plain tuple would let a participant rewrite the
     transcript through a field the paper calls read-only.
     """
     return tuple(_frozen(row) for row in (rows or ()))
@@ -84,30 +84,30 @@ def _readonly(rows: Any) -> tuple[Any, ...]:
 
 @dataclass
 class _Seat:
-    """One turn's conduct and what it spliced into the system message.
+    """One turn's participant and what it spliced into the system message.
 
     The addendum is the part exactly as it was spliced, so the next call finds
     that one and takes it back out rather than stacking a second copy.
     """
 
-    conduct: AgentConduct
+    participant: AgentParticipant
     addendum: Any = None
 
 
-class ConductHook(AgentHook):
-    """One plugin's conduct, seated in the hook chain."""
+class ParticipantHook(AgentHook):
+    """One plugin's participant, seated in the hook chain."""
 
     # The default a seat declares to the loop, overridden per seat below. Kept
     # as a class attribute because that is where the rollback registry looks.
     rolls_back_iterations = True
 
-    def __init__(self, name: str, factory: ConductFactory, *, rolls_back: bool = True) -> None:
+    def __init__(self, name: str, factory: ParticipantFactory, *, rolls_back: bool = True) -> None:
         """``rolls_back`` is what the seat declares to the loop.
 
         The loop reads ``rolls_back_iterations`` off every hook it holds and, if
         any says yes, withholds the reply's tokens behind a draft gate so a
         verdict can still send the turn back. That is the right default for a
-        conduct whose ``review`` may resample, and the wrong one for a conduct
+        participant whose ``review`` may resample, and the wrong one for a participant
         that never does: it would buy nothing and cost the incremental reply the
         reader sees. Declared per seat rather than inherited, because the
         plugins this replaces declared it per hook.
@@ -115,7 +115,7 @@ class ConductHook(AgentHook):
         self.rolls_back_iterations = rolls_back
         self._name = name
         self._factory = factory
-        self._seat_key = f"raven.conduct.{name}"
+        self._seat_key = f"raven.participant.{name}"
         # Only for a caller with no metadata dict to seat the turn in.
         self._turn: Any = None
         self._seat_fallback: _Seat | None = None
@@ -126,19 +126,19 @@ class ConductHook(AgentHook):
         return self._name
 
     @property
-    def factory(self) -> ConductFactory:
-        """The factory, for a host that wants to seat the conduct elsewhere."""
+    def factory(self) -> ParticipantFactory:
+        """The factory, for a host that wants to seat the participant elsewhere."""
         return self._factory
 
     @property
-    def conduct(self) -> AgentConduct | None:
-        """The conduct of the turn whose phase ran last, for a host or a test
+    def participant(self) -> AgentParticipant | None:
+        """The participant of the turn whose phase ran last, for a host or a test
         that wants to look at it. Never read inside a phase: with two turns in
         flight the last one to start is not this one."""
-        return self._last_seat.conduct if self._last_seat is not None else None
+        return self._last_seat.participant if self._last_seat is not None else None
 
     def _seat(self, ctx: Any, *, fresh: bool = False) -> "_Seat":
-        """This turn's conduct and the addendum it spliced.
+        """This turn's participant and the addendum it spliced.
 
         Parked in the turn's own ``metadata`` dict, which is where the hook
         context has always carried a plugin's turn state: one hook instance
@@ -186,15 +186,15 @@ class ConductHook(AgentHook):
 
     @staticmethod
     def _with_trail(seat: "_Seat", decision: HookDecision) -> HookDecision:
-        """The decision with whatever this turn's conduct noted along the way.
+        """The decision with whatever this turn's participant noted along the way.
 
         ``getattr`` because the trail is a convenience the base class offers,
-        not a verb the contract requires: a conduct that implements the nine
-        verbs without inheriting ``AgentConduct`` is a conduct, and asking it
+        not a verb the contract requires: a participant that implements the nine
+        verbs without inheriting ``AgentParticipant`` is a participant, and asking it
         for a method it never claimed would raise into the composite's catch --
         which would log the plugin as broken and drop the answer it just gave.
         """
-        drain = getattr(seat.conduct, "drain_trail", None)
+        drain = getattr(seat.participant, "drain_trail", None)
         trail = drain() if callable(drain) else []
         if not trail:
             return decision
@@ -213,7 +213,7 @@ class ConductHook(AgentHook):
         verdict = answer if isinstance(answer, Verdict) else read_verdict(answer)
         # Both, de-duplicated: ``Resample`` takes its reason positionally, so an
         # author writes one there and often the same sentence again as a note.
-        # Reading only the note dropped the line a conduct that wrote just the
+        # Reading only the note dropped the line a participant that wrote just the
         # reason meant to leave behind.
         notes = list(dict.fromkeys(n for n in (verdict.reason, verdict.note) if n))
         if verdict.kind == "resample":
@@ -227,64 +227,64 @@ class ConductHook(AgentHook):
             return HookDecision(short_circuit_result=verdict.reply, notes=notes)
         return HookDecision(notes=notes)
 
-    async def _intake(self, text: str, step: StepView, conduct: AgentConduct):
+    async def _intake(self, text: str, step: StepView, participant: AgentParticipant):
         """What this turn reads in, decided by the Memory role when one is bound.
 
         Read here, so that a replaced role may answer with the mapping a
         participant answered with rather than with this seat's own shape."""
         harness = current_harness()
         if harness is None:
-            return await compose_intake(text, step, [conduct])
-        answer = await harness.memory.read_inbound(text, step, [conduct])
+            return await compose_intake(text, step, [participant])
+        answer = await harness.memory.ask_intake(text, step, [participant])
         return answer if answer is None or isinstance(answer, Intake) else read_intake(answer, text=text)
 
-    async def _advise(self, step: StepView, conduct: AgentConduct) -> str | None:
+    async def _advise(self, step: StepView, participant: AgentParticipant) -> str | None:
         """The turn guidance, decided by the Planning role when one is bound."""
         harness = current_harness()
         if harness is None:
-            return await compose_advice(step, [conduct])
-        return await harness.planning.guide(step, [conduct])
+            return await compose_advice(step, [participant])
+        return await harness.planning.ask_advice(step, [participant])
 
-    async def _review(self, step: StepView, conduct: AgentConduct):
+    async def _review(self, step: StepView, participant: AgentParticipant):
         """The verdict on this step, decided by the Action role when one is bound."""
         harness = current_harness()
         if harness is None:
-            return await compose_review(step, [conduct])
-        return await harness.action.judge_step(step, [conduct])
+            return await compose_review(step, [participant])
+        return await harness.action.ask_review(step, [participant])
 
-    async def _salvage(self, step: StepView, conduct: AgentConduct):
+    async def _salvage(self, step: StepView, participant: AgentParticipant):
         """What a turn with no answer sends, decided by the Action role when bound."""
         harness = current_harness()
         if harness is None:
-            return await compose_salvage(step, [conduct])
-        return await harness.action.rescue(step, [conduct])
+            return await compose_salvage(step, [participant])
+        return await harness.action.ask_salvage(step, [participant])
 
-    async def _addendum(self, step: StepView, conduct: AgentConduct):
+    async def _addendum(self, step: StepView, participant: AgentParticipant):
         """What this call adds to the system message, composed by Memory."""
         harness = current_harness()
         if harness is None:
-            return await compose_addendum(step, [conduct])
-        answer = await harness.memory.compose_addendum(step, [conduct])
+            return await compose_addendum(step, [participant])
+        answer = await harness.memory.ask_system_addendum(step, [participant])
         return answer if answer is None or isinstance(answer, Intake) else read_intake(answer)
 
-    async def _record(self, step: StepView, reply: str | None, conduct: AgentConduct):
+    async def _record(self, step: StepView, reply: str | None, participant: AgentParticipant):
         """What the turn's record is stamped with, merged by Memory."""
         harness = current_harness()
         if harness is None:
-            return await compose_record(step, reply, [conduct])
-        return await harness.memory.file_record(step, reply, [conduct])
+            return await compose_record(step, reply, [participant])
+        return await harness.memory.ask_archive(step, reply, [participant])
 
-    async def _tools(self, offered: list[dict[str, Any]], step: StepView, conduct: AgentConduct):
+    async def _tools(self, offered: list[dict[str, Any]], step: StepView, participant: AgentParticipant):
         """The tool array this iteration carries, composed by Capability."""
         harness = current_harness()
         if harness is None:
-            return await compose_tools(offered, step, [conduct])
-        return await harness.capability.offer(offered, step, [conduct])
+            return await compose_tools(offered, step, [participant])
+        return await harness.capability.ask_select_tools(offered, step, [participant])
 
     async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
         seat = self._seat(ctx, fresh=True)
         text = getattr(ctx, "inbound_content", None) or ""
-        intake = await self._intake(text, self._step(ctx, phase="user_inbound"), seat.conduct)
+        intake = await self._intake(text, self._step(ctx, phase="user_inbound"), seat.participant)
         if intake is None:
             return self._with_trail(seat, HookDecision())
         notes = [intake.note] if intake.note else []
@@ -296,16 +296,16 @@ class ConductHook(AgentHook):
 
     async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
         seat = self._seat(ctx)
-        conduct = seat.conduct
-        # The system message is shown without this conduct's earlier addendum,
-        # so what the conduct sizes its text against is the prefix it will be
+        participant = seat.participant
+        # The system message is shown without this participant's earlier addendum,
+        # so what the participant sizes its text against is the prefix it will be
         # spliced into, and a turn that adds nothing this call leaves nothing.
         self._strip_addendum(ctx, seat)
         step = self._step(ctx, phase="iteration")
         offered = getattr(ctx, "tools", None)
-        narrowed = await self._tools(list(offered or []), step, conduct) if offered is not None else None
-        note = await self._advise(step, conduct)
-        addendum = await self._addendum(step, conduct)
+        narrowed = await self._tools(list(offered or []), step, participant) if offered is not None else None
+        note = await self._advise(step, participant)
+        addendum = await self._addendum(step, participant)
         if addendum is not None and addendum.reply is not None:
             return self._with_trail(
                 seat,
@@ -328,9 +328,9 @@ class ConductHook(AgentHook):
         return next((m for m in messages if isinstance(m, dict) and m.get("role") == "system"), None)
 
     def _strip_addendum(self, ctx: Any, seat: "_Seat") -> None:
-        """Take this conduct's previous addendum back out of the system message.
+        """Take this participant's previous addendum back out of the system message.
 
-        Found by its text rather than by where it was put: another conduct's
+        Found by its text rather than by where it was put: another participant's
         seat may have spliced after this one and stripped before it, so an
         offset taken last iteration does not survive a second seat. The
         bookkeeping is cleared only once the text is actually gone -- a strip
@@ -378,12 +378,12 @@ class ConductHook(AgentHook):
     async def before_execute_tools(self, ctx: AgentHookContext) -> HookDecision:
         seat = self._seat(ctx)
         return self._with_trail(
-            seat, self._decide(await self._review(self._step(ctx, phase="execute_tools"), seat.conduct))
+            seat, self._decide(await self._review(self._step(ctx, phase="execute_tools"), seat.participant))
         )
 
     async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
         seat = self._seat(ctx)
-        conduct = seat.conduct
+        participant = seat.participant
         # After the iteration, whatever the model proposed has run.
         step = self._step(ctx, phase="after_iteration")
         # Advice first and observation always: the six hooks this seat replaces
@@ -392,8 +392,8 @@ class ConductHook(AgentHook):
         # handed still follows the chain: a decision that ends or resamples
         # carries no appended note, because the composite drops the notes it
         # accumulated the moment a hook answers with one of those.
-        note = await self._advise(step, conduct)
-        answer = await self._review(step, conduct)
+        note = await self._advise(step, participant)
+        answer = await self._review(step, participant)
         verdict = answer if isinstance(answer, Verdict) else read_verdict(answer)
         decision = self._decide(verdict)
         if not verdict.accepted:
@@ -402,20 +402,20 @@ class ConductHook(AgentHook):
 
     async def terminal_answerless(self, ctx: AgentHookContext) -> HookDecision:
         seat = self._seat(ctx)
-        salvaged = await self._salvage(self._step(ctx, phase="answerless"), seat.conduct)
+        salvaged = await self._salvage(self._step(ctx, phase="answerless"), seat.participant)
         answer = HookDecision() if salvaged is None else HookDecision(short_circuit_result=salvaged)
         return self._with_trail(seat, answer)
 
     async def after_send(self, ctx: AgentHookContext) -> HookDecision:
         seat = self._seat(ctx)
-        conduct = seat.conduct
+        participant = seat.participant
         step = self._step(ctx, phase="sent")
         reply = getattr(ctx, "outbound_content", None) or ""
-        sending = await conduct.outbound(reply, step)
-        filed = await self._record(step, reply or None, conduct)
+        sending = await participant.outbound(reply, step)
+        filed = await self._record(step, reply or None, participant)
         if filed:
             # Stamped where the loop files a turn's observers: one entry per
-            # observer name, merged so another conduct's counters stand.
+            # observer name, merged so another participant's counters stand.
             meta = getattr(ctx, "metadata", None)
             if isinstance(meta, dict):
                 observers = meta.setdefault("observers", {})
@@ -429,4 +429,4 @@ class ConductHook(AgentHook):
         return self._with_trail(seat, HookDecision(modified_content=sending))
 
 
-__all__ = ["ConductHook"]
+__all__ = ["ParticipantHook"]

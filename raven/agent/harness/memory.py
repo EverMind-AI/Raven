@@ -42,11 +42,11 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.agent.harness.conducts import Intake, compose_addendum, compose_intake, compose_record
+from raven.agent.harness.participants import Intake, compose_addendum, compose_intake, compose_record
 from raven.agent.window import compaction, shrink
-from raven.contracts.agent_conduct import AgentConduct, StepView
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.harness import MemoryModule, ShrinkResult, WindowPressure, WindowState
+from raven.contracts.participant import AgentParticipant, StepView
 from raven.providers.base import send_max_tokens
 from raven.utils.tokens import estimate_prompt_tokens
 
@@ -381,16 +381,16 @@ class DefaultMemory:
     async def after_turn(self, session_key: str, outcome: dict[str, Any]) -> None:
         await self._engine.after_turn(session_key, outcome)
 
-    async def read_inbound(self, text: str, step: StepView, conducts: Sequence[AgentConduct]) -> Intake | None:
-        return await compose_intake(text, step, conducts)
+    async def ask_intake(self, text: str, step: StepView, participants: Sequence[AgentParticipant]) -> Intake | None:
+        return await compose_intake(text, step, participants)
 
-    async def compose_addendum(self, step: StepView, conducts: Sequence[AgentConduct]) -> Intake | None:
-        return await compose_addendum(step, conducts)
+    async def ask_system_addendum(self, step: StepView, participants: Sequence[AgentParticipant]) -> Intake | None:
+        return await compose_addendum(step, participants)
 
-    async def file_record(
-        self, step: StepView, reply: str | None, conducts: Sequence[AgentConduct]
+    async def ask_archive(
+        self, step: StepView, reply: str | None, participants: Sequence[AgentParticipant]
     ) -> dict[str, dict[str, Any]] | None:
-        return await compose_record(step, reply, conducts)
+        return await compose_record(step, reply, participants)
 
 
 def bind(memory: DefaultMemory) -> MemoryModule:
@@ -399,7 +399,7 @@ def bind(memory: DefaultMemory) -> MemoryModule:
     if not isinstance(memory, MemoryModule):
         raise TypeError(
             f"{type(memory).__name__} cannot serve as the Memory role: it must provide "
-            "owns_compaction, candidate_messages, token_budget, assemble, shrink, read_inbound and after_turn"
+            "owns_compaction, candidate_messages, token_budget, assemble, shrink, ask_intake, ask_system_addendum, ask_archive and after_turn"
         )
     return memory
 

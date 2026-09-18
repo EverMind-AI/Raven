@@ -140,10 +140,10 @@ Measured at 3,170, thirty over the count rather than one, for the reason the
 first bump gave.
 
 3,200 -> 3,410 (2026-09-18), and this is that review. The change is a whole
-paper: contracts/agent_conduct.py, 191 lines, the nine verbs a sub-agent
-implements instead of the six hook phases (``AgentConduct``, its ``StepView``
+paper: contracts/participant.py, 191 lines, the nine verbs a sub-agent
+implements instead of the six hook phases (``AgentParticipant``, its ``StepView``
 of fourteen read-only fields, the ``Intake`` and ``Verdict`` it answers with,
-the per-turn ``ConductFactory``, and a diagnostic trail so a gate's one-line
+the per-turn ``ParticipantFactory``, and a diagnostic trail so a gate's one-line
 findings still reach the loop's notes). It sits beside ``loop_hooks`` rather
 than replacing it: the phases remain the loop's timing contract, this is the
 judgement contract, and an adapter seats one in the other. Surveyed before it
@@ -155,16 +155,16 @@ not move with it.
 
 Measured at 3,379, thirty-one over the count, for the reason given above.
 
-3,410 -> 3,440 (2026-09-18), when the conducts were seated on the roles:
+3,410 -> 3,440 (2026-09-18), when the participants were seated on the roles:
 ``MemoryModule.intake``, ``PlanningModule.advise`` and ``ActionModule.review``
-/ ``salvage`` -- the four verbs a conduct answers that belong to a role rather
-than to the seat, each taking this turn's conducts so a replaced role decides
+/ ``salvage`` -- the four verbs a participant answers that belong to a role rather
+than to the seat, each taking this turn's participants so a replaced role decides
 what a plugin's judgement does. 28 lines of protocol and prose; the
 composition rules themselves live in the harness, not here.
 
 Measured at 3,406, thirty-four over the count, for the reason given above.
 
-And once more, 3,440 -> 3,470, for the closeout of the conduct contract
+And once more, 3,440 -> 3,470, for the closeout of the participant contract
 (2026-09-18). Four changes, all of them narrowing what the paper claims rather
 than widening it: ``observe`` is gone, because a verb with no return value
 decides nothing and can only keep the state a participant is forbidden to
@@ -187,9 +187,9 @@ seam applied without a seat. ``system_addendum``, ``archive`` and
 ``select_tools`` were rendered straight onto the hook decision, so each was the
 one judgement in the set with nowhere to compose two participants, nowhere to
 vet what came back, and nothing a replacement role could decide. They join the
-roles the other four sit on: ``MemoryModule.compose_addendum`` and
-``file_record``, and ``CapabilityModule.offer``. The tool seat is deliberately
-not the point where narrowing takes effect -- ``select`` still is, and the
+roles the other four sit on: ``MemoryModule.ask_system_addendum`` and
+``ask_archive``, and ``CapabilityModule.ask_select_tools``. The tool seat is
+deliberately not the point where narrowing takes effect -- ``select`` still is, and the
 registry still adjudicates every call -- so a participant narrows after the
 product has spoken and never instead of it. 47 lines of protocol and prose.
 
@@ -198,7 +198,7 @@ Measured at 3,477.
 
 And once more, 3,500 -> 3,540 (2026-09-18), for the verb that lets a
 dispatch's own judgements be a participant rather than something a role reads
-for itself. ``AgentConduct.judge`` is the one synchronous verb -- it runs before
+for itself. ``AgentParticipant.judge`` is the one synchronous verb -- it runs before
 every tool dispatch and ahead of the permission gate -- and it was already pure
 data, a list of sentences. Adding it is what makes the participant list the only
 route an external judgement takes: a Charter's ``checks`` and ``code`` answer it

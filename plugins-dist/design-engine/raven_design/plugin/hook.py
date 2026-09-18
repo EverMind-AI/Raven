@@ -67,8 +67,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from raven.agent import workdir
-from raven.contracts.agent_conduct import Accept, AgentConduct, Answer, Intake, Resample, StepView
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.participant import Accept, AgentParticipant, Answer, Intake, Resample, StepView
 from raven.memory_engine.skill_local.registry import SkillRegistry
 from raven.utils.paths import mint_slug
 from raven_design.selector import VisualDomainSkillSelector
@@ -251,7 +251,7 @@ class MisconfiguredEngineHook(AgentHook):
         return HookDecision(short_circuit_result=(f"{_MALFORMED_SLICE_ERROR}: {self._error}", []))
 
 
-class DesignConduct(AgentConduct):
+class DesignParticipant(AgentParticipant):
     """Domain selection on the way in; task-state projection and nudge through.
 
     One instance per turn (the host builds it from ``make_hook``'s factory), so
@@ -418,7 +418,7 @@ class DesignConduct(AgentConduct):
 
 __all__ = [
     "FOUNDATION_SKILL_ID",
-    "DesignConduct",
+    "DesignParticipant",
     "MisconfiguredEngineHook",
     "RECONCILE_NUDGE",
     "build_selector",
