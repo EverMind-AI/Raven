@@ -65,14 +65,13 @@ class StepView:
     """The context window the loop was told to assume, in tokens -- the sizing
     fallback for a caller with no active model binding to consult."""
     max_iterations: int | None = None
+    """The loop's iteration cap this turn, for a participant that paces itself against it."""
 
     @property
     def tools_ran(self) -> bool:
         """Whether this step's tool calls have run, for the two ``review``
         moments. Derived from ``phase`` so the two cannot disagree."""
         return self.phase == "after_iteration"
-
-    """The loop's iteration cap this turn, for a participant that paces itself against it."""
 
 
 Answer = Mapping[str, Any]
@@ -196,8 +195,18 @@ class AgentParticipant:
         the turn rather than the call.
 
         Already pure data, which is why a dispatch's own ``checks`` and ``code``
-        answer here: they are participants like any other, asked after the
-        plugins so that a product's own rules speak first."""
+        answer here: they are participants like any other, and the merge asks
+        them after the plugins so that a product's own rules speak first.
+
+        Today the list holds only those: the seat does not ask this verb,
+        because the party that asks it is ``ToolRegistry.execute`` and a
+        registry is not the hook chain that seats a participant -- it has no
+        handle on this turn's. So a plugin that overrides ``judge`` is not yet
+        reached, and a plugin that wants to refuse a call still does it from
+        ``review`` at the ``execute_tools`` phase. Wiring the seat's
+        participants through to the registry is a turn-scoped register this
+        change does not add, and it would start refusing calls that run today,
+        which is why it is named here rather than slipped in."""
         return ()
 
     async def outbound(self, reply: str, step: StepView) -> str | None:

@@ -209,6 +209,18 @@ not asked. 30 lines of protocol and prose.
 
 Measured at 3,515.
 
+
+And once more, 3,540 -> 3,550 (2026-09-18), for prose only -- no executable
+line moves with it. Two claims on the paper were wider than the tree: the
+``max_iterations`` docstring had been orphaned by the property inserted above
+it, and ``judge`` read as though a plugin's override were asked, when the party
+that asks it is the tool registry and a registry holds no handle on this turn's
+participants. Both now say what is wired. A ceiling bump for a docstring is the
+cost of keeping the paper honest about what it does not do, which is the half a
+reader cannot check by reading the code.
+
+Measured at 3,528.
+
 """
 
 from __future__ import annotations
@@ -219,7 +231,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 3_540
+CONTRACTS_LINE_CEILING = 3_550
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 

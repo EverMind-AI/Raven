@@ -265,6 +265,83 @@ async def test_a_bound_harness_decides_what_a_participants_verdict_does():
 
 
 @pytest.mark.asyncio
+async def test_each_phase_names_itself_on_the_step():
+    """``phase`` is the field a verb asked at two moments reads to tell them
+    apart, and ``tools_ran`` is derived from it. Three of the five bundled
+    plugins branch on ``tools_ran`` -- ppt on its close, oncall on its counter,
+    research on which gate runs -- so a mistyped phase string at one of the six
+    call sites would change what they do with nothing here to say so."""
+
+    seen: list[tuple[str, bool]] = []
+
+    class Watcher(AgentParticipant):
+        async def intake(self, text, step):
+            seen.append((step.phase, step.tools_ran))
+            return None
+
+        async def advise(self, step):
+            seen.append((step.phase, step.tools_ran))
+            return None
+
+        async def review(self, step):
+            seen.append((step.phase, step.tools_ran))
+            return Accept()
+
+        async def salvage(self, step):
+            seen.append((step.phase, step.tools_ran))
+            return None
+
+        async def archive(self, step, reply):
+            seen.append((step.phase, step.tools_ran))
+            return None
+
+    hook = ParticipantHook("probe", Watcher)
+    ctx = _ctx(iteration=1, inbound_content="q")
+    await hook.before_user_inbound(ctx)
+    await hook.before_iteration(ctx)
+    await hook.before_execute_tools(ctx)
+    await hook.after_iteration(ctx)
+    await hook.terminal_answerless(ctx)
+    await hook.after_send(SimpleNamespace(outbound_content="done", metadata={}))
+
+    assert seen == [
+        ("user_inbound", False),
+        ("iteration", False),
+        ("execute_tools", False),
+        ("after_iteration", True),
+        ("after_iteration", True),
+        ("answerless", False),
+        ("sent", False),
+    ], f"a phase is mislabelled: {seen}"
+
+
+def test_a_seated_participant_is_not_asked_to_judge_a_tool_call():
+    """``judge`` has a role but no seat, and the contract says so. The party
+    that asks it is the tool registry, which is not the hook chain and holds no
+    handle on this turn's participants -- so today only a dispatch's own rules
+    answer it. Pinned rather than left implicit: whoever wires the seat through
+    should have to come here and say the prose has changed."""
+    from raven.agent.harness import DefaultAction
+    from raven.agent.subagent.charter import Charter, CheckRule, charter_scope
+    from raven.agent.tools.registry import ToolRegistry
+
+    asked: list[str] = []
+
+    class ProductRules(AgentParticipant):
+        def judge(self, name, params, prior):
+            asked.append(name)
+            return ["the product refuses this one"]
+
+    ParticipantHook("product", ProductRules)  # seated is not enough; nothing carries it across
+    registry = ToolRegistry(verifier_provider=lambda: DefaultAction())
+    with charter_scope(Charter(checks=(CheckRule(tool="write_file", path_prefix="out/"),))):
+        refusals = registry._verifier_refusals("write_file", {"path": "/etc/passwd"})
+
+    assert refusals, "the dispatch's own rules must still be asked"
+    assert asked == [], "a seated participant is not on the registry's list -- see AgentParticipant.judge"
+
+
+@pytest.mark.asyncio
 async def test_a_participant_cannot_write_through_the_step_it_is_shown():
     """ "Read-only" is the paper's word, so the rows are rows a write raises on.
     Without this the tuple froze the sequence and left every message inside it
@@ -281,6 +358,13 @@ async def test_a_participant_cannot_write_through_the_step_it_is_shown():
                         wrote.append("yes")
                     except TypeError:
                         pass
+            # The one frozen field that is a mapping rather than a row of them.
+            if step.mode_overlay is not None:
+                try:
+                    step.mode_overlay["depth"] = "rewritten"
+                    wrote.append("yes")
+                except TypeError:
+                    pass
             return None
 
     ctx = _ctx(
@@ -288,6 +372,7 @@ async def test_a_participant_cannot_write_through_the_step_it_is_shown():
         messages=[{"role": "user", "content": "q"}],
         session_history=[{"role": "assistant", "content": "a"}],
         tools=[{"name": "web_search"}],
+        metadata={"mode_overlay": {"depth": "deep"}},
     )
     await ParticipantHook("probe", Mutator).before_iteration(ctx)
 
