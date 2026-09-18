@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { setTranslator } from '../../i18n/t'
@@ -2384,8 +2384,11 @@ describe('renaming and deleting a base', () => {
     })
     await act(async () => {
       ;(screen.getByText('gui.kb.save').closest('button') as HTMLButtonElement).click()
-      await Promise.resolve()
     })
+    /* The click starts work it does not await, and the toast lands only once
+       the rejection has reached the store's catch and <Toasts/> has drawn it.
+       One microtask was enough on a quiet machine and not on a loaded one. */
+    await waitFor(() => expect(toasts()).toHaveLength(1))
 
     expect(toasts()).toEqual(['a knowledge base called staff handbook already exists'])
     expect(document.getElementById('kbrename')).not.toBeNull()
