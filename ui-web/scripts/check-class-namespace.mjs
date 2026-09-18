@@ -183,7 +183,11 @@ const LEGACY_LOCAL = {
      two rows below moved the same way -- `.drop` and `.halt` in composer,
      `.caret` in transcript, the last of them written into a string of HTML. */
   browser: 25,
-  composer: 9,
+  /* Up from 9, and none of the two is new code: this branch deletes the old
+     settings page, which also named `.icb`, `.other`, `.srow` and `.what`, so
+     what the check read as two domains' it now reads as composer's own. The
+     settings rows below fall to zero by the same deletion. */
+  composer: 11,
   connections: 6,
   cron: 15,
   /* Up from 7, and every one of the six is a class that MOVED here rather than
@@ -250,7 +254,11 @@ const LEGACY_EXPR = {
 // goldens take their bytes from -- so these two come down by renaming, in a
 // commit that changes the DOM the goldens record.
 const LEGACY_CHROME = {
-  chrome: 103,
+  /* Up from 103: `.icb`, `.led`, `.note` and `.tick` were borrowed from names
+     the old settings page shared with the frame, and this branch deletes that
+     page. Nothing new is written -- the four move off the borrowed list and on
+     to this one. */
+  chrome: 107,
   components: 33,
 }
 
@@ -258,7 +266,10 @@ const LEGACY_CHROME_EXPR = {
   /* Up from 1 for `.hot`, `.risk`, `.rule` and `.warm`: four names written
      inside a `${...}` hole, which the expression reader used to skip over. */
   chrome: 4,
-  components: 8,
+  /* Up from 8 by the same deletion: `.led`, written from inside an expression
+     in SetupRow.tsx and SetupSheet.tsx, was shared with the old settings page
+     and is these two files' own now. */
+  components: 10,
 }
 
 // A class the markup writes that styles/page.css does not define -- page.css
@@ -308,11 +319,11 @@ const UNSTYLED = {
 // expression cannot tell from a class.
 const LEGACY_BORROWED = {
   chrome: [
-    'body', 'btn', 'cfind', 'chev', 'cmd', 'foot', 'ghost-ic', 'hd', 'ic', 'icb',
-    'lb', 'led', 'mk', 'n', 'note', 'pill', 'pmhero', 'row', 'sheet', 't',
-    'tick', 'tipdn', 'top',
+    'body', 'btn', 'cfind', 'chev', 'cmd', 'foot', 'ghost-ic', 'hd', 'ic',
+    'lb', 'mk', 'n', 'pill', 'pmhero', 'row', 'sheet', 't',
+    'tipdn', 'top',
   ],
-  components: ['a', 'cap', 'hd', 'key', 'l1', 'l2', 'led', 'n', 'skel', 'sustate', 'warn'],
+  components: ['a', 'cap', 'hd', 'key', 'l1', 'l2', 'n', 'skel', 'sustate', 'warn'],
 }
 
 const domains = readdirSync(join(src, 'features'))

@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { resetSources } from '../../../state/sources'
-import { install, mount } from '../harness'
+import { resetSources, setSources } from '../../../state/sources'
+import { install, mount, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
 import { plugChip } from './Plugins'
 
@@ -17,6 +17,11 @@ const detail = vi.hoisted(() => ({ fields: [{ key: 'token', label: 'Token', help
 vi.mock('../../plugins/source', () => ({
   pluginsSource: { detail: async () => ({ entry: { id: 'github', name: 'GitHub', contributes: [{ kind: 'mcp', auth: { mode: 'apikey', fields: detail.fields } }] }, installed: true }) },
 }))
+
+
+beforeEach(() => {
+  setSources({ settings: settingsSource })
+})
 
 afterEach(() => {
   cleanup()

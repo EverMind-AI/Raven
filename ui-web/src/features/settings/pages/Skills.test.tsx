@@ -1,16 +1,21 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as confirm from '../../../state/confirm'
-import { resetSources } from '../../../state/sources'
-import { install, mount } from '../harness'
+import { resetSources, setSources } from '../../../state/sources'
+import { install, mount, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
 import { stripFrontmatter } from './Skills'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 vi.mock('../../../state/toast', () => ({ show: () => {}, subscribe: () => () => {}, get: () => [] }))
+
+
+beforeEach(() => {
+  setSources({ settings: settingsSource })
+})
 
 afterEach(() => {
   cleanup()

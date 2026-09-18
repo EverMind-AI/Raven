@@ -10,7 +10,6 @@
 import { useState } from 'react'
 
 import { t } from '../i18n/t'
-import './modelPicker.css'
 
 import type { JSX } from 'react'
 
@@ -48,9 +47,9 @@ export function ModelPicker({ title, providers, current, onPick, onClose, emptyN
   const rows = sel ? hits(sel) : []
   const first = rows[0] ?? (q.trim() && !exact ? q.trim() : null)
   return (
-    <div className="mpk" role="dialog" aria-label={title}>
-      <div className="mpk-search">
-        <span className="ttl">{title}</span>
+    <div className="model-picker" role="dialog" aria-label={title}>
+      <div className="model-picker-search">
+        <span className="model-picker-title">{title}</span>
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>
         <input
           value={q}
@@ -72,41 +71,41 @@ export function ModelPicker({ title, providers, current, onPick, onClose, emptyN
             if (e.key === 'Enter' && sel && first) onPick(first, sel.id, !sel.models.includes(first))
           }}
         />
-        <button type="button" className="back" onClick={onClose}>{t('gui.cancel')}</button>
+        <button type="button" className="model-picker-back" onClick={onClose}>{t('gui.cancel')}</button>
       </div>
-      <div className="mpk-body">
-        <div className="mpk-left">
+      <div className="model-picker-body">
+        <div className="model-picker-left">
           {shown.map((p) => (
-            <button key={p.id} type="button" className="mpk-prov" aria-current={p.id === selId} onClick={() => setProv(p.id)}>
-              <span>{p.name}</span><span className="c">{hits(p).length}</span>
-              {current && current.provider === p.id && <span className="dot" />}
+            <button key={p.id} type="button" className="model-picker-prov" aria-current={p.id === selId} onClick={() => setProv(p.id)}>
+              <span>{p.name}</span><span className="model-picker-count">{hits(p).length}</span>
+              {current && current.provider === p.id && <span className="model-picker-dot" />}
             </button>
           ))}
         </div>
-        <div className="mpk-right">
-          {!sel && <div className="mpk-empty">{emptyNote}</div>}
+        <div className="model-picker-right">
+          {!sel && <div className="model-picker-empty">{emptyNote}</div>}
           {sel && rows.map((m) => {
             const on = !!current && current.provider === sel.id && current.model === m
             const named = sel.labels && sel.labels[m]
             const win = named && named.context_window
             return (
-              <button key={m} type="button" className="mpk-model" aria-pressed={on} onClick={() => onPick(m, sel.id, false)}>
+              <button key={m} type="button" className="model-picker-model" aria-pressed={on} onClick={() => onPick(m, sel.id, false)}>
                 <span>{(named && named.label) || m}</span>
-                {on && <span className="tick">{'✓'}</span>}
-                {win ? <span className="win">{Math.floor(win / 1000)}k</span> : null}
+                {on && <span className="model-picker-tick">{'✓'}</span>}
+                {win ? <span className="model-picker-win">{Math.floor(win / 1000)}k</span> : null}
               </button>
             )
           })}
           {sel && q.trim() && !exact && (
             <>
-              {rows.length > 0 && <div className="mpk-hr" />}
-              <button type="button" className="mpk-model add" onClick={() => onPick(q.trim(), sel.id, true)}>
+              {rows.length > 0 && <div className="model-picker-hr" />}
+              <button type="button" className="model-picker-model model-picker-add" onClick={() => onPick(q.trim(), sel.id, true)}>
                 <span>{t('gui.model.pick_use', { id: q.trim() })}</span>
-                <span className="win">{t('gui.model.pick_add_to', { name: sel.name })}</span>
+                <span className="model-picker-win">{t('gui.model.pick_add_to', { name: sel.name })}</span>
               </button>
             </>
           )}
-          {sel && !rows.length && !q.trim() && <div className="mpk-empty">{t('gui.model.pick_none')}</div>}
+          {sel && !rows.length && !q.trim() && <div className="model-picker-empty">{t('gui.model.pick_none')}</div>}
         </div>
       </div>
     </div>

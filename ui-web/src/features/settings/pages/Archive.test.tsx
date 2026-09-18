@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as confirm from '../../../state/confirm'
-import { resetSources } from '../../../state/sources'
-import { install, mount, snap } from '../harness'
+import { resetSources, setSources } from '../../../state/sources'
+import { install, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
 import { AUTO_ARCHIVE_DAYS } from './Archive'
 
@@ -18,6 +18,11 @@ const rows: ArchivedSession[] = [
   { id: 'tui:1', title: 'Quarterly deck', preview: 'p', last_message_preview: 'l', message_count: 3, started_at: 1, updated_at: Math.floor(Date.now() / 1000) - 3 * 86400 },
   { id: 'tui:2', title: '', preview: 'untitled one', last_message_preview: 'l', message_count: 1, started_at: 1, updated_at: Math.floor(Date.now() / 1000) - 40 * 86400 },
 ]
+
+
+beforeEach(() => {
+  setSources({ settings: settingsSource })
+})
 
 afterEach(() => {
   cleanup()

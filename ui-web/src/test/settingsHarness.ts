@@ -6,13 +6,12 @@ import { act, render } from '@testing-library/react'
 import { createElement } from 'react'
 import { vi } from 'vitest'
 
-import { setTranslator } from '../../i18n/t'
-import * as settingsDialog from '../../state/settings'
-import { setSources } from '../../state/sources'
-import { SettingsApp } from './SettingsApp'
-import * as store from './store'
+import { SettingsApp } from '../features/settings/SettingsApp'
+import * as store from '../features/settings/store'
+import { setTranslator } from '../i18n/t'
+import * as settingsDialog from '../state/settings'
 
-import type { ProviderRow, SettingsSnapshot, SettingsSource } from './types'
+import type { ProviderRow, SettingsSnapshot, SettingsSource } from '../features/settings/types'
 
 export const providers = (): ProviderRow[] => [
   { id: 'anthropic', name: 'Anthropic', models: ['claude-opus-4-5', 'claude-sonnet-4-5'], configured: ['claude-opus-4-5', 'claude-sonnet-4-5'],
@@ -67,12 +66,34 @@ export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
 
 export type Call = [string, unknown]
 
+/* The four elements the dialog's shell owns: App.tsx draws them and the island
+   portals into them, so they are the page's markup rather than the domain's.
+   mountPageRoot() renders the real thing where a case can afford the whole
+   page; this is the cheap stand-in for the ones that only need somewhere to
+   portal into. */
+export const SETTINGS_SHELL =
+  '<div id="setModal"><div class="snavlist" id="snavList"></div><h3 id="setTitle"></h3>'
+  + '<p class="sub" id="setSub"></p><div class="spanels" id="spanels"></div></div>'
+
+let live: SettingsSource | null = null
+
+/* What a test puts on the seam, once per file. `setSources` may be named only
+   in a `*.test.ts` file (CONTRIBUTING section 5.3), so the harness cannot
+   install itself; this stand-in keeps one identity across the installs a file
+   makes and forwards every call to whatever install() built last. */
+export const source: SettingsSource = new Proxy({} as SettingsSource, {
+  get: (_target, key) => {
+    if (!live) throw new Error('install() builds the settings source; call it before the page reads one')
+    return (live as unknown as Record<string | symbol, unknown>)[key]
+  },
+})
+
 /* A source that records every write and answers the same snapshot, so a
    test asserts what was asked of the gateway and nothing about the answer. */
 export function install(data: SettingsSnapshot = snap(), over: Partial<SettingsSource> = {}): { source: SettingsSource; calls: Call[]; data: SettingsSnapshot } {
   const calls: Call[] = []
   const rec = (name: string, args: unknown): SettingsSnapshot => { calls.push([name, args]); return data }
-  const source: SettingsSource = {
+  const built: SettingsSource = {
     load: async () => data,
     set: async (key, value) => rec('set', { key, value }),
     everosSet: async (section, fields, borrowFrom) => rec('everosSet', { section, fields, ...(borrowFrom ? { borrowFrom } : {}) }),
@@ -104,11 +125,14 @@ export function install(data: SettingsSnapshot = snap(), over: Partial<SettingsS
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
   vi.spyOn(settingsDialog, 'open').mockImplementation(() => {})
   vi.spyOn(settingsDialog, 'close').mockImplementation(() => {})
-  setSources({ settings: source })
-  document.body.innerHTML =
-    '<div id="setModal"><div class="snavlist" id="snavList"></div><h3 id="setTitle"></h3>' +
-    '<p class="sub" id="setSub"></p><div class="spanels" id="spanels"></div></div>'
+  live = built
+  document.body.innerHTML = SETTINGS_SHELL
   return { source, calls, data }
+}
+
+/** Forgets the source install() built, so the next file starts from nothing. */
+export function _resetForTests(): void {
+  live = null
 }
 
 export async function mount(tab = 'general'): Promise<ReturnType<typeof render>> {

@@ -1,15 +1,20 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, screen, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { resetSources } from '../../../state/sources'
-import { install, mount, snap } from '../harness'
+import { resetSources, setSources } from '../../../state/sources'
+import { install, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
 import { ROLES, roleProviders, rolesUsing } from './Roles'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 vi.mock('../../../state/toast', () => ({ show: () => {}, subscribe: () => () => {}, get: () => [] }))
+
+
+beforeEach(() => {
+  setSources({ settings: settingsSource })
+})
 
 afterEach(() => {
   cleanup()
@@ -20,7 +25,7 @@ afterEach(() => {
 
 const role = (id: string) => ROLES.find((r) => r.id === id)!
 const pill = (roleName: string): HTMLElement => screen.getByLabelText(`gui.settings.roles.change {"role":"${roleName}"}`)
-const picker = (): HTMLElement => document.querySelector('.mpk') as HTMLElement
+const picker = (): HTMLElement => document.querySelector('.model-picker') as HTMLElement
 const pick = async (roleName: string, model: string, providerName?: string): Promise<void> => {
   await act(async () => { fireEvent.click(pill(roleName)) })
   if (providerName) await act(async () => { fireEvent.click(within(picker()).getByText(providerName)) })

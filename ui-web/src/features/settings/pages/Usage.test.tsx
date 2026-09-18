@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { resetSources } from '../../../state/sources'
-import { install, mount } from '../harness'
+import { resetSources, setSources } from '../../../state/sources'
+import { install, mount, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
 import { lastDays } from '../store'
 import { MAX_DAYS, clampRange } from './Usage'
@@ -31,6 +31,11 @@ function stats(days: string[], withWrite = false): UsageStats {
     tools: { total: 3, counts: [{ name: 'exec', count: 2 }, { name: 'read_file', count: 1 }] },
   }
 }
+
+
+beforeEach(() => {
+  setSources({ settings: settingsSource })
+})
 
 afterEach(() => {
   cleanup()

@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { resetSources } from '../../../state/sources'
-import { install, mount, snap } from '../harness'
+import { resetSources, setSources } from '../../../state/sources'
+import { install, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
 import { workspacePath } from './About'
 
@@ -12,6 +12,11 @@ import { workspacePath } from './About'
 vi.mock('../../../state/toast', () => ({ show: () => {}, subscribe: () => () => {}, get: () => [] }))
 const copied = vi.hoisted(() => ({ values: [] as string[] }))
 vi.mock('../../../lib/openUrl', () => ({ open: (v: string) => { copied.values.push(v) } }))
+
+
+beforeEach(() => {
+  setSources({ settings: settingsSource })
+})
 
 afterEach(() => {
   cleanup()
