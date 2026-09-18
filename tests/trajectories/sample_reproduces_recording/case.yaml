@@ -1,0 +1,16 @@
+# Case metadata (see raven/trajectory/regression.py). Required by
+# `raven trajectory regression validate`.
+issue: "https://github.com/EverMind-AI/Raven/pull/362"
+owner: forrest
+why: >
+  Shape 1 sample: the live harness must reproduce this tool-calling
+  recording exactly, so any change to message assembly or tool dispatch
+  surfaces as a divergence.
+re_record: >
+  Only when the recording format or the sample generation flow changes
+  intentionally; regenerate with a scripted provider and re-run
+  trajectory minimize.
+risk: low
+reviewed_residuals:
+  - sha256: c8687dcb5a592e08ecef13e23c403d21d4c93418f2f861b3105a1b5a65248a3c
+    note: the token most-recently-modified, identifier-shaped prose in the recorded tool description

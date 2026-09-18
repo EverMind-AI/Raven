@@ -137,10 +137,10 @@ _TRACING_ID = re.compile(r"(?:trace|span|att)-[0-9a-f]{6,}")
 # tracing-id exemption above. Anchored full match: a credential merely
 # containing ``call_`` does not qualify.
 _CALL_ID = re.compile(r"^call_[A-Za-z0-9]+$")
-# Fixed field names of provider usage blocks: they clear the entropy bar in
-# every trajectory with a model call. Exact literals only — any variation
-# still flags.
-_BENIGN_LITERALS = frozenset({"completion_tokens_details", "prompt_tokens_details"})
+# Fixed field names of provider usage blocks and of the redaction report
+# itself: they clear the entropy bar in every trajectory (every cassette
+# carries a redaction.json). Exact literals only — any variation still flags.
+_BENIGN_LITERALS = frozenset({"completion_tokens_details", "prompt_tokens_details", "config_secrets_loaded"})
 _UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _PURE_DIGITS = re.compile(r"^[0-9]+$")

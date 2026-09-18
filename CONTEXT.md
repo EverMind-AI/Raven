@@ -90,12 +90,27 @@ The four generation-scoped strategy roles the Agent Loop delegates to without gi
 Turn state machine: **Memory** assembles the window the model sees, **Planning** may prepare
 turn guidance, **Capability** picks the tool definitions one Iteration exposes, and **Action**
 produces one model response. The default set preserves what the loop did inline: Memory wraps
-this generation's Context Engine and adds the two turn decisions that were the shell's (which
-history slice is a candidate, and how much window the prompt may occupy), Planning passes
+this generation's Context Engine and adds the turn decisions that were the shell's (which
+history slice is a candidate, how much window the prompt may occupy, and how a transcript is
+made to fit again mid-turn), Planning passes
 messages through, Capability reports `ToolRegistry.get_definitions`, and Action dispatches the
 one streaming-or-retrying call.
 Frozen per Generation: the tool array is the prompt-cache prefix, so the set a turn runs on
 cannot move between two of its model calls.
+
+**Window Shrink** (`agent/window/`, paper `contracts/harness.py:MemoryModule.shrink`):
+How a Turn's transcript is made to fit again after it is assembled. The Memory role is
+asked under a **WindowPressure** -- `PROACTIVE` (the last billed reading crossed the
+compaction trigger), `STANDING` (the standing image window, every iteration), `OVERFLOW`
+(the provider refused the request as too long), `TOOL_IMAGES_REFUSED` (the endpoint
+refused a picture inside a tool result), `IMAGES_TOO_LARGE` (the request's pictures
+outgrew their byte budget) -- and answers with a **ShrinkResult**: the message list to go
+on with, and whether anything was given up. **WindowState** is the turn's own bookkeeping
+the shell carries between those calls: the standing image window's width, the last billed
+context size, and the retry budgets that bound how many elisions, head summaries and
+picture withdrawals one turn may pay for. The policy is Memory's; the mechanism -- noticing
+the refusal, re-entering the Iteration, bounding the retries -- stays with the Agent Loop,
+which is why `agent/window/` holds only the pure pieces both sides read.
 _Avoid_: treating the four as four architecture layers — they are L3 strategy roles the L2
 shell calls. And saying Action owns the loop: the shell keeps iteration accounting, hook
 phases, tool execution and approval, the three in-turn recoveries, persistence and event
@@ -938,7 +953,8 @@ losslessly to disk, Consolidation distills across turns into memory notes, Compa
 
 **Compaction** (`agents.defaults.compaction`, `config/schema.py:CompactionConfig`):
 In-turn transcript compaction for long agentic turns, off by default: without it the
-loop's in-turn shrinks are the standing image window (`_window_images`, which retires
+loop's in-turn shrinks are the standing image window (`Memory.shrink` under
+`WindowPressure.STANDING`, which retires
 pictures the model has already looked at before every call, bounded by
 `agents.defaults.imageWindowBudgetBytes`) and the reactive, deterministic elision it has
 always run on a provider's overflow error. Enabled, two layers join them on the same usage
@@ -1444,8 +1460,8 @@ the directory name is provisional by ruling. One ruled edge: `trajectory` (L3)
 reaches `config.admission` for the door vocabulary and builds a loop by hand for replay --
 legal, because it is a harness over recorded runs, not an entrance. One package holds two
 seats: in `agent/`, `agent/loop` is the L2 harness shell every entrance runs, and its
-siblings -- `tools`, `subagent`, `context`, `hook`, `personalizer`,
-`workdir` -- are L3 cargo the loop consumes; the "cargo does not import the loop shell"
+siblings -- `tools`, `subagent`, `context`, `hook`, `personalizer`, `workdir`,
+`harness`, `window` -- are L3 cargo the loop consumes; the "cargo does not import the loop shell"
 import-linter contract keeps the two seats apart in the shared directory, which is why
 the package is not split physically (ruled 2026-08-30). The one exception the target
 tree always named: the ACP client family -- the client, the `acp_agent` backend that
@@ -1797,12 +1813,24 @@ the replay layer.
 
 **Trajectory Regression Case** (`raven/trajectory/regression.py`, `tests/trajectories/`):
 One directory pinning a fixed harness bug into CI: a Trajectory Cassette
-(`cassette/`) plus an expectation file (`expect.yaml`) declaring where the
+(`cassette/`), an expectation file (`expect.yaml`) declaring where the
 replay's first Replay Divergence must land and what the live side must do
-there (message contains/not-contains/equals, tool name/params checks).
-Discovered and run by `tests/test_trajectory_regressions.py`; asserting
-"divergence at the expected call, live value = fixed behavior" is the normal
-shape — zero divergence is the special case guarding faithful reproduction.
+there (message contains/not-contains/equals, tool name/params checks), and a
+metadata file (`case.yaml`) carrying the human contract — `issue`, `owner`,
+`why`, and `re_record` are required non-blank, `risk`/`created_from` are
+optional, and `reviewed_residuals` lists per-token human sign-offs on
+residual-scan findings (full-token sha256 plus a reason; nothing is exempted
+automatically). Scaffolded by `raven trajectory regression init` (minimize
+into staging, interactive residual review, atomic publish — the result is a
+draft until the metadata TODOs are filled) and gated statically by
+`raven trajectory regression validate` (both schemas, cassette completeness
+down to the replay contract, residual review coverage, a 256 KiB / 1 MiB size
+budget). Discovered and run by `tests/test_trajectory_regressions.py`, whose
+hand-raised `MIN_COMMITTED_CASES` floor keeps the suite from passing
+vacuously; the CI `trajectory` job runs the replays and `validate --all`.
+Asserting "divergence at the expected call, live value = fixed behavior" is
+the normal shape — zero divergence is the special case guarding faithful
+reproduction.
 
 ### Workspace & Onboarding
 

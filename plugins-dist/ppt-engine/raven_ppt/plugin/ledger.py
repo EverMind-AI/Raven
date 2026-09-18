@@ -44,7 +44,7 @@ LEDGER_MARKER = "[Deck ledger -- the user's words verbatim and the deck's state 
 #: can take them out of the window.
 JOURNAL_FILENAME = ".deck-words.json"
 
-# The host's summary message begins with this line (raven.agent.loop.compaction).
+# The host's summary message begins with this line (raven.agent.window.compaction).
 # Spelled here so the plugin does not import loop internals; the test suite pins
 # the two spellings against each other.
 SUMMARY_MARKER = "[Context summary — earlier steps were compacted to fit the context window]"
