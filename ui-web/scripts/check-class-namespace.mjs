@@ -56,7 +56,10 @@
 //                  renders. There the namespace is the file, because that is
 //                  what owns the markup: Skeleton.tsx names `skeleton-<rest>`,
 //                  SetupSheet.tsx names `setup-sheet-<rest>`, and a component's
-//                  own root class may be the bare name (`agent-mark`).
+//                  own root class may be the bare name (`agent-mark`). One file
+//                  at a time, so each is held to its own name: ModelTags.tsx
+//                  owning `.model-tags` does not let SetupSheet.tsx write it,
+//                  and the row that fails names the borrower and the owner.
 //
 // A name in SHARED passes in both, as it does in a domain, and so does a name
 // already on LEGACY_SHARED: that row is the debt of a class two domains name,
@@ -66,7 +69,11 @@
 // names it writes would read as one more domain and all 86 rows would move
 // without a class changing. What these two still owe is pinned per namespace:
 //
-//   LEGACY_CHROME      -- how many of a namespace's classes carry no prefix.
+//   LEGACY_CHROME      -- how many names a namespace writes without carrying
+//                         its prefix, a row per (class, prefix) pair: `chrome`
+//                         has one prefix, so that is per class, and
+//                         `components` has one per file, so a class two
+//                         components write is a row on each of them.
 //   LEGACY_CHROME_EXPR -- the same count inside a `className={...}` expression.
 //   UNSTYLED           -- a class the markup writes that no stylesheet defines.
 //
@@ -522,10 +529,12 @@ const nsStale = []
 let nsClasses = 0
 let nsLiterals = 0
 for (const ns of NAMESPACES) {
-  /* Each name with the prefixes of the files that write it: two components may
-     name the same class, and it is that component's own prefix each is held to. */
+  /* Each name with the prefixes of the files that write it, and each prefix
+     with its files: two components may name the same class, and it is that
+     component's own prefix each of them is held to. */
   const attrNames = new Map()
   const exprNames = new Map()
+  const filesOf = new Map()
   const add = (into, c, prefix) => {
     if (!into.has(c)) into.set(c, new Set())
     into.get(c).add(prefix)
@@ -533,6 +542,8 @@ for (const ns of NAMESPACES) {
   for (const file of ns.files) {
     const text = readFileSync(file, 'utf8')
     const prefix = ns.prefix(file)
+    if (!filesOf.has(prefix)) filesOf.set(prefix, [])
+    filesOf.get(prefix).push(basename(file))
     for (const m of text.matchAll(/className="([^"{]+)"/g)) {
       for (const c of m[1].trim().split(/\s+/)) if (c) add(attrNames, c, prefix)
     }
@@ -546,21 +557,43 @@ for (const ns of NAMESPACES) {
   nsClasses += attrNames.size
   nsLiterals += exprNames.size
 
-  const prefixed = (c, where) => [...where].some((prefix) => carries(c, prefix))
+  /* The file a prefix speaks for, where that is one file: `components` is a
+     namespace per file, so a row can name the borrower and the owner. `chrome`
+     is one namespace over many files and answers under its own name. */
+  const whose = (prefix) => {
+    const files = filesOf.get(prefix) ?? []
+    return files.length === 1 ? files[0] : ns.name
+  }
+  const row = (c, prefix, where) => {
+    const lenders = [...where].filter((p) => p !== prefix && carries(c, p)).map(whose)
+    if (lenders.length) return `${ns.name}/${whose(prefix)} borrows .${c} from ${lenders.join(' and ')}`
+    return whose(prefix) === ns.name ? `.${c}` : `.${c} in ${whose(prefix)}`
+  }
+  /* A row per (class, prefix) pair whose prefix the class does not carry, not
+     per class: the prefixes naming one class are separate namespaces, so the
+     component that owns the name cannot answer for a second one borrowing it.
+     An attribute row covers the pair it counted, not every use of the name. */
   const owed = (from, already) => {
     const out = []
     for (const [c, where] of from) {
-      if (SHARED.has(c) || LEGACY_SHARED[c] !== undefined || already?.has(c)) continue
-      if (!prefixed(c, where)) out.push(c)
+      if (SHARED.has(c) || LEGACY_SHARED[c] !== undefined) continue
+      for (const prefix of where) {
+        if (carries(c, prefix) || already?.get(c)?.has(prefix)) continue
+        out.push(row(c, prefix, where))
+      }
     }
     return out.sort()
   }
+  /* Whether some prefix carries the name, which is how an expression literal is
+     told from a comparison operand -- a question about the token, not about who
+     may write it. */
+  const anyPrefix = (c, where) => [...where].some((prefix) => carries(c, prefix))
   const debt = owed(attrNames)
   const exprDebt = owed(exprNames, attrNames)
   const ratchet = (found, pinned, what, into) => {
     if (pinned === undefined) into.push(`${ns.name}: ${found.length} ${what}, not on the list`)
     else if (found.length > pinned) {
-      into.push(`${ns.name}: ${found.length} ${what}, pinned ${pinned} -- ${found.map((c) => `.${c}`).join(', ')}`)
+      into.push(`${ns.name}: ${found.length} ${what}, pinned ${pinned} -- ${found.join(', ')}`)
     } else if (found.length < pinned) {
       nsStale.push(`${ns.name}: ${found.length} ${what} now, pinned ${pinned}, lower it`)
     }
@@ -573,7 +606,7 @@ for (const ns of NAMESPACES) {
      expression is where an operand is indistinguishable from a class. */
   const dead = [...attrNames.keys()].filter((c) => !styled(c))
   for (const [c, where] of exprNames) {
-    if (!attrNames.has(c) && prefixed(c, where) && !styled(c)) dead.push(c)
+    if (!attrNames.has(c) && anyPrefix(c, where) && !styled(c)) dead.push(c)
   }
   dead.sort()
   const known = UNSTYLED[ns.name]

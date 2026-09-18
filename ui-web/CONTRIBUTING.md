@@ -356,7 +356,10 @@ A class the page frame introduces -- `src/chrome/`, `src/App.tsx`,
 shared component in `src/components/` introduces carries its own file's name in
 kebab-case (`Skeleton.tsx` names `skeleton-<rest>`, `SetupSheet.tsx` names
 `setup-sheet-<rest>`), and that component's root class may be the bare name.
-Both are styled from `page.css`, which is the only sheet either has.
+Each file is its own namespace there, and each is held to its own name alone:
+`.model-tags` belongs to `ModelTags.tsx`, so `SetupSheet.tsx` writing it too is
+borrowing and fails -- the check names the borrower and the owner. Both
+namespaces are styled from `page.css`, which is the only sheet either has.
 
 **Enforced by `check-class-namespace`** (run as a gate by
 `check-class-namespace.test.mjs` and as a CLI), with three shrink-only debts:
