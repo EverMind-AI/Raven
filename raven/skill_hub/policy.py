@@ -35,7 +35,7 @@ import asyncio
 import re
 import sys
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 
 def normalize_blocklist(names: Iterable[str] | None) -> frozenset[str]:
@@ -115,6 +115,12 @@ class SkillPolicy:
     min_safety: float = 0.7
     blocklist: frozenset[str] = field(default_factory=frozenset)
     auto_install: str = "auto"
+    #: Where the list is read from when it can change under a running loop.
+    #: The settings page writes ``skillForge.blocklist`` to disk and the next
+    #: turn has to see it; a policy built at loop construction would answer
+    #: with the list of that moment until a restart, which is one switch
+    #: direction working and the other not.
+    blocklist_reader: "Callable[[], frozenset[str]] | None" = field(default=None, repr=False, compare=False)
     _prompt_lock: asyncio.Lock = field(
         default_factory=asyncio.Lock,
         init=False,
@@ -129,12 +135,27 @@ class SkillPolicy:
         min_safety: float = 0.7,
         blocklist: Iterable[str] | None = None,
         auto_install: str = "auto",
+        blocklist_reader: "Callable[[], frozenset[str]] | None" = None,
     ) -> "SkillPolicy":
         return cls(
             min_safety=min_safety,
             blocklist=normalize_blocklist(blocklist),
             auto_install=auto_install,
+            blocklist_reader=blocklist_reader,
         )
+
+    def blocked_now(self) -> frozenset[str]:
+        """The list to screen against for this decision.
+
+        The reader when there is one, the frozen field otherwise -- so a
+        caller that never had a live list keeps the behaviour it had.
+        """
+        if self.blocklist_reader is not None:
+            try:
+                return self.blocklist_reader()
+            except Exception:
+                return self.blocklist
+        return self.blocklist
 
     async def install_skip_reason(self, name: str) -> str | None:
         """Consent reason to skip a Hub bundle download, or ``None`` to
@@ -176,7 +197,7 @@ class SkillPolicy:
         strength, because they are about the skill rather than its body."""
         slug = str(next((i for i in (meta.get("slug"), meta.get("name"), *extra_identifiers) if i), "?"))
         if is_blocked(
-            self.blocklist,
+            self.blocked_now(),
             meta.get("slug"),
             meta.get("name"),
             meta.get("skill_id"),

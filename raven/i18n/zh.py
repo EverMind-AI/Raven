@@ -5,6 +5,7 @@ boundary test keeps every other module free of CJK text.
 """
 
 MESSAGES: dict[str, str] = {
+    "Saved. Applies after the next gateway reload or restart.": "已保存。下次网关重载或重启后生效。",
     "OpenRouter (recommended - one key, many models)": "OpenRouter(推荐 · 一个 Key 调用多家模型)",
     "The least effort a sub-agent is asked for.": "子代理被要求付出的最少努力。",
     "The middle amount of effort, between the other two.": "居中的投入，介于另外两档之间。",

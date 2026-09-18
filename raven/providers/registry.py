@@ -42,6 +42,9 @@ class ProviderSpec:
     env_key: str = ""
     display_name: str = ""  # shown in `raven status`
     homepage: str = ""
+    # Where the vendor hands out API keys. Empty for OAuth and local providers
+    # and for vendors the registry carries no console link for.
+    key_url: str = ""
 
     # model prefixing
     # This provider is reached through ANOTHER vendor's LiteLLM driver: SiliconFlow
@@ -272,6 +275,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # takes a model id.
     ProviderSpec(
         name="azure_openai",
+        key_url="https://portal.azure.com/",
         client="azure",
         keywords=("azure", "azure-openai"),
         env_key="",
@@ -285,6 +289,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # OpenRouter: global gateway, keys start with "sk-or-"
     ProviderSpec(
         name="openrouter",
+        key_url="https://openrouter.ai/settings/keys",
         keywords=("openrouter",),
         env_key="OPENROUTER_API_KEY",
         display_name="OpenRouter",
@@ -306,6 +311,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # so we strip to bare "claude-3" then re-prefix as "openai/claude-3".
     ProviderSpec(
         name="aihubmix",
+        key_url="https://aihubmix.com/token",
         keywords=("aihubmix",),
         env_key="OPENAI_API_KEY",  # OpenAI-compatible
         display_name="AiHubMix",
@@ -324,6 +330,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # SiliconFlow: OpenAI-compatible gateway, model names keep org prefix
     ProviderSpec(
         name="siliconflow",
+        key_url="https://cloud.siliconflow.cn/account/ak",
         keywords=("siliconflow",),
         env_key="OPENAI_API_KEY",
         display_name="SiliconFlow",
@@ -342,6 +349,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # VolcEngine: OpenAI-compatible gateway
     ProviderSpec(
         name="volcengine",
+        key_url="https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey",
         native_api_bases=(("responses", "https://ark.cn-beijing.volces.com/api/v3"),),
         keywords=("volcengine", "volces", "ark"),
         env_key="OPENAI_API_KEY",
@@ -670,6 +678,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # prefix is what keeps another vendor's key from answering for the id.
     ProviderSpec(
         name="anthropic",
+        key_url="https://console.anthropic.com/settings/keys",
         native_api_bases=(("anthropic", "https://api.anthropic.com"),),
         keywords=("anthropic", "claude"),
         env_key="ANTHROPIC_API_KEY",
@@ -691,6 +700,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # OpenAI: LiteLLM recognizes "gpt-*" natively, no prefix needed.
     ProviderSpec(
         name="openai",
+        key_url="https://platform.openai.com/api-keys",
         native_api_bases=(("responses", "https://api.openai.com/v1"),),
         keywords=("openai", "gpt"),
         env_key="OPENAI_API_KEY",
@@ -756,6 +766,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # DeepSeek: needs "deepseek/" prefix for LiteLLM routing.
     ProviderSpec(
         name="deepseek",
+        key_url="https://platform.deepseek.com/api_keys",
         native_api_bases=(("responses", "https://api.deepseek.com"),),
         keywords=("deepseek",),
         env_key="DEEPSEEK_API_KEY",
@@ -775,6 +786,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # Gemini: needs "gemini/" prefix for LiteLLM.
     ProviderSpec(
         name="gemini",
+        key_url="https://aistudio.google.com/apikey",
         keywords=("gemini",),
         env_key="GEMINI_API_KEY",
         display_name="Gemini",
@@ -797,6 +809,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # skip_prefixes: don't add "zai/" when already routed via gateway.
     ProviderSpec(
         name="zai",
+        key_url="https://z.ai/manage-apikey/apikey-list",
         native_api_bases=(("anthropic", "https://api.z.ai/api/anthropic"),),
         keywords=("zhipu", "glm", "zai"),
         name_aliases=("zhipu",),  # model ids written before the rename
@@ -845,6 +858,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # `dashscope` while the shelf it appears on says who runs it.
     ProviderSpec(
         name="dashscope",
+        key_url="https://bailian.console.aliyun.com/?apiKey=1",
         keywords=("qwen", "dashscope"),
         env_key="DASHSCOPE_API_KEY",
         display_name="Alibaba Cloud",
@@ -867,6 +881,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # Moonshot: Kimi models. Kimi K2.5 enforces temperature >= 1.0.
     ProviderSpec(
         name="moonshot",
+        key_url="https://platform.moonshot.cn/console/api-keys",
         keywords=("moonshot", "kimi"),
         env_key="MOONSHOT_API_KEY",
         display_name="Moonshot",
@@ -899,6 +914,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # Uses OpenAI-compatible API at api.minimax.io/v1.
     ProviderSpec(
         name="minimax",
+        key_url="https://platform.minimaxi.com/user-center/basic-information/interface-key",
         native_api_bases=(("responses", "https://api.minimax.io/v1"),),
         keywords=("minimax",),
         env_key="MINIMAX_API_KEY",
@@ -1157,6 +1173,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     # Needs "groq/" prefix for LiteLLM routing. Placed last — it rarely wins fallback.
     ProviderSpec(
         name="groq",
+        key_url="https://console.groq.com/keys",
         keywords=("groq",),
         env_key="GROQ_API_KEY",
         display_name="Groq",

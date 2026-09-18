@@ -26,6 +26,8 @@ interface Entry {
   auth_type: string
   default_api_base?: string
   needs_api_base?: boolean
+  /** Where the vendor hands out keys; the registry carries it for a few. */
+  key_url?: string
 }
 
 const PROVIDERS: Entry[] = [
@@ -34,11 +36,11 @@ const PROVIDERS: Entry[] = [
   { slug: 'minimax_cn_api', name: 'MiniMax (CN)', homepage: 'https://platform.minimaxi.com/',
     models: ['minimax-cn-api/MiniMax-M3', 'minimax-cn-api/MiniMax-M2'], authenticated: false,
     auth_type: 'endpoint', default_api_base: 'https://api.minimaxi.com/v1/' },
-  { slug: 'anthropic', name: 'Anthropic', homepage: 'https://anthropic.com/',
+  { slug: 'anthropic', name: 'Anthropic', homepage: 'https://anthropic.com/', key_url: 'https://console.anthropic.com/settings/keys',
     models: ['claude-opus-4-5', 'claude-sonnet-4-6'], authenticated: true, auth_type: 'key' },
-  { slug: 'openai', name: 'OpenAI', homepage: 'https://openai.com/',
+  { slug: 'openai', name: 'OpenAI', homepage: 'https://openai.com/', key_url: 'https://platform.openai.com/api-keys',
     models: ['gpt-5.1', 'gpt-5-mini'], authenticated: false, auth_type: 'key' },
-  { slug: 'deepseek', name: 'DeepSeek', homepage: 'https://deepseek.com/',
+  { slug: 'deepseek', name: 'DeepSeek', homepage: 'https://deepseek.com/', key_url: 'https://platform.deepseek.com/api_keys',
     models: ['deepseek-v3.2'], authenticated: false, auth_type: 'key' },
   { slug: 'nvidia_nim', name: 'NVIDIA', homepage: 'https://build.nvidia.com/explore/discover',
     models: ['nvidia-nim/nvidia/nemotron-3-super-120b-a12b', 'nvidia-nim/openai/gpt-oss-120b'],
@@ -81,6 +83,8 @@ const wire = (e: Entry, current: string): Provider => ({
   is_current: e.slug === current, auth_type: e.auth_type, models: e.models,
   configured_models: e.models, total_models: e.models.length,
   needs_api_base: !!e.needs_api_base, warning: '',
+  key_url: e.key_url ?? null,
+  extra_headers: {},
   ...(e.default_api_base ? { default_api_base: e.default_api_base } : {}),
 })
 
@@ -127,6 +131,15 @@ export function createModel(_env: FixtureEnv): ModelFixture {
         })),
         status: 'ok',
       }),
+      'model.add_models': (p) => {
+        const row = find(p.slug)
+        for (const m of p.models) if (row && !row.models.includes(m)) row.models.push(m)
+        return { provider: wire(row || rows[0]!, provider) }
+      },
+      'model.set_fields': (p) => ({ previous: Object.fromEntries(Object.keys(p.fields).map((k) => [k, null])) }),
+      /* A device flow with no vendor behind it: the code is shown and never
+         lands, which is the page's "waiting" state. */
+      'model.oauth_login': () => ({ verification_uri: 'https://example.com/device', user_code: 'ABCD-1234', expires_in: 900 }),
       'model.set_protocol': (p) => ({
         provider: wire(find((p as { slug: string }).slug) || rows[0]!, provider),
       }),

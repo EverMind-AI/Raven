@@ -1,8 +1,17 @@
-/* One provider row of the model panel. Each source owns its provider list;
-   the live source shares its fetched rows with the composer's model picker. */
+/* The settings domain's shapes: what one read of the dialog fills, and the
+   seam (`SettingsSource`) the rpc layer implements for it. */
 import type { ModelTagFacts } from '../../components/ModelTags'
-import type { ApiUsageModel, SettingsUsageResult, ToolSetupNeed } from '../../rpc/generated'
+import type {
+  ApiUsageModel,
+  ExtSkillRow,
+  McpSnapshot,
+  ResultOf,
+  SettingsUsageResult,
+  ToolSetupNeed,
+} from '../../rpc/generated'
 
+/* One provider row of the model page. Each source owns its provider list;
+   the live source shares its fetched rows with the composer's model picker. */
 export interface ProviderRow {
   id: string
   name: string
@@ -11,6 +20,11 @@ export interface ProviderRow {
      asks is which model to put in the list, and a front page does not answer
      it. Absent for a provider the registry carries no docs link for. */
   docs?: string
+  /* Where the vendor hands out API keys, drawn as the "get a key" link beside
+     the key field. Absent for a vendor the registry has no page for. */
+  keyUrl?: string
+  /* Custom request headers by name, each value redacted by the server. */
+  headers?: Record<string, string>
   /* The picker's offer: this section's list plus a curated shortlist plus a
      catalogue. What the settings page manages is `configured` below. */
   models: string[]
@@ -20,7 +34,7 @@ export interface ProviderRow {
      it lists as its id with no icons. */
   labels?: Record<string, ModelTagFacts & { label?: string; description?: string }>
   on: boolean
-  /* 'api_key' | 'oauth' | 'local' | 'endpoint' */
+  /* 'key' | 'oauth' | 'local' | 'endpoint' -- the registry's auth shape. */
   kind?: string
   needsBase?: boolean
   /* Whether the provider takes an API key at all. Absent from a source that
@@ -55,18 +69,14 @@ export interface EverosInfo {
 
 export type UsageModelRow = ApiUsageModel
 export type UsageStats = SettingsUsageResult
-
-/* One group heading of the toolset panel. */
-export interface ToolGroup {
-  id: string
-  label: string
-  hint?: string
+/* Two ISO dates, inclusive; the server clamps to 90 days back. */
+export interface UsageRange {
+  from: string
+  to: string
 }
 
-/* One built-in tool. Each settings source owns its list. In live mode `on`
-   is an accessor over `tools.disabledTools`, so assigning it persists the
-   flip. In the demo it is a plain field and the flip is local, which is what
-   the offline page always did. */
+/* One built-in tool. In live mode `on` is an accessor over
+   `tools.disabledTools`, so assigning it persists the flip. */
 export interface ToolRow {
   id: string
   name: string
@@ -81,10 +91,15 @@ export interface ToolRow {
   needs?: ToolSetupNeed | null
 }
 
+export type SkillRow = ExtSkillRow
+export type SkillDetail = NonNullable<ResultOf<'skills.manage'>['info']>
+export type ArchivedSession = ResultOf<'session.list'>['sessions'][number]
+export type OauthStart = ResultOf<'model.oauth_login'>
+
 /* Everything the dialog draws from, in one read. `raw` is the config
-   settings.get returned (camelCased keys, one level per dot); the fixture
-   answers an empty object so every V() read falls back to the schema
-   default, exactly as the demo page always painted. */
+   settings.get returned (camelCased keys, one level per dot). The skill and
+   MCP rows are `ext.list`'s own, untouched, because the two pages read fields
+   the inventory's row shapes drop (`always`, `auth`, `credentialed`). */
 export interface SettingsSnapshot {
   raw: Record<string, unknown>
   configPath: string
@@ -92,8 +107,9 @@ export interface SettingsSnapshot {
   providers: ProviderRow[]
   curProvider: string
   model: string
-  toolGroups: ToolGroup[]
   tools: ToolRow[]
+  skills: SkillRow[]
+  mcp: McpSnapshot[]
 }
 
 export type ProviderOp = 'save_key' | 'add_model' | 'remove_model' | 'disconnect'
@@ -118,13 +134,10 @@ export interface ModelCatalogue {
   error?: string | null
 }
 
-/* The DS.settings contract both the offline fixture library and the rpc
-   source (live layer) implement. Writes in the fixture throw { notLive: true },
-   which the island renders as the in-row refusal the demo page always spoke;
-   the rpc source speaks its own toasts and throws { handled: true } so the
-   island only redraws. `usage` resolving null means "no counter behind this
-   page" (the demo), not zero usage. `pickModel` is the live layer's model
-   picker popover -- absent in the fixture, so the demo refuses the button. */
+/* The DS.settings contract the rpc source implements. A write that fails
+   toasts where the wording lives and throws { handled: true }, so the island
+   only redraws; a write that succeeds resolves to the fresh snapshot where the
+   page behind it changed. */
 export interface SettingsSource {
   load(): Promise<SettingsSnapshot>
   set(key: string, value: unknown): Promise<SettingsSnapshot>
@@ -133,24 +146,38 @@ export interface SettingsSource {
      the page is only ever shown a redacted key, so it has nothing to send. */
   everosSet(section: string, fields: Record<string, string> | null,
     borrowFrom?: string): Promise<SettingsSnapshot>
-  usage(sessionKey?: string): Promise<UsageStats | null>
+  usage(range: UsageRange): Promise<UsageStats | null>
   provider(op: ProviderOp, params: Record<string, unknown>): Promise<SettingsSnapshot>
-  /* Ask the provider what it serves right now. Optional because the offline
-     demo has no provider to ask -- absent, the button reports that rather than
-     pretending to fetch. A read: nothing is written until a row is added. */
-  fetchModels?(slug: string): Promise<ModelCatalogue>
+  /* Ask the provider what it serves right now. A read: nothing is written
+     until a row is added. */
+  fetchModels(slug: string): Promise<ModelCatalogue>
+  addModels(slug: string, models: string[]): Promise<SettingsSnapshot>
+  /* The non-credential fields: api_base, deployment, api_version, and an
+     extra_headers patch ({name: value | null}). */
+  setFields(slug: string, fields: Record<string, unknown>): Promise<SettingsSnapshot>
+  oauthLogin(slug: string): Promise<OauthStart>
+  /* The chat role: agents.defaults.model and .provider, through the same write
+     the composer's picker makes. */
+  pickModel(model: string, provider: string): Promise<void>
   model(): string
-  /* The configured default provider, paired with model() above: the default
-     badge must move with a cross-provider default pick without reopening the
-     page. Optional because the offline demo has no live default to track. */
-  defaultProvider?(): string
+  defaultProvider(): string
+  archived(): Promise<ArchivedSession[]>
+  restore(id: string): Promise<void>
+  removeSession(id: string): Promise<void>
+  inspectSkill(name: string): Promise<SkillDetail>
+  openSkillFile(name: string, file: string): Promise<void>
+  uninstallSkill(name: string): Promise<SettingsSnapshot>
+  toggleServer(name: string, on: boolean): Promise<SettingsSnapshot>
+  retryServer(name: string): Promise<SettingsSnapshot>
+  revokeServer(name: string): Promise<SettingsSnapshot>
+  /* An empty form value clears that credential field. */
+  configureServer(name: string, form: Record<string, string>): Promise<SettingsSnapshot>
+  /* Resolves once the browser tab is open; the token lands later. */
+  authServer(name: string): Promise<SettingsSnapshot>
   version(): string | null
   checkUpdate(btn: HTMLButtonElement): void | Promise<void>
-  pickModel?(anchor: HTMLElement, after: () => void): void
   /* The language pick. On the source rather than the shell because what a flip
      MEANS differs between the modes -- live persists it through config.language,
-     which also drives the TUI and the language the agent replies in, while the
-     offline page repaints and has nowhere to persist to. Required, since a
-     settings page that cannot answer the pick would draw a dead control. */
+     which also drives the TUI and the language the agent replies in. */
   setLang(lang: string): void
 }

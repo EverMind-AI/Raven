@@ -193,6 +193,8 @@ const UNSENT = new Set([
   'model.fetch_models.error', 'model.fetch_models.models[].capabilities', 'model.fetch_models.models[].context_window', 'model.fetch_models.models[].description', 'model.fetch_models.models[].input_modalities', 'model.fetch_models.models[].output_modalities', 'model.fetch_models.models[].source',
   // model.options: 8
   'model.options.providers[].accepts_api_key', 'model.options.providers[].api_base', 'model.options.providers[].docs', 'model.options.providers[].key_env', 'model.options.providers[].model_labels', 'model.options.providers[].platforms', 'model.options.providers[].protocol_overrides', 'model.options.providers[].protocols',
+  // model.add_models: 9 -- the same provider row as model.options, plus the default address the row above states
+  'model.add_models.provider.accepts_api_key', 'model.add_models.provider.api_base', 'model.add_models.provider.default_api_base', 'model.add_models.provider.docs', 'model.add_models.provider.key_env', 'model.add_models.provider.model_labels', 'model.add_models.provider.platforms', 'model.add_models.provider.protocol_overrides', 'model.add_models.provider.protocols',
   // model.remove_model: 9
   'model.remove_model.provider.accepts_api_key', 'model.remove_model.provider.api_base', 'model.remove_model.provider.default_api_base', 'model.remove_model.provider.docs', 'model.remove_model.provider.key_env', 'model.remove_model.provider.model_labels', 'model.remove_model.provider.platforms', 'model.remove_model.provider.protocol_overrides', 'model.remove_model.provider.protocols',
   // model.save_key: 9
@@ -209,6 +211,12 @@ const UNSENT = new Set([
   'plug.install.mcp.auth_url', 'plug.install.mcp.error',
   // plug.toggle: 1
   'plug.toggle.mcp.auth_url',
+  // plug.configure / plug.retry / plug.revoke: 2 each -- the row's snapshot, which carries neither a consent URL nor an error here
+  'plug.configure.mcp.auth_url', 'plug.configure.mcp.error',
+  'plug.retry.mcp.auth_url', 'plug.retry.mcp.error',
+  'plug.revoke.mcp.auth_url', 'plug.revoke.mcp.error',
+  // skills.manage: 9 -- the gate asks for the list; inspect, open, search, browse and install answer the rest
+  'skills.manage.info', 'skills.manage.installed', 'skills.manage.items', 'skills.manage.name', 'skills.manage.opened', 'skills.manage.page', 'skills.manage.results', 'skills.manage.total', 'skills.manage.total_pages',
   // session.compress: 9
   'session.compress.info.config_notices', 'session.compress.info.endpoint', 'session.compress.info.update_available', 'session.compress.info.update_command', 'session.compress.info.usage.context_estimated', 'session.compress.messages', 'session.compress.summary.note', 'session.compress.summary.token_line', 'session.compress.usage',
   // session.create: 5
@@ -217,8 +225,12 @@ const UNSENT = new Set([
   'session.resume.info.config_notices', 'session.resume.info.endpoint', 'session.resume.info.update_available', 'session.resume.info.update_command', 'session.resume.info.usage.context_estimated', 'session.resume.messages[].context', 'session.resume.messages[].dag_run_id', 'session.resume.messages[].delegated', 'session.resume.messages[].diff', 'session.resume.messages[].notice', 'session.resume.messages[].origin', 'session.resume.messages[].reasoning_ms', 'session.resume.messages[].spawn_task_id', 'session.resume.messages[].turn_ended',
   // settings.everos: 1
   'settings.everos.note',
-  // settings.usage: 5
-  'settings.usage.llm.total.input_missing_calls', 'settings.usage.llm.total.output_missing_calls', 'settings.usage.session_key', 'settings.usage.session_titles', 'settings.usage.sessions',
+  // settings.everosSet: 1 -- the gateway's re-index warning, which only a real embedding move raises
+  'settings.everosSet.warning',
+  // settings.set: 1 -- the gateway's reload-only warning, which the key the gate writes (a live one) never raises
+  'settings.set.warning',
+  // settings.usage: 3
+  'settings.usage.session_key', 'settings.usage.session_titles', 'settings.usage.sessions',
   // subagents.list: 3
   'subagents.list.rows[].building', 'subagents.list.rows[].stateful', 'subagents.list.rows[].upgrade_to',
   // subagents.probe: 2

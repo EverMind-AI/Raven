@@ -4,7 +4,7 @@
  * by the two gates that hold the page's tables complete
  * (scripts/gates/domain-shape.test.mjs, domain-registration.test.mjs).
  */
-import { SettingsApp } from './SettingsPage'
+import { SettingsApp } from './SettingsApp'
 
 import type { DomainManifest } from '../manifests'
 

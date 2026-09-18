@@ -12,6 +12,9 @@ export interface Provider {
   id: string
   name: string
   homepage?: string
+  keyUrl?: string
+  /* Custom request headers by name, each value redacted by the server. */
+  headers?: Record<string, string>
   /* Everything this provider could serve: its configured list plus a curated
      shortlist plus a catalogue. The picker does not offer this -- see
      `offered` below -- but the onboarding step, which runs before anything has

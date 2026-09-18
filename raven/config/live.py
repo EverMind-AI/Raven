@@ -326,6 +326,23 @@ def disabled_tool_names(live: LiveConfig) -> frozenset[str]:
     return frozenset(names)
 
 
+def skill_blocklist(live: LiveConfig) -> frozenset[str]:
+    """The operator's skill off switches, read on every ask.
+
+    ``settings.set`` writes ``skillForge.blocklist`` and a hand-written config
+    may spell the block ``skill_forge``; a switch that only counts under one
+    spelling works from one surface.
+    """
+    from raven.skill_hub.policy import normalize_blocklist
+
+    names: list[str] = []
+    for key in ("skillForge.blocklist", "skill_forge.blocklist"):
+        value = live.get(key)
+        if isinstance(value, list):
+            names.extend(str(x) for x in value if isinstance(x, str))
+    return normalize_blocklist(names)
+
+
 _LAST_VALID_PERMISSIONS: "weakref.WeakKeyDictionary[LiveConfig, Any]" = weakref.WeakKeyDictionary()
 
 

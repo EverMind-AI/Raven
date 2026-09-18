@@ -1657,3 +1657,188 @@ async def test_the_offer_and_the_configured_list_are_separate_answers(fake_home:
     )
     entry = _entry(await model_options({}), "anthropic")
     assert entry["configured_models"] == ["anthropic/claude-opus-5"]
+
+
+async def test_options_carries_the_vendor_key_url(fake_home: Path) -> None:
+    _write_config(fake_home, {"agents": {"defaults": {"model": "deepseek-chat"}}})
+    result = await model_options({})
+    assert _entry(result, "deepseek")["key_url"] == "https://platform.deepseek.com/api_keys"
+    assert _entry(result, "hosted_vllm")["key_url"] is None
+
+
+# ----------------------------------------------------------------------------
+# model.set_fields / model.add_models / add_model description
+# ----------------------------------------------------------------------------
+
+
+def _read_config(home: Path) -> dict:
+    return json.loads((home / ".raven" / "config.json").read_text(encoding="utf-8"))
+
+
+async def test_set_fields_patches_headers_one_at_a_time_and_masks_the_reply(fake_home: Path) -> None:
+    from raven.rpc.methods.model import model_set_fields
+
+    await model_save_key({"slug": "moonshot", "api_key": "sk-moon"})
+    await model_set_fields({"slug": "moonshot", "fields": {"extra_headers": {"X-App": "alpha"}}})
+    await model_set_fields({"slug": "moonshot", "fields": {"extra_headers": {"X-Env": "beta"}}})
+    assert _read_config(fake_home)["providers"]["moonshot"]["extraHeaders"] == {"X-App": "alpha", "X-Env": "beta"}
+    reply = await model_set_fields({"slug": "moonshot", "fields": {"extra_headers": {"X-App": None}}})
+    assert _read_config(fake_home)["providers"]["moonshot"]["extraHeaders"] == {"X-Env": "beta"}
+    assert "alpha" not in json.dumps(reply) and "beta" not in json.dumps(reply)
+    assert _read_config(fake_home)["providers"]["moonshot"]["apiKey"] == "sk-moon"
+
+
+async def test_set_fields_refuses_the_key_and_unknown_fields(fake_home: Path) -> None:
+    from raven.rpc.methods.model import model_set_fields
+
+    with pytest.raises(ConfigValidationError):
+        await model_set_fields({"slug": "moonshot", "fields": {"api_key": "x"}})
+    with pytest.raises(ConfigValidationError):
+        await model_set_fields({"slug": "moonshot", "fields": {}})
+    with pytest.raises(ConfigValidationError):
+        await model_set_fields({"slug": "moonshot", "fields": {"extra_headers": {"X": ""}}})
+
+
+async def test_set_fields_changes_the_address_without_the_key(fake_home: Path) -> None:
+    from raven.rpc.methods.model import model_set_fields
+
+    await model_save_key({"slug": "moonshot", "api_key": "sk-moon"})
+    await model_set_fields({"slug": "moonshot", "fields": {"api_base": "https://api.moonshot.cn/v1"}})
+    section = _read_config(fake_home)["providers"]["moonshot"]
+    assert section["apiBase"] == "https://api.moonshot.cn/v1"
+    assert section["apiKey"] == "sk-moon"
+
+
+async def test_set_fields_writes_azure_deployment_and_api_version(fake_home: Path) -> None:
+    from raven.rpc.methods.model import model_set_fields
+
+    await model_set_fields({"slug": "azure_openai", "fields": {"deployment": "gpt-4o-eu", "api_version": "2024-10-21"}})
+    providers = _read_config(fake_home)["providers"]
+    section = providers.get("azure_openai") or providers["azureOpenai"]
+    assert (section["deployment"], section["apiVersion"]) == ("gpt-4o-eu", "2024-10-21")
+
+
+async def test_add_model_description_and_empty_string_clears(fake_home: Path) -> None:
+    await model_save_key({"slug": "deepseek", "api_key": "sk-deep"})
+    await model_add_model({"slug": "deepseek", "model": "deepseek-v4-flash", "label": "Flash", "description": "cheap"})
+
+    def overlay() -> dict:
+        return _read_config(fake_home)["providers"]["deepseek"].get("modelOverlay", {})
+
+    def named() -> dict:
+        row = next(v for k, v in overlay().items() if k.endswith("deepseek-v4-flash"))
+        return {k: row[k] for k in ("label", "description") if row.get(k)}
+
+    assert named() == {"label": "Flash", "description": "cheap"}
+    await model_add_model({"slug": "deepseek", "model": "deepseek-v4-flash", "label": ""})
+    assert named() == {"description": "cheap"}
+    await model_add_model({"slug": "deepseek", "model": "deepseek-v4-flash", "description": ""})
+    assert not any(k.endswith("deepseek-v4-flash") for k in overlay())
+
+
+async def test_add_models_appends_all_in_one_write_and_skips_duplicates(fake_home: Path, monkeypatch) -> None:
+    from raven.config import update_providers
+    from raven.rpc.methods.model import model_add_models
+
+    await model_save_key({"slug": "deepseek", "api_key": "sk-deep"})
+    writes = []
+    real = update_providers.atomic_update
+    monkeypatch.setattr(update_providers, "atomic_update", lambda path, fn: writes.append(path) or real(path, fn))
+    result = await model_add_models({"slug": "deepseek", "models": ["deepseek-a", "deepseek-b", "deepseek-a"]})
+    stored = _read_config(fake_home)["providers"]["deepseek"]["models"]
+    assert [m for m in stored if m.endswith("deepseek-a")] and [m for m in stored if m.endswith("deepseek-b")]
+    assert len([m for m in stored if m.endswith("deepseek-a")]) == 1
+    assert len(writes) == 1
+    assert any(m.endswith("deepseek-b") for m in result["provider"]["models"])
+    with pytest.raises(ConfigValidationError):
+        await model_add_models({"slug": "deepseek", "models": ["  "]})
+
+
+# ----------------------------------------------------------------------------
+# model.oauth_login
+# ----------------------------------------------------------------------------
+
+
+async def test_oauth_login_hands_the_pair_from_the_starter(fake_home: Path, monkeypatch) -> None:
+    from raven.providers import oauth_login
+    from raven.rpc.methods.model import model_oauth_login
+
+    async def fake_start(slug: str) -> dict:
+        assert slug == "minimax_global"
+        return {
+            "verification_uri": "https://platform.minimax.io/oauth-authorize",
+            "user_code": "ABCD",
+            "expires_in": 42,
+        }
+
+    monkeypatch.setattr(oauth_login, "start", fake_start)
+    assert await model_oauth_login({"slug": "minimax_global"}) == {
+        "verification_uri": "https://platform.minimax.io/oauth-authorize",
+        "user_code": "ABCD",
+        "expires_in": 42,
+    }
+
+
+async def test_oauth_login_refuses_a_key_provider_and_a_second_start(fake_home: Path, monkeypatch) -> None:
+    from raven.providers import oauth_login
+    from raven.rpc.methods.model import model_oauth_login
+
+    with pytest.raises(NotSupportedError):
+        await model_oauth_login({"slug": "deepseek"})
+
+    async def busy(slug: str) -> dict:
+        raise RuntimeError("already waiting")
+
+    monkeypatch.setattr(oauth_login, "start", busy)
+    with pytest.raises(ConfigValidationError):
+        await model_oauth_login({"slug": "openai_codex"})
+
+
+async def test_options_lists_extra_headers_by_name_only(fake_home: Path) -> None:
+    """The advanced card removes headers by name and must never see a value."""
+    _write_config(
+        fake_home,
+        {
+            "providers": {
+                "openai": {
+                    "apiKey": "sk-x",
+                    "extraHeaders": {"X-Auth": "secret-1234", "APP-Code": "code-5678"},
+                }
+            },
+        },
+    )
+    result = await model_options({})
+    entry = _entry(result, "openai")
+    assert set(entry["extra_headers"]) == {"X-Auth", "APP-Code"}
+    for value in entry["extra_headers"].values():
+        assert value and "secret" not in value and "code-5678" not in value
+    assert _entry(result, "anthropic")["extra_headers"] == {}
+
+
+async def test_add_models_and_set_fields_name_an_unknown_provider(fake_home: Path) -> None:
+    _write_config(fake_home, {"providers": {}})
+    with pytest.raises(ConfigValidationError):
+        await model_module.model_add_models({"slug": "nobody_home", "models": ["m"]})
+    with pytest.raises(ConfigValidationError):
+        await model_module.model_set_fields({"slug": "nobody_home", "fields": {"api_base": "https://x"}})
+
+
+@pytest.mark.parametrize(
+    ("raised", "expected", "text"),
+    [
+        (LookupError("no device flow"), NotSupportedError, "no device flow"),
+        (RuntimeError("already waiting"), ConfigValidationError, "already waiting"),
+        (ValueError("vendor said no"), ConfigValidationError, "could not start"),
+    ],
+)
+async def test_oauth_login_maps_each_failure_to_the_pages_vocabulary(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch, raised: Exception, expected: type, text: str
+) -> None:
+    from raven.providers import oauth_login
+
+    async def failing(slug: str) -> dict:
+        raise raised
+
+    monkeypatch.setattr(oauth_login, "start", failing)
+    with pytest.raises(expected, match=text):
+        await model_module.model_oauth_login({"slug": "minimax_global"})

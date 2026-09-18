@@ -2606,3 +2606,183 @@ async def test_a_clear_wins_over_a_mode_given_alongside_it():
     )
     assert result["mode"] == "high"
     assert loop.policies["tui:1"] == "high"
+
+
+# ---------------------------------------------------------------------------
+# session.list {archived} and the lazy auto-archive pass
+# ---------------------------------------------------------------------------
+
+
+def _seed_session_file(mgr: SessionManager, key: str, *, days_ago: int, pinned: bool = False, archived=None) -> Path:
+    """A session file written the way ``save`` writes it, with old timestamps."""
+    from datetime import datetime, timedelta
+
+    when = (datetime.now() - timedelta(days=days_ago)).isoformat()
+    meta: dict = {"title": key, "pinned": pinned}
+    if archived is not None:
+        meta["archived"] = archived
+    path = mgr.session_path(key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        json.dumps(
+            {
+                "_type": "metadata",
+                "key": key,
+                "created_at": when,
+                "updated_at": when,
+                "metadata": meta,
+                "last_consolidated": None,
+                "pending_clarification": None,
+            }
+        ),
+        json.dumps({"role": "user", "content": "hello", "timestamp": when}),
+    ]
+    path.write_text("".join(line + "\n" for line in lines), encoding="utf-8")
+    return path
+
+
+def _last_meta(path: Path) -> dict:
+    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [r for r in records if r.get("_type") == "metadata"][-1]["metadata"]
+
+
+def _archive_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, after_days) -> SessionManager:
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    mgr = SessionManager(tmp_path)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+    monkeypatch.setattr(
+        session_module,
+        "load_raven_config",
+        lambda: SimpleNamespace(sessions=SimpleNamespace(auto_archive_after_days=after_days)),
+    )
+    return mgr
+
+
+async def test_session_list_archived_true_returns_only_archived(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mgr = _archive_setup(tmp_path, monkeypatch, after_days=None)
+    _seed_session_file(mgr, "tui:a", days_ago=1, archived=True)
+    _seed_session_file(mgr, "tui:b", days_ago=1)
+    archived = await session_list({"archived": True})
+    live = await session_list({})
+    assert [s["id"] for s in archived["sessions"]] == ["tui:a"]
+    assert [s["id"] for s in live["sessions"]] == ["tui:b"]
+
+
+async def test_auto_archive_marks_stale_unpinned_sessions_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    mgr = _archive_setup(tmp_path, monkeypatch, after_days=30)
+    old = _seed_session_file(mgr, "tui:old", days_ago=40)
+    pinned = _seed_session_file(mgr, "tui:pinned", days_ago=40, pinned=True)
+    fresh = _seed_session_file(mgr, "tui:fresh", days_ago=1)
+    before = {p: len(p.read_text().splitlines()) for p in (old, pinned, fresh)}
+
+    live = await session_list({})
+    assert [s["id"] for s in live["sessions"]] == ["tui:fresh", "tui:pinned"]
+    assert _last_meta(old) == {"title": "tui:old", "pinned": False, "archived": True, "archivedBy": "auto"}
+    assert "archived" not in _last_meta(pinned)
+    assert "archived" not in _last_meta(fresh)
+    assert len(old.read_text().splitlines()) == before[old] + 1
+
+    await session_list({})
+    assert len(old.read_text().splitlines()) == before[old] + 1
+    assert [s["id"] for s in (await session_list({"archived": True}))["sessions"]] == ["tui:old"]
+
+
+async def test_restored_session_is_never_auto_archived_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    mgr = _archive_setup(tmp_path, monkeypatch, after_days=30)
+    old = _seed_session_file(mgr, "tui:old", days_ago=40, archived=True)
+    await session_archive({"session_id": "tui:old", "archived": False})
+    assert _last_meta(old)["archived"] is False
+    live = await session_list({})
+    assert [s["id"] for s in live["sessions"]] == ["tui:old"]
+    assert _last_meta(old)["archived"] is False
+
+
+async def test_auto_archive_off_appends_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    mgr = _archive_setup(tmp_path, monkeypatch, after_days=None)
+    old = _seed_session_file(mgr, "tui:old", days_ago=400)
+    lines = len(old.read_text().splitlines())
+    await session_list({})
+    assert len(old.read_text().splitlines()) == lines
+
+
+async def test_auto_archive_never_loads_transcripts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    mgr = _archive_setup(tmp_path, monkeypatch, after_days=30)
+    for i in range(50):
+        _seed_session_file(mgr, f"tui:s{i}", days_ago=40)
+    loads: list[str] = []
+    real_load = SessionManager._load
+
+    def spy(self, key):
+        loads.append(key)
+        return real_load(self, key)
+
+    monkeypatch.setattr(SessionManager, "_load", spy)
+    await session_list({})
+    assert loads == []
+    assert len((await session_list({"archived": True}))["sessions"]) == 50
+
+
+def test_as_local_datetime_answers_none_for_anything_but_an_iso_string() -> None:
+    assert session_module._as_local_datetime(None) is None
+    assert session_module._as_local_datetime("") is None
+    assert session_module._as_local_datetime("yesterday") is None
+    assert session_module._as_local_datetime(1_700_000_000) is None
+    parsed = session_module._as_local_datetime("2026-09-01T00:00:00Z")
+    assert parsed is not None and parsed.tzinfo is None
+
+
+def test_auto_archive_pass_leaves_everything_alone_when_the_config_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken():
+        raise RuntimeError("config unreadable")
+
+    monkeypatch.setattr(session_module, "load_raven_config", broken)
+    touched: list[str] = []
+    mgr = SimpleNamespace(append_metadata_patch=lambda key, patch: touched.append(key))
+    entries = [{"key": "tui:old", "metadata": {}, "last_message_at": "2000-01-01T00:00:00+00:00"}]
+    session_module._auto_archive_stale(mgr, entries)
+    assert touched == [] and "archived" not in entries[0]["metadata"]
+
+
+def test_auto_archive_pass_skips_a_keyless_entry_and_survives_a_write_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        session_module,
+        "load_raven_config",
+        lambda: SimpleNamespace(sessions=SimpleNamespace(auto_archive_after_days=30)),
+    )
+
+    def failing(key: str, patch: dict) -> None:
+        raise OSError("disk full")
+
+    mgr = SimpleNamespace(append_metadata_patch=failing)
+    stale = "2000-01-01T00:00:00+00:00"
+    entries = [
+        {"key": None, "metadata": {}, "last_message_at": stale},
+        {"key": "tui:old", "metadata": {}, "last_message_at": stale},
+    ]
+    session_module._auto_archive_stale(mgr, entries)
+    assert all("archived" not in e["metadata"] for e in entries)
+
+
+def test_append_metadata_patch_is_a_no_op_for_a_missing_or_headless_file_and_updates_the_cache(
+    tmp_path: Path,
+) -> None:
+    mgr = SessionManager(tmp_path)
+    mgr.append_metadata_patch("tui:absent", {"archived": True})
+    assert not mgr.session_path("tui:absent").exists()
+    headless = mgr.session_path("tui:headless")
+    headless.parent.mkdir(parents=True, exist_ok=True)
+    headless.write_text(json.dumps({"role": "user", "content": "no metadata record"}) + "\n", encoding="utf-8")
+    mgr.append_metadata_patch("tui:headless", {"archived": True})
+    assert headless.read_text(encoding="utf-8").count("\n") == 1
+    live = mgr.get_or_create("tui:cached")
+    mgr.save(live)
+    mgr.append_metadata_patch("tui:cached", {"archived": True, "archivedBy": "auto"})
+    assert live.metadata["archived"] is True and live.metadata["archivedBy"] == "auto"
