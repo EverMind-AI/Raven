@@ -102,7 +102,7 @@ runs the same three and then `npm test`.
 
 ## Gates
 
-`npm test` is one run over both trees, so the 35 files under `scripts/gates/`
+`npm test` is one run over both trees, so the 37 files under `scripts/gates/`
 go with the unit suites. Each one's header says what it pins and why; the
 conventions they are written to are `CONTRIBUTING.md` section 8.
 
@@ -112,15 +112,17 @@ conventions they are written to are `CONTRIBUTING.md` section 8.
 | `domain-shape` | the files a domain has and the name its root component exports |
 | `domain-registration` | every domain declared once, every page claimed by one domain, every seam key answered by one |
 | `store-shape` | one store shape and one set of verbs; the listener set lives only in `state/store.ts` |
-| `state-dom-touch` | how often each module in `state/` and `app/` may reach for an element, and zero for `lib/` and `components/` |
+| `state-dom-touch` | how often each module in `state/` and `app/` may reach for an element -- counted per match, the page's own `$` included -- how often the page frame -- `chrome/`, `App.tsx`, `main.tsx` -- may, zero for `lib/` and `components/`, and how many text, class and markup writes each of those files still holds |
+| `seam-assignment` | only `app/install.ts` puts a source on the data seam -- under any name a file bound to it, and through a destructuring target or `defineProperty` too -- plus the first frame's one pinned exception, held to exactly one assignment; `setSources` stays the test seam, named nowhere else |
 | `island-lang` | every island's root subscribes to the language store |
 | `i18n-keys` | every literal key exists in the catalogue, sits under a namespace, and the namespace belongs to one domain |
+| `first-frame-literals` | the words the page shows without a `t(key)` behind them -- the served first frame and today's literals -- counted per file as unbroken CJK runs, escaped or not, and shrink-only |
 | `file-names` | what a file may be called: PascalCase components, camelCase modules, `<module>.test.ts`, kebab-case gates |
 | `rpc-names` | every method name is in the contract, and every call inside `features/` is in that domain's `source.ts` |
 | `fixture-shape` | every offline responder answers the shape the contract declares, plus the fields it never sends |
 | `offline-coverage` | every method the page calls has an offline answer, or a reason it does not |
 | `fixture-now` | the offline library has no clock of its own |
-| `check-class-namespace` | a domain's class names carry the domain's prefix, in a `className` attribute or inside a `className={...}` expression; the shared and unprefixed debts may only shrink |
+| `check-class-namespace` | a domain's class names carry the domain's prefix, the page frame's carry `chrome-` and a shared component's carry its own file name -- however the class is written: a `className` attribute, a `class` attribute inside a string of markup, a `classList` call, or a `className={...}` expression; every `.tsx` belongs to one of the three namespaces, the shared, unprefixed and borrowed debts may only shrink, and a class the stylesheets do not define is pinned by name |
 | `check-css` | the stylesheet's own declaration-level invariants |
 | `boot-order` | the page defers its first data-driven paint until every source is installed |
 | `first-run-model-setup` | a page with no provider configured sends every task action to Models |
