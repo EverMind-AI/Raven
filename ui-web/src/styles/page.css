@@ -607,9 +607,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 
 .empty-note { padding: 46px 12px; font-size: 12.5px; color: var(--faint); text-align: center; line-height: 2; }
 
-/* A hairline seam above the identity row: without it the foot reads as the
-   last session in the list rather than a fixture of the rail. */
-.rail-foot { display: grid; gap: 2px; padding: 6px 8px 8px; border-top: 1px solid var(--line-soft); margin-top: 4px; }
+/* No seam above the identity row: the list ends in whitespace and the foot is
+   a glyph and one word, so there is nothing for a rule to separate that the gap
+   does not separate already. */
+.rail-foot { display: grid; gap: 2px; padding: 6px 8px 8px; margin-top: 4px; }
 
 .rail-foot .me {
   display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;

@@ -35,7 +35,7 @@ import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent } from 'reac
 function DeskTabs({ value, onChange }: { value: DeskTab; onChange: (tab: DeskTab) => void }): JSX.Element {
   return (
     <div className="desk-tabs" role="tablist">
-      {(['deliverables', 'diff', 'tasks'] as DeskTab[]).map((tab) => {
+      {(['deliverables', 'tasks', 'diff'] as DeskTab[]).map((tab) => {
         const label = tab === 'diff' ? 'Diff'
           : tab === 'deliverables' ? t('gui.ws.deliverables') : t('gui.ws.tasks')
         const fresh = desk.unseen(tab)
