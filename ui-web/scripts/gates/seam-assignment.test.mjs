@@ -10,7 +10,10 @@
  *
  * Three doors, all held here:
  *
- *  - `sources.<key> = ...`. The installer, plus the one exception below.
+ *  - `sources.<key> = ...`. The installer, plus the one exception below,
+ *    which is pinned by count: the reason a file may write one key once does
+ *    not cover a second write of the same key, so the number is part of the
+ *    licence rather than the file and the key alone.
  *  - `setSources(patch)`. `state/sources.ts` exports it as the test seam -- a
  *    case installs what it reads and `resetSources()` takes it back -- and
  *    every caller today is a `.test.` file. A production module calling it
@@ -39,14 +42,17 @@ const SRC = new URL('../../src/', import.meta.url).pathname
 /** The module CONTRIBUTING section 5.3 names: the page's one installer. */
 const INSTALLER = 'app/install.ts'
 
-/* The assignments outside it, by file and by the keys they write.
-   `app/boot.ts` claims the first frame -- the splash, the rail held on
-   skeleton rows -- and holds the rail on those rows until the first session
-   list lands. `holdRail()` on the line after it reads the source, so the
-   source goes on the seam before the claim rather than after the sequence
-   that fills it. Down or gone: this is an exception, not a second installer. */
+/* The assignments outside it, by file, by key, and by how many writes of that
+   key the row licenses. `app/boot.ts` claims the first frame -- the splash, the
+   rail held on skeleton rows -- and holds the rail on those rows until the
+   first session list lands. `holdRail()` on the line after it reads the source,
+   so the source goes on the seam before the claim rather than after the
+   sequence that fills it. That reason is one assignment's, hence the 1: a
+   second `sources.rail = ...` in the same file would be a second installer
+   standing on the first one's reason. Down or gone: this is an exception, not
+   a second installer. */
 const EXCEPTIONS = {
-  'app/boot.ts': ['rail'],
+  'app/boot.ts': { rail: 1 },
 }
 
 /** The module that declares the seam, and so the only one that may assign in bulk. */
@@ -122,9 +128,19 @@ function doors() {
 
 const isTest = (rel) => rel.includes('.test.')
 
+/** Every pinned exception beside the assignments the tree really carries for it. */
+const counted = (production) => Object.entries(EXCEPTIONS)
+  .flatMap(([rel, keys]) => Object.entries(keys).map(([key, pinned]) => ({
+    rel,
+    key,
+    pinned,
+    found: production.filter((a) => a.rel === rel && a.key === key),
+  })))
+
 describe('putting a source on the seam', () => {
   const { assigned, bulk, set } = doors()
   const production = assigned.filter((a) => !isTest(a.rel))
+  const exceptions = counted(production)
 
   it('finds the installer it is written about', () => {
     expect(production.filter((a) => a.rel === INSTALLER).length, `${INSTALLER} no longer installs the sources`)
@@ -134,9 +150,21 @@ describe('putting a source on the seam', () => {
   it('assigns nowhere else but the installer and the pinned exception', () => {
     const stray = production
       .filter((a) => a.rel !== INSTALLER)
-      .filter((a) => !(EXCEPTIONS[a.rel] ?? []).includes(a.key))
+      .filter((a) => !Object.hasOwn(EXCEPTIONS[a.rel] ?? {}, a.key))
       .map((a) => `${a.at} sources.${a.key}`)
     expect(stray, `install the source in ${INSTALLER} (CONTRIBUTING section 5.3), or pin the site in EXCEPTIONS with the reason`)
+      .toEqual([])
+  })
+
+  it('holds every exception to the number of writes it pins', () => {
+    /* The count is the exception. Reading the row as "this file may write this
+       key" leaves a licence that grows in silence: the same line twice, or a
+       second site in the same file, would inherit a reason written for one
+       assignment and nothing here would say so. */
+    const over = exceptions
+      .filter((e) => e.found.length > e.pinned)
+      .map((e) => `${e.rel} sources.${e.key} -- ${e.found.map((a) => a.at).join(', ')} (pinned ${e.pinned})`)
+    expect(over, 'the first-frame exception is one assignment; a second write goes through app/install.ts')
       .toEqual([])
   })
 
@@ -144,10 +172,9 @@ describe('putting a source on the seam', () => {
     /* The other direction: an exception whose assignment has moved into the
        installer is a licence nothing uses, and the next reader would take it
        for a rule. */
-    const unused = Object.entries(EXCEPTIONS)
-      .flatMap(([rel, keys]) => keys
-        .filter((key) => !production.some((a) => a.rel === rel && a.key === key))
-        .map((key) => `${rel} sources.${key}`))
+    const unused = exceptions
+      .filter((e) => e.found.length < e.pinned)
+      .map((e) => `${e.rel} sources.${e.key} -- ${e.found.length} (pinned ${e.pinned})`)
     expect(unused, 'the assignment is gone -- delete the row, and the exception in CONTRIBUTING section 11 with it')
       .toEqual([])
   })

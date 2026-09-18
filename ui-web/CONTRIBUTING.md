@@ -277,10 +277,13 @@ page's wiring has run. Enforced by `import-direction`.
    ahead of the sequence that fills it. Nothing else assigns a member, and
    `setSources` is the test seam rather than a second door into it.
    **Enforced by `seam-assignment`**: every `sources.<key> = ...` in the tree
-   is the installer's or that one pinned exception's, `setSources` is called
-   only from a `.test.` file, and `Object.assign(sources, ...)` only inside
-   `state/sources.ts`, which declares the seam. An alias (`const s = sources`)
-   is outside it: that needs the type checker rather than the syntax.
+   is the installer's or that one pinned exception's -- the row pins exactly
+   one assignment, by count, so a second write of the same key in the same file
+   fails rather than inheriting the first one's reason -- `setSources` is
+   called only from a `.test.` file, and `Object.assign(sources, ...)` only
+   inside `state/sources.ts`, which declares the seam. An alias
+   (`const s = sources`) is outside it: that needs the type checker rather than
+   the syntax.
 4. **One responder module per wire namespace under `src/rpc/fixtures/`**,
    registered in `fixtures/index.ts`. A responder answers the contract and
    nothing else: no clock of its own (the transport hands it `now`), no import
@@ -520,7 +523,7 @@ shrink-only: the way off a list is the fix.
 | 18 methods with no offline answer | Each entry says why the offline page has nothing to answer with | `offline-coverage`'s `EXEMPT` |
 | 17 files inside a runtime cycle, in two components | The session knot is the large one; `state/session/naming.ts` is in it because it was carved out of `runtime.ts`, which already was. Inverting `runtime.ts`'s two calls into it is the way back to 16 | `import-direction`'s `CYCLES` and `IN_CYCLES` |
 | 59 cross-domain edges, eight of them the desk's | Splitting the desk out of `features/workspace/` turned eight intra-domain edges into cross-domain ones. Same imports, same runtime edges, two domains | `import-direction`'s `CROSS` |
-| `src/app/boot.ts` assigns one seam key of its own | The first frame's claim installs the session source because the `holdRail()` on the next line reads it, and the installer runs later in the boot sequence. Inverting the two is what takes the row off | `seam-assignment`'s `EXCEPTIONS` |
+| `src/app/boot.ts` assigns one seam key of its own, exactly once | The first frame's claim installs the session source because the `holdRail()` on the next line reads it, and the installer runs later in the boot sequence. The row pins the count, so a second write of `sources.rail` is not covered by that reason. Inverting the two is what takes the row off | `seam-assignment`'s `EXCEPTIONS` |
 | 23 non-English lines in 14 files | Two are the served first frame, which has no catalogue to read; fifteen are words and two separators a reader sees before a language is picked, and the boot and region goldens are taken from that frame; three are patterns matched against text and one a comparison with a served title | `first-frame-literals`'s `PINNED` |
 | `curly` is off | 2,063 one-line guards | `eslint.config.js` |
 | `rpc-schema/openrpc.json` disagrees with its own descriptions in three places | `CronJobInfo.next_run_at_ms` / `last_run_at_ms` are sent as null against an integer schema, and `PlaybookNode.skills` / `mcps` describe three states against an array schema. `Wire<T>` is this page's accommodation; the schema is the cure, and it is outside `ui-web/` | `src/rpc/fixtureTransport.ts`'s header |
