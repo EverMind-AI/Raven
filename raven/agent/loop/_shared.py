@@ -321,6 +321,15 @@ def _appended_by_hook(before: str | None, after: str) -> str:
 #: on the way to the provider, so what it changes is only how readers of the
 #: transcript classify the line.
 _HOOK_INJECTED_KEY = "_hook_injected"
+#: A user message the runtime merged into a turn that was already running
+#: (``BusyPolicy.INJECT``). It is a real user message and persists as one; the
+#: mark says only that it arrived mid-turn, and the underscore key is dropped on
+#: the way to the provider like the others here. A turn that may be re-run is
+#: what needs the mark: the rerun starts again from the question and throws the
+#: failed attempt's work away, and without this it cannot tell a correction the
+#: reader typed -- which is the question now, and which the queue has already
+#: given up -- from the research it is entitled to discard.
+_MID_TURN_USER_KEY = "_mid_turn_user"
 
 
 @dataclass(frozen=True)
@@ -484,6 +493,18 @@ def _file_change_payload(change: Any) -> dict[str, Any] | None:
     return payload
 
 
+def monotonic() -> float:
+    """The turn's elapsed-time clock, as one name the loop calls.
+
+    A seam, and the reason is that the alternative is worse. The budgets this feeds
+    are checked against elapsed time, and a test that wants to see a deadline fire
+    cannot wait for one; replacing ``time.monotonic`` itself would replace the clock
+    asyncio schedules on, so the substitute has to be this narrow. The datetime
+    equivalent already goes through ``_now_fn`` for the same reason.
+    """
+    return time.monotonic()
+
+
 _TOOL_PREVIEW_MAX_CHARS = 4_000
 """How much of a tool's output rides the ``tool.complete`` event to a client.
 
@@ -493,3 +514,93 @@ one event lands per tool call in a live turn and again on a session replay, so
 it is a page-weight budget rather than a correctness one. Four thousand covers
 an error with its traceback, a directory listing, and a short file, which is
 most of what a reader opens a card to read."""
+
+
+TURN_BUDGETS_KEY = "turn_budgets"
+"""Where a product leaves the bounds it wants a turn run under, on the turn's metadata.
+
+The loop serves every agent and must not know any of them, so bounds arrive as data a
+hook writes rather than as config the loop reads: a hook that writes nothing leaves the
+turn bounded exactly as it was before this key existed, which is what keeps every other
+agent byte-identical. The value is a plain dict, and :func:`turn_budgets` is the only
+reader -- a malformed one leaves the turn unbounded rather than raising inside the loop.
+"""
+
+
+TURN_ASK_KIND_KEY = "turn_ask_kind"
+"""Where a product leaves the labeller for its own harness-injected asks.
+
+The same seam as ``TURN_BUDGETS_KEY`` and for the same reason, carrying a callable
+rather than a dict because what it holds is knowledge of wording: only the product that
+writes an ask can name it. The loop pairs the name with the structural marker on the
+injected message, so the boolean "the harness asked and the model never answered" holds
+whether or not this key is set, and only the sub-label depends on it.
+
+Unlike ``observers`` this entry stays in the process -- it is never filed onto a message
+or sent to a client -- so a callable here crosses no serialization boundary.
+"""
+
+
+@dataclass(frozen=True)
+class TurnBudgets:
+    """The bounds one turn runs under, beyond the iteration cap.
+
+    ``wall_clock_seconds`` is checked between iterations, never mid-generation:
+    cancelling a call in flight throws away a finished generation and leaves no
+    answer, and a deadline landing between a tool result and the model reading it
+    produces a trajectory nothing can interpret. The cost is an overrun of at most
+    one iteration, and that is the intended trade rather than an oversight.
+
+    ``dead_end_retries`` is how many times a turn that produced no answer may be
+    run again from the original question. Re-run, never salvaged: squeezing an
+    answer out of a failed attempt's leftovers was measured to convert a
+    detectable zero into a confident wrong answer, and it empties the very
+    trigger this budget reads.
+
+    ``dead_end_reasons`` narrows which dead ends are worth re-running, matched as
+    prefixes of what ``dead_reasons`` returns. Empty means all of them.
+    """
+
+    wall_clock_seconds: float | None = None
+    dead_end_retries: int = 0
+    dead_end_reasons: tuple[str, ...] = ()
+
+
+def turn_budgets(metadata: dict[str, Any] | None) -> TurnBudgets:
+    """Read the turn's budgets off its hook metadata; defaults mean unbounded.
+
+    Tolerant by construction. This reads a dict a plugin wrote, so a malformed
+    value must leave the turn bounded the way it was rather than raise inside the
+    loop: an instrument that can end the turn it measures is worse than no
+    instrument, and a budget is not even an instrument.
+    """
+    raw = (metadata or {}).get(TURN_BUDGETS_KEY)
+    if not isinstance(raw, dict):
+        return TurnBudgets()
+    wall = raw.get("wall_clock_seconds")
+    retries = raw.get("dead_end_retries")
+    reasons = raw.get("dead_end_reasons")
+    # ``bool`` is an ``int``, so a switch left in a number's place would otherwise
+    # read as one retry or a one-second deadline -- a misconfiguration that ends
+    # turns rather than one that is ignored.
+    numeric = (int, float)
+    return TurnBudgets(
+        wall_clock_seconds=(
+            float(wall) if isinstance(wall, numeric) and not isinstance(wall, bool) and wall > 0 else None
+        ),
+        dead_end_retries=(
+            int(retries) if isinstance(retries, int) and not isinstance(retries, bool) and retries > 0 else 0
+        ),
+        dead_end_reasons=tuple(str(r) for r in reasons) if isinstance(reasons, (list, tuple)) else (),
+    )
+
+
+def turn_ask_kind(metadata: dict[str, Any] | None) -> Callable[[object], "str | None"] | None:
+    """Read the product's ask labeller off the turn's hook metadata, or ``None``.
+
+    Tolerant for the reason :func:`turn_budgets` is: a non-callable left under the key
+    must leave the turn labelled the way it was rather than raise inside the loop, since
+    what this names is a measurement and an instrument may not end the turn it measures.
+    """
+    value = (metadata or {}).get(TURN_ASK_KIND_KEY)
+    return value if callable(value) else None

@@ -276,6 +276,31 @@ class ForcedFinalizeGate(Gate):
             except Exception as exc:
                 logger.warning("force-finalize: salvage call failed (%s: %s); fail-open", type(exc).__name__, exc)
                 return self._fail(ctx, "call_failed")
+        # What this phase COST. It was unaccounted anywhere: ``_salvage`` calls the
+        # provider directly and never reaches the loop's per-call accounting, so the
+        # per-workspace token log -- the only per-turn spend record there is -- was
+        # missing exactly the phase that fires on every run that produced no answer, and
+        # burns up to ``max_tokens`` doing it. Written into the ``force_finalize``
+        # namespace rather than plumbed into the loop's strategy registry: a flow hook
+        # reaching into the loop's accounting stack is the wrong direction, and the
+        # namespace is exported by value type, so every counter below reaches the
+        # trajectory with no second edit.
+        usage = getattr(response, "usage", None) or {}
+        # Same default shape as both callers use. They always create the namespace
+        # before reaching here, so a bare ``{}`` would do today -- but it would leave a
+        # malformed namespace (no ``empty_hits``) if anyone ever calls ``_salvage``
+        # first, and the symptom would be a KeyError in the caller rather than here.
+        state = ctx.metadata.setdefault("force_finalize", {"empty_hits": 0, "nudges": 0, "synth_failed": 0})
+        state["salvage_calls"] = state.get("salvage_calls", 0) + 1
+        for key, field in (
+            ("salvage_prompt_tokens", "prompt_tokens"),
+            ("salvage_completion_tokens", "completion_tokens"),
+            ("salvage_reasoning_tokens", "reasoning_tokens"),
+        ):
+            value = usage.get(field)
+            if value is not None:
+                state[key] = state.get(key, 0) + int(value or 0)
+        state["salvage_last_finish_reason"] = str(getattr(response, "finish_reason", "") or "")
         if getattr(response, "finish_reason", "") == "error":
             return self._fail(ctx, "error_response")
         # Truncation and "the model produced only reasoning" are different

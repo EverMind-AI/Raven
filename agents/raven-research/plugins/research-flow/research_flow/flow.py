@@ -29,6 +29,7 @@ from loguru import logger
 
 from raven.agent.hook.composite import CompositeHook
 from raven.agent.hook.conduct import ConductHook
+from raven.agent.loop import TURN_ASK_KIND_KEY, TURN_BUDGETS_KEY
 from raven.contracts.agent_conduct import Accept, AgentConduct, End, Intake, Resample, StepView, Verdict
 from raven.contracts.loop_hooks import HookDecision
 from research_flow.config import FlowConfig
@@ -78,6 +79,7 @@ from research_flow.gates.verify import DraftReviewerGate
 from research_flow.state import SessionStore
 from research_flow.support.evidence_round import EvidenceRound
 from research_flow.support.fetch_gate_core import FetchGate
+from research_flow.support.harness_text import harness_ask_kind
 from research_flow.support.ledger import close_product_ledger, ledger_path, open_product_ledger
 from research_flow.support.process_appendix import build_appendix, read_ledger
 from research_flow.support.search_saturation import SearchSaturation
@@ -222,6 +224,21 @@ class TurnFrame(Gate):
         set_first_turn(False)
         set_plain_turn(False)
         set_prior_sources(())
+        # The bounds this product asks the loop to run the turn under. Data rather
+        # than config the loop reads: the loop serves every agent and must not know
+        # any of them, so an agent that leaves this key alone is bounded exactly as
+        # it was before the key existed.
+        ctx.metadata[TURN_BUDGETS_KEY] = {
+            "wall_clock_seconds": self._cfg.wall_clock_seconds,
+            "dead_end_retries": self._cfg.dead_end_retry.max_retries if self._cfg.dead_end_retry.enabled else 0,
+            "dead_end_reasons": list(self._cfg.dead_end_retry.reasons),
+        }
+        # This product's asks are this product's wording, so the loop is handed the
+        # name for them rather than a copy of the prefixes. Without it a dead end on
+        # any of the three reads as ``stranded:harness_ask_unknown``, and a
+        # ``dead_end_reasons`` narrowed to one of them would match nothing and switch
+        # off the rerun it meant to narrow.
+        ctx.metadata[TURN_ASK_KIND_KEY] = harness_ask_kind
         ctx.metadata.pop(_TURN_MODE_KEY, None)
         text = ctx.inbound_content or ""
         ctx.metadata[_USER_TEXT_KEY] = text

@@ -419,3 +419,60 @@ async def test_tagless_salvage_with_oob_reasoning_commits_under_the_strict_calib
     decision = await gate.after_iteration(_ctx("reasoning only</think>"))
 
     assert decision.short_circuit_result == "Ada founded X in 1992."
+
+
+@pytest.mark.asyncio
+async def test_a_salvage_call_books_its_own_spend():
+    """The phase was unaccounted anywhere. ``_salvage`` calls the provider directly
+    and never reaches the loop's per-call accounting, so the only per-turn spend
+    record was missing exactly the phase that fires on every run that produced no
+    answer -- and burns up to ``max_tokens`` doing it."""
+    provider = _SalvageProvider(
+        [
+            LLMResponse(
+                content="salvage reasoning</think>Ada founded X in 1992.",
+                finish_reason="stop",
+                usage={"prompt_tokens": 1200, "completion_tokens": 80, "reasoning_tokens": 40},
+            )
+        ]
+    )
+    gate = ForcedFinalizeGate(provider, max_nudges=0)
+    ctx = _ctx("reasoning only</think>")
+
+    await gate.after_iteration(ctx)
+
+    state = ctx.metadata["force_finalize"]
+    assert state["salvage_calls"] == 1
+    assert state["salvage_prompt_tokens"] == 1200
+    assert state["salvage_completion_tokens"] == 80
+    assert state["salvage_reasoning_tokens"] == 40
+    assert state["salvage_last_finish_reason"] == "stop"
+
+
+@pytest.mark.asyncio
+async def test_a_salvage_that_never_reached_the_provider_books_nothing():
+    """The counter has to mean "a call was made". A salvage that failed open before
+    any response arrived spent nothing, and a counter that ticked anyway would
+    report spend on turns that had none."""
+    gate = ForcedFinalizeGate(_SalvageProvider([RuntimeError("provider down")]), max_nudges=0)
+    ctx = _ctx("reasoning only</think>")
+
+    await gate.after_iteration(ctx)
+
+    assert "salvage_calls" not in ctx.metadata["force_finalize"]
+
+
+@pytest.mark.asyncio
+async def test_a_salvage_with_no_usage_still_books_the_call():
+    """A provider that reports no usage is a provider whose spend is unknown, not
+    one that spent nothing. The call count still moves; the token counters stay
+    absent rather than reading as zero."""
+    provider = _SalvageProvider([LLMResponse(content="x</think>Ada founded X in 1992.", finish_reason="stop")])
+    gate = ForcedFinalizeGate(provider, max_nudges=0)
+    ctx = _ctx("reasoning only</think>")
+
+    await gate.after_iteration(ctx)
+
+    state = ctx.metadata["force_finalize"]
+    assert state["salvage_calls"] == 1
+    assert "salvage_prompt_tokens" not in state
