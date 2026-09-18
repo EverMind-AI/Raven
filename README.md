@@ -15,13 +15,13 @@
 
 <br>
 
-# Raven
+# What is Raven
 
-Raven is **The Harness of Harnesses**, a continuously evolving multi-agent ecosystem built for autonomous collaboration and open co-creation. Built on EverMind's self-evolving harness engine, it is designed to build and improve Agent Harnesses for specific models and domains, then compose their heterogeneous execution capabilities into an **All-Domain Collaboration Network** for complex, long-horizon tasks.
+Raven is **The Harness of Harnesses**—a self-evolving multi-agent orchestration ecosystem. As a **Host Agent**, it brings specialized agents together through one unified surface to delegate tasks, coordinate execution, and integrate results. Its long-term vision is to extend this orchestration across devices, environments, and domains.
 
-Powered by the [EverOS](https://github.com/EverMind-AI/EverOS) memory system, Raven preserves user context, agent experience, and world knowledge across sessions. Its self-evolving harness builds on this memory to refine tools, skills, and workflows over time, helping agents learn from past work and collaborate more effectively on future tasks.
+Built on EverMind’s self-evolving harness engine and powered by [EverOS](https://github.com/EverMind-AI/EverOS), Raven preserves context across sessions and continuously improves agent harnesses and collaborative workflows.
 
-**Update:** Raven now ships four agents of its own: **Raven-Research**, **Raven-Code**, **Raven-Design**, and **Raven-Oncall**, covering research, coding, visual design, and long-running job supervision.
+**Built-in Agents: Raven-Research**, **Raven-Code**, **Raven-Design**, and **Raven-Oncall** support research, coding, visual design, and unattended workflow automation.
 
 > Raven is pre-alpha. Interfaces and configuration may change quickly.
 
@@ -29,15 +29,13 @@ Powered by the [EverOS](https://github.com/EverMind-AI/EverOS) memory system, Ra
   <a href="https://github.com/user-attachments/assets/e333694a-0f4c-4f27-8bfe-8120ff5339a0"><img src="https://github.com/user-attachments/assets/e333694a-0f4c-4f27-8bfe-8120ff5339a0" alt="Multi-Agent Orchestration Benchmark: Node F1, Edge F1, Partial Order Accuracy, and Exact Match Rate" width="100%"></a>
 </p>
 
-<p align="center"><em>Raven on the Multi-Agent Orchestration Benchmark</em></p>
+<p align="center"><em>Raven's Performance on the Multi-Agent Orchestration Benchmark</em></p>
 
-## ❯❯ Raven Agents
+## ❯❯ Built-in Agents
 
-Raven's modular architecture powers four specialized agents, each assembled from reusable harness components with tools, skills, and workflows tailored to its domain. It can delegate a focused task to one agent or coordinate several agents in a shared workflow.
+Raven's modular architecture is designed for harness self-evolving and subagent creation. Powered by the **Raven Evolver** engine, its four built-in agents deliver **state-of-the-art (SOTA) performance in their respective domains**, combining reusable harness components with domain-specific tools, skills, and agent loops. Raven can delegate a focused task to a single agent or orchestrate multiple agents within a shared workflow.
 
-For example, Raven-Research can gather evidence, Raven-Code can implement an experiment, Raven-Oncall can run and monitor it, and Raven-Design can turn the results into charts and a presentation.
-
-Enable the agents you need during onboarding. See [`agents/README.md`](agents/README.md) for configuration details.
+> All four agents are built in and ready for orchestration out of the box.
 
 ### Raven-Research
 

@@ -15,13 +15,13 @@
 
 <br>
 
-# Raven
+# Raven 是什么
 
-Raven 是 **The Harness of Harnesses**，一个为自主协作与开放共创而构建、持续演进的多 Agent 生态系统。依托 EverMind 的自进化 harness 引擎，Raven 致力于为特定模型和领域构建、改进 Agent Harness，并将其异构执行能力组合成面向复杂长程任务的 **全领域协作网络（All-Domain Collaboration Network）**。
+Raven 是 **The Harness of Harnesses**——一个持续自我演进的多 Agent 编排生态。作为 **Host Agent（宿主 Agent）**，它通过统一入口连接专业 Agent，负责任务委派、执行协调和结果整合。Raven 的长期目标是将这种编排能力扩展到不同设备、环境和领域。
 
-借助 [EverOS](https://github.com/EverMind-AI/EverOS) 记忆系统，Raven 能跨会话保留用户上下文、Agent 经验和世界知识。自进化 harness 以这些记忆为基础，持续改进工具、技能和工作流，让 Agent 从过往工作中学习，并在后续任务中更有效地协作。
+基于 EverMind 的自进化 harness 引擎，并由 [EverOS](https://github.com/EverMind-AI/EverOS) 提供支持，Raven 跨会话保存上下文，持续改进 Agent harness 与协作工作流。
 
-**更新：** Raven 现已提供四个自有 Agent：**Raven-Research**、**Raven-Code**、**Raven-Design** 和 **Raven-Oncall**，覆盖研究、编程、视觉设计和长时间运行任务的监控。
+**内置 Agent：** **Raven-Research**、**Raven-Code**、**Raven-Design** 和 **Raven-Oncall** 支持研究、编程、视觉设计和无人值守流程自动化。
 
 > Raven 目前处于 pre-alpha 阶段，接口和配置可能快速变化。
 
@@ -31,13 +31,11 @@ Raven 是 **The Harness of Harnesses**，一个为自主协作与开放共创而
 
 <p align="center"><em>Raven 在多 Agent 编排基准测试上的表现</em></p>
 
-## ❯❯ Raven 自有 Agent
+## ❯❯ 内置 Agent
 
-Raven 通过模块化架构构建了四个专业 Agent。每个 Agent 都由可复用的 harness 组件组装而成，并搭配适合其领域的工具、技能和工作流。Raven 既可以将单项任务交给一个 Agent，也可以在同一工作流中协调多个 Agent 协作。
+Raven 的模块化架构面向 harness 自我演进和子 Agent 创建。借助 **Raven Evolver** 引擎，四个内置 Agent 在各自领域提供**先进水平（SOTA）的性能**，结合可复用的 harness 组件、领域专用工具、技能和 Agent 循环。Raven 可以将聚焦任务委派给单个 Agent，也可以在共享工作流中编排多个 Agent。
 
-例如，Raven-Research 可以收集证据，Raven-Code 实现实验，Raven-Oncall 运行并持续监控，最后由 Raven-Design 将结果制作成图表和演示文稿。
-
-在配置向导中启用所需的 Agent，配置详情见 [`agents/README.md`](agents/README.md)。
+> 四个 Agent 均已内置，开箱即可进行编排。
 
 ### Raven-Research
 
