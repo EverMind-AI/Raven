@@ -129,7 +129,7 @@ copy, or let that column be a card.
 
 | The page | Shape |
 | --- | --- |
-| Cover, section opener, closing | S6 or S11, with a generated background |
+| Cover, section opener, closing | S6 or S11, with a photograph found for it or a generated background |
 | One statement, one quote | S11 |
 | Three or four pillars, features, a 2x2 matrix | S4, each cell with an icon |
 | Two things compared, before and after | S3 |

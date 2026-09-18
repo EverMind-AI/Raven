@@ -77,13 +77,16 @@ which of the four were defaults.
    `references/assets.md` says how.
    An icon is a mark and not an illustration: about 0.7in, one weight and one colour across
    the deck, and no filled disc behind it.
-7. The cover, the contents page, the closing page and every section opener get a generated
-   background. Not a flat colour block, not a body page's photograph, not nothing.
-   **Two or three backgrounds cover a deck.** Section openers share one; the cover and the
-   closing page can be the same picture at different crops. A distinct generation per
-   section is 8 serial calls where 3 would do, and a deck whose openers all look different
-   has no house. Each call takes over a minute and they do not overlap, so settle the whole
-   short list before building rather than asking for one more while drawing each page.
+7. The cover, the contents page, the closing page and every section opener get a picture
+   with weight: a photograph found for it, or a generated background where no photograph
+   says it. A real photograph of the subject beats a generated texture every time it can
+   be had, so search first. Not a flat colour block, not a picture a body page already
+   uses, not nothing. **Two or three such pictures cover a deck.** Section openers share
+   one; the cover and the closing page can be the same picture at different crops. A
+   distinct generation per section is 8 serial calls where 3 would do, and a deck whose
+   openers all look different has no house. Each generation takes over a minute and they
+   do not overlap, so settle the whole short list before building rather than asking for
+   one more while drawing each page.
 8. Before generating a picture for a page, render that page and look at it. Ask for what the
    page lacks.
 9. Give `image_generate` the brand material in `images`. Do not describe it in words.
