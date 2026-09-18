@@ -156,8 +156,24 @@ injected messages and generation overrides for that one call); `before_iteration
 withhold tools for the iteration, the iteration phases may leave the model a harness note on
 the last message (`append_note`), and `before_user_inbound` may rewrite the inbound text
 (`modified_content`, chained through `inbound_content`). Multiple hooks chain via `CompositeHook`; the EvalEngine
-wires three concrete implementations, and an agent steers the loop with its own.
+wires three concrete implementations. It remains the loop's *timing* contract and stays open to
+any hook: what changed is that the bundled agents no longer write their product logic here, but
+as an Agent Conduct seated in this chain.
 _Avoid_: "callback" or "middleware" — neither captures the phase-specific, chain-aware semantics.
+
+**Agent Conduct** (`contracts/agent_conduct.py`, seated by `agent/hook/conduct.py`):
+What a bundled agent judges, written as verbs rather than as phases: `intake`, `select_tools`,
+`advise`, `system_addendum`, `review`, `salvage`, `outbound`, `archive`, `observe`. Each is asked
+about one step of a Turn, answered against a read-only `StepView`, and returns what it decided --
+a text, a narrower tool array, a note, a `Verdict`, a reply -- never a write into the loop's own
+state. The host builds one per Turn from a `ConductFactory`, so what a conduct has already done
+this turn is an attribute that dies with the turn. `ConductHook` seats one in the Agent Hook
+chain and renders its answers as the `HookDecision` the composite already merges, which is why
+the phases, their order and the rollback mechanism are unchanged by it. The four Harness Modules
+compose what the conducts of a seat say: Memory their `intake`, Planning their `advise`, Action
+their `review` and `salvage` -- so replacing a role replaces what a conduct's judgement does.
+_Avoid_: reading it as a replacement for Agent Hook. The phases say *when* the loop asks; a
+conduct says *what this agent judges*, and a third-party hook needs neither.
 
 **Session Mode** (`acp/modes.py`; declared under `acp.modes` in config):
 A named per-session operating profile a client switches over ACP `session/set_mode`; every

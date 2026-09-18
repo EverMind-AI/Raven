@@ -6,7 +6,7 @@ Module-level names live in ``_shared``; method groups live in mixins
 
 from __future__ import annotations
 
-from raven.agent.harness import default_harness_modules
+from raven.agent.harness import bind_harness, default_harness_modules
 from raven.agent.loop._shared import (
     TYPE_CHECKING,
     Any,
@@ -922,6 +922,10 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 self.tools.turn_scope(),
                 delegate_scope(delegate_table),
                 charter_scope(charter),
+                # The conduct seats in the hook chain ask this turn's modules,
+                # so a replaced Action or Planning decides what a plugin's
+                # judgement does -- bound per turn like the model.
+                bind_harness(self.harness),
             ):
                 return await self._run_turn(
                     req,

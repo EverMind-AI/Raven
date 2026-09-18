@@ -36,13 +36,15 @@ see a retried call exactly as they saw the first.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from raven.agent.harness.conducts import compose_intake
 from raven.agent.window import compaction, shrink
+from raven.contracts.agent_conduct import AgentConduct, Intake, StepView
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.harness import MemoryModule, ShrinkResult, WindowPressure, WindowState
 from raven.providers.base import send_max_tokens
@@ -379,6 +381,9 @@ class DefaultMemory:
     async def after_turn(self, session_key: str, outcome: dict[str, Any]) -> None:
         await self._engine.after_turn(session_key, outcome)
 
+    async def intake(self, text: str, step: StepView, conducts: Sequence[AgentConduct]) -> Intake | None:
+        return await compose_intake(text, step, conducts)
+
 
 def bind(memory: DefaultMemory) -> MemoryModule:
     """Admit a built Memory role, naming a missing member at assembly rather
@@ -386,7 +391,7 @@ def bind(memory: DefaultMemory) -> MemoryModule:
     if not isinstance(memory, MemoryModule):
         raise TypeError(
             f"{type(memory).__name__} cannot serve as the Memory role: it must provide "
-            "owns_compaction, candidate_messages, token_budget, assemble, shrink and after_turn"
+            "owns_compaction, candidate_messages, token_budget, assemble, shrink, intake and after_turn"
         )
     return memory
 

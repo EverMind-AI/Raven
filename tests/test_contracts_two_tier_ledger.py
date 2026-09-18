@@ -168,6 +168,15 @@ LEDGER = {
         "ShrinkResult",
         "WindowPressure",
         "WindowState",
+        # -- the conduct a sub-agent writes instead of six hook phases.
+        "Accept",
+        "AgentConduct",
+        "ConductFactory",
+        "End",
+        "Intake",
+        "Resample",
+        "StepView",
+        "Verdict",
     },
 }
 
