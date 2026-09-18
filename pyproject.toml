@@ -583,6 +583,11 @@ source_modules = [
     # (measured: zero cli/rpc/acp imports in either); seated inner so the
     # machine watches the edge instead of a ruling note.
     "raven.browser", "raven.importer", "raven.updates",
+    # What one stint needs over a workspace -- the ownership grades, the journal
+    # window, the project git and the checks. Consumed by `mode: stint` through
+    # `raven.playbook`, by the CLI and RPC surfaces that read a stint's record,
+    # and by the dispatch path that carries its ref; it imports no surface itself.
+    "raven.stint",
 ]
 forbidden_modules = ["raven.cli", "raven.rpc", "raven.acp"]
 # Debt allowlist: none. The last allowlisted edge (market reaching the skill

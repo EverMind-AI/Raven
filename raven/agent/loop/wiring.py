@@ -1327,6 +1327,11 @@ class WiringMixin:
             dag_tool=dag_tool,
             provider=self.provider,
             compose_model=cfg.model,
+            # A multi-round stint works a project for hours and takes a checkout
+            # of it. The project is the conversation's own working directory,
+            # not this process's: a gateway is started from wherever it happens
+            # to be started from, and that is nobody's repository.
+            workspace_for=self._stint_workspace,
         )
         # Both Playbook model calls use the live, capability-aware agent view.
         executor.set_agent_profiles(lambda: agent_profiles_from_registry(self.subagents.registry))
@@ -1515,6 +1520,16 @@ class WiringMixin:
         it -- the RPC surface that answers what a conversation handed over."""
         return self._deliverables
 
+    def _stint_workspace(self, session_key: str | None) -> Path:
+        """The project a stint started in this session works.
+
+        Through the same resolver a tool call goes through, and with no key it
+        still goes through it: an operator who launched with ``-w`` named one
+        directory for this process, and a stint is the last thing that should
+        work a different one.
+        """
+        return self.peek_session_workdir(session_key or "")
+
     def peek_session_workdir(self, session_key: str) -> Path:
         """Where this session would work, with no side effect and no refusal.
 
@@ -1627,9 +1642,11 @@ class WiringMixin:
         """Stop one in-flight run, whichever instance owns it."""
         return any(tool.request_cancel(run_id) for tool in self.dag_tools())
 
-    def resolve_dag_node(self, run_id: str, node_id: str, decision: str, message: str | None, plan: Any = None) -> bool:
+    def resolve_dag_node(
+        self, run_id: str, node_id: str, decision: str, message: str | None, stint: Any = None
+    ) -> bool:
         """Answer one suspended node, whichever instance owns its run."""
-        return any(tool.resolve_node(run_id, node_id, decision, message, plan) for tool in self.dag_tools())
+        return any(tool.resolve_node(run_id, node_id, decision, message, stint) for tool in self.dag_tools())
 
     def dag_control_reachable(self) -> bool:
         """Whether the schema-hidden dag control tools have a call path.

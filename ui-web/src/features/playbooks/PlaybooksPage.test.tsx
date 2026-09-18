@@ -5,7 +5,15 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { PlaybooksApp } from './PlaybooksPage'
 import * as store from './store'
 
-import type { PlaybookDetail, PlaybookNode, PlaybookRow, PlaybooksSource } from './types'
+import type {
+  StintDetail,
+  StintRow,
+  PlaybookDetail,
+  PlaybookNode,
+  PlaybookRole,
+  PlaybookRow,
+  PlaybooksSource
+} from './types'
 import type { Shell } from '../../shell/bridge'
 
 function node(over: Partial<PlaybookNode> & { id: string }): PlaybookNode {
@@ -33,6 +41,24 @@ function row(over: Partial<PlaybookRow> & { name: string }): PlaybookRow {
       { id: 'b', depends_on: ['a'] }
     ],
     error: '',
+    ...over
+  }
+}
+
+function rounds_role(over: Partial<PlaybookRole> & { label: string }): PlaybookRole {
+  return {
+    agent: 'echo',
+    node_summary: '',
+    depends_on: [],
+    owns: [],
+    appends: [],
+    reads: [],
+    enforce_read: 'soft',
+    enforce_write: 'hard',
+    journal_section: '',
+    verify_after: [],
+    max_handbacks: 2,
+    terminal: false,
     ...over
   }
 }
@@ -378,6 +404,79 @@ describe('the playbook library', () => {
     expect(document.querySelector('.pbpanel')).toBeNull()
     /* And the tab does not name a picture that is not there. */
     expect(document.querySelector('.pbtab')?.textContent).toBe('gui.pb.tab_assembly')
+  })
+
+  it('shows a multi-round playbook as roles and commands, not as an empty prompt box', async () => {
+    /* What a person approving a run has to read. Falling through to the
+       assembly branch showed them `prompts`, which a stint playbook does not
+       have, so a file full of roles and shell commands rendered blank. */
+    install({
+      get: async (name: string) =>
+        detail({
+          name,
+          mode: 'stint',
+          nodes: [],
+          prompts: '',
+          stint: {
+            max_rounds: 30,
+            until: 'NOTHING-LEFT',
+            report: 'round',
+            roles: [
+              rounds_role({ label: 'planner', agent: 'research-raven', owns: ['reports/brief_{NN}.md'] }),
+              rounds_role({
+                label: 'qa',
+                agent: 'research-raven',
+                depends_on: ['planner'],
+                terminal: true,
+                appends: ['.stint/FIXLOG.md'],
+                verify_after: ['build']
+              })
+            ],
+            checks: [{ name: 'build', run: 'python3 -m compileall -q src', timeout_sec: 300, needs_display: false }],
+            carried: [{ path: 'JOURNAL.md', append: true, recent_rounds: 2, max_chars: 16000 }]
+          }
+        })
+    })
+    await mount()
+    fireEvent.click(screen.getByText('issue-triage'))
+    await act(async () => {})
+
+    expect(document.querySelector('.pbtab')?.textContent).toBe('gui.pb.tab_stint')
+    const names = Array.from(document.querySelectorAll('.pbtbl .nm')).map((cell) => cell.textContent)
+    expect(names).toEqual(['planner', 'qagui.pb.role_terminal', 'build'])
+    /* The command runs on this machine, so it is shown whole rather than named. */
+    expect(screen.getByText('python3 -m compileall -q src')).toBeTruthy()
+    expect(screen.getByText('reports/brief_{NN}.md')).toBeTruthy()
+    /* An append-only path must not read like an owned one. */
+    expect(screen.getByText('.stint/FIXLOG.md (gui.pb.role_appends)')).toBeTruthy()
+    /* Only the role the stint actually reads is marked as able to end it. */
+    expect(names.filter((n) => n?.includes('gui.pb.role_terminal'))).toEqual(['qagui.pb.role_terminal'])
+  })
+
+  it('marks no role as able to end a stint that has no word for ending one', async () => {
+    install({
+      get: async (name: string) =>
+        detail({
+          name,
+          mode: 'stint',
+          nodes: [],
+          stint: {
+            max_rounds: 4,
+            until: '',
+            report: 'end',
+            roles: [rounds_role({ label: 'solo', agent: 'echo', terminal: true })],
+            checks: [],
+            carried: []
+          }
+        })
+    })
+    await mount()
+    fireEvent.click(screen.getByText('issue-triage'))
+    await act(async () => {})
+
+    expect(document.body.textContent).not.toContain('gui.pb.role_terminal')
+    expect(screen.getByText('gui.pb.no_checks')).toBeTruthy()
+    expect(screen.getByText('gui.pb.no_carried')).toBeTruthy()
   })
 
   it('shows a step the author left blank as blank, not as missing', async () => {
@@ -977,5 +1076,131 @@ describe('the credentials tab', () => {
     fireEvent.click(tab('gui.pb.tab_credentials')!)
     await act(async () => {})
     expect(document.body.textContent).toContain('gui.pb.cred_none')
+  })
+})
+
+function planRow(over: Partial<StintRow> & { stint_id: string }): StintRow {
+  return {
+    playbook: 'game-dev',
+    round_index: 3,
+    max_rounds: 30,
+    status: 'running',
+    live: true,
+    stop_reason: '',
+    workdir: '/w/tree',
+    branch: 'stint/stint-a',
+    started_at_ms: 1,
+    ended_at_ms: 0,
+    open_questions: 0,
+    ...over
+  }
+}
+
+function planDetail(over: Partial<StintDetail> = {}): StintDetail {
+  return {
+    stint: planRow({ stint_id: 'stint-a' }),
+    rounds: [
+      { index: 1, run_id: 'run-1', attempt: 0, status: 'completed', checks: ['build=failed'], violations: ['dev wrote reports/qa.md'] },
+      { index: 2, run_id: 'run-2', attempt: 0, status: 'completed', checks: ['build=ok'], violations: [] }
+    ],
+    questions: [],
+    ...over
+  }
+}
+
+describe('the runs a playbook started', () => {
+  it('lists a run with how far it got, and says nothing has run when nothing has', async () => {
+    install({ stints: async () => [] })
+    await mount()
+    fireEvent.click(screen.getByText('gui.pb.tab_plans'))
+    await act(async () => {})
+    expect(screen.getByText('gui.pb.stints_none')).toBeTruthy()
+
+    cleanup()
+    store._resetForTests()
+    install({ stints: async () => [planRow({ stint_id: 'stint-a' })] })
+    await mount()
+    fireEvent.click(screen.getByText('gui.pb.tab_plans'))
+    await act(async () => {})
+    expect(screen.getByText('stint-a')).toBeTruthy()
+    expect(screen.getByText('gui.pb.stint_round {"n":"3","max":"30"}')).toBeTruthy()
+    expect(screen.getByText('gui.pb.stint_live')).toBeTruthy()
+  })
+
+  it('says how many answers a run is waiting on, because that is the one thing only a person can clear', async () => {
+    install({ stints: async () => [planRow({ stint_id: 'stint-a', open_questions: 2 })] })
+    await mount()
+    fireEvent.click(screen.getByText('gui.pb.tab_plans'))
+    await act(async () => {})
+    expect(screen.getByText('gui.pb.stint_waiting {"n":"2"}')).toBeTruthy()
+  })
+
+  it('shows every round, its checks and what it undid', async () => {
+    install({ stints: async () => [planRow({ stint_id: 'stint-a' })], stint: async () => planDetail() })
+    await mount()
+    fireEvent.click(screen.getByText('gui.pb.tab_plans'))
+    await act(async () => {})
+    fireEvent.click(screen.getByText('stint-a'))
+    await act(async () => {})
+    expect(screen.getByText('build=failed')).toBeTruthy()
+    expect(screen.getByText('gui.pb.stint_undone {"n":"1"}')).toBeTruthy()
+    expect(screen.getByText('1: dev wrote reports/qa.md')).toBeTruthy()
+  })
+
+  it('offers a stop only while a run is live, and says what a stop does', async () => {
+    const stopped = { ...planDetail(), stint: planRow({ stint_id: 'stint-a', live: false, status: 'stopped' }) }
+    install({
+      stints: async () => [planRow({ stint_id: 'stint-a' })],
+      stint: async () => planDetail(),
+      stopPlan: async () => stopped
+    })
+    await mount()
+    fireEvent.click(screen.getByText('gui.pb.tab_plans'))
+    await act(async () => {})
+    fireEvent.click(screen.getByText('stint-a'))
+    await act(async () => {})
+    expect(screen.getByText('gui.pb.stint_stop_note')).toBeTruthy()
+
+    fireEvent.click(screen.getByText('gui.pb.stint_stop'))
+    await act(async () => {})
+    expect(screen.queryByText('gui.pb.stint_stop')).toBeNull()
+  })
+
+  it('takes an answer and shows it where the question was', async () => {
+    const asked = planDetail({
+      questions: [{ round: 1, role: 'planner', text: 'which of the two?', answer: '' }]
+    })
+    const answered = planDetail({
+      questions: [{ round: 1, role: 'planner', text: 'which of the two?', answer: 'the second one' }]
+    })
+    const sent: unknown[] = []
+    install({
+      stints: async () => [planRow({ stint_id: 'stint-a', open_questions: 1 })],
+      stint: async () => asked,
+      answerPlan: async (stintId: string, question: number, text: string) => {
+        sent.push([stintId, question, text])
+        return answered
+      }
+    })
+    await mount()
+    fireEvent.click(screen.getByText('gui.pb.tab_plans'))
+    await act(async () => {})
+    fireEvent.click(screen.getByText('stint-a'))
+    await act(async () => {})
+
+    fireEvent.change(screen.getByLabelText('gui.pb.stint_answer'), { target: { value: 'the second one' } })
+    fireEvent.click(screen.getByText('gui.pb.stint_answer'))
+    await act(async () => {})
+
+    expect(sent).toEqual([['stint-a', 0, 'the second one']])
+    expect(screen.getByText('the second one')).toBeTruthy()
+  })
+
+  it('says so when the engine has no runs surface, rather than drawing an empty list', async () => {
+    install()
+    await mount()
+    fireEvent.click(screen.getByText('gui.pb.tab_plans'))
+    await act(async () => {})
+    expect(store.getState().plansErr).toBe('unsupported')
   })
 })

@@ -6,7 +6,7 @@ import { MORE_ROWS, draw, install as installNav, mark, toggle } from './navfly'
 
 import type { Shell } from './bridge'
 
-/* The three openers are direct imports now, so the pages they open are observed
+/* The openers are direct imports now, so the pages they open are observed
    by standing in for those modules rather than for a shell verb. */
 const opens = vi.hoisted(() => ({ list: [] as string[] }))
 vi.mock('../features/connections/store', () => ({ open: () => opens.list.push('connPage') }))
@@ -14,7 +14,7 @@ vi.mock('../features/cron/store', () => ({ open: () => opens.list.push('cronPage
 vi.mock('../features/xa/store', () => ({ open: () => opens.list.push('xaPage') }))
 
 /* NAV_OF, as far as the flyout is concerned: which button a page lights up.
-   The three rows all light up the group's own parent. */
+   Every row in the group lights up the group's own parent. */
 const NAV_OF: Record<string, string> = {
   capsPage: 'skillBtn',
   xaPage: 'moreBtn',
@@ -87,7 +87,7 @@ describe('the nav flyout', () => {
   it('draws one row per module it holds, named from the catalogue', () => {
     install()
     draw()
-    expect(rows()).toHaveLength(3)
+    expect(rows()).toHaveLength(MORE_ROWS.length)
     expect(names()).toEqual(MORE_ROWS.map((r) => r.nameKey))
   })
 
@@ -110,7 +110,7 @@ describe('the nav flyout', () => {
     install()
     draw()
     draw()
-    expect(rows()).toHaveLength(3)
+    expect(rows()).toHaveLength(MORE_ROWS.length)
   })
 
   it('marks the row whose page stands open, from the first draw', () => {
@@ -153,7 +153,7 @@ describe('opening and closing the group', () => {
     toggle()
     expect(fly().dataset.open).toBe('true')
     expect(document.getElementById('moreBtn')!.getAttribute('aria-expanded')).toBe('true')
-    expect(rows()).toHaveLength(3)
+    expect(rows()).toHaveLength(MORE_ROWS.length)
   })
 
   it('closes again, keeping the rows it drew', () => {
@@ -162,7 +162,7 @@ describe('opening and closing the group', () => {
     toggle()
     expect(fly().dataset.open).toBe('false')
     expect(document.getElementById('moreBtn')!.getAttribute('aria-expanded')).toBe('false')
-    expect(rows()).toHaveLength(3)
+    expect(rows()).toHaveLength(MORE_ROWS.length)
   })
 
   it('takes a state rather than a flip when given one', () => {
@@ -173,7 +173,7 @@ describe('opening and closing the group', () => {
     toggle(true)
     toggle(true)
     expect(fly().dataset.open).toBe('true')
-    expect(rows()).toHaveLength(3)
+    expect(rows()).toHaveLength(MORE_ROWS.length)
   })
 
   it('re-decides the marks either way round', () => {

@@ -14,4 +14,10 @@ DS.playbooks = {
   clearSecret: (name, param) => rpc.call('playbooks.credentials.clear', { name, param }).then(() => undefined),
   authorize: (name, server) => rpc.call('playbooks.oauth.authorize', { name, server }),
   clearOauth: (name, server) => rpc.call('playbooks.oauth.clear', { name, server }).then(() => undefined),
+  /* The runs those playbooks started. Unwrapped like the list above: the
+     contract answers an object so it can grow a field beside the array. */
+  stints: () => rpc.call('playbooks.stints.list', {}).then((r) => (r && r.stints) || []),
+  stint: (stint_id) => rpc.call('playbooks.stints.get', { stint_id }),
+  stopPlan: (stint_id) => rpc.call('playbooks.stints.stop', { stint_id }),
+  answerPlan: (stint_id, question, text) => rpc.call('playbooks.stints.answer', { stint_id, question, text }),
 };

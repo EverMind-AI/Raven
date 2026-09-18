@@ -24,11 +24,12 @@ from __future__ import annotations
 import re
 from typing import Any, ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-from pydantic.alias_generators import to_camel
+from pydantic import Field, model_validator
 
 from raven.agent.subagent.dag_graph import DagNodeSpec
 from raven.config.schema import MCPServerConfig
+from raven.playbook.base import CamelBase
+from raven.playbook.stint_spec import MemoryEntry, RoleEntry, StopSpec, VerifyEntry
 from raven.utils.paths import mint_slug
 
 SPEC_VERSION = 1
@@ -66,12 +67,6 @@ as ``SubAgentDagSpec.confirm``), where "approve this" means the whole graph.
 def slugify(name: str) -> str:
     slug = mint_slug(name)
     return slug or "playbook"
-
-
-class CamelBase(BaseModel):
-    """Wire shape is camelCase; python stays snake_case."""
-
-    model_config = ConfigDict(extra="forbid", alias_generator=to_camel, populate_by_name=True)
 
 
 class Triggers(CamelBase):
@@ -143,7 +138,7 @@ class PlaybookSpec(CamelBase):
     run it at all."""
 
     version: int = SPEC_VERSION
-    mode: Literal["dag", "prompt"]
+    mode: Literal["dag", "prompt", "stint"]
     confirm: bool = True
     triggers: Triggers
     params: dict[str, ParamSpec] = Field(default_factory=dict)
@@ -172,8 +167,51 @@ class PlaybookSpec(CamelBase):
     skills/mcps, dependencies) — never runtime decision rules; a composed
     graph is fixed once assembled."""
 
+    roles: list[RoleEntry] | None = None
+    """rounds mode: who plays each part, every round. The round's graph is
+    compiled from this, one node per role, so a role is a node's worth of
+    description plus what carries between rounds."""
+
+    memory: list[MemoryEntry] | None = None
+    """rounds mode: the files that carry between rounds. Every round is a fresh
+    conversation for every role, so nothing carries that is not written down."""
+
+    verify: list[VerifyEntry] | None = None
+    """rounds mode: real commands a role's work is measured by. The one signal
+    in a round no model produced, which is why it is worth its cost."""
+
+    stop: StopSpec | None = None
+    """rounds mode: when to stop opening rounds. Absent is the default budget,
+    never "forever"."""
+
+    setup: Literal["stint"] | None = None
+    """rounds mode: the project layout this playbook is written against, laid
+    out before the first round when the project does not have it.
+
+    A name from a closed set rather than a list of files or a script. A playbook
+    is a file that travels, so a setup section that could say *what* to write
+    would be a way to make the host write anything; a name can only select a
+    recipe that shipped with the host, and the approval can say which one and
+    what it lays down. Absent is a playbook that works a project as it finds
+    it -- most of them."""
+
+    STINT_SECTIONS: ClassVar[tuple[str, ...]] = ("roles", "memory", "verify", "stop", "setup")
+
     @model_validator(mode="after")
     def _mode_section_pairing(self) -> "PlaybookSpec":
+        if self.mode == "stint":
+            if not self.roles:
+                raise ValueError("mode 'stint' requires non-empty roles")
+            if self.nodes or self.prompts:
+                raise ValueError("mode 'stint' carries roles, not nodes or prompts")
+            return self
+        # Said by name rather than as "the other sections": a playbook that
+        # carried `verify` under `mode: dag` would look like it runs commands
+        # and would not, and a section that is silently ignored is worse than
+        # one that is refused.
+        carried = [name for name in self.STINT_SECTIONS if getattr(self, name) is not None]
+        if carried:
+            raise ValueError(f"mode {self.mode!r} must not carry {', '.join(carried)} -- those are rounds mode's")
         if self.mode == "dag":
             if not self.nodes:
                 raise ValueError("mode 'dag' requires non-empty nodes")
@@ -184,6 +222,58 @@ class PlaybookSpec(CamelBase):
                 raise ValueError("mode 'prompt' requires non-empty prompts")
             if self.nodes:
                 raise ValueError("mode 'prompt' must not carry nodes")
+        return self
+
+    @model_validator(mode="after")
+    def _the_round_is_an_order_of_roles(self) -> "PlaybookSpec":
+        """Unique labels, resolvable dependencies, no cycle.
+
+        The same three rules the graph itself enforces, asked here so a role
+        table that could not compile is refused when the file loads rather than
+        when somebody runs it.
+        """
+        roles = self.roles or []
+        labels = [role.label for role in roles]
+        duplicated = sorted({label for label in labels if labels.count(label) > 1})
+        if duplicated:
+            raise ValueError(f"two roles share the label {', '.join(duplicated)}; a label names one part")
+        known = set(labels)
+        for role in roles:
+            unknown = [dep for dep in role.depends_on if dep not in known]
+            if unknown:
+                raise ValueError(f"role {role.label!r} depends on {', '.join(unknown)}, which no role answers to")
+            if role.label in role.depends_on:
+                raise ValueError(f"role {role.label!r} depends on itself")
+        remaining = {role.label: set(role.depends_on) for role in roles}
+        while remaining:
+            ready = sorted(label for label, deps in remaining.items() if not deps)
+            if not ready:
+                raise ValueError(f"the roles depend on each other in a circle: {', '.join(sorted(remaining))}")
+            for label in ready:
+                remaining.pop(label)
+            for deps in remaining.values():
+                deps.difference_update(ready)
+        return self
+
+    @model_validator(mode="after")
+    def _a_role_is_measured_by_a_check_that_exists(self) -> "PlaybookSpec":
+        declared = {entry.name for entry in (self.verify or [])}
+        for role in self.roles or []:
+            unknown = [name for name in role.verify_after if name not in declared]
+            if unknown:
+                raise ValueError(
+                    f"role {role.label!r} verifies after {', '.join(unknown)}, which no verify entry names"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _running_commands_is_approved_once_or_not_at_all(self) -> "PlaybookSpec":
+        """A playbook is a file that travels; `verify` is the one part of it
+        that executes. The single approval a plan gets has to be the approval
+        for those commands, so a stint playbook carrying them may not waive it.
+        """
+        if self.verify and not self.confirm:
+            raise ValueError("a playbook carrying verify commands must keep confirm: true -- they run as shell")
         return self
 
     @model_validator(mode="after")

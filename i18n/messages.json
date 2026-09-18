@@ -5409,7 +5409,7 @@
     },
     "gui.ws.instance_turn_elapsed": {
       "en": "Working for {d}",
-      "zh": "\u672c\u8f6e\u5df2\u8fd0\u884c {d}"
+      "zh": "本轮已运行 {d}"
     },
     "gui.ws.instance_new_fail": {
       "en": "Could not start: {why}",
@@ -5553,11 +5553,11 @@
     },
     "gui.ws.html_run": {
       "en": "Run it here",
-      "zh": "\u5728\u8fd9\u91cc\u8fd0\u884c"
+      "zh": "在这里运行"
     },
     "gui.ws.html_no_scripts": {
       "en": "Scripts do not run in this preview. A page that needs them may look blank, or may look finished while its layout is wrong and nothing responds. Open the file outside Raven to see it as written.",
-      "zh": "\u9884\u89c8\u4e0d\u8fd0\u884c\u811a\u672c\u3002\u9700\u8981\u811a\u672c\u7684\u9875\u9762\u53ef\u80fd\u4e00\u7247\u7a7a\u767d\uff0c\u4e5f\u53ef\u80fd\u770b\u7740\u50cf\u753b\u597d\u4e86\u3001\u5b9e\u9645\u4e0a\u6392\u7248\u662f\u6b6a\u7684\u4e14\u70b9\u4ec0\u4e48\u90fd\u6ca1\u53cd\u5e94\u3002\u8981\u770b\u5b83\u672c\u6765\u7684\u6837\u5b50\uff0c\u8bf7\u5728 Raven \u4e4b\u5916\u6253\u5f00\u8fd9\u4e2a\u6587\u4ef6\u3002"
+      "zh": "预览不运行脚本。需要脚本的页面可能一片空白，也可能看着像画好了、实际上排版是歪的且点什么都没反应。要看它本来的样子，请在 Raven 之外打开这个文件。"
     },
     "gui.ws.file_gone": {
       "en": "That file is no longer there.",
@@ -6079,6 +6079,70 @@
       "en": "Reading...",
       "zh": "正在读取…"
     },
+    "gui.pb.tab_library": {
+      "en": "Library",
+      "zh": "剧本库"
+    },
+    "gui.pb.tab_plans": {
+      "en": "Runs",
+      "zh": "运行"
+    },
+    "gui.pb.stint_round": {
+      "en": "round {n} of {max}",
+      "zh": "第 {n} 轮 / 共 {max} 轮"
+    },
+    "gui.pb.stint_rounds_run": {
+      "en": "{n} round(s) run",
+      "zh": "已跑 {n} 轮"
+    },
+    "gui.pb.stint_live": {
+      "en": "running",
+      "zh": "进行中"
+    },
+    "gui.pb.stint_waiting": {
+      "en": "{n} waiting on you",
+      "zh": "{n} 条在等你"
+    },
+    "gui.pb.stint_stop": {
+      "en": "Stop",
+      "zh": "停止"
+    },
+    "gui.pb.stint_stop_note": {
+      "en": "The round already running finishes and reports; no further round opens.",
+      "zh": "已经在跑的那一轮会跑完并汇报；不会再开新的一轮。"
+    },
+    "gui.pb.stint_undone": {
+      "en": "{n} undone",
+      "zh": "撤销 {n} 处"
+    },
+    "gui.pb.stint_answer": {
+      "en": "Answer",
+      "zh": "回答"
+    },
+    "gui.pb.stint_answer_ph": {
+      "en": "What the next round should read",
+      "zh": "写给下一轮看的内容"
+    },
+    "gui.pb.stint_answered": {
+      "en": "answered",
+      "zh": "已回答"
+    },
+    "gui.pb.stint_unanswered": {
+      "en": "waiting",
+      "zh": "等待中"
+    },
+    "gui.pb.stint_tree": {
+      "en": "works in",
+      "zh": "工作目录"
+    },
+    "gui.pb.stint_checks": {
+      "en": "checks",
+      "zh": "检查"
+    },
+    "gui.pb.stint_back": {
+      "en": "All runs",
+      "zh": "全部运行"
+    },
     "gui.pb.lane": {
       "en": "@{handle} one session",
       "zh": "@{handle} 同一会话"
@@ -6142,6 +6206,118 @@
     "gui.pb.tab_contract": {
       "en": "Contract",
       "zh": "契约"
+    },
+    "gui.pb.tab_stint": {
+      "en": "Stint",
+      "zh": "多轮运行"
+    },
+    "gui.pb.sec_roles": {
+      "en": "Roles",
+      "zh": "角色"
+    },
+    "gui.pb.sec_checks": {
+      "en": "Checks",
+      "zh": "客观检查"
+    },
+    "gui.pb.sec_carried": {
+      "en": "Carried between rounds",
+      "zh": "轮间交接"
+    },
+    "gui.pb.stint_budget": {
+      "en": "Up to {n} rounds",
+      "zh": "最多 {n} 轮"
+    },
+    "gui.pb.stint_until": {
+      "en": "or until a last role writes {marker}",
+      "zh": "或直到最后一个角色写下 {marker}"
+    },
+    "gui.pb.stint_every": {
+      "en": "says a line each round",
+      "zh": "每轮报一句"
+    },
+    "gui.pb.stint_at_end": {
+      "en": "says nothing until it ends",
+      "zh": "结束前不出声"
+    },
+    "gui.pb.col_role": {
+      "en": "Role",
+      "zh": "角色"
+    },
+    "gui.pb.col_played_by": {
+      "en": "Played by",
+      "zh": "由谁来演"
+    },
+    "gui.pb.col_after": {
+      "en": "After",
+      "zh": "在谁之后"
+    },
+    "gui.pb.col_writes": {
+      "en": "May write",
+      "zh": "可以写"
+    },
+    "gui.pb.col_starts_from": {
+      "en": "Starts reading at",
+      "zh": "从哪里读起"
+    },
+    "gui.pb.col_command": {
+      "en": "Command",
+      "zh": "命令"
+    },
+    "gui.pb.role_terminal": {
+      "en": "can end the plan",
+      "zh": "可以结束计划"
+    },
+    "gui.pb.role_appends": {
+      "en": "append-only",
+      "zh": "只能追加"
+    },
+    "gui.pb.role_write_soft": {
+      "en": "not undone",
+      "zh": "不会被撤销"
+    },
+    "gui.pb.role_read_hard": {
+      "en": "reads fenced",
+      "zh": "读取有围栏"
+    },
+    "gui.pb.role_nothing": {
+      "en": "nothing",
+      "zh": "无"
+    },
+    "gui.pb.role_handbacks": {
+      "en": "{n} handbacks",
+      "zh": "最多返工 {n} 次"
+    },
+    "gui.pb.role_journal": {
+      "en": "writes {section} in the journal",
+      "zh": "往记事本的 {section} 节写"
+    },
+    "gui.pb.check_after": {
+      "en": "after {roles}",
+      "zh": "{roles} 干完要过"
+    },
+    "gui.pb.check_display": {
+      "en": "needs a screen",
+      "zh": "需要屏幕"
+    },
+    "gui.pb.check_timeout": {
+      "en": "{n}s",
+      "zh": "{n} 秒"
+    },
+    "gui.pb.no_checks": {
+      "en": "No commands run: every judgement this plan makes is a role's own.",
+      "zh": "不跑任何命令：这个计划里的每一个判断都是角色自己给的。"
+    },
+    "gui.pb.no_carried": {
+      "en": "Nothing is carried between rounds, so each round starts from the repository alone.",
+      "zh": "轮与轮之间不交接任何文件，每一轮只能从仓库本身读起。"
+    },
+    "gui.pb.carried_journal": {
+      "en": "journal",
+      "zh": "记事本"
+    },
+    "gui.pb.carried_window": {
+      "en": "last {n} rounds, {chars} chars",
+      "zh": "最近 {n} 轮，{chars} 字"
     },
     "gui.pb.f_mode": {
       "en": "mode",
@@ -6261,23 +6437,23 @@
     },
     "gui.imodel.title": {
       "en": "Model",
-      "zh": "\u6a21\u578b"
+      "zh": "模型"
     },
     "gui.imodel.agent": {
       "en": "Agent's own",
-      "zh": "\u8ddf\u968f\u5b50\u667a\u80fd\u4f53"
+      "zh": "跟随子智能体"
     },
     "gui.imodel.agent_tip": {
       "en": "Answering with whatever this agent chose. Click to give this instance its own model.",
-      "zh": "\u7528\u7684\u662f\u5b50\u667a\u80fd\u4f53\u81ea\u5df1\u9009\u7684\u6a21\u578b\u3002\u70b9\u51fb\u53ef\u4e3a\u8fd9\u4e2a\u5b9e\u4f8b\u5355\u72ec\u6307\u5b9a\u6a21\u578b\u3002"
+      "zh": "用的是子智能体自己选的模型。点击可为这个实例单独指定模型。"
     },
     "gui.imodel.set_tip": {
       "en": "This instance's own model, from its next turn on.",
-      "zh": "\u8fd9\u4e2a\u5b9e\u4f8b\u81ea\u5df1\u7684\u6a21\u578b\uff0c\u4ece\u4e0b\u4e00\u8f6e\u5f00\u59cb\u751f\u6548\u3002"
+      "zh": "这个实例自己的模型，从下一轮开始生效。"
     },
     "gui.imodel.failed": {
       "en": "Could not change this instance's model",
-      "zh": "\u6539\u8fd9\u4e2a\u5b9e\u4f8b\u7684\u6a21\u578b\u6ca1\u6709\u6210\u529f"
+      "zh": "改这个实例的模型没有成功"
     },
     "gui.imode.title": {
       "en": "Effort",
@@ -7182,6 +7358,10 @@
     "gui.kb.save": {
       "en": "Save",
       "zh": "保存"
+    },
+    "gui.pb.stints_none": {
+      "en": "No multi-round run has been started here.",
+      "zh": "这里还没有启动过多轮运行。"
     }
   }
 }

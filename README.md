@@ -387,6 +387,7 @@ The following runtime packages and modules form the canonical commit scopes unde
 | `session` | Conversation storage, session resolution, titles, and transcript export |
 | `skill_hub` | SkillHub search, skill retrieval, bundle installation, and install policy |
 | `spine` | Turn scheduling, concurrency lanes, cancellation, and event delivery |
+| `stint` | What one multi-round run needs: the record, its checkout, ownership grades, the journal window and the checks |
 | `templates` | Packaged workspace files, prompt packs, and agent scaffolding templates |
 | `token_wise` | Token usage, pricing, prompt caching, and efficiency strategies |
 | `tracing` | Span capture, instrumentation, trace storage, and artifact management |
