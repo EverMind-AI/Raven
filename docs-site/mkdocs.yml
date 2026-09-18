@@ -34,7 +34,7 @@ plugins:
           name: English
           build: true
         - locale: zh
-          name: 简体中文
+          name: Chinese (Simplified)
           build: true
 
 nav:
