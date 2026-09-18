@@ -331,6 +331,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    closes and its twin in that header takes over. */
 .railtop { display: flex; align-items: center; justify-content: flex-start; gap: 2px;
   flex: none; height: 44px; padding: 0 var(--edge); }
+/* Pushes the two chores to the far end of the row, which is what puts the name
+   at the window's corner and the buttons where the design has them. */
+.wordmark { display: flex; align-items: center; gap: 8px; margin-right: auto; padding: 0 6px;
+  font-size: 13px; font-weight: 600; letter-spacing: .06em; color: var(--text); }
+.wordmark svg { display: block; flex: none; }
 /* The collapsed-rail twin is lifted out of this row's flow (see #railShow), so
    the space it stood in has to be reserved: --edge, the button, and the gap. */
 .app[data-rail="off"] .top { padding-left: calc(var(--edge) + 35px); }
@@ -340,7 +345,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    Skills / Plugins / Memory painted over the way out and left no way to reach
    another module at all. It keeps the exact spot its twin in the rail occupies,
    so the icon never moves under the pointer that just clicked it. */
-#railShow { position: fixed; left: calc(var(--edge) + 4px); top: 22px; transform: translateY(-50%); z-index: var(--z-rail-handle); }
+#railShow { position: fixed; left: var(--edge); top: 26px; transform: translateY(-50%); z-index: var(--z-rail-handle); }
 :root[data-shell="1"] #railShow { left: var(--tl-pad, 78px); top: calc(var(--tl-row, 38px) / 2); }
 :root[data-shell="1"][data-rail="off"] .top { padding-left: calc(var(--tl-pad, 78px) + 35px); }
 /* Desktop shell hides the OS title bar, so this row shares the traffic-light
@@ -577,7 +582,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 
 /* A hairline seam above the identity row: without it the foot reads as the
    last session in the list rather than a fixture of the rail. */
-.rail-foot { padding: 8px 6px 6px; border-top: 1px solid var(--line-soft); margin-top: 4px; }
+.rail-foot { display: grid; gap: 2px; padding: 6px 8px 8px; border-top: 1px solid var(--line-soft); margin-top: 4px; }
 
 .me {
   display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;

@@ -2,6 +2,17 @@ div#onb
 div.app[data-rail=on]
   aside.rail[data-counts=pending]
     div.railtop
+      span.wordmark
+        svg
+          rect
+          path
+          circle
+          ellipse
+          ellipse
+          circle
+          circle
+          path
+          path
       button#railBtn.ghost-ic.tipdn
         svg
           rect

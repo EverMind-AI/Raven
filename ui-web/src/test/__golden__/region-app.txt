@@ -1,6 +1,17 @@
 div.app
   aside.rail
     div.railtop
+      span.wordmark
+        svg
+          rect
+          path
+          circle
+          ellipse
+          ellipse
+          circle
+          circle
+          path
+          path
       button#railBtn.ghost-ic.tipdn
         svg
           rect
