@@ -77,13 +77,17 @@ def _int_or_none(value: Any) -> int | None:
 
 
 def _tool_counts(source: dict[str, Any]) -> tuple[int | None, int | None]:
-    """``(tool_call_count, tool_failure_count)``, null where the lane never said."""
+    """``(tool_call_count, tool_failure_count)``, null where the lane never said.
+
+    ``as_meta`` writes ``tool_failures`` only when there were some, so a lane
+    that listed its calls and named no failure had zero, not an unknown number.
+    """
     calls = source.get("tool_calls")
     failures = source.get("tool_failures")
-    return (
-        len(calls) if isinstance(calls, list) else None,
-        len(failures) if isinstance(failures, list) else None,
-    )
+    call_count = len(calls) if isinstance(calls, list) else None
+    if isinstance(failures, list):
+        return call_count, len(failures)
+    return call_count, (0 if call_count is not None else None)
 
 
 def _files_of(source: dict[str, Any]) -> list[dict[str, Any]]:

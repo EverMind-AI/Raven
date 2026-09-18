@@ -432,9 +432,11 @@ async def test_a_finalized_two_node_run_is_one_completed_task(workspace: Path) -
     assert n1["node_id"] == "n1"
     assert n1["has_output"] is True
     assert n1["tool_call_count"] == 1
+    assert n1["tool_failure_count"] == 0
     assert n1["tokens_in"] == 10 and n1["tokens_out"] == 5
     n2 = row["nodes"][1]
     assert n2["depends_on"] == ["n1"]
+    assert n2["tool_call_count"] is None and n2["tool_failure_count"] is None
 
 
 async def test_a_hard_stop_reads_cancelled_from_the_node_registry_not_all(workspace: Path) -> None:
