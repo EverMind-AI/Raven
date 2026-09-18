@@ -1,9 +1,10 @@
 /** Shared types for the floating workspace desk. */
 
 import type { AgentRow, InstanceRow } from '../subagents/types'
+import type { TaskRow } from '../tasks/types'
 import type { WsChange, WsFile } from '../workspace/types'
 
-export type DeskTab = 'diff' | 'deliverables' | 'agents'
+export type DeskTab = 'diff' | 'deliverables' | 'tasks'
 
 /* Which way a two-pane desk is cut. The counts above two have one layout each,
    so this says nothing there; at two it is the difference between a stack and a
@@ -15,6 +16,11 @@ export type DeskPane =
   | { id: string; kind: 'file'; file: WsFile }
   | { id: string; kind: 'agent'; row: InstanceRow }
   | { id: string; kind: 'agent-record'; row: AgentRow }
+  /* A task opens as a pane rather than inside the palette: the list is the
+     floating window and a task's graph is not something to read through a
+     340px slot. Same split the deliverables tab already has, where a row opens
+     the file it names. */
+  | { id: string; kind: 'task'; row: TaskRow }
 
 export interface DeskSplits {
   column: number

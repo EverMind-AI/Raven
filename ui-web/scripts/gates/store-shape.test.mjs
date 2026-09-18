@@ -17,10 +17,12 @@
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const SRC = new URL('../../src/', import.meta.url).pathname
+import { relPath, root } from './paths.mjs'
+
+const SRC = root(new URL('../../src/', import.meta.url))
 
 /** The one module that owns the listener set and the notify. */
 const STORE = 'state/store.ts'
@@ -85,7 +87,7 @@ function* sources(dir, testsToo) {
 const modules = (dir) => sources(dir, false)
 
 /** Every non-test module under one of src/'s directories, by its path from src/. */
-const layer = (dir) => [...modules(join(SRC, dir))].map((path) => relative(SRC, path)).sort()
+const layer = (dir) => [...modules(join(SRC, dir))].map((path) => relPath(SRC, path)).sort()
 
 const read = (rel) => readFileSync(join(SRC, rel), 'utf8')
 
@@ -164,7 +166,7 @@ describe('the page\'s stores', () => {
     const RETIRED = /\b(getState|_resetAppsForTests|_clearForTests)\b/
     const found = []
     for (const path of sources(SRC, true)) {
-      if (RETIRED.test(readFileSync(path, 'utf8'))) found.push(relative(SRC, path))
+      if (RETIRED.test(readFileSync(path, 'utf8'))) found.push(relPath(SRC, path))
     }
     expect(found, 'read a snapshot with get(); the test seam is _resetForTests').toEqual([])
   })

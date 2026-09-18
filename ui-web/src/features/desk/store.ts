@@ -8,12 +8,14 @@ import { show as toast } from '../../state/toast'
 import { pane } from '../../state/wsPane'
 import { instanceState } from '../subagents/history'
 import * as agents from '../subagents/store'
+import * as tasks from '../tasks/store'
 import * as deliveries from '../workspace/deliveries'
 import * as workspace from '../workspace/store'
 import * as palette from './palette'
 import * as seen from './seen'
 
 import type { AgentRow, InstanceRow } from '../subagents/types'
+import type { TaskRow } from '../tasks/types'
 import type { WsChange } from '../workspace/types'
 import type { DeskDuo, DeskPane, DeskSplits, DeskState, DeskTab } from './types'
 
@@ -133,7 +135,7 @@ function remember(): void {
   })
 }
 
-const TABS: readonly DeskTab[] = ['deliverables', 'agents', 'diff']
+const TABS: readonly DeskTab[] = ['deliverables', 'diff', 'tasks']
 
 /* What each tab is counting, as the identity of every item in it -- read from
    the source that tab draws from, so "what is in it" and "what is new in it"
@@ -147,7 +149,7 @@ const TABS: readonly DeskTab[] = ['deliverables', 'agents', 'diff']
 export function idsOf(tab: DeskTab): string[] {
   if (tab === 'diff') return workspace.shared().changes.map((c) => `${c.key}:${c.turn}`)
   if (tab === 'deliverables') return deliveries.paths()
-  return agents.instances().map((it) => `${it.agent}:${it.handle}`)
+  return tasks.rows().map((r) => r.id)
 }
 
 /* Whether the desk should be up for this conversation, when the reader has not
@@ -362,7 +364,7 @@ export const showing = (): boolean => get().paletteOpen && !get().solo
  * like one that always did. */
 export function pickTab(): DeskTab {
   if (unseen('deliverables') > 0) return 'deliverables'
-  if (unseen('agents') > 0) return 'agents'
+  if (unseen('tasks') > 0) return 'tasks'
   /* Existence, not news, and only on this rung: with nothing new anywhere, what
      the session has been editing is the most useful thing to be looking at.
      Above it the test is "unseen" twice, so an old delegated run does not keep
@@ -481,10 +483,19 @@ export function openDeskAgent(row: InstanceRow, recordId?: string | null): void 
      has to say the reader has now seen this run.
 
      `openDeskAgentRecord` needs no such line: a record is a spawn or a graph
-     node, and neither is in the instance list the agents tab counts, so there
-     is nothing there for opening one to clear. */
-  readItem('agents', `${row.agent}:${row.handle}`)
+     node, and neither is in the instance list the agents tab counted, so there
+     is nothing there for opening one to clear.
+
+     Nor does this one any more. The palette counts tasks now, and an instance
+     is not one of them, so there is no tab rung for opening a run to clear --
+     the pane still opens, from the transcript's graph card, and clears nothing
+     because nothing counted it. */
   addPane({ id: `agent:${row.agent}:${row.handle}`, kind: 'agent', row }, supersedes)
+}
+
+export function openDeskTask(row: TaskRow, supersedes?: string): void {
+  readItem('tasks', row.id)
+  addPane({ id: `task:${row.id}`, kind: 'task', row }, supersedes)
 }
 
 export function openDeskAgentRecord(row: AgentRow): void {
@@ -617,8 +628,12 @@ export function notifyDesk(): void {
  *
  * Subscribed here rather than fixed at the poll: the poll is one of several
  * writers -- the panel refreshes on its own, and `state/session/resume` forces one --
- * and a store should hear its own evidence change wherever it changes from. */
+ * and a store should hear its own evidence change wherever it changes from.
+ *
+ * Both stores, because both are still evidence: the tasks store is what a tab
+ * counts, and the subagents store is what the launcher's running glyph reads. */
 agents.subscribe(weighTheDesk)
+tasks.subscribe(weighTheDesk)
 
 export function reset(): void {
   /* The palette is NOT shut here, and that is the point: a reset runs on the way

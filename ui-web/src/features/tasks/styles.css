@@ -1,0 +1,24 @@
+/* This domain's own stylesheet.
+ *
+ * Every class this domain introduces carries the domain's prefix (`tk`), and
+ * the file is imported by the domain's App -- see TasksPage.tsx -- so nothing
+ * outside features/tasks/ has to know it exists. Vite collects the imported
+ * stylesheets of every domain into one asset, which ui-web/build.py inlines
+ * into the page's single <style> block after styles/page.css, in domain order.
+ *
+ * The rest of this domain's rules are still in styles/page.css, where they
+ * landed before there was a per-domain sheet to put them in; the gate's
+ * LEGACY_LOCAL row is what carries that debt down.
+ */
+
+/* The node card's three "there is nothing to show here" lines -- a step nobody
+   started, one whose record this panel has not read, and one whose executor
+   kept none. The same muted paragraph as `.tknote`, and named apart from it
+   because the two say different things: a note annotates what IS on screen,
+   this one stands in place of what is not. */
+.tkempty {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+}

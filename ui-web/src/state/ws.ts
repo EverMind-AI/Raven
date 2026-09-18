@@ -167,6 +167,22 @@ export function restore(next: string, wasPicked: unknown): void {
   picked = !!wasPicked
 }
 
+/* What else a session switch clears, registered rather than imported.
+   The three resets above are edges this layer already carries into features/
+   and the import-direction gate pins as the debt they are; a fourth is not
+   added by writing another one. A domain whose state belongs to the
+   conversation hands its reset in through here instead, and the page's wiring
+   is what hands it (src/app/install.ts) -- the arrangement state/page.ts's
+   show slots already have. */
+const alsoReset = new Map<string, () => void>()
+
+/** Registers state a session switch clears, for a domain this layer may not
+ *  import. Keyed by that domain, so a module evaluated twice in a test
+ *  registers one reset rather than two. */
+export function onReset(domain: string, fn: () => void): void {
+  alsoReset.set(domain, fn)
+}
+
 export function reset(): void {
   tab = 'diff'
   picked = false
@@ -180,6 +196,7 @@ export function reset(): void {
      same reason, and because `dag.node` is addressed by session: left set, the
      pane would ask the newly opened conversation for a run it never made. */
   resetSubagents()
+  for (const fn of alsoReset.values()) fn()
 }
 
 export const stale = (mine: number): boolean => mine !== epoch

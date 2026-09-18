@@ -9,6 +9,7 @@ import { InstanceModel } from '../subagents/InstanceModel'
 import * as agents from '../subagents/store'
 import { AgentRecordConversation, InstanceConversation } from '../subagents/SubagentsPage'
 import { TurnClock } from '../subagents/TurnClock'
+import { TaskPane } from '../tasks/TasksPage'
 import * as deliveries from '../workspace/deliveries'
 import * as workspace from '../workspace/store'
 import { ChgDiff, FileView } from '../workspace/WorkspacePage'
@@ -69,7 +70,8 @@ function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
          slug, a name for the machine. Read the other way round, a graph node's
          pane was headed by its id whatever the run knew about it. */
       ? pane.row.label || pane.row.node || pane.row.id || t('gui.ws.agents')
-      : pane.kind === 'file' ? pane.file.path.split('/').pop() || pane.file.path : pane.change.name
+      : pane.kind === 'file' ? pane.file.path.split('/').pop() || pane.file.path
+        : pane.kind === 'task' ? pane.row.name : pane.change.name
   return (
     <section
       ref={(el) => refPane(pane.id, el)}
@@ -78,7 +80,10 @@ function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
       onPointerDown={() => desk.setActive(pane.id)}
     >
       <header onPointerDown={(event) => onGrab(pane.id, event)}>
-        <DeskIcon kind={pane.kind === 'agent' || pane.kind === 'agent-record' ? 'agents' : pane.kind} />
+        <DeskIcon kind={
+          pane.kind === 'agent' || pane.kind === 'agent-record' ? 'agents'
+            : pane.kind === 'task' ? 'tasks' : pane.kind
+        } />
         <b title={title}>{title}</b>
         {pane.kind === 'agent' || pane.kind === 'agent-record'
           ? (
@@ -110,6 +115,7 @@ function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
         {pane.kind === 'file' ? <FileView ws={workspace.shared()} file={pane.file} /> : null}
         {pane.kind === 'agent' ? <InstanceConversation row={pane.row} /> : null}
         {pane.kind === 'agent-record' ? <AgentRecordConversation row={pane.row} /> : null}
+        {pane.kind === 'task' ? <TaskPane task={pane.row} full={full} /> : null}
       </div>
     </section>
   )

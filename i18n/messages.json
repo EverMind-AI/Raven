@@ -5409,7 +5409,7 @@
     },
     "gui.ws.instance_turn_elapsed": {
       "en": "Working for {d}",
-      "zh": "\u672c\u8f6e\u5df2\u8fd0\u884c {d}"
+      "zh": "本轮已运行 {d}"
     },
     "gui.ws.instance_new_fail": {
       "en": "Could not start: {why}",
@@ -5553,11 +5553,11 @@
     },
     "gui.ws.html_run": {
       "en": "Run it here",
-      "zh": "\u5728\u8fd9\u91cc\u8fd0\u884c"
+      "zh": "在这里运行"
     },
     "gui.ws.html_no_scripts": {
       "en": "Scripts do not run in this preview. A page that needs them may look blank, or may look finished while its layout is wrong and nothing responds. Open the file outside Raven to see it as written.",
-      "zh": "\u9884\u89c8\u4e0d\u8fd0\u884c\u811a\u672c\u3002\u9700\u8981\u811a\u672c\u7684\u9875\u9762\u53ef\u80fd\u4e00\u7247\u7a7a\u767d\uff0c\u4e5f\u53ef\u80fd\u770b\u7740\u50cf\u753b\u597d\u4e86\u3001\u5b9e\u9645\u4e0a\u6392\u7248\u662f\u6b6a\u7684\u4e14\u70b9\u4ec0\u4e48\u90fd\u6ca1\u53cd\u5e94\u3002\u8981\u770b\u5b83\u672c\u6765\u7684\u6837\u5b50\uff0c\u8bf7\u5728 Raven \u4e4b\u5916\u6253\u5f00\u8fd9\u4e2a\u6587\u4ef6\u3002"
+      "zh": "预览不运行脚本。需要脚本的页面可能一片空白，也可能看着像画好了、实际上排版是歪的且点什么都没反应。要看它本来的样子，请在 Raven 之外打开这个文件。"
     },
     "gui.ws.file_gone": {
       "en": "That file is no longer there.",
@@ -6119,18 +6119,6 @@
       "en": "Playbook graph - drag to pan, ctrl and scroll to zoom",
       "zh": "剧本流程图 · 拖动平移，按住 ctrl 滚动缩放"
     },
-    "gui.pb.zoom_in": {
-      "en": "Zoom in",
-      "zh": "放大"
-    },
-    "gui.pb.zoom_out": {
-      "en": "Zoom out",
-      "zh": "缩小"
-    },
-    "gui.pb.zoom_fit": {
-      "en": "Fit the whole graph",
-      "zh": "缩放到完整流程"
-    },
     "gui.pb.tab_graph": {
       "en": "Graph",
       "zh": "图"
@@ -6261,23 +6249,23 @@
     },
     "gui.imodel.title": {
       "en": "Model",
-      "zh": "\u6a21\u578b"
+      "zh": "模型"
     },
     "gui.imodel.agent": {
       "en": "Agent's own",
-      "zh": "\u8ddf\u968f\u5b50\u667a\u80fd\u4f53"
+      "zh": "跟随子智能体"
     },
     "gui.imodel.agent_tip": {
       "en": "Answering with whatever this agent chose. Click to give this instance its own model.",
-      "zh": "\u7528\u7684\u662f\u5b50\u667a\u80fd\u4f53\u81ea\u5df1\u9009\u7684\u6a21\u578b\u3002\u70b9\u51fb\u53ef\u4e3a\u8fd9\u4e2a\u5b9e\u4f8b\u5355\u72ec\u6307\u5b9a\u6a21\u578b\u3002"
+      "zh": "用的是子智能体自己选的模型。点击可为这个实例单独指定模型。"
     },
     "gui.imodel.set_tip": {
       "en": "This instance's own model, from its next turn on.",
-      "zh": "\u8fd9\u4e2a\u5b9e\u4f8b\u81ea\u5df1\u7684\u6a21\u578b\uff0c\u4ece\u4e0b\u4e00\u8f6e\u5f00\u59cb\u751f\u6548\u3002"
+      "zh": "这个实例自己的模型，从下一轮开始生效。"
     },
     "gui.imodel.failed": {
       "en": "Could not change this instance's model",
-      "zh": "\u6539\u8fd9\u4e2a\u5b9e\u4f8b\u7684\u6a21\u578b\u6ca1\u6709\u6210\u529f"
+      "zh": "改这个实例的模型没有成功"
     },
     "gui.imode.title": {
       "en": "Effort",
@@ -7182,6 +7170,138 @@
     "gui.kb.save": {
       "en": "Save",
       "zh": "保存"
+    },
+    "gui.dag.zoom_in": {
+      "en": "Zoom in",
+      "zh": "放大"
+    },
+    "gui.dag.zoom_out": {
+      "en": "Zoom out",
+      "zh": "缩小"
+    },
+    "gui.dag.zoom_fit": {
+      "en": "Fit the whole graph",
+      "zh": "缩放到完整流程"
+    },
+    "gui.ws.tasks": {
+      "en": "Tasks",
+      "zh": "任务"
+    },
+    "gui.tasks.running": {
+      "en": "Running",
+      "zh": "进行中"
+    },
+    "gui.tasks.settled": {
+      "en": "Finished",
+      "zh": "已结束"
+    },
+    "gui.tasks.state_run": {
+      "en": "Running",
+      "zh": "进行中"
+    },
+    "gui.tasks.artifacts_n": {
+      "en": "{n} products",
+      "zh": "{n} 个产物"
+    },
+    "gui.tasks.step": {
+      "en": "step {i}/{n}",
+      "zh": "第 {i}/{n} 步"
+    },
+    "gui.ws.tasks_none": {
+      "en": "No tasks yet",
+      "zh": "还没有任务"
+    },
+    "gui.tasks.none": {
+      "en": "No tasks yet. Delegating in the conversation, running a dag or running a playbook all line up here.",
+      "zh": "还没有任务。对话里派活、run dag 或跑 playbook，都会在这里排成一条。"
+    },
+    "gui.ws.tasks_none_sub": {
+      "en": "No tasks yet. Delegating in the conversation, running a dag or running a playbook all line up here.",
+      "zh": "还没有任务。对话里派活、run dag 或跑 playbook，都会在这里排成一条。"
+    },
+    "gui.tasks.src_spawn": {
+      "en": "spawn",
+      "zh": "spawn"
+    },
+    "gui.tasks.src_dag": {
+      "en": "run dag",
+      "zh": "run dag"
+    },
+    "gui.tasks.src_playbook": {
+      "en": "playbook",
+      "zh": "playbook"
+    },
+    "gui.tasks.node_agent": {
+      "en": "Agent",
+      "zh": "执行"
+    },
+    "gui.tasks.node_status": {
+      "en": "Status",
+      "zh": "状态"
+    },
+    "gui.tasks.node_took": {
+      "en": "Took",
+      "zh": "耗时"
+    },
+    "gui.tasks.artifacts_1": {
+      "en": "1 product",
+      "zh": "1 个产物"
+    },
+    "gui.tasks.state_wait": {
+      "en": "Pending",
+      "zh": "待办"
+    },
+    "gui.tasks.confirm": {
+      "en": "confirm before dispatch {v}",
+      "zh": "派发前确认 {v}"
+    },
+    "gui.tasks.record_tools": {
+      "en": "{n} tool calls",
+      "zh": "{n} 次工具调用"
+    },
+    "gui.tasks.rec_more": {
+      "en": "Show all",
+      "zh": "展开全文"
+    },
+    "gui.tasks.rec_less": {
+      "en": "Show less",
+      "zh": "收起"
+    },
+    "gui.tasks.rec_process": {
+      "en": "Process",
+      "zh": "过程"
+    },
+    "gui.tasks.rec_thought": {
+      "en": "Thought",
+      "zh": "已思考"
+    },
+    "gui.tasks.rec_unrecorded": {
+      "en": "This sub-agent (cli type) keeps no record of its process",
+      "zh": "该子智能体（cli 类型）不记录过程"
+    },
+    "gui.tasks.rec_pending": {
+      "en": "Not started yet",
+      "zh": "尚未开始"
+    },
+    "gui.tasks.tab_flow": {
+      "en": "Flow",
+      "zh": "执行流"
+    },
+    "gui.tasks.rec_unread": {
+      "en": "No record read for this step yet",
+      "zh": "尚未读取这一步的过程记录"
+    },
+    "gui.tasks.canvas": {
+      "en": "Task graph - drag to pan, ctrl and scroll to zoom",
+      "zh": "任务流程图 · 拖动平移，按住 ctrl 滚动缩放"
+    },
+    "gui.tasks.pick_node": {
+      "en": "Pick a step to read it",
+      "zh": "选中一个步骤查看"
+    },
+    "gui.tasks.tab_order": {
+      "en": "Work order",
+      "zh": "任务单"
     }
   }
 }
