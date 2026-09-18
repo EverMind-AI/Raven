@@ -24,25 +24,68 @@ const GROUP_LABEL: Record<string, string> = {
   memory: 'gui.settings.tools.grp_memory', search: 'gui.settings.tools.grp_search',
 }
 
-/* The vendors the two web tools can run on, with where each hands out keys.
-   The fetch vendors other than Jina share the search vendor's key. */
-const WEB_SEARCH: Array<[string, string, string]> = [
-  ['serper', 'Serper', 'https://serper.dev'], ['anysearch', 'AnySearch', 'https://anysearch.com'],
-  ['serpapi', 'SerpApi', 'https://serpapi.com'], ['tavily', 'Tavily', 'https://tavily.com'],
-  ['exa', 'Exa', 'https://exa.ai'], ['brave', 'Brave Search', 'https://brave.com/search/api'],
-  ['firecrawl', 'Firecrawl', 'https://firecrawl.dev'],
-]
-const WEB_FETCH: Array<[string, string, string, boolean]> = [
-  ['jina', 'Jina Reader', 'https://jina.ai/reader', false], ['anysearch', 'AnySearch', 'https://anysearch.com', true],
-  ['tavily', 'Tavily', 'https://tavily.com', true], ['exa', 'Exa', 'https://exa.ai', true],
-  ['firecrawl', 'Firecrawl', 'https://firecrawl.dev', true],
-]
+/* The vendors the two web tools can run on, in the schema's order, with the
+   default each falls back to. tests/test_agent_tools_web_providers.py parses
+   this table from the source and holds it to the schema literals. */
+interface WebVendorPick {
+  path: string
+  vendors: string[]
+  fallback: string
+}
+const WEB_VENDOR: Record<string, WebVendorPick> = {
+  web_search: {
+    path: 'tools.web.search.provider',
+    vendors: ['serper', 'anysearch', 'serpapi', 'tavily', 'exa', 'brave', 'firecrawl', 'serply'],
+    fallback: 'serper',
+  },
+  web_fetch: {
+    path: 'tools.web.fetch.provider',
+    vendors: ['jina', 'anysearch', 'tavily', 'exa', 'firecrawl'],
+    fallback: 'jina',
+  },
+}
+const WEB_VENDOR_LABEL: Record<string, string> = {
+  serper: 'Serper',
+  anysearch: 'AnySearch',
+  serpapi: 'SerpApi',
+  jina: 'Jina Reader',
+  tavily: 'Tavily',
+  exa: 'Exa',
+  brave: 'Brave Search',
+  firecrawl: 'Firecrawl',
+  serply: 'Serply',
+}
+/* Where each vendor hands out keys. */
+const WEB_VENDOR_URL: Record<string, string> = {
+  serper: 'https://serper.dev', anysearch: 'https://anysearch.com', serpapi: 'https://serpapi.com',
+  jina: 'https://jina.ai/reader', tavily: 'https://tavily.com', exa: 'https://exa.ai',
+  brave: 'https://brave.com/search/api', firecrawl: 'https://firecrawl.dev', serply: 'https://serply.io',
+}
+/* Jina reads without a key; every other reader needs one. */
+const FETCH_KEYLESS = new Set(['jina'])
 
 const dig = (raw: Record<string, unknown>, path: string): unknown =>
   path.split('.').reduce<unknown>((o, k) => (o && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined), raw)
 const str = (raw: Record<string, unknown>, path: string): string => {
   const v = dig(raw, path)
   return typeof v === 'string' ? v : ''
+}
+
+/* The vendor a web tool runs on, from the config or the default. */
+export const webVendor = (tool: string, raw: Record<string, unknown>): string => {
+  const pick = WEB_VENDOR[tool]!
+  return str(raw, pick.path) || pick.fallback
+}
+/* The slot the tools read a vendor's key from, and the pre-vendor leaf a key
+   may still sit in: the tools read that too, so the row counts it as set and
+   a clear retires both. */
+export const vendorKey = (vendor: string): string => `tools.web.providers.${vendor}.apiKey`
+export const legacyKey = (tool: string, vendor: string): string | null =>
+  (tool === 'web_search' && vendor === 'serper') ? 'tools.web.search.apiKey'
+    : (tool === 'web_fetch' && vendor === 'jina') ? 'tools.web.jinaApiKey' : null
+const keySet = (tool: string, vendor: string, raw: Record<string, unknown>): boolean => {
+  const legacy = legacyKey(tool, vendor)
+  return !!str(raw, vendorKey(vendor)) || (!!legacy && !!str(raw, legacy))
 }
 
 const ROLE_OF: Record<string, string> = {
@@ -54,12 +97,10 @@ const ROLE_OF: Record<string, string> = {
    tools by their role. */
 export function blocker(id: string, raw: Record<string, unknown>): string {
   const snap = store.get().snap
-  if (id === 'web_search') return str(raw, 'tools.web.search.apiKey') ? '' : 'key'
+  if (id === 'web_search') return keySet(id, webVendor(id, raw), raw) ? '' : 'key'
   if (id === 'web_fetch') {
-    const vendor = str(raw, 'tools.web.fetch.provider') || 'jina'
-    const row = WEB_FETCH.find((v) => v[0] === vendor)
-    if (vendor === 'jina') return str(raw, 'tools.web.jinaApiKey') ? '' : 'key'
-    return row && row[3] && !str(raw, 'tools.web.search.apiKey') ? 'key' : ''
+    const vendor = webVendor(id, raw)
+    return !FETCH_KEYLESS.has(vendor) && !keySet(id, vendor, raw) ? 'key' : ''
   }
   if (id === 'deep_research') return str(raw, 'tools.deepResearch.apiKey') ? '' : 'key'
   const roleId = ROLE_OF[id]
@@ -70,13 +111,24 @@ export function blocker(id: string, raw: Record<string, unknown>): string {
   return ''
 }
 
-function KeyRow({ label, keyName, url, raw }: { label: string; keyName: string; url?: string; raw: Record<string, unknown> }): JSX.Element {
+function KeyRow({ label, keyName, legacy, url, raw }: {
+  label: string
+  keyName: string
+  /* The pre-vendor leaf the same key may still sit in; a clear empties it too. */
+  legacy?: string | null
+  url?: string
+  raw: Record<string, unknown>
+}): JSX.Element {
   const [value, setValue] = useState('')
-  const isSet = !!str(raw, keyName)
+  const isSet = !!str(raw, keyName) || (!!legacy && !!str(raw, legacy))
   const save = (): void => {
     const v = value.trim()
     if (!v) { store.refuse(t('gui.settings.tools.key_first')); return }
     void store.write(keyName, v)
+  }
+  const clear = async (): Promise<void> => {
+    if (str(raw, keyName)) await store.write(keyName, '')
+    if (legacy && str(raw, legacy)) await store.write(legacy, '')
   }
   return (
     <Row stack label={<>{label}<KeyLink url={url} /></>}>
@@ -85,7 +137,7 @@ function KeyRow({ label, keyName, url, raw }: { label: string; keyName: string; 
           placeholder={isSet ? t('gui.settings.key_set_ph') : t('gui.settings.key_ph')}
           onChange={(e) => setValue(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
         <button type="button" className="mini" onClick={save}>{isSet ? t('gui.settings.update') : t('gui.save')}</button>
-        {isSet && <button type="button" className="mini ghost" onClick={() => void store.write(keyName, '')}>{t('gui.settings.clear')}</button>}
+        {isSet && <button type="button" className="mini ghost" onClick={() => void clear()}>{t('gui.settings.clear')}</button>}
       </span>
     </Row>
   )
@@ -107,29 +159,19 @@ function Panel({ id, raw }: { id: string; raw: Record<string, unknown> }): JSX.E
     const role = ROLES.find((r) => r.id === roleId) as Role
     return <Row label={t('gui.settings.tools.model')}><RolePill role={role} /></Row>
   }
-  if (id === 'web_search') {
-    const vendor = str(raw, 'tools.web.search.provider') || WEB_SEARCH[0]![0]
-    const row = WEB_SEARCH.find((v) => v[0] === vendor) || WEB_SEARCH[0]!
+  if (id === 'web_search' || id === 'web_fetch') {
+    const pick = WEB_VENDOR[id]!
+    const vendor = webVendor(id, raw)
+    const keyed = id === 'web_search' || !FETCH_KEYLESS.has(vendor)
     return (
       <>
-        <Row label={t('gui.settings.tools.search_vendor')}>
-          <VendorSelect keyName="tools.web.search.provider" value={vendor} opts={WEB_SEARCH.map((v) => [v[0], v[1]])} />
+        <Row label={t(id === 'web_search' ? 'gui.settings.tools.search_vendor' : 'gui.settings.tools.fetch_vendor')}>
+          <VendorSelect keyName={pick.path} value={vendor} opts={pick.vendors.map((v) => [v, WEB_VENDOR_LABEL[v] || v])} />
         </Row>
-        <KeyRow label={t('gui.settings.tools.vendor_key', { name: row[1] })} keyName="tools.web.search.apiKey" url={row[2]} raw={raw} />
-      </>
-    )
-  }
-  if (id === 'web_fetch') {
-    const vendor = str(raw, 'tools.web.fetch.provider') || 'jina'
-    const row = WEB_FETCH.find((v) => v[0] === vendor) || WEB_FETCH[0]!
-    return (
-      <>
-        <Row label={t('gui.settings.tools.fetch_vendor')}>
-          <VendorSelect keyName="tools.web.fetch.provider" value={vendor} opts={WEB_FETCH.map((v) => [v[0], v[1]])} />
-        </Row>
-        {vendor === 'jina'
-          ? <KeyRow label={t('gui.settings.tools.vendor_key', { name: row[1] })} keyName="tools.web.jinaApiKey" url={row[2]} raw={raw} />
-          : row[3] && <KeyRow label={t('gui.settings.tools.vendor_key', { name: row[1] })} keyName="tools.web.search.apiKey" url={row[2]} raw={raw} />}
+        {(keyed || vendor === 'jina') && (
+          <KeyRow label={t('gui.settings.tools.vendor_key', { name: WEB_VENDOR_LABEL[vendor] || vendor })}
+            keyName={vendorKey(vendor)} legacy={legacyKey(id, vendor)} url={WEB_VENDOR_URL[vendor]} raw={raw} />
+        )}
       </>
     )
   }
