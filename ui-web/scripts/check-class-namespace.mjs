@@ -32,12 +32,29 @@
 // already in styles/page.css come across a domain at a time, each move lowering
 // a number here.
 //
-// Reach: every class a domain's non-test .tsx files name, whether the attribute
-// is a literal (`className="a b"`) or an expression (`className={...}`) -- and
-// inside an expression, every single-quoted, double-quoted and template-literal
-// static chunk, split on whitespace. A token glued to an interpolation is a stem
-// rather than a class (`kbf-${family}` names `.kbf-md`, never `.kbf-`), so it is
-// not read as one. No .ts under features/ names a class today.
+// Reach: every class a domain's non-test .tsx and .ts files name. A class is
+// written in four ways and all four are read --
+//
+//   className="a b"   the attribute, in either quote
+//   class="a b"       the same attribute inside a string of markup, which is
+//                     what `dangerouslySetInnerHTML` is handed
+//   classList.add()   and its three siblings, the class set on an element by
+//                     hand rather than declared in the markup
+//   className={...}   the expression: every single-quoted, double-quoted and
+//                     template-literal static chunk, split on whitespace, and
+//                     the same again inside each `${...}` hole
+//
+// -- because a rule about names is worth only as much as the narrowest way of
+// writing one. A token glued to an interpolation is a stem rather than a class
+// (`kbf-${family}` names `.kbf-md`, never `.kbf-`), so it is not read as one.
+//
+// What is NOT read, and cannot be by reading text: a class that reaches the
+// attribute as an identifier (`className={cls}`, `{...{ className }}`), and a
+// class handed to a component under some other prop name (`cls="x"`). Neither
+// end of those is a literal this check can hold to a prefix, and a count of the
+// sites would not say which class went through them, so they are a limit rather
+// than a list. `src/lib/prose.ts` is the largest of them: it builds markup for
+// the whole shell and belongs to no namespace (CONTRIBUTING section 11).
 //
 // What an expression cannot tell apart is a class from a comparison operand:
 // `state === 'bad' ? 'v err' : 'v'` names .v and .err and reads 'bad' as a class
@@ -49,24 +66,30 @@
 //
 // Two namespaces beyond features/, read the same way and pinned the same way:
 //
-//   chrome      -- src/chrome/**.tsx plus src/App.tsx and src/main.tsx, the
-//                  page's own frame. A class it introduces is named
-//                  `chrome-<rest>`, or exactly `chrome`.
-//   components  -- src/components/**.tsx, the components more than one region
+//   chrome      -- src/chrome/** plus src/App.tsx and src/main.tsx, the page's
+//                  own frame. A class it introduces is named `chrome-<rest>`,
+//                  or exactly `chrome`.
+//   components  -- src/components/**, the components more than one region
 //                  renders. There the namespace is the file, because that is
 //                  what owns the markup: Skeleton.tsx names `skeleton-<rest>`,
 //                  SetupSheet.tsx names `setup-sheet-<rest>`, and a component's
 //                  own root class may be the bare name (`agent-mark`). One file
 //                  at a time, so each is held to its own name: ModelTags.tsx
 //                  owning `.model-tags` does not let SetupSheet.tsx write it,
-//                  and the row that fails names the borrower and the owner.
+//                  and the row that fails names the borrower and the owner. A
+//                  class belongs to the LONGEST of those names it carries, so
+//                  an `Agent.tsx` cannot answer for `.agent-mark-row`.
+//
+// Every .tsx under src/ belongs to one of the three, which is checked rather
+// than assumed: a component filed outside them all is markup nothing here
+// reads, and so is a class nothing holds to a prefix.
 //
 // A name in SHARED passes in both, as it does in a domain, and so does a name
 // already on LEGACY_SHARED: that row is the debt of a class two domains name,
 // and counting the frame's use of it again would say the debt grew when nothing
 // moved. LEGACY_SHARED itself stays scoped to features for the same reason --
 // the frame renders the page every domain sits in, so most of the page-wide
-// names it writes would read as one more domain and all 86 rows would move
+// names it writes would read as one more domain and every row would move
 // without a class changing. What these two still owe is pinned per namespace:
 //
 //   LEGACY_CHROME      -- how many names a namespace writes without carrying
@@ -75,13 +98,16 @@
 //                         `components` has one per file, so a class two
 //                         components write is a row on each of them.
 //   LEGACY_CHROME_EXPR -- the same count inside a `className={...}` expression.
-//   UNSTYLED           -- a class the markup writes that no stylesheet defines.
+//   LEGACY_BORROWED    -- which LEGACY_SHARED rows the namespace helps itself
+//                         to, by name, since those pass the two counts above.
+//   UNSTYLED           -- a class the markup writes that page.css, the only
+//                         sheet either namespace has, does not define.
 //
-// Down or gone, all three. A name the frame and one domain both write is a row
+// Down or gone, all four. A name the frame and one domain both write is a row
 // on both sides, and either can retire its own: this counts what a namespace
 // owes, not how many names the page has.
 import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -90,6 +116,9 @@ const fail = (msg) => {
   console.error(`check-class-namespace: ${msg}`)
   process.exit(1)
 }
+
+/* A path from src/, spelled the way this file's messages spell one. */
+const relOf = (path) => relative(src, path).split(sep).join('/')
 
 // Classes every domain may use, because they are the page's own vocabulary
 // rather than any one feature's: buttons, empty states, and the small text
@@ -152,8 +181,12 @@ const LEGACY_SHARED = {
 // A zero is a domain that is done, and it stays on the list: the entry is what
 // says the count was measured rather than forgotten.
 const LEGACY_LOCAL = {
-  browser: 24,
-  composer: 7,
+  /* Up from 24 for `.hot`, which BrowserPage.tsx sets with classList rather
+     than in the markup: a class this check had never read, not a new one. The
+     two rows below moved the same way -- `.drop` and `.halt` in composer,
+     `.caret` in transcript, the last of them written into a string of HTML. */
+  browser: 25,
+  composer: 9,
   connections: 5,
   cron: 13,
   /* Up from 7, and every one of the six is a class that MOVED here rather than
@@ -177,7 +210,7 @@ const LEGACY_LOCAL = {
   skills: 4,
   subagents: 39,
   tasks: 9,
-  transcript: 73,
+  transcript: 74,
   workspace: 37,
 }
 
@@ -225,15 +258,22 @@ const LEGACY_CHROME = {
 }
 
 const LEGACY_CHROME_EXPR = {
-  chrome: 1,
+  /* Up from 1 for `.hot`, `.risk`, `.rule` and `.warm`: four names written
+     inside a `${...}` hole, which the expression reader used to skip over. */
+  chrome: 4,
   components: 8,
 }
 
-// A class the markup writes that no stylesheet defines: a rule renamed or
-// deleted from under the markup, which no rendering test can see. Down or gone,
-// and going away edits the served markup -- `.newrun` is in
-// src/test/__golden__/region-app.txt -- so it is not a delete in a commit that
-// changes no DOM. An empty list is a namespace that was measured and owes
+// A class the markup writes that styles/page.css does not define -- page.css
+// alone, because it is the only sheet either namespace has, and reading a
+// domain's own sheet here would let the frame borrow a class that domain styles
+// for itself and call it defined. Comments come out of the sheet first: a note
+// saying a rule went away is the likeliest place for the name to outlive it.
+//
+// So: a rule renamed or deleted from under the markup, which no rendering test
+// can see. Down or gone, and going away edits the served markup -- `.newrun` is
+// in src/test/__golden__/region-app.txt -- so it is not a delete in a commit
+// that changes no DOM. An empty list is a namespace that was measured and owes
 // nothing.
 //
 // src/components/SetupSheet.tsx writes two more of these from inside an
@@ -242,8 +282,40 @@ const LEGACY_CHROME_EXPR = {
 // like a class; both are real, and both go when that span's two states get a
 // rule or a name.
 const UNSTYLED = {
-  chrome: ['newrun'],
+  /* `tipdn` is not a rule and never was: it is the flag state/tooltip.ts reads
+     with `classList.contains` to place the hover pill below its control instead
+     of above it. page.css names it in the comment over those rules, which is
+     what used to answer for it here until the comments came out of the search --
+     a marker class rather than a renamed rule, and one the tooltip placement
+     tests cover. */
+  chrome: ['newrun', 'tipdn'],
   components: [],
+}
+
+// Which LEGACY_SHARED rows each namespace borrows, by name. A name on one of
+// those rows passes the two counts above on purpose -- counting the frame's use
+// of a class two domains already name would say the debt grew when nothing
+// moved -- so without this list the whole pool was free for the frame and the
+// shared components to help themselves to.
+//
+// Down or gone, like the rest: a NEW borrow fails and a retired one is a pin to
+// delete. Either end retires a row -- the domains prefix the class, or the
+// namespace stops writing it.
+//
+// Names rather than a count, because a count would let one borrow be traded for
+// another. Attribute and expression borrowings are one list: an expression is
+// how a class is written as often as an attribute is (`'led' + ...` in
+// SetupRow.tsx and SetupSheet.tsx), and keeping them apart would leave the
+// expression form as the way around the list. `warn` in `components` is the
+// price of that: it is SetupSheet.tsx comparing a state name, which an
+// expression cannot tell from a class.
+const LEGACY_BORROWED = {
+  chrome: [
+    'body', 'btn', 'cfind', 'chev', 'cmd', 'foot', 'ghost-ic', 'hd', 'ic', 'icb',
+    'lb', 'led', 'mk', 'n', 'note', 'pill', 'pmhero', 'row', 'sheet', 't',
+    'tick', 'tipdn', 'top',
+  ],
+  components: ['a', 'cap', 'hd', 'key', 'l1', 'l2', 'led', 'n', 'skel', 'sustate', 'warn'],
 }
 
 const domains = readdirSync(join(src, 'features'))
@@ -257,16 +329,53 @@ const prefixOf = (domain) => {
   return text.match(/\bcssPrefix:\s*'([^']+)'/)?.[1] ?? domain
 }
 
-const components = (dir, out = []) => {
+/* Directories the walk does not enter, by their path from src/ rather than by
+   a bare name: `src/assets/` is not source, while a domain's own `assets/`
+   would be, and a name-only test cannot tell the two apart. */
+const SKIP = new Set(['assets', 'test/__golden__'])
+const skipped = (path) => {
+  const rel = relOf(path)
+  return SKIP.has(rel) || /(^|\/)__snapshots__$/.test(rel)
+}
+
+/* A test file is one whose own name says so -- `Rail.test.tsx`, `test.tsx` --
+   rather than any path with `.test.` somewhere along it. */
+const isTest = (name) => /(^|\.)test\.[jt]sx?$/.test(name)
+
+/* Every file of a namespace that can write a class: the JSX, and the modules
+   beside it that reach for an element and set a class on it by hand. */
+const sources = (dir, out = []) => {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name)
     if (entry.isDirectory()) {
-      if (entry.name !== '__snapshots__') components(path, out)
-    } else if (entry.name.endsWith('.tsx') && !entry.name.endsWith('.test.tsx')) {
+      if (!skipped(path)) sources(path, out)
+    } else if (/\.tsx?$/.test(entry.name) && !isTest(entry.name) && !entry.name.endsWith('.d.ts')) {
       out.push(path)
     }
   }
   return out
+}
+
+/* The walk above reads TypeScript, which is the whole tree only while there is
+   no plain JavaScript in it. A `.js` under src/ would be markup this check
+   never opened, and silence is the one answer it must not give. */
+const javascript = (dir, out = []) => {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      if (!skipped(path)) javascript(path, out)
+    } else if (/\.(js|jsx|mjs|cjs)$/.test(entry.name)) {
+      out.push(relOf(path))
+    }
+  }
+  return out
+}
+const plainJs = javascript(src)
+if (plainJs.length) {
+  fail(
+    `${plainJs.join(', ')} under src/ is JavaScript, which this check's walk does not read: ` +
+      'add the extension to `sources` in scripts/check-class-namespace.mjs, or move the file under src/assets/.',
+  )
 }
 
 /* The expression after each `className={`, to its balanced closing brace --
@@ -297,20 +406,24 @@ const endOfString = (text, i) => {
   let j = i + 1
   while (j < text.length && text[j] !== quote) {
     if (text[j] === '\\') { j += 2; continue }
-    if (quote === '`' && text[j] === '$' && text[j + 1] === '{') { j = endOfHole(text, j + 1) + 1; continue }
+    if (quote === '`' && text[j] === '$' && text[j + 1] === '{') { j = endOfGroup(text, j + 1) + 1; continue }
     j += 1
   }
   return j
 }
 
-/* The index of the brace that closes the `${` whose brace is at `i`. */
-const endOfHole = (text, i) => {
+/* The index of the bracket that closes the one at `i` -- a `${`'s brace, or a
+   call's parenthesis -- with quotes skipped so a bracket inside a string does
+   not end it. */
+const endOfGroup = (text, i) => {
+  const open = text[i]
+  const close = open === '{' ? '}' : ')'
   let j = i + 1
   let depth = 1
   while (j < text.length && depth > 0) {
     const ch = text[j]
-    if (ch === '{') depth += 1
-    else if (ch === '}') depth -= 1
+    if (ch === open) depth += 1
+    else if (ch === close) depth -= 1
     else if (ch === "'" || ch === '"' || ch === '`') j = endOfString(text, j)
     j += 1
   }
@@ -345,8 +458,14 @@ const tokensIn = (expr) => {
         const hole = expr.indexOf('${', at)
         if (hole === -1 || hole >= end) break
         take(expr.slice(at, hole), glueStart, true)
+        /* The hole holds an expression of its own, so it is read as one:
+           `` `x ${on ? 'a' : 'b'}` `` names .a and .b, and skipping the hole
+           made a whole class of names invisible. The chunks on either side keep
+           the stem rule -- they are glued to whatever the hole answers. */
+        const close = endOfGroup(expr, hole + 1)
+        for (const c of tokensIn(expr.slice(hole + 2, close))) out.push(c)
         glueStart = true
-        at = endOfHole(expr, hole + 1) + 1
+        at = close + 1
       }
       take(expr.slice(at, end), glueStart, false)
       i = end + 1
@@ -357,24 +476,63 @@ const tokensIn = (expr) => {
   return out
 }
 
+/* `className="a b"` and `className='a b'`: a class name holds no quote, so one
+   pattern reads both, and a `{` in the value is the expression form below. */
+const ATTRIBUTE = /className=(["'])([^"'{]+)\1/g
+
+/* The same attribute inside a string of markup -- what `dangerouslySetInnerHTML`
+   is handed, and what a helper building HTML writes. The quote may be escaped,
+   because the string around it may be quoted the same way. */
+const MARKUP = /\bclass=\\?(["'])([^"'{\\]+)\\?\1/g
+
+/* A class set on an element by hand, which no attribute anywhere says. */
+const CLASS_LIST = /\bclassList\.(?:add|remove|toggle|replace)\(/g
+
+/* Every class one file writes, in two piles. The attribute forms and the
+   hand-set ones are classes and nothing else; a `className={...}` expression is
+   where a literal may be a comparison operand instead, which is the whole
+   reason the two are counted apart.
+   `classList` sits in the first pile because its four verbs take class names.
+   Their arguments are read the way an expression is, so a comparison inside
+   one (`toggle('x', mode === 'dark')`) would be read as a class -- no call
+   does that today, and the alternative is not reading the call at all. */
+const written = (text) => {
+  const attr = []
+  const expr = []
+  for (const pattern of [ATTRIBUTE, MARKUP]) {
+    for (const m of text.matchAll(pattern)) {
+      for (const c of m[2].trim().split(/\s+/)) if (c) attr.push(c)
+    }
+  }
+  for (const m of text.matchAll(CLASS_LIST)) {
+    const open = m.index + m[0].length - 1
+    for (const c of tokensIn(text.slice(open + 1, endOfGroup(text, open)))) attr.push(c)
+  }
+  for (const e of expressions(text)) {
+    for (const c of tokensIn(e)) expr.push(c)
+  }
+  return { attr, expr }
+}
+
 const prefixes = new Map(domains.map((domain) => [domain, prefixOf(domain)]))
 const named = new Map()
 const inExpr = new Map()
+const read = []
 for (const domain of domains) {
-  const files = components(join(src, 'features', domain))
+  const files = sources(join(src, 'features', domain))
   const used = new Set()
   const fromExpr = new Set()
   for (const file of files) {
-    const text = readFileSync(file, 'utf8')
-    for (const m of text.matchAll(/className="([^"{]+)"/g)) {
-      for (const c of m[1].trim().split(/\s+/)) if (c) used.add(c)
-    }
-    for (const expr of expressions(text)) {
-      for (const c of tokensIn(expr)) fromExpr.add(c)
-    }
+    const { attr, expr } = written(readFileSync(file, 'utf8'))
+    for (const c of attr) used.add(c)
+    for (const c of expr) fromExpr.add(c)
   }
-  if (files.length && !used.size) {
-    fail(`features/${domain} renders ${files.length} component(s) and names no class, which means this check is reading the wrong files`)
+  read.push(...files)
+  /* The .tsx alone, because a domain may be all modules and no markup:
+     features/installed is one shared read and two pages' worth of rows. */
+  const rendering = files.filter((file) => file.endsWith('.tsx')).length
+  if (rendering && !used.size) {
+    fail(`features/${domain} renders ${rendering} component(s) and names no class, which means this check is reading the wrong files`)
   }
   named.set(domain, used)
   inExpr.set(domain, fromExpr)
@@ -482,15 +640,29 @@ for (const domain of new Set([...Object.keys(LEGACY_LOCAL), ...Object.keys(LEGAC
 }
 if (stale.length) fail(`${stale.join('; ')}. All three lists above are down-or-gone.`)
 
+/* A sheet without its comments, and without the two places a dot is text
+   rather than a selector: a note saying a rule went away is the likeliest place
+   for the name to survive it, and `content: '.x'` draws the characters. */
+const selectors = (text) => text
+  .replace(/\/\*[\s\S]*?\*\//g, ' ')
+  .replace(/\burl\([^)]*\)/g, ' ')
+  .replace(/\bcontent\s*:[^;}]*/g, ' ')
+
+const page = selectors(readFileSync(join(src, 'styles/page.css'), 'utf8'))
+const sheets = [page]
+for (const domain of domains) {
+  try { sheets.push(selectors(readFileSync(join(src, 'features', domain, 'styles.css'), 'utf8'))) } catch { /* not every domain has one */ }
+}
+const css = sheets.join('\n')
+/* A class name is `[\w-]`, but a token read out of an expression need not be
+   one, and an unescaped `.` or `(` in the pattern would match a rule that says
+   something else. */
+const definedIn = (text) => (c) => new RegExp(`\\.${c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`).test(text)
+const styled = definedIn(css)
+
 /* And the reverse of the prefix rule: a class a domain owns must be a class the
    stylesheets define. A prefixed name nothing styles is a rule that was renamed
    or deleted from under the markup, which no rendering test can see either. */
-const sheets = [readFileSync(join(src, 'styles/page.css'), 'utf8')]
-for (const domain of domains) {
-  try { sheets.push(readFileSync(join(src, 'features', domain, 'styles.css'), 'utf8')) } catch { /* not every domain has one */ }
-}
-const css = sheets.join('\n')
-const styled = (c) => new RegExp(`\\.${c}(?![\\w-])`).test(css)
 const undefined_ = []
 for (const domain of domains) {
   for (const c of new Set([...named.get(domain), ...inExpr.get(domain)])) {
@@ -505,25 +677,32 @@ if (undefined_.length) fail(`${undefined_.join(', ')}, which no stylesheet defin
    markup names. The frame is one namespace over many files; a component is a
    namespace of its own, so `PascalCase.tsx` is read as the prefix its classes
    carry. */
-const kebab = (file) => basename(file, '.tsx').replace(/([a-z\d])([A-Z])/g, '$1-$2').toLowerCase()
+const kebab = (file) => basename(file).replace(/\.tsx?$/, '').replace(/([a-z\d])([A-Z])/g, '$1-$2').toLowerCase()
 const carries = (c, prefix) => c === prefix || c.startsWith(`${prefix}-`)
 const NAMESPACES = [
   {
     name: 'chrome',
-    reach: 'src/chrome/**.tsx, src/App.tsx and src/main.tsx',
-    files: [...components(join(src, 'chrome')), join(src, 'App.tsx'), join(src, 'main.tsx')],
+    reach: 'src/chrome/**, src/App.tsx and src/main.tsx',
+    files: [...sources(join(src, 'chrome')), join(src, 'App.tsx'), join(src, 'main.tsx')],
     prefix: () => 'chrome',
   },
   {
     name: 'components',
-    reach: 'src/components/**.tsx',
-    files: components(join(src, 'components')),
+    reach: 'src/components/**',
+    files: sources(join(src, 'components')),
     prefix: (file) => kebab(file),
   },
 ]
 
+/* Neither namespace has a sheet of its own, so page.css is where its rules
+   are -- what the failure message says, and what section 7 of CONTRIBUTING
+   says. Reading a domain's sheet here would let the frame borrow a class a
+   domain styles for itself and call it defined. */
+const onPage = definedIn(page)
+
 const nsOver = []
 const nsExprOver = []
+const nsBorrowed = []
 const nsDead = []
 const nsStale = []
 let nsClasses = 0
@@ -535,21 +714,24 @@ for (const ns of NAMESPACES) {
   const attrNames = new Map()
   const exprNames = new Map()
   const filesOf = new Map()
-  const add = (into, c, prefix) => {
+  /* And the files themselves, per name, so a row can say where to go: `chrome`
+     answers for twenty-odd files under one prefix, and the prefix alone told a
+     reader nothing about which of them to open. */
+  const wrote = new Map()
+  const add = (into, c, prefix, file) => {
     if (!into.has(c)) into.set(c, new Set())
     into.get(c).add(prefix)
+    const key = `${prefix} ${c}`
+    if (!wrote.has(key)) wrote.set(key, new Set())
+    wrote.get(key).add(basename(file))
   }
   for (const file of ns.files) {
-    const text = readFileSync(file, 'utf8')
     const prefix = ns.prefix(file)
     if (!filesOf.has(prefix)) filesOf.set(prefix, [])
     filesOf.get(prefix).push(basename(file))
-    for (const m of text.matchAll(/className="([^"{]+)"/g)) {
-      for (const c of m[1].trim().split(/\s+/)) if (c) add(attrNames, c, prefix)
-    }
-    for (const expr of expressions(text)) {
-      for (const c of tokensIn(expr)) add(exprNames, c, prefix)
-    }
+    const { attr, expr } = written(readFileSync(file, 'utf8'))
+    for (const c of attr) add(attrNames, c, prefix, file)
+    for (const c of expr) add(exprNames, c, prefix, file)
   }
   if (!attrNames.size) {
     fail(`${ns.reach} name no class, which means this check is reading the wrong files`)
@@ -558,36 +740,44 @@ for (const ns of NAMESPACES) {
   nsLiterals += exprNames.size
 
   /* The file a prefix speaks for, where that is one file: `components` is a
-     namespace per file, so a row can name the borrower and the owner. `chrome`
-     is one namespace over many files and answers under its own name. */
+     namespace per file, so a row can name the owner of a borrowed class.
+     `chrome` is one namespace over many files and answers under its own name. */
   const whose = (prefix) => {
     const files = filesOf.get(prefix) ?? []
     return files.length === 1 ? files[0] : ns.name
   }
-  const row = (c, prefix, where) => {
-    const lenders = [...where].filter((p) => p !== prefix && carries(c, p)).map(whose)
-    if (lenders.length) return `${ns.name}/${whose(prefix)} borrows .${c} from ${lenders.join(' and ')}`
-    return whose(prefix) === ns.name ? `.${c}` : `.${c} in ${whose(prefix)}`
+  /* A class belongs to the LONGEST namespace prefix it carries, not to any
+     prefix it happens to start with: `agent-mark-row` is AgentMark.tsx's, and
+     an `Agent.tsx` beside it would otherwise own every class of the component
+     whose name its own is the stem of. */
+  const ours = [...new Set(ns.files.map(ns.prefix))]
+  const owner = (c) => ours.filter((p) => carries(c, p)).sort((a, b) => b.length - a.length)[0]
+  const at = (c, prefix) => [...(wrote.get(`${prefix} ${c}`) ?? [])].sort().join(' and ')
+  const anywhere = (c) => [...new Set(ours.flatMap((p) => [...(wrote.get(`${p} ${c}`) ?? [])]))].sort().join(' and ')
+  const row = (c, prefix) => {
+    const lenders = ours.filter((p) => p !== prefix && carries(c, p)).map(whose)
+    if (lenders.length) return `${at(c, prefix)} borrows .${c} from ${lenders.join(' and ')}`
+    return `.${c} in ${at(c, prefix)}`
   }
-  /* A row per (class, prefix) pair whose prefix the class does not carry, not
-     per class: the prefixes naming one class are separate namespaces, so the
-     component that owns the name cannot answer for a second one borrowing it.
-     An attribute row covers the pair it counted, not every use of the name. */
+  /* A row per (class, prefix) pair the class does not belong to, not per class:
+     the prefixes naming one class are separate namespaces, so the component
+     that owns the name cannot answer for a second one borrowing it. An
+     attribute row covers the pair it counted, not every use of the name. */
   const owed = (from, already) => {
     const out = []
     for (const [c, where] of from) {
       if (SHARED.has(c) || LEGACY_SHARED[c] !== undefined) continue
       for (const prefix of where) {
-        if (carries(c, prefix) || already?.get(c)?.has(prefix)) continue
-        out.push(row(c, prefix, where))
+        if (owner(c) === prefix || already?.get(c)?.has(prefix)) continue
+        out.push(row(c, prefix))
       }
     }
     return out.sort()
   }
-  /* Whether some prefix carries the name, which is how an expression literal is
-     told from a comparison operand -- a question about the token, not about who
-     may write it. */
-  const anyPrefix = (c, where) => [...where].some((prefix) => carries(c, prefix))
+  /* Whether the namespace has a prefix the name carries, which is how an
+     expression literal is told from a comparison operand -- a question about
+     the token, not about who may write it. */
+  const anyPrefix = (c) => owner(c) !== undefined
   const debt = owed(attrNames)
   const exprDebt = owed(exprNames, attrNames)
   const ratchet = (found, pinned, what, into) => {
@@ -601,26 +791,61 @@ for (const ns of NAMESPACES) {
   ratchet(debt, LEGACY_CHROME[ns.name], 'unprefixed', nsOver)
   ratchet(exprDebt, LEGACY_CHROME_EXPR[ns.name], 'unprefixed in expressions', nsExprOver)
 
+  /* The LEGACY_SHARED rows the namespace writes, by name. Those names pass the
+     two ratchets above on purpose -- counting the frame's use of a class two
+     domains already name would say the debt grew when nothing moved -- which
+     left the whole pool borrowable at will. The borrowings are the pin
+     instead: a name here is one the frame or a component already writes, and a
+     name not here is a new borrow. */
+  const borrows = [...new Set([...attrNames.keys(), ...exprNames.keys()])]
+    .filter((c) => !SHARED.has(c) && LEGACY_SHARED[c] !== undefined && owner(c) === undefined)
+    .sort()
+  const pinnedBorrows = LEGACY_BORROWED[ns.name]
+  if (pinnedBorrows === undefined) {
+    nsBorrowed.push(`${ns.name} has no LEGACY_BORROWED list of its own`)
+  } else {
+    for (const c of borrows) {
+      if (!pinnedBorrows.includes(c)) nsBorrowed.push(`${ns.name} writes .${c} in ${anywhere(c)}`)
+    }
+    for (const c of pinnedBorrows) {
+      if (!borrows.includes(c)) nsStale.push(`${ns.name}: .${c} is not borrowed any more, delete the pin`)
+    }
+  }
+
   /* Every attribute literal, because an attribute is a class and nothing else,
      plus the expression literals that carry the prefix -- the rest of an
      expression is where an operand is indistinguishable from a class. */
-  const dead = [...attrNames.keys()].filter((c) => !styled(c))
-  for (const [c, where] of exprNames) {
-    if (!attrNames.has(c) && anyPrefix(c, where) && !styled(c)) dead.push(c)
+  const dead = [...attrNames.keys()].filter((c) => !onPage(c))
+  for (const [c] of exprNames) {
+    if (!attrNames.has(c) && anyPrefix(c) && !onPage(c)) dead.push(c)
   }
   dead.sort()
-  const known = UNSTYLED[ns.name]
-  if (known === undefined) {
+  const pinnedDead = UNSTYLED[ns.name]
+  if (pinnedDead === undefined) {
     nsDead.push(`${ns.name} has no UNSTYLED list of its own`)
   } else {
-    for (const c of dead) if (!known.includes(c)) nsDead.push(`${ns.name} writes .${c}, which no stylesheet defines`)
-    for (const c of known) if (!dead.includes(c)) nsStale.push(`${ns.name}: .${c} is styled or gone now, delete the pin`)
+    for (const c of dead) {
+      if (!pinnedDead.includes(c)) nsDead.push(`${ns.name} writes .${c} in ${anywhere(c)}, which page.css does not define`)
+    }
+    for (const c of pinnedDead) if (!dead.includes(c)) nsStale.push(`${ns.name}: .${c} is styled or gone now, delete the pin`)
   }
 }
 const namespaces = new Set(NAMESPACES.map((ns) => ns.name))
-for (const name of new Set([...Object.keys(LEGACY_CHROME), ...Object.keys(LEGACY_CHROME_EXPR), ...Object.keys(UNSTYLED)])) {
+const pinnedNames = [
+  ...Object.keys(LEGACY_CHROME), ...Object.keys(LEGACY_CHROME_EXPR),
+  ...Object.keys(LEGACY_BORROWED), ...Object.keys(UNSTYLED),
+]
+for (const name of new Set(pinnedNames)) {
   if (!namespaces.has(name)) nsStale.push(`${name}: no such namespace, delete the pin`)
 }
+
+/* And every file that can write a class is inside one of the namespaces above.
+   A component filed anywhere else -- `src/state/Stray.tsx` -- is markup no list
+   here reads, so its classes answer to no prefix and nothing notices. The
+   modules that are not components stay out: `lib/prose.ts` builds markup and is
+   a known exception (CONTRIBUTING section 11), not a namespace. */
+const claimed = new Set([...read, ...NAMESPACES.flatMap((ns) => ns.files)])
+const unclaimed = sources(src).filter((file) => file.endsWith('.tsx') && !claimed.has(file)).map(relOf)
 
 if (nsOver.length) {
   fail(
@@ -636,10 +861,24 @@ if (nsExprOver.length) {
       'shared component.',
   )
 }
+if (nsBorrowed.length) {
+  fail(
+    `${nsBorrowed.join('; ')}, which is a class LEGACY_SHARED already carries for two or more ` +
+      'domains. Borrowing one more spreads it further without moving a number: name the class for ' +
+      'this namespace instead, or add it to SHARED because every region should look the same here.',
+  )
+}
 if (nsDead.length) {
   fail(
     `${nsDead.join('; ')}. Take the class out of the markup, in a commit that says which golden ` +
       'lines moved, or pin it in UNSTYLED with the reason it is still written.',
+  )
+}
+if (unclaimed.length) {
+  fail(
+    `${unclaimed.join(', ')} renders markup no class namespace reads, so nothing holds its classes ` +
+      'to a prefix. A component belongs to features/<domain>/, src/chrome/ or src/components/; if it ' +
+      'belongs where it is, this check needs a namespace for that root.',
   )
 }
 if (nsStale.length) fail(`${nsStale.join('; ')}. The chrome and components lists are down-or-gone too.`)
@@ -654,6 +893,7 @@ console.log(
     `${nsClasses} classes and ${nsLiterals} expression literals across the ` +
     `${NAMESPACES.length} namespaces beyond features/, chrome and components; ` +
     `${Object.values(LEGACY_CHROME).reduce((a, b) => a + b, 0)} unprefixed, ` +
-    `${Object.values(LEGACY_CHROME_EXPR).reduce((a, b) => a + b, 0)} unprefixed in expressions ` +
-    `and ${Object.values(UNSTYLED).reduce((n, list) => n + list.length, 0)} unstyled pinned)`,
+    `${Object.values(LEGACY_CHROME_EXPR).reduce((a, b) => a + b, 0)} unprefixed in expressions, ` +
+    `${Object.values(LEGACY_BORROWED).reduce((n, list) => n + list.length, 0)} borrowed from ` +
+    `LEGACY_SHARED and ${Object.values(UNSTYLED).reduce((n, list) => n + list.length, 0)} unstyled pinned)`,
 )

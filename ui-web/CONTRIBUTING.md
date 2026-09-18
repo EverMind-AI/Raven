@@ -381,18 +381,26 @@ kebab-case (`Skeleton.tsx` names `skeleton-<rest>`, `SetupSheet.tsx` names
 `setup-sheet-<rest>`), and that component's root class may be the bare name.
 Each file is its own namespace there, and each is held to its own name alone:
 `.model-tags` belongs to `ModelTags.tsx`, so `SetupSheet.tsx` writing it too is
-borrowing and fails -- the check names the borrower and the owner. Both
-namespaces are styled from `page.css`, which is the only sheet either has.
+borrowing and fails -- the check names the borrower, the owner and the file. A
+class belongs to the longest of those names it carries, so an `Agent.tsx` could
+not answer for `AgentMark.tsx`'s classes. Both namespaces are styled from
+`page.css`, which is the only sheet either has, and the check reads that one
+sheet for them -- with its comments stripped first, since a comment saying a
+rule went away is where the name outlives it.
+
+Every `.tsx` under `src/` belongs to one of the three namespaces, and the check
+says so rather than assuming it: a component filed anywhere else is markup no
+list reads.
 
 **Enforced by `check-class-namespace`** (run as a gate by
 `check-class-namespace.test.mjs` and as a CLI), with three shrink-only debts:
-`LEGACY_SHARED` (86 classes two or more domains name, pinned with how many
+`LEGACY_SHARED` (the classes two or more domains name, pinned with how many
 domains each reaches), `LEGACY_LOCAL` (how many of a domain's own classes are
-still unprefixed, 342 in total) and `LEGACY_EXPR` (the same count for the
-literals inside a `className={...}` expression, 91 in total). A new shared
-class fails; one more unprefixed class in a domain fails, in an attribute or in
-an expression. Moving a domain's rules out of `page.css` into its own sheet is
-what lowers a number.
+still unprefixed) and `LEGACY_EXPR` (the same count for the literals inside a
+`className={...}` expression). The tool's OK line prints all three totals, and
+that line is the number to quote. A new shared class fails; one more unprefixed
+class in a domain fails, in an attribute or in an expression. Moving a domain's
+rules out of `page.css` into its own sheet is what lowers a number.
 
 Moving a rule is not yet a mechanical change, and three facts decide how it
 goes:
@@ -412,25 +420,36 @@ goes:
   It establishes the mechanism -- a domain's sheet, imported by its App,
   collected by Vite -- and says so in its header. No rule has moved yet.
 
-The two namespaces beyond `features/` carry three more shrink-only lists in the
+The two namespaces beyond `features/` carry four more shrink-only lists in the
 same tool: `LEGACY_CHROME` (136 unprefixed classes, 103 in the frame and 33 in
-the components), `LEGACY_CHROME_EXPR` (9 more inside a `className={...}`
-expression, 1 and 8) and `UNSTYLED` (`.newrun`, the one class the frame's
-markup writes that no stylesheet defines). A name in the shared vocabulary
-passes there too, and so does a name already pinned in `LEGACY_SHARED` --
-counting the frame's use of a class two domains name would say the debt grew
-when nothing moved.
+the components), `LEGACY_CHROME_EXPR` (12 more inside a `className={...}`
+expression, 4 and 8), `LEGACY_BORROWED` (the 34 `LEGACY_SHARED` names the two
+help themselves to, 23 and 11, listed by name) and `UNSTYLED` (`.newrun` and
+`.tipdn`, the two classes the frame's markup writes that `page.css` does not
+define). A name in the shared vocabulary passes there too, and so does a name
+already pinned in `LEGACY_SHARED` -- counting the frame's use of a class two
+domains name would say the debt grew when nothing moved, which is what
+`LEGACY_BORROWED` is for: those names pass the counts, so the borrowings
+themselves are pinned and a new one fails.
 
-The gate's reach is every class a domain's non-test `.tsx` files name, and the
-same for the frame's and the shared components': the literal attribute
-`className="a b"`, and inside a `className={...}` expression every
-single-quoted, double-quoted and template-literal static chunk, split on
-whitespace. A token glued to an interpolation is a stem rather than a class
-(`` `kbf-${family}` `` names `.kbf-md`, never `.kbf-`) and is not read as one.
-An expression cannot tell a class from a comparison operand, which is why its
-literals are counted in their own list rather than mixed into the other two,
-and why the defined-in-a-stylesheet half reads every attribute literal but
+The gate's reach is every class a domain's non-test `.tsx` and `.ts` files
+name, and the same for the frame's and the shared components'. A class is read
+however it is written: the attribute `className="a b"` in either quote, a
+`class="a b"` inside a string of markup (what `dangerouslySetInnerHTML` is
+handed), a `classList.add()` / `remove()` / `toggle()` / `replace()` call, and
+inside a `className={...}` expression every single-quoted, double-quoted and
+template-literal static chunk, split on whitespace, plus the same again inside
+each `${...}` hole. A token glued to an interpolation is a stem rather than a
+class (`` `kbf-${family}` `` names `.kbf-md`, never `.kbf-`) and is not read as
+one. An expression cannot tell a class from a comparison operand, which is why
+its literals are counted in their own list rather than mixed into the other
+two, and why the defined-in-a-stylesheet half reads every attribute literal but
 only the prefixed literals of an expression.
+
+What the gate cannot read is a class that reaches the attribute as an
+identifier (`className={cls}`, `{...{ className }}`) or under another prop name
+(`cls="x"`); the tool's header says so, and section 11 has the one file where
+that matters at any scale.
 
 ## 8. Tests and gates
 
@@ -540,9 +559,11 @@ shrink-only: the way off a list is the fix.
 | Four more non-store subscriber groups | `app/connection.ts` and `lib/session.ts` are watcher lists rather than stores; `state/caps.ts`'s `switched` and `state/lang/store.ts`'s `afterwards` are second groups beside a store's own subscribers | `store-shape`'s `LISTENERS` |
 | Four modules hold module-level `let` with no reset | Three hold a React root a reset would have to unmount; the fourth is a pinned store | `store-shape`'s `NO_RESET` |
 | `lang.attr(key)` survives beside `t(key)` | It answers `undefined` until a language is picked, which is what keeps nine `data-tip` and twenty-four `aria-label` attributes off the first frame of a page nobody has picked for -- exactly what the served markup carries. Turning them into `t()` would change the DOM the boot and region goldens record | `state/lang/store.ts`'s `picked`, `i18n-keys`'s `KEYED` regex |
-| 86 shared class names, 342 unprefixed local ones and 91 unprefixed inside a `className={...}` | The rules are in `page.css`, whose bytes are what the two boot goldens and the region goldens are taken from; they move a domain at a time. The third list is an upper bound: an expression literal may be a comparison operand rather than a class | `check-class-namespace`'s `LEGACY_SHARED`, `LEGACY_LOCAL` and `LEGACY_EXPR` |
-| 136 unprefixed classes in the two namespaces beyond `features/`, 9 more inside a `className={...}` | 103 and 1 in the page frame, 33 and 8 in the shared components. There is no `chrome/styles.css` to move a rule into, so these come down by renaming in `page.css`, in a commit that changes the DOM the goldens record | `check-class-namespace`'s `LEGACY_CHROME` and `LEGACY_CHROME_EXPR` |
-| `.newrun` is written and never styled | `src/chrome/Rail.tsx` puts it on the new-session button and no rule defines it; taking it out edits `src/test/__golden__/region-app.txt`. `src/components/SetupSheet.tsx` writes two more from inside an expression (`.badtx`, `.warntx`), where the check cannot tell a class from a comparison operand and so does not read them | `check-class-namespace`'s `UNSTYLED` |
+| 84 shared class names, 357 unprefixed local ones and 91 unprefixed inside a `className={...}` | The rules are in `page.css`, whose bytes are what the two boot goldens and the region goldens are taken from; they move a domain at a time. The third list is an upper bound: an expression literal may be a comparison operand rather than a class. The tool's OK line prints the three totals, and is what to read rather than this row | `check-class-namespace`'s `LEGACY_SHARED`, `LEGACY_LOCAL` and `LEGACY_EXPR` |
+| 136 unprefixed classes in the two namespaces beyond `features/`, 12 more inside a `className={...}` | 103 and 4 in the page frame, 33 and 8 in the shared components. There is no `chrome/styles.css` to move a rule into, so these come down by renaming in `page.css`, in a commit that changes the DOM the goldens record | `check-class-namespace`'s `LEGACY_CHROME` and `LEGACY_CHROME_EXPR` |
+| The two namespaces borrow 34 `LEGACY_SHARED` names | 23 in the page frame and 11 in the shared components, listed by name because a name on a `LEGACY_SHARED` row passes the two counts above on purpose. One of the eleven, `warn`, is `SetupSheet.tsx` comparing a state name inside an expression rather than writing a class | `check-class-namespace`'s `LEGACY_BORROWED` |
+| `.newrun` and `.tipdn` are written and never styled | `src/chrome/Rail.tsx` puts `.newrun` on the new-session button and no rule defines it; taking it out edits `src/test/__golden__/region-app.txt`. `.tipdn` is the flag `state/tooltip.ts` reads with `classList.contains` to hang the hover pill below its control, named only in the `page.css` comment over those rules. `src/components/SetupSheet.tsx` writes two more from inside an expression (`.badtx`, `.warntx`), where the check cannot tell a class from a comparison operand and so does not read them | `check-class-namespace`'s `UNSTYLED` |
+| `src/lib/prose.ts` writes 13 classes that no class namespace holds | It builds the shell's markdown markup as HTML strings (`.cblk`, `.artf`, `.pth` and ten more), and it is a `lib/` module rather than a domain, the page frame or a shared component -- so the gate reads no prefix rule over it. A `lib` namespace would be a fourth prefix invented for one file; the classes belong with the markdown rules in `page.css` until the prose helpers move behind a component | by review (`check-class-namespace` does not read `src/lib/`) |
 | 26 imperative reaches for an element in the page frame | Not the rule's case: a portal at the body, two popovers filling a served list, the island mount boxes, and `chrome/behaviour/`'s grip drag and overlay scrollbars, which are behaviour rather than rendering and own no component tree. Counted so a third such module cannot appear unnoticed | `state-dom-touch`'s `FRAME` |
 | 24 writes of an element's text, class or markup outside `features/` | Rule (a) is a flag on a store's own region; these set `textContent`, `innerHTML` or the class of a node something else rendered. `state/session/registry.ts` and `app/updates.ts` hold four each, and eight more files the rest. A row goes when the markup says the text instead | `state-dom-touch`'s `WRITES` |
 | `state/session/registry.ts` reaches four ids and its header names none | It reaches `#stage`, `#flash`, `#title` and `#ta` through the page's own `$`, while its header is about which conversation the page is on. One sentence in that header takes the row off, and the gate then fails until it is deleted | `state-dom-touch`'s `SILENT` |
