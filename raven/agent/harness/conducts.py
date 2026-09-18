@@ -157,6 +157,27 @@ async def compose_salvage(step: StepView, conducts: Sequence[AgentConduct]) -> s
     return None
 
 
+def compose_judge(
+    name: str,
+    params: Mapping[str, Any],
+    prior: Sequence[tuple[str, Mapping[str, Any]]],
+    conducts: Sequence[AgentConduct],
+) -> list[str]:
+    """Why any participant refuses this call, the first that does deciding it.
+
+    A veto, so one refusal is enough and the rest are not asked: the sentences
+    reach the model as the call's result, and two participants' reasons for the
+    same refusal would read as one confused reason. Synchronous, because the
+    verb is.
+    """
+    for conduct in conducts:
+        refusals = conduct.judge(name, params, prior)
+        said = [line for line in refusals if isinstance(line, str) and line] if refusals else []
+        if said:
+            return said
+    return []
+
+
 async def compose_addendum(step: StepView, conducts: Sequence[AgentConduct]) -> Intake | None:
     """Every participant's system addendum, joined in order; the first that
     answers with a reply instead ends the turn and the joining stops there."""
@@ -219,6 +240,7 @@ __all__ = [
     "compose_addendum",
     "compose_advice",
     "compose_intake",
+    "compose_judge",
     "compose_record",
     "compose_review",
     "compose_salvage",

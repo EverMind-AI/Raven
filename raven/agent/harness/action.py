@@ -23,7 +23,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from raven.agent.harness.conducts import Verdict, compose_review, compose_salvage
+from raven.agent.harness.conducts import Verdict, compose_judge, compose_review, compose_salvage
 from raven.contracts.agent_conduct import AgentConduct, StepView
 from raven.contracts.harness import ActionModule, ActionRequest
 
@@ -39,8 +39,13 @@ class DefaultAction:
         name: str,
         params: Mapping[str, Any],
         prior: Sequence[tuple[str, Mapping[str, Any]]],
+        conducts: Sequence[AgentConduct] = (),
     ) -> list[str]:
-        """Why this dispatch's Charter refuses this call, or an empty list.
+        """Why any participant refuses this call, or an empty list.
+
+        The dispatch's own judgements are one participant among them, asked
+        after whatever the caller passes, so a product's own rules speak first
+        and their wording is what the model reads.
 
         Imported in the call, not for style: ``raven.agent.subagent`` pulls its
         manager and every backend on package import, so naming the charter at
@@ -54,9 +59,9 @@ class DefaultAction:
         defect into checks that quietly stop applying, which is the failure a
         refusal exists to prevent.
         """
-        from raven.agent.subagent.charter import judge as charter_judge
+        from raven.agent.subagent.charter import participants
 
-        return charter_judge(name, params, prior)
+        return compose_judge(name, params, prior, [*conducts, *participants()])
 
     async def judge_step(self, step: StepView, conducts: Sequence[AgentConduct]) -> Verdict:
         return await compose_review(step, conducts)

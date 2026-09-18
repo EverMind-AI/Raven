@@ -407,3 +407,55 @@ def test_an_injected_role_is_asked_instead_of_the_default() -> None:
     with charter_scope(_rules()):
         assert registry._verifier_refusals("write_file", {"path": "./out/a"}) == ["the role said no"]
     assert asked == ["write_file"]
+
+
+def test_a_dispatch_brings_its_judgements_as_a_participant() -> None:
+    """The Charter answers the same verb a plugin answers, rather than being
+    read by the role itself. That is what lets a judgement generated for one
+    dispatch join the same list later."""
+    from raven.agent.subagent.charter import participants
+
+    assert participants() == (), "no charter bound, no participant"
+    with charter_scope(Charter(prompt="just a brief")):
+        assert participants() == (), "a charter with no judgements brings none"
+    with charter_scope(_rules()):
+        brought = participants()
+        assert len(brought) == 1
+        assert brought[0].judge("write_file", {"path": "/etc/passwd"}, []) == [
+            "write under ./out/",
+            "read it first",
+        ]
+
+
+def test_a_plugins_own_rules_speak_before_the_dispatchs() -> None:
+    """Participant order is product first: a veto needs one voice, and the
+    wording the model reads should be the product's own where both would
+    refuse."""
+    from raven.agent.harness.action import DefaultAction
+
+    class Product:
+        def judge(self, name, params, prior):
+            return ["the product refuses this one"]
+
+    action = DefaultAction()
+    with charter_scope(_rules()):
+        assert action.judge("write_file", {"path": "/etc/passwd"}, [], [Product()]) == ["the product refuses this one"]
+        assert action.judge("write_file", {"path": "/etc/passwd"}, []) == [
+            "write under ./out/",
+            "read it first",
+        ]
+
+
+def test_a_participant_that_says_nothing_lets_the_next_one_speak() -> None:
+    """A veto stops at the first refusal, not at the first participant."""
+    from raven.agent.harness.action import DefaultAction
+
+    class Quiet:
+        def judge(self, name, params, prior):
+            return []
+
+    with charter_scope(_rules()):
+        assert DefaultAction().judge("write_file", {"path": "/etc/passwd"}, [], [Quiet()]) == [
+            "write under ./out/",
+            "read it first",
+        ]
