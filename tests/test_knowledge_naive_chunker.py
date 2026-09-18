@@ -326,3 +326,92 @@ def test_a_section_with_no_positions_merges_without_inventing_any() -> None:
     assert "page_number" not in chunks[0].metadata
     assert "bbox" not in chunks[0].metadata
     assert len(chunks[0].metadata["elements"]) == 2, "but it still says what went in"
+
+
+# -- which section each part came from ------------------------------
+
+
+def _from_section(text: str, ordinal: int, page: int = 1) -> Section:
+    """A section as a structured parser leaves one: identified, and placed."""
+    return Section(
+        content=TextBlock(text=text),
+        source="handbook.docx",
+        metadata={
+            "reading_order": ordinal,
+            "section_ordinal": ordinal,
+            "page_number": page,
+            "page_end": page,
+            "layout_type": "text",
+            "heading_path": ["Handbook", f"Part {ordinal}"],
+        },
+    )
+
+
+def test_every_part_names_the_section_it_was_cut_from() -> None:
+    """`section_ordinal` is *the* section identity -- a heading path is not one,
+    because two same-named children of a parent share it. Carried only on the
+    chunk, every part after the first was attributed to a section it never came
+    from, and a hit widened back to "its" section would be handed the wrong
+    text with nothing saying so."""
+    chunks = _chunk([_from_section("Third.", 3), _from_section("Seventh.", 7)], chunk_size=1000)
+
+    spans = chunks[0].metadata["elements"]
+    assert [span["section_ordinal"] for span in spans] == [3, 7]
+
+
+def test_a_chunk_spanning_sections_claims_none_of_them() -> None:
+    """Because it does not have one. Keeping the first part's is the
+    mis-attribution the key exists to prevent, and the parts each carry their
+    own for a reader that needs it."""
+    chunks = _chunk([_from_section("Third.", 3), _from_section("Seventh.", 7)], chunk_size=1000)
+
+    assert "section_ordinal" not in chunks[0].metadata
+
+
+def test_a_chunk_built_inside_one_section_keeps_that_section() -> None:
+    """The common case, and the one the rule above must not cost: several
+    pieces of one section merging is still that section's chunk."""
+    section = _with_elements([("First para.", "text"), ("Second para.", "text")])
+    section.metadata["section_ordinal"] = 4
+
+    chunks = _chunk([section], chunk_size=1000)
+
+    assert chunks[0].metadata["section_ordinal"] == 4
+    assert {span["section_ordinal"] for span in chunks[0].metadata["elements"]} == {4}
+
+
+def test_a_section_with_no_ordinal_falls_back_to_its_reading_order() -> None:
+    """A spreadsheet writes one section per row and no section ordinal, so the
+    reading order is the only thing that says which row a piece was. Twenty
+    rows in a chunk with no way to tell them apart is the same loss under
+    another name."""
+    rows = [
+        Section(
+            content=TextBlock(text=f"Region: R{n}"),
+            source="sales.csv",
+            metadata={"reading_order": n, "layout_type": "table", "row_idx": n + 2},
+        )
+        for n in range(3)
+    ]
+
+    chunks = _chunk(rows, chunk_size=1000)
+
+    assert [span["section_ordinal"] for span in chunks[0].metadata["elements"]] == [0, 1, 2]
+
+
+def test_a_section_that_cannot_say_where_it_came_from_is_not_given_a_guess() -> None:
+    """A span with no origin is honest about not knowing; one carrying an
+    invented ordinal is not."""
+    chunks = _chunk([_plain("first"), _plain("second")], chunk_size=1000)
+
+    assert all("section_ordinal" not in span for span in chunks[0].metadata["elements"])
+
+
+def test_the_origin_does_not_leak_into_a_chunk_that_merged_nothing() -> None:
+    """A chunk from one section carries that section's metadata unchanged, and
+    tracking where parts came from must not add a key to it."""
+    section = _from_section("Alone.", 5)
+
+    chunks = _chunk([section], chunk_size=1000)
+
+    assert chunks[0].metadata == section.metadata

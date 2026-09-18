@@ -29,8 +29,17 @@ import re
 from dataclasses import dataclass, field
 
 from raven.knowledge._chunker import ChunkerBase
+from raven.knowledge._sections import SECTION_ORDINAL
 from raven.knowledge._types import Chunk, DataBlock, Section, TextBlock
-from raven.knowledge.parser import BBOX, ELEMENTS, LAYOUT_TYPE, PAGE_END, PAGE_NUMBER, LayoutType
+from raven.knowledge.parser import (
+    BBOX,
+    ELEMENTS,
+    LAYOUT_TYPE,
+    PAGE_END,
+    PAGE_NUMBER,
+    READING_ORDER,
+    LayoutType,
+)
 
 #: Where a section records the headings above it. Not a parser constant: the
 #: structured parsers write it and the page reads it, and a merged chunk has to
@@ -146,18 +155,24 @@ class _Unit:
     #: chunk whose metadata is only the first piece's states a page number, a
     #: box and a heading that are true of a fraction of what a reader is
     #: looking at.
-    parts: "list[tuple[int, int, dict]]" = field(default_factory=list)
+    parts: "list[tuple[int, int, dict, dict]]" = field(default_factory=list)
+    #: Which section of the document this unit was cut from, as the identity
+    #: keys of that section. Held apart from ``metadata`` because the row
+    #: metadata a section's element spans produce overwrites the section's own
+    #: ``reading_order`` with the element's -- so by the time a unit exists,
+    #: its metadata no longer says which section it came from.
+    origin: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.parts:
-            self.parts = [(0, len(self.text), self.metadata)]
+            self.parts = [(0, len(self.text), self.metadata, self.origin)]
 
     def absorb(self, other: "_Unit", joiner: str = "\n") -> None:
         """Fold ``other`` into this unit, keeping track of where it landed."""
         at = len(self.text) + len(joiner)
         self.text = f"{self.text}{joiner}{other.text}"
         self.tokens += other.tokens
-        self.parts.extend((start + at, end + at, metadata) for start, end, metadata in other.parts)
+        self.parts.extend((start + at, end + at, metadata, origin) for start, end, metadata, origin in other.parts)
 
     def whole(self) -> str:
         parts = [part for part in (self.above, self.text, self.below) if part]
@@ -177,14 +192,27 @@ class _Unit:
         this must not disturb.
 
         Several: the first part's, because a chunk is filed where it starts,
-        and then corrected where "where it starts" would be a lie about the
-        rest. The page becomes a range, because that is what the shape already
-        had room for (``page_number`` and ``page_end``). The box is dropped
-        when the parts do not share a page, because a rectangle spanning two
-        sheets of paper is not a location. And every part is written into
-        ``elements`` with the character range it occupies here, which is the
-        list this was always going to need: each piece keeps its own page, box
-        and layout, addressed by where it sits in the text of this chunk.
+        and then corrected everywhere "where it starts" would be a lie about
+        the rest. The page becomes a range, because that is what the shape
+        already had room for (``page_number`` and ``page_end``). The box is
+        dropped when the parts do not share a page, because a rectangle
+        spanning two sheets of paper is not a location. And every part is
+        written into ``elements`` with the character range it occupies here,
+        which is the list this was always going to need: each piece keeps its
+        own page, box, layout, heading path -- and the section it was cut from.
+
+        That last one is the load-bearing part. ``section_ordinal`` is defined
+        as *the* section identity, precisely because a heading path is not one
+        (two same-named children of a parent share it), and a merged chunk that
+        carried only the first part's would attribute every later part to a
+        section it never came from -- a hit widened back to "its" section would
+        be handed the wrong text, and nothing about the chunk would say so. So
+        each span carries its own, and the chunk-level key is dropped when the
+        parts disagree: a chunk built from several sections does not have one.
+
+        The heading path stays at chunk level even then, because it is a label
+        rather than an identity -- it is what a list row shows -- and each
+        part's own travels in its span beside the section it belongs to.
         """
         if len(self.parts) == 1:
             return dict(self.metadata)
@@ -192,7 +220,7 @@ class _Unit:
         merged = dict(self.parts[0][2])
         pages = [
             page
-            for _, _, metadata in self.parts
+            for _, _, metadata, _ in self.parts
             for page in (metadata.get(PAGE_NUMBER), metadata.get(PAGE_END))
             if isinstance(page, int)
         ]
@@ -201,6 +229,11 @@ class _Unit:
             merged[PAGE_END] = max(pages)
         if len(set(pages)) > 1:
             merged.pop(BBOX, None)
+
+        sections = {origin.get(SECTION_ORDINAL) for _, _, _, origin in self.parts}
+        if len(sections) > 1:
+            merged.pop(SECTION_ORDINAL, None)
+
         merged[ELEMENTS] = [
             {
                 "reading_order": order,
@@ -212,8 +245,9 @@ class _Unit:
                     for key in (PAGE_NUMBER, PAGE_END, BBOX, HEADING_PATH)
                     if metadata.get(key) is not None
                 },
+                **origin,
             }
-            for order, (start, end, metadata) in enumerate(self.parts)
+            for order, (start, end, metadata, origin) in enumerate(self.parts)
         ]
         return merged
 
@@ -301,14 +335,33 @@ class NaiveChunker(ChunkerBase):
         units: list[_Unit] = []
 
         for section in sections:
+            # Read from the section, before `_rows` overlays an element's own
+            # reading order on top of the section's: after that the row cannot
+            # say which section it belongs to any more.
+            origin = _origin_of(section)
             if not isinstance(section.content, TextBlock):
-                units.append(_Unit(text="", kind="data", metadata=dict(section.metadata), source=section.source))
+                units.append(
+                    _Unit(
+                        text="",
+                        kind="data",
+                        metadata=dict(section.metadata),
+                        source=section.source,
+                        origin=origin,
+                    )
+                )
                 units[-1].block = section.content  # type: ignore[attr-defined]
                 continue
             for text, kind, metadata in _rows(section):
                 if kind in ("table", "figure"):
                     units.append(
-                        _Unit(text=text, kind=kind, metadata=metadata, source=section.source, tokens=count_tokens(text))
+                        _Unit(
+                            text=text,
+                            kind=kind,
+                            metadata=metadata,
+                            source=section.source,
+                            tokens=count_tokens(text),
+                            origin=origin,
+                        )
                     )
                     continue
                 for piece in _split(text, pattern):
@@ -319,6 +372,7 @@ class NaiveChunker(ChunkerBase):
                             metadata=metadata,
                             source=section.source,
                             tokens=count_tokens(piece),
+                            origin=origin,
                         )
                     )
         return units
@@ -366,6 +420,26 @@ class NaiveChunker(ChunkerBase):
                 continue
             merged[open_text].absorb(unit)
         return merged
+
+
+def _origin_of(section: Section) -> dict:
+    """Which section of its document this is, as the one key that says so.
+
+    ``section_ordinal`` when a parser wrote one -- it is defined as the section
+    identity for exactly this purpose. Otherwise the section's own
+    ``reading_order``, which is the same fact under the only name a parser
+    without sections of its own records it by: one section per row for a
+    spreadsheet, one per file for plain text.
+
+    Empty when neither is a number, which is a section that cannot say where it
+    came from. Nothing is invented for it: a span with no origin is honest
+    about not knowing, and one carrying a guessed ordinal is not.
+    """
+    for key in (SECTION_ORDINAL, READING_ORDER):
+        value = section.metadata.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return {SECTION_ORDINAL: value}
+    return {}
 
 
 def _rows(section: Section) -> list[tuple[str, str, dict]]:
