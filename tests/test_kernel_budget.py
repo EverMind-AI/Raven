@@ -181,6 +181,20 @@ which layer they are on.
 Measured at 3,444. The headroom is the twenty-odd this docstring has argued
 for since the first bump, not room set aside to spend.
 
+
+And once more, 3,470 -> 3,500 (2026-09-18), for the three verbs the
+seam applied without a seat. ``system_addendum``, ``archive`` and
+``select_tools`` were rendered straight onto the hook decision, so each was the
+one judgement in the set with nowhere to compose two participants, nowhere to
+vet what came back, and nothing a replacement role could decide. They join the
+roles the other four sit on: ``MemoryModule.compose_addendum`` and
+``file_record``, and ``CapabilityModule.offer``. The tool seat is deliberately
+not the point where narrowing takes effect -- ``select`` still is, and the
+registry still adjudicates every call -- so a participant narrows after the
+product has spoken and never instead of it. 47 lines of protocol and prose.
+
+Measured at 3,477.
+
 """
 
 from __future__ import annotations
@@ -191,7 +205,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 3_470
+CONTRACTS_LINE_CEILING = 3_500
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 

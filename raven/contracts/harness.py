@@ -187,6 +187,27 @@ class MemoryModule(Protocol):
         """Post-turn hook: the engine updates its manifest or archives here."""
         ...
 
+    async def compose_addendum(self, step: "StepView", conducts: "Sequence[AgentConduct]") -> "Intake | None":
+        """What this call adds to the system message, composed from each
+        conduct's ``system_addendum``: the texts joined in order, and the first
+        conduct that answers with a reply instead ends the turn.
+
+        Memory's because the system message is part of the window it assembles.
+        The splicing itself stays with the seat -- a role says what the text is,
+        the shell says where it goes and takes it back out next call."""
+        ...
+
+    async def file_record(
+        self, step: "StepView", reply: str | None, conducts: "Sequence[AgentConduct]"
+    ) -> "Mapping[str, Mapping[str, Any]] | None":
+        """What the turn's record is stamped with, merged from each conduct's
+        ``archive``: observer name to counters, later conducts merging into
+        earlier ones rather than replacing them.
+
+        Memory's because it is the turn's own account of itself, filed where the
+        window's other bookkeeping is filed."""
+        ...
+
     async def read_inbound(self, text: str, step: "StepView", conducts: "Sequence[AgentConduct]") -> "Intake | None":
         """What the turn's inbound text becomes before anything is assembled:
         each conduct's ``intake`` in order, threaded, until one ends the turn.
@@ -257,6 +278,18 @@ class CapabilityModule(Protocol):
     """Which tool definitions one iteration exposes."""
 
     async def select(self, request: CapabilityRequest) -> CapabilitySelection: ...
+
+    async def offer(
+        self, offered: list[dict[str, Any]], step: "StepView", conducts: "Sequence[AgentConduct]"
+    ) -> list[dict[str, Any]] | None:
+        """The tool array this iteration carries, composed from each conduct's
+        ``select_tools``: threaded, so each sees what the one before it left.
+
+        A seat, not the point where it takes effect. ``select`` is still what
+        the loop applies, and ``ToolRegistry.execute`` still adjudicates every
+        call, so a participant narrows after the product has spoken and never
+        instead of it."""
+        ...
 
 
 @dataclass(frozen=True)
