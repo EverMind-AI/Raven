@@ -20,11 +20,12 @@ from pathlib import Path
 import pytest
 from loguru import logger
 
-from raven.agent.loop import AgentLoop, compaction
+from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
-from raven.agent.loop.recovery import REASONING_EFFORT_LADDER
+from raven.agent.window import compaction, shrink
 from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.config.schema import AgentDefaults, CompactionConfig
+from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.providers.rates import resolve_max_output_tokens
 from raven.spine.message import ChatType, Source
@@ -41,7 +42,7 @@ def workspace():
 
 
 # --------------------------------------------------------------------------- #
-# unit: _emergency_shrink                                                      #
+# unit: shrink.emergency_shrink                                                   #
 # --------------------------------------------------------------------------- #
 
 
@@ -51,7 +52,7 @@ def test_emergency_shrink_elides_all_but_recent_tool_results():
         msgs.append({"role": "assistant", "content": "", "tool_calls": [{"id": f"t{i}"}]})
         msgs.append({"role": "tool", "content": f"result {i}"})
 
-    shrunk, elided = AgentLoop._emergency_shrink(msgs)
+    shrunk, elided = shrink.emergency_shrink(msgs)
 
     assert elided == 3  # 6 tool results, keep most-recent 3
     tool_contents = [m["content"] for m in shrunk if m["role"] == "tool"]
@@ -62,7 +63,7 @@ def test_emergency_shrink_elides_all_but_recent_tool_results():
 
 def test_emergency_shrink_noop_when_few_tool_results():
     msgs = [{"role": "system", "content": "s"}, {"role": "tool", "content": "r0"}]
-    shrunk, elided = AgentLoop._emergency_shrink(msgs)
+    shrunk, elided = shrink.emergency_shrink(msgs)
     assert elided == 0 and shrunk is msgs
 
 
@@ -666,7 +667,7 @@ async def test_summary_calls_share_the_overflow_retry_budget(workspace):
     final, _used, _messages, _outcome = await agent._run_agent_loop(_initial())
 
     assert final == "answer after compaction"
-    assert len(provider.summary_calls) == AgentLoop._MAX_COMPRESS_RETRIES
+    assert len(provider.summary_calls) == shrink.MAX_COMPRESS_RETRIES
     assert len(provider.main_calls) == 5
 
 
@@ -681,7 +682,7 @@ async def test_failed_proactive_summary_degrades_to_uncompacted_turn(workspace):
     final, _used, _messages, _outcome = await agent._run_agent_loop(_initial())
 
     assert final == "done anyway"
-    assert len(provider.summary_calls) == AgentLoop._MAX_COMPRESS_RETRIES
+    assert len(provider.summary_calls) == shrink.MAX_COMPRESS_RETRIES
     assert not any(
         str(m.get("content", "")).startswith(compaction.SUMMARY_MARKER) for call in provider.main_calls for m in call
     )
@@ -785,8 +786,8 @@ def test_should_compact_trigger_ratio_lowers_line():
 
 def test_prune_is_idempotent_on_placeholders():
     msgs = _history(6)
-    once, _ = AgentLoop._emergency_shrink(msgs)
-    twice, elided = AgentLoop._emergency_shrink(once)
+    once, _ = shrink.emergency_shrink(msgs)
+    twice, elided = shrink.emergency_shrink(once)
     assert elided == 0 and twice == once
 
 

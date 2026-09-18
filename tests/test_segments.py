@@ -25,7 +25,7 @@ from raven.contracts.memory import Memory
 from raven.memory_engine.skill_forge import RouterHit, SkillForgeRouter
 
 
-def _ctx(tmp_path: Path, msg: str = "hi", session=None) -> AssemblyContext:
+def _ctx(tmp_path: Path, msg: str = "hi", session=None, **over) -> AssemblyContext:
     return AssemblyContext(
         session_key="s",
         current_message=msg,
@@ -34,6 +34,7 @@ def _ctx(tmp_path: Path, msg: str = "hi", session=None) -> AssemblyContext:
         chat_id=None,
         session_messages=session or [],
         budget=TokenBudget(100_000, 4_000, 2_000, 1_000, 93_000),
+        **over,
     )
 
 
@@ -105,6 +106,43 @@ class TestIdentityBootstrap:
         assert f"Agent home: {home}" in seg.text
         assert f"{home}/user_memory/profile/user.md" in seg.text
         assert str(project / "user_memory") not in seg.text
+
+    async def test_the_identity_renders_the_task_it_is_handed(self, tmp_path: Path) -> None:
+        """The segment owns how the identity reads and nothing about deciding it.
+
+        It used to reach into the dispatch layer's ContextVar itself; Memory
+        fills the two strings now, so this hands them over the way the
+        assembler does and asserts only on the rendering.
+        """
+        brief = "Only look at A. Leave B alone."
+        plain = (await IdentitySegmentBuilder(tmp_path).build(_ctx(tmp_path))).text
+        briefed = (
+            await IdentitySegmentBuilder(tmp_path).build(
+                _ctx(tmp_path, task_brief=brief, task_done_when="both tables land")
+            )
+        ).text
+
+        assert "## This task" not in plain, "a turn with no brief reads as it always did"
+        assert plain in briefed.replace("\n\n## This task", ""), "the brief is appended, never substituted"
+        assert brief in briefed and "both tables land" in briefed
+
+    async def test_memory_is_what_fills_the_turn_from_the_charter(self, tmp_path: Path) -> None:
+        """The other half of the split: the role that decides what a turn shows
+        its model is the one that reads the dispatch's charter."""
+        from raven.agent.harness.memory import DefaultMemory
+        from raven.agent.subagent.charter import Charter, charter_scope
+        from raven.contracts.context import TurnContext
+
+        brief = "Only look at A. Leave B alone."
+        plain = TurnContext(current_message="hi")
+        assert DefaultMemory._briefed(plain) is plain, "no charter bound, nothing to add"
+
+        with charter_scope(Charter(prompt=brief, stop_when="both tables land")):
+            briefed = DefaultMemory._briefed(plain)
+
+        assert briefed.task_brief == brief
+        assert briefed.task_done_when == "both tables land"
+        assert plain.task_brief == "", "the turn it was handed is not mutated"
 
     async def test_identity_falls_back_to_agent_home_when_unbound(self, tmp_path: Path) -> None:
         """No binding means the pre-split single-directory behaviour."""

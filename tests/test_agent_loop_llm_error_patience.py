@@ -18,6 +18,7 @@ import pytest
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.agent.loop.recovery import RecoveryLimits, limits_from_defaults
+from raven.agent.window import shrink
 from raven.contracts.tool import Tool, ToolResult
 from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
@@ -281,7 +282,7 @@ def test_the_image_window_keeps_the_newest_pictures_and_says_what_the_rest_showe
     messages = _with_pictures()
     before_newest = [dict(messages[3]), dict(messages[5])]
 
-    changed, withdrawn = AgentLoop._window_images(messages, 2)
+    changed, withdrawn = shrink.window_images(messages, 2)
 
     assert (changed, withdrawn) == (1, 2)
     assert [_pictures_in(m) for m in messages] == [0, 0, 0, 1, 0, 2]
@@ -303,7 +304,7 @@ def test_the_image_window_is_prefix_stable_between_iterations() -> None:
     an earlier pass, so a cached prefix is invalidated from the slide-out point and
     not rewritten from the top."""
     messages = _with_pictures()
-    AgentLoop._window_images(messages, 2)
+    shrink.window_images(messages, 2)
     first_pass = list(messages)
 
     messages.append({"role": "assistant", "content": "one more"})
@@ -315,7 +316,7 @@ def test_the_image_window_is_prefix_stable_between_iterations() -> None:
             "_image_sources": [{"tool": "ppt_build", "iteration": 4, "caption": "Page 9 of 20"}],
         }
     )
-    changed, withdrawn = AgentLoop._window_images(messages, 2)
+    changed, withdrawn = shrink.window_images(messages, 2)
 
     assert (changed, withdrawn) == (1, 1)
     same = [messages[i] is first_pass[i] for i in range(len(first_pass))]
@@ -324,7 +325,7 @@ def test_the_image_window_is_prefix_stable_between_iterations() -> None:
         _pictures_in(messages[3]) == 0
         and '"Page 7 of 20: the claim" from ppt_build at iteration 2' in messages[3]["content"][0]["text"]
     )
-    assert AgentLoop._window_images(messages, 2) == (0, 0), "a second pass over the same list is a no-op"
+    assert shrink.window_images(messages, 2) == (0, 0), "a second pass over the same list is a no-op"
 
 
 def _batch(tag: str, pictures: int, iteration: int) -> dict:
@@ -350,7 +351,7 @@ def test_the_budget_window_collapses_once_when_the_pictures_outgrow_it_and_not_b
         messages.append({"role": "assistant", "content": f"round {arrival}"})
         messages.append(_batch(f"b{arrival}", pictures=3, iteration=arrival))  # 12 wire bytes per batch
         before = list(messages)
-        changed, withdrawn = AgentLoop._window_images(messages, 2, budget=40, reason="budget")
+        changed, withdrawn = shrink.window_images(messages, 2, budget=40, reason="budget")
         breaks.append(changed)
         untouched = [messages[i] is before[i] for i in range(len(before))]
         if changed:
@@ -366,7 +367,7 @@ def test_the_budget_window_collapses_once_when_the_pictures_outgrow_it_and_not_b
     assert len(live) == 3 and live[-1] == len(messages) - 1, "the newest batches are the ones still in view"
     note = next(p["text"] for m in messages if m.get("_attached_image") for p in m["content"] if p["type"] == "text")
     assert "outgrew their byte budget" in note and "only the 2 newest image-bearing result(s) keep theirs" in note
-    assert AgentLoop._window_images(messages, 2, budget=40, reason="budget") == (0, 0), "idempotent under budget"
+    assert shrink.window_images(messages, 2, budget=40, reason="budget") == (0, 0), "idempotent under budget"
 
 
 def test_the_budget_weighs_inline_bytes_only_and_the_users_picture_is_outside_it() -> None:
@@ -380,8 +381,8 @@ def test_the_budget_weighs_inline_bytes_only_and_the_users_picture_is_outside_it
     ]
 
     # 16 wire bytes across the two batches, the remote reference weighing nothing.
-    assert AgentLoop._window_images(messages, 1, budget=16, reason="budget") == (0, 0)
-    assert AgentLoop._window_images(messages, 1, budget=15, reason="budget") == (2, 3)
+    assert shrink.window_images(messages, 1, budget=16, reason="budget") == (0, 0)
+    assert shrink.window_images(messages, 1, budget=15, reason="budget") == (2, 3)
     assert messages[0] is sketch, "the user's own picture is neither weighed nor withdrawn"
 
 
@@ -401,8 +402,8 @@ def test_the_budget_is_charged_the_base64_the_request_carries_not_the_bytes_it_d
         {"role": "tool", "tool_call_id": "2", "content": [image_block(f"data:image/png;base64,{payload}")]},
     ]
 
-    assert AgentLoop._window_images(messages, 1, budget=800, reason="budget") == (0, 0), "two pictures, 800 wire bytes"
-    assert AgentLoop._window_images(messages, 1, budget=700, reason="budget") == (1, 1), (
+    assert shrink.window_images(messages, 1, budget=800, reason="budget") == (0, 0), "two pictures, 800 wire bytes"
+    assert shrink.window_images(messages, 1, budget=700, reason="budget") == (1, 1), (
         "600 decoded would have fit 700; 800 on the wire does not"
     )
 
@@ -416,7 +417,7 @@ def test_a_picture_without_provenance_is_still_accounted_for() -> None:
         {"role": "user", "content": [_picture("c")], "_attached_image": True},
     ]
 
-    assert AgentLoop._window_images(messages, 1) == (1, 2)
+    assert shrink.window_images(messages, 1) == (1, 2)
     notes = [p["text"] for p in messages[0]["content"]]
     assert notes[0].startswith("[image no longer in context: picture 1 of 2.")
     assert notes[1].startswith("[image no longer in context: picture 2 of 2.")
@@ -430,12 +431,12 @@ def test_a_picture_the_user_sent_is_not_part_of_the_window() -> None:
     sketch = {"role": "user", "content": [text_block("make it look like this"), _picture("SKETCH")]}
     messages = [sketch, *_with_pictures()[1:]]
 
-    assert AgentLoop._window_images(messages, 1) == (2, 3)
+    assert shrink.window_images(messages, 1) == (2, 3)
     assert messages[0] is sketch and _pictures_in(messages[0]) == 1
 
-    assert AgentLoop._window_images(messages, 0, reason="refused") == (1, 2), "the tool pictures, not the sketch"
+    assert shrink.window_images(messages, 0, reason="refused") == (1, 2), "the tool pictures, not the sketch"
     assert _pictures_in(messages[0]) == 1
-    assert AgentLoop._window_images(messages, 0, reason="refused", any_role=True) == (1, 1)
+    assert shrink.window_images(messages, 0, reason="refused", any_role=True) == (1, 1)
     assert _pictures_in(messages[0]) == 0 and "refused this request's pictures" in messages[0]["content"][1]["text"]
 
 
@@ -444,7 +445,7 @@ def test_a_closed_window_withdraws_the_newest_picture_and_says_why() -> None:
     the newest included, and the note blames the endpoint rather than a newer batch."""
     messages = _with_pictures()
 
-    assert AgentLoop._window_images(messages, 0, reason="refused") == (3, 5)
+    assert shrink.window_images(messages, 0, reason="refused") == (3, 5)
     assert not any(_pictures_in(m) for m in messages)
     assert "The endpoint refused this request's pictures as too large" in messages[5]["content"][1]["text"]
     assert "Page 8 of 20" in messages[5]["content"][1]["text"]
@@ -452,21 +453,21 @@ def test_a_closed_window_withdraws_the_newest_picture_and_says_why() -> None:
     # The standing pass with the window already closed reads differently again: the
     # picture was never shown, and the model is told none will be for this turn.
     later = [{"role": "user", "content": [_picture("z")], "_attached_image": True}]
-    AgentLoop._window_images(later, 0)
+    shrink.window_images(later, 0)
     assert "so none are kept in context now" in later[0]["content"][0]["text"]
 
 
 def test_the_overflow_path_uses_the_same_notes() -> None:
-    """``_emergency_shrink`` keeps its tighter count and its copy-and-return contract,
+    """``shrink.emergency_shrink`` keeps its tighter count and its copy-and-return contract,
     and the picture it drops gets the same kind of note, with the overflow as the reason."""
     messages = _with_pictures()
-    out, elided = AgentLoop._elide_older_images(messages)
+    out, elided = shrink.elide_older_images(messages)
 
     assert elided == 2 and out is not messages
     assert [_pictures_in(m) for m in messages] == [0, 2, 0, 1, 0, 2], "the input is left alone"
     assert [_pictures_in(m) for m in out] == [0, 0, 0, 0, 0, 2]
     assert "elided to fit the context window" in out[3]["content"][0]["text"]
-    assert AgentLoop._elide_older_images(out) == (out, 0)
+    assert shrink.elide_older_images(out) == (out, 0)
 
 
 def test_the_overflow_path_sheds_the_users_own_pictures_last() -> None:
@@ -481,21 +482,21 @@ def test_the_overflow_path_sheds_the_users_own_pictures_last() -> None:
         {"role": "assistant", "content": "seen"},
         {"role": "user", "content": [text_block("third"), _picture("U3")]},
     ]
-    out, elided = AgentLoop._emergency_shrink(pasted)
+    out, elided = shrink.emergency_shrink(pasted)
 
     assert elided == 2 and out is not pasted
     assert [_pictures_in(m) for m in pasted] == [1, 0, 1, 0, 1], "the input is left alone"
     assert [_pictures_in(m) for m in out] == [0, 0, 0, 0, 1]
     assert "elided to fit the context window" in out[0]["content"][1]["text"]
-    assert AgentLoop._emergency_shrink(out) == (out, 0)
+    assert shrink.emergency_shrink(out) == (out, 0)
 
     mixed = [*_with_pictures(), {"role": "user", "content": [_picture("U9")]}]
-    first, freed = AgentLoop._emergency_shrink(mixed)
+    first, freed = shrink.emergency_shrink(mixed)
     assert freed == 2 and _pictures_in(first[-1]) == 1, "result pictures go first, the user's stays"
-    again, freed_again = AgentLoop._emergency_shrink(first)
+    again, freed_again = shrink.emergency_shrink(first)
     assert freed_again == 1 and _pictures_in(again[5]) == 0, "then the older result picture goes"
     assert _pictures_in(again[-1]) == 1, "the newest picture, the user's, is kept"
-    assert AgentLoop._emergency_shrink(again) == (again, 0)
+    assert shrink.emergency_shrink(again) == (again, 0)
 
 
 class _PageRender(Tool):
@@ -746,9 +747,9 @@ def test_every_reason_the_note_can_give_files_down_to_its_facts(reason, keep, so
     composes every reason the loop can pass and files it, so a reworded opening on
     either side fails here instead of filing the turn's business into the session.
     The caption carries the sentence break the parser must read past."""
-    from raven.agent.loop._shared import _withdrawn_image_note, filed_image_note
+    from raven.agent.window.images import filed_image_note, withdrawn_image_note
 
-    live = _withdrawn_image_note(source, index=1, total=2, reason=reason, keep=keep)
+    live = withdrawn_image_note(source, index=1, total=2, reason=reason, keep=keep)
     facts = live.partition(". ")[0] if source["caption"] is None else live[: live.index(". ", live.index("iteration"))]
 
     assert filed_image_note(live) == f"{facts}.]"

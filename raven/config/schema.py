@@ -139,7 +139,7 @@ class CompactionConfig(Base):
     """In-turn transcript compaction for long agentic turns.
 
     Off by default: without it the loop's in-turn shrinks are the standing image
-    window (``_window_images``, bounded by ``image_window_budget_bytes``) and the
+    window (``shrink.window_images``, bounded by ``image_window_budget_bytes``) and the
     reactive, deterministic elision it has always run on a provider's overflow
     error. Enabled, two layers join them, on the same usage readings:
 

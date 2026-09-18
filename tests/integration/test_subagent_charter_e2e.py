@@ -164,21 +164,114 @@ def test_a_turn_with_no_charter_staged_takes_none(workspace) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_the_brief_reaches_the_assembled_identity(workspace) -> None:
-    """Not the helper in isolation: the text a real identity segment renders."""
+def _assembly_ctx(**over):
+    """A real AssemblyContext, which is what a segment is built with in production.
+
+    The assembler always hands one over (``b.build(ctx)``); ``stable`` only
+    decides how much of the head a cache key may cover, not how a builder is
+    called. A test that passed ``None`` was exercising a shape the loop never
+    produces.
+    """
+    from raven.contracts.assembled import TokenBudget
+    from raven.contracts.context import AssemblyContext
+
+    fields = {
+        "session_key": "s1",
+        "current_message": "hi",
+        "media": None,
+        "channel": "test",
+        "chat_id": "c1",
+        "session_messages": [],
+        "budget": TokenBudget(
+            context_length=8000, reserved_output=1000, reserved_tools=0, reserved_system=0, available_history=7000
+        ),
+    }
+    fields.update(over)
+    return AssemblyContext(**fields)
+
+
+def test_the_identity_renders_the_task_it_is_handed(workspace) -> None:
+    """The segment owns how the identity reads, and nothing about deciding it.
+
+    It used to reach into the dispatch layer's ContextVar itself; now Memory
+    fills the two strings and this only renders them, so the test hands them
+    over the way the assembler does.
+    """
+    import asyncio
+
     from raven.context_engine.segments.identity import IdentitySegmentBuilder
 
     segment = IdentitySegmentBuilder(workspace=workspace)
-    import asyncio
-
-    plain = asyncio.run(segment.build(None)).text
-    with charter_scope(Charter(prompt=BRIEF, stop_when="both tables land")):
-        briefed = asyncio.run(segment.build(None)).text
+    plain = asyncio.run(segment.build(_assembly_ctx())).text
+    briefed = asyncio.run(segment.build(_assembly_ctx(task_brief=BRIEF, task_done_when="both tables land"))).text
 
     assert BRIEF not in plain
     assert BRIEF in briefed
     assert "both tables land" in briefed
     assert briefed.startswith(plain), "the brief is appended; the runtime facts above it stay"
+
+
+@pytest.mark.asyncio
+async def test_the_brief_only_reaches_the_identity_through_memory(workspace) -> None:
+    """The join, not the two halves. A charter is bound, a real assemble runs,
+    and the brief comes out in the identity -- which it can only do if Memory
+    filled the turn it handed the engine. Memory dropping that step used to
+    break nothing any test could see.
+    """
+    from raven.agent.harness.memory import DefaultMemory
+    from raven.contracts.assembled import TokenBudget
+    from raven.contracts.context import TurnContext
+
+    seen: dict[str, object] = {}
+
+    class _Engine:
+        owns_compaction = False
+
+        async def assemble(self, session_key, session_messages, budget, *, turn):
+            seen["brief"] = turn.task_brief
+            seen["done_when"] = turn.task_done_when
+            return object()
+
+        async def after_turn(self, session_key, outcome): ...
+
+    memory = DefaultMemory(
+        engine=_Engine(),
+        provider=lambda: None,
+        model=lambda: "stub",
+        context_window_tokens=lambda: 8000,
+        tool_definitions=lambda: [],
+        system_prompt=lambda skills: "",
+        compaction=lambda: None,
+        output_ceiling=lambda model=None: 1000,
+    )
+    budget = TokenBudget(
+        context_length=8000, reserved_output=1000, reserved_tools=0, reserved_system=0, available_history=7000
+    )
+
+    with charter_scope(Charter(prompt=BRIEF, stop_when="both tables land")):
+        await memory.assemble("s1", [], budget, turn=TurnContext(current_message="hi"))
+
+    assert seen["brief"] == BRIEF, "the engine was handed a turn Memory never briefed"
+    assert seen["done_when"] == "both tables land"
+
+
+def test_memory_fills_the_turn_from_the_charter(workspace) -> None:
+    """The other half: the role that decides what a turn shows its model is the
+    one that reads the dispatch's charter."""
+    from dataclasses import replace as _replace
+
+    from raven.agent.harness.memory import DefaultMemory
+    from raven.contracts.context import TurnContext
+
+    plain = TurnContext(current_message="hi")
+    assert DefaultMemory._briefed(plain) is plain, "no charter bound, nothing to add"
+
+    with charter_scope(Charter(prompt=BRIEF, stop_when="both tables land")):
+        briefed = DefaultMemory._briefed(plain)
+    assert briefed.task_brief == BRIEF
+    assert briefed.task_done_when == "both tables land"
+    assert plain.task_brief == "", "the turn it was handed is not mutated"
+    assert _replace(plain, task_brief=BRIEF).task_brief == BRIEF
 
 
 def test_the_tool_array_is_narrowed_for_a_briefed_turn(workspace) -> None:
