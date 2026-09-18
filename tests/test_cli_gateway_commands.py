@@ -541,6 +541,29 @@ def test_shutdown_stops_the_skill_file_watcher() -> None:
     assert "stop_file_watcher()" in teardown
 
 
+def test_unbinding_a_generation_stops_its_skill_watcher() -> None:
+    """A generation swap must stop the outgoing loop's skill watcher.
+
+    ``build_runtime`` mints a fresh ``AgentLoop`` per generation, so each swap
+    starts a new ``SkillFileWatcher`` and abandons the previous one. Stopping
+    only the live generation's watcher at process exit is not enough: a watcher
+    left by an earlier generation is still parked in ``watchfiles``' Rust
+    ``watch()`` when ``Py_FinalizeEx`` runs. Measured 2026-09-18 on this tree --
+    boot, one SIGHUP, then SIGTERM -- the gateway still exited -11 with the
+    teardown-chain stop in place, and exits 0 once the unbind stops it too.
+
+    ``_unbind_generation`` is a closure inside the serve command with no import
+    seam, so this pins the call in the command source.
+    """
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    unbind = src.split("async def _unbind_generation", 1)[1].split("cron.allowed_channels.discard", 1)[0]
+    assert "stop_file_watcher()" in unbind
+
+
 def test_cron_config_notify_missed_defaults_on() -> None:
     from raven.config.schema import CronConfig
 

@@ -819,6 +819,14 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 # already gone would record as a failure rather than a stop.
                 # dispose() cancels again, which is an idempotent no-op.
                 await agent.subagents.cancel_all()
+                # ``agent`` is still the outgoing loop here; the caller rebinds
+                # it after this returns. Its skill watcher has to go with the
+                # generation: the next one mints its own, and a watcher left
+                # behind is a daemon thread parked in native code that
+                # Py_FinalizeEx will still tear the interpreter down under --
+                # so a reloaded gateway segfaults on stop even though the
+                # teardown chain stops the live generation's.
+                agent.context.skills.stop_file_watcher()
                 if page_mount is not None:
                     await page_mount.teardown()
                     page_mount = None
