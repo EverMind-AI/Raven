@@ -31,6 +31,7 @@ import { installSessionActions } from '../features/rail/wire'
 import { bannerSource, settingsSource } from '../features/settings/source'
 import { skillsSource } from '../features/skills/source'
 import { agentsSource, startAgentHeartbeat } from '../features/subagents/source'
+import { fixtureTasksSource, tasksSource } from '../features/tasks/source'
 import {
   branch, cleanPreview, dagRun, okOf, openDagNode, openDagRun, openSpawn, spawnList, spawnRecord,
 } from '../features/transcript/source'
@@ -44,6 +45,7 @@ import { $ } from '../lib/dom'
 import { hostPlatform } from '../lib/platform'
 import { current as sessionCurrent } from '../lib/session'
 import { refusal as uploadRefusal } from '../lib/upload'
+import { liveMode } from '../rpc/chooseTransport'
 import { gateway } from '../rpc/gateway'
 import { setFault as setMemFault } from '../state/banner'
 import * as caps from '../state/caps'
@@ -150,6 +152,10 @@ export function installSources(): void {
   sources.onboard = onboardSource
   sources.browser = browserSource
   sources.subagents = agentsSource
+  /* The one seam no transport answers: there is no `tasks.*` method yet, so a
+     served page gets the empty list and an offline one gets the stand-in rows
+     the panel can be reviewed against (features/tasks/source.ts). */
+  sources.tasks = liveMode() ? tasksSource : fixtureTasksSource
   sources.extAgents = extAgentsSource
 
   /* The workspace panel's chrome is still the page's, so the two things its

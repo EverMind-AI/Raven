@@ -24,8 +24,10 @@ import { WsTransport } from './wsTransport'
 
 import type { RpcTransport } from './transport'
 
-/* Whether this page has a gateway to talk to at all. */
-function liveMode(): boolean {
+/* Whether this page has a gateway to talk to at all. Exported for the one seam
+   no transport answers: the tasks panel has no wire method yet, so the wiring
+   asks this the way the chooser below does (src/app/install.ts). */
+export function liveMode(): boolean {
   return /^http/.test(location.protocol) && !/(^|[?&])stub=1/.test(location.search)
 }
 

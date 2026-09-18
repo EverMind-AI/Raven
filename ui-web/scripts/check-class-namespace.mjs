@@ -72,6 +72,18 @@ const SHARED = new Set([
   // in components/ProviderMark.tsx -- including its dark-mode handling, which an
   // island restyling the class for itself would get wrong.
   'provider-icon',
+  // The state dot, which `bad` above is already two thirds of. A colour that
+  // means one thing in one list and another two rows above it in the same panel
+  // is worse than a colour that differs from a mock, so the three are one
+  // vocabulary and one rule (features/tasks/store.ts's `dot`).
+  'run', 'ok',
+  // The desk panel's list chrome. Every panel drawn in that 340px slot is the
+  // same list with a different row in it -- the tasks view replaces the agents
+  // view inside it -- so these belong to the panel rather than to whichever
+  // domain is filling it today. `bd` is the row's body and is only ever styled
+  // as `.sarow .bd`, beside `.nm` and `.st` which are shared already; `wsempty`
+  // is that panel's one empty state, which DeskEmpty draws for every tab.
+  'salist', 'sarow', 'wsgrp', 'bd', 'wsempty',
 ])
 
 // Every class two or more domains name, with the number of domains that name
@@ -84,7 +96,7 @@ const SHARED = new Set([
 // end of a row here can retire it: move the rule into one domain's styles.css
 // and prefix it there, or put the name in SHARED on purpose.
 const LEGACY_SHARED = {
-  a: 4, act: 3, ag: 2, bd: 2, body: 3, btn: 3, cap: 6, cfind: 2, chev: 2, chgs: 2,
+  a: 4, act: 3, ag: 2, body: 3, btn: 3, cap: 6, cfind: 2, chev: 2, chgs: 2,
   cmd: 3, ct: 3, d: 5, dact: 3, empty: 2, faint: 2, ff: 2, foot: 4, gap: 3,
   'ghost-ic': 3, grp: 2, h: 4, hd: 6, hubcard: 2, hubgrid: 2, hubpage: 2, ic: 5,
   icb: 2, k: 4, kd: 3, key: 5, l1: 5, l2: 5, lb: 4, led: 2, mk: 2, n: 8, none: 2,
@@ -93,8 +105,7 @@ const LEGACY_SHARED = {
   pmid: 2, pmnm: 2, pmpub: 2, pmsec: 4, pmsign: 2, pnote: 4,
   'provider-choice-action': 2, rm: 3, row: 3, sheet: 2, shot: 3, sk: 4, skel: 4,
   srow: 2, step: 2, sulist: 3, sustate: 2, swi: 3, sz: 2, t: 3, tag: 3, tick: 2,
-  tipdn: 3, tm: 2, top: 2, v: 3, val: 2, w: 4, warn: 3, wkg: 3, wsempty: 2,
-  wsnote: 2, wt: 2,
+  tipdn: 3, tm: 2, top: 2, v: 3, val: 2, w: 4, warn: 3, wkg: 3, wsnote: 2, wt: 2,
 }
 
 // How many of a domain's own classes -- the ones no other domain names -- still
@@ -111,7 +122,13 @@ const LEGACY_LOCAL = {
   composer: 7,
   connections: 5,
   cron: 13,
-  dag: 7,
+  /* Up from 7, and every one of the six is a class that MOVED here rather than
+     a new one: the pan-and-zoom viewport the playbook page carried became
+     features/dag/Board.tsx so the task board could read it too, and its
+     `.g*` classes came with it. The playbooks row below falls by the same six,
+     so the page's total debt is unchanged -- and the prefix pass that retires
+     them is one rename over one file now instead of two. */
+  dag: 13,
   desk: 5,
   extAgents: 5,
   installed: 0,
@@ -119,14 +136,15 @@ const LEGACY_LOCAL = {
   memory: 6,
   model: 5,
   onboard: 1,
-  playbooks: 14,
+  playbooks: 13,
   plugins: 3,
   rail: 10,
   settings: 81,
   skills: 4,
-  subagents: 41,
+  subagents: 39,
+  tasks: 9,
   transcript: 73,
-  workspace: 38,
+  workspace: 37,
 }
 
 // The same count for the classes a domain names from inside a `className={...}`
@@ -136,10 +154,10 @@ const LEGACY_LOCAL = {
 // says why), so a row here is an upper bound on a debt where a row there is the
 // debt. A name in both places is counted once, by LEGACY_LOCAL.
 const LEGACY_EXPR = {
-  browser: 3,
+  browser: 2,
   composer: 3,
-  connections: 5,
-  cron: 1,
+  connections: 4,
+  cron: 0,
   dag: 3,
   desk: 2,
   extAgents: 1,
@@ -147,14 +165,15 @@ const LEGACY_EXPR = {
   knowledge: 0,
   memory: 1,
   model: 3,
-  onboard: 2,
+  onboard: 1,
   playbooks: 7,
   plugins: 2,
   rail: 2,
   settings: 13,
   skills: 2,
+  tasks: 6,
   subagents: 6,
-  transcript: 28,
+  transcript: 26,
   workspace: 7,
 }
 
