@@ -19,7 +19,9 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const SRC = new URL('../../src/', import.meta.url).pathname
+import { root } from './paths.mjs'
+
+const SRC = root(new URL('../../src/', import.meta.url))
 
 const read = (rel) => readFileSync(join(SRC, rel), 'utf8')
 

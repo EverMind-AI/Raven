@@ -35,10 +35,12 @@
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { dirname, join, relative } from 'node:path'
+import { join, posix } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const SRC = new URL('../../src/', import.meta.url).pathname
+import { relPath, root } from './paths.mjs'
+
+const SRC = root(new URL('../../src/', import.meta.url))
 
 /* One rank per directory, lowest first: an import may point at its own rank or
    at a higher number, never back.
@@ -294,7 +296,7 @@ function* sources(dir) {
 }
 
 /** Every non-test module, by its path from src/. */
-const modules = [...sources(SRC)].map((path) => relative(SRC, path)).filter((rel) => !TEST(rel)).sort()
+const modules = [...sources(SRC)].map((path) => relPath(SRC, path)).filter((rel) => !TEST(rel)).sort()
 const known = new Set(modules)
 
 /* The bucket a module belongs to, which is what carries the rank. */
@@ -316,8 +318,8 @@ const rankOf = (name) => (name in RANK ? RANK[name] : RANK.features)
    the file itself, a .ts/.tsx extension, or a directory's index. */
 function target(from, spec) {
   if (!spec.startsWith('.')) return null
-  const base = join(dirname(from), spec)
-  for (const candidate of [base, `${base}.ts`, `${base}.tsx`, join(base, 'index.ts'), join(base, 'index.tsx')]) {
+  const base = posix.join(posix.dirname(from), spec)
+  for (const candidate of [base, `${base}.ts`, `${base}.tsx`, posix.join(base, 'index.ts'), posix.join(base, 'index.tsx')]) {
     const rel = candidate.replace(/^\.\//, '')
     if (known.has(rel)) return rel
   }

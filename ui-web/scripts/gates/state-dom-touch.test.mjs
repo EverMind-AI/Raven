@@ -25,10 +25,12 @@
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const SRC = new URL('../../src/', import.meta.url).pathname
+import { relPath, root } from './paths.mjs'
+
+const SRC = root(new URL('../../src/', import.meta.url))
 
 /* Reaching for an element this module did not build: by id, by selector, at the
    body, or by making one. `createElementNS` is deliberately not in it. */
@@ -80,7 +82,7 @@ function* modules(dir) {
 }
 
 /** Every module under one of src/'s directories, by its path from src/. */
-const layer = (dir) => [...modules(join(SRC, dir))].map((path) => relative(SRC, path)).sort()
+const layer = (dir) => [...modules(join(SRC, dir))].map((path) => relPath(SRC, path)).sort()
 
 const touches = (rel) => readFileSync(join(SRC, rel), 'utf8').split('\n').filter((line) => TOUCH.test(line))
 
