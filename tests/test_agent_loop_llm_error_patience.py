@@ -868,3 +868,100 @@ async def test_an_image_refusal_with_nothing_to_withdraw_is_not_waited_out(works
 
     assert provider.calls == 1
     assert out is not None and "Error calling LLM" in (out[0] or "")
+
+
+async def _watch(text: str) -> None:
+    """A caller watching the reply form: what puts a spawn on the streamed path."""
+
+
+class _DropsTwiceThenAnswers(LLMProvider):
+    """The connection drops before the first delta twice, then the stream answers
+    whole: one failure more than the single reconnect the helper grants on its own,
+    so only a ladder handed down from the deployment reaches the answer."""
+
+    def __init__(self):
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, *args, **kwargs):  # pragma: no cover - the fallback this test must not take
+        raise AssertionError("the spawn fell back to the waited-for call")
+
+    async def chat_stream(self, *args, **kwargs):
+        from raven.providers.base import ChatDelta
+
+        self.calls += 1
+        if self.calls <= 2:
+            raise ConnectionError("connection reset by peer")
+        yield ChatDelta(content="answer")
+
+
+class _ShowsThenDrops(LLMProvider):
+    """Streams a word, then the connection drops; answers whole next time."""
+
+    def __init__(self):
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, *args, **kwargs):  # pragma: no cover - the fallback this test must not take
+        raise AssertionError("the spawn fell back to the waited-for call")
+
+    async def chat_stream(self, *args, **kwargs):
+        from raven.providers.base import ChatDelta
+
+        self.calls += 1
+        if self.calls == 1:
+            yield ChatDelta(content="partial")
+            raise ConnectionError("connection reset by peer")
+        yield ChatDelta(content="answer")
+
+
+@pytest.mark.asyncio
+async def test_a_spawned_subagents_dropped_stream_is_asked_again_on_the_deployments_ladder(workspace):
+    """The subagent half of the wiring: `RavenLoopBackend` hands the ladder it was built
+    with to `stream_llm_call`. Left to that call's own defaults a spawn reconnects once
+    and waits never, so a stream dropped twice ended the run; with the ladder handed
+    over, the third call answers and its answer is the run's result."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    provider = _DropsTwiceThenAnswers()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=workspace / "home", retry_delays=(0.0,))
+
+    out = await backend.run("build the deck", task_id="t1", workspace=workspace, executor=None, on_delta=_watch)
+
+    assert provider.calls == 3
+    assert "answer" in (out or "")
+
+
+@pytest.mark.asyncio
+async def test_a_spawned_subagents_rendered_stream_is_retried_only_when_the_deployment_says_so(workspace):
+    """`llmRetryAfterOutput` reaches a spawn the same way. Built with it on, a stream
+    that showed a word and then dropped is asked again and the retry's word is the
+    answer; built without it, the default, the drop ends the run as the rule has
+    always read."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    seen: list[str] = []
+
+    async def watch(text: str) -> None:
+        seen.append(text)
+
+    provider = _ShowsThenDrops()
+    backend = RavenLoopBackend(
+        provider=provider, model="stub", agent_home=workspace / "home", retry_delays=(0.0,), retry_after_output=True
+    )
+    out = await backend.run("build the deck", task_id="t1", workspace=workspace, executor=None, on_delta=watch)
+    assert provider.calls == 2
+    assert "answer" in (out or "")
+    assert seen == ["partial", "answer"]
+
+    provider = _ShowsThenDrops()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=workspace / "home", retry_delays=(0.0,))
+    with pytest.raises(ConnectionError):
+        await backend.run("build the deck", task_id="t1", workspace=workspace, executor=None, on_delta=_watch)
+    assert provider.calls == 1
