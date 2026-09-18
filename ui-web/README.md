@@ -116,7 +116,7 @@ conventions they are written to are `CONTRIBUTING.md` section 8.
 | `seam-assignment` | only `app/install.ts` puts a source on the data seam, plus the first frame's one pinned exception, held to exactly one assignment; `setSources` stays the test seam |
 | `island-lang` | every island's root subscribes to the language store |
 | `i18n-keys` | every literal key exists in the catalogue, sits under a namespace, and the namespace belongs to one domain |
-| `first-frame-literals` | the words the page shows without a `t(key)` behind them -- the served first frame and today's literals -- counted per file and shrink-only |
+| `first-frame-literals` | the words the page shows without a `t(key)` behind them -- the served first frame and today's literals -- counted per file as unbroken CJK runs, escaped or not, and shrink-only |
 | `file-names` | what a file may be called: PascalCase components, camelCase modules, `<module>.test.ts`, kebab-case gates |
 | `rpc-names` | every method name is in the contract, and every call inside `features/` is in that domain's `source.ts` |
 | `fixture-shape` | every offline responder answers the shape the contract declares, plus the fields it never sends |

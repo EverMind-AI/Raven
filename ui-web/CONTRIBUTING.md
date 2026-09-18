@@ -234,17 +234,24 @@ page's wiring has run. Enforced by `import-direction`.
    (`t(` and `lang.attr(`), names an entry the catalogue carries. A key built by
    concatenation is outside it.
    The lookup is not yet the only source of words, and what remains is pinned.
-   Two lines are the served first frame -- `src/page.html`'s `<html lang>` and
-   its no-JavaScript shell -- which no catalogue and no store has reached yet.
-   Twenty-one more are literals in code, across thirteen modules: fifteen words
-   a reader sees (a `??` fallback rendered before a language is picked, a JSX
-   literal, the string `state/envChip.ts` writes), two separators a reader sees
-   (the comma `features/cron/humanize.ts` joins a translated list with), three
-   patterns matched against text and never drawn, and one comparison against
-   the title `chrome/ChatTop.tsx` serves.
-   **Ratcheted by `first-frame-literals`**: a count per file, down or gone,
-   each with its reason in the gate's header. The offline fixture library is
-   out of that count -- 234 lines in ten files whose content is the demo shell
+   The unit is a maximal run of CJK -- a script written without spaces has no
+   smaller thing to call a word, and a line already pinned cannot carry a
+   second word in on the same line for free. Six runs are the served first
+   frame, the no-JavaScript shell in `src/page.html`, which no catalogue and no
+   store has reached yet (its `<html lang>` is a tag rather than a word).
+   Thirty-two more are in code, across thirteen modules: sixteen words a reader
+   sees (a `??` fallback rendered before a language is picked, a JSX literal,
+   the string `state/envChip.ts` writes, the month and day
+   `features/memory/MemoryPage.tsx` formats), two separators a reader sees (the
+   ideographic comma `features/cron/humanize.ts` joins a translated list with),
+   thirteen in three patterns matched against text and never drawn -- twelve of
+   them the range ends and class members spelling out `lib/prose.ts`'s two --
+   and one comparison against the title `chrome/ChatTop.tsx` serves.
+   **Ratcheted by `first-frame-literals`**: a count of runs per file, down or
+   gone, each with its reason in the gate's header; a string is read cooked, so
+   an escaped run counts as the characters it stands for, and a file that loses
+   a run lowers its own row in the same change. The offline fixture library is
+   out of that count -- 489 runs in ten files whose content is the demo shell
    rather than the page's own words.
    English source is the repo's rule rather than this page's:
    `scripts/check_source_language.py` at the root fails a PR that adds a
@@ -540,6 +547,6 @@ shrink-only: the way off a list is the fix.
 | 17 files inside a runtime cycle, in two components | The session knot is the large one; `state/session/naming.ts` is in it because it was carved out of `runtime.ts`, which already was. Inverting `runtime.ts`'s two calls into it is the way back to 16 | `import-direction`'s `CYCLES` and `IN_CYCLES` |
 | 59 cross-domain edges, eight of them the desk's | Splitting the desk out of `features/workspace/` turned eight intra-domain edges into cross-domain ones. Same imports, same runtime edges, two domains | `import-direction`'s `CROSS` |
 | `src/app/boot.ts` assigns one seam key of its own, exactly once | The first frame's claim installs the session source because the `holdRail()` on the next line reads it, and the installer runs later in the boot sequence. The row pins the count, so a second write of `sources.rail` is not covered by that reason. Inverting the two is what takes the row off | `seam-assignment`'s `EXCEPTIONS` |
-| 23 non-English lines in 14 files | Two are the served first frame, which has no catalogue to read; fifteen are words and two separators a reader sees before a language is picked, and the boot and region goldens are taken from that frame; three are patterns matched against text and one a comparison with a served title | `first-frame-literals`'s `PINNED` |
+| 38 non-English runs in 14 files | A run is an unbroken stretch of CJK, the nearest thing to a word in a script written without spaces. Six are the served first frame, which has no catalogue to read; sixteen words and two separators a reader sees before a language is picked, and the boot and region goldens are taken from that frame; thirteen spell out three patterns matched against text and one is a comparison with a served title | `first-frame-literals`'s `PINNED` |
 | `curly` is off | 2,063 one-line guards | `eslint.config.js` |
 | `rpc-schema/openrpc.json` disagrees with its own descriptions in three places | `CronJobInfo.next_run_at_ms` / `last_run_at_ms` are sent as null against an integer schema, and `PlaybookNode.skills` / `mcps` describe three states against an array schema. `Wire<T>` is this page's accommodation; the schema is the cure, and it is outside `ui-web/` | `src/rpc/fixtureTransport.ts`'s header |
