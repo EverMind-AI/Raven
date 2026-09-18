@@ -2382,16 +2382,16 @@ describe('renaming and deleting a base', () => {
         target: { value: 'staff handbook' },
       })
     })
+    /* `show` drops a notice raised with no #toasts in the document, and this
+       file's helper creates that host at assertion time -- too late. Whether
+       one was already standing came down to what the test before this left
+       behind, which is why the same file passed alone and timed out in the
+       full run. Raise it before the click, and one second is plenty. */
+    toastHost()
     await act(async () => {
       ;(screen.getByText('gui.kb.save').closest('button') as HTMLButtonElement).click()
     })
-    /* The click starts work it does not await, and the toast lands only once
-       the rejection has reached the store's catch and <Toasts/> has drawn it.
-       One microtask was enough on a quiet machine and not on a loaded one, and
-       waitFor's own second is not enough on a machine running the whole suite
-       at once -- the wait ends on the condition, so the ceiling only decides
-       how long a real failure takes to report. */
-    await waitFor(() => expect(toasts()).toHaveLength(1), { timeout: 10_000 })
+    await waitFor(() => expect(toasts()).toHaveLength(1))
 
     expect(toasts()).toEqual(['a knowledge base called staff handbook already exists'])
     expect(document.getElementById('kbrename')).not.toBeNull()
