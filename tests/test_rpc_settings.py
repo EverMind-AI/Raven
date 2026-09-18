@@ -224,6 +224,47 @@ class TestEmbeddingCardFollowsTheEndpointHome:
                 }
             )
 
+    async def test_the_address_the_card_showed_is_an_echo_not_an_instruction(
+        self, everos_toml, tmp_path, monkeypatch
+    ) -> None:
+        """The row renders the resolved address as a `defaultValue`, so every
+        save carries it back whether or not anyone touched it. Refusing that
+        made the row unsaveable without first emptying a field nobody had
+        edited -- changing only the model came back as an error."""
+        import json
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text(
+            json.dumps(
+                {
+                    "embedding": {"model": "old-model", "provider": "siliconflow"},
+                    "providers": {"siliconflow": {"apiKey": "sk", "apiBase": "https://api.siliconflow.cn/v1"}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        raven_home.set_config_path(cfg)
+        everos_toml.write_text('[llm]\nmodel = "m"\n', encoding="utf-8")
+
+        r = await rpc_console.settings_everos_set(
+            {
+                "section": "embedding",
+                "fields": {"model": "new-model", "base_url": "https://api.siliconflow.cn/v1"},
+            }
+        )
+
+        assert r["applied"] is True
+        assert json.loads(cfg.read_text(encoding="utf-8"))["embedding"] == {
+            "model": "new-model",
+            "provider": "siliconflow",
+        }
+
+        # An address that differs is an instruction, and there is nowhere to put it.
+        with pytest.raises(ConfigValidationError, match="belongs to the provider"):
+            await rpc_console.settings_everos_set(
+                {"section": "embedding", "fields": {"base_url": "https://elsewhere.test/v1"}}
+            )
+
     async def test_half_a_pin_is_refused_from_either_end(self, everos_toml, tmp_path, monkeypatch) -> None:
         """Both halves or neither. A model with nobody to serve it reads as
         configured on every screen while every reader resolves it to nothing;
@@ -633,6 +674,65 @@ class TestAPinIsWrittenAsOneThing:
 
         block = _read(cfg)["translate"]
         assert block["model"] is None and block["provider"] is None
+
+
+class TestAPinCanNameAnyProviderThisConfigHolds:
+    """Raven carries no spec for every vendor LiteLLM can reach.
+
+    Checking a pin's provider against the registry alone made a working
+    endpoint uneditable on the page that exists to edit it: the wizard stored
+    `provider: deepinfra`, every reader resolved it, and this surface called it
+    a provider that does not exist.
+    """
+
+    async def test_a_section_in_the_config_is_proof_the_vendor_exists(self, cfg):
+        from raven.config.update_providers import set_provider_fields
+        from raven.providers.registry import find_by_name
+
+        assert find_by_name("deepinfra") is None, "the point of this test is a vendor with no spec"
+        set_provider_fields("deepinfra", {"api_key": "sk-di", "api_base": "https://api.deepinfra.com/v1/openai"})
+
+        r = await rpc_console.settings_set(
+            {"key": "embedding", "value": {"model": "Qwen/Qwen3-Embedding-8B", "provider": "deepinfra"}}
+        )
+
+        assert r["applied"] is True
+        assert _read(cfg)["embedding"] == {"model": "Qwen/Qwen3-Embedding-8B", "provider": "deepinfra"}
+
+    async def test_a_name_nothing_holds_is_still_a_typo(self, cfg):
+        """The check still earns its keep: a misspelling would otherwise
+        surface as a silent fallback to the conversation's model."""
+        with pytest.raises(ConfigValidationError, match="no provider named"):
+            await rpc_console.settings_set({"key": "embedding", "value": {"model": "m", "provider": "deepinfr"}})
+
+
+class TestClearingTheEmbeddingPin:
+    """The picker's "inherit" option sends both halves empty.
+
+    Dropping empty values before the write made that a no-op the caller was
+    told had applied: the picker snapped back to the old pair on the next load,
+    and editing the file by hand was the only way to unset it.
+    """
+
+    async def test_both_halves_empty_removes_the_block(self, cfg):
+        from raven.config.update_providers import set_provider_fields
+
+        set_provider_fields("openai", {"api_key": "sk-openai"})
+        await rpc_console.settings_set(
+            {"key": "embedding", "value": {"model": "text-embedding-3-small", "provider": "openai"}}
+        )
+
+        r = await rpc_console.settings_set({"key": "embedding", "value": {"model": "", "provider": ""}})
+
+        assert r["applied"] is True
+        assert "embedding" not in _read(cfg)
+        assert r["previous"] == {"model": "text-embedding-3-small", "provider": "openai"}
+
+    async def test_clearing_what_was_never_set_is_not_an_error(self, cfg):
+        r = await rpc_console.settings_set({"key": "embedding", "value": {"model": "", "provider": ""}})
+
+        assert r["applied"] is True
+        assert "embedding" not in _read(cfg)
 
 
 class TestTheEmbeddingPinHasOneWayIn:

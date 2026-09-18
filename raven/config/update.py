@@ -455,7 +455,14 @@ def set_embedding_endpoint(
     """
     path = config_path or get_config_path()
     allowed = {"model", "provider", "dimensions"}
-    clean = {k: v for k, v in fields.items() if k in allowed and v not in (None, "")}
+    given = {k: v for k, v in fields.items() if k in allowed}
+    clean = {k: v for k, v in given.items() if v not in (None, "")}
+    # A pin cleared rather than changed. The page's "inherit" option sends both
+    # halves empty, and dropping empties before the write made that a no-op the
+    # caller was told had applied -- the picker snapped back to the old pair on
+    # the next load, with no way to unset it but editing the file.
+    if given and not clean:
+        return _clear_embedding_pin(path)
     if not clean:
         return {}
 
@@ -482,6 +489,19 @@ def set_embedding_endpoint(
 
     prev = atomic_update(path, _apply)
     logger.info("config/update: embedding endpoint set ({})", ", ".join(sorted(clean)))
+    return prev or {}
+
+
+def _clear_embedding_pin(path: "Path") -> dict[str, Any]:
+    """Remove the block, and answer with what it held."""
+
+    def _apply(_text: str | None) -> tuple[str, Any]:
+        data = read_raw_or_raise(path)
+        prev = dict(data.pop("embedding", None) or {})
+        return json.dumps(data, indent=2, ensure_ascii=False), prev
+
+    prev = atomic_update(path, _apply)
+    logger.info("config/update: embedding endpoint cleared")
     return prev or {}
 
 
@@ -529,6 +549,14 @@ def _refuse_a_pin_that_cannot_embed(clean: dict[str, Any], *, path: "Path") -> N
         )
 
 
+_EMBEDDING_MODEL_CHANGED = (
+    "Embedding model changed from {was} to {now}. Anything already indexed was built with the "
+    "old one and cannot be searched with the new one: rebuild each knowledge base, and re-index "
+    "whatever the memory backend has stored."
+)
+"""The one wording, as a catalogue key. Surfaces ask for it rather than rewording."""
+
+
 def embedding_model_change(previous: dict[str, Any], fields: dict[str, Any]) -> str:
     """One sentence when the model moved, empty when it did not.
 
@@ -545,11 +573,12 @@ def embedding_model_change(previous: dict[str, Any], fields: dict[str, Any]) -> 
     now = str(fields.get("model") or "")
     if not was or not now or was == now:
         return ""
-    return (
-        f"Embedding model changed from {was} to {now}. Anything already indexed was built with the "
-        "old one and cannot be searched with the new one: rebuild each knowledge base, and "
-        "re-index whatever the memory backend has stored."
-    )
+    from raven.i18n import t
+
+    # Through the catalogue, like every other sentence a person reads. Built by
+    # interpolating the two names into a finished string instead, it was the one
+    # English paragraph on an otherwise translated screen.
+    return t(_EMBEDDING_MODEL_CHANGED, was=was, now=now)
 
 
 __all__ = [

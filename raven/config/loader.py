@@ -19,7 +19,7 @@ from raven.utils.atomic_io import atomic_replace, atomic_update
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 8
+CURRENT_CONFIG_VERSION = 9
 
 # The generation that introduced each run-once migration. Each is gated on its
 # own floor rather than on "is this config current", because those are not the
@@ -41,6 +41,7 @@ _PHANTOM_KNOBS_MIGRATION = 5
 _VENDORED_TREE_MIGRATION = 6
 _RESEARCH_RENAME_MIGRATION = 7
 _EMBEDDING_HOME_MIGRATION = 8
+_EMBEDDING_SHAPE_MIGRATION = 9
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -378,7 +379,9 @@ def _persist_migrations(path: Path, from_version: int = 0) -> None:
                 changed = _migrate_research_rename(raw) or changed
                 rename_pending = _research_rename_pending(raw)
             if from_version < _EMBEDDING_HOME_MIGRATION:
-                changed = _migrate_embedding_home(raw) or changed
+                changed = _migrate_embedding_home(raw, config_path=path) or changed
+            if from_version < _EMBEDDING_SHAPE_MIGRATION:
+                changed = _migrate_embedding_shape(raw, config_path=path) or changed
         if not changed:
             return None, True
         return json.dumps(raw, indent=2, ensure_ascii=False), True
@@ -456,7 +459,7 @@ def load_config(config_path: Path | None = None) -> Config:
             # (the TUI RPC server reloads every turn) and nothing else.
             from_version = _migration_version(path)
             unstamped = from_version < CURRENT_CONFIG_VERSION
-            data = _migrate_config(data, from_version=from_version)
+            data = _migrate_config(data, from_version=from_version, config_path=path)
             _stash_channel_slices(data)
         except json.JSONDecodeError as e:
             # Boot on defaults for a malformed file (a transient mid-write race
@@ -884,7 +887,66 @@ def _migrate_legacy_leaves(data: dict[str, Any], *, notify: bool = False) -> boo
     return changed
 
 
-def _migrate_embedding_home(data: dict, *, notify: bool = False) -> bool:
+def _provider_serving(base_url: str, config_path: Path | None) -> str | None:
+    """Which configured provider answers at ``base_url``. Migration-local.
+
+    Imported inside the call because ``update_providers`` reads config through
+    this module, and the migration runs while that read is in flight -- which
+    is also why the path travels rather than being looked up again.
+    """
+    try:
+        from raven.config.update_providers import provider_serving_at
+
+        return provider_serving_at(base_url, config_path=config_path)
+    except Exception:  # noqa: BLE001 - nothing to match against is not a migration failure
+        return None
+
+
+def _migrate_embedding_shape(data: dict, *, notify: bool = False, config_path: Path | None = None) -> bool:
+    """Take the address and key the block used to carry itself.
+
+    `EmbeddingConfig` forbids extras, so a config still holding them does not
+    load at all -- every command that reads the extension blocks ends in a
+    traceback rather than in a degraded feature.
+
+    Its own generation rather than the one that moved the block: generation 8
+    shipped without this repair, so an install that already consumed 8 carries
+    both the stamp and the shape that cannot load, and a repair gated on 8
+    would never reach it.
+    """
+    import logging as _logging
+
+    _log = _logging.getLogger(__name__)
+    block = data.get("embedding") if isinstance(data, dict) else None
+    if not isinstance(block, dict) or not any(k in block for k in ("baseUrl", "base_url", "apiKey", "api_key")):
+        return False
+
+    address = str(block.pop("baseUrl", None) or block.pop("base_url", None) or "")
+    block.pop("apiKey", None)
+    block.pop("base_url", None)
+    block.pop("api_key", None)
+    # Adopted onto the provider that answers at that address, when one is
+    # configured. Failing that the whole block goes: a model left with no
+    # provider is a pin every reader resolves to nothing while every screen
+    # reads it as configured, which is the state this repair exists to end.
+    served_by = _provider_serving(address, config_path) if address else None
+    if served_by:
+        block.setdefault("provider", served_by)
+        if notify:
+            _log.info("Migrated: embedding endpoint %s -> provider %r", address, served_by)
+    elif not block.get("provider"):
+        data.pop("embedding", None)
+        if notify:
+            _log.warning(
+                "Migrated: dropped the embedding endpoint at %s -- no configured provider answers "
+                "there, so there is nowhere for its key to live. Pick an embedding model in "
+                "settings to configure one again.",
+                address or "(no address)",
+            )
+    return True
+
+
+def _migrate_embedding_home(data: dict, *, notify: bool = False, config_path: Path | None = None) -> bool:
     """Move the endpoint and the extraction block to the names they earned.
 
     Two renames, one generation, because they are the same edit seen twice: a
@@ -953,7 +1015,13 @@ def _migrate_embedding_home(data: dict, *, notify: bool = False) -> bool:
     return changed
 
 
-def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version: int = CURRENT_CONFIG_VERSION) -> dict:  # noqa: C901 (cc 46: pre-existing, above the ceiling)
+def _migrate_config(  # noqa: C901 (cc 42: pre-existing, above the ceiling)
+    data: dict,
+    *,
+    pop_extension_keys: bool = True,
+    from_version: int = CURRENT_CONFIG_VERSION,
+    config_path: Path | None = None,
+) -> dict:  # noqa: C901 (cc 46: pre-existing, above the ceiling)
     """Migrate old config formats to current.
 
     ``pop_extension_keys``: when True (default, used by ``load_config``),
@@ -1038,7 +1106,9 @@ def _migrate_config(data: dict, *, pop_extension_keys: bool = True, from_version
                 )
 
     if from_version < _EMBEDDING_HOME_MIGRATION:
-        _migrate_embedding_home(data, notify=True)
+        _migrate_embedding_home(data, notify=True, config_path=config_path)
+    if from_version < _EMBEDDING_SHAPE_MIGRATION:
+        _migrate_embedding_shape(data, notify=True, config_path=config_path)
 
     # Same for the session-title gate, which changed both name and unit:
     # ``min_input_chars`` counted code points, ``min_input_width`` counts

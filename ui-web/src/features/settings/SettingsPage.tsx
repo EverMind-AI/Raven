@@ -2325,6 +2325,7 @@ function MemRole({
               ))}
             </select>
           )}
+          {sec === 'embedding' && <div className="mnote">{t('gui.set.dm.embed_warn')}</div>}
           {borrow ? (
             <div className="mnote">{t('gui.set.mem.borrow_note')}</div>
           ) : (
