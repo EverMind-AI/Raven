@@ -194,6 +194,84 @@ class TestIdentityBootstrap:
         assert render._resolved_model_id() == "openrouter/acme/some-model"
 
 
+class TestIdentityNamesTheBoundModel:
+    """The identity line names the model the running turn goes out under.
+
+    The loop opens ``use_binding`` around every turn with the session's own
+    binding -- its ``/model`` pick, else the default -- so the renderer reads
+    the id there instead of from ``agents.defaults.model``. Before, the line
+    named the configured default on every turn of a switched conversation, and
+    the model, asked what it was, quoted the line back: from the page the
+    switch looked like it had never happened (#470).
+    """
+
+    def test_a_switched_conversation_is_told_the_model_it_is_bound_to(self, tmp_path: Path, monkeypatch) -> None:
+        from raven.providers.binding import ModelBinding, use_binding
+
+        cfg = _provider_config("acme/config-default", "openrouter", api_key="sk-or-v1-abc")
+        monkeypatch.setattr("raven.config.loader.load_config", lambda: cfg)
+
+        with use_binding(ModelBinding(provider=object(), model="acme/session-pick")):  # type: ignore[arg-type]
+            line = render._resolved_model_id()
+
+        assert line == "openrouter/acme/session-pick"
+        assert "config-default" not in line, "the configured default must not leak into a switched turn"
+
+    def test_the_bound_id_goes_through_the_same_storage_to_wire_conversion(self, tmp_path: Path, monkeypatch) -> None:
+        """A session's pick is stored in the storage spelling, like the default.
+        Fed through the binding it must still come out in the wire spelling the
+        request carries -- here the codex client's, which strips the prefix --
+        or the line names an id no request ever sends."""
+        from raven.providers.binding import ModelBinding, use_binding
+
+        cfg = _provider_config("openai-codex/gpt-5.1", "openai_codex")
+        monkeypatch.setattr("raven.config.loader.load_config", lambda: cfg)
+
+        with use_binding(ModelBinding(provider=object(), model="openai-codex/gpt-5.1-codex")):  # type: ignore[arg-type]
+            assert render._resolved_model_id() == "gpt-5.1-codex"
+
+    def test_outside_a_turn_the_configured_default_still_answers(self, monkeypatch) -> None:
+        from raven.providers.binding import active_binding
+
+        assert active_binding() is None
+        cfg = _provider_config("acme/config-default", "openrouter", api_key="sk-or-v1-abc")
+        monkeypatch.setattr("raven.config.loader.load_config", lambda: cfg)
+
+        assert render._resolved_model_id() == "openrouter/acme/config-default"
+
+    async def test_the_segment_names_the_bound_model(self, tmp_path: Path, monkeypatch) -> None:
+        from raven.providers.binding import ModelBinding, use_binding
+
+        cfg = _provider_config("acme/config-default", "openrouter", api_key="sk-or-v1-abc")
+        monkeypatch.setattr("raven.config.loader.load_config", lambda: cfg)
+
+        with use_binding(ModelBinding(provider=object(), model="acme/session-pick")):  # type: ignore[arg-type]
+            seg = await IdentitySegmentBuilder(tmp_path).build(_ctx(tmp_path))
+
+        assert "You are running on model: openrouter/acme/session-pick." in seg.text
+        assert "config-default" not in seg.text
+
+    async def test_the_estimation_prompt_and_the_turn_prompt_agree_on_a_switched_model(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """``ContextBuilder._get_identity`` sizes the system prompt for the token
+        budget and promises never to drift from the per-turn renderer. Both
+        read the binding, so a switched conversation is sized against the
+        line it is actually sent -- a field handed down the assembly path
+        would have reached one of the two and not the other."""
+        from raven.providers.binding import ModelBinding, use_binding
+
+        cfg = _provider_config("acme/config-default", "openrouter", api_key="sk-or-v1-abc")
+        monkeypatch.setattr("raven.config.loader.load_config", lambda: cfg)
+
+        with use_binding(ModelBinding(provider=object(), model="acme/session-pick")):  # type: ignore[arg-type]
+            seg = await IdentitySegmentBuilder(tmp_path).build(_ctx(tmp_path))
+            estimate = ContextBuilder(workspace=tmp_path)._get_identity()
+
+        assert seg.text == estimate
+        assert "openrouter/acme/session-pick" in estimate
+
+
 class TestMemory:
     async def test_recall_merged_under_memory_heading(self, tmp_path: Path) -> None:
         backend = _Backend([Memory(text="likes espresso")])
