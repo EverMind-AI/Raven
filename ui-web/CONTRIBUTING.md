@@ -212,14 +212,34 @@ page's wiring has run. Enforced by `import-direction`.
 3. **Language.** Every `<Domain>App` subscribes with
    `useSyncExternalStore(lang.subscribe, lang.get)`, so a flip re-renders the
    island by construction (**enforced by `island-lang`**, `NO_ROOT` naming the
-   four domains with no root of their own and why). Words come from `t(key)`
-   (`src/i18n/t.ts`) and nothing else; `lang.attr(key)` is the one other take-a-key
+   four domains with no root of their own and why). `t(key)`
+   (`src/i18n/t.ts`) is the lookup; `lang.attr(key)` is the one other take-a-key
    form, for keyed attributes the served markup did not carry, and it answers
    `undefined` until a reader has picked a language. `state/lang/effects.ts`
    holds only what is drawn rather than rendered.
    **Enforced by `i18n-keys`**: every literal key, in either take-a-key form
    (`t(` and `lang.attr(`), names an entry the catalogue carries. A key built by
    concatenation is outside it.
+   The lookup is not yet the only source of words, and what remains is pinned.
+   Two lines are the served first frame -- `src/page.html`'s `<html lang>` and
+   its no-JavaScript shell -- which no catalogue and no store has reached yet.
+   Twenty-one more are literals in code, across thirteen modules: fifteen words
+   a reader sees (a `??` fallback rendered before a language is picked, a JSX
+   literal, the string `state/envChip.ts` writes), two separators a reader sees
+   (the comma `features/cron/humanize.ts` joins a translated list with), three
+   patterns matched against text and never drawn, and one comparison against
+   the title `chrome/ChatTop.tsx` serves.
+   **Ratcheted by `first-frame-literals`**: a count per file, down or gone,
+   each with its reason in the gate's header. The offline fixture library is
+   out of that count -- 234 lines in ten files whose content is the demo shell
+   rather than the page's own words.
+   English source is the repo's rule rather than this page's:
+   `scripts/check_source_language.py` at the root fails a PR that adds a
+   non-English line, and lets one through only by a named zone, the `*.md`
+   suffix, a relocation of the same run, or the file having carried one at the
+   base revision. `ui-web/` is no zone, so that last pass is what the fourteen
+   files above stand on, and `first-frame-literals` is what keeps the pile from
+   growing.
 4. **Portals go at the body**, in the order `state/portals.ts` declares, and a
    place in that order is derived (`BOOT_BODY_ORDER.indexOf`), never written as
    an absolute index. By review, with `src/test/portals.test.ts` reading the
@@ -251,8 +271,14 @@ page's wiring has run. Enforced by `import-direction`.
    exists to make loud, the second makes a missing source silently do nothing.
 3. **`src/app/install.ts` assigns the seam.** The one exception is
    `src/app/boot.ts`'s claim on the first frame, which installs the session
-   source before anything below it reads (`sources.rail`). Nothing outside
-   `src/app/` assigns a member. By review.
+   source (`sources.rail`) because the `holdRail()` on the next line reads it,
+   ahead of the sequence that fills it. Nothing else assigns a member, and
+   `setSources` is the test seam rather than a second door into it.
+   **Enforced by `seam-assignment`**: every `sources.<key> = ...` in the tree
+   is the installer's or that one pinned exception's, `setSources` is called
+   only from a `.test.` file, and `Object.assign(sources, ...)` only inside
+   `state/sources.ts`, which declares the seam. An alias (`const s = sources`)
+   is outside it: that needs the type checker rather than the syntax.
 4. **One responder module per wire namespace under `src/rpc/fixtures/`**,
    registered in `fixtures/index.ts`. A responder answers the contract and
    nothing else: no clock of its own (the transport hands it `now`), no import
@@ -330,6 +356,24 @@ class fails; one more unprefixed class in a domain fails, in an attribute or in
 an expression. Moving a domain's rules out of `page.css` into its own sheet is
 what lowers a number.
 
+Moving a rule is not yet a mechanical change, and three facts decide how it
+goes:
+
+- **Order flips.** `build.py` reads `styles/page.css`, appends the collected
+  `.modern/domains.css` to it, and splices the pair into the page's one
+  `/*__STYLE__*/` marker. So a rule moved into `features/<domain>/styles.css`
+  lands after the whole of `page.css`, and any same-specificity rule that used
+  to win by source order now loses to it -- or starts winning where it lost.
+- **Nothing checks pixels.** The stylesheet's digest was pinned for the
+  refactor and that gate is retired; what is left records shape, not style. The
+  two boot goldens (`scripts/__golden__/`) and the region goldens
+  (`src/test/__golden__/`) hold each element's tag, id, classes and `data-*`
+  attributes, and `check-css` holds declaration-level invariants. A migration
+  brings its own verification.
+- **`features/extAgents/styles.css` is the exemplar and is empty on purpose.**
+  It establishes the mechanism -- a domain's sheet, imported by its App,
+  collected by Vite -- and says so in its header. No rule has moved yet.
+
 The gate's reach is every class a domain's non-test `.tsx` files name: the
 literal attribute `className="a b"`, and inside a `className={...}` expression
 every single-quoted, double-quoted and template-literal static chunk, split on
@@ -370,8 +414,13 @@ literals are counted in their own list rather than mixed into the other two.
    wholesale (`vitest -u`): edit the golden by hand from the same table the
    source change came from, and read the diff back line by line.
 
+No gate asks a module for a suite: nothing above fails because a new module
+arrived without tests, or because a branch of one goes unreached. Whether a
+change brings its tests is a review item, like the nine rules in this file
+whose verifier is a reader rather than a run.
+
 `npm test` is `vitest run` over both trees, so it is every unit suite and every
-gate at once. `README.md` lists the 35 gates and what each pins. `npm run lint`
+gate at once. `README.md` lists the 37 gates and what each pins. `npm run lint`
 is the eslint pass (section 9).
 
 ## 9. Tooling
@@ -414,7 +463,7 @@ tells you what is missing rather than the reader finding out.
 | 1 | Create `features/<domain>/` and write, in this order, `types.ts`, `source.ts` (every method name in the contract), `store.ts` (`makeStore`), `<Domain>App.tsx` (the root subscribes to `lang`), `styles.css` (prefixed classes), `manifest.ts` | `domain-shape` (a missing file or a root named something else), `island-lang` (a root that does not subscribe), `file-names` (a file named against the rule), `store-shape` (a store of its own shape), `rpc-names` (a `gateway()` call outside `source.ts`, or a name the contract does not declare) |
 | 2 | Write `src/rpc/fixtures/<domain>.ts` and register it in `fixtures/index.ts`, typed rather than cast | `offline-coverage` (a method with no answer), `fixture-shape` (an answer the contract does not accept), `fixture-now` (a clock of its own), `tsc` (a missing required field) |
 | 3 | Assign the seam in `src/app/install.ts`: `sources.<domain> = ...`, and declare the key in `manifest.ts`'s `sources` | `domain-registration` (a seam key no domain claims, or two claiming one), `tsc` (a key absent from `Sources`) |
-| 4 | Add the words to `i18n/messages.json` at the repo root, under `gui.<domain>.*` | `i18n-keys` (a key the catalogue lacks, or a shape that is not `gui.<ns>.<leaf>`) |
+| 4 | Add the words to `i18n/messages.json` at the repo root, under `gui.<domain>.*`. `ui-tui` generates its own copy of that file, so run `npm run --prefix ui-tui gen:i18n` and commit the regenerated `ui-tui/src/i18n/messages.generated.ts` in the same change | `i18n-keys` (a key the catalogue lacks, or a shape that is not `gui.<ns>.<leaf>`); the `TUI checks` job in `.github/workflows/ci.yml`, whose `npm run lint:i18n` is that generator in `--check` mode |
 | 5 | If it owns a module page, add its row to `src/state/pages.ts` and claim it in the manifest -- nothing else needs touching, because every other table derives | `domain-registration` (a page declared and unclaimed, or claimed and undeclared), `rail-nav-registry` (a button the rail cannot mark) |
 | 6 | Keep the classes prefixed, and put new rules in the domain's own sheet | `check-class-namespace` (an unprefixed or shared class) |
 | 7 | Define any new term in `CONTEXT.md` in the same change, then run `npm test`, `npm run type-check`, `npm run lint` and the build | by review (the terms), the gates (everything else) |
@@ -447,5 +496,7 @@ shrink-only: the way off a list is the fix.
 | 18 methods with no offline answer | Each entry says why the offline page has nothing to answer with | `offline-coverage`'s `EXEMPT` |
 | 17 files inside a runtime cycle, in two components | The session knot is the large one; `state/session/naming.ts` is in it because it was carved out of `runtime.ts`, which already was. Inverting `runtime.ts`'s two calls into it is the way back to 16 | `import-direction`'s `CYCLES` and `IN_CYCLES` |
 | 59 cross-domain edges, eight of them the desk's | Splitting the desk out of `features/workspace/` turned eight intra-domain edges into cross-domain ones. Same imports, same runtime edges, two domains | `import-direction`'s `CROSS` |
+| `src/app/boot.ts` assigns one seam key of its own | The first frame's claim installs the session source because the `holdRail()` on the next line reads it, and the installer runs later in the boot sequence. Inverting the two is what takes the row off | `seam-assignment`'s `EXCEPTIONS` |
+| 23 non-English lines in 14 files | Two are the served first frame, which has no catalogue to read; fifteen are words and two separators a reader sees before a language is picked, and the boot and region goldens are taken from that frame; three are patterns matched against text and one a comparison with a served title | `first-frame-literals`'s `PINNED` |
 | `curly` is off | 2,063 one-line guards | `eslint.config.js` |
 | `rpc-schema/openrpc.json` disagrees with its own descriptions in three places | `CronJobInfo.next_run_at_ms` / `last_run_at_ms` are sent as null against an integer schema, and `PlaybookNode.skills` / `mcps` describe three states against an array schema. `Wire<T>` is this page's accommodation; the schema is the cure, and it is outside `ui-web/` | `src/rpc/fixtureTransport.ts`'s header |

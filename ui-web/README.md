@@ -102,7 +102,7 @@ runs the same three and then `npm test`.
 
 ## Gates
 
-`npm test` is one run over both trees, so the 35 files under `scripts/gates/`
+`npm test` is one run over both trees, so the 37 files under `scripts/gates/`
 go with the unit suites. Each one's header says what it pins and why; the
 conventions they are written to are `CONTRIBUTING.md` section 8.
 
@@ -113,8 +113,10 @@ conventions they are written to are `CONTRIBUTING.md` section 8.
 | `domain-registration` | every domain declared once, every page claimed by one domain, every seam key answered by one |
 | `store-shape` | one store shape and one set of verbs; the listener set lives only in `state/store.ts` |
 | `state-dom-touch` | how often each module in `state/` and `app/` may reach for an element, and zero for `lib/` and `components/` |
+| `seam-assignment` | only `app/install.ts` puts a source on the data seam, plus the first frame's one pinned exception; `setSources` stays the test seam |
 | `island-lang` | every island's root subscribes to the language store |
 | `i18n-keys` | every literal key exists in the catalogue, sits under a namespace, and the namespace belongs to one domain |
+| `first-frame-literals` | the words the page shows without a `t(key)` behind them -- the served first frame and today's literals -- counted per file and shrink-only |
 | `file-names` | what a file may be called: PascalCase components, camelCase modules, `<module>.test.ts`, kebab-case gates |
 | `rpc-names` | every method name is in the contract, and every call inside `features/` is in that domain's `source.ts` |
 | `fixture-shape` | every offline responder answers the shape the contract declares, plus the fields it never sends |
