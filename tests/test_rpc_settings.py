@@ -1069,6 +1069,47 @@ async def test_usage_daily_buckets_cover_the_range_with_zero_days(telemetry):
     assert r["tools"]["counts"] == [{"name": "exec", "count": 1}]
 
 
+def _transcript(home, name: str, days_ago: int, calls: list[str]) -> None:
+    """One session file whose tool calls the fallback scan may or may not count.
+
+    The scan reads a transcript when its mtime is inside the window, so the
+    mtime is what the case is about; the rows themselves are the same either
+    way.
+    """
+    import os
+    from datetime import datetime, timedelta
+
+    d = home / "workspace" / "sessions" / "tui"
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / f"{name}.jsonl"
+    rows = [{"_type": "metadata", "key": f"tui:{name}", "metadata": {"title": name}}]
+    rows.append({"role": "assistant", "tool_calls": [{"id": f"{name}-1", "name": c} for c in calls]})
+    f.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    when = (datetime.now() - timedelta(days=days_ago)).timestamp()
+    os.utime(f, (when, when))
+
+
+async def test_usage_tool_scan_is_bounded_at_both_ends(telemetry, tmp_path):
+    """A transcript touched after `to` is outside the window the reply reports.
+
+    The LLM and telemetry-tool tallies read the selected days' files only, so
+    counting a transcript modified later made one reply disagree with itself:
+    the tool total covered a wider range than the dates beside it.
+    """
+    _transcript(tmp_path, "inside", 4, ["exec"])
+    _transcript(tmp_path, "after", 0, ["read_file", "read_file"])
+    _transcript(tmp_path, "before", 40, ["grep"])
+
+    r = await rpc_console.settings_usage({"from": _iso(5), "to": _iso(3)})
+    assert r["tools"]["counts"] == [{"name": "exec", "count": 1}]
+    assert r["tools"]["total"] == 1
+
+    # And the same scan does count it once the range reaches that day.
+    r = await rpc_console.settings_usage({"from": _iso(5), "to": _iso(0)})
+    assert sorted(c["name"] for c in r["tools"]["counts"]) == ["exec", "read_file"]
+    assert r["tools"]["total"] == 3
+
+
 async def test_usage_from_is_clamped_and_reversed_range_refused(telemetry):
     r = await rpc_console.settings_usage({"from": _iso(400), "to": _iso(0)})
     assert r["from"] == _iso(89)

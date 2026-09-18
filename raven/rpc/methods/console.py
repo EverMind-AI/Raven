@@ -994,7 +994,7 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
     file mtime falls inside the window. Both scans are read-only and bounded
     by ``days`` (default 30, max 90).
     """
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     from raven.config.loader import load_config
 
@@ -1101,10 +1101,16 @@ async def settings_usage(params: dict, *, agent_loop_factory=None) -> dict:
             except Exception:
                 continue
         sess_root = Path(load_config().workspace_path) / "sessions"
+        # Both ends, because the range is a window rather than a floor: the
+        # daily telemetry files this falls back for are read for the selected
+        # days only, so a transcript touched after `to` would add tool calls
+        # the other two tallies of the same reply do not have.
         cutoff = datetime.combine(frm, datetime.min.time()).timestamp()
+        until = datetime.combine(to + timedelta(days=1), datetime.min.time()).timestamp()
         for p in sess_root.glob("*/*.jsonl"):
             try:
-                if p.stat().st_mtime < cutoff:
+                mtime = p.stat().st_mtime
+                if mtime < cutoff or mtime >= until:
                     continue
                 lines = p.read_text(encoding="utf-8").splitlines()
             except Exception:
