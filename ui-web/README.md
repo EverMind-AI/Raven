@@ -96,10 +96,9 @@ The page checks read `dist/`, so build before running them. The two boot
 snapshots run on their own, from `build.py`. The last two also run as gates
 under `npm test`, so the inner loop covers them.
 
-`make lint-ui` at the repo root is `gen:check` plus `type-check`; the line the
-maintainer has yet to add to that target is `npm run lint --prefix ui-web`,
-between the two, matching the order `lint-tui` uses. The `Makefile` is outside
-this directory, which is why it is a note here rather than a change.
+`make lint-ui` at the repo root is `gen:check`, `npm run lint` and `type-check`
+in that order, matching `lint-tui`; the ui job in `.github/workflows/ci.yml`
+runs the same three and then `npm test`.
 
 ## Gates
 
