@@ -4,17 +4,16 @@
  * Two steps of the `--z` ladder in src/styles/page.css are deliberate ties --
  * `--z-shade` with `--z-tip` at 90, and `--z-picker` with the inline 46 the two
  * composer popovers set -- so for those four elements the DOM order at the body
- * IS the whole of the stacking decision. It used to be an accident of who ran
- * first: the scrollbar layer was appended by its own install(), the model
- * picker's wrapper and #deskHost by src/main.tsx, the tooltip layer by the
- * legacy chrome, and nothing said they had to land in that order.
+ * IS the whole of the stacking decision. Left to the appending code, that order
+ * would be an accident of which module ran first, and nothing would say the
+ * four had to land in the order the stylesheet assumes.
  *
  * The order is declared here instead, once, and `host` is what hands out the
  * four boot-time layers: made on first ask, appended in the order of this
  * table rather than the order of the asking. The tie at 90 reads backwards from
  * what page.css's comment intends -- the shade covers the tooltip, because
  * .tipp is appended at boot and .upshade only when an upgrade starts -- and
- * what stage C reproduces is the measurement, not the intent.
+ * this table reproduces the measurement, not the intent.
  *
  * Three kinds are distinguished, because each breaks differently:
  *   static   -- at the body from the page root's first commit, and the writer
@@ -24,9 +23,19 @@
  *   append   -- created at runtime and appended to the body.
  */
 
+import { PAGES } from './pages'
+
 export interface Portal {
-  /** What the element is called; a CSS selector where it has one to itself. */
-  readonly selector: string
+  /** What the element is called, and the table's key: unique across the
+   *  thirteen. */
+  readonly id: string
+  /** The selector that finds it, for the eleven that have one to themselves.
+   *  The other two are named only: the model picker's wrapper carries neither
+   *  id nor class (`make` below says why), and `bootErrorBar` is a row of the
+   *  design's table that nothing in src/ builds. Anything looking these up in
+   *  the document has to skip the two without a selector rather than take two
+   *  nulls it cannot tell from a missing element. */
+  readonly selector?: string
   readonly kind: 'static' | 'reparent' | 'append'
   /** The `--z` token it takes, or the literal an inline style sets. */
   readonly z: string
@@ -38,39 +47,18 @@ export interface Portal {
   readonly bootKey?: string
 }
 
-/* The thirteen, in the order the design's portal table lists them. */
-export const PORTALS: readonly Portal[] = [
-  { selector: '.sbars', kind: 'append', z: '--z-scrollbars', at: 18, bootKey: 'div.sbars' },
-  { selector: 'pickHost', kind: 'append', z: '--z-picker', at: 19, bootKey: 'div' },
-  { selector: '#deskHost', kind: 'append', z: '--z-desk', at: 20, bootKey: 'div#deskHost' },
-  { selector: '.tipp', kind: 'append', z: '--z-tip', at: 21, bootKey: 'div.tipp' },
-  { selector: '#permPop', kind: 'reparent', z: '46', at: 'last' },
-  { selector: '#tierPop', kind: 'reparent', z: '46', at: 'last' },
-  { selector: 'button.lightbox', kind: 'append', z: '--z-lightbox', at: 'last' },
-  { selector: '.upshade', kind: 'append', z: '--z-shade', at: 'last' },
-  { selector: '.topfail', kind: 'append', z: '--z-failbar', at: 'last' },
-  { selector: 'bootErrorBar', kind: 'append', z: '99', at: 'last' },
-  { selector: 'input[type=file]', kind: 'append', z: '', at: 'last' },
-  { selector: '#menu', kind: 'static', z: '--z-menu', at: 16, bootKey: 'div#menu' },
-  { selector: '#toasts', kind: 'static', z: '--z-toast', at: 17, bootKey: 'div#toasts' },
-]
-
 /* The body's standing order after boot, as the goldens record it: seventeen
    static regions (#splash and #noJs are removed before the snapshot is taken)
    then the four appended while the page installs itself. Keyed by tag plus id,
    or tag plus classes when there is no id -- the model picker's wrapper has
-   neither, which is why one entry is a bare `div`. */
+   neither, which is why one entry is a bare `div`. The seven module pages are
+   the table in state/pages.ts, in its order, because that IS the order they
+   are rendered in (src/App.tsx). */
 export const BOOT_BODY_ORDER = [
   'div#onb',
   'div.app',
   'button#railShow',
-  'section#capsPage',
-  'section#xaPage',
-  'section#connPage',
-  'section#memPage',
-  'section#pbPage',
-  'section#kbPage',
-  'section#cronPage',
+  ...PAGES.map((page) => `section#${page.id}`),
   'div#jobVeil',
   'aside#detail',
   'div#setVeil',
@@ -82,7 +70,29 @@ export const BOOT_BODY_ORDER = [
   'div',
   'div#deskHost',
   'div.tipp',
-] as const
+]
+
+/* Where a boot-time layer stands among the body's children, read off the order
+   above rather than written down: one insertion into a page list used to
+   invalidate six absolute indices in this file and three more in its tests. */
+const at = (bootKey: string): number => BOOT_BODY_ORDER.indexOf(bootKey) + 1
+
+/* The thirteen, in the order the design's portal table lists them. */
+export const PORTALS: readonly Portal[] = [
+  { id: '.sbars', selector: '.sbars', kind: 'append', z: '--z-scrollbars', at: at('div.sbars'), bootKey: 'div.sbars' },
+  { id: 'pickHost', kind: 'append', z: '--z-picker', at: at('div'), bootKey: 'div' },
+  { id: '#deskHost', selector: '#deskHost', kind: 'append', z: '--z-desk', at: at('div#deskHost'), bootKey: 'div#deskHost' },
+  { id: '.tipp', selector: '.tipp', kind: 'append', z: '--z-tip', at: at('div.tipp'), bootKey: 'div.tipp' },
+  { id: '#permPop', selector: '#permPop', kind: 'reparent', z: '46', at: 'last' },
+  { id: '#tierPop', selector: '#tierPop', kind: 'reparent', z: '46', at: 'last' },
+  { id: 'button.lightbox', selector: 'button.lightbox', kind: 'append', z: '--z-lightbox', at: 'last' },
+  { id: '.upshade', selector: '.upshade', kind: 'append', z: '--z-shade', at: 'last' },
+  { id: '.topfail', selector: '.topfail', kind: 'append', z: '--z-failbar', at: 'last' },
+  { id: 'bootErrorBar', kind: 'append', z: '99', at: 'last' },
+  { id: 'input[type=file]', selector: 'input[type=file]', kind: 'append', z: '', at: 'last' },
+  { id: '#menu', selector: '#menu', kind: 'static', z: '--z-menu', at: at('div#menu'), bootKey: 'div#menu' },
+  { id: '#toasts', selector: '#toasts', kind: 'static', z: '--z-toast', at: at('div#toasts'), bootKey: 'div#toasts' },
+]
 
 /** The four layers this module hands out, in the order they belong at the body. */
 export const LAYERS = ['sbars', 'picker', 'desk', 'tip'] as const

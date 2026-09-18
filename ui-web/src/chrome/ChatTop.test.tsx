@@ -12,13 +12,12 @@
  * The banner's two shapes are pinned where they were before they became a
  * component (src/state/banner.test.ts, ten cases, unchanged).
  */
+// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
+import { readFileSync } from 'node:fs'
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
-import { readFileSync } from 'node:fs'
-
-import { islands } from '../features/registry'
+import * as rail from '../features/rail/store'
 import * as lang from '../state/lang'
 import { mountPageRoot } from '../test/pageRoot'
 
@@ -28,7 +27,7 @@ import { mountPageRoot } from '../test/pageRoot'
 /* The one verb the header calls, kept as a counter: renaming is the rail
    island's, and this file answers for the button rather than for the rename. */
 const renames = { n: 0 }
-vi.spyOn(islands.rail, 'rename').mockImplementation(() => {
+vi.spyOn(rail, 'rename').mockImplementation(() => {
   renames.n += 1
 })
 
@@ -53,7 +52,7 @@ const source = (rel: string): string => readFileSync(`src/${rel}`, 'utf8') as st
    answer, so a case reached with English already applied would pass for a
    component that draws its text from the catalogue too. */
 const flip = (): void => {
-  const next = lang.get() === 'en' ? 'zh' : 'en'
+  const next = lang.get().lang === 'en' ? 'zh' : 'en'
   act(() => {
     lang.set(next)
   })

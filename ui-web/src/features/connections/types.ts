@@ -35,12 +35,12 @@ export interface ConnQr {
   connected: boolean
 }
 
-/* The DS.conn contract both the offline fixture library and the rpc
+/* The DS.connections contract both the offline fixture library and the rpc
    source (live layer) implement. The island only ever talks to this.
    `rows(true)` is the page-open fetch: the rpc source reserves its
    gateway-not-running warning for that one call. `qr` resolving null means
    "nothing to show yet"; the island keeps polling while the dialog is up. */
-export interface ConnSource {
+export interface ConnectionsSource {
   rows(initial?: boolean): Promise<ConnChannel[]>
   /* Whether anything is running that could host a channel adapter at all --
      the gateway lock, read after the last `rows`. A page-level fact, not a

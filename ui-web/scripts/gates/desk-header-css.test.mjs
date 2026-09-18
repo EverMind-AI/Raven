@@ -12,21 +12,9 @@
  * only place this invariant is written down is the stylesheet.
  */
 
-import { readFileSync } from 'node:fs'
-
 import { describe, expect, it } from 'vitest'
 
-const css = readFileSync(new URL('../../src/styles/page.css', import.meta.url), 'utf8')
-
-/* One rule's declarations, by exact selector, with comments stripped first --
-   what sits between two rules is captured as the next one's selector. */
-function rule(selector) {
-  const rules = css.replace(/\/\*[\s\S]*?\*\//g, ' ')
-  for (const match of rules.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    if (match[1].trim() === selector) return match[2]
-  }
-  return null
-}
+import { rule } from './css.mjs'
 
 describe('the pane header controls', () => {
   it('centres whatever a header button contains', () => {

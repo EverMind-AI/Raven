@@ -5,16 +5,17 @@ import { CardSkeleton } from '../../components/Skeleton'
 import { t } from '../../i18n/t'
 import { text as reachText } from '../../lib/reach'
 import * as detail from '../../state/detail'
+import * as lang from '../../state/lang'
+import { startTaskWith } from '../composer/startTaskWith'
 import * as store from './store'
 
 import type { SkillsState } from './store'
 import type { HubItem } from './types'
 import type { JSX } from 'react'
-import { useInTask } from '../composer/useInTask'
 
 /* The skill tab mirrors the plugin tab exactly: the market IS the page,
    what you already have lives one level in (the installed button top-right
-   is legacy chrome, back arrow to return), a category chip row filters,
+   is the capabilities page's, back arrow to return), a category chip row filters,
    and every card opens the shared detail drawer. */
 const HUB_CATS: Array<[string, string]> = [
   ['', 'gui.hubcat.all'],
@@ -172,7 +173,7 @@ function HubCard({ it, busy }: { it: HubItem; busy: string | null }): JSX.Elemen
               onClick={(e) => {
                 // Two hit zones: the button installs right away, the card opens the sheet.
                 e.stopPropagation()
-                store.install(it)
+                store.installSkill(it)
               }}
             >
               {t('gui.hub.install')}
@@ -303,7 +304,7 @@ function SkillInstalled(): JSX.Element {
                     className="mini gold"
                     onClick={(e) => {
                       e.stopPropagation()
-                      useInTask('gui.hub.use_prompt', c.name)
+                      startTaskWith('gui.hub.use_prompt', c.name)
                     }}
                   >
                     {t('gui.hub.use')}
@@ -364,11 +365,11 @@ function SkillDetail({ s, drawer }: { s: SkillsState; drawer: NonNullable<Skills
         {busy ? (
           <span className="pnote">{t('gui.hub.working')}</span>
         ) : installed ? (
-          <button className="mini gold" onClick={() => useInTask('gui.hub.use_prompt', name)}>
+          <button className="mini gold" onClick={() => startTaskWith('gui.hub.use_prompt', name)}>
             {t('gui.hub.use')}
           </button>
         ) : (
-          <button className="mini gold" onClick={() => store.install(it ?? { id: hubId, name })}>
+          <button className="mini gold" onClick={() => store.installSkill(it ?? { id: hubId, name })}>
             {t('gui.hub.install')}
           </button>
         )}
@@ -465,7 +466,10 @@ function SkillDetail({ s, drawer }: { s: SkillsState; drawer: NonNullable<Skills
 }
 
 export function SkillsApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The language the page resolved, so a pick repaints this island: every word
+     below is a t(key) read at render time (state/lang/store.ts). */
+  useSyncExternalStore(lang.subscribe, lang.get)
   return (
     <>
       {s.view === 'installed' ? <SkillInstalled /> : <SkillMarket s={s} />}

@@ -15,7 +15,7 @@ import { describe, expect, it } from 'vitest'
 
 import { fakeGateway, loadPart } from '../module-harness.mjs'
 
-/* `sources.agents.instanceSend` as the page installs it, with the real `mediaOf`
+/* `sources.subagents.instanceSend` as the page installs it, with the real `mediaOf`
    and the real note text behind it -- the note is what splits the message. */
 async function sender(calls) {
   const wiring = await loadPart(() => import('../../src/app/install'), {
@@ -26,8 +26,8 @@ async function sender(calls) {
   /* The two seam objects the chrome builds, which this case does not install. */
   setSources({ composer: {}, transcript: {} })
   wiring.installSources()
-  if (!sources.agents?.instanceSend) throw new Error('instanceSend is absent from the page wiring')
-  return sources.agents.instanceSend
+  if (!sources.subagents?.instanceSend) throw new Error('instanceSend is absent from the page wiring')
+  return sources.subagents.instanceSend
 }
 
 const { I18N } = await import('../../src/i18n/t')

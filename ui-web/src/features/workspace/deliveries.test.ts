@@ -4,9 +4,9 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { setCurrent } from '../../lib/session'
+import { resetSources, setSources } from '../../state/sources'
 import * as deliveries from './deliveries'
 import * as workspace from './store'
-import { resetSources, setSources } from '../../state/sources'
 
 import type { WorkspaceSource } from './types'
 

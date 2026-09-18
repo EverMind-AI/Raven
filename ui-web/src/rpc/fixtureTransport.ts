@@ -1,3 +1,5 @@
+import { RpcError } from './transport'
+
 import type { ParamsOf, ResultOf, RpcMethod } from './generated'
 import type { PushMethod } from './notifications'
 import type {
@@ -9,9 +11,31 @@ import type {
   StateListener,
 } from './transport'
 
-import { RpcError } from './transport'
+/**
+ * A contract answer as a gateway really sends it: a field the contract leaves
+ * optional may carry `null`, which is the wire saying nothing.
+ *
+ * The contract says so in prose where its schemas cannot -- a playbook node's
+ * `skills` is three-state ("null means the author said nothing"), and a cron
+ * job with no next fire sends `next_run_at_ms: null`
+ * (raven/rpc/methods/console.py) against a schema that types the field as an
+ * integer. So a responder answering exactly what the server answers could not
+ * be held to the generated type as generated, and seven of them were built
+ * behind an `as` instead -- which switches off the whole check, required fields
+ * and enums included, for the sake of one optional field.
+ *
+ * This widens only that: required fields, enums and nested shapes are held
+ * exactly, and a required field a fixture omits is a compile error again.
+ * scripts/gates/fixture-shape.test.mjs reads a null on an optional field as an
+ * absence for the same reason.
+ */
+export type Wire<T> =
+  T extends readonly (infer E)[] ? Array<Wire<E>>
+    : T extends object ? { [K in keyof T]: undefined extends T[K] ? Wire<T[K]> | null : Wire<T[K]> }
+      : T
 
-type Responder<M extends RpcMethod> = ResultOf<M> | ((params: ParamsOf<M>) => ResultOf<M> | Promise<ResultOf<M>>)
+type Responder<M extends RpcMethod> =
+  Wire<ResultOf<M>> | ((params: ParamsOf<M>) => Wire<ResultOf<M>> | Promise<Wire<ResultOf<M>>>)
 
 export type Fixtures = { [M in RpcMethod]?: Responder<M> }
 

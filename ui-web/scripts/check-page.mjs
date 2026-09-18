@@ -24,8 +24,7 @@ const fail = (msg) => { console.error(`check-page: ${msg}`); process.exit(1) }
 const count = (re) => (html.match(re) ?? []).length
 if (count(/<style>/g) !== 1 || count(/<\/style>/g) !== 1) fail('expected exactly one <style> block')
 // Two, in load order: the asset digest hangs __ASSETV on window before any
-// icon helper reads it, then the bundle -- which now carries the legacy page
-// script too, as ES modules Vite bundles in. Still a fixed count -- an
+// icon helper reads it, then the bundle Vite writes. Still a fixed count -- an
 // unexpected third block is as wrong as zero -- and still all inline (no src=
 // anywhere) so the one-file contract holds. Tags are matched at line start
 // only: the bundle legitimately carries the string `<script>` inside a

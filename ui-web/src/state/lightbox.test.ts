@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { close, isOpen, open } from './lightbox'
-import { mountPageRoot } from '../test/pageRoot'
 import { resetTranslator, setTranslator } from '../i18n/t'
-import * as pageStore from './page'
+import { mountPageRoot } from '../test/pageRoot'
 import * as confirmStore from './confirm'
+import { close, isOpen, open } from './lightbox'
+import * as pageStore from './page'
 
 
 /* The overlay is drawn by src/chrome/Lightbox.tsx, so the page's own root has

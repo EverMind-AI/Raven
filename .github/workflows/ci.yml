@@ -438,9 +438,10 @@ jobs:
       # generated.ts is committed; a schema edit without regeneration is the
       # drift this catches. Then the transport layer compiles against it and
       # the fixture transport's behaviour is pinned by vitest.
-      - name: Check contract, types, and tests
+      - name: Check contract, lint, types, and tests
         run: |
           npm run gen:check
+          npm run lint
           npm run type-check
           npm test
         working-directory: ui-web

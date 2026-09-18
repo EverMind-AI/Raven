@@ -3,9 +3,9 @@
    list and the key form; this module only knows how to speak model.* and
    setup.status over /rpc. */
 
-import type { OnboardSource } from './types'
-
 import { gateway } from '../../rpc/gateway'
+
+import type { OnboardSource } from './types'
 
 export const onboardSource: OnboardSource = {
   options: () => gateway().call('model.options', {}),

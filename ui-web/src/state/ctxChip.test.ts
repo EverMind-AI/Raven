@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { _resetForTests, draw, set } from './ctxChip'
-import { mountPageRoot } from '../test/pageRoot'
 import { resetTranslator, setTranslator } from '../i18n/t'
+import { mountPageRoot } from '../test/pageRoot'
 import * as confirmStore from './confirm'
+import { _resetForTests, draw, set } from './ctxChip'
 import * as pageStore from './page'
 
 

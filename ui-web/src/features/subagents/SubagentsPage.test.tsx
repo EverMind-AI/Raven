@@ -3,7 +3,15 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useSyncExternalStore } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { setTranslator } from '../../i18n/t'
+import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import { resetSources, setSources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import { installWsPane } from '../../test/wsPaneHarness'
 import * as mount_ from './mount'
+import * as store from './store'
 import {
   AgentList,
   AgentRecordConversation,
@@ -11,35 +19,35 @@ import {
   InstanceRowView,
   orderAgentGroups,
   SubagentsApp,
-} from './SubagentsPage'
-import * as store from './store'
-import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
+} from './SubagentsPage';
 
-import { domSnapshot } from '../../test/domSnapshot'
-import { islands } from '../registry'
-import { resetSources, setSources, sources } from '../../state/sources'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as confirmStore from '../../state/confirm'
-import { installWsPanel } from '../../test/wsPanelHarness'
-import * as pageStore from '../../state/page'
-import type { JSX } from 'react'
 import type { ComposerSource } from '../composer/types'
-import type { AgentCtx, AgentRow, AgentsSource, DirectTurn, InstanceRow, SubagentRow } from './types'
+import type { AgentCtx, AgentRow, DirectTurn, InstanceRow, SubagentRow, SubagentsSource } from './types'
+import type { JSX } from 'react'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const paints: Array<{ ctx: unknown; opts?: { key?: string; empty?: string; reset?: boolean } }> = []
 
+/* Where a pane opened from this panel goes, handed in the way src/main.tsx
+   hands it in: the desk imports this store back, so the store takes its opener
+   rather than importing the desk (features/subagents/store.ts's setAgentPane).
+   The two verbs are spied on per case. */
+const deskPane = {
+  openAgent: (_row: InstanceRow, _recordId?: string | null): void => {},
+  openAgentRecord: (_row: AgentRow): void => {},
+}
+store.setAgentPane(deskPane)
+
 /* The island runs against the same two seams production wires up: a stand-in
    translator on setTranslator (it returns its key) and a source on
-   sources.agents -- the fixture shape for offline behaviour, list/context/node
+   sources.subagents -- the fixture shape for offline behaviour, list/context/node
    for live behaviour. */
-function wire(source: AgentsSource): void {
+function wire(source: SubagentsSource): void {
   paints.length = 0
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
-  installWsPanel({ view: () => ({ tab: 'agents', open: true, picked: true }) })
+  installWsPane({ view: () => ({ tab: 'agents', open: true, picked: true }) })
   vi.spyOn(pageStore, 'show').mockImplementation(() => {})
   vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   sessionReset()
@@ -48,13 +56,13 @@ function wire(source: AgentsSource): void {
     paints.push({ ctx, opts })
     box.appendChild(document.createElement('p'))
   }
-  setSources({ agents: source })
+  setSources({ subagents: source })
   document.body.innerHTML =
     '<span id="wsAgentRun" hidden></span><div class="ws-body" id="wsBody" data-view="agents"></div>'
 }
 
-function rows(items: AgentRow[], over: Partial<AgentsSource> = {}): AgentsSource {
-  const source: AgentsSource = { list: async () => items, ...over }
+function rows(items: AgentRow[], over: Partial<SubagentsSource> = {}): SubagentsSource {
+  const source: SubagentsSource = { list: async () => items, ...over }
   wire(source)
   return source
 }
@@ -68,8 +76,8 @@ function inst(over: Partial<InstanceRow> & { handle: string }): InstanceRow {
 
 /* The panel drawing instances rather than runs: `list` still answers, because a
    run detail opened from the conversation reads its header off that list. */
-function instances(items: InstanceRow[], over: Partial<AgentsSource> = {}): AgentsSource {
-  const source: AgentsSource = { list: async () => [], instances: async () => items, ...over }
+function instances(items: InstanceRow[], over: Partial<SubagentsSource> = {}): SubagentsSource {
+  const source: SubagentsSource = { list: async () => [], instances: async () => items, ...over }
   wire(source)
   return source
 }
@@ -88,7 +96,7 @@ async function mount() {
    component -- the standalone panel draws one flat list of instances and has no
    agent headings for a button to sit beside. */
 function Grouped({ onOpen }: { onOpen?: (row: InstanceRow) => void }): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
   return <AgentList s={s} onOpen={onOpen} compact />
 }
 
@@ -119,7 +127,7 @@ afterEach(() => {
 
 describe('subagents island, the list', () => {
   it('routes an existing instance opener into the floating workspace', () => {
-    const openAgent = vi.spyOn(islands.workspace, 'openAgent').mockImplementation(() => {})
+    const openAgent = vi.spyOn(deskPane, 'openAgent').mockImplementation(() => {})
     const row = inst({ handle: 'resume-me', resumable: true })
     store.openInstance(row)
     /* Second argument is the record this promotion replaces; a row opened
@@ -127,11 +135,11 @@ describe('subagents island, the list', () => {
     expect(openAgent).toHaveBeenCalledWith(row, null)
     /* And records WHAT it opened. Leaving `open` on the node it was promoted
        from is what made the promotion below fire again on every heartbeat. */
-    expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'resume-me' })
+    expect(store.get().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'resume-me' })
   })
 
   it('routes a legacy run detail into a workspace record pane', () => {
-    const openAgentRecord = vi.spyOn(islands.workspace, 'openAgentRecord').mockImplementation(() => {})
+    const openAgentRecord = vi.spyOn(deskPane, 'openAgentRecord').mockImplementation(() => {})
     const row: AgentRow = { id: 'spawn-1', kind: 'spawn', label: 'legacy task' }
     store.openRow(row)
     expect(openAgentRecord).toHaveBeenCalledWith(row)
@@ -280,7 +288,7 @@ describe('subagents island, the list', () => {
 
   /* One roster of four, so a single mount can say which agents get the button
      and which do not. `hermes` is the only one that can hold a direct chat. */
-  function startable(over: Partial<AgentsSource> = {}): AgentsSource {
+  function startable(over: Partial<SubagentsSource> = {}): SubagentsSource {
     const roster = [
       { name: 'hermes', enabled: true, stateful: true },
       { name: 'mute', enabled: true, stateful: false },
@@ -330,7 +338,7 @@ describe('subagents island, the list', () => {
     })
     await mountGrouped()
     await screen.findByText('hermes')
-    expect(store.getState().instances.map((r) => r.handle)).toEqual(['one', 'two'])
+    expect(store.get().instances.map((r) => r.handle)).toEqual(['one', 'two'])
     const button = retireIn('hermes')!
     /* The warning the standalone row already carries, not a second wording:
        this drops an ACP agent's own session too, and the reader is owed that
@@ -343,8 +351,8 @@ describe('subagents island, the list', () => {
     expect(forgotten).toEqual([['hermes', 'one']])
     /* Gone from the list, and the row did NOT open -- dismissing a row must not
        also be a click on it. */
-    expect(store.getState().instances.map((r) => r.handle)).toEqual(['two'])
-    expect(store.getState().open).toBeNull()
+    expect(store.get().instances.map((r) => r.handle)).toEqual(['two'])
+    expect(store.get().open).toBeNull()
   })
 
   it('lets the keyboard reach the retire control instead of opening the row', async () => {
@@ -361,12 +369,12 @@ describe('subagents island, the list', () => {
        exactly what takes the button's activation away. */
     const survived = fireEvent.keyDown(button, { key: 'Enter' })
     expect(survived).toBe(true)
-    expect(store.getState().open).toBeNull()
+    expect(store.get().open).toBeNull()
     /* The positive half, or the case above is satisfied by a row that responds
        to no keys at all: the ROW's own Enter still opens it. */
     const row = button.closest('.sarow') as HTMLElement
     expect(fireEvent.keyDown(row, { key: 'Enter' })).toBe(false)
-    expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'one' })
+    expect(store.get().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'one' })
   })
 
   it('lets the keyboard reach the standalone row Remove button too', async () => {
@@ -379,10 +387,10 @@ describe('subagents island, the list', () => {
     await screen.findByText('one')
     const button = document.querySelector<HTMLButtonElement>('.sarow .mini.ghost')!
     expect(fireEvent.keyDown(button, { key: 'Enter' })).toBe(true)
-    expect(store.getState().open).toBeNull()
+    expect(store.get().open).toBeNull()
     const row = button.closest('.sarow') as HTMLElement
     expect(fireEvent.keyDown(row, { key: 'Enter' })).toBe(false)
-    expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'one' })
+    expect(store.get().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'one' })
   })
 
   it('offers a new instance only for an agent that can hold a direct chat', async () => {
@@ -427,9 +435,9 @@ describe('subagents island, the list', () => {
     expect(made).toEqual(['made-1'])
     expect(asked).toEqual([['hermes', 'made-1']])
     /* And the reader is inside it, which is the other half of the ask. */
-    expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'fresh' })
-    expect(store.getState().instances.map((r) => r.handle)).toContain('fresh')
-    expect(store.getState().starting).toBeNull()
+    expect(store.get().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'fresh' })
+    expect(store.get().instances.map((r) => r.handle)).toContain('fresh')
+    expect(store.get().starting).toBeNull()
   })
 
   it('keeps the conversation it is already in rather than starting another', async () => {
@@ -481,13 +489,13 @@ describe('subagents island, the list', () => {
     await act(async () => {
       await Promise.resolve()
     })
-    expect(store.getState().startFail).toEqual({
+    expect(store.get().startFail).toEqual({
       agent: 'hermes', why: 'the gateway refused a new session',
     })
     expect(asked).toEqual([])
     /* And the button comes back, rather than being held by a request that is
        over. */
-    expect(store.getState().starting).toBeNull()
+    expect(store.get().starting).toBeNull()
   })
 
   it('offers no button at all where no conversation can be started', async () => {
@@ -538,13 +546,13 @@ describe('subagents island, the list', () => {
     expect(asked).toEqual([['hermes', 's1']])
     /* Both, which is the whole ask: the panel is inside the new instance, and
        the instance is on the list waiting when `back()` leaves it. */
-    expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'fresh' })
-    expect(store.getState().instances.map((r) => r.handle)).toContain('fresh')
+    expect(store.get().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'fresh' })
+    expect(store.get().instances.map((r) => r.handle)).toContain('fresh')
     act(() => {
       store.back()
     })
-    expect(store.getState().open).toBeNull()
-    expect(store.getState().instances.map((r) => r.handle)).toContain('fresh')
+    expect(store.get().open).toBeNull()
+    expect(store.get().instances.map((r) => r.handle)).toContain('fresh')
   })
 
   it('does not open one conversation\'s new instance in another', async () => {
@@ -575,12 +583,12 @@ describe('subagents island, the list', () => {
       await Promise.resolve()
     })
     /* Nothing opened, and nothing was written into the new conversation. */
-    expect(store.getState().open).toBeNull()
-    expect(store.getState().startFail).toBeNull()
-    expect(store.getState().instances.map((r) => r.handle)).not.toContain('fresh')
+    expect(store.get().open).toBeNull()
+    expect(store.get().startFail).toBeNull()
+    expect(store.get().instances.map((r) => r.handle)).not.toContain('fresh')
     /* And the button in the new conversation is usable: a `starting` left set by
        the conversation that has gone would disable it for good. */
-    expect(store.getState().starting).toBeNull()
+    expect(store.get().starting).toBeNull()
   })
 
   it('does not let a settled request release a newer one\'s button', async () => {
@@ -597,7 +605,7 @@ describe('subagents island, the list', () => {
     await act(async () => {
       plusFor('hermes')!.click()
     })
-    expect(store.getState().starting).toBe('hermes')
+    expect(store.get().starting).toBe('hermes')
 
     act(() => {
       store.reset()
@@ -614,7 +622,7 @@ describe('subagents island, the list', () => {
     await act(async () => {
       plusFor('hermes')!.click()
     })
-    expect(store.getState().starting).toBe('hermes')
+    expect(store.get().starting).toBe('hermes')
 
     /* Now the one from the conversation the reader left comes back. */
     await act(async () => {
@@ -622,14 +630,14 @@ describe('subagents island, the list', () => {
       await Promise.resolve()
     })
     /* Still held: the s2 request has not answered. */
-    expect(store.getState().starting).toBe('hermes')
+    expect(store.get().starting).toBe('hermes')
 
     /* And when the successor does answer, it releases its own. */
     await act(async () => {
       gates[1]!(inst({ sessionKey: 's2', handle: 'fresh' }))
       await Promise.resolve()
     })
-    expect(store.getState().starting).toBeNull()
+    expect(store.get().starting).toBeNull()
   })
 
   it('does not carry a refusal into the conversation the reader moved to', async () => {
@@ -653,8 +661,8 @@ describe('subagents island, the list', () => {
       refuse!(new Error('hermes is disabled'))
       await Promise.resolve()
     })
-    expect(store.getState().startFail).toBeNull()
-    expect(store.getState().starting).toBeNull()
+    expect(store.get().startFail).toBeNull()
+    expect(store.get().starting).toBeNull()
   })
 
   it('does not blame the creation for a failure after it', async () => {
@@ -674,10 +682,10 @@ describe('subagents island, the list', () => {
     await act(async () => {
       await Promise.resolve()
     })
-    expect(store.getState().startFail).toBeNull()
-    expect(store.getState().instances.map((r) => r.handle)).toContain('fresh')
+    expect(store.get().startFail).toBeNull()
+    expect(store.get().instances.map((r) => r.handle)).toContain('fresh')
     /* And it is released either way, so the button can be pressed again. */
-    expect(store.getState().starting).toBeNull()
+    expect(store.get().starting).toBeNull()
 
     /* The call still RESOLVES, and resolves true: the start happened. Asserted on
        the promise because the button discards it, and an opener that throws with
@@ -741,9 +749,9 @@ describe('subagents island, the list', () => {
       await Promise.resolve()
     })
     expect(document.querySelector('.agent-newfail')?.textContent).toContain('hermes is stateless')
-    expect(store.getState().open).toBeNull()
+    expect(store.get().open).toBeNull()
     /* Released, not stuck: the button has to take a second try. */
-    expect(store.getState().starting).toBeNull()
+    expect(store.get().starting).toBeNull()
     expect(plusFor('hermes')!.disabled).toBe(false)
   })
 
@@ -837,7 +845,7 @@ describe('subagents island, the detail', () => {
     rows([run], { context: async () => ctx })
     const host = document.getElementById('wsBody')!
     /* Through the mount module, because the remount is what is being tested:
-       drawWs() detaches, wipes the panel body and draws a fresh root. */
+       its draw() detaches, wipes the panel body and draws a fresh root. */
     await act(async () => {
       mount_.draw(host)
     })
@@ -948,7 +956,7 @@ describe('subagents island, an instance detail', () => {
     expect(document.querySelector('.satx .wsempty')).toBeNull()
   })
 
-  async function openInstance(row: InstanceRow, over: Partial<AgentsSource> = {}): Promise<void> {
+  async function openInstance(row: InstanceRow, over: Partial<SubagentsSource> = {}): Promise<void> {
     instances([row], { instanceHistory: async () => ({ turns: [] }), ...over })
     await mount()
     await act(async () => {
@@ -1444,7 +1452,7 @@ describe('subagents island, an instance detail', () => {
   /* Alpha open, of two resumable rows, with `instanceSend` under the test's
      control. The refusal wording is true of one instance and a lie about any
      other, so where it is shown is the whole point. */
-  async function alphaRefusing(send: AgentsSource['instanceSend']): Promise<void> {
+  async function alphaRefusing(send: SubagentsSource['instanceSend']): Promise<void> {
     instances(
       [
         inst({ handle: 'alpha', status: 'running', resumable: true }),
@@ -1686,7 +1694,7 @@ describe('subagents island, an instance detail', () => {
        the summary never reached the record row at all; and the pane's own header
        reads `row.node` before `row.label`, so the id would have won even once
        the summary arrived. */
-    const openAgentRecord = vi.spyOn(islands.workspace, 'openAgentRecord').mockImplementation(() => {})
+    const openAgentRecord = vi.spyOn(deskPane, 'openAgentRecord').mockImplementation(() => {})
     instances([], { instances: async () => [], node: async () => ({ messages: [] }) })
     await act(async () => {
       store.openDagNode('r1', {
@@ -1715,8 +1723,8 @@ describe('subagents island, an instance detail', () => {
 
   it('promotes that node once, not on every heartbeat after it', async () => {
     const row = inst({ handle: 'h-1', status: 'completed', resumable: true, runId: 'r1', nodeId: 'shape' })
-    const openAgent = vi.spyOn(islands.workspace, 'openAgent').mockImplementation(() => {})
-    const openAgentRecord = vi.spyOn(islands.workspace, 'openAgentRecord').mockImplementation(() => {})
+    const openAgent = vi.spyOn(deskPane, 'openAgent').mockImplementation(() => {})
+    const openAgentRecord = vi.spyOn(deskPane, 'openAgentRecord').mockImplementation(() => {})
     instances([], {
       instances: async () => [row],
       instanceHistory: async () => ({ turns: [] }),
@@ -1808,7 +1816,7 @@ describe('subagents island, an instance detail', () => {
           ],
       }),
     })
-    installWsPanel()
+    installWsPane()
 
     render(<InstanceConversation row={row} />, {
       container: document.getElementById('wsBody')!,
@@ -1869,7 +1877,7 @@ describe('subagents island, an instance detail', () => {
           : [{ role: 'assistant', content: 'first' }, { role: 'assistant', content: 'second' }],
       }),
     })
-    installWsPanel()
+    installWsPane()
 
     render(<AgentRecordConversation row={row} />, {
       container: document.getElementById('wsBody')!,
@@ -1975,7 +1983,7 @@ describe('subagents island, what a spawned run opens as', () => {
 
     store.openRow(run({ instance: 'survey-9ab2c6' }))
 
-    expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'survey-9ab2c6' })
+    expect(store.get().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'survey-9ab2c6' })
   })
 
   it('opens the record when the run committed under no handle', async () => {
@@ -1986,7 +1994,7 @@ describe('subagents island, what a spawned run opens as', () => {
 
     store.openRow(run())
 
-    expect(store.getState().open).toEqual({ kind: 'spawn', id: 'call-1' })
+    expect(store.get().open).toEqual({ kind: 'spawn', id: 'call-1' })
   })
 
   it('opens the record when the handle names no row, and swaps when one arrives', async () => {
@@ -1997,13 +2005,13 @@ describe('subagents island, what a spawned run opens as', () => {
 
     store.openRow(run({ instance: 'survey-9ab2c6' }))
     await act(async () => { await Promise.resolve() })
-    expect(store.getState().open).toEqual({ kind: 'spawn', id: 'call-1' })
+    expect(store.get().open).toEqual({ kind: 'spawn', id: 'call-1' })
 
     rows = [inst({ handle: 'survey-9ab2c6', resumable: true })]
     await act(async () => { store.refreshInstances(true); await Promise.resolve() })
     await act(async () => { await Promise.resolve() })
 
-    expect(store.getState().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'survey-9ab2c6' })
+    expect(store.get().open).toEqual({ kind: 'instance', agent: 'hermes', handle: 'survey-9ab2c6' })
   })
 
   it('does not take a handle of the same name under another agent', async () => {
@@ -2014,7 +2022,7 @@ describe('subagents island, what a spawned run opens as', () => {
 
     store.openRow(run({ instance: 'survey-9ab2c6' }))
 
-    expect(store.getState().open).toEqual({ kind: 'spawn', id: 'call-1' })
+    expect(store.get().open).toEqual({ kind: 'spawn', id: 'call-1' })
   })
 
   it("does not take another agent's handle when the list arrives later either", async () => {
@@ -2031,7 +2039,7 @@ describe('subagents island, what a spawned run opens as', () => {
     await act(async () => { store.refreshInstances(true); await Promise.resolve() })
     await act(async () => { await Promise.resolve() })
 
-    expect(store.getState().open).toEqual({ kind: 'spawn', id: 'call-1' })
+    expect(store.get().open).toEqual({ kind: 'spawn', id: 'call-1' })
   })
 
   it('a handle-less spawn stays on its record even after an instance list arrives', async () => {
@@ -2043,19 +2051,19 @@ describe('subagents island, what a spawned run opens as', () => {
       { instanceHistory: async () => ({ turns: [] }) })
 
     store.openRow(run())
-    expect(store.getState().open).toEqual({ kind: 'spawn', id: 'call-1' })
+    expect(store.get().open).toEqual({ kind: 'spawn', id: 'call-1' })
 
     await act(async () => { store.refreshInstances(true); await Promise.resolve() })
     await act(async () => { await Promise.resolve() })
 
-    expect(store.getState().open).toEqual({ kind: 'spawn', id: 'call-1' })
+    expect(store.get().open).toEqual({ kind: 'spawn', id: 'call-1' })
   })
 })
 
 /* The read in flight is shared with whoever asks for the same list while it is
-   still going (lib/resume.ts waits on it to put a window back). Shared state
-   has to be dropped when the conversation changes, or the next one waits on an
-   answer that was thrown away. */
+   still going (state/session/resume.ts waits on it to put a window back).
+   Shared state has to be dropped when the conversation changes, or the next one
+   waits on an answer that was thrown away. */
 describe('the list reads', () => {
   it('hand a second caller the answer the first is waiting for', async () => {
     /* Waiting on the SECOND call alone is the whole point: a caller told
@@ -2075,7 +2083,7 @@ describe('the list reads', () => {
     await second
 
     expect(asks).toBe(1)
-    expect(store.getState().instances.map((row) => row.handle)).toEqual(['h7'])
+    expect(store.get().instances.map((row) => row.handle)).toEqual(['h7'])
   })
 
   it('hand a second caller the run list the first is waiting for', async () => {
@@ -2094,7 +2102,7 @@ describe('the list reads', () => {
     await second
 
     expect(asks).toBe(1)
-    expect(store.getState().rows.map((row) => row.id)).toEqual(['call-1'])
+    expect(store.get().rows.map((row) => row.id)).toEqual(['call-1'])
   })
 
   it('are shared only while they are in flight', async () => {
@@ -2144,7 +2152,7 @@ describe('the list reads', () => {
     await store.refreshInstances(true)
 
     expect(asked).toEqual(['s1', 's2'])
-    expect(store.getState().instances.map((row) => row.handle)).toEqual(['for-s2'])
+    expect(store.get().instances.map((row) => row.handle)).toEqual(['for-s2'])
   })
 
   it('drop the run read when the conversation changes under it', async () => {
@@ -2163,7 +2171,7 @@ describe('the list reads', () => {
     await store.refresh(true)
 
     expect(asked).toEqual(['s1', 's2'])
-    expect(store.getState().rows.map((row) => row.id)).toEqual(['call-s2'])
+    expect(store.get().rows.map((row) => row.id)).toEqual(['call-s2'])
   })
 })
 
@@ -2180,7 +2188,7 @@ describe('the compact roster', () => {
     const { roster: names, instances: live } = roster()
     wire({ list: async () => [] })
     render(
-      <AgentList s={{ ...store.getState(), roster: names, instances: live }} compact />,
+      <AgentList s={{ ...store.get(), roster: names, instances: live }} compact />,
       { container: document.getElementById('wsBody')! },
     )
   }
@@ -2220,7 +2228,7 @@ describe('the compact roster', () => {
     render(
       <AgentList
         s={{
-          ...store.getState(),
+          ...store.get(),
           roster: [
             { name: 'my-claude', preset: 'claude_code' },
             { name: 'claude_code' },
@@ -2247,7 +2255,7 @@ describe('the compact roster', () => {
     render(
       <AgentList
         s={{
-          ...store.getState(),
+          ...store.get(),
           roster: [
             { name: 'raven', builtin: true },
             { name: 'Raven-Code', vendored: true },

@@ -25,23 +25,21 @@ async function turnPart(
         drawMeter: () => {},
         goPaint: () => {},
       },
-      'src/i18n/t': { T: (k: string) => k },
+      'src/i18n/t': { t: (k: string) => k },
       'src/lib/duration': { formatDuration: (ms: number) => `${ms}ms` },
       'src/lib/dom': { $: looseQuery() },
       'src/lib/session': { current: () => 's1' },
       'src/state/ctxChip': { set: () => {} },
       'src/lib/notifications': { show: () => {} },
       'src/state/session/registry': { touch: () => {} },
-    },
-    islands: {
-      transcript: {
+      'src/features/transcript/mount': {
         nudge: () => {},
         stopStream: () => {},
         ...stubs.transcript,
-        down: () => {},
         killStatus: () => {},
       },
-      workspace: { currentTurn: () => 1 },
+      'src/features/transcript/tail': { down: () => {} },
+      'src/features/workspace/store': { currentTurn: () => 1 },
     },
   })
   const runtime = (await import('./runtime')) as Runtime

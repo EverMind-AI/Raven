@@ -2,29 +2,34 @@
  * handful of controls whose action belongs to the session rather than to the
  * chrome that carries them.
  *
- * Every line here was one file of the live layer -- twenty parts whose whole
- * body was an `install()` putting one feature's `source.ts` on the seam. They
- * are four lists now, in the order the manifest ran them, and the order is
- * load-bearing in exactly two places, both marked below.
+ * Four lists, each line putting one feature's `source.ts` on the seam, and the
+ * order is load-bearing in exactly two places, both marked below.
  *
- * Called once, from the boot (app/boot.ts), after the legacy chrome has
- * installed itself. Split into four rather than one so a test can drive the
+ * Called once, from the boot (app/boot.ts's `boot`). Split into four rather
+ * than one so a test can drive the
  * half it is about: the seam touches nothing but `sources`, while the pushes
  * need a transport and the actions need the document.
  */
 
 import { onFrameBytes, onFrameJson, browserSource } from '../features/browser/source'
 import { open as approveSheet } from '../features/composer/approve'
-import { slashHelp, slashName } from '../i18n/t'
 import { connSource } from '../features/connections/source'
+import { closeDialog as closeConnDialog } from '../features/connections/store'
 import { cronSource } from '../features/cron/source'
+import { closeSheet as closeCronSheet } from '../features/cron/store'
+import { extAgentsSource } from '../features/extAgents/source'
+import { capabilitiesSource, extPlugins, loadExt } from '../features/installed/source'
 import { knowledgeSource } from '../features/knowledge/source'
 import { memorySource } from '../features/memory/source'
-import { openModelsForMissingProvider } from '../features/model/source'
+import { modelSource, openModelsForMissingProvider, tierSource } from '../features/model/source'
 import { onboardSource } from '../features/onboard/source'
 import { playbooksSource } from '../features/playbooks/source'
-import { capabilitiesSource, extPlugins, loadExt, pluginsSource, skillsSource } from '../features/plugins/source'
-import { installSessionActions } from '../features/rail/leave'
+import { pluginsSource } from '../features/plugins/source'
+import { onEvent as pluginsEvent } from '../features/plugins/store'
+import { markNew } from '../features/rail/store'
+import { installSessionActions } from '../features/rail/wire'
+import { bannerSource, settingsSource } from '../features/settings/source'
+import { skillsSource } from '../features/skills/source'
 import { agentsSource, startAgentHeartbeat } from '../features/subagents/source'
 import {
   branch, cleanPreview, dagRun, okOf, openDagNode, openDagRun, openSpawn, spawnList, spawnRecord,
@@ -32,24 +37,24 @@ import {
 import {
   proseSource, setHostPlatformReader, setShortener, workspaceSource,
 } from '../features/workspace/source'
-import { xaSource } from '../features/xa/source'
-import { islands } from '../features/registry'
-import { setFault as setMemFault } from '../state/banner'
-import { show as toast } from '../state/toast'
-import { current as sessionCurrent } from '../lib/session'
-import { refusal as uploadRefusal } from '../lib/upload'
-import { installConnectionUI, onReconnect, surface } from './connection'
-import { gateway } from '../rpc/gateway'
-import { reconnect, switchToDraft } from '../state/session/registry'
-import { clarifyRequest, dispatch, installPipeline } from '../state/session/pipeline'
-import { installComposerActions, installSlashActions } from '../state/session/runtime'
-import { sources } from '../state/sources'
-import { showUpNote } from './updates'
-import { T } from '../i18n/t'
+import { shared as workspaceShared } from '../features/workspace/store'
+import { slashHelp, slashName } from '../i18n/t'
+import { t } from '../i18n/t'
 import { $ } from '../lib/dom'
 import { hostPlatform } from '../lib/platform'
+import { current as sessionCurrent } from '../lib/session'
+import { refusal as uploadRefusal } from '../lib/upload'
+import { gateway } from '../rpc/gateway'
+import { setFault as setMemFault } from '../state/banner'
 import * as caps from '../state/caps'
 import * as page from '../state/page'
+import { clarifyRequest, dispatch, installPipeline } from '../state/session/pipeline'
+import { reconnect, switchToDraft } from '../state/session/registry'
+import { installComposerActions, installSlashActions } from '../state/session/runtime'
+import { ds, sources } from '../state/sources'
+import { show as toast } from '../state/toast'
+import { installConnectionUI, onReconnect, surface } from './connection'
+import { showUpNote } from './updates'
 
 import type { ComposerSource } from '../features/composer/types'
 import type { SlashCmd } from '../features/composer/types'
@@ -124,9 +129,19 @@ export function installSources(): void {
   transcript.spawnList = spawnList
   transcript.openSpawn = openSpawn
 
+  /* The four the settings dialog's own wiring used to assign. Here rather than
+     there because this is the page's one assigner, and first in this list
+     because that is where they landed before: settingsChrome.install() runs
+     ahead of boot() (src/main.tsx). */
+  sources.banner = bannerSource
+  sources.settings = settingsSource
+  sources.tier = tierSource
+  sources.model = modelSource
+  composer.beforeSend = openModelsForMissingProvider
+
   sources.capabilities = capabilitiesSource
   sources.cron = cronSource
-  sources.conn = connSource
+  sources.connections = connSource
   sources.skills = skillsSource
   sources.plugins = pluginsSource
   sources.memory = memorySource
@@ -134,13 +149,13 @@ export function installSources(): void {
   sources.playbooks = playbooksSource
   sources.onboard = onboardSource
   sources.browser = browserSource
-  sources.agents = agentsSource
-  sources.xa = xaSource
+  sources.subagents = agentsSource
+  sources.extAgents = extAgentsSource
 
   /* The workspace panel's chrome is still the page's, so the two things its
      source cannot work out for itself are handed over here. */
   setHostPlatformReader(hostPlatform)
-  setShortener((p) => sources.workspace!.shortPath(p))
+  setShortener((p) => ds('workspace').shortPath(p))
   sources.prose = proseSource
   sources.workspace = workspaceSource
 
@@ -154,7 +169,7 @@ export function installSources(): void {
      (features/workspace/record.ts). The transcript counts it the same way over
      the same payload. */
   sources.artifacts = {
-    changes: (turn) => islands.workspace.shared().changes.filter((c) => c.turn === turn),
+    changes: (turn) => workspaceShared().changes.filter((c) => c.turn === turn),
   }
 
   /* Files are uploaded into <workspace>/uploads and handed to the agent as
@@ -195,7 +210,7 @@ function onUpdateAvailable(frame: unknown): void {
    conversation's turn. */
 function onMemoryHealth(frame: unknown): void {
   const p = frame as MemoryHealthParams
-  setMemFault(p && p.ok === false ? (p.error || T('gui.mem.down')) : null)
+  setMemFault(p && p.ok === false ? (p.error || t('gui.mem.down')) : null)
 }
 
 let pmExtSoon: ReturnType<typeof setTimeout> | undefined
@@ -209,10 +224,10 @@ function onMcpStatus(frame: unknown): void {
     // ext.list) -- coalesce the reload; startup syncs fire one event per server.
     clearTimeout(pmExtSoon)
     pmExtSoon = setTimeout(() => loadExt()
-      .then(() => islands.plugins.event({ kind: 'rows' }))
+      .then(() => pluginsEvent({ kind: 'rows' }))
       .catch(() => {}), 250)
   }
-  islands.plugins.event({
+  pluginsEvent({
     kind: 'status', name: p.name, state: p.state, tool_count: p.tool_count, error: p.error ?? undefined,
     auth_url: p.auth_url || null,
   })
@@ -220,7 +235,7 @@ function onMcpStatus(frame: unknown): void {
 
 function onOauthPending(frame: unknown): void {
   const p = frame as OauthPendingParams
-  islands.plugins.event({
+  pluginsEvent({
     kind: 'authPending', server: p.server, url: p.url,
     expires_in: p.expires_in, interactive: p.interactive,
   })
@@ -228,7 +243,7 @@ function onOauthPending(frame: unknown): void {
 
 function onOauthDone(frame: unknown): void {
   const p = frame as OauthDoneParams
-  islands.plugins.event({ kind: 'authDone', server: p.server, ok: !!p.ok, error: p.error })
+  pluginsEvent({ kind: 'authDone', server: p.server, ok: !!p.ok, error: p.error })
 }
 
 /** Every handler the page hangs on the transport, and the one clock it starts. */
@@ -288,6 +303,13 @@ export function installActions(): void {
   installSessionActions()
   /* The slash palette's two session verbs, on the rows the dock declares. */
   installSlashActions()
+  /* What a page switch spends on an island: the rail re-marks itself, and the
+     two overlays a single page owns close behind it. Registered here because
+     state/page.ts does not import features/ -- it declares the three slots and
+     the order they run in (state/page.ts's `show`). */
+  page.onShow('markNav', markNew)
+  page.onShow('closeConnDialog', closeConnDialog)
+  page.onShow('closeCronSheet', closeCronSheet)
 
   $('#newBtn')!.onclick = () => {
     if (openModelsForMissingProvider()) return
@@ -314,7 +336,7 @@ export function installDevHooks(): void {
   /* The approval sheet only appears when an engine asks for one, which is too
      long a loop to design a sheet in (window.__approve('rm -rf build/')). */
   hooks.__approve = (p: unknown) => approveSheet((p as string) || 'rm -rf build/',
-    () => toast(T('gui.confirm.allow')), () => toast(T('gui.confirm.deny')))
+    () => toast(t('gui.confirm.allow')), () => toast(t('gui.confirm.deny')))
 
   // The graph is only reachable by configuring third-party sub-agents and
   // spending a multi-agent run, which is too long a loop to design a layout in.

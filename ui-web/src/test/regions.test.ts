@@ -2,8 +2,8 @@
 /* A golden per top-level region of the page, taken from the markup that ships
  * today.
  *
- * Stage C moved every one of these nineteen regions out of src/page.html and
- * into App.tsx, one PR at a time. The promise was that the DOM does not move:
+ * Every one of these nineteen regions moved out of src/page.html and into
+ * App.tsx, one step at a time. The promise was that the DOM does not move:
  * an element's tag, id, classes, data-* attributes and the order of its children
  * all stay as they are. So the golden was written once, here, off page.html --
  * and each step changed only where the test got the markup from, never the
@@ -19,34 +19,30 @@
  * (scripts/boot-snapshot.mjs) and the body's standing order has another
  * (portals.test.ts).
  */
-import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
-import { flushSync } from 'react-dom'
-import { describe, expect, it } from 'vitest'
-
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { env } from 'node:process'
+import { createElement } from 'react'
+import { flushSync } from 'react-dom'
+import { createRoot } from 'react-dom/client'
+import { describe, expect, it } from 'vitest'
 
 import { App } from '../App'
+import { PAGES } from '../state/pages'
 import { bodySiblings, elementSnapshot } from './domSnapshot'
 
 /* The nineteen regions, in document order, keyed the way their golden files
-   are: by id, or by class for the one region that has no id (`div.app`). */
+   are: by id, or by class for the one region that has no id (`div.app`). The
+   seven module pages are the table that declares them (state/pages.ts), in its
+   order, so a page added there has a golden here rather than none. */
 const REGIONS = [
   'splash',
   'onb',
   'noJs',
   'app',
   'railShow',
-  'capsPage',
-  'xaPage',
-  'connPage',
-  'memPage',
-  'pbPage',
-  'kbPage',
-  'cronPage',
+  ...PAGES.map((page) => page.id),
   'jobVeil',
   'detail',
   'setVeil',
@@ -54,7 +50,7 @@ const REGIONS = [
   'connVeil',
   'menu',
   'toasts',
-] as const
+]
 
 const GOLDEN_DIR = 'src/test/__golden__'
 

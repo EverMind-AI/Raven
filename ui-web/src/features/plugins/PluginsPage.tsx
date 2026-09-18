@@ -1,21 +1,21 @@
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import { t } from '../../i18n/t'
-import { show as toast } from '../../state/toast'
 import { CardSkeleton } from '../../components/Skeleton'
+import { t } from '../../i18n/t'
 import * as detail from '../../state/detail'
+import * as lang from '../../state/lang'
+import { show as toast } from '../../state/toast'
+import { startTaskWith } from '../composer/startTaskWith'
 import * as store from './store'
 
 import type { Contribution, DetailEntry, InstalledRow, MarketItem, McpSnapshot } from './types'
 import type { CSSProperties, JSX } from 'react'
-import { useInTask } from '../composer/useInTask'
 
 /* The plugin tab is market-first: the page IS the catalog, and what you
    already have lives one level in (the installed button top-right, back
-   arrow to return). Both views share the hub grid so they read as the
-   same place. Everything here is a transcription of the legacy renderer
-   the live layer used to carry -- class names and structure unchanged. */
+   arrow to return). Both views share the hub grid so they read as the same
+   place. */
 
 function Tile({ name }: { name: string }): JSX.Element {
   // Stable per-name hue: same plugin, same colour, every render and page.
@@ -32,7 +32,7 @@ const Vfd = (): JSX.Element => (
 )
 
 /* The category catalogue covers the known ids; an unknown one keeps its raw
-   name -- the same fallback the legacy T(key, null, cat) call expressed. */
+   name -- the same fallback the lookup's third argument expresses. */
 function catLabel(cat: string): string {
   const key = 'gui.plug.cat_' + cat
   const label = t(key)
@@ -89,11 +89,14 @@ function ArmButton({
   )
 }
 
-export function PlugApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+export function PluginsApp(): JSX.Element {
+  const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The language the page resolved, so a pick repaints this island: every word
+     below is a t(key) read at render time (state/lang/store.ts). */
+  useSyncExternalStore(lang.subscribe, lang.get)
   return (
     <>
-      {s.view === 'installed' ? <Installed s={s} /> : <Market s={s} />}
+      {s.view === 'installed' ? <Installed /> : <Market s={s} />}
       {s.drawer ? <DrawerHost key={`${s.drawer.kind}:${s.drawer.id}`} drawer={s.drawer} s={s} /> : null}
     </>
   )
@@ -208,7 +211,7 @@ function MarketCard({ it, s }: { it: MarketItem; s: store.PlugState }): JSX.Elem
 
 /* ── installed view ──────────────────────────────────────────────── */
 
-function Installed({ s }: { s: store.PlugState }): JSX.Element {
+function Installed(): JSX.Element {
   // A pending-auth install is not installed yet: it stays a market-side
   // waiting card until its authentication settles.
   const py = store.pyRows()
@@ -319,7 +322,7 @@ function McpCard({ row }: { row: InstalledRow }): JSX.Element | null {
               className="mini gold"
               onClick={(e) => {
                 e.stopPropagation()
-                useInTask('gui.plug.use_prompt', m.name)
+                startTaskWith('gui.plug.use_prompt', m.name)
               }}
             >
               {t('gui.hub.use')}
@@ -445,7 +448,7 @@ function Progress({ s }: { s: store.PlugState }): JSX.Element | null {
               {pg.state === 'done' && (
                 <button
                   className="mini gold"
-                  onClick={() => useInTask('gui.plug.use_prompt', pg.name)}
+                  onClick={() => startTaskWith('gui.plug.use_prompt', pg.name)}
                 >
                   {t('gui.hub.use')}
                 </button>
@@ -603,7 +606,7 @@ function StdioWarn({
           className="mini"
           onClick={() => {
             const form = collect ? collect() : {}
-            if (form) store.install(entry, form)
+            if (form) store.installEntry(entry, form)
           }}
         >
           {t('gui.plug.still_install')}
@@ -678,7 +681,7 @@ function InstallControls({
               className="mini gold"
               onClick={() => {
                 const form = collect()
-                if (form) store.install(entry, form)
+                if (form) store.installEntry(entry, form)
               }}
             >
               {t('gui.plug.connect')}
@@ -711,7 +714,7 @@ function InstallControls({
             store.unfoldConfirm(entry.id)
             return
           }
-          store.install(entry, {})
+          store.installEntry(entry, {})
         }}
       >
         {s.busy === entry.id ? t('gui.hub.working') : t('gui.plug.install')}
@@ -808,7 +811,7 @@ function MarketDetail({ id, s }: { id: string; s: store.PlugState }): JSX.Elemen
             ) : !lm || lm.enabled ? (
               <button
                 className="mini gold"
-                onClick={() => useInTask('gui.plug.use_prompt', entry.name)}
+                onClick={() => startTaskWith('gui.plug.use_prompt', entry.name)}
               >
                 {t('gui.hub.use')}
               </button>
@@ -827,7 +830,7 @@ function MarketDetail({ id, s }: { id: string; s: store.PlugState }): JSX.Elemen
                   store.unfoldConfirm(entry.id)
                   return
                 }
-                store.install(entry, {})
+                store.installEntry(entry, {})
               }}
             >
               {t('gui.plug.install')}
@@ -907,7 +910,7 @@ function InstDetail({ id }: { id: string }): JSX.Element | null {
           ) : m.enabled ? (
             <button
               className="mini gold"
-              onClick={() => useInTask('gui.plug.use_prompt', m.name)}
+              onClick={() => startTaskWith('gui.plug.use_prompt', m.name)}
             >
               {t('gui.hub.use')}
             </button>

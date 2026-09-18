@@ -4,7 +4,6 @@
 // is still being generated used to be 4.95px shorter than its neighbours, and
 // 11.27px shorter while the pointer was on it.
 import { readFileSync } from 'node:fs'
-
 import { describe, expect, it } from 'vitest'
 
 const css = readFileSync(new URL('../../src/styles/page.css', import.meta.url), 'utf8')

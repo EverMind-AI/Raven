@@ -1,24 +1,25 @@
 import { t } from '../../i18n/t'
-import { ds } from '../../state/sources'
 import { formatDuration } from '../../lib/duration'
 import { current as currentSession, onChange as onSessionChange } from '../../lib/session'
+import { ds } from '../../state/sources'
 import { sources } from '../../state/sources'
+import { pane } from '../../state/wsPane'
 import { plainTitle as stripTitle } from '../rail/title'
 import { instanceCtxStatus, toInstanceCtx } from './history'
 
 import type { ComposerSource } from '../composer/types'
-import type { AgentRow, AgentsSource, InstanceCtx, InstanceRow, OpenItem, SubagentRow } from './types'
-import { panel } from '../../state/wsPanel'
+import type { AgentRow, InstanceCtx, InstanceRow, OpenItem, SubagentRow, SubagentsSource } from './types'
 
-/* Page state, outside React on purpose: the legacy shell drives this view
- * imperatively (drawWs mounts and unmounts it per redraw, the dag sheet opens
- * nodes into it, wsReset clears it with the session), so the state lives in a
- * plain store the shims can call and the component subscribes.
+/* View state, outside React on purpose: three of the callers that drive this
+ * view are not React. The workspace pane mounts and unmounts it per repaint
+ * (features/workspace/store.ts's mount), the turn pipeline pushes a
+ * sub-agent's own frames into it (state/session/stages.ts calls `directEvent`)
+ * and the pane drops it with the conversation (state/ws.ts calls `reset`) --
+ * so the state lives in a plain store those three can call and the component
+ * subscribes.
  *
- * This is the legacy AGENTS/agentOpen/dagNode trio (the demo layer's sub-agent
- * part, before the migration) plus the refresh/poll judgements that lived
- * beside it; the fingerprint, the floor and the clock keep their behaviour so
- * the two can be diffed.
+ * The fingerprint, the poll floor and the clock are judgements rather than
+ * state, and they are kept here beside the rows they are about.
  */
 
 export interface AgentsState {
@@ -52,7 +53,7 @@ export interface AgentsState {
   who: string | null
   /* Bumped when the open run's status flips under the reader: remounts the
      detail so the header mark and the transcript land on the final state
-     together -- the island's equivalent of the legacy full drawWs. */
+     together -- the island's own equivalent of the pane's full remount. */
   epoch: number
   tick: number
 }
@@ -71,7 +72,7 @@ const initial: AgentsState = {
 let state: AgentsState = { ...initial }
 const listeners = new Set<() => void>()
 
-export const getState = (): AgentsState => state
+export const get = (): AgentsState => state
 
 export function subscribe(l: () => void): () => void {
   listeners.add(l)
@@ -84,23 +85,22 @@ function set(p: Partial<AgentsState>): void {
   clockSync()
 }
 
-export const source = (): AgentsSource => ds<AgentsSource>('agents')
+export const source = (): SubagentsSource => ds('subagents')
 
 /* Where a pane opened from this panel goes: the floating desk, when the page
-   has one. Handed in (src/features/registry.ts) rather than imported from
-   features/workspace/deskStore, which is what the island bag used to stand in
-   for: the desk imports this store back and subscribes to it as it evaluates,
-   so an import in this direction would run that subscription against a
-   half-built module. Null on a page with no desk wired, which is every test
-   that does not ask for one. */
+   has one. Handed in (src/main.tsx) rather than imported from
+   features/desk/store: the desk imports this store back and
+   subscribes to it as it evaluates, so an import in this direction would run
+   that subscription against a half-built module. Null on a page with no desk
+   wired, which is every test that does not ask for one. */
 interface AgentPane {
   openAgent(row: InstanceRow, recordId?: string | null): void
   openAgentRecord(row: AgentRow): void
 }
-let pane: AgentPane | null = null
+let deskPane: AgentPane | null = null
 
 export function setAgentPane(p: AgentPane): void {
-  pane = p
+  deskPane = p
 }
 
 export const absent = (): boolean => {
@@ -160,8 +160,9 @@ export const plainTitle = stripTitle
    the reader is in, and whether anything changed enough to repaint. */
 /* The read in flight, not a flag saying there is one: a caller that has to
    know when the list has answered -- restoring a window the reader had open
-   (lib/resume.ts) -- can only wait on the same read the panel is already
-   doing. Held rather than started again, so two callers share one answer. */
+   (state/session/resume.ts) -- can only wait on the same read the panel is
+   already doing. Held rather than started again, so two callers share one
+   answer. */
 let flight: Promise<void> | null = null
 let at = 0
 /* One fingerprint per drawn list, keyed by conversation as well as content,
@@ -183,7 +184,7 @@ const sessionKey = (): string => currentSession() || ''
    promotion with two callers is the point. */
 function conversationStarter(): ComposerSource['startConversation'] {
   try {
-    return ds<ComposerSource>('composer').startConversation
+    return ds('composer').startConversation
   } catch {
     return undefined
   }
@@ -348,7 +349,7 @@ export function openInstance(it: InstanceRow, recordId?: string | null): void {
   stageFresh = true
   paintedStatus = null
   set({ open: { kind: 'instance', agent: it.agent, handle: it.handle }, who: it.agent, epoch: state.epoch + 1 })
-  const workspace = pane
+  const workspace = deskPane
   /* The record this promotion is replacing, when it is a spawn's: the desk can
      derive a graph node's record id from the row, but a spawn's is the call id
      and the row does not carry one. Left off and the record pane stays open
@@ -717,7 +718,7 @@ export function openRow(it: AgentRow): void {
        promotion above swaps in the instance view when one turns up. */
     if (it.instance) refreshInstances(true)
   }
-  pane?.openAgentRecord(it)
+  deskPane?.openAgentRecord(it)
 }
 
 /* The dag sheet opens its nodes here (the sheet stays the map, this panel is
@@ -746,7 +747,7 @@ export function openDagNode(
      id stays the fallback: a run old enough to have no summary still has one. */
   const label = n.summary || n.id
   set({ open: { kind: 'dag', run_id: runId, node: n.id, agent: n.subagent, label }, who: null })
-  pane?.openAgentRecord({ kind: 'dag', run_id: runId, node: n.id, agent: n.subagent, label })
+  deskPane?.openAgentRecord({ kind: 'dag', run_id: runId, node: n.id, agent: n.subagent, label })
   /* Opened before this panel had ever asked for its rows: ask now, and the
      refresh promotes this to the instance view if a row turns up. */
   refreshInstances(true)
@@ -770,11 +771,12 @@ let stageEl: HTMLElement | null = null
 export function setStage(el: HTMLElement | null): void {
   stageEl = el
   /* A box arriving is the thing that makes the next paint a fresh one, and it
-     is not the same event as the island deciding to start over. `drawWs()`
-     wipes the panel body and mounts a new root on every draw, so a reopened
-     panel hands over an empty box while the open record has not changed at
-     all -- and a paint that believes it is a continuation appends the slice
-     it already drew, which is nothing, into a box with nothing in it. */
+     is not the same event as the island deciding to start over. The pane's
+     mount wipes #wsBody and makes a new root on every repaint
+     (features/workspace/store.ts), so a reopened pane hands over an empty box
+     while the open record has not changed at all -- and a paint that believes
+     it is a continuation appends the slice it already drew, which is nothing,
+     into a box with nothing in it. */
   if (el) stageFresh = true
 }
 
@@ -1017,7 +1019,7 @@ export function paintAgentRecord(box: HTMLElement, row: AgentRow): void {
    flight has to move without being reopened, and its header has to change
    the moment the run does -- a detail page still saying "working" over a run
    the list already knows failed is the panel lying. */
-let hooked: AgentsSource | null = null
+let hooked: SubagentsSource | null = null
 const detailPollListeners = new Set<() => void>()
 
 export function subscribeDetailPoll(listener: () => void): () => void {
@@ -1027,7 +1029,7 @@ export function subscribeDetailPoll(listener: () => void): () => void {
 }
 
 export function hook(): void {
-  const src = sources.agents
+  const src = sources.subagents
   if (!src || !src.watch || src === hooked) return
   hooked = src
   src.watch(onPoll)
@@ -1035,7 +1037,7 @@ export function hook(): void {
 
 function onPoll(): void {
   detailPollListeners.forEach((listener) => listener())
-  const shown = panel().view()
+  const shown = pane().view()
   if (!(shown.open && shown.tab === 'agents')) {
     if (detailPollListeners.size) {
       refresh(true)

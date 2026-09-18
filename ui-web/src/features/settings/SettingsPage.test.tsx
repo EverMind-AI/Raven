@@ -2,19 +2,18 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { SettingsApp } from './SettingsPage'
-import * as store from './store'
-import * as lookStore from '../../state/look'
+import { setTranslator } from '../../i18n/t'
 import * as notifications from '../../lib/notifications'
-
-import { domSnapshot } from '../../test/domSnapshot'
-import { resetSources, setSources, sources } from '../../state/sources'
-import { mountPageRoot } from '../../test/pageRoot'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
+import * as lookStore from '../../state/look'
 import * as pageStore from '../../state/page'
 import * as settingsDialogStore from '../../state/settings'
+import { resetSources, setSources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import { mountPageRoot } from '../../test/pageRoot'
+import { SettingsApp } from './SettingsPage'
+import * as store from './store'
+
 import type { RailSource } from '../rail/types'
 import type { SettingsSnapshot, SettingsSource } from './types'
 
@@ -28,7 +27,7 @@ mountPageRoot()
 /* The connections page is opened by importing its island, so standing in for
    that module is how the manage button's second half is observed. */
 const connOpens = vi.hoisted(() => ({ n: 0 }))
-vi.mock('../connections/nav', () => ({ open: () => { connOpens.n += 1 } }))
+vi.mock('../connections/wire', () => ({ open: () => { connOpens.n += 1 } }))
 
 const toastWriter = vi.hoisted(() => ({ calls: [] as Array<[string, unknown]> }))
 vi.mock('../../state/toast', () => {
@@ -125,11 +124,11 @@ function install(data: SettingsSnapshot = snap(), over: Partial<SettingsSource> 
   vi.spyOn(settingsDialogStore, 'open').mockImplementation(() => shellCalls.push(['openSet', null]))
   vi.spyOn(settingsDialogStore, 'close').mockImplementation(() => shellCalls.push(['closeSet', null]))
   /* The danger card's button is a SESSION operation offered from this page, so
-     it goes out through DS.sessions rather than this page's own source. */
+     it goes out through DS.rail rather than this page's own source. */
   const wiped: Array<null> = []
   setSources({
     settings: source,
-    sessions: {
+    rail: {
       snapshot: () => ({ rows: [{}, {}, {}], cur: null, busy: false }),
       replace: () => {},
       open: () => {},
@@ -162,7 +161,7 @@ const change = async (input: HTMLInputElement, value: string) => {
 
 afterEach(() => {
   cleanup()
-  store.reset()
+  store._resetForTests()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   localStorage.clear()
@@ -214,13 +213,13 @@ describe('settings island', () => {
       await store.openProviderModels('openai')
     })
 
-    expect(store.getState().provOpen).toBe('openai')
-    expect(store.getState().modelNudge).toBe('openai')
+    expect(store.get().provOpen).toBe('openai')
+    expect(store.get().modelNudge).toBe('openai')
     expect(document.querySelector('.mpanel .mini.nudge')?.textContent).toBe('gui.model.get_list')
   })
 
   /* The one destructive button on the page, and it had no coverage: it used to
-     leave through a shell verb, and now it leaves through DS.sessions. Either
+     leave through a shell verb, and now it leaves through DS.rail. Either
      way what matters is that it goes out at all, and only after the confirm. */
   it('wipes every session through the session source, from the data page', async () => {
     const h = install()
@@ -289,7 +288,7 @@ describe('settings island', () => {
     expect(document.getElementById('setTitle')!.textContent).toBe('gui.set.pg.channel')
   })
 
-  /* The picker is legacy chrome, so the island cannot watch it: after a pick
+  /* The picker is page chrome, so the island cannot watch it: after a pick
      it has to re-read the model from the source or the card keeps showing the
      old one. Nothing exercised that callback, because the fixture had no
      picker at all and pickDefault returned early. */
@@ -685,7 +684,7 @@ describe('settings island', () => {
     /* The pane's own emptiness check would hide the mark either way. Asserted
        on the store too, so a rule that raised it for every save would fail
        here rather than survive behind that guard. */
-    expect(store.getState().modelNudge).toBeNull()
+    expect(store.get().modelNudge).toBeNull()
   })
 
   it('drops the mark once the catalogue drawer is opened', async () => {
@@ -1417,7 +1416,7 @@ describe('settings island', () => {
   })
 
 
-  /* ---- the toolset panel, which used to be drawn by the legacy layer ---- */
+  /* ---- the toolset panel ---- */
 
   const toolset = async () => {
     await act(async () => {

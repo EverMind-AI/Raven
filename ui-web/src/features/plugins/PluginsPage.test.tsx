@@ -2,17 +2,16 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { PlugApp } from './PluginsPage'
-import * as store from './store'
-
-import { domSnapshot } from '../../test/domSnapshot'
-import { resetSources, setSources, sources } from '../../state/sources'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as startTaskWithModule from '../../features/composer/startTaskWith'
+import { setTranslator } from '../../i18n/t'
+import * as capsStore from '../../state/caps'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
-import * as useInTaskModule from '../../features/composer/useInTask'
-import * as capsStore from '../../state/caps'
+import { resetSources, setSources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import { PluginsApp } from './PluginsPage'
+import * as store from './store';
+
 import type { DetailEntry, InstalledRow, MarketItem, PluginsSource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -98,7 +97,7 @@ function install(
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
   vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   vi.spyOn(pageStore, 'show').mockImplementation((id) => shellCalls.push(['showPage', id]))
-  vi.spyOn(useInTaskModule, 'useInTask').mockImplementation((key, name) => shellCalls.push(['useInTask', `${key}:${name}`]))
+  vi.spyOn(startTaskWithModule, 'startTaskWith').mockImplementation((key, name) => shellCalls.push(['startTaskWith', `${key}:${name}`]))
   vi.spyOn(capsStore, 'drawIfOpenOnPlugins').mockImplementation(() => shellCalls.push(['plugRedraw', null]))
   setSources({ plugins: source })
   document.body.innerHTML =
@@ -108,7 +107,7 @@ function install(
 }
 
 async function mount() {
-  const view = render(<PlugApp />, { container: document.getElementById('capsBody')! })
+  const view = render(<PluginsApp />, { container: document.getElementById('capsBody')! })
   await act(async () => {
     await store.search()
   })
@@ -196,7 +195,7 @@ describe('plugins island', () => {
   /* The island sets its own state and then tells the chrome, because the tab
      title, hero and installed button live outside any root it owns. Nothing
      asserted the second half. */
-  it('asks the caps chrome to redraw on both view transitions', async () => {
+  it('asks the caps frame to redraw on both view transitions', async () => {
     const { shellCalls } = install([item()], [{ id: 'sheets', name: 'sheets', src: 'raven-sheets', ver: '0.9.0', state: 'on' }])
     await mount()
     const redraws = () => shellCalls.filter((c) => c[0] === 'plugRedraw').length

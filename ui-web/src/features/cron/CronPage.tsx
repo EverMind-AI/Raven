@@ -1,18 +1,19 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import { SetupGroup, SetupRow } from '../../components/SetupRow'
+import { SetupRow } from '../../components/SetupRow'
 import { SheetFoot, SheetHead, StateLine } from '../../components/SetupSheet'
 import { t } from '../../i18n/t'
+import { ask as confirmAsk } from '../../state/confirm'
+import * as lang from '../../state/lang'
 import { show as menuAt } from '../../state/menu'
+import * as settingsDialog from '../../state/settings'
 import { show as toast } from '../../state/toast'
 import { cronExprHuman, cronWhen } from './humanize'
 import * as store from './store'
 
 import type { CronDraft, CronJob, CronRun } from './types'
 import type { JSX } from 'react'
-import { ask as confirmAsk } from '../../state/confirm'
-import * as settingsDialog from '../../state/settings'
 
 /* The frequencies and the delivery routes the editor offers. Page data, not
    wire data: a job's own kind and expression come from `cron.list`, and these
@@ -71,7 +72,13 @@ function removeThenList(j: CronJob): void {
 }
 
 export function CronApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The language the page resolved, so a pick repaints this island: every word
+     below is a t(key) read at render time (state/lang/store.ts). The detail
+     view also refetches its run history on it -- run stamps arrive
+     language-baked from the source, so a flip has to ask again, while the
+     plain redraws the island's own controls ask for must not. */
+  const { lang: pageLang } = useSyncExternalStore(lang.subscribe, lang.get)
   const job = s.viewId ? s.rows.find((x) => x.id === s.viewId) : undefined
   useEffect(() => {
     if (s.viewId && !job) store.backToList()
@@ -80,7 +87,7 @@ export function CronApp(): JSX.Element {
   return (
     <>
       {job && draft ? (
-        <CronDetail key={`${job.id}:${s.epoch}`} job={job} draft={draft} rev={s.rev} lang={s.lang} />
+        <CronDetail key={`${job.id}:${s.epoch}`} job={job} draft={draft} rev={s.rev} lang={pageLang} />
       ) : s.loaded || s.rows.length ? (
         <CronList rows={s.rows} />
       ) : null}
@@ -211,14 +218,15 @@ function CronRow({ j }: { j: CronJob }): JSX.Element {
    what it is set to do, and what it has done. They used to be two cards
    stacked down one scroll, which meant editing a schedule with a run log
    underfoot and a delete button between them. */
-function CronDetail({ job, draft, rev, lang }: { job: CronJob; draft: CronDraft; rev: number; lang: number }): JSX.Element {
+function CronDetail({ job, draft, rev, lang }: { job: CronJob; draft: CronDraft; rev: number; lang: string }): JSX.Element {
   const [runs, setRuns] = useState<CronRun[] | null>(null)
   const [tab, setTab] = useState<'cfg' | 'runs'>('cfg')
   const [running, setRunning] = useState(false)
-  /* Keyed on rev, not just the job: the legacy page refetched history on
-     every draw, and the shell leans on that -- live's cron.finished handler
-     calls refresh() precisely so a run that lands while the reader is on
-     this page drops into the list. */
+  /* Keyed on rev and on the page's language, not just on the job. `rev` is
+     what the live cron.finished handler bumps through refresh(), precisely so
+     a run that lands while the reader is on this page drops into the list; the
+     language is what makes a flip re-ask for stamps the source baked words
+     into. */
   useEffect(() => {
     let stale = false
     store
@@ -327,9 +335,9 @@ function CronDetail({ job, draft, rev, lang }: { job: CronJob; draft: CronDraft;
 /* create / edit -- one form, two hosts: the new-job sheet and the detail
    page's config card both edit the same draft shape.
 
-   Inputs are uncontrolled on purpose, mirroring the legacy form: a keystroke
-   mutates the draft object and re-renders nothing, so focus and IME
-   composition survive; only a frequency change or a refusal redraws. The
+   Inputs are uncontrolled on purpose: a keystroke mutates the draft object and
+   re-renders nothing, so focus and IME composition survive; only a frequency
+   change or a refusal redraws. The
    store's epoch key remounts this subtree whenever a draft is replaced. */
 function JobForm({ draft }: { draft: CronDraft }): JSX.Element {
   if (draft.freq === 'week' && draft.wd == null) draft.wd = 1
@@ -508,15 +516,14 @@ function AtInput({ draft }: { draft: CronDraft }): JSX.Element {
 
 /* The new-job sheet, rendered into the static #jobVeil container the page
    markup keeps; the veil's own open flag and click-outside behaviour are
-   managed here because nothing legacy owns them any more. */
+   all managed here. */
 function JobSheet({ draft }: { draft: CronDraft }): JSX.Element | null {
   const veil = document.getElementById('jobVeil')
   const cancel = (): void => store.closeSheet()
   useEffect(() => {
     if (!veil) return
     veil.dataset.open = 'true'
-    /* React's autoFocus does not reach a portal reliably; focus by hand,
-       the way the legacy sheet did on open. */
+    /* React's autoFocus does not reach a portal reliably; focus by hand. */
     veil.querySelector('input')?.focus()
     const onClick = (e: MouseEvent): void => {
       if (e.target === veil) cancel()

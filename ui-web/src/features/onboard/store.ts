@@ -1,6 +1,7 @@
 /* The page-scoped opening state for the first-run onboarding island. */
 
 import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
 
 import type { OnboardSource } from './types'
 
@@ -9,40 +10,30 @@ export interface OnboardOpening {
   epoch: number
 }
 
-let state: OnboardOpening = { source: null, epoch: 0 }
+const store = makeStore<OnboardOpening>({ source: null, epoch: 0 })
+
+export const { get, set, subscribe } = store
+
 let resolveOpen: (() => void) | null = null
-const subs = new Set<() => void>()
-
-export const snapshot = (): OnboardOpening => state
-
-export function subscribe(fn: () => void): () => void {
-  subs.add(fn)
-  return () => subs.delete(fn)
-}
-
-const announce = (): void => subs.forEach(fn => fn())
 
 export function open(): Promise<void> {
   resolveOpen?.()
   return new Promise(resolve => {
     resolveOpen = resolve
-    state = { source: ds<OnboardSource>('onboard'), epoch: state.epoch + 1 }
-    announce()
+    set({ source: ds('onboard'), epoch: get().epoch + 1 })
   })
 }
 
 export function finish(): void {
-  if (!state.source) return
-  state = { source: null, epoch: state.epoch }
+  if (!get().source) return
   const done = resolveOpen
   resolveOpen = null
-  announce()
+  set({ source: null, epoch: get().epoch })
   done?.()
 }
 
 export function _resetForTests(): void {
   resolveOpen?.()
   resolveOpen = null
-  state = { source: null, epoch: 0 }
-  announce()
+  set({ source: null, epoch: 0 })
 }

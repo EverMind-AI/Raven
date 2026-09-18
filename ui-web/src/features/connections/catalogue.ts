@@ -17,9 +17,9 @@
  * already drawn from -- and holding one array is what makes that true.
  */
 
-import type { ConnChannel } from './types'
-
 import { t } from '../../i18n/t'
+
+import type { ConnChannel } from './types'
 
 interface CatalogueEntry {
   id: string

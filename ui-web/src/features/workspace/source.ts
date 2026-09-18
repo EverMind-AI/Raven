@@ -4,12 +4,12 @@
    an answer makes clickable. The live layer installs both sources onto the
    seam, which replaces the fixture ones before the first paint. */
 
-import type { WorkspaceSource } from './types'
-import type { ProseSource, ProseTarget } from '../../lib/prose'
-
 import { current as sessionCurrent } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
-import { islands } from '../registry'
+import { changes as workspaceChanges, showFile } from './store'
+
+import type { ProseSource, ProseTarget } from '../../lib/prose'
+import type { WorkspaceSource } from './types'
 
 export function relToWorkspace(p: string | null | undefined): string | null {
   const s = String(p || '')
@@ -55,7 +55,7 @@ export const livePathOf = (s: string): string | null => {
   const text = String(s).trim().replace(/:\d+(?::\d+)?$/, '')
   if (!text || /\s/.test(text)) return null
   if (/(?:^|\/)(?:\.raven\/)?workspace\/./.test(text)) return relToWorkspace(text) || text
-  const hit = islands.workspace.changes().find((c) => c.key === text || shorten(c.key) === text)
+  const hit = workspaceChanges().find((c) => c.key === text || shorten(c.key) === text)
   return hit ? hit.key : null
 }
 
@@ -96,7 +96,7 @@ export const proseSource: ProseSource = {
      stops calling a directory a link at all (see the dir check there). */
   open: ({ p, dir }) => (dir
     ? void gateway().call('fs.reveal', { path: p, session: sessionCurrent() || '' }).catch(() => {})
-    : islands.workspace.showFile(p)),
+    : showFile(p)),
 }
 
 /* The gateway host's OS family, handed in by the boot's own wiring
@@ -105,6 +105,13 @@ let hostPlatformLive: () => string = () => ''
 export function setHostPlatformReader(fn: () => string): void {
   hostPlatformLive = fn
 }
+
+/* A path as the panel shows it. A free function beside the source rather than
+   only a member of it, because this domain's own modules read it too and a
+   domain reaching its own source through the page seam is a round trip
+   (features/workspace/record.ts files every row under this name). */
+export const shortPath = (p: string): string =>
+  relToWsRoot(p) || relToWorkspace(p) || String(p).replace(/^\/Users\/[^/]+\//, '~/')
 
 export const workspaceSource: WorkspaceSource = {
   hostPlatform: () => hostPlatformLive(),
@@ -120,5 +127,13 @@ export const workspaceSource: WorkspaceSource = {
      desktop -- see hostIsLocal above. */
   openIn: (p, app) => gateway().call('fs.open', { path: p, session: sessionCurrent() || '', ...(app ? { app } : {}) }),
   hostIsLocal,
-  shortPath: (p) => relToWsRoot(p) || relToWorkspace(p) || String(p).replace(/^\/Users\/[^/]+\//, '~/'),
+  shortPath,
+}
+
+/* Test seam only: the workspace root and the two injected helpers are the
+   module's. */
+export function _resetForTests(): void {
+  wsRoot = ''
+  shorten = (p) => p
+  hostPlatformLive = () => ''
 }

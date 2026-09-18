@@ -9,21 +9,21 @@
    for the visible conversation, which is a settings question rather than the
    chip's own. */
 
-import type { ProviderOp, SettingsSnapshot, SettingsSource, ToolGroup } from './types'
-import type { ParamsOf, ResultOf } from '../../rpc/generated'
-import type { BannerSource } from '../../state/banner'
-
-import { defaultModel, defaultProvider, loadProviders, providers, setDefaultPair, showModel } from '../model/source'
-import { open as openModelPicker } from '../model/store'
-import { extTools, loadExt } from '../plugins/source'
-import { draw as drawBanner } from '../../state/banner'
 import { t } from '../../i18n/t'
-import { setFromConfig as setPermMode } from '../../state/perm'
 import { current as sessionCurrent } from '../../lib/session'
-import { show as toast } from '../../state/toast'
 import { gateway } from '../../rpc/gateway'
+import { draw as drawBanner } from '../../state/banner'
+import { setFromConfig as setPermMode } from '../../state/perm'
 import { generation } from '../../state/session/generation'
 import { staging } from '../../state/session/staging'
+import { show as toast } from '../../state/toast'
+import { extTools, loadExt } from '../installed/source'
+import { defaultModel, defaultProvider, loadProviders, providers, setDefaultPair, showModel } from '../model/source'
+import { open as openModelPicker } from '../model/store'
+
+import type { ParamsOf, ResultOf } from '../../rpc/generated'
+import type { BannerSource } from '../../state/banner'
+import type { ProviderOp, SettingsSnapshot, SettingsSource, ToolGroup } from './types'
 
 /* The groups the dialog draws its tool rows under, and their order. Page data
    rather than a fixture: both modes draw the same four, and which one a tool
@@ -46,7 +46,7 @@ let everosLive: ResultOf<'settings.everos'> | null = null
 /* The three members that need page chrome no island owns: the version the foot
    learned from `system.version`, the check that drives the update notice and
    the upgrade prompt, and the language pick. Installed by
-   features/settings/chrome.ts, which owns the settings transport. */
+   features/settings/wire.ts, which owns the settings transport. */
 export interface SettingsChrome {
   version(): string | null
   checkUpdate(btn: HTMLButtonElement): void | Promise<void>
@@ -98,6 +98,18 @@ export async function loadPermMode(sid?: string | null, gen?: number): Promise<v
 }
 
 export const pushPermMode = (): Promise<void> => loadPermMode(sessionCurrent())
+
+/* The About card's own check, on demand. `check: true` means fetch now rather
+   than read the daily cache: the button says check for updates, and a person
+   who has just clicked it is asking about now. */
+export const checkVersion = (): Promise<ResultOf<'system.version'>> =>
+  gateway().call('system.version', { check: true })
+
+/* A permission pick, written under the conversation it was made in. What a
+   refusal says to the reader is the chip's decision (./wire.ts). */
+export const savePermMode = (mode: string, sid: string): Promise<boolean> =>
+  gateway().call('config.set', { key: 'permissions.mode', value: mode, scope: 'session', session_id: sid })
+    .then((r) => !!(r && r.applied))
 
 export async function loadSettings(): Promise<void> {
   const r = await gateway().call('settings.get', {})
@@ -215,4 +227,13 @@ export const settingsSource: SettingsSource = {
   /* Not awaited: the pick repaints synchronously and the persist speaks for
      itself if it fails. */
   setLang: (v) => chrome.setLang(v),
+}
+
+/* Test seam only: the raw config, the path it came from and the chrome the page
+   registered are all the module's. */
+export function _resetForTests(): void {
+  RAW = {}
+  configPathLive = '~/.raven/config.json'
+  everosLive = null
+  chrome = { version: () => null, checkUpdate: () => {}, setLang: () => {} }
 }

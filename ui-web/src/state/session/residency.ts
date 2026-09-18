@@ -13,20 +13,23 @@
  * host off `#stage` and files it on the runtime; coming back puts it back.
  */
 
-import { islands } from '../../features/registry'
-import { draw as drawBanner } from '../banner'
-import { current as sessionCurrent } from '../../lib/session'
+import { liveAnchor, setLiveAnchor } from '../../features/composer/mount'
 import { drawMeter, goPaint as goState, queueRestore, queueSnapshot, turn } from '../../features/composer/mount'
-import { $ } from '../../lib/dom'
 import { draw as sessionDraw } from '../../features/rail/store'
+import { nudge, stopStream } from '../../features/transcript/mount'
+import { down as scrollTranscriptDown } from '../../features/transcript/tail'
+import { restore as wsRestoreSnapshot, snapshot as wsSnapshot } from '../../features/workspace/store'
+import { $ } from '../../lib/dom'
+import { current as sessionCurrent } from '../../lib/session'
+import { draw as drawBanner } from '../banner'
 import { draw as drawWs, open as wsOpen, restore as wsRestore, view as wsView } from '../ws'
-import { sess } from './rows'
 import { drop as dropHost, hold as holdHost } from './hosts'
 import { adoptRuntime, get, release, viewRuntime } from './registry'
+import { sess } from './rows'
 
-import type { SessionRuntime } from './runtime'
 import type { TurnEvent } from '../../features/composer/turn'
 import type { WorkspaceSnapshot } from '../../features/workspace/types'
+import type { SessionRuntime } from './runtime'
 
 /* A phase event for one conversation, whether or not it is on screen. Here
    rather than with the switch because what becomes of it is the residency
@@ -50,7 +53,7 @@ export function park(): void {
   const rt = viewRuntime()
   release()
   if (!turn.busy()) return
-  islands.transcript.stopStream()
+  stopStream()
   const s = sess(rt.key)
   if (s) s.status = 'run'
   rt.phase = turn.snapshot()
@@ -59,8 +62,8 @@ export function park(): void {
      away conversation's idle turn-live paint zeroes it -- without carrying it
      here, a turn ten minutes in read "2s" after a round trip through another
      conversation. */
-  rt.liveT0 = islands.composer.liveAnchor()
-  rt.ws = islands.workspace.snapshot()
+  rt.liveT0 = liveAnchor()
+  rt.ws = wsSnapshot()
   /* Asked for, not read off the panel's own bindings: this is where the pane
      state is kept, not where it is owned. */
   rt.pane = wsView()
@@ -80,8 +83,8 @@ export function resume(rt: SessionRuntime, apply?: (ev: unknown) => void): void 
   turn.restore(rt.phase); queueRestore(rt.queue)
   /* Before drawMeter below: its turn-live paint keeps a non-zero anchor, so the
      clock resumes from the turn's real start rather than from the switch. */
-  islands.composer.setLiveAnchor(rt.liveT0 || 0)
-  islands.workspace.restore(rt.ws as WorkspaceSnapshot)
+  setLiveAnchor(rt.liveT0 || 0)
+  wsRestoreSnapshot(rt.ws as WorkspaceSnapshot)
   if (rt.pane) wsRestore(rt.pane.tab, rt.pane.picked)
   const s = sess(sessionCurrent())
   if (s && s.status === 'run') s.status = null
@@ -90,8 +93,8 @@ export function resume(rt: SessionRuntime, apply?: (ev: unknown) => void): void 
   if (apply) {
     backlog.forEach((ev) => { try { apply(ev) } catch { /* one bad frame must not eat the rest */ } })
   }
-  islands.transcript.nudge()
+  nudge()
   drawMeter(); goState(); sessionDraw(); drawBanner()
   if (typeof drawWs === 'function' && wsOpen) drawWs()
-  islands.transcript.down()
+  scrollTranscriptDown()
 }

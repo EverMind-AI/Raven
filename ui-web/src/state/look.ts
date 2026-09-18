@@ -68,3 +68,8 @@ export function set(patch: Partial<LookState>): void {
   apply()
   save()
 }
+
+/* Test seam only: the theme the reader picked is the module's. */
+export function _resetForTests(): void {
+  state = { ...DEFAULT }
+}

@@ -54,6 +54,9 @@ def _living_docs() -> list[Path]:
     docs += [p for p in (REPO / "docs" / "sandbox").glob("*.md")]
     docs += [p for p in REPO.glob("ui-tui/CONTEXT.md")]
     docs += [p for p in REPO.glob("ui-tui/README.md")]
+    docs += [p for p in REPO.glob("ui-web/CONTEXT.md")]
+    docs += [p for p in REPO.glob("ui-web/README.md")]
+    docs += [p for p in REPO.glob("ui-web/CONTRIBUTING.md")]
     return sorted(p for p in docs if "plans" not in p.parts and "node_modules" not in p.parts)
 
 

@@ -9,19 +9,22 @@
  * in src/state/session/.
  */
 
-import { islands } from '../registry'
-import { has } from '../../rpc/capabilities'
+import { t } from '../../i18n/t'
 import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
-import { show as toast } from '../../state/toast'
+import { has } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
-import { dagOpenNode } from '../dag/open'
-import { T } from '../../i18n/t'
-import { draw as sessionDraw } from '../rail/store'
-import { session as sheetSession } from '../../state/sheetRack'
 import { unpitch } from '../../state/session/conversation'
 import { open as sessionOpen, rows as sessionRows } from '../../state/session/rows'
-import { panel } from '../../state/wsPanel'
+import { session as sheetSession } from '../../state/sheetRack'
+import { show as toast } from '../../state/toast'
+import { pane } from '../../state/wsPane'
+import { run as dagRunOf } from '../dag/mount'
+import { dagOpenNode } from '../dag/open'
+import { openDeskTab } from '../desk/store'
+import { draw as sessionDraw } from '../rail/store'
 import { plainTitle } from '../rail/title'
+import * as subagents from '../subagents/store'
+import { history as drawHistory } from './mount'
 
 import type { SessRow } from '../rail/types'
 import type { HistoryMessage } from './types'
@@ -58,7 +61,7 @@ export function renderHistory(messages: HistoryMessage[]): void {
      resetView; still needed for the reconnect replay, which repaints a
      conversation without leaving it. */
   unpitch()
-  islands.transcript.history(messages)
+  drawHistory(messages)
 }
 
 /* Opening a delegated graph: the last node if this page already holds the run's
@@ -68,7 +71,7 @@ export function renderHistory(messages: HistoryMessage[]): void {
 export function openDagRun(runId: string): void {
   const id = String(runId || '')
   if (id) {
-    const d = islands.dag.run(sheetSession())
+    const d = dagRunOf(sheetSession())
     const last = d && d.run_id === id ? d.order[d.order.length - 1] : null
     if (last) {
       /* With what the node is FOR, not only its id. The run holds every node's
@@ -80,7 +83,7 @@ export function openDagRun(runId: string): void {
       return
     }
   }
-  panel().setOpen(true, 'agents')
+  pane().setOpen(true, 'agents')
 }
 
 export const openDagNode = (runId: string, nodeId: string, summary?: string | null): void =>
@@ -109,7 +112,7 @@ export const spawnRecord = (callId: string) =>
    turn a restored card's task id into the record id its stream is read by: a
    record's directory is `<stamp>-<task_id>`, so the row is found by suffix. */
 export function spawnList() {
-  /* Guarded like sources.agents.list is: a server without the subagent surface
+  /* Guarded like sources.subagents.list is: a server without the subagent surface
    answers -32601, and a card that asked would then re-ask on every reopen for
    an answer that cannot arrive. */
   if (!has('subagent')) return Promise.resolve([])
@@ -124,13 +127,13 @@ export function openSpawn(agent: string, label: string): void {
   /* Same rule as dagOpenNode: `openRow` below raises the window, and in desk
    mode that is the whole answer. The panel's agents view is only needed where
    there are no windows. */
-  if (!document.documentElement.classList.contains('desk-ready')) panel().setOpen(true, 'agents')
-  const match = () => islands.subagents.rows().find((x) => x.kind !== 'dag'
+  if (!document.documentElement.classList.contains('desk-ready')) pane().setOpen(true, 'agents')
+  const match = () => subagents.rows().find((x) => x.kind !== 'dag'
     && (!label || plainTitle(x.label) === plainTitle(label))
     && (!agent || (x.agent || 'raven') === (agent || 'raven')))
   const attempt = (n: number): void => {
     const it = match()
-    if (it) { islands.subagents.openRow(it); return }
+    if (it) { subagents.openRow(it); return }
     if (n >= 4) {
       /* Nothing was found, so nothing was opened -- and a click that opens
        nothing reads as broken. `refresh` keeps the drawn list on a failed
@@ -138,10 +141,10 @@ export function openSpawn(agent: string, label: string): void {
        registry spells differently lands here, and the reader is left with a
        list they can search by hand. Only on this branch: the palette beside
        a window the reader did get is the thing this whole change removes. */
-      islands.workspace.openDeskTab('agents')
+      openDeskTab('agents')
       return
     }
-    islands.subagents.refresh(true)
+    subagents.refresh(true)
     setTimeout(() => attempt(n + 1), 700)
   }
   attempt(0)
@@ -152,14 +155,14 @@ export function openSpawn(agent: string, label: string): void {
 export function branch(): void {
   gateway().call('session.branch', { session_id: openKey() })
     .then((r) => {
-      if (!r.session_id) { toast(T('gui.sess.branch_empty')); return }
+      if (!r.session_id) { toast(t('gui.sess.branch_empty')); return }
       const s: SessRow = {
-        id: r.session_id, title: r.title || T('gui.sess.branch_title'),
-        last: T('gui.sess.branched'), when: T('gui.sess.just_now'),
+        id: r.session_id, title: r.title || t('gui.sess.branch_title'),
+        last: t('gui.sess.branched'), when: t('gui.sess.just_now'),
         at: Math.floor(Date.now() / 1000), run: null, live: true,
       }
       sessionRows().unshift(s); sessionSet(s.id); sessionDraw(); sessionOpen(s)
-      toast(T('gui.sess.branched_n', { n: r.message_count || 0 }))
+      toast(t('gui.sess.branched_n', { n: r.message_count || 0 }))
     })
-    .catch((e) => toast(T('gui.op.branch_failed', { detail: (e as Error).message || e })))
+    .catch((e) => toast(t('gui.op.branch_failed', { detail: (e as Error).message || e })))
 }

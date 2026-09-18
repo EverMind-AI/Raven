@@ -76,7 +76,7 @@ const STORED: Record<string, ResultOf<'session.resume'>['messages']> = {
 /* What every conversation's banner says. One model, one window, one working
    directory: the canvas has no engine behind it, so the bundle is the shape of
    a real one rather than a reading of anything. */
-const info = (env: FixtureEnv, title: string): InitInfo => ({
+const info = (title: string): InitInfo => ({
   model: 'claude-fable-5', model_id: 'claude-fable-5', provider: 'anthropic',
   context_window: 200000, lazy: false, skills: {}, tools: {},
   usage: { input: 0, output: 0, cost_usd: 0, calls: 0, context_max: 200000, context_used: 0, context_percent: 0 },
@@ -127,14 +127,14 @@ export function createSessions(env: FixtureEnv, turn: () => TurnFixture): Sessio
         minted += 1
         const s: Fixture = { id: `n${minted}`, ago: 0, title: '', last: '', run: null }
         rows.unshift(s)
-        return { session_id: s.id, info: info(env, '') }
+        return { session_id: s.id, info: info('') }
       },
       'session.resume': (p) => {
         const id = p.session_id || ''
         const s = find(id)
         return {
           session_id: id,
-          info: info(env, (s && s.title) || ''),
+          info: info((s && s.title) || ''),
           messages: s && s.run ? turn().history(id) : STORED[id] || [],
         }
       },
@@ -170,7 +170,7 @@ export function createSessions(env: FixtureEnv, turn: () => TurnFixture): Sessio
       'session.compress': (p) => ({
         before_messages: 12, after_messages: 4, before_tokens: 18400, after_tokens: 3100,
         removed: 8, summary: { headline: 'compacted', noop: false },
-        info: info(env, (find(p.session_id) || { title: '' }).title),
+        info: info((find(p.session_id) || { title: '' }).title),
       }),
       'session.branch': (p) => {
         const from = find(p.session_id)

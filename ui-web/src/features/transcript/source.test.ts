@@ -25,8 +25,8 @@ async function opener(calls: unknown[][], run: unknown) {
     return import('../../app/install')
   }, {
     fakes: {
-      'src/state/wsPanel': {
-        panel: () => ({ setOpen: (...args: unknown[]) => calls.push(['fallback', ...args]) }),
+      'src/state/wsPane': {
+        pane: () => ({ setOpen: (...args: unknown[]) => calls.push(['fallback', ...args]) }),
       },
       'src/state/sheetRack': {
         session: () => 'a',
@@ -38,11 +38,13 @@ async function opener(calls: unknown[][], run: unknown) {
       'src/features/dag/open': {
         dagOpenNode: (runId: string, node: { id: string }) => calls.push(['node', runId, node.id]),
       },
+      'src/features/dag/mount': {
+        run: (key: string) => (key === 'a' ? run : null),
+      },
     },
-    islands: { dag: { run: (key: string) => (key === 'a' ? run : null) } },
   })
   const { setSources, sources } = await import('../../state/sources')
-  setSources({ transcript: {}, composer: {}, sessions: {} } as unknown as Partial<Sources>)
+  setSources({ transcript: {}, composer: {}, rail: {} } as unknown as Partial<Sources>)
   wiring.installSources()
   if (!sources.transcript!.openDagRun) throw new Error('openDagRun is absent from the page wiring')
   return sources.transcript!.openDagRun
@@ -77,8 +79,8 @@ async function nodeHarness({ rows = [{ kind: 'spawn', agent: 'raven', label: 'qc
     return import('../../app/install')
   }, {
     fakes: {
-      'src/state/wsPanel': {
-        panel: () => ({
+      'src/state/wsPane': {
+        pane: () => ({
           view: () => ({ tab: 'diff', open: false, picked: false }),
           setOpen: (open: boolean, tab?: string) => calls.push(['setWs', open, tab ?? null]),
           pick: (tab: string) => calls.push(['wsPick', tab]),
@@ -87,15 +89,15 @@ async function nodeHarness({ rows = [{ kind: 'spawn', agent: 'raven', label: 'qc
       },
       'src/lib/session': { current: () => 's1' },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
-    },
-    islands: {
-      subagents: {
+      'src/features/subagents/store': {
         openDagNode: (run: string, node: { id: string }) => calls.push(['openDagNode', run, node.id]),
         rows: () => rows,
         openRow: (row: SpawnRow) => calls.push(['openRow', row.label]),
         refresh: () => calls.push(['refresh']),
       },
-      workspace: { openDeskTab: (tab: string) => calls.push(['openDeskTab', tab]) },
+      'src/features/desk/store': {
+        openDeskTab: (tab: string) => calls.push(['openDeskTab', tab]),
+      },
     },
   })
   await fakeGateway(() => Promise.resolve({}))

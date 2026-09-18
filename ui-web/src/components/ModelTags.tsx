@@ -179,7 +179,7 @@ export function TagGlyph({ name }: { name: string }): JSX.Element {
 /* 128000 -> 128K, 1000000 -> 1M. A window is read as a size, not counted: the
    exact token figure is noise on every row of a list and the rounded one is
    what a person compares. */
-export function contextLabel(tokens: number): string {
+function contextLabel(tokens: number): string {
   if (tokens >= 1_000_000) {
     const millions = tokens / 1_000_000
     return `${millions >= 10 || Number.isInteger(millions) ? Math.round(millions) : millions.toFixed(1)}M`

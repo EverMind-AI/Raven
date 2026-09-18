@@ -14,25 +14,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /** The seven module pages, as NAV_OF keys them. */
-const PAGES = ['capsPage', 'xaPage', 'connPage', 'memPage', 'pbPage', 'kbPage', 'cronPage'] as const
+const PAGES = ['capsPage', 'extAgentsPage', 'connectionsPage', 'memoryPage', 'playbooksPage', 'kbPage', 'cronPage'] as const
 
 interface Fresh {
   page: typeof import('./page')
-  islands: (typeof import('../features/registry'))['islands']
+  /* What each registered slot was asked, in the order the switch asked it. */
+  spent: string[]
 }
 
-/* Fresh module state per case: the store holds which page is open and a set of
-   subscribers, and both would leak into the next case. The island bag is taken
-   from the same reset graph the store just got, the way
-   scripts/module-harness.mjs does it. */
+/* Fresh module state per case: the store holds which page is open, a set of
+   subscribers and the three slots the page's wiring fills, and all three would
+   leak into the next case.
+   The slots are filled here the way src/app/install.ts fills them, which is
+   also what says an unfilled slot is a switch that asks nothing. */
 async function fresh(): Promise<Fresh> {
   vi.resetModules()
   const page = await import('./page')
-  const { islands } = await import('../features/registry')
-  vi.spyOn(islands.rail, 'markNew').mockImplementation(() => {})
-  vi.spyOn(islands.connections, 'closeDialog').mockImplementation(() => {})
-  vi.spyOn(islands.cron, 'closeSheet').mockImplementation(() => {})
-  return { page, islands }
+  const spent: string[] = []
+  for (const slot of ['markNav', 'closeConnDialog', 'closeCronSheet'] as const) {
+    page.onShow(slot, () => { spent.push(slot) })
+  }
+  return { page, spent }
 }
 
 /* The page as show() reaches it: the shell mark, the seven sections with their
@@ -57,14 +59,14 @@ const onlyOpen = (open: string | null): Record<string, string> =>
 describe('showing a module page', () => {
   it('writes the open flag on all seven sections', async () => {
     const { page } = await fresh()
-    page.show('memPage')
-    expect(flags()).toEqual(onlyOpen('memPage'))
-    expect(page.get()).toBe('memPage')
+    page.show('memoryPage')
+    expect(flags()).toEqual(onlyOpen('memoryPage'))
+    expect(page.get()).toBe('memoryPage')
   })
 
   it('clears all seven when nothing is open', async () => {
     const { page } = await fresh()
-    page.show('memPage')
+    page.show('memoryPage')
     page.show(null)
     expect(flags()).toEqual(onlyOpen(null))
     expect(page.get()).toBeNull()
@@ -81,17 +83,17 @@ describe('showing a module page', () => {
   it('marks the shell while a page is up, and unmarks it after', async () => {
     const { page } = await fresh()
     const app = document.querySelector<HTMLElement>('.app')!
-    page.show('pbPage')
+    page.show('playbooksPage')
     expect(app.dataset.page).toBe('on')
     page.show(null)
     expect(app.dataset.page).toBe('off')
   })
 
   it('has the rail re-mark itself on every switch', async () => {
-    const { page, islands } = await fresh()
-    page.show('xaPage')
+    const { page, spent } = await fresh()
+    page.show('extAgentsPage')
     page.show(null)
-    expect(islands.rail.markNew).toHaveBeenCalledTimes(2)
+    expect(spent.filter((name) => name === 'markNav')).toHaveLength(2)
   })
 
   /* caps and memory both render into the shared drawer, so opening either of
@@ -102,18 +104,27 @@ describe('showing a module page', () => {
       const drawer = document.getElementById('detail')!
       drawer.dataset.open = 'true'
       page.show(id)
-      expect(drawer.dataset.open, id).toBe(id === 'capsPage' || id === 'memPage' ? 'true' : 'false')
+      expect(drawer.dataset.open, id).toBe(id === 'capsPage' || id === 'memoryPage' ? 'true' : 'false')
     }
   })
 
   it('closes a page-owned overlay only when the page it belongs to is not the one opening', async () => {
-    const { page, islands } = await fresh()
-    page.show('connPage')
-    expect(islands.connections.closeDialog).not.toHaveBeenCalled()
-    expect(islands.cron.closeSheet).toHaveBeenCalledTimes(1)
+    const { page, spent } = await fresh()
+    page.show('connectionsPage')
+    expect(spent.filter((name) => name === 'closeConnDialog')).toHaveLength(0)
+    expect(spent.filter((name) => name === 'closeCronSheet')).toHaveLength(1)
     page.show('cronPage')
-    expect(islands.connections.closeDialog).toHaveBeenCalledTimes(1)
-    expect(islands.cron.closeSheet).toHaveBeenCalledTimes(1)
+    expect(spent.filter((name) => name === 'closeConnDialog')).toHaveLength(1)
+    expect(spent.filter((name) => name === 'closeCronSheet')).toHaveLength(1)
+  })
+
+  /* The order the three slots are spent in, which is what state/page.ts spells
+     out: the rail's mark, then the drawer, then the two page-owned escapeOrder. */
+  it('spends the three registered slots in the order it declares', async () => {
+    const { page, spent } = await fresh()
+    document.getElementById('detail')!.dataset.open = 'true'
+    page.show('memoryPage')
+    expect(spent).toEqual(['markNav', 'closeConnDialog', 'closeCronSheet'])
   })
 })
 
@@ -122,19 +133,19 @@ describe('the subscribers', () => {
     const { page } = await fresh()
     const calls: string[] = []
     const record = (name: string) => () => {
-      calls.push(`${name}:${page.get()}:${document.getElementById('memPage')!.dataset.open}`)
+      calls.push(`${name}:${page.get()}:${document.getElementById('memoryPage')!.dataset.open}`)
     }
     page.subscribe(record('skills'))
     page.subscribe(record('plugins'))
-    page.show('memPage')
-    expect(calls).toEqual(['skills:memPage:true', 'plugins:memPage:true'])
+    page.show('memoryPage')
+    expect(calls).toEqual(['skills:memoryPage:true', 'plugins:memoryPage:true'])
   })
 
   it('stop being called once they unsubscribe', async () => {
     const { page } = await fresh()
     let calls = 0
     const off = page.subscribe(() => { calls += 1 })
-    page.show('xaPage')
+    page.show('extAgentsPage')
     off()
     page.show(null)
     expect(calls).toBe(1)

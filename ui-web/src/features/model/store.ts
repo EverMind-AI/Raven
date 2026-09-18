@@ -9,9 +9,8 @@
 
 import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
-import { show as toast } from '../../state/toast'
 import { sources } from '../../state/sources'
-
+import { show as toast } from '../../state/toast'
 import { offered } from './types'
 
 import type { ApiProtocol, ModelSource, Provider } from './types'
@@ -47,10 +46,10 @@ let epoch = 0
 let selected = 'minimax-m3'
 const subs = new Set<() => void>()
 
-export const source = (): ModelSource => ds<ModelSource>('model')
+export const source = (): ModelSource => ds('model')
 
 /* Installed by the live layer only. The offline demo's chip opens a plain menu
-   of its own (demo/150-chrome.js), so the opener below has to be callable and
+   of its own (the composer's model button), so the opener below has to be callable and
    do nothing there rather than throw at the name the chrome imports. */
 const installed = (): boolean => !!sources.model
 

@@ -1,18 +1,17 @@
 // @vitest-environment happy-dom
-/* What one `channels.status` answer does to the catalogue's rows. The merge
- * was untested while it lived in the legacy layer, and three of its rules are
- * about telling "no" apart from "nobody could say".
+/* What one `channels.status` answer does to the catalogue's rows. Three of the
+ * merge's rules are about telling "no" apart from "nobody could say".
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { CHANNELS, chanName } from './catalogue'
-import { connSource, loadChannels } from './source'
+import { setTranslator } from '../../i18n/t'
 import { FixtureTransport } from '../../rpc/fixtureTransport'
 import { setGateway } from '../../rpc/gateway'
-import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as pageStore from '../../state/page'
 import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import { CHANNELS, chanName } from './catalogue'
+import { connSource, loadChannels } from './source'
 
 
 type StatusRow = { name: string } & Record<string, unknown>

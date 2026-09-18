@@ -8,12 +8,13 @@
    an older one notifies the same page state with the JPEG base64 inside it,
    and a page cannot know which it will be sent until one arrives. */
 
+import { open as openUrlOutside } from '../../lib/openUrl'
+import { gateway } from '../../rpc/gateway'
+import { urls as workspaceUrls } from '../workspace/store'
+
 import type { ParamsOf } from '../../rpc/generated'
 import type { BrowserFramePushParams } from '../../rpc/notifications'
 import type { ChromiumSource, FrameHead } from './types'
-
-import { gateway } from '../../rpc/gateway'
-import { islands } from '../registry'
 
 const b64Blob = (b64: string): Blob => {
   const s = atob(b64)
@@ -26,10 +27,10 @@ const b64Blob = (b64: string): Blob => {
    off the source object so the two decoders below have one hook to reach. */
 export const browserSource: ChromiumSource & { openUrl(u: string): void } = {
   embedded: true,
-  urls: () => islands.workspace.urls(),
+  urls: () => workspaceUrls(),
   /* Not on ChromiumSource: the links variant declares it and this one carried
      it too, so a caller holding the union could reach it either way. */
-  openUrl: (u: string) => islands.chrome.openUrl(u),
+  openUrl: (u: string) => openUrlOutside(u),
   frame: (p) => gateway().call('browser.frame', p),
   open: (p) => gateway().call('browser.open', p),
   watch: (p) => gateway().call('browser.watch', p),

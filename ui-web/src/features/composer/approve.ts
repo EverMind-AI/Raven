@@ -8,13 +8,13 @@
  *
  * Beside the rack rather than in shell/, because it is a tenant of it: one sheet
  * appended to #sheetRack, filed under the conversation that asked. That is also
- * why its opener sits on the composer's member of the island bag instead of a
- * member of its own -- the rack's six names are already there and this is the
- * seventh thing the layers do to that rack.
+ * why its opener is the composer's rather than a domain of its own -- the
+ * rack's six names are already the composer's, and this is the seventh thing
+ * the page does to that rack.
  *
  * What is here is each sheet's own element and the answers it can give; the
- * markup inside them is src/chrome/ApproveSheet.tsx (the preview variant) and
- * src/chrome/ApprovalSheet.tsx. The element belongs to this module because the
+ * markup inside them is features/composer/AskApproveSheet.tsx (the preview variant) and
+ * features/composer/GateSheet.tsx. The element belongs to this module because the
  * rack files it under a conversation and styles it as its flex item, and so does
  * the key handler, which lives as long as the request rather than as long as its
  * interior: a parked sheet is unmounted and still pending.
@@ -25,15 +25,15 @@
 
 import { createElement } from 'react'
 
-import { ApprovalSheet } from '../../chrome/ApprovalSheet'
-import { ApproveSheet } from '../../chrome/ApproveSheet'
 import { t } from '../../i18n/t'
 import * as drafts from '../../state/sheetDrafts'
 import { add as sheetAdd, dropClass, remove as sheetRemove, session } from '../../state/sheetRack'
+import { AskApproveSheet } from './AskApproveSheet'
+import { GateSheet } from './GateSheet'
 import { composing } from './store'
 
-import type { ApprovalControls } from '../../chrome/ApprovalSheet'
 import type { SheetOptionRow } from '../../chrome/SheetRack'
+import type { ApprovalControls } from './GateSheet'
 
 /* The permission gate's approval, keyed so approval.closed can withdraw the
    exact request it retires (a timeout, a teardown, an answer from another
@@ -115,7 +115,7 @@ export function open(
   /* The withdrawal handed to the rack, not kept here: the rack sees every exit
      -- including the conversation being deleted, which never reaches this
      module -- and a second copy of who-owns-what could only disagree with it. */
-  sheetAdd(sheet, key, withdraw, createElement(ApproveSheet, {
+  sheetAdd(sheet, key, withdraw, createElement(AskApproveSheet, {
     title: t('gui.confirm.title'),
     deny: t('gui.confirm.deny'),
     prompt: prompt || '',
@@ -211,7 +211,7 @@ export function openApproval(
   }
   document.addEventListener('keydown', onKey, true)
 
-  sheetAdd(sheet, key, withdraw, createElement(ApprovalSheet, {
+  sheetAdd(sheet, key, withdraw, createElement(GateSheet, {
     ctl,
     draft,
     command: req.command || '',

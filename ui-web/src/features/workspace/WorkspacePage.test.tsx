@@ -2,17 +2,16 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { WsApp } from './WorkspacePage'
-import * as deliveries from './deliveries'
-import * as store from './store'
-
-import { domSnapshot } from '../../test/domSnapshot'
-import { resetSources, setSources, sources } from '../../state/sources'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
+import { setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
-import { installWsPanel } from '../../test/wsPanelHarness'
+import { resetSources, setSources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import { installWsPane } from '../../test/wsPaneHarness'
+import * as deliveries from './deliveries'
+import * as store from './store'
+import { WorkspaceApp } from './WorkspacePage';
+
 import type { WorkspaceSnapshot, WorkspaceSource, WsChange } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -67,7 +66,7 @@ function install(ws: WorkspaceSnapshot, over: Partial<WorkspaceSource> = {}, vie
   store.setDeskOpener(null)
   vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   vi.spyOn(pageStore, 'show').mockImplementation((id) => shellCalls.push(['showPage', id]))
-  installWsPanel({
+  installWsPane({
     view: () => view,
     show: (tab) => {
       shellCalls.push(['showWorkspace', tab])
@@ -89,7 +88,7 @@ function install(ws: WorkspaceSnapshot, over: Partial<WorkspaceSource> = {}, vie
 }
 
 async function mount() {
-  const view = render(<WsApp />, { container: document.getElementById('wsBody')! })
+  const view = render(<WorkspaceApp />, { container: document.getElementById('wsBody')! })
   await act(async () => {
     store.sync()
   })
@@ -101,7 +100,7 @@ afterEach(() => {
     store.reset()
   })
   localStorage.clear()
-  store._resetAppsForTests()
+  store._resetForTests()
   cleanup()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
@@ -636,11 +635,11 @@ describe('workspace island', () => {
      else, or somebody editing the key by hand, must not reach a command line. */
   it('refuses a stored application name that is not one', async () => {
     localStorage.setItem('raven.openWith', JSON.stringify({ pptx: '/bin/sh', xlsx: 'Numbers' }))
-    store._resetAppsForTests()
+    store._resetForTests()
     expect(store.appFor('/x/a.pptx')).toBeNull()
     expect(store.appFor('/x/a.xlsx')).toBe('Numbers')
     localStorage.setItem('raven.openWith', 'not json at all')
-    store._resetAppsForTests()
+    store._resetForTests()
     expect(store.appFor('/x/a.xlsx')).toBeNull()
   })
 

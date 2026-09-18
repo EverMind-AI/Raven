@@ -1,9 +1,9 @@
-/* Resizable panels.
+/* Resizable panes.
  *
- * Both panels drag the same way, so the differences are data: which variable
+ * Both panes drag the same way, so the differences are data: which variable
  * the grip writes, which direction widens it, and the bounds. The floor and
  * ceiling are not decoration -- a 90px rail cannot show a session title and a
- * 900px panel leaves no transcript -- and the ceiling is additionally clamped
+ * 900px pane leaves no transcript -- and the ceiling is additionally clamped
  * against the window so a drag can never squeeze the chat below its floor.
  *
  * Behaviour, not rendering, like the scrollbars: a grip drag writes one CSS

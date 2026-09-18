@@ -2,21 +2,20 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { RailApp } from './RailPage'
-import * as store from './store'
+import { setTranslator } from '../../i18n/t'
 import {
   _resetForTests as sessionReset,
   current as sessionCurrent,
   onChange,
   setCurrent,
 } from '../../lib/session'
-
-import { domSnapshot } from '../../test/domSnapshot'
-import { resetSources, setSources, sources } from '../../state/sources'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
+import { resetSources, setSources, sources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import { RailApp } from './RailPage'
+import * as store from './store'
+
 import type { MenuItem } from '../../state/menu'
 import type { ToastAction } from '../../state/toast'
 import type { RailSnapshot, RailSource, SessRow } from './types'
@@ -47,7 +46,7 @@ interface Harness {
 
 /* The island runs against the same two seams production wires: a stand-in
    translator on setTranslator (it returns its key, so tests assert catalogue
-   keys) and a snapshot source on sources.sessions. */
+   keys) and a snapshot source on sources.rail. */
 function install(over: Partial<RailSnapshot> = {}): Harness {
   const state: RailSnapshot = { rows: [row()], cur: 'a', busy: false, ...over }
   const calls: Array<[string, unknown]> = []
@@ -63,7 +62,7 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
     state.cur = id
     store.draw()
   })
-  setSources({ sessions: {
+  setSources({ rail: {
     snapshot: () => state,
     replace: (rows: SessRow[]) => { state.rows = rows },
     open: (s: SessRow) => calls.push(['openSession', s.id]),
@@ -71,7 +70,7 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
   document.body.innerHTML =
     '<div class="app" data-page="off">' +
     '<button id="newBtn"></button><button id="skillBtn"></button>' +
-    '<button id="plugBtn"></button><button id="memBtn"></button><button id="moreBtn"></button>' +
+    '<button id="plugBtn"></button><button id="memoryBtn"></button><button id="moreBtn"></button>' +
     '<div id="moreFly" data-open="false"></div>' +
     PAGES.map(p => `<div id="${p}" data-open="false"></div>`).join('') +
     '<div id="list"></div><h1 id="title">t</h1><button id="renameBtn"></button></div>'
@@ -79,18 +78,18 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
 }
 
 /* The installed source, for the cases that add a write verb to it. */
-const src = (): RailSource => sources.sessions as RailSource
+const src = (): RailSource => sources.rail as RailSource
 
-/* The nav the assembled page hands over (demo/155-bridge.js reads it off
-   NAV_OF and MORE_ROWS): every module page, the rail button each one lights
-   up, and the More group's rows in their drawn order. The default fake above
-   hands over an empty one, which is the whole page shut. */
-const PAGES = ['capsPage', 'xaPage', 'connPage', 'memPage', 'cronPage']
+/* The nav the assembled page hands over (state/page.ts's navState, off the
+   page table): every module page, the rail button each one lights up, and the
+   More group's rows in their drawn order. The default fake above hands over an
+   empty one, which is the whole page shut. */
+const PAGES = ['capsPage', 'extAgentsPage', 'connectionsPage', 'memoryPage', 'cronPage']
 const BTN_OF: Record<string, string> = {
   capsPage: 'skillBtn',
-  xaPage: 'moreBtn',
-  connPage: 'moreBtn',
-  memPage: 'memBtn',
+  extAgentsPage: 'moreBtn',
+  connectionsPage: 'moreBtn',
+  memoryPage: 'memoryBtn',
   cronPage: 'moreBtn'
 }
 
@@ -359,7 +358,7 @@ describe('rail island', () => {
     const host = mount()
     expect(screen.getByText('GTM research')).toBeTruthy()
     setSources({
-      sessions: {
+      rail: {
         snapshot: () => {
           throw new Error('gone')
         }
@@ -566,7 +565,7 @@ describe('rail island', () => {
      still has focus -- could slip past entirely. Telling the source from
      inside the commit is what closes that. */
   describe('renaming the current session', () => {
-    function edit(h: Harness): HTMLInputElement {
+    function edit(): HTMLInputElement {
       const host = mount()
       const it_ = rowItems(host, 'second task').find(x => x !== '-' && x.label === 'gui.sess.rename') as MenuItem
       act(() => it_.fn())
@@ -586,9 +585,9 @@ describe('rail island', () => {
     }
 
     it('tells the source on Enter, which is the case a blur listener missed', () => {
-      const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
+      install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
       const said = wire()
-      const inp = edit(h)
+      const inp = edit()
       inp.value = 'renamed by hand'
       key(inp, 'Enter')
       expect(said).toEqual([['b', 'renamed by hand']])
@@ -598,24 +597,24 @@ describe('rail island', () => {
     })
 
     it('tells the source on blur too', () => {
-      const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
+      install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
       const said = wire()
-      const inp = edit(h)
+      const inp = edit()
       inp.value = 'renamed by leaving'
       act(() => inp.dispatchEvent(new FocusEvent('blur')))
       expect(said).toEqual([['b', 'renamed by leaving']])
     })
 
     it('says nothing on escape, or when the title did not change', () => {
-      const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
+      install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
       const said = wire()
-      const inp = edit(h)
+      const inp = edit()
       inp.value = 'thrown away'
       key(inp, 'Escape')
       expect(said).toEqual([])
       expect(document.getElementById('title')!.textContent).toBe('second task')
 
-      const again = edit(h)
+      const again = edit()
       again.value = 'second task'
       key(again, 'Enter')
       expect(said).toEqual([])
@@ -623,7 +622,7 @@ describe('rail island', () => {
 
     it('renames with no source verb at all', () => {
       const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
-      const inp = edit(h)
+      const inp = edit()
       inp.value = 'offline rename'
       expect(() => key(inp, 'Enter')).not.toThrow()
       expect(h.state.rows[1]!.title).toBe('offline rename')
@@ -636,9 +635,9 @@ describe('rail island', () => {
        first had already put the heading back, so recovering was down to which
        of the two won. One commit per editor closes all of it. */
     it('ignores the blur that committing with Enter itself causes', () => {
-      const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
+      install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
       const said = wire()
-      const inp = edit(h)
+      const inp = edit()
       inp.value = 'named once'
       key(inp, 'Enter')
 
@@ -663,7 +662,7 @@ describe('rail island', () => {
     it('hands the heading back when a conversation switch needs it', () => {
       const h = install({ rows: [row(), row({ id: 'b', title: 'second task' })], cur: 'b' })
       const said = wire()
-      const inp = edit(h)
+      const inp = edit()
       inp.value = 'named on the way out'
       expect(document.getElementById('title')).toBeNull()
 
@@ -717,16 +716,16 @@ describe('rail island', () => {
     /* Nothing covering the chat and no session: the draft row is current. */
     act(() => store.markNew())
     expect(current('newBtn')).toBe('true')
-    navUp('memPage')
+    navUp('memoryPage')
     act(() => store.markNew())
-    expect(current('memBtn')).toBe('true')
+    expect(current('memoryBtn')).toBe('true')
     expect(current('newBtn')).toBe('false')
     /* The capabilities page lights whichever capability button is showing;
        btnOf is the shell's answer, not a table the island keeps. */
     navUp('capsPage')
     act(() => store.markNew())
     expect(current('skillBtn')).toBe('true')
-    expect(current('memBtn')).toBe('false')
+    expect(current('memoryBtn')).toBe('false')
   })
 
   it('hands the mark to the More row while the group is open, and takes it back when folded', () => {
@@ -738,7 +737,8 @@ describe('rail island', () => {
     fly.dataset.open = 'true'
     act(() => store.markNew())
     const rows = [...fly.querySelectorAll('.navi')].map(b => b.getAttribute('aria-current'))
-    /* morePages is [xa, conn, cron]: the third row is the page that is up. */
+    /* morePages is [extAgents, connections, cron]: the third row is the page
+       that is up. */
     expect(rows).toEqual(['false', 'false', 'true'])
     expect(current('moreBtn')).toBe('false')
     /* Folded, the group has to stand in for the page it hides. */

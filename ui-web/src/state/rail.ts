@@ -37,3 +37,8 @@ export function set(on: boolean): void {
   document.documentElement.dataset.rail = on ? 'on' : 'off'
   ;(document.getElementById('railShow') as HTMLElement).hidden = on
 }
+
+/* Test seam only: whether the rail stands open is the module's. */
+export function _resetForTests(): void {
+  open = true
+}

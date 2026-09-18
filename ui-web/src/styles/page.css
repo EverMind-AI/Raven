@@ -3330,7 +3330,7 @@ details[open] summary { margin-bottom: 8px; }
 /* ── the set-up pages' shared shape ───────────────────────────────────
    One row, one group heading, one sheet anatomy, shared by the three
    set-up-once pages: sub-agents, entrances, schedules
-   (ui/src/shell/setuprow.tsx and setupsheet.tsx). Same family as .clist above:
+   (src/components/SetupRow.tsx and SetupSheet.tsx). Same family as .clist above:
    rows share a border so a group reads as a list rather than as N boxes.
 
    Every child is placed explicitly. Grid auto-placement puts items that have a
@@ -5083,7 +5083,8 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    magenta and the hue rotation puts it back. A file with no currentColor at all
    carries its own palette and gets neither.
    Both theme paths need each rule: an explicit choice stamps data-theme, the
-   default setting stamps nothing. Guarded by ui-web/scripts/agent-mark-css.test.mjs. */
+   default setting stamps nothing. Guarded by
+   ui-web/scripts/gates/agent-mark-css.test.mjs. */
 :root[data-theme="dark"] .agent-mark img[data-tone="mono"] { filter: invert(1); }
 :root[data-theme="dark"] .agent-mark img[data-tone="hybrid"] { filter: invert(1) hue-rotate(180deg); }
 @media (prefers-color-scheme: dark) {

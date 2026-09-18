@@ -8,9 +8,9 @@
  * nothing is exactly what there was no way to look at before).
  */
 
-import type { Overrides } from '../overrideTransport'
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
 import type { ResultOf } from '../generated'
+import type { Overrides } from '../overrideTransport'
 
 type Provider = ResultOf<'model.options'>['providers'][number]
 
@@ -82,7 +82,7 @@ const wire = (e: Entry, current: string): Provider => ({
   configured_models: e.models, total_models: e.models.length,
   needs_api_base: !!e.needs_api_base, warning: '',
   ...(e.default_api_base ? { default_api_base: e.default_api_base } : {}),
-}) as Provider
+})
 
 export interface ModelFixture {
   fixtures: Fixtures
@@ -161,8 +161,12 @@ export function onboardDemoOverrides(schedule: (ms: number, fn: () => void) => v
     },
     'model.save_key': (p) => {
       const row = rows.find((x) => x.slug === p.slug)
-      if (row) row.authenticated = true
-      return wait({ provider: row ? wire(row, '') : null } as ResultOf<'model.save_key'>)
+      /* The contract's answer is a provider, so a slug this library does not
+         have is an error rather than a null one -- which is what it used to
+         answer, behind a cast, for a shape the contract forbids. */
+      if (!row) throw new Error(`no provider ${p.slug}`)
+      row.authenticated = true
+      return wait({ provider: wire(row, '') })
     },
     'setup.status': () => wait({ provider_configured: false }, 300),
   }

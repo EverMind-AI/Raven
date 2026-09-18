@@ -1,6 +1,6 @@
 /* The conversation list, reached through the seam that answers for it.
  *
- * Four verbs over `sources.sessions`, one line each: the rail island renders
+ * Four verbs over `sources.rail`, one line each: the rail island renders
  * the rows, the page's boot owns the array behind them (app/boot.ts's
  * sessionsSource), and what is here is what everything else asks of it.
  *
@@ -16,7 +16,7 @@ import type { RailSource, SessRow } from '../../features/rail/types'
 
 /** The installed source. Unguarded on purpose: the boot puts it on the seam
  *  before anything below can be reached. */
-export const source = (): RailSource => sources.sessions as RailSource
+export const source = (): RailSource => sources.rail as RailSource
 
 export const rows = (): SessRow[] => source().snapshot().rows
 

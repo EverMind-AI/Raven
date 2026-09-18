@@ -1,20 +1,20 @@
 // @vitest-environment happy-dom
 /* The four row builders one `ext.list` read fans out into, and the hub's i18n
- * objects flattened to the one language the island sees. Untested while they
- * lived in the legacy layer, and each carries a rule a reading of the code
- * alone does not make obvious.
+ * objects flattened to the one language the island sees. Each carries a rule a
+ * reading of the code alone does not make obvious.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { mkMcpRow, mkPluginRow, mkSkillRow, mkToolRow, pmNormEntry } from './source'
-import { islands } from '../registry'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as pageStore from '../../state/page'
+import { setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import { mkMcpRow, mkPluginRow, mkSkillRow, mkToolRow } from '../installed/source'
+import { pmNormEntry } from './source'
+import * as plugins from './store'
+
+import type { ExtMcpRow, ExtPluginRow, ExtSkillRow, ExtToolRow } from '../installed/source'
 import type { DetailEntry } from './types'
-import type { ExtMcpRow, ExtPluginRow, ExtSkillRow, ExtToolRow } from './source'
 
 /* The contract's own row shapes, filled in for the fields a case is not about
    -- every builder here reads a handful of them. */
@@ -125,9 +125,7 @@ describe('one mcp row', () => {
   })
 
   it('switches through the island, which owns the write', () => {
-    const toggleMcp = vi.fn()
-    const before = islands.plugins.toggleMcp
-    islands.plugins.toggleMcp = toggleMcp
+    const toggleMcp = vi.spyOn(plugins, 'toggleMcp').mockImplementation(() => {})
     try {
       const row = mkMcpRow(mcp({ name: 'remote', transport: 'http' })) as unknown as { state: string }
       row.state = 'on'
@@ -135,7 +133,7 @@ describe('one mcp row', () => {
       row.state = 'off'
       expect(toggleMcp).toHaveBeenCalledWith('remote', false)
     } finally {
-      islands.plugins.toggleMcp = before
+      toggleMcp.mockRestore()
     }
   })
 })

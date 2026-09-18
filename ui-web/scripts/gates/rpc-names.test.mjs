@@ -1,88 +1,36 @@
 /* Every method name the page calls is one the contract declares.
  *
- * Written against the legacy layer, which was plain JavaScript: there
- * `gateway().call('sessoin.list', ...)` type checked as readily as the spelling
- * that exists, because the compiler only saw the transport's signature where
- * the caller was TypeScript. A misspelt name is a -32601 at the moment a reader
- * opens the page that makes it, which is the one failure this refactor was
- * supposed to end.
- *
- * The layer is gone and tsc now sees every call site, so what this is still for
- * is the unchecked escape hatch: `callUnchecked` takes a plain string on either
- * side of the line, and this is what keeps it to the two names it was opened
- * for. They answer -32601 today and must go on doing so rather than being typed
- * into existence or silently dropped. The names are collected from the source
- * with the TypeScript API and held to RPC_METHODS, which is generated from
- * rpc-schema/openrpc.json.
+ * tsc sees every typed call site, so what this is for is the unchecked escape
+ * hatch: `callUnchecked` takes a plain string on either side of the line, and
+ * this is what keeps it to the two names it was opened for. They answer -32601
+ * today and must go on doing so rather than being typed into existence or
+ * silently dropped -- a misspelt name is a -32601 at the moment a reader opens
+ * the page that makes it. The names are collected from the source with the
+ * TypeScript API (scripts/gates/rpcCalls.mjs, which offline-coverage reads too)
+ * and held to RPC_METHODS, which is generated from rpc-schema/openrpc.json.
  */
 
 import { readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-
-import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
 import { RPC_METHODS } from '../../src/rpc/generated'
+import { names } from './rpcCalls.mjs'
 
 /* The two undeclared names, and the only two allowed. Both are the manual
    plugin-add path in features/plugins/source.ts. */
 const UNCHECKED = ['raven.mcp.list', 'raven.mcp.set']
 
-/* Every feature's source module and everything under state/ and app/: the
-   calls moved there as each domain left the legacy layer, and the two sets
-   together are the page's whole traffic. Paths are from src/. */
-const sourceModules = () => readdirSync(resolve(process.cwd(), 'src/features'), { withFileTypes: true })
-  .filter((e) => e.isDirectory())
-  .map((e) => `features/${e.name}/source.ts`)
-  .filter((rel) => {
-    try { readFileSync(resolve(process.cwd(), 'src', rel)); return true } catch { return false }
-  })
-
-/* Every .ts under one of those trees, at any depth, tests excluded. */
-const treeModules = (dir) => readdirSync(resolve(process.cwd(), 'src', dir), { withFileTypes: true })
+/* Every module under features/, components and all, for the rule below. */
+const featureModules = (dir = 'features') => readdirSync(resolve(process.cwd(), 'src', dir), { withFileTypes: true })
   .flatMap((e) => (e.isDirectory()
-    ? treeModules(`${dir}/${e.name}`)
-    : e.name.endsWith('.ts') && !e.name.includes('.test.') ? [`${dir}/${e.name}`] : []))
+    ? featureModules(`${dir}/${e.name}`)
+    : /\.tsx?$/.test(e.name) && !e.name.includes('.test.') ? [`${dir}/${e.name}`] : []))
 
-const FILES = [...sourceModules(), ...treeModules('state'), ...treeModules('app')]
-
-/* A `gateway().call(...)` or `gateway().binary(...)`: the callee is a property
-   of a call to `gateway`, which is what tells it apart from `source.call(...)`
-   or any other object's method of the same name. */
-function isGatewayMember(node, member) {
-  if (!ts.isCallExpression(node)) return false
-  const callee = node.expression
-  if (!ts.isPropertyAccessExpression(callee) || callee.name.text !== member) return false
-  const object = callee.expression
-  return ts.isCallExpression(object)
-    && ts.isIdentifier(object.expression)
-    && object.expression.text === 'gateway'
-}
-
-/* Every [file:line, name] the layer calls `member` with. A name that is not a
-   string literal is reported as such: an expression is a name nothing can
-   check, which is the whole failure mode here. */
-function names(member) {
-  const found = []
-  for (const rel of FILES) {
-    const text = readFileSync(resolve(process.cwd(), 'src', rel), 'utf8')
-    const kind = rel.endsWith('.ts') ? ts.ScriptKind.TS : ts.ScriptKind.JS
-    const sf = ts.createSourceFile(rel, text, ts.ScriptTarget.ES2022, true, kind)
-    const walk = (node) => {
-      if (isGatewayMember(node, member)) {
-        const first = node.arguments[0]
-        const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1
-        found.push([
-          `${rel}:${line}`,
-          first && ts.isStringLiteral(first) ? first.text : `<not a literal: ${first ? first.getText(sf) : 'no argument'}>`,
-        ])
-      }
-      ts.forEachChild(node, walk)
-    }
-    walk(sf)
-  }
-  return found
-}
+/* Domain modules that speak to the gateway outside their own source.ts. None
+   today; a name here would be a call the domain's source does not know about,
+   pinned with the reason it cannot move. Down or gone. */
+const OUTSIDE_SOURCE = {}
 
 describe('the method names the page calls', () => {
   const declared = new Set(RPC_METHODS)
@@ -92,7 +40,21 @@ describe('the method names the page calls', () => {
     /* A ratchet rather than a floor near zero: a gate that found nothing would
        pass forever, and so would one that lost a whole scan root -- the seven
        calls in app/ dropping out of the count was invisible under `> 100`. */
-    expect(called.length).toBeGreaterThan(135)
+    expect(called.length).toBeGreaterThan(140)
+  })
+
+  /* Where a call may be written, as opposed to what it may be named. A domain's
+     source is "everything one domain knows about speaking to the gateway"
+     (CONTEXT.md), and the value of that is a reader who can answer "what does
+     this page ask of the server for X" by opening one file. A wire call in a
+     component, a tab module or a store is that answer being somewhere else --
+     and it is also outside the scan above, so the name goes unchecked. */
+  it('keeps every call in a domain\'s own source module', () => {
+    const stray = featureModules()
+      .filter((rel) => !rel.endsWith('/source.ts') && !(rel in OUTSIDE_SOURCE))
+      .filter((rel) => /gateway\(\)/.test(readFileSync(resolve(process.cwd(), 'src', rel), 'utf8')))
+    expect(stray, 'move the call into the domain\'s source.ts, or pin it in OUTSIDE_SOURCE with the reason')
+      .toEqual([])
   })
 
   it('are all declared by the contract', () => {

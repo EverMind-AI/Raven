@@ -29,6 +29,11 @@ export type Overrides = { [M in RpcMethod]?: Override<M> }
  * data source the rest of the page can see.
  */
 export class OverrideTransport implements RpcTransport {
+  /* Every handler the page registered through this canvas, so `push` below can
+     reach them. Registered with the transport underneath as well: a frame the
+     real gateway sends still has to arrive. */
+  private readonly pushed = new Map<string, Set<NotificationHandler>>()
+
   constructor(
     private readonly inner: RpcTransport,
     private readonly overrides: Overrides,
@@ -49,7 +54,26 @@ export class OverrideTransport implements RpcTransport {
   }
 
   on(method: PushMethod, handler: NotificationHandler): () => void {
-    return this.inner.on(method, handler)
+    const set = this.pushed.get(method) ?? new Set()
+    set.add(handler)
+    this.pushed.set(method, set)
+    const off = this.inner.on(method, handler)
+    return () => {
+      set.delete(handler)
+      off()
+    }
+  }
+
+  /**
+   * A frame the canvas itself pushes, to the handlers registered through it.
+   *
+   * A canvas that answers a call whose real effect arrives as a push has to
+   * push one, or the offline route is a second route: the live gateway stamps
+   * the frame and the page reads it through the handler `installPipeline`
+   * registers, and this is the same door for a canned answer.
+   */
+  push(method: PushMethod, params: unknown): void {
+    for (const handler of this.pushed.get(method) ?? []) handler(params)
   }
 
   binary(handler: BinaryHandler): () => void {

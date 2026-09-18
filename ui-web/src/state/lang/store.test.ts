@@ -1,13 +1,16 @@
 // @vitest-environment happy-dom
-/* The language store, against the two states a page is really in.
+/* The language store, against the three states a page is really in.
  *
- * The one that is easy to forget is the first: nothing has applied a language
- * yet. src/page.html declares lang="zh-CN" and the regions src/App.tsx renders
- * carry the literals that markup was served with, and neither load mode
- * translates them on its own -- the fixture config has no `language` key and a
- * page with no gateway never gets that far -- so the page a reader opens sits in
- * that state indefinitely. Every case below that names `applied == null` is
- * pinning what such a page shows.
+ * The one that decides the first frame is where the language comes FROM. A
+ * reader who has picked one is remembered in localStorage and the page is in it
+ * before anything renders; a page nobody has picked for is in the language its
+ * own markup declares (src/page.html says lang="zh-CN"), because that is the
+ * language the reader is looking at. Neither load mode asks the gateway in time
+ * to matter -- the fixture config has no `language` key and a page with no
+ * gateway never gets that far.
+ *
+ * What still waits for a pick is one thing: an attribute the served markup does
+ * not carry at all. Every case below that names `attr` is pinning that.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -18,60 +21,64 @@ import catalog from '../../../../i18n/messages.json'
    the one the catalogue owns. */
 const ZH_NEW_TASK = catalog.ui['gui.new_task'].zh
 
-/* Fresh module state per case. `applied` only moves forwards, so a case that
-   applied a language must not be visible to one asserting that none has. */
+/* Fresh module state per case: the language is resolved as the module loads, so
+   a case that changes the document or what is remembered has to load it again. */
 async function fresh(): Promise<typeof import('./store')> {
   vi.resetModules()
   return import('./store')
 }
 
+/** The catalogue's own lookup, in whichever column the store has selected. */
+async function words(): Promise<typeof import('../../i18n/t')['t']> {
+  return (await import('../../i18n/t')).t
+}
+
 beforeEach(() => {
-  /* What the served page declares (src/page.html:2), which is what the three
-     readers below see today before any pick lands. */
+  /* What the served page declares (src/page.html:2). */
   document.documentElement.lang = 'zh-CN'
   document.body.innerHTML = ''
+  localStorage.clear()
 })
 
-describe('before any language is applied', () => {
-  it('has no applied language', async () => {
+describe('the language the page resolves', () => {
+  it('is the one the document declares when nobody has picked', async () => {
     const lang = await fresh()
-    expect(lang.get()).toBeNull()
+    expect(lang.get().lang).toBe('zh')
+    expect(await (await words())('gui.new_task')).toBe(ZH_NEW_TASK)
   })
 
-  it('answers text() with the literal the markup carries', async () => {
+  it('is the remembered pick when there is one, whatever the document says', async () => {
+    localStorage.setItem('raven.gui.lang', 'en')
     const lang = await fresh()
-    expect(lang.text('gui.new_task', 'the markup literal')).toBe('the markup literal')
-    /* Including for a key the catalogue does carry: the point is that the page
-       has not been translated, not that the catalogue is missing something. */
-    expect(lang.text('gui.new_task', 'x')).not.toBe('New task')
+    expect(lang.get().lang).toBe('en')
+    expect((await words())('gui.new_task')).toBe('New task')
   })
 
-  it('writes no attribute on <html>, on load or on a text() call', async () => {
-    const seen: Array<string | null> = []
-    const observer = new MutationObserver((records) => {
-      for (const record of records) seen.push(record.attributeName)
-    })
-    observer.observe(document.documentElement, { attributes: true })
-    const lang = await fresh()
-    lang.text('gui.new_task', 'the markup literal')
-    const pending = observer.takeRecords().map((record) => record.attributeName)
-    observer.disconnect()
-    expect([...seen, ...pending]).toEqual([])
+  /* A remembered pick is the one case that moves the declaration, and it moves
+     it before the first frame: the page is served zh-CN and the reader asked
+     for English on it last time. */
+  it('writes the declaration for a remembered pick, and leaves it otherwise', async () => {
+    await fresh()
     expect(document.documentElement.lang).toBe('zh-CN')
+    localStorage.setItem('raven.gui.lang', 'en')
+    await fresh()
+    expect(document.documentElement.lang).toBe('en')
+  })
+
+  it('ignores a remembered value that is not one of the two languages', async () => {
+    localStorage.setItem('raven.gui.lang', 'fr')
+    const lang = await fresh()
+    expect(lang.get().lang).toBe('zh')
   })
 
   /* What lib/platform.language(), MemoryPage's memWhen and the settings
-     dialog's language radio read. All three used to read the attribute
-     directly, so the store has to answer what the attribute says -- the served
-     declaration on a page, and nothing at all in a document that declares
-     nothing, which is every other test's document. */
-  it('answers tag() with the document declaration', async () => {
+     dialog's language radio read: the resolved language as a declaration. */
+  it('answers tag() for the language it resolved', async () => {
     const lang = await fresh()
     expect(lang.tag()).toBe('zh-CN')
     document.documentElement.lang = 'en'
-    expect(lang.tag()).toBe('en')
-    document.documentElement.removeAttribute('lang')
-    expect(lang.tag()).toBe('')
+    const english = await fresh()
+    expect(english.tag()).toBe('en')
   })
 })
 
@@ -80,33 +87,43 @@ describe('applying a language', () => {
     const lang = await fresh()
     lang.set('zh')
     expect(document.documentElement.lang).toBe('zh-CN')
-    expect(lang.get()).toBe('zh')
+    expect(lang.get().lang).toBe('zh')
     lang.set('en')
     expect(document.documentElement.lang).toBe('en')
-    expect(lang.get()).toBe('en')
+    expect(lang.get().lang).toBe('en')
   })
 
-  it('moves text() onto the catalogue', async () => {
+  it('moves the catalogue column with it', async () => {
     const lang = await fresh()
+    const t = await words()
     lang.set('en')
-    expect(lang.text('gui.new_task', 'the markup literal')).toBe('New task')
+    expect(t('gui.new_task')).toBe('New task')
     lang.set('zh')
-    expect(lang.text('gui.new_task', 'the markup literal')).toBe(ZH_NEW_TASK)
+    expect(t('gui.new_task')).toBe(ZH_NEW_TASK)
   })
 
   /* What the five passes applyI18n made over the document became: a value the
-     region renders beside the key. `text` answers the ones the markup carried a
-     literal for and `attr` the ones it did not, which is every aria-label,
-     title and data-tip on the page -- so one is the literal until a pick lands
-     and the other is nothing at all. Which element gets which is
-     src/App.test.tsx's and each region's own test's. */
-  it('answers attr() with nothing until a language lands, then the catalogue', async () => {
+     region renders beside the key. The text ones need no pick -- the page is in
+     a language from its first frame -- and `attr` covers the ones the markup
+     carried nothing for, which is every aria-label, title and data-tip on the
+     page: absent until a reader's pick lands, which is what both boot goldens
+     record. Which element gets which is src/App.test.tsx's and each region's
+     own test's. */
+  it('answers attr() with nothing until a pick lands, then the catalogue', async () => {
     const lang = await fresh()
     expect(lang.attr('gui.collapse_rail')).toBe(undefined)
     lang.set('en')
     expect(lang.attr('gui.collapse_rail')).toBe('Collapse sidebar')
     lang.set('zh')
     expect(lang.attr('gui.collapse_rail')).not.toBe('Collapse sidebar')
+  })
+
+  /* A remembered pick IS a pick, so the page it boots carries those attributes
+     from the first frame -- the reader picked, just not on this load. */
+  it('answers attr() straight away for a remembered pick', async () => {
+    localStorage.setItem('raven.gui.lang', 'en')
+    const lang = await fresh()
+    expect(lang.attr('gui.collapse_rail')).toBe('Collapse sidebar')
   })
 
   /* Nothing walks the document any more: the keys on the markup are inert
@@ -145,31 +162,25 @@ describe('the subscribers', () => {
     expect(calls).toBe(2)
   })
 
-  /* The boot restore's setter. `restore` applies the remembered language ahead
-     of the first data-driven paint and repaints nothing DRAWN, which is why the
-     whole-page redraw must not run for it. */
-  it('hears nothing from the quiet setter, which still applies the language', async () => {
-    const lang = await fresh()
-    let calls = 0
-    lang.onApplied(() => { calls += 1 })
-    lang.setQuiet('zh')
-    expect(calls).toBe(0)
-    expect(lang.get()).toBe('zh')
-    expect(document.documentElement.lang).toBe('zh-CN')
-    expect(lang.text('gui.new_task', 'the markup literal')).toBe(ZH_NEW_TASK)
-  })
-
-  /* The markup is the other half, and the quiet setter moves it: applyI18n ran
-     on every call site including this one, so a page that boots with a
-     remembered language has to be in it before the first frame. */
-  it('still tells the regions to draw again from the quiet setter', async () => {
+  /* Two groups, and the rendered half commits first: applyI18n rewrote the
+     markup and only then did everything drawn from JavaScript redraw
+     (state/lang/effects.ts is that redraw). */
+  it('commits the regions before the group that draws itself', async () => {
     const lang = await fresh()
     const seen: string[] = []
     lang.subscribe(() => { seen.push('render') })
     lang.onApplied(() => { seen.push('redraw') })
-    lang.setQuiet('zh')
-    expect(seen).toEqual(['render'])
     lang.set('en')
-    expect(seen).toEqual(['render', 'render', 'redraw'])
+    expect(seen).toEqual(['render', 'redraw'])
+  })
+
+  it('stops calling a redraw that has been taken off', async () => {
+    const lang = await fresh()
+    let calls = 0
+    const stop = lang.onApplied(() => { calls += 1 })
+    lang.set('en')
+    stop()
+    lang.set('zh')
+    expect(calls).toBe(1)
   })
 })

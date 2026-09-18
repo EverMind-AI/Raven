@@ -2,20 +2,19 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { Lightbox } from '../../chrome/Lightbox'
+import { setTranslator } from '../../i18n/t'
+import * as attachmentCache from '../../lib/attachmentCache'
+import * as confirmStore from '../../state/confirm'
+import { close as closeLightbox } from '../../state/lightbox'
+import * as pageStore from '../../state/page'
+import { resetSources, setSources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import * as tail from '../transcript/tail'
 import { AttTray, QueueList, SlashList, TurnLive } from './ComposerPage'
 import * as store from './store'
-import * as turn from './turn'
-import * as attachmentCache from '../../lib/attachmentCache'
-import * as tail from '../transcript/tail'
+import * as turn from './turn';
 
-import { Lightbox } from '../../chrome/Lightbox'
-import { close as closeLightbox } from '../../state/lightbox'
-import { domSnapshot } from '../../test/domSnapshot'
-import { resetSources, setSources } from '../../state/sources'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as confirmStore from '../../state/confirm'
-import * as pageStore from '../../state/page'
 import type { ComposerSource, SlashCmd } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -23,8 +22,8 @@ import type { ComposerSource, SlashCmd } from './types'
 
 const directNotes = vi.hoisted((): Array<[string, string]> => [])
 const toastWriter = vi.hoisted(() => ({ items: [] as string[] }))
-/* Partial, not wholesale: the island bag is assembled from every member this
-   module really has. */
+/* Partial, not wholesale: the page calls this module by name for verbs this
+   case is not about. */
 vi.mock('../transcript/mount', async (original) => ({
   ...(await original<Record<string, unknown>>()),
   note: (label: string, detail: string) => { directNotes.push([label, detail]) },
@@ -404,7 +403,7 @@ describe('the live turn row', () => {
     const host = document.createElement('div')
     host.dataset.cvl = '1'
     render(<TurnLive afterPaint={() => {
-      if (!store.getState().live) { host.remove(); return }
+      if (!store.get().live) { host.remove(); return }
       if (stage.lastElementChild !== host) stage.appendChild(host)
     }} />, { container: host })
 
@@ -506,7 +505,7 @@ describe('the attachment tray', () => {
   })
 
   it('opens an image chip in the viewer, since the square crops it', async () => {
-    const { calls } = wire({ upload: async () => ({ path: 'uploads/p.png', size: 10 }) })
+    wire({ upload: async () => ({ path: 'uploads/p.png', size: 10 }) })
     const box = mountTray()
     await act(async () => {
       store.addFiles([new File(['x'], 'p.png', { type: 'image/png' })])
@@ -517,7 +516,7 @@ describe('the attachment tray', () => {
     /* The overlay is drawn by src/chrome/Lightbox.tsx, so something has to be
        rendering it for the click below to put one on screen. Its own component
        rather than the whole page root: this file mocks the transcript's mount
-       partially, and the page root reaches that through the island bag. */
+       partially, and the page root reaches those verbs by name. */
     render(<Lightbox />)
     try {
       act(() => { fireEvent.click(img) })
@@ -745,7 +744,8 @@ describe('a language flip', () => {
     expect(document.querySelector('.turnlive')!.getAttribute('aria-label')).toContain('进行中')
 
     lang = 'en'
-    /* What redrawAll() does: call the same paints again, no reload. */
+    /* What a language flip asks for (state/lang/effects.ts): the same paints
+       again, no reload. */
     act(() => {
       store.drawQueue()
       store.drawSlash('/')

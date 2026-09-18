@@ -9,11 +9,11 @@
  * chrome it opens is the workspace's, not the graph's.
  */
 
-import { panel } from '../../state/wsPanel'
-import { islands } from '../registry'
+import { pane } from '../../state/wsPane'
+import { openDagNode } from '../subagents/store'
 
 export function dagOpenNode(runId: string, n: { id: string; summary?: string | null }): void {
-  islands.subagents.openDagNode(runId, n)
+  openDagNode(runId, n)
   /* The open above already raised the node's own window, and in desk mode that
      window IS the view -- so there is no panel tab left to pick. Picking one
      anyway routed through `openDeskTab`, whose whole job is to open the
@@ -22,7 +22,7 @@ export function dagOpenNode(runId: string, n: { id: string; summary?: string | n
      The lines below are the pre-desk panel, where selecting the agents view
      was how the instance got on screen at all. */
   if (document.documentElement.classList.contains('desk-ready')) return
-  const ws = panel()
+  const ws = pane()
   if (!ws.view().open) ws.setOpen(true)
   ws.pick('agents')
   ws.draw()

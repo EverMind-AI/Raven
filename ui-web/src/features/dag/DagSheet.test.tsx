@@ -2,23 +2,23 @@
 import { act } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
 import {
   add as rackAdd,
   remove as rackRemove,
   _resetForTests as rackReset,
   sync as rackSync,
 } from '../../state/sheetRack'
+import { resetSources, setSources } from '../../state/sources'
+import { installWsPane } from '../../test/wsPaneHarness'
 import { back as subBack, openDagNode, _resetForTests as subReset } from '../subagents/store'
 import { advance, forget, resume, run, settle, start, sync, touch, _resetForTests } from './mount'
-import { fold as storeFold } from './store'
-import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
-import { resetSources, setSources } from '../../state/sources'
+import { fold as storeFold } from './store';
 
-import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as pageStore from '../../state/page'
-import * as confirmStore from '../../state/confirm'
-import { installWsPanel } from '../../test/wsPanelHarness'
-import type { AgentsSource } from '../subagents/types'
+import type { SubagentsSource } from '../subagents/types'
 import type { TranscriptSource } from '../transcript/types'
 import type { DagRun } from './types'
 
@@ -28,12 +28,12 @@ const opened: Array<[string, string]> = []
 
 function wire(): void {
   setTranslator((key) => key)
-  installWsPanel()
+  installWsPane()
   vi.spyOn(pageStore, 'show').mockImplementation(() => {})
   vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
   setSources({
     transcript: { openDagNode: (runId: string, nodeId: string) => opened.push([runId, nodeId]) } as unknown as TranscriptSource,
-    agents: {} as unknown as AgentsSource,
+    subagents: {} as unknown as SubagentsSource,
   })
   document.body.innerHTML =
     '<div class="chat"><div class="dock"><div class="sheets" id="sheetRack"></div>'
@@ -443,7 +443,7 @@ describe('the dag sheet after a reload', () => {
   })
 
   /* Whether a conversation should be asked about at all is no longer settled
-     here: it moved to `resumeDag` in lib/resume.ts, which refuses when it has
+     here: it moved to `resumeDag` in state/session/resume.ts, which refuses when it has
      no run to read, and is covered there by "asks for nothing when the
      conversation had nothing open". It had to move -- the test this replaces
      asserted a refusal based on a stored note, and a note is per-tab and absent

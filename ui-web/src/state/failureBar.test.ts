@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { _resetForTests, bootError, show } from './failureBar'
-import { mountPageRoot } from '../test/pageRoot'
 import { resetTranslator, setTranslator } from '../i18n/t'
-import * as pageStore from './page'
+import { mountPageRoot } from '../test/pageRoot'
 import * as confirmStore from './confirm'
+import { _resetForTests, bootError, show } from './failureBar'
+import * as pageStore from './page'
 
 /* Both bars are drawn by src/chrome/FailureBar.tsx, so the page's own root has
    to be standing for one to reach the body (see src/main.tsx) -- and that root

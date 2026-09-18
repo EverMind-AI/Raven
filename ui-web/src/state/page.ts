@@ -10,48 +10,72 @@
  * answer is a field here as well, so a caller can ask without a selector.
  *
  * The two tabs that used to decorate this function subscribe here instead
- * (features/skills/tab.ts, features/plugins/tab.ts). Registration order is the
+ * (features/skills/wire.ts, features/plugins/wire.ts). Registration order is the
  * order their side effects are visible in: every effect below runs first, then
  * each subscriber in turn.
+ *
+ * What a switch asks of an island is registered rather than imported: three
+ * calls used to reach into features/ from here, which put every store that
+ * opens a page in the closure of every other and made this module the largest
+ * single cost in the import graph. The slots below are filled by the page's
+ * wiring (src/app/install.ts) and spent in the order `show` spells out.
  */
 
-import { islands } from '../features/registry'
-import * as caps from './caps'
 import * as detail from './detail'
+import { PAGES, pageOf } from './pages'
 
-/** The seven module pages, keyed as their <section> ids. */
-export type PageId = 'capsPage' | 'xaPage' | 'connPage' | 'memPage' | 'pbPage' | 'kbPage' | 'cronPage'
+import type { PageId } from './pages'
 
-/* Which rail button each page lights up. Only one module page is open at a
-   time: they used to cover the whole window, so two open at once was invisible;
-   now that the rail stays put, the one behind shows through.
+export type { PageId }
 
-   Named rather than derived, and the capabilities page's entry is a function
-   because that one section serves two modules and lights whichever tab stands
-   open. An outside gate reads this table against the rail's own list of the
-   buttons it writes (scripts/gates/rail-nav-registry.test.mjs), because a page
-   in here that the rail does not mark has no selected state at all and nothing
-   else fails. */
-const NAV_OF = {
-  capsPage: () => (caps.get().tab === 'plugin' ? 'plugBtn' : 'skillBtn'),
-  xaPage: 'moreBtn',
-  connPage: 'moreBtn',
-  memPage: 'memBtn',
-  pbPage: 'pbBtn',
-  kbPage: 'kbBtn',
-  cronPage: 'moreBtn',
+/* Which of a page's two buttons is lit, answered by the module whose own state
+   decides it. The one page with two is the capabilities page and the answer is
+   whichever of its tabs stands open, and reading that tab from here made this
+   module and state/caps.ts import each other. Filled at that module's
+   evaluation and empty until then: a page driven from a test lights the first
+   of the two, which is the tab its section is served on. */
+const buttonOf = new Map<string, () => string>()
+
+/** Registers which of a page's two buttons its own state means. */
+export function onNavButton(page: PageId, pick: () => string): void {
+  buttonOf.set(page, pick)
 }
 
 /** The pages, and the button each lights up -- what markNew asks of the page
- *  registry. The More rows are not in here: the nav flyout marks its own. */
+ *  registry. The More rows are not in here: the nav flyout marks its own.
+ *
+ *  Which button comes from the table (state/pages.ts); which of two comes from
+ *  whoever registered the answer above. */
 export function navState(): { pages: string[]; btnOf(p: string): string | undefined } {
   return {
-    pages: Object.keys(NAV_OF),
+    pages: PAGES.map((page) => page.id),
     btnOf: (p) => {
-      const of = NAV_OF[p as keyof typeof NAV_OF]
-      return typeof of === 'function' ? of() : of
+      const buttons = pageOf(p)?.navButtons
+      if (!buttons) return undefined
+      if (buttons.length < 2) return buttons[0]
+      return buttonOf.get(p)?.() ?? buttons[0]
     },
   }
+}
+
+/** The three things a switch asks of an island, in the order it asks them. */
+const SLOTS = ['markNav', 'closeConnDialog', 'closeCronSheet'] as const
+
+/** One of the three callbacks `show` spends. */
+export type ShowSlot = (typeof SLOTS)[number]
+
+const slots = new Map<ShowSlot, () => void>()
+
+/** Registers what a switch spends on an island. src/app/install.ts fills all three. */
+export function onShow(name: ShowSlot, fn: () => void): void {
+  slots.set(name, fn)
+}
+
+/* An unfilled slot is a switch that asks nothing: a page driven from a test
+   registers the ones its case is about and the rest stay empty. */
+const spend = (name: ShowSlot): void => {
+  const fn = slots.get(name)
+  if (fn) fn()
 }
 
 let current: PageId | null = null
@@ -70,10 +94,15 @@ export function subscribe(fn: () => void): () => void {
   }
 }
 
+/* Test seam only: which page stands open is the module's. */
+export function _resetForTests(): void {
+  current = null
+}
+
 export function show(id: PageId | null): void {
   current = id
-  for (const p of Object.keys(NAV_OF)) {
-    document.getElementById(p)!.dataset.open = String(p === id)
+  for (const page of PAGES) {
+    document.getElementById(page.id)!.dataset.open = String(page.id === id)
   }
   /* From the top, every time: the scroller keeps its position across a close
      and reopen, so a page could greet the reader halfway down its own list. */
@@ -84,13 +113,13 @@ export function show(id: PageId | null): void {
   /* Read by the rail: while a page is up it owns the selected state, so the
      session behind it stops claiming one too. */
   ;(document.querySelector('.app') as HTMLElement).dataset.page = id ? 'on' : 'off'
-  islands.rail.markNew()
+  spend('markNav')
   /* caps and memory both use the shared detail drawer */
-  if (id !== 'capsPage' && id !== 'memPage') detail.close()
+  if (id !== 'capsPage' && id !== 'memoryPage') detail.close()
   /* Same rule for the overlays a single page owns: the channel drawer and the
      new-job sheet used to survive the switch and sit over whatever came next,
      still showing the entry the reader had left behind. */
-  if (id !== 'connPage') islands?.connections?.closeDialog?.()
-  if (id !== 'cronPage') islands?.cron?.closeSheet?.()
+  if (id !== 'connectionsPage') spend('closeConnDialog')
+  if (id !== 'cronPage') spend('closeCronSheet')
   for (const fn of [...listeners]) fn()
 }

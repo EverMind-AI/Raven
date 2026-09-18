@@ -4,17 +4,17 @@
    ways. The live layer installs it onto the seam, which replaces the fixture
    source before the first paint. */
 
-import type { CronJob, CronDraft, CronRun, CronSource } from './types'
-import type { ParamsOf, ResultOf } from '../../rpc/generated'
-import type { RailSource } from '../rail/types'
-
-import { cronExprHuman } from './humanize'
-import { islands } from '../registry'
 import { t } from '../../i18n/t'
-import { ds } from '../../state/sources'
 import { setCurrent as sessionSet } from '../../lib/session'
-import { show as toast } from '../../state/toast'
 import { gateway } from '../../rpc/gateway'
+import { ds } from '../../state/sources'
+import { show as toast } from '../../state/toast'
+import { draw as drawSessions } from '../rail/store'
+import { cronExprHuman } from './humanize'
+import { close as closeCronPage } from './store'
+
+import type { ParamsOf, ResultOf } from '../../rpc/generated'
+import type { CronJob, CronDraft, CronRun, CronSource } from './types'
 
 /** One job as `cron.list` sends it. */
 export type CronJobWire = ResultOf<'cron.list'>['jobs'][number]
@@ -129,14 +129,14 @@ export const cronSource: CronSource = {
     .then(() => toast(t('gui.cron.triggered_x', { name: j.name })))
     .catch((e) => toast(t('gui.op.trigger_failed', { detail: e.message || e }))),
   openRun: async (j) => {
-    islands.cron.close()
-    const rail = ds<RailSource>('sessions')
+    closeCronPage()
+    const rail = ds('rail')
     const s = { id: `cron:${j.id}`, title: j.name, last: '', when: '',
       at: Math.floor(Date.now() / 1000), run: null, live: true, from: 'cron' }
     const rows = rail.snapshot().rows
     if (!rows.find((row) => row.id === s.id)) rows.unshift(s)
     sessionSet(s.id)
-    islands.rail.draw()
+    drawSessions()
     rail.open(s)
   },
 }

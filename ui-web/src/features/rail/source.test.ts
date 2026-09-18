@@ -39,7 +39,7 @@ async function harness({ rows = [] as Row[], cur = null as string | null } = {})
         rows: () => rows,
       },
       'src/i18n/t': {
-        T: label,
+        t: label,
       },
       'src/lib/dom': {
         $: looseQuery(),
@@ -205,6 +205,10 @@ async function refreshHarness({
     fakes: {
       'src/features/rail/store': {
         draw: () => log.push(['sessionDraw']),
+        reconcileRows: (current: Row[], next: Row[], at: string | null) => {
+          log.push(['reconcile', current.map((r) => r.id), next.map((r) => r.id), at])
+          return reconciled || { rows: next, currentMissing: false }
+        },
       },
       'src/features/composer/mount': {
         turn: { dispatch: () => {} },
@@ -215,30 +219,25 @@ async function refreshHarness({
         rows: () => rows,
       },
       'src/i18n/t': {
-        T: label,
+        t: label,
       },
       'src/lib/dom': {
         $: looseQuery(),
       },
       'src/lib/session': { current: () => cur },
-      'src/features/rail/leave': {
+      'src/features/rail/wire': {
         leaveDeletedSession: (id: string) => { log.push(['leaveDeleted', id]); return Promise.resolve() },
       },
-    },
-    islands: {
-      transcript: { nudge: () => {}, stopStream: () => {} },
-      rail: {
-        reconcile: (current: Row[], next: Row[], at: string | null) => {
-          log.push(['reconcile', current.map((r) => r.id), next.map((r) => r.id), at])
-          return reconciled || { rows: next, currentMissing: false }
-        },
+      'src/features/transcript/mount': {
+        nudge: () => {},
+        stopStream: () => {},
       },
     },
   })
   const registry = await import('../../state/session/registry')
   await fakeGateway(async () => answer)
   const { setSources } = await import('../../state/sources')
-  setSources({ composer: {}, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+  setSources({ composer: {}, rail: {}, transcript: {} } as unknown as Partial<Sources>)
   return { registry, log }
 }
 

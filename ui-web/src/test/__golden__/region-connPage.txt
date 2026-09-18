@@ -1,5 +1,0 @@
-section#connPage.page[data-i18n-aria=gui.page.conn][data-open=false]
-  header
-    h2[data-i18n=gui.page.conn]
-  div.work
-    div#connBody.wrap

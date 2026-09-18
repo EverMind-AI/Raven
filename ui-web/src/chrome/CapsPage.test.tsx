@@ -11,10 +11,8 @@
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
-import { readFileSync } from 'node:fs'
-
-import { islands } from '../features/registry'
+import * as plugins from '../features/plugins/store'
+import * as skills from '../features/skills/store'
 import { FixtureTransport } from '../rpc/fixtureTransport'
 import { setGateway } from '../rpc/gateway'
 import * as caps from '../state/caps'
@@ -46,10 +44,10 @@ const field = (): HTMLInputElement => el('cq') as HTMLInputElement
 const bar = (): HTMLElement => document.querySelector('#capsPage .cbar') as HTMLElement
 const kids = (parent: Element): string[] =>
   Array.from(parent.children).map((c) => c.id || (c.getAttribute('class') ?? '') || c.tagName.toLowerCase())
-const source = (rel: string): string => readFileSync(`src/${rel}`, 'utf8') as string
 
-/* Both tabs' installed buttons, created the way the two legacy parts create
-   them on install: empty, and only then synced. */
+/* Both tabs' installed buttons, created the way the two wire modules
+   (features/skills/wire.ts, features/plugins/wire.ts) create them on install:
+   empty, and only then synced. */
 function createButtons(): void {
   act(() => {
     caps.installedButton('skill', { hidden: false, label: null, badge: null })
@@ -60,17 +58,13 @@ function createButtons(): void {
 beforeEach(() => {
   /* The tab, the filter and the two buttons are module state, and this
      component renders them, so every case starts from the served page. */
-  caps.wipe()
+  caps._resetForTests()
   asked.list.length = 0
-  Object.assign(islands.skills, {
-    setQuery: (q: string) => asked.list.push(`skills.setQuery:${q}`),
-    searchNow: (q: string) => asked.list.push(`skills.searchNow:${q}`),
-    toggleView: () => asked.list.push('skills.toggleView'),
-  })
-  Object.assign(islands.plugins, {
-    setQuery: (q: string) => asked.list.push(`plugins.setQuery:${q}`),
-    toggleView: () => asked.list.push('plugins.toggleView'),
-  })
+  vi.spyOn(skills, 'setQuery').mockImplementation((q: string) => asked.list.push(`skills.setQuery:${q}`))
+  vi.spyOn(skills, 'searchNow').mockImplementation((q: string) => asked.list.push(`skills.searchNow:${q}`))
+  vi.spyOn(skills, 'toggleView').mockImplementation(() => asked.list.push('skills.toggleView'))
+  vi.spyOn(plugins, 'setQuery').mockImplementation((q: string) => asked.list.push(`plugins.setQuery:${q}`))
+  vi.spyOn(plugins, 'toggleView').mockImplementation(() => asked.list.push('plugins.toggleView'))
 })
 
 afterEach(() => {
@@ -78,6 +72,7 @@ afterEach(() => {
   unmount = () => {}
   document.body.innerHTML = ''
   resetSources()
+  vi.restoreAllMocks()
 })
 
 describe('the capabilities page chrome', () => {
@@ -140,7 +135,7 @@ describe('the capabilities page chrome', () => {
     host.id = 'islandHost'
     el('capsBody').appendChild(host)
     act(() => {
-      caps.chrome({ title: 'Skills', label: 'Skills', search: 'Search', pillsHidden: true, advHidden: true, bar: '' })
+      caps.setFrame({ title: 'Skills', label: 'Skills', search: 'Search', pillsHidden: true, advHidden: true, bar: '' })
     })
     expect(el('capsBody').firstElementChild).toBe(host)
   })
@@ -315,7 +310,7 @@ describe('the capabilities page chrome', () => {
     render()
     const served = el('capsTitle').textContent
     act(() => {
-      caps.chrome({ title: 'Installed skills', label: 'Skills', search: 'Search the market', pillsHidden: true, advHidden: true, bar: 'none' })
+      caps.setFrame({ title: 'Installed skills', label: 'Skills', search: 'Search the market', pillsHidden: true, advHidden: true, bar: 'none' })
     })
     expect(el('capsTitle').textContent).toBe('Installed skills')
     expect(field().placeholder).toBe('Search the market')
@@ -332,7 +327,7 @@ describe('the capabilities page chrome', () => {
      happy-dom). No act() here on purpose: that is what makes it observable. */
   it('commits a draw before the statement after it', () => {
     render()
-    caps.chrome({ title: 'Plugins', label: 'Plugins', search: 'Search plugins', pillsHidden: true, advHidden: false, bar: '' })
+    caps.setFrame({ title: 'Plugins', label: 'Plugins', search: 'Search plugins', pillsHidden: true, advHidden: false, bar: '' })
     expect(el('capsTitle').textContent).toBe('Plugins')
     expect(field().placeholder).toBe('Search plugins')
     expect(el('cKind').hidden).toBe(true)
@@ -355,20 +350,19 @@ describe('the capabilities page chrome', () => {
 })
 
 /* Last in the file on purpose: applying a language is module state for
-   everything after it. Same agreement as the rail's and the two dialogs' --
-   the pass state/lang/store.ts makes over the document's data-i18n attributes, and
-   the component rendering the same key through lang.text -- so the page cannot
-   come back in the served language once a flip has moved it. */
+   everything after it. Same claim as the rail's and the two dialogs': every
+   word here is the catalogue's, read at render time, so the page cannot come
+   back in the language before the flip. */
 describe('the capabilities page chrome once a language is applied', () => {
   it('renders the applied words when the page is mounted again', () => {
     const KEYED = ['#capsTitle', '#cKind .pill:nth-child(1)', '#cKind .pill:nth-child(2)', '#cKind .pill:nth-child(3)', '#cKind .pill:nth-child(4)', '#advAdd summary', '#advAdd p', '#mAdd']
     const words = (): string[] => KEYED.map((sel) => document.querySelector(sel)?.textContent ?? '')
-    /* The two fields' hints carry keys too, so the pass writes them as well. */
+    /* The two fields' hints carry keys too, and are read the same way. */
     const hints = (): string[] => ['mName', 'mAddr'].map((id) => (el(id) as HTMLInputElement).placeholder)
     render()
     const served = words()
     const servedHints = hints()
-    lang.set('en')
+    lang.set('zh')
     const applied = words()
     const appliedHints = hints()
     expect(applied).not.toEqual(served)

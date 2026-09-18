@@ -9,10 +9,10 @@
  * two are in service is fixture.
  */
 
+import { CHANNELS } from '../../features/connections/catalogue'
+
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
 import type { ChannelField, ResultOf } from '../generated'
-
-import { CHANNELS } from '../../features/connections/catalogue'
 
 const creds = (...pairs: Array<[string, string, boolean?]>): ChannelField[] =>
   pairs.map(([key, label, secret]) => ({ key, label, required: true, secret: !!secret, set: false }))

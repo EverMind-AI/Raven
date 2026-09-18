@@ -2,16 +2,17 @@ import { useEffect, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 
 import { AgentMark, isOwnAgent } from '../../components/AgentMark'
-import { t } from '../../i18n/t'
-import { ds } from '../../state/sources'
 import { SendGlyph } from '../../components/Ico'
+import { t } from '../../i18n/t'
+import * as lang from '../../state/lang'
+import { ds } from '../../state/sources'
 import { composing, fmtSize } from '../composer/store'
 import { instanceMark, instanceState } from './history'
 import * as store from './store'
 
+import type { Attachment, ComposerSource } from '../composer/types'
 import type { AgentsState } from './store'
 import type { AgentRow, InstanceRow, OpenItem, SubagentRow } from './types'
-import type { Attachment, ComposerSource } from '../composer/types'
 import type { JSX } from 'react'
 
 /* The glyph the panel's rows have always been drawn with. */
@@ -403,7 +404,7 @@ function SpawnDetail({ s, open }: { s: AgentsState; open: Extract<OpenItem, { ki
    render rather than captured, like the composer store's own `canAttach`. */
 function uploader(): ComposerSource['upload'] | undefined {
   try {
-    return ds<ComposerSource>('composer').upload
+    return ds('composer').upload
   } catch {
     return undefined
   }
@@ -431,7 +432,7 @@ function InstanceAtt({ a, onRemove }: { a: Attachment; onRemove: () => void }): 
   )
 }
 
-export function InstanceComposer(
+function InstanceComposer(
   { open, name, fail }: {
     open: Extract<OpenItem, { kind: 'instance' }>
     name: string
@@ -593,7 +594,7 @@ export function InstanceComposer(
 }
 
 export function InstanceConversation({ row }: { row: InstanceRow }): JSX.Element {
-  const state = useSyncExternalStore(store.subscribe, store.getState)
+  const state = useSyncExternalStore(store.subscribe, store.get)
   const [poll, setPoll] = useState(0)
   const box = useRef<HTMLDivElement>(null)
   const current = state.instances.find((it) => it.agent === row.agent && it.handle === row.handle) || row
@@ -628,7 +629,7 @@ export function InstanceConversation({ row }: { row: InstanceRow }): JSX.Element
 }
 
 export function AgentRecordConversation({ row }: { row: AgentRow }): JSX.Element {
-  const state = useSyncExternalStore(store.subscribe, store.getState)
+  const state = useSyncExternalStore(store.subscribe, store.get)
   const [poll, setPoll] = useState(0)
   const box = useRef<HTMLDivElement>(null)
   const current = state.rows.find((item) => row.kind === 'dag'
@@ -693,7 +694,10 @@ function InstanceDetail(
 }
 
 export function SubagentsApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The language the page resolved, so a pick repaints this island: every word
+     below is a t(key) read at render time (state/lang/store.ts). */
+  useSyncExternalStore(lang.subscribe, lang.get)
   if (s.open && s.open.kind === 'dag') {
     return <DagDetail key={`d${s.epoch}:${s.open.run_id}:${s.open.node}`} open={s.open} />
   }

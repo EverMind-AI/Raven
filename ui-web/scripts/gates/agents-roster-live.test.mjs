@@ -19,8 +19,8 @@ async function roster(call) {
   /* The two seam objects the chrome builds, which this case does not install. */
   setSources({ composer: {}, transcript: {} })
   wiring.installSources()
-  if (!sources.agents) throw new Error('sources.agents is absent from the page wiring')
-  return sources.agents.roster
+  if (!sources.subagents) throw new Error('sources.subagents is absent from the page wiring')
+  return sources.subagents.roster
 }
 
 const ROWS = [

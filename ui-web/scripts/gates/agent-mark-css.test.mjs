@@ -27,21 +27,9 @@
  * nothing by default. Neither may become a blanket rule.
  */
 
-import { readFileSync } from 'node:fs'
-
 import { describe, expect, it } from 'vitest'
 
-const css = readFileSync(new URL('../../src/styles/page.css', import.meta.url), 'utf8')
-
-function rules(pattern) {
-  const stripped = css.replace(/\/\*[\s\S]*?\*\//g, ' ')
-  const found = []
-  for (const match of stripped.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    const selector = match[1].trim()
-    if (pattern.test(selector)) found.push([selector, match[2]])
-  }
-  return found
-}
+import { rules } from './css.mjs'
 
 const filtered = () => rules(/\.agent-mark\b/).filter(([, body]) => /filter:\s*invert/.test(body))
 

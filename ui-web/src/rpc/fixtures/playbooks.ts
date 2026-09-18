@@ -8,27 +8,32 @@
  * the transport instead of behind the source.
  */
 
-import type { FixtureEnv, Fixtures } from '../fixtureTransport'
+import type { FixtureEnv, Fixtures, Wire } from '../fixtureTransport'
 import type { ResultOf } from '../generated'
 
 /* One playbook, whole. A row is the list's view of it and a detail is all of
    it, and both are answered from this one object so the two calls cannot drift
    apart on the canvas. */
+/* The contract's own shapes, as a gateway sends them: `Wire` is where the
+   nulls the contract describes but does not type live (fixtureTransport.ts). */
+type Detail = Wire<ResultOf<'playbooks.get'>['playbook']>
+type Server = Wire<ResultOf<'playbooks.credentials.get'>['servers'][number]>
+
 interface Playbook {
   name: string
   description: string
   task_summary: string
-  mode: string
+  mode: Detail['mode']
   version: number
   confirm: boolean
   origin: string
   disabled: boolean
   keywords: string[]
-  params: Record<string, Record<string, unknown>>
+  params: Detail['params']
   prompts: string
   path: string
-  nodes: Array<Record<string, unknown>>
-  mcp_servers?: Record<string, Record<string, unknown>>
+  nodes: Detail['nodes']
+  mcp_servers?: Record<string, { auth: Server['auth']; enabled?: boolean }>
   error?: string
 }
 
@@ -282,7 +287,7 @@ export function createPlaybooks(env: FixtureEnv): PlaybooksFixture {
           nodes: (p.nodes || []).map((n) => ({ id: n.id, depends_on: n.depends_on })),
           error: p.error || '',
         })),
-      }) as unknown as ResultOf<'playbooks.list'>,
+      }),
       'playbooks.get': (p) => {
         const found = find(p.name)
         if (!found) throw new Error(`no playbook named ${p.name}`)
@@ -302,7 +307,7 @@ export function createPlaybooks(env: FixtureEnv): PlaybooksFixture {
             nodes: found.nodes || [],
             prompts: found.prompts || '',
           },
-        } as unknown as ResultOf<'playbooks.get'>
+        }
       },
       'playbooks.credentials.get': (p) => {
         const found = find(p.name)
@@ -314,10 +319,10 @@ export function createPlaybooks(env: FixtureEnv): PlaybooksFixture {
             name: k, set: !!creds.params[`${p.name}/${k}`], description: (v.description as string) || '',
           })),
           servers: servers.map(([k, v]) => ({
-            name: k, auth: (v.auth as string) || 'none', enabled: v.enabled !== false,
+            name: k, auth: v.auth || 'none', enabled: v.enabled !== false,
             authorized: !!creds.oauth[`${p.name}/${k}`], shadows_host: false,
           })),
-        } as unknown as ResultOf<'playbooks.credentials.get'>
+        }
       },
       'playbooks.credentials.set': (p) => {
         creds.params[`${p.name}/${p.param}`] = true
@@ -332,7 +337,7 @@ export function createPlaybooks(env: FixtureEnv): PlaybooksFixture {
         return {
           server: p.server, state: 'auth_required',
           auth_url: 'https://example.invalid/authorize?demo=1', error: null,
-        } as ResultOf<'playbooks.oauth.authorize'>
+        }
       },
       'playbooks.oauth.clear': (p) => {
         delete creds.oauth[`${p.name}/${p.server}`]
