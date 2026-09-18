@@ -3,9 +3,9 @@
  *
  * A run in flight has to move on screen without being reopened, and there is
  * no push for it: the source polls and forwards, and every judgement about what
- * that takes belongs to the island that is drawing it. The interval was
- * untested while it lived in the legacy layer, which is the half a rewrite can
- * silently drop -- nothing else fails when a panel merely stops refreshing.
+ * that takes belongs to the island that is drawing it. The interval is the
+ * half that can be dropped silently -- nothing else fails when a panel merely
+ * stops refreshing.
  *
  * Opened by the page's wiring, beside the handlers for the pushes that do
  * exist (src/app/install.ts), so that is what this drives.
@@ -25,12 +25,17 @@ async function harness() {
     fakes: {
       'src/lib/session': { current: () => 's1' },
       'src/state/session/runtime': { mediaOf: () => ({}) },
+      'src/features/transcript/mount': {
+        agentStage: () => {},
+      },
+      'src/features/subagents/store': {
+        directEvent: () => {},
+      },
     },
-    islands: { transcript: { agentStage: () => {} }, subagents: { directEvent: () => {} } },
   })
   await fakeGateway(() => Promise.resolve({}))
   const { setSources, sources } = await import('../../state/sources')
-  setSources({ composer: { slash: [] }, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+  setSources({ composer: { slash: [] }, rail: {}, transcript: {} } as unknown as Partial<Sources>)
   wiring.installSources()
   /* The interval is opened with the push handlers, so the clock has to be fake
      before they install. */
@@ -46,7 +51,7 @@ describe('the sub-agent heartbeat', () => {
     const { sources } = await harness()
     const beat = vi.fn()
 
-    sources.agents!.watch!(beat)
+    sources.subagents!.watch!(beat)
     await vi.advanceTimersByTimeAsync(2000)
     expect(beat).toHaveBeenCalledTimes(1)
 
@@ -61,7 +66,7 @@ describe('the sub-agent heartbeat', () => {
 
     await vi.advanceTimersByTimeAsync(6000)
     const beat = vi.fn()
-    sources.agents!.watch!(beat)
+    sources.subagents!.watch!(beat)
     await vi.advanceTimersByTimeAsync(2000)
 
     expect(beat).toHaveBeenCalledTimes(1)

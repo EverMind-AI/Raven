@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
+import { current, setCurrent } from '../../lib/session'
+import { term as findTerm } from '../../state/find'
+import * as lang from '../../state/lang'
 import * as page from '../../state/page'
 import { show as toast } from '../../state/toast'
-import { current, setCurrent } from '../../lib/session'
 import { open as openCron } from '../cron/store'
 import * as store from './store'
 import { plainTitle } from './title'
@@ -11,7 +13,6 @@ import { plainTitle } from './title'
 import type { MenuItem } from '../../state/menu'
 import type { SessRow } from './types'
 import type { JSX, KeyboardEvent, MouseEvent } from 'react'
-import { term as findTerm } from '../../state/find'
 
 /* The row's context/⋯ menu. Opening and acting on a session go through the
    source, while the current pointer is page-scoped modern state, so
@@ -301,7 +302,10 @@ function Group({
 }
 
 export function RailApp(): JSX.Element | null {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The language the page resolved, so a pick repaints this island: every word
+     below is a t(key) read at render time (state/lang/store.ts). */
+  useSyncExternalStore(lang.subscribe, lang.get)
   if (s.skel) {
     /* The live boot's skeleton rows, exactly the shapes the boot guard drew. */
     return (

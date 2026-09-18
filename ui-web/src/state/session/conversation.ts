@@ -11,7 +11,8 @@
  * owned by nobody who could be handed the flag instead.
  */
 
-import { islands } from '../../features/registry'
+import { ask as drawAsk, note as drawNote } from '../../features/transcript/mount'
+import { setStuck } from '../../features/transcript/tail'
 import { I18N } from '../../i18n/t'
 
 import type { NoteHandle } from '../../features/transcript/types'
@@ -55,9 +56,9 @@ export function splitAtts(text: string): { body: string; atts: string[] } {
 
 export function ask(text: string, when?: string): void {
   unpitch()
-  islands.transcript.setStuck(true)
+  setStuck(true)
   /* The bubble, its attachment chips and its footer are the island's. */
-  islands.transcript.ask(text, when)
+  drawAsk(text, when)
 }
 
 /* Writes what the row shows and what it can give back, together; `row` is the
@@ -84,7 +85,7 @@ export function noteRow(
      uses on it (noteSay's set, compressNow's remove). `host` needs no
      forwarding: the island's main lane IS the #stage transcript, and a
      delegated pane draws its own notes from its own record. */
-  return islands.transcript.note(label, detail, {
+  return drawNote(label, detail, {
     quiet: !!o.quiet,
     retry: typeof o.retry === 'function' ? o.retry : null,
   })

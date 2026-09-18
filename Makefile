@@ -81,6 +81,7 @@ lint-types:
 
 lint-ui:
 	npm run gen:check --prefix ui-web
+	npm run lint --prefix ui-web
 	npm run type-check --prefix ui-web
 
 lint-tui:

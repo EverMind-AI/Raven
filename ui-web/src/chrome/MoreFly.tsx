@@ -10,7 +10,7 @@
  * Names only. These three rows are places the reader already knows by name; a
  * sentence under each turned a three-item group into a panel.
  *
- * Words through t() rather than lang.text(key, literal): these rows carry no
+ * Words through t(), like every other line of chrome: these rows carry no
  * served literal to fall back to, because nothing draws them until a reader
  * unfolds the group.
  *
@@ -31,12 +31,12 @@ import type { JSX } from 'react'
 /* The glyphs, in the shape and the attribute order page.css and the sibling nav
    rows have them: one 24x24 box, stroked by the rule rather than by the tag. */
 const GLYPH: Record<string, JSX.Element> = {
-  xaPage: (
+  extAgentsPage: (
     <>
       <rect x="3.5" y="4" width="7" height="7" rx="1.6" /><rect x="13.5" y="13" width="7" height="7" rx="1.6" /><path d="M10.5 7.5h3.5a3 3 0 0 1 3 3v2.5" />
     </>
   ),
-  connPage: <path d="M9.5 14.5 6.8 17.2a3.3 3.3 0 0 1-4.7-4.7l2.7-2.7M14.5 9.5l2.7-2.7a3.3 3.3 0 0 1 4.7 4.7l-2.7 2.7M9 15l6-6" />,
+  connectionsPage: <path d="M9.5 14.5 6.8 17.2a3.3 3.3 0 0 1-4.7-4.7l2.7-2.7M14.5 9.5l2.7-2.7a3.3 3.3 0 0 1 4.7 4.7l-2.7 2.7M9 15l6-6" />,
   cronPage: (
     <>
       <circle cx="12" cy="12.5" r="7.5" /><path d="M12 8.5v4.2l2.6 1.6M9 2.5h6" />
@@ -48,7 +48,7 @@ export function MoreFly(): JSX.Element {
   const s = useSyncExternalStore(navfly.subscribe, navfly.get)
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
-    <div className="moresub" id="moreFly" data-open="false" role="group" data-i18n-aria="gui.nav.more" aria-label={lang.attr('gui.nav.more')}>
+    <div className="moresub" id="moreFly" data-open="false" role="group" aria-label={lang.attr('gui.nav.more')}>
       {s.rows.map((row) => (
         <button key={row.page} className="navi" onClick={() => navfly.pick(row)}>
           <svg viewBox="0 0 24 24" aria-hidden="true">{GLYPH[row.page]}</svg>

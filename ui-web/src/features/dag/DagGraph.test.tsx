@@ -5,12 +5,12 @@ import { act } from '@testing-library/react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { DagGraph, visibleLayers } from './DagGraph'
-import { CARD, SHEET } from './graph'
-
 import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as pageStore from '../../state/page'
 import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import { DagGraph, visibleLayers } from './DagGraph'
+import { CARD, SHEET } from './graph';
+
 import type { DagNode } from './types'
 import type { Root } from 'react-dom/client'
 

@@ -1,9 +1,10 @@
 import { t } from '../../i18n/t'
-import { ds } from '../../state/sources'
 import { settingsTab } from '../../state/settings'
+import * as settingsDialog from '../../state/settings'
+import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
 
-import * as settingsDialog from '../../state/settings'
 import type {
   ModelCandidate,
   ProviderOp,
@@ -12,15 +13,16 @@ import type {
   UsageStats,
 } from './types'
 
-/* Page state, outside React on purpose: the legacy shell drives this dialog
- * imperatively (the me button and Cmd+, open it, redrawAll repaints it on a
- * language flip, the capabilities rows repaint it after a credential write),
- * so the state lives in a plain store the shims can call, and the component
- * subscribes.
+/* Page state, outside React on purpose: three of the callers that drive this
+ * dialog are not React. The platform's settings shortcut opens it
+ * (state/globalListeners.ts), the whole-page language repaint bumps its epoch
+ * (state/lang/effects.ts) and the boot repaints it once the gateway answers
+ * (app/boot.ts) -- so the state lives in a plain store those three can call,
+ * and the component subscribes.
  *
  * The open tab is NOT here: the chrome jumps the dialog to a section by
- * writing the shared slot (ui-web/src/state/settings.ts) before calling
- * drawSettings(), and the store syncs from it on every draw.
+ * writing the shared slot (ui-web/src/state/settings.ts) before asking for
+ * the repaint below, and the store syncs from it on every draw.
  */
 
 export interface SettingsState {
@@ -88,54 +90,49 @@ const initial = (): SettingsState => ({
   modelNudge: null,
 })
 
-let state: SettingsState = initial()
-const listeners = new Set<() => void>()
+const store = makeStore<SettingsState>(initial())
 let lazy = false
 let usageBusy = false
 let usageAt = 0
 
-export const getState = (): SettingsState => state
+export const { get, subscribe } = store
 
-export function subscribe(l: () => void): () => void {
-  listeners.add(l)
-  return () => listeners.delete(l)
+/** A patch, merged into the page's state. */
+export function set(patch: Partial<SettingsState>): void {
+  store.set((prev) => ({ ...prev, ...patch }))
 }
 
-function set(patch: Partial<SettingsState>): void {
-  state = { ...state, ...patch }
-  for (const l of listeners) l()
-}
+export const source = (): SettingsSource => ds('settings')
 
-export const source = (): SettingsSource => ds<SettingsSource>('settings')
-
-const curTab = (): string => settingsTab.id ?? state.tab
+const curTab = (): string => settingsTab.id ?? get().tab
 
 export async function refresh(): Promise<void> {
   set({ loaded: true })
   try {
     const snap = await source().load()
-    set({ snap, epoch: state.epoch + 1 })
+    set({ snap, epoch: get().epoch + 1 })
   } catch (e) {
     toast(t('gui.op.load_failed', { detail: (e as Error).message || String(e) }))
   }
 }
 
-/* The drawSettings shim lands here. The first draw schedules the fixture (or
-   rpc) load on a task boundary rather than inline: the boot list draws before
-   the live layer has evaluated, and the deferral lets the real source win the
-   seam before anything is fetched. */
+/* Where the boot's own draw step and the language repaint land (app/boot.ts,
+   state/lang/effects.ts). The first draw schedules the fixture (or rpc) load on
+   a task boundary rather than inline: the boot list draws before every source
+   is on the seam, and the deferral lets the real one win it before anything is
+   fetched. */
 export function redraw(): void {
-  set({ tab: curTab(), epoch: state.epoch + 1 })
+  set({ tab: curTab(), epoch: get().epoch + 1 })
   if (!lazy) {
     lazy = true
     setTimeout(() => {
-      if (!state.loaded) void refresh()
+      if (!get().loaded) void refresh()
     }, 0)
   }
 }
 
-/* The live layer's openSettings: load, draw, then lift the veil -- the same
-   order the legacy open kept, so the dialog never greets with fixture rows. */
+/* Load, draw, then lift the veil, in that order, so the dialog never greets
+   with fixture rows. */
 export async function open(): Promise<void> {
   lazy = true
   set({ tab: curTab() })
@@ -144,7 +141,7 @@ export async function open(): Promise<void> {
   /* The counters are read when the tab comes up, the way the legacy usage
      page read them on every draw. The poll only keeps them current after
      that, and only while the dialog stays open. */
-  if (state.tab === 'usage') void usageLoad()
+  if (get().tab === 'usage') void usageLoad()
 }
 
 export async function openModels(): Promise<void> {
@@ -163,7 +160,7 @@ export function setTab(id: string): void {
   /* The drawer belongs to the model page. Left open across a tab change it
      would come back over whatever section is showing, addressed to a provider
      nobody is looking at any more. */
-  set({ tab: id, drawer: null, epoch: state.epoch + 1 })
+  set({ tab: id, drawer: null, epoch: get().epoch + 1 })
   if (id === 'usage') void usageLoad()
 }
 
@@ -177,11 +174,11 @@ const isNotLive = (e: unknown): boolean => !!(e as { notLive?: boolean }).notLiv
 export async function write(key: string, value: unknown): Promise<WriteOutcome> {
   try {
     const snap = await source().set(key, value)
-    set({ snap, epoch: state.epoch + 1 })
+    set({ snap, epoch: get().epoch + 1 })
     return 'ok'
   } catch (e) {
     if (isNotLive(e)) return 'notlive'
-    set({ epoch: state.epoch + 1 })
+    set({ epoch: get().epoch + 1 })
     return 'err'
   }
 }
@@ -193,32 +190,32 @@ export async function everosSave(
 ): Promise<WriteOutcome> {
   try {
     const snap = await source().everosSet(section, fields, borrowFrom)
-    set({ snap, memEdit: null, epoch: state.epoch + 1 })
+    set({ snap, memEdit: null, epoch: get().epoch + 1 })
     return 'ok'
   } catch (e) {
     if (isNotLive(e)) return 'notlive'
-    set({ epoch: state.epoch + 1 })
+    set({ epoch: get().epoch + 1 })
     return 'err'
   }
 }
 
 export function memEditSet(sec: string): void {
-  set({ memEdit: state.memEdit === sec ? null : sec, epoch: state.epoch + 1 })
+  set({ memEdit: get().memEdit === sec ? null : sec, epoch: get().epoch + 1 })
 }
 
 export function toolKeyToggle(id: string): void {
-  set({ toolKeyEdit: state.toolKeyEdit === id ? null : id, epoch: state.epoch + 1 })
+  set({ toolKeyEdit: get().toolKeyEdit === id ? null : id, epoch: get().epoch + 1 })
 }
 
 export function advToggle(): void {
-  set({ mdlAdv: !state.mdlAdv, epoch: state.epoch + 1 })
+  set({ mdlAdv: !get().mdlAdv, epoch: get().epoch + 1 })
 }
 
 /* Which provider the right-hand pane is showing. A selection, not a toggle:
    the pane is always showing one, so clicking the row you are already on must
    not empty it. */
 export function provSelect(id: string): void {
-  if (state.provOpen === id) return
+  if (get().provOpen === id) return
   /* No `epoch` bump. That counter remounts the whole panel so uncontrolled
      fields restart from freshly loaded values, and a remounted rail is a new
      element scrolled back to the top -- picking a provider near the bottom of
@@ -233,7 +230,7 @@ export function addModelOpen(slug: string): void {
 }
 
 export function addModelClose(): void {
-  if (state.drawer === null) return
+  if (get().drawer === null) return
   set({ drawer: null, addErr: '' })
 }
 
@@ -258,16 +255,16 @@ export async function fetchModelsOpen(slug: string): Promise<void> {
     const out = await ask(slug)
     /* Dropped if the drawer moved on: a second provider's list must not land
        under the first one's heading. */
-    if (state.drawer?.slug !== slug || state.drawer.mode !== 'list') return
+    if (get().drawer?.slug !== slug || get().drawer?.mode !== 'list') return
     set({ fetch: { busy: false, rows: out.models || [], status: out.status || '', error: out.error || '' } })
   } catch (e) {
-    if (state.drawer?.slug !== slug) return
+    if (get().drawer?.slug !== slug) return
     set({ fetch: { busy: false, rows: [], status: 'error', error: errText(e) } })
   }
 }
 
 /* Add or drop one row of the fetched list, and flip that row where it stands.
-   The list is the drawer's own state, so a snapshot refresh does not touch it
+   The list is the drawer's own get(), so a snapshot refresh does not touch it
    -- without this the row a person just added still offers to add it. */
 export async function catalogueToggle(slug: string, row: ModelCandidate): Promise<void> {
   const params: Record<string, unknown> = row.added
@@ -282,11 +279,11 @@ export async function catalogueToggle(slug: string, row: ModelCandidate): Promis
       }
   const before = row.added
   await providerRun(before ? 'remove_model' : 'add_model', params)
-  if (state.provErr) return
+  if (get().provErr) return
   set({
     fetch: {
-      ...state.fetch,
-      rows: state.fetch.rows.map((r) => (r.id === row.id ? { ...r, added: !before } : r)),
+      ...get().fetch,
+      rows: get().fetch.rows.map((r) => (r.id === row.id ? { ...r, added: !before } : r)),
     },
   })
 }
@@ -298,7 +295,7 @@ export async function catalogueAddAll(slug: string, rows: ModelCandidate[]): Pro
   for (const row of rows) {
     if (row.added) continue
     await catalogueToggle(slug, row)
-    if (state.provErr) return
+    if (get().provErr) return
   }
 }
 
@@ -306,24 +303,24 @@ export async function catalogueAddAll(slug: string, rows: ModelCandidate[]): Pro
    if it lands. A refusal -- a duplicate id, a provider that went away -- has to
    stay in front of the form that caused it, with the fields still filled. */
 export async function addModelSave(params: Record<string, unknown>): Promise<void> {
-  if (state.provBusy) return
+  if (get().provBusy) return
   set({ provBusy: true, addErr: '' })
   try {
     const snap = await source().provider('add_model', params)
-    set({ snap, provBusy: false, drawer: null, addErr: '', epoch: state.epoch + 1 })
+    set({ snap, provBusy: false, drawer: null, addErr: '', epoch: get().epoch + 1 })
   } catch (e) {
     const msg = errText(e)
-    set({ provBusy: false, addErr: msg, epoch: state.epoch + 1 })
+    set({ provBusy: false, addErr: msg, epoch: get().epoch + 1 })
   }
 }
 
 /* Validation refusals land where the legacy provErr did: in the open form. */
 export function provSay(msg: string): void {
-  set({ provErr: msg, epoch: state.epoch + 1 })
+  set({ provErr: msg, epoch: get().epoch + 1 })
 }
 
 export function clearProvFocus(): void {
-  state = { ...state, provFocus: false }
+  set({ provFocus: false })
 }
 
 /* What a refused provider write says to the reader. Shared by the two callers
@@ -334,13 +331,13 @@ function errText(e: unknown): string {
 }
 
 export async function providerRun(op: ProviderOp, params: Record<string, unknown>): Promise<void> {
-  if (state.provBusy) return
+  if (get().provBusy) return
   set({ provBusy: true, provErr: '' })
   try {
     const snap = await source().provider(op, params)
-    set({ snap, provBusy: false, epoch: state.epoch + 1, modelNudge: emptyAfterConnect(op, params, snap) })
+    set({ snap, provBusy: false, epoch: get().epoch + 1, modelNudge: emptyAfterConnect(op, params, snap) })
   } catch (e) {
-    set({ provBusy: false, provErr: errText(e), epoch: state.epoch + 1 })
+    set({ provBusy: false, provErr: errText(e), epoch: get().epoch + 1 })
   }
 }
 
@@ -357,8 +354,8 @@ function emptyAfterConnect(op: ProviderOp, params: Record<string, unknown>, snap
   return row && !(row.configured ?? []).length ? slug : null
 }
 
-/* The default-model picker is legacy live chrome; the source hands the
-   island a door to it. Returns false when no picker is behind the page. */
+/* The default-model picker is page chrome (features/model); the source hands
+   the island a door to it. Returns false when no picker is behind the page. */
 export function pickDefault(anchor: HTMLElement): boolean {
   const s = source()
   if (!s.pickModel) return false
@@ -369,11 +366,11 @@ export function pickDefault(anchor: HTMLElement): boolean {
     const src = source()
     set({
       snap: {
-        ...state.snap,
+        ...get().snap,
         model: src.model(),
-        curProvider: src.defaultProvider ? src.defaultProvider() : state.snap.curProvider,
+        curProvider: src.defaultProvider ? src.defaultProvider() : get().snap.curProvider,
       },
-      epoch: state.epoch + 1,
+      epoch: get().epoch + 1,
     })
   })
   return true
@@ -395,8 +392,8 @@ export function usageSelect(session: string): void {
 export async function usageLoad(): Promise<void> {
   if (usageBusy || Date.now() - usageAt < 3000) return
   usageBusy = true
-  const selected = state.usageSession
-  let usage = state.usage
+  const selected = get().usageSession
+  let usage = get().usage
   try {
     usage = await source().usage(selected || undefined)
   } catch {
@@ -413,14 +410,16 @@ export async function usageLoad(): Promise<void> {
     }
   }
   usageBusy = false
-  if (selected !== state.usageSession) { void usageLoad(); return }
+  if (selected !== get().usageSession) { void usageLoad(); return }
   usageAt = Date.now()
   set({ usage })
 }
 
-/* Test seam: back to the boot state, timers and floors included. */
-export function reset(): void {
-  state = initial()
+/* Test seam: back to the boot state, timers and floors included. A fresh
+   initial() rather than the store's own, because this state nests objects and a
+   shared one would carry a case's writes into the next. */
+export function _resetForTests(): void {
+  store.set(initial())
   lazy = false
   usageBusy = false
   usageAt = 0

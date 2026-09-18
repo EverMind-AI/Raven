@@ -1,11 +1,7 @@
 /* What the page does between "the bundle has run" and "the reader can work".
  *
- * One sequence, in one place, called once from main.tsx. It used to be two
- * halves of the legacy layer -- a guard part that claimed the splash and held
- * the rail, and a boot part that asked the gateway everything a first frame
- * needs -- and the order between them was the order two files happened to sit
- * in a manifest. The steps are the same steps, in the same order; what changed
- * is that the order is now readable as a list.
+ * One sequence, in one place, called once from main.tsx: claim the splash and
+ * hold the rail, then ask the gateway everything a first frame needs.
  *
  * Which transport answers the calls is decided before any of this runs
  * (src/rpc/chooseTransport.ts): a page opened from disk or with ?stub=1 reads the
@@ -17,61 +13,47 @@
  * until the real counts land.
  */
 
-import { turn } from '../features/composer/mount'
-import { setupState } from '../features/model/source'
-import { onboardSource } from '../features/onboard/source'
-import { loadExt } from '../features/plugins/source'
-import { deleteAllSessions } from '../features/rail/leave'
-import { loadSessions, pinSession } from '../features/rail/source'
-import { loadSettings, pushPermMode } from '../features/settings/source'
-import { islands } from '../features/registry'
-import { hasUpdateFlag } from '../rpc/capabilities'
-import { draw as drawCtx } from '../state/ctxChip'
-import { draw as drawFoot } from '../state/foot'
-import { bootError } from '../state/failureBar'
-import { load as lookLoad } from '../state/look'
 import { load as paneLoad } from '../chrome/behaviour/panes'
-import { draw as drawPerm } from '../state/perm'
+import { goPaint } from '../features/composer/mount'
+import { warm as warmCron } from '../features/cron/store'
+import { loadExt } from '../features/installed/source'
+import { setupState } from '../features/model/source'
+import { open as openOnboard } from '../features/onboard/store'
+import { loadSessions, sessionsSource } from '../features/rail/source'
+import { draw as sessionDraw, hold as holdRail, release as releaseRail } from '../features/rail/store'
+import { loadSettings, pushPermMode } from '../features/settings/source'
+import { redraw as redrawSettings } from '../features/settings/store'
 import { hostPlatformSet } from '../lib/platform'
-import { current as sessionCurrent, setCurrent as sessionSet } from '../lib/session'
-import { load as loadTier } from '../state/tier'
-import * as caps from '../state/caps'
-import { authFail, bootFail, shellReady, surface } from './connection'
-import { setRuntime } from '../state/envChip'
+import { setCurrent as sessionSet } from '../lib/session'
+import { hasUpdateFlag } from '../rpc/capabilities'
 import { gateway } from '../rpc/gateway'
-import { installPage } from './install'
-import { load as loadLang, restore as langRestore } from '../state/lang/pick'
+import * as caps from '../state/caps'
+import { draw as drawCtx } from '../state/ctxChip'
+import { setRuntime } from '../state/envChip'
+import { bootError } from '../state/failureBar'
+import { draw as drawFoot } from '../state/foot'
+import { load as loadLang } from '../state/lang/pick'
+import { load as lookLoad } from '../state/look'
+import { draw as drawPerm } from '../state/perm'
 import { set as setRail } from '../state/rail'
-import { open as sessionOpen, rows as sessionRows, sess } from '../state/session/rows'
 import { switchTo, switchToDraft } from '../state/session/registry'
+import { landing, watch as watchSessionNote } from '../state/session/resume'
+import { open as sessionOpen, rows as sessionRows, sess } from '../state/session/rows'
 import { sources } from '../state/sources'
+import { load as loadTier } from '../state/tier'
+import { bump as bumpWs } from '../state/ws'
+import { authFail, bootFail, shellReady, surface } from './connection'
+import { installPage } from './install'
 import { hideSplash } from './splash'
 import { appVersionSet, resumeUpgrade, showUpNote, watchForUpdates } from './updates'
-import { bump as bumpWs } from '../state/ws'
 
-import type { RailSource, SessRow } from '../features/rail/types'
+import type { SessRow } from '../features/rail/types'
 
 /* `update_available` and `latest_version` ride along with the version answer
    without being in the contract's result schema: the gateway adds them from
    its own update cache, so a server too old to have one omits both and the
    notice row simply stays hidden (see rpc/capabilities.hasUpdateFlag). */
 const latestOf = (v: unknown): string | undefined => (v as { latest_version?: string }).latest_version
-
-/* The rows the rail draws, held here because the page holds them: the list is
-   one answer to `session.list`, read back by every draw and replaced whole by
-   the next answer. */
-let rows: SessRow[] = []
-
-/* The session source, which is also where the three writes a row makes for
-   itself are answered. Built as one object rather than grown by five installs:
-   every verb on it is now a function with a home of its own. */
-export const sessionsSource: RailSource = {
-  snapshot: () => ({ rows, cur: sessionCurrent(), busy: turn.busy() }),
-  replace: (next) => { rows = next },
-  open: (s) => switchTo(s),
-  pin: pinSession,
-  deleteAll: deleteAllSessions,
-}
 
 /* The page's own claim on the first frame: the shell's markers, the splash,
    and the rail held on skeleton rows until the first list lands. Everything
@@ -90,24 +72,24 @@ function claimFirstFrame(): void {
   /* Set before the deferred first paint, cleared once the real counts land. */
   const rail = document.querySelector('.rail') as HTMLElement | null
   if (rail) rail.dataset.counts = 'pending'
-  sources.sessions = sessionsSource
-  islands.rail.hold()
+  sources.rail = sessionsSource
+  holdRail()
   sessionSet(null)
   /* From here on the pointer is the page's own, so what it says can be recorded
      for the next reload. Started after the line above on purpose: the demo
      chrome has already opened its canned session on this page, and both that
      and the clear above are fixture noise the note must not carry (see
-     lib/resume.ts). */
-  islands.view.watch()
+     state/session/resume.ts). */
+  watchSessionNote()
 }
 
-/* Everything a first frame needs from the gateway, in the order it needs it. */
+/* Everything a first frame needs from the gateway, in the order it needs it.
+ *
+ * The language is not a step here any more: the store resolves it as it loads,
+ * from the remembered pick and otherwise from what the document declares
+ * (state/lang/store.ts), so the notice that explains a page which cannot
+ * connect is already in the reader's language before this runs. */
 async function sequence(): Promise<void> {
-  /* Ahead of the connect, because the failure path below never reaches
-     `loadLang`: the notice that explains a page which cannot connect has to
-     be in the reader's language, and the only copy available offline is the
-     one the last successful boot remembered. */
-  langRestore()
   /* The first connect is the one place where a socket that never opened really
      does mean the session is not welcome: nothing has been served to this page
      yet that could have come from a gateway which then went away. The rejoin
@@ -136,7 +118,7 @@ async function sequence(): Promise<void> {
       .then((fresh) => { if (hasUpdateFlag(fresh)) showUpNote('ver', latestOf(fresh)) })
       .catch(() => {})
     await loadSessions()
-    islands.rail.release()
+    releaseRail()
     /* Home is the new-task screen, never the last session: opening straight
        into someone else's half-finished transcript is a worse first frame than
        an empty composer, and the rail is one click away. A draft writes nothing
@@ -146,10 +128,10 @@ async function sequence(): Promise<void> {
        conversation and did not ask to leave it -- the page was replaced under
        them, by a refresh or by an upgrade -- so the tab's own note is what
        decides here, and it exists only for a tab that was already somewhere
-       (lib/resume.ts). Asked of the list rather than opened blind: a
+       (state/session/resume.ts). Asked of the list rather than opened blind: a
        conversation deleted since is a note for something that is not there any
        more, and the new-task screen is the right answer for it. */
-    const back = islands.view.landing(sessionRows().map((s: SessRow) => s.id))
+    const back = landing(sessionRows().map((s: SessRow) => s.id))
     if (back) await switchTo(sess(back) as SessRow)
     else switchToDraft()
     /* Remember whether task actions need to send the reader to Models. The
@@ -164,7 +146,7 @@ async function sequence(): Promise<void> {
          nothing would get the version that writes. */
       const cannedInstead = /[?&]onboard=demo/.test(location.search)
       if (!cannedInstead && /[?&]onboard=1/.test(location.search)) {
-        islands.onboard.open()
+        openOnboard()
       }
     } catch (e) {
       if (window.console) console.warn('[live boot] setup.status failed; skipping onboarding gate', e)
@@ -185,7 +167,7 @@ async function sequence(): Promise<void> {
        the demo mock's phantom counts. */
     Promise.allSettled([
       loadExt(),
-      islands.cron.warm(),
+      warmCron(),
     ]).then(() => {
       const rail = document.querySelector('.rail') as HTMLElement | null
       if (rail) delete rail.dataset.counts
@@ -208,7 +190,7 @@ export function bootPage(): void {
     ['lookLoad', (): void => lookLoad()],
     ['paneLoad', (): void => paneLoad()],
     ['setRail', (): void => setRail(true)],
-    ['sessionDraw', (): void => islands.rail.draw()],
+    ['sessionDraw', (): void => sessionDraw()],
     /* A live boot deliberately starts with an empty source and chooses a draft
        after the real list lands; an offline page has a fixture row to open. */
     ['sessionOpen', (): void => { const first = sessionRows()[0]; if (first) void sessionOpen(first) }],
@@ -218,9 +200,9 @@ export function bootPage(): void {
     ['drawCaps', (): void => caps.draw()],
     ['drawFoot', (): void => drawFoot()],
     ['bumpWs', (): void => bumpWs()],
-    ['drawSettings', (): void => islands.settings.redraw()],
+    ['drawSettings', (): void => redrawSettings()],
     ['setRuntime', (): void => setRuntime()],
-    ['goState', (): void => islands.composer.goPaint()],
+    ['goState', (): void => goPaint()],
   ] as Array<[string, () => void]>).forEach(([where, step]) => {
     try { step() } catch (e) { bootError(where, e) }
   })
@@ -231,7 +213,7 @@ export function bootPage(): void {
    Registered with the page's other window listeners
    (src/state/globalListeners.ts). */
 export function onLoad(): void {
-  if (/[?&]onboard=demo/.test(location.search)) islands.onboard.open()
+  if (/[?&]onboard=demo/.test(location.search)) openOnboard()
 }
 
 /**

@@ -12,21 +12,9 @@
  * paint order is not in the DOM -- so the stylesheet is where it is pinned.
  */
 
-import { readFileSync } from 'node:fs'
-
 import { describe, expect, it } from 'vitest'
 
-const css = readFileSync(new URL('../../src/styles/page.css', import.meta.url), 'utf8')
-
-/* One rule's declarations, by its exact selector. Comments come out first: what
-   sits between two rules is captured as the next one's selector, prose and all. */
-function rule(selector) {
-  const rules = css.replace(/\/\*[\s\S]*?\*\//g, ' ')
-  for (const match of rules.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    if (match[1].trim() === selector) return match[2]
-  }
-  return null
-}
+import { rule, rules } from './css.mjs'
 
 const zOf = (selector) => {
   const body = rule(selector)
@@ -43,12 +31,11 @@ const zOf = (selector) => {
    and is not this invariant. `-lift` and `-settle` are the two that carry one
    on purpose. */
 function paneLevels() {
-  const rules = css.replace(/\/\*[\s\S]*?\*\//g, ' ')
   const out = []
-  for (const match of rules.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    const z = match[2].match(/z-index:\s*(-?\d+)/)
+  for (const [selector, body] of rules(null)) {
+    const z = body.match(/z-index:\s*(-?\d+)/)
     if (!z) continue
-    for (const part of match[1].split(',')) {
+    for (const part of selector.split(',')) {
       const target = part.trim().split(/[\s>+~]+/).filter(Boolean).pop() || ''
       if (!target.includes('.desk-pane')) continue
       if (target.includes('.desk-pane-lift') || target.includes('.desk-pane-settle')) continue

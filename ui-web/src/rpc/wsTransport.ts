@@ -1,3 +1,6 @@
+import { absorb, gone } from './capabilities'
+import { RpcError } from './transport'
+
 import type { ParamsOf, ResultOf, RpcMethod, SystemHelloResult } from './generated'
 import type { PushMethod } from './notifications'
 import type {
@@ -8,9 +11,6 @@ import type {
   StateInfo,
   StateListener,
 } from './transport'
-
-import { absorb, gone } from './capabilities'
-import { RpcError } from './transport'
 
 /* The live end of the DataSource seam: JSON-RPC 2.0 over one WebSocket to
    /rpc, with the rejoin policy the page runs today. Every behaviour here is

@@ -1,5 +1,5 @@
-/* One diff row, in the legacy shape the demo shell's hunk builders still
-   produce: a tuple of [kind, text, oldLineNo, newLineNo], where a 'gap' row
+/* One diff row, in the shape features/workspace/hunks.ts produces: a tuple of
+   [kind, text, oldLineNo, newLineNo], where a 'gap' row
    carries the folded lines as its second slot and an `open` expando the
    reader toggles in place. */
 export type DiffRow = [string, string | string[], (number | null)?, (number | null)?] & {

@@ -5,9 +5,9 @@
  * same way the real hub does, so the installed shelf answers the change.
  */
 
-import type { ExtFixture } from './ext'
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
 import type { ResultOf } from '../generated'
+import type { ExtFixture } from './ext'
 
 type Item = ResultOf<'skillhub.search'>['items'][number]
 
@@ -96,7 +96,7 @@ export function createSkillhub(_env: FixtureEnv, ext: ExtFixture): SkillhubFixtu
           ...item(e),
           files: ['SKILL.md'], skill_md: `# ${e.name}\n\n${e.description}`,
           body_tokens: 1200, subscores: { utility: 8, robustness: 7, safety: 9, flags: [] },
-        } as ResultOf<'skillhub.detail'>
+        }
       },
       'skillhub.install': (p) => {
         const e = HUB_FIXTURE.find((h) => h.id === p.id)

@@ -4,17 +4,11 @@
  * conversation the reader has left can land after the one they moved to; the
  * generation ticket is what keeps the late answer from repainting the page. A
  * synchronous stub cannot exercise that, so this runs the real functions.
- *
- * Migrated from scripts/model-refresh-live.test.mjs when the model and
- * settings sources left the legacy layer: the assertions are unchanged, and
- * what moved is how the harness reaches them -- imports of the two source
- * modules and the override part, instead of one part and its collaborators.
  */
 
 import { describe, expect, it } from 'vitest'
 
 import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
-import { resetTranslator, setTranslator } from '../../i18n/t'
 
 /* One entry of the traffic log: a method name with its params, or a page verb
    with whatever it was handed. */
@@ -57,6 +51,7 @@ async function live({ session = null, answers = null }: Options = {}) {
       },
       'src/features/rail/store': {
         draw: () => {},
+        endRename: () => {},
       },
       'src/features/composer/mount': {
         drawMeter: () => {},
@@ -79,11 +74,9 @@ async function live({ session = null, answers = null }: Options = {}) {
       'src/state/tier': { load: () => {} },
       'src/state/perm': { setFromConfig: (m: string) => calls.push(['setPermMode', m]) },
       'src/state/session/residency': { park: () => {} },
-    },
-    islands: {
-      settings: { openModels: () => calls.push(['openModels']) },
-      rail: { endRename: () => {} },
-      model: { current: () => '', setCurrent: (m: string) => calls.push(['modelSet', m]) },
+      'src/features/settings/store': {
+        openModels: () => calls.push(['openModels']),
+      },
     },
   })
   await fakeGateway((method: string, params: Record<string, unknown>) => {

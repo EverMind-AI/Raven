@@ -13,9 +13,8 @@
  * the tooltip and the offset are nullable here.
  */
 
-import { flushSync } from 'react-dom'
-
 import { t } from '../i18n/t'
+import { makeStore } from './store'
 
 /* The turn's own usage, as message.complete reports it (context_used /
    context_max). The state is the store's because the ring is: nothing else
@@ -35,22 +34,12 @@ export interface CtxState {
 }
 
 const served: CtxState = { shown: false, warm: false, hot: false, offset: null, tip: null }
-let state: CtxState = served
-const listeners = new Set<() => void>()
+const store = makeStore<CtxState>(served)
 
 /** The ring's state, for <CtxChip/>. */
-export function get(): CtxState {
-  return state
-}
+export const { get, subscribe } = store
 
 /** For useSyncExternalStore: called whenever the ring changes. */
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => {
-    listeners.delete(fn)
-  }
-}
-
 /* The ring's circumference, so a percentage can be said as the length of dash
    left to go. Pinned to the markup: the chip draws the circle at r="7.6", and
    2*pi*7.6 is 47.75. The two have to agree or the ring stops at the wrong
@@ -60,18 +49,16 @@ const RING = 47.75
 const fmtTokens = (n: number): string =>
   n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n)
 
-/* Committed synchronously, the way the five writes by id were: a caller that
-   asks for a draw and then reads the chip -- the boot list, redrawAll, the
-   turn's own completion -- has to see the ring it just asked for. */
-function put(next: CtxState): void {
-  if (
-    next.shown === state.shown && next.warm === state.warm && next.hot === state.hot
-    && next.offset === state.offset && next.tip === state.tip
-  ) return
-  state = next
-  flushSync(() => {
-    for (const fn of [...listeners]) fn()
-  })
+/* Committed synchronously: a caller that asks for a draw and then reads the
+   chip -- the boot list (app/boot.ts), the language repaint
+   (state/lang/effects.ts), the turn's own completion -- has to see the ring it
+   just asked for. */
+/* The same five fields are not a write: this runs on every report the gateway
+   sends, and most of them move nothing the reader can see. */
+function unchanged(next: CtxState): boolean {
+  const now = get()
+  return next.shown === now.shown && next.warm === now.warm && next.hot === now.hot
+    && next.offset === now.offset && next.tip === now.tip
 }
 
 export function draw(): void {
@@ -80,7 +67,8 @@ export function draw(): void {
      cannot be reached with any of them set, because no report ever takes a
      window away again -- `set` below only ever raises one. */
   if (!max) {
-    put({ ...state, shown: false })
+    const off = { ...get(), shown: false }
+    if (!unchanged(off)) store.set(off)
     return
   }
   const pct = Math.min(100, Math.max(0, Math.round((100 * used) / max)))
@@ -91,13 +79,14 @@ export function draw(): void {
     max: fmtTokens(max),
     pct: String(pct),
   })
-  put({
+  const next: CtxState = {
     shown: true,
     warm: pct >= 70 && pct < 90,
     hot: pct >= 90,
     offset: String(RING * (1 - pct / 100)),
     tip,
-  })
+  }
+  if (!unchanged(next)) store.set(next)
 }
 
 /* Two numbers, though the live layer's message.complete carries a third:
@@ -121,5 +110,5 @@ export function set(nextUsed: number, nextMax: number): void {
 export function _resetForTests(): void {
   used = 0
   max = 0
-  state = served
+  store._resetForTests()
 }

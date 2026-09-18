@@ -9,10 +9,9 @@
  * re-render, because React diffs against the props it rendered last rather than
  * against the document.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readFileSync } from 'node:fs'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import * as lang from '../state/lang'
 import * as navfly from '../state/navfly'
@@ -31,7 +30,7 @@ const names = (): Array<string | null> => rows().map((b) => b.querySelector('.nm
 let unmount = (): void => {}
 
 beforeEach(() => {
-  navfly.reset()
+  navfly._resetForTests()
   document.body.innerHTML = ''
   unmount = mountPageRoot()
 })
@@ -78,7 +77,7 @@ describe('the more flyout', () => {
    everything after it. */
 describe('the more flyout once a language is applied', () => {
   it('renders the applied words, and leaves the mark and the fold alone', () => {
-    document.getElementById('connPage')!.dataset.open = 'true'
+    document.getElementById('connectionsPage')!.dataset.open = 'true'
     navfly.draw()
     /* The state the rows are in before the flip: the middle page is the one
        that is up, and the group has been unfolded by its own writer. */

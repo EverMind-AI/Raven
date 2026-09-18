@@ -28,7 +28,7 @@ import { markNew as markNewCurrent } from '../features/rail/store'
  * draw and writes it when a reader picks a section, so the slot has to be
  * somewhere both sides can reach -- which used to mean window.sTab.
  *
- * `usage` is the section the page is served on, as the legacy shell's install
+ * `usage` is the section the page is served on, as the dialog's own install
  * seeded it. `null` is "nothing has asked for a section", which is what a reset
  * test starts from; the island then shows the tab its own state holds. `open`
  * below never touches it.
@@ -63,4 +63,11 @@ export function close(): void {
   up = false
   paint()
   markNewCurrent()
+}
+
+/* Test seam only: whether the dialog stands open, and which pane it opened on,
+   are the module's. */
+export function _resetForTests(): void {
+  up = false
+  settingsTab.id = 'usage'
 }

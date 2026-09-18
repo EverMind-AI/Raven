@@ -29,14 +29,16 @@
  * owning it would re-render a text field the reader is typing into. Its two
  * listeners are native, on the element itself -- which is also what lets the
  * composition guard read the real KeyboardEvent -- and they dispatch on the
- * open tab, which is what the three layers the legacy chrome stacked on this
- * one field did (demo/150-chrome.js, then 152-skills.js, then 153-plugins.js).
+ * open tab, which is the one thing the two tab renderers cannot decide for
+ * themselves (features/skills/wire.ts, features/plugins/wire.ts).
  */
 
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 
 import { composing } from '../features/composer/store'
-import { islands } from '../features/registry'
+import * as plugins from '../features/plugins/store'
+import * as skills from '../features/skills/store'
+import { t } from '../i18n/t'
 import * as caps from '../state/caps'
 import * as lang from '../state/lang'
 
@@ -58,7 +60,7 @@ const PILLS = [
 function Title(): JSX.Element {
   const s = useSyncExternalStore(caps.subscribe, caps.get)
   useSyncExternalStore(lang.subscribe, lang.get)
-  return <h2 id="capsTitle" data-i18n="gui.tab.skills">{s.title ?? lang.text('gui.tab.skills', '技能')}</h2>
+  return <h2 id="capsTitle">{s.title ?? t('gui.tab.skills')}</h2>
 }
 
 /* The search field. The placeholder is the only word on this page with no key
@@ -78,11 +80,11 @@ function Search(): JSX.Element {
       const value = el.value.trim()
       const tab = caps.get().tab
       if (tab === 'plugin') {
-        islands.plugins.setQuery(value)
+        plugins.setQuery(value)
         return
       }
       if (tab === 'skill') {
-        islands.skills.setQuery(value)
+        skills.setQuery(value)
         return
       }
       caps.setQuery(el.value.trim().toLowerCase())
@@ -94,7 +96,7 @@ function Search(): JSX.Element {
       if (composing(e)) return
       if (e.key !== 'Enter' || caps.get().tab !== 'skill') return
       e.preventDefault()
-      islands.skills.searchNow(el.value.trim())
+      skills.searchNow(el.value.trim())
     }
     el.addEventListener('input', typed)
     el.addEventListener('keydown', key)
@@ -110,16 +112,17 @@ function Search(): JSX.Element {
         <circle cx="11" cy="11" r="7" /><path d="M20 20l-4.3-4.3" />
       </svg>
       {' '}
-      <input id="cq" placeholder={s.search ?? '搜索'} data-i18n-aria="gui.search" aria-label={lang.attr('gui.search')} ref={field} />
+      <input id="cq" placeholder={s.search ?? '搜索'} aria-label={lang.attr('gui.search')} ref={field} />
       {' '}
     </div>
   )
 }
 
 /* One tab's "installed" entry point, which rides in the bar rather than in the
-   page: the count is the part's (demo/152-skills.js, 153-plugins.js), and the
-   click is the island's view switch. Rendered only once its part has created
-   it, and with no label until the first sync, which is how it was built. */
+   page: the count is the tab renderer's (features/skills/wire.ts,
+   features/plugins/wire.ts) and the click is the island's view switch. Rendered
+   only once its renderer has asked for it, and with no label until the first
+   sync, which is when the count is known. */
 function InstalledButton({ btn, toggle }: { btn: caps.Installed; toggle: () => void }): JSX.Element {
   return (
     <button className="pminstbtn" hidden={btn.hidden} onClick={toggle}>
@@ -139,22 +142,21 @@ function FilterBar(): JSX.Element {
   return (
     <>
       <Search />
-      <div className="pills" id="cKind" role="group" data-i18n-aria="gui.filter_status" aria-label={lang.attr('gui.filter_status')} hidden={s.pillsHidden}>
+      <div className="pills" id="cKind" role="group" aria-label={lang.attr('gui.filter_status')} hidden={s.pillsHidden}>
         {PILLS.map((pill) => (
           <button
             key={pill.k}
             className="pill"
             data-k={pill.k}
             aria-pressed={s.kind === pill.k ? 'true' : 'false'}
-            data-i18n={pill.key}
             onClick={() => caps.pick(pill.k)}
           >
-            {lang.text(pill.key, pill.literal)}
+            {t(pill.key)}
           </button>
         ))}
       </div>
-      {s.skill ? <InstalledButton btn={s.skill} toggle={() => islands.skills.toggleView()} /> : null}
-      {s.plugin ? <InstalledButton btn={s.plugin} toggle={() => islands.plugins.toggleView()} /> : null}
+      {s.skill ? <InstalledButton btn={s.skill} toggle={() => skills.toggleView()} /> : null}
+      {s.plugin ? <InstalledButton btn={s.plugin} toggle={() => plugins.toggleView()} /> : null}
     </>
   )
 }
@@ -166,14 +168,14 @@ function ManualAdd(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
     <>
-      <summary data-i18n="gui.adv_add">{lang.text('gui.adv_add', '高级 · 手动添加')}</summary>
-      <p style={{ color: 'var(--muted)', fontSize: '12.5px', margin: '10px 0 0' }} data-i18n="gui.adv_hint">
-        {lang.text('gui.adv_hint', '知道要接什么就直接填地址或启动命令，Raven 会握手取回它提供的动作。')}
+      <summary>{t('gui.adv_add')}</summary>
+      <p style={{ color: 'var(--muted)', fontSize: '12.5px', margin: '10px 0 0' }}>
+        {t('gui.adv_hint')}
       </p>
       <div className="row">
-        <input id="mName" data-i18n-ph="gui.adv_name_ph" placeholder={lang.text('gui.adv_name_ph', '名称，例如 内部 CRM')} />
-        <input id="mAddr" data-i18n-ph="gui.adv_addr_ph" placeholder={lang.text('gui.adv_addr_ph', '地址或命令，例如 npx -y @acme/crm-mcp')} />
-        <button className="mini" id="mAdd" data-i18n="gui.add" onClick={() => void caps.manualAdd()}>{lang.text('gui.add', '添加')}</button>
+        <input id="mName" placeholder={t('gui.adv_name_ph')} />
+        <input id="mAddr" placeholder={t('gui.adv_addr_ph')} />
+        <button className="mini" id="mAdd" onClick={() => void caps.manualAdd()}>{t('gui.add')}</button>
       </div>
     </>
   )

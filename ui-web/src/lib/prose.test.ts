@@ -1,12 +1,12 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { md } from './prose'
-import { resetSources, setSources } from '../state/sources'
-
 import { resetTranslator, setTranslator } from '../i18n/t'
-import * as pageStore from '../state/page'
 import * as confirmStore from '../state/confirm'
+import * as pageStore from '../state/page'
+import { resetSources, setSources } from '../state/sources'
+import { md } from './prose'
+
 import type { ProseSource } from './prose'
 
 /* The renderer reads two things and nothing else: whether a string is a path

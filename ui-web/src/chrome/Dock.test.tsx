@@ -15,18 +15,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as composer from '../features/composer/mount'
 import * as store from '../features/composer/store'
+import { resetTranslator, setTranslator } from '../i18n/t'
+import * as confirmStore from '../state/confirm'
 import * as ctx from '../state/ctxChip'
 import * as lang from '../state/lang'
+import * as pageStore from '../state/page'
 import * as perm from '../state/perm'
 import { _resetForTests as resetLayers, host } from '../state/portals'
 import { setSources } from '../state/sources'
 import * as tier from '../state/tier'
 import { bodySiblings } from '../test/domSnapshot'
-import { mountPageRoot } from '../test/pageRoot'
+import { mountPageRoot } from '../test/pageRoot';
 
-import { resetTranslator, setTranslator } from '../i18n/t'
-import * as confirmStore from '../state/confirm'
-import * as pageStore from '../state/page'
 import type { ComposerSource } from '../features/composer/types'
 import type { TierSource } from '../state/tier'
 
@@ -71,7 +71,7 @@ const key = (init: KeyboardEventInit): void => {
   })
 }
 
-/* The two popovers keep their up-or-down, the chip's paint and the tier panel's
+/* The two popovers keep their up-or-down, the chip's paint and the tier popover's
    two headings in a store rather than on the node (src/state/perm.ts,
    src/state/tier.ts), so all of it outlives a case's markup and has to be put
    back by hand between them. */
@@ -218,7 +218,7 @@ describe('the dock', () => {
     for (const sel of ['#permName', '#envName', '#tierName', '#modelName', '#slashPop .lab', '#permPop .lab', '#permPop .note']) {
       expect(document.querySelector(sel)?.textContent, sel).not.toBe('')
     }
-    /* The heading and the note of the tier panel come from the store, chosen on
+    /* The heading and the note of the tier popover come from the store, chosen on
        open from the catalogue that answered, so they carry no key and no
        literal -- and nothing at all before the first open. */
     expect(el('tierPop').querySelector('.note')!.textContent).toBe('')
@@ -328,9 +328,9 @@ describe('the field while the slash palette is open', () => {
   })
 })
 
-/* Both popover writers move their panel to the body the first time it opens,
+/* Both popover writers move their popover to the body the first time it opens,
    because the card's entrance animation makes the card a containing block and
-   re-bases the panel's fixed coordinates. React renders the panel inside the
+   re-bases the popover's fixed coordinates. React renders the popover inside the
    card, so the move takes a child out from under the portal -- which is safe
    only because none of the card's children is conditional, and React therefore
    never reconciles that child list. */
@@ -355,29 +355,26 @@ describe('a popover reparented out of the card', () => {
 })
 
 /* Last in the file on purpose: applying a language is module state for
-   everything after it. Same agreement as the rail's -- the pass state/lang/store.ts
-   makes over the document's data-i18n attributes, and the component rendering
-   the same key through lang.text -- so the dock cannot come back in the served
-   language once a flip has moved it. */
+   everything after it. The claim is that every keyed word here is the
+   catalogue's rather than the literal the markup was served with -- the
+   stand-in translator answers `t:<key>`, so a served word on screen would be
+   visible at once -- and that a pick and a remount both leave it that way. */
 describe('the dock once a language is applied', () => {
-  it('renders the applied words when the band is mounted again', () => {
+  it('renders the keyed words from the catalogue, before and after a pick', () => {
     const KEYED = ['#slashPop .lab', '#permPop .lab', '#permPop .note']
     const words = (): string[] => KEYED.map((sel) => document.querySelector(sel)?.textContent ?? '')
     const hint = (): string => ta().placeholder
+    const asked = ['t:gui.session_commands', 't:gui.perm.title', 't:gui.perm.note']
     render()
-    const served = words()
-    const servedHint = hint()
-    act(() => { lang.set('en') })
-    const applied = words()
-    expect(applied).not.toEqual(served)
-    expect(hint()).not.toBe(servedHint)
-    const appliedHint = hint()
-    /* A remount over fresh markup, which is what the pass over the document
-       cannot help with: the band renders its own literals unless it reads the
-       catalogue itself. */
+    expect(words()).toEqual(asked)
+    expect(hint()).toBe('t:gui.composer_ph')
+    act(() => { lang.set('zh') })
+    expect(words()).toEqual(asked)
+    /* A remount over fresh markup: the band would render its own literals again
+       if it did not read the catalogue itself. */
     render()
-    expect(words()).toEqual(applied)
-    expect(hint()).toBe(appliedHint)
+    expect(words()).toEqual(asked)
+    expect(hint()).toBe('t:gui.composer_ph')
   })
 
   /* The four chips carry no key: each is owned by whoever fills it afterwards,
@@ -406,56 +403,56 @@ describe('the dock once a language is applied', () => {
  * Both are rendered inside the composer card, because that is where the page
  * was served with them, and both are moved to the body the first time they open
  * -- once, and never back. The move is not a preference: the card's entrance
- * animation makes the card a containing block, which re-bases the panel's
- * `position: fixed` against the card instead of the viewport, so a panel left
+ * animation makes the card a containing block, which re-bases the popover's
+ * `position: fixed` against the card instead of the viewport, so a popover left
  * in the card is placed off the wrong box.
  *
  * Last in the file because one case applies a language, which is module state
  * for everything after it.
  */
 describe('the two popovers', () => {
-  interface Panel {
+  interface Popover {
     readonly open: () => void
     readonly close: () => void
     readonly isOpen: () => boolean
   }
-  const PANELS: ReadonlyArray<{ name: string, pop: string, chip: string, panel: Panel }> = [
-    { name: 'perm', pop: 'permPop', chip: 'permChip', panel: perm },
-    { name: 'tier', pop: 'tierPop', chip: 'tierChip', panel: tier },
+  const POPOVERS: ReadonlyArray<{ name: string, pop: string, chip: string, popover: Popover }> = [
+    { name: 'perm', pop: 'permPop', chip: 'permChip', popover: perm },
+    { name: 'tier', pop: 'tierPop', chip: 'tierChip', popover: tier },
   ]
 
   it('stands in the composer card until it is opened', () => {
     render()
-    for (const { name, pop } of PANELS) {
+    for (const { name, pop } of POPOVERS) {
       expect(el(pop).parentElement!.closest('.dock-in'), name).not.toBe(null)
     }
   })
 
   it('hangs off the body, last of its children, once it opens', () => {
     render()
-    for (const { name, pop, panel } of PANELS) {
-      panel.open()
+    for (const { name, pop, popover } of POPOVERS) {
+      popover.open()
       expect(el(pop).parentElement, name).toBe(document.body)
       expect(document.body.lastElementChild, name).toBe(el(pop))
     }
   })
 
-  /* The move is once, not per open: `close` only takes the panel down. A panel
+  /* The move is once, not per open: `close` only takes the popover down. A popover
      put back in the card between opens would be placed off the card again. */
   it('stays under the body when it closes', () => {
     render()
-    for (const { name, pop, panel } of PANELS) {
-      panel.open()
-      panel.close()
+    for (const { name, pop, popover } of POPOVERS) {
+      popover.open()
+      popover.close()
       expect(el(pop).parentElement, name).toBe(document.body)
       expect(el(pop).dataset.open, name).toBe('false')
-      panel.open()
+      popover.open()
       expect(el(pop).parentElement, name).toBe(document.body)
     }
   })
 
-  /* `--z-picker` is 46 and both panels set an inline 46, so for these three the
-     DOM order at the body IS the whole of the stacking decision -- the panel a
+  /* `--z-picker` is 46 and both popovers set an inline 46, so for these three the
+     DOM order at the body IS the whole of the stacking decision -- the popover a
      reader just opened has to be the one on top. src/state/portals.ts is where
      that order is declared. */
   it('lands after the model picker, which is what breaks the tie at 46', () => {
@@ -469,7 +466,7 @@ describe('the two popovers', () => {
       /* The picker's wrapper carries neither id nor class, which is why its
          signature is a bare tag. */
       expect(Array.from(document.body.children).indexOf(picker)).toBe(order.indexOf('div'))
-      for (const { name, pop } of PANELS) {
+      for (const { name, pop } of POPOVERS) {
         const at = order.findIndex((line) => line.startsWith(`div#${pop}.pop`))
         expect(at, name).toBeGreaterThan(order.indexOf('div'))
       }
@@ -478,12 +475,12 @@ describe('the two popovers', () => {
     }
   })
 
-  /* The tier panel's heading and note are the store's, chosen on open from the
+  /* The tier popover's heading and note are the store's, chosen on open from the
      catalogue that answered, and neither may carry a key: the built-in ladder
      is a Session Tier and reaches sub-agents, a deployment's own catalogue is a
      Session Mode and does not, so a flip walking the document's keys would
      paint the tier wording back over a mode catalogue's. */
-  it('leaves the tier panel with no key for a language flip to find', () => {
+  it('leaves the tier popover with no key for a language flip to find', () => {
     render()
     const pop = el('tierPop')
     for (const node of [pop, ...pop.querySelectorAll('*')]) {
@@ -494,25 +491,25 @@ describe('the two popovers', () => {
   })
 
   /* A press on the chip has to toggle once. React's delegated click and an
-     imperative .onclick both firing would toggle twice and leave the panel shut
+     imperative .onclick both firing would toggle twice and leave the popover shut
      -- which is what the chrome's own `$('#permChip').onclick` did until this
      step moved it into the component. */
   it('takes exactly one handler per chip, so one press toggles once', () => {
     render()
-    for (const { name, chip, panel } of PANELS) {
+    for (const { name, chip, popover } of POPOVERS) {
       act(() => { el(chip).click() })
-      expect(panel.isOpen(), name).toBe(true)
+      expect(popover.isOpen(), name).toBe(true)
       act(() => { el(chip).click() })
-      expect(panel.isOpen(), name).toBe(false)
+      expect(popover.isOpen(), name).toBe(false)
       /* The onclick property is React's empty trap, not a second handler:
          calling it is what tells the two apart. */
       const trap = el(chip).onclick!
       trap.call(el(chip), new PointerEvent('click'))
-      expect(panel.isOpen(), name).toBe(false)
+      expect(popover.isOpen(), name).toBe(false)
     }
   })
 
-  /* A panel that has left the card is a child React no longer holds. Safe only
+  /* A popover that has left the card is a child React no longer holds. Safe only
      because none of the card's children is conditional, so React never
      reconciles that child list -- a re-render renders on into it and leaves it
      where it stands. */
@@ -520,13 +517,13 @@ describe('the two popovers', () => {
     render()
     perm.open()
     tier.open()
-    const pops = PANELS.map(({ pop }) => el(pop))
+    const pops = POPOVERS.map(({ pop }) => el(pop))
     /* Not 'en': the describe above leaves that applied, and a flip to the
        language in force cannot move a key that is read off it. */
     expect(() => {
       act(() => { lang.set('zh') })
     }).not.toThrow()
-    for (const [i, { name, pop }] of PANELS.entries()) {
+    for (const [i, { name, pop }] of POPOVERS.entries()) {
       expect(el(pop).parentElement, name).toBe(document.body)
       expect(el(pop), name).toBe(pops[i])
       expect(document.querySelectorAll(`#${pop}`), name).toHaveLength(1)

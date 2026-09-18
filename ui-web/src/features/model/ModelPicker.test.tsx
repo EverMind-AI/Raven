@@ -2,15 +2,14 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { ModelPickerApp } from './ModelPicker'
-import * as store from './store'
-
-import { domSnapshot } from '../../test/domSnapshot'
-import { resetSources, setSources } from '../../state/sources'
-
 import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as pageStore from '../../state/page'
 import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import { resetSources, setSources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import { ModelApp } from './ModelPicker'
+import * as store from './store';
+
 import type { ModelSource, Provider } from './types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -75,7 +74,7 @@ function install(over: Partial<ModelSource> = {}, providers = PROVIDERS): Harnes
   return h
 }
 
-const mount = () => render(<ModelPickerApp />, { container: document.body.appendChild(document.createElement('div')) })
+const mount = () => render(<ModelApp />, { container: document.body.appendChild(document.createElement('div')) })
 
 const pick = (): HTMLElement | null => document.querySelector('.mpick')
 const rows = (col: string): HTMLElement[] => [...document.querySelectorAll<HTMLElement>(`.mpick .${col} .row`)]

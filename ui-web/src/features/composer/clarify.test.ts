@@ -1,15 +1,15 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import { _resetForTests as draftsReset, read, slot } from '../../state/sheetDrafts'
+import { _resetForTests, forget, sync } from '../../state/sheetRack'
+import { mountPageRoot } from '../../test/pageRoot'
 import { open as approveOpen } from './approve'
 import { close, open } from './clarify'
-import { _resetForTests, forget, sync } from '../../state/sheetRack'
-import { _resetForTests as draftsReset, read, slot } from '../../state/sheetDrafts'
-import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
-import { mountPageRoot } from '../../test/pageRoot'
-import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as pageStore from '../../state/page'
-import * as confirmStore from '../../state/confirm'
 
 
 function wire(): void {
@@ -178,8 +178,8 @@ describe('the clarify sheet', () => {
 
   /* Number picking is for a reader whose caret has left the field, which is
      where the sheet puts it on arrival -- so a number typed straight after the
-     question appears is part of the typed answer, not a pick. Carried over from
-     the legacy sheet unchanged; blurring is what the two cases apart. */
+     question appears is part of the typed answer, not a pick. Blurring is what
+     tells the two cases apart. */
   it('picks a choice by number once the focus has left the field', () => {
     const said: string[] = []
     open({ question: 'q', choices: ['one', 'two'] }, (a) => said.push(a))

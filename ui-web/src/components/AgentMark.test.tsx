@@ -18,8 +18,8 @@
  * stylesheet's selector reads.
  */
 
-import { createRoot } from 'react-dom/client'
 import { act } from '@testing-library/react'
+import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { AgentMark, agentMarkPath, isOwnAgent } from './AgentMark'

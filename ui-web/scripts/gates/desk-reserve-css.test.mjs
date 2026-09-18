@@ -20,19 +20,9 @@
  * declaration, taking the composer's own 22px with it.
  */
 
-import { readFileSync } from 'node:fs'
-
 import { describe, expect, it } from 'vitest'
 
-const css = readFileSync(new URL('../../src/styles/page.css', import.meta.url), 'utf8')
-
-function rule(selector) {
-  const rules = css.replace(/\/\*[\s\S]*?\*\//g, ' ')
-  for (const match of rules.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    if (match[1].trim() === selector) return match[2]
-  }
-  return null
-}
+import { css, rule } from './css.mjs'
 
 describe('the chat makes room for the anchored desk', () => {
   it('insets the scroller by the reserve, and by nothing without one', () => {

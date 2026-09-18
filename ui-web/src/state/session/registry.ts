@@ -13,30 +13,32 @@
  * painted over the conversation that overtook it.
  */
 
+import { drawMeter, goPaint as goState, loadDraft, parkDraft, queueClear, turn } from '../../features/composer/mount'
 import { loadProviders } from '../../features/model/source'
-import { leaveDeletedSession } from '../../features/rail/leave'
 import { rowFrom, SESS_CHANNELS } from '../../features/rail/source'
+import { draw as sessionDraw, endRename, markNew as markNewCurrent, reconcileRows } from '../../features/rail/store'
 import { plainTitle } from '../../features/rail/title'
+import { leaveDeletedSession } from '../../features/rail/wire'
 import { loadPermMode } from '../../features/settings/source'
+import { killStatus, status as transcriptStatus, stopStream } from '../../features/transcript/mount'
 import { renderHistory } from '../../features/transcript/source'
 import { wsOnHistory } from '../../features/workspace/record'
 import { wsSetRoot } from '../../features/workspace/source'
-import { islands } from '../../features/registry'
+import { loadDeliveries } from '../../features/workspace/store'
+import { t } from '../../i18n/t'
+import { $ } from '../../lib/dom'
+import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
+import { gateway } from '../../rpc/gateway'
 import { draw as drawBanner } from '../banner'
 import { set as setCtx } from '../ctxChip'
-import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
 import { load as loadTier } from '../tier'
 import { show as toast } from '../toast'
-import { gateway } from '../../rpc/gateway'
-import { T } from '../../i18n/t'
-import { $ } from '../../lib/dom'
-import { drawMeter, goPaint as goState, loadDraft, parkDraft, queueClear, turn } from '../../features/composer/mount'
-import { draw as sessionDraw, markNew as markNewCurrent } from '../../features/rail/store'
 import { reset as wsReset, setOpen as setWs } from '../ws'
 import { pitch, unpitch } from './conversation'
-import { open as sessionOpen, replace as sessionReplace, rows as sessionRows, sess } from './rows'
 import { dropAll as dropHeldHosts } from './hosts'
 import { park, resume as resumeInPlace } from './residency'
+import { refreshDag, resume as resumeConversation } from './resume'
+import { open as sessionOpen, replace as sessionReplace, rows as sessionRows, sess } from './rows'
 import { drain, SessionRuntime, reset as resetTurnState } from './runtime'
 import { dispatch } from './stages'
 
@@ -130,7 +132,7 @@ export async function subscribe(sessionKey: string): Promise<void> {
     const r = await gateway().call('turn.subscribe', { session_key: sessionKey })
     record(sessionKey, r.subscription_id)
   } catch (e) {
-    toast(T('gui.op.subscribe_failed', { detail: (e as Error).message || e }))
+    toast(t('gui.op.subscribe_failed', { detail: (e as Error).message || e }))
   }
 }
 
@@ -166,7 +168,7 @@ export async function refreshList(): Promise<void> {
     // Pins and persisted fields come from the server. Only the running/done
     // marker is client state; a not-yet-saved current row also survives until
     // the first list response that contains it.
-    const reconciled = islands.rail.reconcile(sessionRows(), rows, sessionCurrent())
+    const reconciled = reconcileRows(sessionRows(), rows, sessionCurrent())
     const currentMissing = reconciled.currentMissing
     sessionReplace(reconciled.rows)
     if (currentMissing) await leaveDeletedSession(sessionCurrent() as string)
@@ -178,7 +180,7 @@ export async function refreshList(): Promise<void> {
 
 function resetView(rt: SessionRuntime): void {
   turn.dispatch({ type: 'idle' }); queueClear()
-  islands.transcript.stopStream()
+  stopStream()
   /* The turn state belongs to the conversation, so one that kept a turn while
      it was away keeps it: the wipe is for a conversation arrived at fresh,
      which is every conversation that reads itself back off disk. */
@@ -204,7 +206,7 @@ export function switchToDraft(): void {
      IN PLACE OF that heading, so leaving it up would take the heading away for
      the life of the tab. Ending it commits, which is where a name typed there
      belongs: the conversation it was typed over, not the one being opened. */
-  islands.rail.endRename()
+  endRename()
   const gen = nextToken()
   park()
   parkDraft(); loadDraft('new')
@@ -223,12 +225,12 @@ export function switchToDraft(): void {
   void loadProviders(null, gen)
   void loadTier()
   void loadPermMode(null, gen)
-  $('#title')!.textContent = T('gui.new_task')
+  $('#title')!.textContent = t('gui.new_task')
   pitch(); sessionDraw(); $('#ta')!.focus()
 }
 
 export async function switchTo(s: SessRow): Promise<void> {
-  islands.rail.endRename()
+  endRename()
   const gen = nextToken()
   park()
   parkDraft(); loadDraft(s.id)
@@ -280,7 +282,7 @@ export async function switchTo(s: SessRow): Promise<void> {
        through the same verbs a click goes through, and every window they had
        would come back twice. Not awaited, for the reason the resume below is
        not. */
-    islands.view.refreshDag(s.id)
+    refreshDag(s.id)
     return
   }
   try {
@@ -309,7 +311,7 @@ export async function switchTo(s: SessRow): Promise<void> {
     /* Every graph this conversation started, oldest first, as the gateway
        stamped them onto the rows that started them. This is the only source
        that survives a run the reader never saw start: no live event reached
-       this page for it, so nothing was written down -- see lib/resume.ts. */
+       this page for it, so nothing was written down -- see state/session/resume.ts. */
     const dagRuns = (r.messages || [])
       .map((m) => (m && m.dag_run_id) || '')
       .filter((id): id is string => !!id)
@@ -326,7 +328,7 @@ export async function switchTo(s: SessRow): Promise<void> {
        adds is everything the replay cannot carry -- a turn still in flight when
        the socket dropped, and one whose messages a compaction has since
        archived. Not awaited: the shelf fills when it answers. */
-    islands.workspace.loadDeliveries(s.id)
+    loadDeliveries(s.id)
     await subscribe(s.id)
     /* Checked again on this side of the subscribe: the round trip is one more
        place a reader can leave from, and a replayed file window opens on
@@ -342,13 +344,13 @@ export async function switchTo(s: SessRow): Promise<void> {
        why that path calls `refreshDag` rather than returning outright.
        Not awaited: it reads the run and the panes back from the gateway, and
        the transcript is already up. */
-    islands.view.resume(s.id, dagRuns)
+    resumeConversation(s.id, dagRuns)
   } catch (e) {
     /* Same for the failure: a session the reader has already left must not
        empty their stage, and must not raise a toast about a page nobody is on. */
     if (gen !== switches) return
     pitch()
-    toast(T('gui.op.open_failed', { detail: (e as Error).message || e }))
+    toast(t('gui.op.open_failed', { detail: (e as Error).message || e }))
   }
 }
 
@@ -358,7 +360,7 @@ export async function switchTo(s: SessRow): Promise<void> {
    turn missed while the socket was down are unrecoverable -- drop what every
    conversation kept and let re-opens rebuild from disk. */
 export async function reconnect(): Promise<void> {
-  islands.transcript.killStatus()
+  killStatus()
   for (const rt of byKey.values()) { rt.subscriptionId = null; rt.events = null; rt.host = null }
   dropHeldHosts()
   draft().subscriptionId = null
@@ -389,13 +391,13 @@ export async function reconnect(): Promise<void> {
      leading icon stripped, and it holds nothing at all while a name is being
      generated. It stays as the last resort for the one thing the row cannot
      answer -- a current conversation that is not in the list. */
-    islands.rail.endRename()
+    endRename()
     const open = sess(current)
     const heading = $('#title')
     const title = (open && open.title) || (heading && heading.textContent) || ''
     await sessionOpen({ id: current, title })
-    islands.transcript.status(T('gui.reconnected'))
-    setTimeout(() => islands.transcript.killStatus(), 2500)
+    transcriptStatus(t('gui.reconnected'))
+    setTimeout(() => killStatus(), 2500)
   } else if (current) {
     void subscribe(current)
   }
@@ -429,3 +431,12 @@ export function parked(key: string): SessionRuntime | undefined {
    own (./hosts) so that the island's renderer can ask it without importing the
    session layer behind it. */
 export { holdsHost } from './hosts'
+
+/* Test seam only: the draft runtime, the active pointer and the switch counter
+   are the module's. The runtimes themselves are dropped with them: a case's
+   conversation must not be the next case's active one. */
+export function _resetForTests(): void {
+  draftRt = null
+  activeRt = null
+  switches = 0
+}

@@ -36,16 +36,17 @@
 
 import { useSyncExternalStore } from 'react'
 
-import { Banner } from './Banner'
-import { islands } from '../features/registry'
+import { rename as renameSession } from '../features/rail/store'
 import * as lang from '../state/lang'
+import { Banner } from './Banner'
 
 import type { JSX } from 'react'
 
-/* The session header. Its two buttons say their words through data-i18n-tip /
-   -aria, which state/lang/store.ts writes onto the attributes, so there is no literal
-   here to take through lang.text -- and #title has no key at all, because its
-   text is a conversation's name rather than a phrase from the catalogue. */
+/* The session header. Its two buttons say their words in a tooltip and a label
+   rather than in text, so each takes its key through lang.attr -- which is
+   absent until a pick lands, the way the served markup carried neither -- and
+   #title has no key at all, because its text is a conversation's name rather
+   than a phrase from the catalogue. */
 function Header(): JSX.Element {
   return (
     <>
@@ -53,11 +54,9 @@ function Header(): JSX.Element {
       <button
         className="ghost-ic tipdn"
         id="renameBtn"
-        data-i18n-tip="gui.rename_session"
-        data-i18n-aria="gui.rename_session"
         data-tip={lang.attr('gui.rename_session')}
         aria-label={lang.attr('gui.rename_session')}
-        onClick={() => islands.rail.rename()}
+        onClick={() => renameSession()}
       >
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true">
           <path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3z" /><path d="M14.5 6.5 17.5 9.5" />
@@ -68,8 +67,6 @@ function Header(): JSX.Element {
         className="ghost-ic wstog tipdn"
         id="wsBtn"
         aria-expanded="false"
-        data-i18n-tip="gui.expand_ws"
-        data-i18n-aria="gui.expand_ws"
         data-tip={lang.attr('gui.expand_ws')}
         aria-label={lang.attr('gui.expand_ws')}
       >
@@ -120,8 +117,6 @@ export function ChatTop(): JSX.Element {
         id="wsGrip"
         role="separator"
         aria-orientation="vertical"
-        data-i18n-title="gui.resize_ws"
-        data-i18n-aria="gui.resize_ws"
         title={lang.attr('gui.resize_ws')}
         aria-label={lang.attr('gui.resize_ws')}
       />

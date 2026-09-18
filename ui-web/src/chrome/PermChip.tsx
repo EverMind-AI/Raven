@@ -1,9 +1,9 @@
 /* The permission chip in the bar under the field, and the click that opens its
- * panel.
+ * popover.
  *
  * The whole of it is the store's now: the tier's name, its shield, the warning
  * class and the accessible name are one `paint` field state/perm.ts fills in
- * its draw, and aria-expanded is the panel's up-or-down. The four used to be
+ * its draw, and aria-expanded is the popover's up-or-down. The four used to be
  * written by id over what this rendered.
  *
  * Until that first draw the chip shows the shape the page is served with -- the
@@ -13,10 +13,10 @@
  * aria-label here, so this renders none until there is a tier to name.
  *
  * The icon goes in as markup because that is how the store spells it: one
- * string of paths per tier, which is also how the panel's rows carry theirs.
+ * string of paths per tier, which is also how the popover's rows carry theirs.
  *
  * The click is the chip's and not the chrome's. It toggles rather than opens,
- * because the panel has no close button of its own and the chip is the only way
+ * because the popover has no close button of its own and the chip is the only way
  * back out of it with the pointer.
  */
 

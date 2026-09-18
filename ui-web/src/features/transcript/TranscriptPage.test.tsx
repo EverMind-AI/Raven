@@ -1,28 +1,26 @@
 // @vitest-environment happy-dom
+import { act } from '@testing-library/react'
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readFileSync } from 'node:fs'
-
-import { act } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { setTranslator } from '../../i18n/t'
+import { I18N } from '../../i18n/t'
+import * as attachmentCache from '../../lib/attachmentCache'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import { hold as holdHost } from '../../state/session/hosts'
+import { resetSources, setSources, sources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import { installWsPane } from '../../test/wsPaneHarness'
 import { CARD as dagCARD } from '../dag/graph'
+import { markMissing as markDeliveryMissing } from '../workspace/deliveries'
+import { snapshot as deliveriesSnapshot } from '../workspace/deliveries'
 import * as mount from './mount'
 import { WHEEL_LINE_PX } from './overscroll'
 import * as store from './store'
-import * as tail from './tail'
-import * as attachmentCache from '../../lib/attachmentCache'
-import { markMissing as markDeliveryMissing } from '../workspace/deliveries'
-import { snapshot as deliveriesSnapshot } from '../workspace/deliveries'
+import * as tail from './tail';
 
-import { domSnapshot } from '../../test/domSnapshot'
-import { resetSources, setSources, sources } from '../../state/sources'
-import { hold as holdHost } from '../../state/session/hosts'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as confirmStore from '../../state/confirm'
-import { installWsPanel } from '../../test/wsPanelHarness'
-import * as pageStore from '../../state/page'
-import { I18N } from '../../i18n/t'
 import type { ProseTarget } from '../../lib/prose'
 import type { WorkspaceSource } from '../workspace/types'
 import type { ArtifactsSource, HistoryMessage, SpawnListRow, TranscriptSource } from './types'
@@ -48,7 +46,7 @@ function wire(over: Partial<TranscriptSource> = {}): void {
   lang = 'en'
   seen.md = 0
   setTranslator((key, vars) => `${lang}:${key}` + (vars ? ` ${JSON.stringify(vars)}` : ''))
-  installWsPanel()
+  installWsPane()
   vi.spyOn(pageStore, 'show').mockImplementation(() => {})
   vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   const source: TranscriptSource = {
@@ -2160,7 +2158,7 @@ describe('transcript island, the delegation verbs', () => {
   it('sends a spawn row to the agents panel when nothing else will take it', () => {
     const went: string[] = []
     wire()
-    installWsPanel({ show: (tab: string) => { went.push(tab) } })
+    installWsPane({ show: (tab: string) => { went.push(tab) } })
     store.openSpawn('researcher', 'read the docs')
     expect(went).toEqual(['agents'])
   })

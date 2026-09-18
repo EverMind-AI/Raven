@@ -10,9 +10,10 @@
  * from the catalogue rather than from a copy in the JSX.
  */
 import { act } from 'react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { islands } from '../features/registry'
+import * as desk from '../features/desk/store'
+import * as workspace from '../features/workspace/store'
 import * as lang from '../state/lang'
 import * as ws from '../state/ws'
 import { mountPageRoot } from '../test/pageRoot'
@@ -28,8 +29,6 @@ let unmount = (): void => {}
 let picked: string[] = []
 let desks: string[] = []
 
-const real = { workspace: { ...islands.workspace } }
-
 function render(): void {
   unmount()
   document.body.innerHTML = MARKUP
@@ -42,14 +41,12 @@ const pane = (): HTMLElement => el('ws')
 beforeEach(() => {
   picked = []
   desks = []
-  Object.assign(islands.workspace, {
-    shared: () => ({ changes: [], urls: [], file: null, turn: 0, unseen: 0 }),
-    /* The pick is read off the state rather than off the call, because the tab
-       strip's click and the keyboard both go through the store. */
-    draw: () => { picked.push(ws.tab) },
-    notifyDesk: () => {},
-    toggleDesk: () => { desks.push('toggle') },
-  })
+  vi.spyOn(workspace, 'shared').mockReturnValue({ changes: [], urls: [], file: null, turn: 0, unseen: 0 })
+  /* The pick is read off the state rather than off the call, because the tab
+     strip's click and the keyboard both go through the store. */
+  vi.spyOn(workspace, 'mount').mockImplementation(() => { picked.push(ws.tab) })
+  vi.spyOn(desk, 'notifyDesk').mockImplementation(() => {})
+  vi.spyOn(desk, 'toggleDesk').mockImplementation(() => { desks.push('toggle') })
   render()
 })
 
@@ -57,7 +54,7 @@ afterEach(() => {
   ws.restore('diff', false)
   unmount()
   unmount = () => {}
-  Object.assign(islands.workspace, real.workspace)
+  vi.restoreAllMocks()
   document.body.innerHTML = ''
 })
 
@@ -128,8 +125,8 @@ describe('the workspace pane', () => {
 })
 
 describe('the pane controls', () => {
-  /* One delegated click on the row, as the legacy handler had it: each button
-     names its own view. */
+  /* One delegated click on the row (WsPane.tsx's #wsTabs): each button names
+     its own view. */
   it('picks the view of whichever tab was clicked', () => {
     for (const b of [...el('wsTabs').children]) {
       act(() => {
@@ -230,13 +227,12 @@ describe('the keyboard shortcuts on the pane', () => {
 })
 
 /* Last in the file on purpose: applying a language is module state for
-   everything after it. Same agreement as the rail's -- the pass state/lang/store.ts
-   makes over the document's data-i18n attributes, and the component rendering
-   the same key through lang.text -- so the strip cannot come back in the served
-   language once a flip has moved it. A re-render alone would not show it: React
-   diffs against the props it rendered last, so a literal it never changes is a
-   literal it never writes again, and only a remount asks the component what the
-   text is. */
+   everything after it. Same claim as the rail's: every word here is the
+   catalogue's, read at render time, so the strip cannot come back in the
+   language before the flip. A re-render alone would not show it: React diffs
+   against the props it rendered last, so a value it never changes is a value it
+   never writes again, and only a remount asks the component what the text
+   is. */
 describe('the pane once a language is applied', () => {
   it('renders the applied words when the column is mounted again', () => {
     const words = (): (string | null)[] => [...pane().querySelectorAll('.lb')].map((n) => n.textContent)

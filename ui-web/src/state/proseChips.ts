@@ -4,7 +4,7 @@
  * earn a chip -- `code.pth` for a path it could resolve, `.artf` for a
  * deliverable the author linked by hand -- and emits them with the resolved
  * path on `data-p`. Until now the other half of that contract lived in the
- * legacy shell: two document-level listeners in demo/150-chrome.js, calling a
+ * page's own chrome: two document-level listeners, calling a
  * pair of function bindings (pathOpen, dirOpen) that the live layer overwrote
  * at load. So the renderer and the click were in different layers, and which
  * one you got depended on which file had run last.
@@ -25,7 +25,7 @@ import { ds } from './sources'
 
 import type { ProseSource, ProseTarget } from '../lib/prose'
 
-const source = (): ProseSource => ds<ProseSource>('prose')
+const source = (): ProseSource => ds('prose')
 
 /* The chip is the record: prose.ts wrote the resolved path onto data-p, and
    `data-d` marks the ones that resolved to a folder. Reading the DOM back is
@@ -35,12 +35,11 @@ function targetOf(node: HTMLElement): ProseTarget | null {
   return p ? { p, dir: !!node.dataset.d } : null
 }
 
-/* One test, where the legacy pair used two that disagreed: `code.pth` on the
-   click, `classList.contains('pth')` on the key. The transcript island draws
-   its path chips as buttons, so only the second of those ever matched them --
-   and this selector matches what that one matched, keyboard behaviour
-   included. The click half stays the island's own either way, because React
-   stops the native event when it stops the synthetic one. */
+/* One test for the click and the key alike. The transcript island draws its
+   path chips as buttons, so a `code.pth` selector would match none of them;
+   this one reads the class instead, keyboard behaviour included. The click half
+   stays the island's own either way, because React stops the native event when
+   it stops the synthetic one. */
 const chipAt = (node: EventTarget | null): HTMLElement | null => {
   const el = node as Element | null
   if (!el || !el.closest) return null

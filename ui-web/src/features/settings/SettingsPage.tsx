@@ -1,49 +1,45 @@
 import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import { t } from '../../i18n/t'
-import { ds } from '../../state/sources'
-import { show as menuAt } from '../../state/menu'
 import { KeyInput } from '../../components/KeyInput'
-import * as lookStore from '../../state/look'
+import { ModelTagDefs, ModelTags, TagGlyph } from '../../components/ModelTags'
+import { ModelIcon, ProviderIcon, ProviderLink, ProviderStatus } from '../../components/ProviderMark'
+import { t } from '../../i18n/t'
 import * as notifications from '../../lib/notifications'
 import { open as openUrl } from '../../lib/openUrl'
-import { isMac, modKey } from '../../lib/platform'
-import { ModelTagDefs, ModelTags, TagGlyph } from '../../components/ModelTags'
+import { modKey } from '../../lib/platform'
+import { hint as reachHint, text as reachText } from '../../lib/reach'
+import { ask as confirmAsk } from '../../state/confirm'
+import { subscribe as langSubscribe, tag as langTag } from '../../state/lang'
+import * as lookStore from '../../state/look'
+import { show as menuAt } from '../../state/menu'
+import * as settingsDialog from '../../state/settings'
+import { ds } from '../../state/sources'
+import { show as toast } from '../../state/toast'
+import { open as openConnections } from '../connections/wire'
+import { ImageModelPicker } from './ImageModelPicker'
+import * as store from './store'
 
 import type { ModelTagFacts } from '../../components/ModelTags'
-import { ModelIcon, ProviderIcon, ProviderLink, ProviderStatus } from '../../components/ProviderMark'
-import { hint as reachHint, text as reachText } from '../../lib/reach'
-import { show as toast } from '../../state/toast'
-import { subscribe as langSubscribe, tag as langTag } from '../../state/lang'
-import { open as openConn } from '../connections/nav'
-import * as store from './store'
-import { ImageModelPicker } from './ImageModelPicker'
-
 import type { SettingsState } from './store'
-import type { RailSource } from '../rail/types'
 import type { EverosSection, ProviderRow, ToolGroup, ToolRow } from './types'
 import type { JSX, ReactNode, RefObject } from 'react'
-import { ask as confirmAsk } from '../../state/confirm'
-import * as settingsDialog from '../../state/settings'
 
 /* The session list, reached through the seam. `deleteAll` is wrapped because
    a source that has none is the shape a demo shell can be in, and an
    optimistic click must not throw out of the confirm. */
-const sessionCount = (): number => ds<RailSource>('sessions').snapshot().rows.length
+const sessionCount = (): number => ds('rail').snapshot().rows.length
 const deleteAllSessions = (): void => {
   try {
-    ds<RailSource>('sessions').deleteAll?.()
+    ds('rail').deleteAll?.()
   } catch {
     /* no source, nothing to delete */
   }
 }
 
-/* The dialog's contents, transcribed from the legacy drawSettings pages:
-   same class names, same DOM shape, ui-web/src/styles/page.css untouched. The
-   dialog frame is the page's own root (src/App.tsx) over the static #setVeil,
-   and whether it is up is src/state/settings.ts's; the island reaches
-   both through the shell bridge, as it always has. */
+/* The dialog frame is the page's own root (src/App.tsx) over the static
+   #setVeil, and whether it is up is src/state/settings.ts's; this island
+   imports that module directly. */
 
 /* Settings is grouped, not one flat strip: the groups answer "what am I
    changing" -- myself, the agent, or the machine it runs on. */
@@ -2410,7 +2406,7 @@ function ProactPage(): JSX.Element {
           className="mini ghost"
           onClick={() => {
             settingsDialog.close()
-            openConn()
+            openConnections()
           }}
         >
           {t('gui.set.chn.manage')}
@@ -2473,7 +2469,7 @@ function ChannelPage({ s }: { s: SettingsState }): JSX.Element {
           className="mini ghost"
           onClick={() => {
             settingsDialog.close()
-            openConn()
+            openConnections()
           }}
         >
           {t('gui.set.chn.manage')}
@@ -2522,9 +2518,9 @@ function DataPage({ s }: { s: SettingsState }): JSX.Element {
 /* ---- assembly -------------------------------------------------------- */
 
 /* ---- the built-in tool inventory ------------------------------------------
-   Drawn here rather than handed back to the legacy capabilities module, which
-   is what the `renderToolset` shell verb used to do: the panel belongs to this
-   dialog, and a page that lends its own panel out cannot be read on its own.
+   Drawn here rather than handed back to the capabilities page (state/caps.ts):
+   the panel belongs to this dialog, and a page that lends its own panel out
+   cannot be read on its own.
 
    Tools are a fixed inventory the agent ships with, not a store -- which is
    why they sit under the agent here and not in a module for adding and
@@ -2851,7 +2847,10 @@ function Drawers({ s }: { s: SettingsState }): JSX.Element | null {
 }
 
 export function SettingsApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The language the page resolved, so a pick repaints this island: every word
+     below is a t(key) read at render time (state/lang/store.ts). */
+  useSyncExternalStore(langSubscribe, langTag)
   /* The header is static markup the legacy drawSettings wrote into; the
      island keeps doing exactly that. */
   useEffect(() => {

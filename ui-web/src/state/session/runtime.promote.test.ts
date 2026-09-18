@@ -66,7 +66,7 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
         rows: () => rows,
         sess: (id: string) => rows.find((r) => r.id === id),
       },
-      'src/features/rail/store': { markNew: () => {}, draw: () => log.push('draw') },
+      'src/features/rail/store': { markNew: () => {}, draw: () => log.push('draw'), endRename: () => {} },
       'src/state/sheetRack': { forget: () => {} },
       'src/features/composer/mount': {
         drawMeter: () => {},
@@ -78,8 +78,9 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
         queuePush: () => {},
         queueShift: () => null,
         turn: { dispatch: () => {}, busy: () => false, snapshot: () => ({}), restore: () => {} },
+        claimDraft: (id: string | null) => log.push(`claimDraft:${String(id)}`),
       },
-      'src/i18n/t': { T: (key: string) => key },
+      'src/i18n/t': { t: (key: string) => key },
       'src/lib/dom': { $: looseQuery() },
       'src/state/banner': { draw: () => {} },
       'src/state/tier': { load: () => {} },
@@ -100,11 +101,10 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
         stagedPerm: () => staging().perm,
       },
       'src/features/workspace/source': { wsSetRoot: (root: string) => log.push(`wsRoot:${root}`) },
-    },
-    islands: {
-      rail: { endRename: () => {} },
-      composer: { claimDraft: (id: string | null) => log.push(`claimDraft:${String(id)}`) },
-      transcript: { killStatus: () => {}, status: () => {} },
+      'src/features/transcript/mount': {
+        killStatus: () => {},
+        status: () => {},
+      },
     },
   })
   const runtime = (await import('./runtime')) as Runtime

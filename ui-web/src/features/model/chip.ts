@@ -8,8 +8,8 @@
  * against the props it rendered last rather than against the document.
  */
 
-import { current, open as openPicker } from './store'
 import { openModelsForMissingProvider } from './source'
+import { current, open as openPicker } from './store'
 
 /* A model id is provider-qualified (openrouter/anthropic/claude-opus-4.6); the
    chip only has room for the part that identifies the model. */

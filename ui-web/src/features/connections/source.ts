@@ -4,14 +4,13 @@
    catalogue's rows. The live layer installs it onto the seam, which replaces
    the fixture source before the first paint. */
 
-import type { ConnSource } from './types'
-
-import { servesChannels } from '../../rpc/capabilities'
 import { t } from '../../i18n/t'
-import { show as toast } from '../../state/toast'
+import { servesChannels } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
-
+import { show as toast } from '../../state/toast'
 import { CHANNELS, chanName } from './catalogue'
+
+import type { ConnectionsSource } from './types'
 
 /* Merged onto the catalogue's own objects rather than into fresh ones: they
    are what `rows()` has always answered with and what the island is already
@@ -46,7 +45,7 @@ export async function loadChannels(): Promise<void> {
 
 let gatewayRunningLive = false
 
-export const connSource: ConnSource = {
+export const connSource: ConnectionsSource = {
   /* `initial` is the page-open fetch: only that one toasts a failed load or
      warns about a gateway that is not receiving -- a background reload (the
      scan poll's refresh) stays silent, as the old page did. */
@@ -104,4 +103,10 @@ export const connSource: ConnSource = {
      when the gateway does not speak channels.*, which the island shows as the
      same waiting frame the old panel kept. */
   qr: (c) => (servesChannels() ? gateway().call('channels.qr', { name: c.id }) : Promise.resolve(null)),
+}
+
+/* Test seam only: what the gateway last said about a running host is the
+   module's, so it outlives a case. */
+export function _resetForTests(): void {
+  gatewayRunningLive = false
 }

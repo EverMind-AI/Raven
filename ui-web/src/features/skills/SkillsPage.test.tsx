@@ -2,16 +2,15 @@
 import { act, cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { SkillsApp } from './SkillsPage'
-import * as store from './store'
-
-import { domSnapshot } from '../../test/domSnapshot'
-import { resetSources, setSources, sources } from '../../state/sources'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as startTaskWithModule from '../../features/composer/startTaskWith'
+import { setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
-import * as useInTaskModule from '../../features/composer/useInTask'
+import { resetSources, setSources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import { SkillsApp } from './SkillsPage'
+import * as store from './store';
+
 import type { HubItem, InstalledSkill, SkillsSource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -48,7 +47,7 @@ function install(items: HubItem[], over: Partial<SkillsSource> = {}, installed: 
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
   vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   vi.spyOn(pageStore, 'show').mockImplementation((id) => shellCalls.push(['showPage', id]))
-  vi.spyOn(useInTaskModule, 'useInTask').mockImplementation((key, name) => shellCalls.push(['useInTask', `${key}:${name}`]))
+  vi.spyOn(startTaskWithModule, 'startTaskWith').mockImplementation((key, name) => shellCalls.push(['startTaskWith', `${key}:${name}`]))
   setSources({ skills: source })
   document.body.innerHTML =
     '<section id="capsPage" data-open="true"><div id="capsBody"></div></section>' +
@@ -66,7 +65,7 @@ async function mount() {
 
 afterEach(() => {
   act(() => {
-    store.wipe()
+    store._resetForTests()
   })
   cleanup()
   vi.restoreAllMocks()
@@ -197,7 +196,7 @@ describe('skills island', () => {
     await act(async () => {
       screen.getByText('gui.hub.use').click()
     })
-    expect(shellCalls).toContainEqual(['useInTask', 'gui.hub.use_prompt:house-style'])
+    expect(shellCalls).toContainEqual(['startTaskWith', 'gui.hub.use_prompt:house-style'])
   })
 
   it('offers removal on the installed card itself, not only inside the drawer', async () => {

@@ -308,7 +308,7 @@ export interface Lane {
   main: boolean
   epoch: number
   listV: number
-  /* bumps when legacy would have tail-followed; the view scrolls on it */
+  /* bumps on every append that asks the view to scroll down */
   scrollReq: number
   segs: Seg[]
   listeners: Set<() => void>
@@ -336,8 +336,8 @@ export interface Lane {
   empty: string
 }
 
-/* What a legacy caller gets back from newStep()/tool(): the same handle
-   surface the old widgets returned, driving the store instead of the DOM. */
+/* What a caller gets back from newStep()/tool(): a handle that drives the
+   store, so the session pipeline never touches the DOM. */
 export interface CallHandle {
   done(ok: boolean, res: unknown, ms: number, diff?: string | string[] | null, truncated?: boolean): void
   /* The run a restored spawn call started, from the `spawn_task_id` the server
@@ -401,13 +401,13 @@ export interface HistoryMessage {
    Deliberately NOT the finished list. Which of those rows counts as a product,
    and what a tile can draw of it, are presentation decisions -- they belong to
    the island that draws them, where they can be tested, rather than to the
-   legacy layer that happens to own the record. */
+   workspace record that happens to hold the rows. */
 export interface ArtifactsSource {
   changes(turn: number): WsChange[]
 }
 
-/* The pull half of the seam. Event pushes arrive through the island API the
-   live layer forwards into (the island bag's `transcript`). */
+/* The pull half of the seam. Event pushes arrive through this island's own
+   verbs, which the session pipeline calls directly (features/transcript/mount). */
 export interface TranscriptSource {
   clean(text: unknown): string
   okOf(name: string, preview: string): boolean

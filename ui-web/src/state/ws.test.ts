@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-/* The workspace pane's own state: the writes the six legacy verbs made, in the
- * order they made them.
+/* The workspace pane's own state: the writes its six verbs make, in the order
+ * they make them.
  *
  * The order is the part worth pinning. Every one of these verbs ends by handing
  * over to the island (`draw`) or to the desk (`notifyDesk`), and both of those
@@ -8,10 +8,12 @@
  * document at the moment they are called, which is what says the writes landed
  * before the handover rather than after it.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { islands } from '../features/registry'
-import { T } from '../i18n/t'
+import * as desk from '../features/desk/store'
+import * as subagents from '../features/subagents/store'
+import * as workspace from '../features/workspace/store'
+import { t } from '../i18n/t'
 import * as lang from '../state/lang'
 import { mountPageRoot } from '../test/pageRoot'
 import * as ws from './ws'
@@ -61,8 +63,6 @@ let deskTabs: string[] = []
 let resets: string[] = []
 let unmount = (): void => {}
 
-const real = { workspace: { ...islands.workspace }, subagents: { ...islands.subagents } }
-
 beforeEach(() => {
   document.body.innerHTML = MARKUP
   unmount = mountPageRoot()
@@ -73,14 +73,13 @@ beforeEach(() => {
   notified = []
   deskTabs = []
   resets = []
-  Object.assign(islands.workspace, {
-    shared: () => record,
-    draw: () => { drew.push(snap()) },
-    notifyDesk: () => { notified.push(snap()) },
-    openDeskTab: (tab: string) => { deskTabs.push(tab) },
-    reset: () => { resets.push('workspace') },
-  })
-  Object.assign(islands.subagents, { reset: () => { resets.push('subagents') } })
+  vi.spyOn(workspace, 'shared').mockReturnValue(record)
+  vi.spyOn(workspace, 'mount').mockImplementation(() => { drew.push(snap()) })
+  vi.spyOn(workspace, 'reset').mockImplementation(() => { resets.push('workspace') })
+  vi.spyOn(desk, 'notifyDesk').mockImplementation(() => { notified.push(snap()) })
+  vi.spyOn(desk, 'openDeskTab').mockImplementation((tab) => { deskTabs.push(tab) })
+  vi.spyOn(desk, 'reset').mockImplementation(() => { resets.push('desk') })
+  vi.spyOn(subagents, 'reset').mockImplementation(() => { resets.push('subagents') })
 })
 
 /* Module state outlives a case, so it is put back while the markup it writes to
@@ -90,8 +89,7 @@ afterEach(() => {
   ws.restore('diff', false)
   unmount()
   unmount = () => {}
-  Object.assign(islands.workspace, real.workspace)
-  Object.assign(islands.subagents, real.subagents)
+  vi.restoreAllMocks()
   document.documentElement.classList.remove('desk-ready')
   document.body.innerHTML = ''
 })
@@ -114,8 +112,8 @@ describe('opening and collapsing the pane', () => {
     expect(ws.open).toBe(true)
     expect(split().dataset.open).toBe('true')
     expect(el('wsBtn').getAttribute('aria-expanded')).toBe('true')
-    expect(el('wsBtn').dataset.tip).toBe(T('gui.collapse_ws'))
-    expect(el('wsBtn').getAttribute('aria-label')).toBe(T('gui.collapse_ws'))
+    expect(el('wsBtn').dataset.tip).toBe(t('gui.collapse_ws'))
+    expect(el('wsBtn').getAttribute('aria-label')).toBe(t('gui.collapse_ws'))
     /* The island draws once, and the grid and the toggle were already written
        when it did. */
     expect(drew).toHaveLength(1)
@@ -128,7 +126,7 @@ describe('opening and collapsing the pane', () => {
     ws.setOpen(true)
     /* Nothing had been counted when the view drew -- the badge still carried
        the placeholder page.html serves it with -- because the bump comes after
-       the draw, which is the order the legacy verb had. */
+       the draw. */
     expect(drew[0]!.badge).toBe('2')
     expect(notified).toHaveLength(1)
     expect(notified[0]!.badge).toBe('+2')
@@ -143,7 +141,7 @@ describe('opening and collapsing the pane', () => {
     expect(split().dataset.open).toBe('false')
     expect(split().dataset.full).toBe('false')
     expect(ws.wide).toBe(false)
-    expect(el('wsBtn').dataset.tip).toBe(T('gui.expand_ws'))
+    expect(el('wsBtn').dataset.tip).toBe(t('gui.expand_ws'))
     expect(drew).toEqual([])
   })
 })
@@ -155,12 +153,12 @@ describe('expanding the pane to the window', () => {
     const b = el('wsWide')
     expect(b.classList.contains('on')).toBe(true)
     expect(b.getAttribute('aria-pressed')).toBe('true')
-    expect(b.dataset.tip).toBe(T('gui.ws.restore_panel'))
-    expect(b.getAttribute('aria-label')).toBe(T('gui.ws.restore_panel'))
+    expect(b.dataset.tip).toBe(t('gui.ws.restore_panel'))
+    expect(b.getAttribute('aria-label')).toBe(t('gui.ws.restore_panel'))
     ws.setFull(false)
     expect(b.classList.contains('on')).toBe(false)
     expect(b.getAttribute('aria-pressed')).toBe('false')
-    expect(b.dataset.tip).toBe(T('gui.ws.expand_panel'))
+    expect(b.dataset.tip).toBe(t('gui.ws.expand_panel'))
   })
 })
 
@@ -237,7 +235,7 @@ describe('a different session', () => {
     ws.reset()
     expect(ws.tab).toBe('diff')
     expect(ws.picked).toBe(false)
-    expect(resets).toEqual(['workspace', 'subagents'])
+    expect(resets).toEqual(['workspace', 'desk', 'subagents'])
   })
 })
 

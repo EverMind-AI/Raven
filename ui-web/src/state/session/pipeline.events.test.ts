@@ -57,7 +57,10 @@ async function harness({
         noteRow: (labelText: string, detail: string, opts?: Record<string, unknown>) =>
           log.push(['noteRow', labelText, detail, opts ? Object.keys(opts).sort() : null]),
       },
-      'src/features/rail/store': { draw: () => log.push(['sessionDraw']) },
+      'src/features/rail/store': {
+        draw: () => log.push(['sessionDraw']),
+        reconcileRows: (_cur: Row[], next: Row[]) => ({ rows: next, currentMissing: false }),
+      },
       'src/state/sheetRack': { session: () => 'sheet-key' },
       'src/state/session/rows': {
         sess: (id: string) => rows.find((r) => r.id === id),
@@ -77,7 +80,7 @@ async function harness({
       },
       'src/lib/duration': { formatDuration: (ms: number) => `${ms}ms` },
       'src/i18n/t': {
-        T: (key: string, vars?: unknown) => (vars ? `${key}:${JSON.stringify(vars)}` : key),
+        t: (key: string, vars?: unknown) => (vars ? `${key}:${JSON.stringify(vars)}` : key),
       },
       'src/lib/dom': { $: looseQuery() },
       'src/lib/session': { current: () => current },
@@ -92,9 +95,7 @@ async function harness({
       'src/features/rail/source': {
         touchSession: (id: string, preview?: string) => log.push(['touch', id, preview]),
       },
-    },
-    islands: {
-      transcript: {
+      'src/features/transcript/mount': {
         nudge: () => {},
         stopStream: () => {},
         delivered: (row: Record<string, unknown>) => log.push(['delivered', row]),
@@ -106,30 +107,36 @@ async function harness({
         /* The fold a stop makes asks this first and nothing else does, so it is
            where "softStop ran" is visible from outside. */
         turnKept: () => { log.push(['softStop']); return false },
-        down: () => log.push(['down']),
         dagFeed: (type: string) => log.push(['dagFeed', type]),
         killStatus: () => log.push(['killStatus']),
         step: step,
         status: (text: string) => log.push(['showStatus', text]),
       },
-      workspace: { advanceTurn: () => log.push(['advanceTurn']), currentTurn: () => 3 },
-      subagents: {
+      'src/features/transcript/tail': {
+        down: () => log.push(['down']),
+      },
+      'src/features/workspace/store': {
+        advanceTurn: () => log.push(['advanceTurn']),
+        currentTurn: () => 3,
+      },
+      'src/features/subagents/store': {
         directEvent: (target: unknown, type: string) => log.push(['directEvent', target, type]),
       },
-      dag: {
+      'src/features/dag/nodes': {
         fromStarted: () => [{ id: 'first' }, { id: 'last' }],
+      },
+      'src/features/dag/mount': {
         start: (key: string, run: Record<string, unknown>) => log.push(['dagStart', key, run.run_id]),
         advance: (key: string, p: unknown) => log.push(['dagAdvance', key, p]),
         settle: (key: string, p: unknown) => log.push(['dagSettle', key, p]),
         run: () => null,
       },
-      rail: { reconcile: (_cur: Row[], next: Row[]) => ({ rows: next, currentMissing: false }) },
     },
   })
   const pipeline = (await import('./pipeline')) as Pipeline
   await fakeGateway(() => Promise.resolve({ sessions: [] }))
   const { setSources } = await import('../sources')
-  setSources({ composer: {}, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+  setSources({ composer: {}, rail: {}, transcript: {} } as unknown as Partial<Sources>)
   const registry = await import('./registry')
   const runtime = await import('./runtime')
   /* The two page-level objects the turn used to live on, as the conversation
@@ -251,8 +258,8 @@ describe('session.titled', () => {
 describe('session.naming_ended', () => {
   it('hands the reason to the one place that decides (050-turn.js:139)', async () => {
     const h = await harness({ rows: [{ id: 's1', title: 'gui.new_task' }] })
-    const runtime = await import('./runtime')
-    runtime.beginNaming('please cut a desktop release')
+    const naming = await import('./naming')
+    naming.beginNaming('please cut a desktop release')
 
     h.dispatch({ type: 'session.naming_ended', payload: { session_id: 's1', reason: 'no_title' } })
 

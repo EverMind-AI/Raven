@@ -10,8 +10,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
-
 import * as turn from '../../features/composer/turn'
+
 import type { Sources } from '../sources'
 
 type Registry = typeof import('./registry')
@@ -71,7 +71,12 @@ async function harness(): Promise<{
         queueSnapshot: () => ['queued'],
         /* The island's own phase machine, which is what is under test here. */
         turn,
+        liveAnchor: () => 42,
+        setLiveAnchor: () => log.push('setLiveAnchor'),
       },
+      'src/features/workspace/store': { snapshot: () => ({ ...workspace }), restore: workspaceRestore },
+      'src/features/transcript/mount': { nudge: vi.fn(), stopStream: vi.fn() },
+      'src/features/transcript/tail': { down: vi.fn() },
       'src/lib/dom': { $: looseQuery() },
       'src/lib/session': { current: () => current },
       'src/state/banner': { draw: vi.fn() },
@@ -84,11 +89,6 @@ async function harness(): Promise<{
           if (ev && ev.type === 'bad') throw new Error('a bad frame')
         },
       },
-    },
-    islands: {
-      composer: { liveAnchor: () => 42, setLiveAnchor: () => log.push('setLiveAnchor') },
-      workspace: { snapshot: () => ({ ...workspace }), restore: workspaceRestore },
-      transcript: { nudge: vi.fn(), stopStream: vi.fn(), down: vi.fn() },
     },
   })
   const registry = (await import('./registry')) as Registry
@@ -254,7 +254,7 @@ describe('forgetting a conversation subscription', () => {
     const asked: Array<[string, unknown]> = []
     await loadPart(async () => { await import('./runtime'); return import('./registry') }, {
       fakes: {
-        'src/i18n/t': { T: (key: string) => key },
+        'src/i18n/t': { t: (key: string) => key },
         'src/lib/dom': { $: looseQuery() },
         'src/lib/session': { current: () => 'a' },
       },
@@ -265,7 +265,7 @@ describe('forgetting a conversation subscription', () => {
       return Promise.resolve({})
     })
     const { setSources } = await import('../sources')
-    setSources({ composer: {}, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+    setSources({ composer: {}, rail: {}, transcript: {} } as unknown as Partial<Sources>)
     /* The two books the subscription used to be kept in, and the one field that
        said which stream painted the stage: all three are the conversation's own
        `subscriptionId` now, so they are read back off it. */
@@ -289,7 +289,7 @@ describe('forgetting a conversation subscription', () => {
     const asked: Array<[string, unknown]> = []
     await loadPart(async () => { await import('./runtime'); return import('./registry') }, {
       fakes: {
-        'src/i18n/t': { T: (key: string) => key },
+        'src/i18n/t': { t: (key: string) => key },
         'src/lib/dom': { $: looseQuery() },
         'src/lib/session': { current: () => 'a' },
       },

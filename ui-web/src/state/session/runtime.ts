@@ -16,34 +16,39 @@
  * names that used to say which conversation a frame was about.
  */
 
+import { claimDraft as claimComposerDraft } from '../../features/composer/mount'
+import { drawMeter, goPaint as goState, queuePush, queueShift, turn } from '../../features/composer/mount'
+import { reduce } from '../../features/composer/turn'
+import { claimDraft as claimDeskDraft } from '../../features/desk/store'
 import { loadProviders, stagedTier } from '../../features/model/source'
 import { rowPreview, touchSession } from '../../features/rail/source'
+import { draw as sessionDraw } from '../../features/rail/store'
 import { plainTitle } from '../../features/rail/title'
 import { loadPermMode, stagedPerm } from '../../features/settings/source'
+import * as transcript from '../../features/transcript/mount'
+import { down as scrollTranscriptDown } from '../../features/transcript/tail'
 import { wsSetRoot as wsSetRootImpl } from '../../features/workspace/source'
-import { islands } from '../../features/registry'
-import { hasNamingFlag, hasTurnDuration } from '../../rpc/capabilities'
-import { set as setCtx } from '../ctxChip'
+import { currentTurn as wsCurrentTurn } from '../../features/workspace/store'
+import { t } from '../../i18n/t'
+import { $ } from '../../lib/dom'
+import { formatDuration as dur } from '../../lib/duration'
 import { show as ntfPush } from '../../lib/notifications'
 import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
+import { hasNamingFlag, hasTurnDuration } from '../../rpc/capabilities'
+import { gateway } from '../../rpc/gateway'
+import { ask as confirmAsk } from '../confirm'
+import { set as setCtx } from '../ctxChip'
+import { ds, sources } from '../sources'
 import { load as loadTier } from '../tier'
 import { show as toast } from '../toast'
-import { gateway } from '../../rpc/gateway'
-import { sources } from '../sources'
-import { T } from '../../i18n/t'
-import { $ } from '../../lib/dom'
-import { drawMeter, goPaint as goState, queuePush, queueShift, turn } from '../../features/composer/mount'
-import { draw as sessionDraw } from '../../features/rail/store'
-import { formatDuration as dur } from '../../lib/duration'
-import { ask as confirmAsk } from '../confirm'
 import { ask, noteRow, noteSay, pitch, splitAtts } from './conversation'
-import { rows as sessionRows, sess } from './rows'
-import { reduce } from '../../features/composer/turn'
 import { generation } from './generation'
-import { ensure, get, isActiveRuntime, isDraft as registryIsDraft, mint, subscribe, viewRuntime } from './registry'
+import { beginNaming, namingDeclined } from './naming'
+import { get, isActiveRuntime, isDraft as registryIsDraft, mint, subscribe, viewRuntime } from './registry'
+import { rows as sessionRows, sess } from './rows'
 
-import type { SessRow } from '../../features/rail/types'
 import type { TurnEvent, TurnSnapshot } from '../../features/composer/turn'
+import type { SessRow } from '../../features/rail/types'
 import type { Staging } from './staging'
 
 /* The composer island's stores hold the visible conversation's phase and
@@ -64,8 +69,8 @@ export class SessionRuntime {
      composer island's, which is what `goState` and the stop button read. */
   phase: TurnSnapshot = IDLE
 
-  st: ReturnType<typeof islands.transcript.step> | null = null
-  steps: Array<ReturnType<typeof islands.transcript.step>> = []
+  st: ReturnType<typeof transcript.step> | null = null
+  steps: Array<ReturnType<typeof transcript.step>> = []
   say = ''
   open = new Map<string, OpenCall>()
   sawEpisode = false
@@ -132,14 +137,14 @@ export const state = (): SessionRuntime => viewRuntime()
 
 /** Back to a conversation with no turn running. */
 export function reset(rt: SessionRuntime = viewRuntime()): void {
-  islands.transcript.stopStream()
+  transcript.stopStream()
   rt.st = null; rt.steps = []; rt.say = ''; rt.open.clear(); rt.sawEpisode = false
   rt.startedAt = Date.now()
   rt.answerAt = 0
 }
 
 export function ensureStep(rt: SessionRuntime = viewRuntime()) {
-  if (!rt.st) { rt.st = islands.transcript.step(); rt.steps.push(rt.st) }
+  if (!rt.st) { rt.st = transcript.step(); rt.steps.push(rt.st) }
   return rt.st
 }
 
@@ -175,14 +180,14 @@ export const fmtTok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(
 export function finishTurn(payload: unknown, rt: SessionRuntime = viewRuntime()): void {
   const p = (payload || {}) as { usage?: Record<string, number>; duration_ms?: number }
   const usage = p.usage || {}
-  islands.transcript.killStatus()
+  transcript.killStatus()
   /* The island promotes the streamed prose into the answer block where the
      prose stood, merges the silent stretches and folds the turn. */
-  islands.transcript.finishTurn(rt.st, rt.steps, duration(p.duration_ms, rt))
+  transcript.finishTurn(rt.st, rt.steps, duration(p.duration_ms, rt))
   /* The turn's products close it, after the answer and after any note: the
      bar is the last line of a turn, and it is only drawn once the turn is
      over -- nothing grows it mid-flight. */
-  islands.transcript.artifacts(islands.workspace.currentTurn())
+  transcript.artifacts(wsCurrentTurn())
   turn.dispatch({ type: 'idle' })
   const inTok = usage.input_tokens || usage.prompt_tokens || 0
   /* The window fill is the turn's prompt, not the running total. */
@@ -192,9 +197,9 @@ export function finishTurn(payload: unknown, rt: SessionRuntime = viewRuntime())
   touchSession(sessionCurrent(), rt.say)
   // OS notification when the answer lands while the window is in the
   // background; ntfPush itself checks focus and the user's preference.
-  ntfPush(T('gui.set.ntf.done'), (s && s.title) || rt.say.trim().slice(0, 80))
+  ntfPush(t('gui.set.ntf.done'), (s && s.title) || rt.say.trim().slice(0, 80))
   reset(rt)
-  drawMeter(); goState(); sessionDraw(); islands.transcript.down()
+  drawMeter(); goState(); sessionDraw(); scrollTranscriptDown()
   const nx = queueShift()
   if (nx !== undefined) send(nx)
 }
@@ -226,9 +231,9 @@ export function send(text: string): void {
   drawMeter(); goState(); sessionDraw()
   const failed = (e: unknown) => {
     const err = e as { message?: string }
-    islands.transcript.killStatus()
+    transcript.killStatus()
     turn.dispatch({ type: 'idle' })
-    noteRow(T('gui.err.send'), err.message === 'not connected' ? T('gui.err.disconnected') : (err.message || String(e)),
+    noteRow(t('gui.err.send'), err.message === 'not connected' ? t('gui.err.disconnected') : (err.message || String(e)),
       { retry: () => send(text) })
     goState(); drawMeter()
   }
@@ -294,7 +299,6 @@ export function stop(): void {
   if (!turn.cancellable()) return
   const owner = sessionCurrent()
   turn.dispatch({ type: 'cancel' })
-  const rt = viewRuntime()
   gateway().call('turn.cancel', { session_key: owner as string })
     .then(() => {
       get(owner)?.dispatch({ type: 'idle' })
@@ -316,14 +320,14 @@ export function stop(): void {
    pressed stop and watched the half-written answer disappear behind
    "done", under a note saying the output was kept. */
 export function softStop(keepCancelling?: boolean, rt: SessionRuntime = viewRuntime()): void {
-  islands.transcript.killStatus()
-  islands.transcript.finishTurn(rt.st, rt.steps, duration(undefined, rt))
+  transcript.killStatus()
+  transcript.finishTurn(rt.st, rt.steps, duration(undefined, rt))
   if (!keepCancelling) turn.dispatch({ type: 'idle' })
   /* Only promise the output was kept when there is output above to keep. */
-  noteRow(T(islands.transcript.turnKept() ? 'gui.halted' : 'gui.halted_bare'), '',
+  noteRow(t(transcript.turnKept() ? 'gui.halted' : 'gui.halted_bare'), '',
     { quiet: true, host: $('#stage') })
   /* A stopped turn still produced what it produced. */
-  islands.transcript.artifacts(islands.workspace.currentTurn())
+  transcript.artifacts(wsCurrentTurn())
   reset(rt)
   drawMeter(); goState(); sessionDraw()
 }
@@ -395,8 +399,8 @@ export async function promote(preview?: string, atPointer?: (id: string) => void
   const r = await gateway().call('session.create', {})
   setWsRoot(draftRt, r.info && r.info.cwd)
   const s: SessRow = {
-    id: r.session_id, title: T('gui.new_task'), last: preview || T('gui.sess.not_started'),
-    when: T('gui.sess.just_now'), at: Math.floor(Date.now() / 1000), run: null, live: true, persisted: false,
+    id: r.session_id, title: t('gui.new_task'), last: preview || t('gui.sess.not_started'),
+    when: t('gui.sess.just_now'), at: Math.floor(Date.now() / 1000), run: null, live: true, persisted: false,
   }
   sessionRows().unshift(s); sessionSet(s.id)
   /* The draft IS the conversation now: everything it was holding -- the staged
@@ -411,7 +415,11 @@ export async function promote(preview?: string, atPointer?: (id: string) => void
   if (atPointer) atPointer(s.id)
   // The composer was owned by 'new' until this point; keep later keystrokes
   // filed under the session that just came into being.
-  islands.composer.claimDraft(sessionCurrent())
+  /* One announcement, two owners: the composer's draft text and the desk's
+     palette are both filed under the draft and have to follow it to the
+     session (see features/desk/store.ts's claimDraft). */
+  claimComposerDraft(sessionCurrent())
+  claimDeskDraft(sessionCurrent())
   await applyStagedModel(draftRt, s.id, gen)
   await applyStagedTier(draftRt, s.id)
   await applyStagedPerm(draftRt, s.id)
@@ -445,7 +453,7 @@ export async function applyStagedModel(rt: SessionRuntime, sessionId: string, ge
   } catch (e) {
     // Said out loud, not just reversed: the pick was announced as staged, so a
     // silent chip flip back would be an unexplained contradiction.
-    toast(T('gui.op.switch_failed', { detail: detailOf(e) }))
+    toast(t('gui.op.switch_failed', { detail: detailOf(e) }))
     void loadProviders(sessionId, gen)
   }
 }
@@ -464,7 +472,7 @@ export async function applyStagedTier(_rt: SessionRuntime, sessionId: string): P
   try {
     await gateway().call('session.set_mode', { session_key: sessionId, mode })
   } catch (e) {
-    toast(`${T('gui.tier.title')}: ${detailOf(e)}`)
+    toast(`${t('gui.tier.title')}: ${detailOf(e)}`)
   }
   void loadTier()
 }
@@ -478,7 +486,7 @@ export async function applyStagedPerm(_rt: SessionRuntime, sessionId: string): P
   try {
     await gateway().call('config.set', { key: 'permissions.mode', value: mode, scope: 'session', session_id: sessionId })
   } catch (e) {
-    toast(`${T('gui.perm.title')}: ${detailOf(e)}`)
+    toast(`${t('gui.perm.title')}: ${detailOf(e)}`)
   }
   void loadPermMode(sessionId)
 }
@@ -488,146 +496,13 @@ const detailOf = (e: unknown): string => {
   return (o && ((o.data && o.data.detail) || o.message)) || String(e)
 }
 
-/* ---- naming ------------------------------------------------------------ */
-
-/* Naming a new session belongs to the server now: it reads the opening message
-   and answers with `session.titled`. Until that lands the row and the top bar
-   hold a placeholder, which is what the animation is for -- this used to write
-   the truncated first line here and then rewrite it a second later, and no
-   client-side cap is left to disagree with the server's.
-
-   The server now says when naming ends without a title
-   (`session.naming_ended`), so the ordinary quiet endings settle as fast as a
-   success does. This timer is the backstop for the case no message covers -- a
-   server too old to send either event, or a connection that drops mid-turn --
-   and it outlives the server's own timeout on the call
-   (`session_title.timeout_seconds`, 8s by default) so it cannot fire while an
-   answer is still legitimately on its way. A placeholder waiting on something
-   that is not coming is the one state a reader cannot leave by waiting.
-
-   It gives up onto the opening line held here, NOT onto the stored title: the
-   session's auto-name is written by `SessionManager.save`, which runs at turn
-   END (agent/loop/main.py), so a turn still working at the 12s mark has no
-   stored title to read and the row would sit on the default name until a
-   reload -- nothing re-reads it, since `refreshList` fires only for sessions
-   the reader is not looking at. The stored read is still tried first, because
-   a turn that has already ended has the better text. */
-export const NAMING_GRACE_MS = 12000
-
-export function titlePlaceholder(on: boolean): void {
-  const h = $('#title')
-  if (!h) return
-  h.textContent = ''
-  h.classList.toggle('skel', !!on)
-  if (!on) return
-  const bar = document.createElement('span')
-  bar.className = 'sk'
-  bar.style.width = '180px'
-  bar.style.height = '14px'
-  bar.setAttribute('aria-label', T('gui.sess.naming'))
-  h.appendChild(bar)
-}
-
-/* Stop waiting on `id` and show `title`, or what the row already had. Looks the
-   row up rather than holding one: `refreshList` replaces the row objects, so a
-   row captured when the wait started can be off the list by the time it ends. */
-export function settleNaming(id: string, title?: string | null): void {
-  const rt = get(id)
-  if (rt && rt.naming) clearTimeout(rt.naming.timer)
-  if (rt) rt.naming = null
-  const s = sess(id)
-  if (!s) return
-  s.naming = false
-  if (title) s.title = title
-  if (id === sessionCurrent()) {
-    titlePlaceholder(false)
-    const h = $('#title')
-    if (h) h.textContent = plainTitle(s.title)
-  }
-  sessionDraw()
-}
-
-/* The grace period ran out. Prefer the stored title -- a turn that has ended
-   has an auto-name on disk and it is the one every other client shows -- and
-   otherwise use the opening line captured when the wait started. A read that
-   succeeds and answers null is the ordinary case here, not an error: the turn
-   is still running. */
-export async function namingGaveUp(id: string): Promise<void> {
-  const pending = get(id)?.naming
-  let title = ''
-  try {
-    const r = await gateway().call('session.title', { session_id: id })
-    title = (r && r.title) || ''
-  } catch { /* fall through to the captured line */ }
-  settleNaming(id, title || (pending && pending.fallback) || '')
-}
-
-/* The server told us no name is coming for this one -- the opening line was
-   too short to name after, or the session already had a name, or the feature is
-   off. Settle now on the line we captured: waiting the full grace period for an
-   event that will never arrive is what made a two-character "hi" the SLOWEST
-   thing you could send, since a long message actually generates and lands in a
-   second or two while a short one always burned the whole timeout.
-
-   Only when a wait is actually open: `beginNaming` declines to start one for a
-   session that is already named, and this must not then blank its title. */
-export function namingDeclined(id: string): void {
-  const pending = get(id)?.naming
-  if (!pending) return
-  settleNaming(id, pending.fallback || '')
-}
-
-/* A name arrived from a person while the model was still writing one, so the
-   session is already better named than anything we hold. End the wait WITHOUT
-   the captured opening line: settling on it here overwrote the name that had
-   just been typed with the message it was typed over, for as long as the page
-   stayed open.
-
-   The stored title is read rather than assumed, because the rename may have
-   been typed in another client -- this row would still be showing the default
-   and clearing the placeholder alone would leave it there. If that read fails,
-   keep whatever the row has; it is at worst the default, and never the wrong
-   name. */
-export async function namingSuperseded(id: string): Promise<void> {
-  if (!get(id)?.naming) return
-  let title = ''
-  try {
-    const r = await gateway().call('session.title', { session_id: id })
-    title = (r && r.title) || ''
-  } catch { /* keep what the row shows */ }
-  settleNaming(id, title)
-}
-
-/* One place to decide what a `session.naming_ended` reason means for the row,
-   so the dispatcher carries no policy and this is reachable from a test. Three
-   of the four reasons mean "nothing better than the opening line exists"; the
-   fourth means the opposite. */
-export function namingEnded(id: string, reason: string): void | Promise<void> {
-  if (reason === 'renamed') return namingSuperseded(id)
-  return namingDeclined(id)
-}
-
-export function beginNaming(text: string): void {
-  const s = sess(sessionCurrent())
-  if (!s || (s.title && s.title !== '新任务' && s.title !== T('gui.new_task'))) return
-  if (!String(text || '').trim()) return
-  const id = s.id
-  /* Not capped here: how a title fits a row is the front end's own business and
-     both places that draw one already ellipsise. */
-  const fallback = String(text).trim().split('\n')[0]!.trim()
-  s.naming = true
-  if (id === sessionCurrent()) titlePlaceholder(true)
-  sessionDraw()
-  ensure(id).naming = { fallback, timer: setTimeout(() => { namingGaveUp(id) }, NAMING_GRACE_MS) }
-}
-
 /* ---- what a reader can do to a conversation ---------------------------- */
 
 /** Fork it, and open the fork. */
-export const branch = (_text = ''): void => sources.transcript?.branch?.(_text)
+export const branch = (_text = ''): void => ds('transcript').branch?.(_text)
 
 /** Empty its transcript, from the slash palette. */
-export const clear = (): void => sources.composer?.slash.find((x) => x.id === 'gui.clear')?.fn()
+export const clear = (): void => ds('composer').slash.find((x) => x.id === 'gui.clear')?.fn()
 
 /* Manual compaction. The runtime already compacts when a prompt outgrows the
    window; this forces the same pass early, which is what you want once the
@@ -635,12 +510,12 @@ export const clear = (): void => sources.composer?.slash.find((x) => x.id === 'g
 export async function compressNow(): Promise<void> {
   const key = sessionCurrent()
   if (!key || registryIsDraft()) return
-  const line = noteRow(T('gui.compress.running'), '', { quiet: true, host: $('#stage') })
+  const line = noteRow(t('gui.compress.running'), '', { quiet: true, host: $('#stage') })
   try {
     const r = await gateway().call('session.compress', { session_id: key })
     noteSay(line, r.removed
-      ? T('gui.compress.done', { n: r.removed, before: fmtTok(r.before_tokens), after: fmtTok(r.after_tokens) })
-      : T('gui.compress.noop'), '')
+      ? t('gui.compress.done', { n: r.removed, before: fmtTok(r.before_tokens), after: fmtTok(r.after_tokens) })
+      : t('gui.compress.noop'), '')
   } catch (e) {
     line.remove()
     /* Same rule as the clear handler, and here it is the failure path that
@@ -651,14 +526,14 @@ export async function compressNow(): Promise<void> {
     const detail = detailOf(e)
     if (key !== sessionCurrent()) {
       const s = sess(key)
-      toast(T('gui.sess.compress_failed', { title: plainTitle((s && s.title) || key), detail }))
+      toast(t('gui.sess.compress_failed', { title: plainTitle((s && s.title) || key), detail }))
       return
     }
-    noteRow(T('gui.compress.fail', { err: '' }).replace(/[:：]\s*$/, ''), detail)
+    noteRow(t('gui.compress.fail', { err: '' }).replace(/[:：]\s*$/, ''), detail)
   }
   /* The tail this scrolls is the open conversation's. */
   if (key !== sessionCurrent()) return
-  islands.transcript.down()
+  scrollTranscriptDown()
 }
 
 /** Compact it now, rather than when the window fills. */
@@ -666,7 +541,7 @@ export const compress = (): Promise<void> => compressNow()
 
 /* The slash palette's `/clear`. */
 export function clearConversation(): void {
-  confirmAsk(T('gui.clear_title'), T('gui.clear_body'), T('gui.clear_yes'), () => {
+  confirmAsk(t('gui.clear_title'), t('gui.clear_body'), t('gui.clear_yes'), () => {
     /* Which conversation was cleared, read once. The reply used to ask for the
      pointer again, and by then it can name a different one: clearing A and
      clicking B mid-flight wiped B's stage, gave B the new-task layout, and
@@ -677,7 +552,7 @@ export function clearConversation(): void {
         /* The row belongs to the conversation that was cleared, wherever the
          reader is now -- it really is empty, and a list that says otherwise
          is wrong until the next reload. */
-        const s = sess(key); if (s) s.last = T('gui.sess.cleared')
+        const s = sess(key); if (s) s.last = t('gui.sess.cleared')
         sessionDraw()
         /* The stage and the meter are the open conversation's, so they are
          only this reply's to touch while it IS the open one. */
@@ -698,29 +573,29 @@ export function clearConversation(): void {
         const detail = detailOf(e)
         if (key !== sessionCurrent()) {
           const s = sess(key)
-          toast(T('gui.sess.clear_failed', { title: plainTitle((s && s.title) || key), detail }))
+          toast(t('gui.sess.clear_failed', { title: plainTitle((s && s.title) || key), detail }))
           return
         }
-        noteRow(T('gui.clear_title'), detail)
+        noteRow(t('gui.clear_title'), detail)
       })
   })
 }
 
 /** Delete it, transcript and all. */
-export const remove = (s: SessRow): void => sources.sessions?.remove?.(s)
+export const remove = (s: SessRow): void => ds('rail').remove?.(s)
 
 /** Hide it from the rail, with an undo. */
-export const archive = (s: SessRow): void => sources.sessions?.archive?.(s)
+export const archive = (s: SessRow): void => ds('rail').archive?.(s)
 
 /** Pin it to the top of the rail. */
-export const pin = (id: string, pinned: boolean): void => sources.sessions?.pin?.(id, pinned)
+export const pin = (id: string, pinned: boolean): void => ds('rail').pin?.(id, pinned)
 
 /** Persist a title the reader typed. */
 export const rename = (id: string, title: string, previous: string): void =>
-  sources.sessions?.renamed?.(id, title, previous)
+  ds('rail').renamed?.(id, title, previous)
 
 /** Delete every conversation, from the settings page. */
-export const deleteAll = (): void => sources.sessions?.deleteAll?.()
+export const deleteAll = (): void => ds('rail').deleteAll?.()
 
 /* ---- installs ---------------------------------------------------------- */
 
@@ -741,8 +616,14 @@ export function installComposerActions(): void {
 /* The slash palette's two session verbs, replaced on the rows the composer
    island declares. */
 export function installSlashActions(): void {
-  sources.composer?.slash.forEach((x) => {
+  ds('composer').slash.forEach((x) => {
     if (x.id === 'gui.clear') x.fn = clearConversation
     if (x.id === 'gui.compress') x.fn = compressNow
   })
+}
+
+/* Test seam only: the promotion in flight is the module's, and a case that left
+   one pending would hand it to the next. */
+export function _resetForTests(): void {
+  promoting = null
 }

@@ -2,16 +2,16 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { BrowserApp } from './BrowserPage'
-import * as store from './store'
-
-import { domSnapshot } from '../../test/domSnapshot'
-import { resetSources, setSources, sources } from '../../state/sources'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
+import { setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
-import { installWsPanel } from '../../test/wsPanelHarness'
+import * as lang from '../../state/lang'
 import * as pageStore from '../../state/page'
+import { resetSources, setSources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import { installWsPane } from '../../test/wsPaneHarness'
+import { BrowserApp } from './BrowserPage'
+import * as store from './store';
+
 import type { BrowserSource, ChromiumSource, LinksSource, UrlRow } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -22,9 +22,11 @@ const shellCalls: Array<[string, unknown]> = []
 /* The island runs against the same two seams production wires up: a stand-in
    translator on setTranslator (it returns its key, so tests assert catalogue
    keys, not translations) and a source on sources.browser. */
-function wire(source: BrowserSource, lang = 'en'): void {
+function wire(source: BrowserSource, language: 'en' | 'zh' = 'en'): void {
   shellCalls.length = 0
-  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en'
+  /* Which search engine a prose query goes to is the page's language, and the
+     store is what holds it (state/lang/store.ts). */
+  lang.set(language)
   Object.defineProperty(navigator, 'clipboard', {
     configurable: true,
     value: { writeText: (text: string) => { shellCalls.push(['copy', text]); return Promise.resolve() } },
@@ -34,7 +36,7 @@ function wire(source: BrowserSource, lang = 'en'): void {
   vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
   /* The browser view, standing open: the island only reads frames and tabs
      while its own view is the one on screen. */
-  installWsPanel({
+  installWsPane({
     view: () => ({ tab: 'browser', open: true, picked: true }),
     show: (tab) => { shellCalls.push(['showWorkspace', tab]) },
   })
@@ -94,6 +96,9 @@ function mount() {
 afterEach(() => {
   cleanup()
   store._resetForTests()
+  /* The language is module state as well, and a case that picked one must not
+     be visible to the next. */
+  lang._resetForTests()
   vi.restoreAllMocks()
   resetSources()
 })
@@ -219,7 +224,7 @@ describe('browser island, embedded shape (the rpc source)', () => {
       fireEvent.keyDown(bar, { key: 'Enter' })
     })
     expect(calls).toContainEqual(['open', { url: 'https://duckduckgo.com/?q=rate%20limits' }])
-    document.documentElement.lang = 'zh-CN'
+    lang.set('zh')
     bar.value = '天气'
     await act(async () => {
       fireEvent.keyDown(bar, { key: 'Enter' })

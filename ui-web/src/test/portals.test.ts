@@ -13,24 +13,23 @@
  * themselves, and the body while every overlay is up. The table's own accessor
  * has its own test beside it (src/state/portals.test.ts).
  */
-import { describe, expect, it, vi } from 'vitest'
-
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readFileSync } from 'node:fs'
+import { describe, expect, it, vi } from 'vitest'
 
-import * as menu from '../state/menu'
+import { resetTranslator, setTranslator } from '../i18n/t'
 import * as session from '../lib/session'
-import * as tier from '../state/tier'
-import * as toast from '../state/toast'
-import * as upgrade from '../state/upgradeShade'
 import * as confirm from '../state/confirm'
-import * as tip from '../state/tooltip'
+import * as menu from '../state/menu'
 import { BOOT_BODY_ORDER, LAYERS, PORTALS, _resetForTests as resetLayers, host } from '../state/portals'
 import { resetSources, setSources } from '../state/sources'
+import * as tier from '../state/tier'
+import * as toast from '../state/toast'
+import * as tip from '../state/tooltip'
+import * as upgrade from '../state/upgradeShade'
 import { bodySiblings } from './domSnapshot'
 import { mountPageRoot } from './pageRoot'
 
-import { resetTranslator, setTranslator } from '../i18n/t'
 import type { TierReply, TierSource } from '../state/tier'
 
 const source = (path: string): string => readFileSync(path, 'utf8') as string
@@ -82,7 +81,7 @@ function bootedPage(): { doc: Document; unmount: () => void } {
 describe('the portal table', () => {
   it('lists thirteen hosts and no two of them twice', () => {
     expect(PORTALS).toHaveLength(13)
-    expect(new Set(PORTALS.map((p) => p.selector)).size).toBe(13)
+    expect(new Set(PORTALS.map((p) => p.id)).size).toBe(13)
   })
 
   /* Standing hosts: at the body from the page root's first commit, and the
@@ -110,7 +109,7 @@ describe('the portal table', () => {
     expect(live).toEqual([...BOOT_BODY_ORDER, 'div.topfail'])
     for (const portal of PORTALS) {
       if (portal.at === 'last') continue
-      expect(stub[portal.at - 1], `${portal.selector} is not body child ${portal.at}`)
+      expect(stub[portal.at - 1], `${portal.id} is not body child ${portal.at}`)
         .toBe(portal.bootKey)
     }
   })
@@ -118,11 +117,11 @@ describe('the portal table', () => {
   it('gives the tooltip layer a place before the update shade, breaking the tie at 90', () => {
     /* page.css says the tie is deliberate and reads as if a tooltip may sit on
        the shade; the DOM says otherwise, because .tipp is appended while the
-       page installs and .upshade only when an upgrade starts. Stage C copies
+       page installs and .upshade only when an upgrade starts. The table copies
        what is measured, not what the comment intends. */
     expect(BOOT_BODY_ORDER.indexOf('div.tipp')).toBeGreaterThan(-1)
-    expect(PORTALS.find((p) => p.selector === '.tipp')!.at).toBe(21)
-    expect(PORTALS.find((p) => p.selector === '.upshade')!.at).toBe('last')
+    expect(PORTALS.find((p) => p.id === '.tipp')!.at).toBe(21)
+    expect(PORTALS.find((p) => p.id === '.upshade')!.at).toBe('last')
   })
 
   /* The table says it; this is the page doing it. Both are at the body at
@@ -166,10 +165,10 @@ describe('the portal table', () => {
   })
 
   it('gives the model picker a place before the two popovers, breaking the tie at 46', () => {
-    const picker = PORTALS.find((p) => p.selector === 'pickHost')!
+    const picker = PORTALS.find((p) => p.id === 'pickHost')!
     expect(picker.at).toBe(19)
     for (const id of ['#permPop', '#tierPop']) {
-      expect(PORTALS.find((p) => p.selector === id)!.at).toBe('last')
+      expect(PORTALS.find((p) => p.id === id)!.at).toBe('last')
     }
   })
 
@@ -240,9 +239,9 @@ describe('the portal table', () => {
 })
 
 /* The reparenting itself, on the live module rather than on the markup: the
-   fixture is tier.test.ts's, which is the band the panel is rendered into
-   (src/chrome/TierPop.tsx) -- the composer card comes with it, and the card is
-   what the panel has to open clear of. */
+   fixture is tier.test.ts's, which is the band the popover is rendered into
+   (src/chrome/TierPopover.tsx) -- the composer card comes with it, and the card is
+   what the popover has to open clear of. */
 describe('a popover that has been opened', () => {
   const MENU = [
     { id: 'medium', name: 'Medium', description: 'The least effort a sub-agent is asked for.' },

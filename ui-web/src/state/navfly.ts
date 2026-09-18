@@ -23,19 +23,17 @@
  * group open" -- mark() included -- is an imperative one, so it stays a write by
  * id; the button's `aria-expanded` is the same fact rendered from `open` below.
  *
- * The three openers are imported from the islands that own those pages, and
- * markNew from the rail's store. That last one and this module import each
- * other, which is safe only because neither reads the other while it loads:
- * both edges are calls inside functions, so the binding is resolved when the
- * reader clicks rather than while the bundle evaluates.
+ * The three openers are imported from the islands that own those pages. The
+ * rail's marker is not: it registers itself here instead (`onMark` below), so
+ * the edge between the two runs one way -- the rail reads this module and this
+ * module is only read -- where importing it back made the two a knot whose
+ * evaluation order was the bundler's to decide rather than either file's.
  */
 
-import { flushSync } from 'react-dom'
-
-import { open as openConn } from '../features/connections/nav'
+import { open as openConnections } from '../features/connections/wire'
 import { open as openCron } from '../features/cron/store'
-import { markNew } from '../features/rail/store'
-import { open as openXa } from '../features/xa/store'
+import { open as openExtAgents } from '../features/extAgents/store'
+import { makeStore } from './store'
 
 export interface NavRow {
   page: string
@@ -45,14 +43,14 @@ export interface NavRow {
 
 export const MORE_ROWS: readonly NavRow[] = [
   {
-    page: 'xaPage',
+    page: 'extAgentsPage',
     nameKey: 'gui.nav.agents',
-    go: () => openXa(),
+    go: () => openExtAgents(),
   },
   {
-    page: 'connPage',
+    page: 'connectionsPage',
     nameKey: 'gui.nav.conn',
-    go: () => openConn(),
+    go: () => openConnections(),
   },
   {
     page: 'cronPage',
@@ -72,31 +70,32 @@ export interface NavFlyState {
    are drawn on the way open. Once drawn they stay -- folding the group is a
    flag, not a teardown. */
 const NONE: readonly NavRow[] = []
-let state: NavFlyState = { open: false, rows: NONE }
-const listeners = new Set<() => void>()
+const store = makeStore<NavFlyState>({ open: false, rows: NONE })
+
+/* The rail island's markNew, which it registers here when its own module
+   evaluates (features/rail/store.ts): the buttons above these rows are the
+   rail's to write, and this layer may not import a domain to ask. Spent
+   synchronously at the two moments below, so a picked row and a fold each
+   leave one decided strip behind them in the same task. Empty on a page whose
+   rail never evaluated, which is a page with no buttons to decide. */
+let remark: (() => void) | null = null
+
+/** Registers what re-decides the rail's marks when this group changes. */
+export function onMark(fn: () => void): void {
+  remark = fn
+}
 
 /** The group's state, for <MoreFly/> and for the fold's own button. */
-export function get(): NavFlyState {
-  return state
-}
+export const { get, subscribe } = store
 
 /** For useSyncExternalStore: called whenever the fold or the rows change. */
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => {
-    listeners.delete(fn)
-  }
-}
-
 /* Committed synchronously: draw() marks the rows straight afterwards, and the
    rows have to be in the document by then. */
-function put(next: Partial<NavFlyState>): void {
-  const merged = { ...state, ...next }
-  if (merged.open === state.open && merged.rows === state.rows) return
-  state = merged
-  flushSync(() => {
-    for (const fn of [...listeners]) fn()
-  })
+export function set(next: Partial<NavFlyState>): void {
+  const now = get()
+  const merged = { ...now, ...next }
+  if (merged.open === now.open && merged.rows === now.rows) return
+  store.set(merged)
 }
 
 const fly = (): HTMLElement | null => document.getElementById('moreFly')
@@ -117,7 +116,7 @@ function paint(): void {
 }
 
 export function draw(): void {
-  put({ rows: MORE_ROWS })
+  set({ rows: MORE_ROWS })
   paint()
 }
 
@@ -134,11 +133,11 @@ export function mark(): boolean {
 
 /* A row's own click. The group stays open on a pick: it is navigation now, and
    the row's own current mark is the answer to "where am I". Here rather than in
-   the component so that the rows reach markNew() through the seam this module
-   already has with the rail, instead of a second edge into it from chrome/. */
+   the component so that the rows ask for the marks through the registration
+   above, instead of a second edge into the rail from chrome/. */
 export function pick(row: NavRow): void {
   row.go()
-  markNew()
+  remark?.()
 }
 
 export function toggle(force?: boolean): void {
@@ -147,14 +146,14 @@ export function toggle(force?: boolean): void {
   const open = force != null ? force : box.dataset.open !== 'true'
   if (open) draw()
   box.dataset.open = String(open)
-  put({ open })
-  markNew()
+  set({ open })
+  remark?.()
 }
 
 /* Back to the state a fresh page starts in: folded, with no rows drawn. For a
    test, the way state/sources.ts's resetSources() is -- the rows outlive a
    remount, so a case that drew them must not hand them to the next one. The
    page never calls this. */
-export function reset(): void {
-  put({ open: false, rows: NONE })
+export function _resetForTests(): void {
+  set({ open: false, rows: NONE })
 }

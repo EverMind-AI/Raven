@@ -51,8 +51,8 @@ function Tile({ name }: { name: string }): JSX.Element {
   return <span className={'pmtile th' + (h % 8)}>{(name[0] || '?').toUpperCase()}</span>
 }
 
-/* Two-click armed delete, like the legacy memArm: the first click turns the
-   button into its own confirm for four seconds, the second fires. */
+/* Two-click armed delete: the first click turns the button into its own confirm
+   for four seconds, the second fires. */
 function ArmedDelete({ onFire, style }: { onFire: () => void; style?: CSSProperties }): JSX.Element {
   const [armed, setArmed] = useState(false)
   useEffect(() => {
@@ -79,11 +79,11 @@ function ArmedDelete({ onFire, style }: { onFire: () => void; style?: CSSPropert
 }
 
 export function MemoryApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
-  /* Subscribed, not read: memWhen above reads the language at render time, and
-     this is what brings the page back for a flip. The legacy whole-page redraw
-     also repaints this island, so the subscription adds nothing a reader can
-     see -- it is what carries the repaint once that redraw is gone. */
+  const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The language the page resolved, so a pick repaints this island: memWhen
+     above and every word below read it at render time (state/lang/store.ts).
+     This subscription is what carries the repaint -- the whole-page redraw no
+     longer lists this island. */
   useSyncExternalStore(langSubscribe, langTag)
   return (
     <>

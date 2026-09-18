@@ -33,7 +33,7 @@ export const ROOMY: Metric = { W: 44, H: 15, GX: 20, GY: 8 }
 /* Fits 6 columns / 5 rows. */
 export const TIGHT: Metric = { W: 30, H: 11, GX: 13, GY: 6 }
 /* The card's drawing area, in the diagram's own coordinates. */
-export const CARD_BOX = { W: 268, H: 84 }
+const CARD_BOX = { W: 268, H: 84 }
 
 export interface Cell {
   id: string

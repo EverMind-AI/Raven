@@ -1,8 +1,10 @@
-import * as dagNodes from '../dag/nodes'
 import { t } from '../../i18n/t'
-import { ds } from '../../state/sources'
+import { I18N } from '../../i18n/t'
 import { formatDuration } from '../../lib/duration'
 import { md } from '../../lib/prose'
+import { ds } from '../../state/sources'
+import { pane } from '../../state/wsPane'
+import * as dagNodes from '../dag/nodes'
 import * as deliveries from '../workspace/deliveries'
 import * as hunks from '../workspace/hunks'
 
@@ -12,25 +14,23 @@ import type {
   DeliveredData, FoldData, HistoryMessage, Hunk, Lane, NoteData, NoteHandle, QaData, Seg,
   SpawnListRow, StatusData, StepData, StepHandle, SubagentStatusLike, TranscriptSource,
 } from './types'
-import { I18N } from '../../i18n/t'
-import { panel } from '../../state/wsPanel'
 
-/* Plain external store. The legacy layers drive the transcript imperatively
- * (the replay, the live turn machine, the history reader all push segments),
- * so state lives here where the shims can reach it, mutated in place; each
- * segment carries its own version and the components subscribe per segment,
- * which is what keeps a token append from re-rendering anything but the
- * streaming leaf.
+/* Plain external store. The callers that drive the transcript are not React:
+ * the replay, the live turn machine and the history reader all push segments,
+ * and all three are state/session's. So state lives here where they can reach
+ * it, mutated in place; each segment carries its own version and the components
+ * subscribe per segment, which is what keeps a token append from re-rendering
+ * anything but the streaming leaf.
  */
 
-export const source = (): TranscriptSource => ds<TranscriptSource>('transcript')
+const source = (): TranscriptSource => ds('transcript')
 
 /* Tolerated missing rather than thrown on: a page that has installed no
    artifacts source has no products to show, and the bar is drawn from the same
    boot sequence that installs it. */
-export function artifactsSource(): ArtifactsSource {
+function artifactsSource(): ArtifactsSource {
   try {
-    return ds<ArtifactsSource>('artifacts')
+    return ds('artifacts')
   } catch {
     return { changes: () => [] }
   }
@@ -43,7 +43,7 @@ export function artifactsSource(): ArtifactsSource {
    (session.resume carries the write's arguments, and the panel's replay
    rebuilds the same hunk from them). Null when the row carries no content, and
    then the tile shows the file's kind rather than inventing a picture. */
-export function artifactHead(c: WsChange): string | null {
+function artifactHead(c: WsChange): string | null {
   const out: string[] = []
   for (const h of c.hunks || []) {
     for (const r of h.rows || []) {
@@ -108,7 +108,7 @@ export const durText = formatDuration
 
 const shortPath = (p: string): string => {
   try {
-    return ds<{ shortPath(p: string): string }>('workspace').shortPath(p)
+    return ds('workspace').shortPath(p)
   } catch {
     return String(p || '')
   }
@@ -116,7 +116,7 @@ const shortPath = (p: string): string => {
 
 /* ── segment vocabulary helpers (ported with the renderer) ─────────────── */
 
-export const MIN_RUN_STEPS = 2
+const MIN_RUN_STEPS = 2
 export const DTL_MAX_LINES = 80
 
 export const shortArg = (a: unknown, max = 40): string => {
@@ -134,7 +134,7 @@ export const verbOf = (n: string): string => t('gui.act.v.' + n, undefined, rawV
 export const verbIngOf = (n: string): string => t('gui.act.ing.' + n, undefined, rawVerb(n))
 
 /* The demo replay hands the one string it displays where the live RPC hands
-   the argument object; normalised here exactly as the legacy wsArgs did. */
+   the argument object; normalised here so a row reads the same either way. */
 function parseArgs(name: string, args: unknown): Record<string, unknown> {
   if (args && typeof args === 'object') return args as Record<string, unknown>
   const s = String(args == null ? '' : args)
@@ -229,7 +229,7 @@ export function phraseOf(calls: CallData[]): string {
 }
 
 /* When an answer landed: today needs only a clock, older needs the date. */
-export function stamp(when: number | string | Date): string {
+function stamp(when: number | string | Date): string {
   const d = when instanceof Date ? when : new Date(when)
   if (!d || isNaN(d.getTime())) return ''
   const p = (n: number): string => String(n).padStart(2, '0')
@@ -354,8 +354,8 @@ function bump(lane: Lane, seg: { v: number }): void {
   emit(lane)
 }
 
-/* The appends the legacy renderer followed with down(): toggles never
-   scroll (they pin the clicked row instead), so this is its own counter. */
+/* The appends that ask the view to scroll down: toggles never scroll (they pin
+   the clicked row instead), so this is its own counter. */
 function poke(lane: Lane): void {
   lane.scrollReq += 1
 }
@@ -413,7 +413,7 @@ function push(lane: Lane, seg: Seg): void {
   bumpList(lane)
 }
 
-export function ask(lane: Lane, body: string, atts: string[], when?: string | null): void {
+function ask(lane: Lane, body: string, atts: string[], when?: string | null): void {
   push(lane, {
     v: 0, id: nextId(), kind: 'ask', body, atts,
     when: when != null ? when : stamp(Date.now()), expanded: false,
@@ -1102,9 +1102,9 @@ function newCallData(
   return c
 }
 
-/* Row-fold transitions the legacy paintWork made: the step that just outgrew
-   a single call folds its rows for the first time, and a failure is the one
-   thing worth opening unasked -- unless the reader pinned the fold. */
+/* The row-fold transitions: the step that just outgrew a single call folds its
+   rows for the first time, and a failure is the one thing worth opening
+   unasked -- unless the reader pinned the fold. */
 function paintWork(lane: Lane, seg: StepData, grewPast1: boolean): void {
   if (seg.calls.length > 1 && grewPast1 && !seg.wkPinned) seg.wkOpen = false
   if (seg.calls.length > 1 && seg.failed && !seg.wkPinned && !seg.wkOpen) seg.wkOpen = true
@@ -1408,7 +1408,7 @@ function mergeThoughts(lane: Lane, group: StepData[]): void {
 /* Same shape as foldRuns, over the other kind of run. Separate passes because
    the two merges keep different things: a silent run keeps its calls under a
    new holder, a thought run keeps its first step and absorbs the rest. */
-export function foldThoughts(lane: Lane, steps: StepData[]): void {
+function foldThoughts(lane: Lane, steps: StepData[]): void {
   let i = 0
   while (i < steps.length) {
     if (!isThoughtOnly(steps[i] as StepData)) { i += 1; continue }
@@ -1591,7 +1591,7 @@ function callIndex(messages: HistoryMessage[]): Map<string, { name: string; args
    becomes the verb and the command the argument. A raven tool name has no
    colon and comes back unchanged; a shell title spans newlines on purpose. */
 const ACP_TITLE_RE = /^([A-Za-z_][\w.-]{0,31}):\s*(\S[\s\S]*)$/
-export const callParts = (raw: unknown): { name: string; display: string } => {
+const callParts = (raw: unknown): { name: string; display: string } => {
   const m = ACP_TITLE_RE.exec(String(raw || ''))
   return m ? { name: m[1] as string, display: m[2] as string } : { name: String(raw || ''), display: '' }
 }
@@ -1704,12 +1704,12 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
      whose live path is this function rather than finishTurn. */
   let held: { text: string; when: string | null } | null = null
   /* The turn number the workspace record files a change under, counted the way
-     it counts them: one per user message with text (wsOnHistory in
-     demo/100-workspace.js does exactly this, over these same messages). Two
-     readers of one numbering rather than a number passed between them, because
-     the panel's replay and this one are separate entry points on the same
-     payload -- but that makes the rule itself the contract, so it is stated
-     here and there in the same words.
+     it counts them: one per user message with text
+     (features/workspace/record.ts does exactly this, over these same
+     messages). Two readers of one numbering rather than a number passed
+     between them, because the pane's replay and this one are separate entry
+     points on the same payload -- but that makes the rule itself the contract,
+     so it is stated here and there in the same words.
 
      A delegated lane resumes its own count rather than starting over: it is
      painted a slice at a time, so counting from zero over each slice filed every
@@ -2124,7 +2124,7 @@ export function openDagNode(runId: string, nodeId: string, summary?: string | nu
 export function openSpawn(agent: string, label: string): void {
   const src = source()
   if (src.openSpawn) { src.openSpawn(agent, label); return }
-  panel().show('agents')
+  pane().show('agents')
 }
 
 /* Test seam. */

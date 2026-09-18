@@ -35,7 +35,7 @@ describe('the shared detail drawer', () => {
   it('gives each owner in turn the one host under #dBody', async () => {
     const detail = await load()
     const seen: Element[] = []
-    for (const owner of ['memory', 'plugins', 'skills', 'xa'] as const) {
+    for (const owner of ['memory', 'plugins', 'skills', 'extAgents'] as const) {
       detail.open(owner)
       expect(body().children, owner).toHaveLength(1)
       expect(body().firstElementChild, owner).toBe(detail.host(owner))
@@ -61,7 +61,7 @@ describe('the shared detail drawer', () => {
   it('keeps the host display asymmetry the four openers had', async () => {
     const detail = await load()
     expect(detail.host('memory').style.display).toBe('contents')
-    expect(detail.host('xa').style.display).toBe('contents')
+    expect(detail.host('extAgents').style.display).toBe('contents')
     expect(detail.host('skills').style.display).toBe('')
     expect(detail.host('plugins').style.display).toBe('')
   })
@@ -84,7 +84,7 @@ describe('the shared detail drawer', () => {
       detail.open(owner, { fill: true })
       expect(drawer().dataset.fill, owner).toBe('true')
     }
-    for (const owner of ['memory', 'xa'] as const) {
+    for (const owner of ['memory', 'extAgents'] as const) {
       detail.open(owner)
       expect(drawer().hasAttribute('data-fill'), owner).toBe(false)
     }
@@ -97,7 +97,7 @@ describe('the shared detail drawer', () => {
   it('closes in the order the decorator chain made visible', async () => {
     const detail = await load()
     const calls: string[] = []
-    for (const owner of ['xa', 'memory', 'skills', 'plugins'] as const) {
+    for (const owner of ['extAgents', 'memory', 'skills', 'plugins'] as const) {
       detail.onClose(owner, () => {
         calls.push(owner)
         calls.push(`flag:${drawer().dataset.open ?? ''}`)
@@ -112,7 +112,7 @@ describe('the shared detail drawer', () => {
       'flag:true',
       'memory',
       'flag:true',
-      'xa',
+      'extAgents',
       'flag:true',
     ])
     expect(drawer().dataset.open).toBe('false')
@@ -125,7 +125,7 @@ describe('the shared detail drawer', () => {
     detail.open('memory')
     detail.close()
     off()
-    detail.open('xa')
+    detail.open('extAgents')
     expect(seen).toEqual(['memory', 'memory'])
   })
 

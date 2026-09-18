@@ -11,9 +11,8 @@
  * the order the page raised them.
  */
 
-import { flushSync } from 'react-dom'
-
 import { t } from '../i18n/t'
+import { makeStore } from './store'
 
 export interface FailureBar {
   say(text: string): void
@@ -32,28 +31,19 @@ export interface Bar {
 export const BOOT_CSS = 'position:fixed;left:0;right:0;top:0;z-index:99;background:#d96a5b;color:#fff;'
   + 'font:12px/1.5 ui-monospace,monospace;padding:8px 14px;white-space:pre-wrap'
 
-let bars: readonly Bar[] = []
+const store = makeStore<readonly Bar[]>([])
+
+/** The bars on screen, and the verb that raises one. */
+export const { get, set, subscribe } = store
+
 let seq = 0
-const listeners = new Set<() => void>()
-
-export const get = (): readonly Bar[] => bars
-
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => { listeners.delete(fn) }
-}
-
-function commit(next: readonly Bar[]): void {
-  bars = next
-  flushSync(() => { for (const fn of [...listeners]) fn() })
-}
 
 export function show(text: string): FailureBar {
   const id = ++seq
-  commit([...bars, { id, kind: 'top', text }])
+  set([...get(), { id, kind: 'top', text }])
   return {
     say(next: string): void {
-      commit(bars.map((bar) => (bar.id === id ? { ...bar, text: next } : bar)))
+      set(get().map((bar) => (bar.id === id ? { ...bar, text: next } : bar)))
     },
   }
 }
@@ -62,7 +52,7 @@ export function bootError(where: string, error: unknown): void {
   const detail = error as { message?: unknown; stack?: unknown } | null
   const at = String(detail?.stack || '').split('\n')[1] || ''
   const message = detail?.message || error
-  commit([...bars, {
+  set([...get(), {
     id: ++seq,
     kind: 'boot',
     text: `${t('gui.boot_fail', { where, err: String(message) })}\n${at.trim()}`,
@@ -72,5 +62,5 @@ export function bootError(where: string, error: unknown): void {
 
 /** Test seam only: the bars are never taken down in the page. */
 export function _resetForTests(): void {
-  commit([])
+  set([])
 }

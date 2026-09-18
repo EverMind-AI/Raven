@@ -35,8 +35,8 @@ import { watch as watchTier } from '../../state/tier'
 import { show as toast } from '../../state/toast'
 import * as store from './store'
 
-import type { JSX, MouseEvent } from 'react'
 import type { InstanceRow, SubagentMode } from './types'
+import type { JSX, MouseEvent } from 'react'
 
 interface Held {
   /* This instance's own override, or null when it has none -- which is Auto. */

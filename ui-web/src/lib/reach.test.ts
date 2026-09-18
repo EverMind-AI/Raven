@@ -3,10 +3,10 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { hint, text } from './reach'
 import { resetTranslator, setTranslator } from '../i18n/t'
-import * as pageStore from '../state/page'
 import * as confirmStore from '../state/confirm'
+import * as pageStore from '../state/page'
+import { hint, text } from './reach'
 
 afterEach(() => {
   resetTranslator()

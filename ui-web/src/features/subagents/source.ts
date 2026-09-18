@@ -16,10 +16,10 @@ import { current as sessionCurrent } from '../../lib/session'
 import { gone, has } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
 import { mediaOf } from '../../state/session/runtime'
-import { islands } from '../registry'
+import { agentStage } from '../transcript/mount'
 
 import type { AgentCtxLike } from '../transcript/store'
-import type { AgentsSource } from './types'
+import type { SubagentsSource } from './types'
 
 /* Every call here is addressed to the conversation on screen, and every caller
    is a panel that only exists inside one. */
@@ -29,7 +29,7 @@ const openKey = (): string => sessionCurrent() as string
    without being reopened, and there is no push for it. */
 let agentsWatch: (() => void) | null = null
 
-export const agentsSource: AgentsSource = {
+export const agentsSource: SubagentsSource = {
   /* Filtered on whether the agent can be dispatched, not on where it came
    from. It filtered `vendored` -- which is true of every agent that ships
    WITH raven -- so Raven-Code, Raven-PPT and Raven-Research were absent from
@@ -119,11 +119,18 @@ export const agentsSource: AgentsSource = {
    scroll). A member here rather than its own binding, because a painter is
    only ever wanted for a record, and this is the source the records come
    from. */
-  stagePaint: (box, r, opts) => islands.transcript.agentStage(box, r as AgentCtxLike | null, opts),
+  stagePaint: (box, r, opts) => agentStage(box, r as AgentCtxLike | null, opts),
 }
 
 /* Two seconds, for the life of the tab whether or not the panel is open: the
    absent watcher is the ordinary case, not an error. */
 export function startAgentHeartbeat(): void {
   setInterval(() => { if (agentsWatch) agentsWatch() }, 2000)
+}
+
+/* Test seam only: the heartbeat's unsubscribe is the module's, and a case that
+   started one must not leave it running into the next. */
+export function _resetForTests(): void {
+  agentsWatch?.()
+  agentsWatch = null
 }
