@@ -214,7 +214,7 @@ const LEGACY_LOCAL = {
   rail: 11,
   settings: 0,
   skills: 4,
-  subagents: 38,
+  subagents: 39,
   /* Down from 8: the node panel's inline "still running" line -- a plain
      `className="dot run"`, the one attribute-form use of `.dot` this domain
      had -- is gone with the line it lived on (the head already says a
@@ -222,7 +222,13 @@ const LEGACY_LOCAL = {
      inside a `className={...}` expression, which `LEGACY_EXPR` already
      counted. */
   tasks: 7,
-  transcript: 74,
+  /* Up by two. The transcript's turn shapes are `.turn` and `.msg` now, which
+     retires `.ask`, `.answer-turn` and `.b` -- three names for two. The row
+     rises anyway because the two modifiers those shapes carry, `.me` and
+     `.ai`, used to be written inside a className expression and are literal
+     attributes here: they moved onto this list from the one below, which falls
+     by one in the same change. */
+  transcript: 76,
   workspace: 37,
 }
 
@@ -252,7 +258,7 @@ const LEGACY_EXPR = {
   skills: 2,
   tasks: 5,
   subagents: 6,
-  transcript: 26,
+  transcript: 25,
   workspace: 7,
 }
 
