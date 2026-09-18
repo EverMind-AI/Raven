@@ -87,6 +87,7 @@ LEDGER = {
         "Memory",
         "MemoryBackend",
         "ProviderHTTPError",
+        "REASONING_EFFORT_LADDER",
         "QuestionResponder",
         "RAW_ARGUMENTS_KEY",
         "RunMeta",
@@ -164,6 +165,18 @@ LEDGER = {
         "CapabilitySelection",
         "PlanningRequest",
         "PlanningResult",
+        "ShrinkResult",
+        "WindowPressure",
+        "WindowState",
+        # -- the conduct a sub-agent writes instead of six hook phases.
+        "Accept",
+        "AgentConduct",
+        "ConductFactory",
+        "End",
+        "Intake",
+        "Resample",
+        "StepView",
+        "Verdict",
     },
 }
 
@@ -267,7 +280,7 @@ def test_import_guard_bites_machinery_and_spares_type_checking(tmp_path):
 # The contract tier is versioned: its shape moves only with a version bump
 # ---------------------------------------------------------------------------
 
-PINNED_CONTRACT_SURFACE = ("26", "9c337e383c7ad5a3b02bb7610204d1d075336118a65e5a242fdfa2d26a995ddb")
+PINNED_CONTRACT_SURFACE = ("28", "2883ec07bcdefe78e8838b965650bb167cca6a72abb1e59ec3c65c25368e4a80")
 
 
 def _render(node) -> str:

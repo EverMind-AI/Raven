@@ -202,20 +202,33 @@ def collect_tool_names(get_tool_definitions: Callable[[], list[Any]] | None) -> 
 
 
 def _resolved_model_id() -> str:
-    """The routed model id (gateway/provider prefix applied) from config.
+    """The wire id of the model the running turn's request goes out under.
 
-    Delegates the storage-to-wire conversion to ``providers.wire`` instead
-    of constructing a provider — that would import litellm and mutate env
-    vars during prompt assembly. Reads config lazily and never raises;
-    ``""`` means "unknown" and the identity block skips the line.
+    The id comes from the turn's active :class:`~raven.providers.binding.ModelBinding`
+    when there is one -- the loop opens ``use_binding`` around every turn, and a
+    session's own ``/model`` pick is what that binding holds -- and from
+    ``agents.defaults.model`` outside a turn. Read from the binding rather than
+    handed down as a field: both renderers of this line (the request path and
+    the token-estimation path) call here without being told, so they agree by
+    construction, and a conversation that switched model is told what it is
+    running on now instead of the configured default it left.
+
+    Either way the id is the *stored* spelling, so both go through the same
+    storage-to-wire conversion: ``providers.wire`` rather than a provider,
+    because constructing one would import litellm and mutate env vars during
+    prompt assembly, and a lazily built one answers identity until its first
+    call. Reads config lazily and never raises; ``""`` means "unknown" and the
+    identity block skips the line.
     """
     try:
         from raven.config.loader import load_config
+        from raven.providers.binding import active_binding
         from raven.providers.registry import find_by_name, find_gateway
         from raven.providers.wire import wire_model
 
         config = load_config()
-        model = config.agents.defaults.model
+        bound = active_binding()
+        model = bound.model if bound is not None else config.agents.defaults.model
         provider_name = config.get_provider_name(model)
         gateway = find_gateway(
             provider_name,
@@ -339,7 +352,8 @@ def identity_text(
 
     ``model`` is the resolved routed model id (full ``provider/model``
     form) told to the model so it never guesses its own identity from
-    pretraining. ``None`` (the default) resolves it lazily from config.
+    pretraining. ``None`` (the default) resolves it from the running turn's
+    binding, else lazily from config (see ``_resolved_model_id``).
     """
     home_path = str(agent_home.expanduser().resolve())
     bound = work_dir or workdir.current()

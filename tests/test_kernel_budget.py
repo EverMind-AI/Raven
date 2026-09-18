@@ -99,6 +99,70 @@ and the memory backend read one endpoint rather than a copy each. Measured at
 so the host can read back what a sub-agent left behind through the contract
 rather than that backend's HTTP API, and ``store``'s two metadata conventions
 are written down where a plugin author reads them. Measured at 3,013.
+
+3,040 -> 3,100 (2026-09-17), and this is that review. No new paper: thirty-
+nine lines onto two that were already here, both spent saying where a
+dispatch's playbook is read rather than adding anything it can say.
+
+``ActionModule`` gains ``judge`` (28 lines with its prose). The judgement a
+playbook carries was read by a module-level helper inside the tool registry,
+which put "what the agent does next" in two places -- the role for deciding it
+and a private function for vetting it. The method moves the reading to the
+role and leaves the refusing where it was: ``ToolRegistry.execute`` still
+decides what a refusal does, so a replaced role withholds nothing it could not
+already withhold. The prose is most of the 28: two callers and two moments is
+the part a reader gets wrong.
+
+``TurnContext`` and ``AssemblyContext`` gain ``task_brief`` and
+``task_done_when``, 11 lines. The identity segment used to reach into the
+dispatch layer's ContextVar to find out what this turn was asked to do, which
+decided "what does this turn show its model" somewhere the Memory role could
+not see it. Memory fills the two strings now and the segment renders them.
+
+Measured at 3,072, and the twenty-eight above it is the headroom this
+docstring has argued for since the first bump: a ceiling the next field trips
+is a ceiling somebody edits on the way past.
+
+3,100 -> 3,200 (2026-09-17), and this is that review. The Memory role gains
+its mid-turn seat: ``shrink``, with ``WindowPressure`` (the five reasons a
+window is asked to get smaller), ``WindowState`` (one turn's readings and
+retry budgets, held by the shell because the role outlives the turn) and
+``ShrinkResult``, 84 lines of which the prose is most. The five recoveries the
+loop ran inline -- proactive compaction, the standing image window, overflow,
+a picture refused in a tool result, pictures refused for size -- now go
+through this one method, so the policy half moved onto the role while the
+retry mechanism stayed in the shell; the six ``continue`` statements did not
+move. ``REASONING_EFFORT_LADDER`` (11 lines with its prose) also lands in
+``llm_provider.py``: the loop's empty-response descent and the window's head
+summary both read it, and neither package may import the other.
+
+Measured at 3,170, thirty over the count rather than one, for the reason the
+first bump gave.
+
+3,200 -> 3,410 (2026-09-18), and this is that review. The change is a whole
+paper: contracts/agent_conduct.py, 191 lines, the nine verbs a sub-agent
+implements instead of the six hook phases (``AgentConduct``, its ``StepView``
+of fourteen read-only fields, the ``Intake`` and ``Verdict`` it answers with,
+the per-turn ``ConductFactory``, and a diagnostic trail so a gate's one-line
+findings still reach the loop's notes). It sits beside ``loop_hooks`` rather
+than replacing it: the phases remain the loop's timing contract, this is the
+judgement contract, and an adapter seats one in the other. Surveyed before it
+was written -- 42 real hook implementations across five plugins read fourteen
+context fields and used six decision fields, and every one of them fits one of
+the verbs -- so the paper is sized to what exists, not to what might.
+Factory-loop tier, so the contract-tier digest and ``CONTRACTS_VERSION`` do
+not move with it.
+
+Measured at 3,379, thirty-one over the count, for the reason given above.
+
+3,410 -> 3,440 (2026-09-18), when the conducts were seated on the roles:
+``MemoryModule.intake``, ``PlanningModule.advise`` and ``ActionModule.review``
+/ ``salvage`` -- the four verbs a conduct answers that belong to a role rather
+than to the seat, each taking this turn's conducts so a replaced role decides
+what a plugin's judgement does. 28 lines of protocol and prose; the
+composition rules themselves live in the harness, not here.
+
+Measured at 3,406, thirty-four over the count, for the reason given above.
 """
 
 from __future__ import annotations
@@ -109,7 +173,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 3_040
+CONTRACTS_LINE_CEILING = 3_440
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 

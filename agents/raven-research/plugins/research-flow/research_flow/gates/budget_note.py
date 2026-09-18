@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import logging
 
-from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.loop_hooks import HookDecision
+from research_flow.gates.base import Gate, GateCtx
 from research_flow.support.budget import usage_tokens
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ _CONVERGE_WARNING = (
 )
 
 
-class BudgetNoteObserver(AgentHook):
+class BudgetNoteObserver(Gate):
     """Make the remaining budget visible to the model, in-history."""
 
     def __init__(
@@ -41,7 +42,7 @@ class BudgetNoteObserver(AgentHook):
     def name(self) -> str:
         return "BudgetNoteObserver"
 
-    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def after_iteration(self, ctx: GateCtx) -> HookDecision:
         if not getattr(ctx.response, "has_tool_calls", False):
             return HookDecision()
         messages = ctx.messages or []

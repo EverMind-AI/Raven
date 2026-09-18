@@ -150,6 +150,17 @@ def sufficiency_listing_notice() -> str:
     )
 
 
+ORPHAN_ENTITIES_HEADER = "[names and dates on this page not covered above]"
+"""Header line of the digest sidecar block (``digest.orphanEntities``).
+
+Like the fetch-gate notice it rides on a real tool result - appended after the
+digest and the verbatim head - so it is NOT in the permissive table below (a
+permissive match would condemn the page it is attached to). Strict-only: an
+answer whose first line is this header is the harness's block echoed back, not
+an answer. Defined here so the emitter and the recognisers cannot drift apart.
+"""
+
+
 # Permissive recognisers: (name, matcher). Used only where a false positive is
 # free. Keep the names stable - they are the diagnostic a reader gets back.
 _HARNESS_BODIES: tuple[tuple[str, Callable[[str], bool]], ...] = (
@@ -208,6 +219,45 @@ def is_harness_authored(content: object) -> bool:
     return harness_body_kind(content) is not None
 
 
+FINALIZE_ASK_PREFIX = "[finalize]"
+"""Opening of the forced-finalize nudge (``gates/finalize.py::_commit_nudge``)."""
+
+CHECKPOINT_ASK_PREFIX = "[research checkpoint]"
+"""Opening of the spin breaker's force-report note (``gates/spin_breaker.py``)."""
+
+VERIFY_REJECT_PREFIX = "A reviewer rejected the draft above."
+"""Opening of both verify-gate rejections (``gates/verify.py``)."""
+
+_HARNESS_ASKS = (
+    ("finalize", FINALIZE_ASK_PREFIX),
+    ("checkpoint", CHECKPOINT_ASK_PREFIX),
+    ("verify_reject", VERIFY_REJECT_PREFIX),
+)
+
+
+def harness_ask_kind(content: object) -> str | None:
+    """Which question the harness asked the model, or ``None`` if not an ask.
+
+    A third channel, and it needs its own predicate for the same reason the
+    other two do: its error preference differs again. The selection channel may
+    over-match (it loses look-back), the answer channel must not (it destroys
+    answers); this one is a **measurement** channel, where a false positive
+    mislabels how a run ended and a false negative hides an entire failure mode.
+    So it matches by prefix - the asks interpolate a reason - but only ever on a
+    body already known to be harness-authored, never on model text.
+
+    Callers pair it with the structural marker (the loop's injected-message key
+    on the injected turn) rather than using it alone: that way the *boolean*
+    "the harness asked and the model never answered" cannot drift when someone
+    rewords a nudge, and only the sub-label depends on wording.
+    """
+    s = str(content or "").strip()
+    for name, prefix in _HARNESS_ASKS:
+        if s.startswith(prefix):
+            return name
+    return None
+
+
 PLAIN_FIRST_PREFIX = "[plain-first]"
 
 
@@ -257,6 +307,10 @@ def is_harness_echo(answer: object) -> bool:
         return True
     if s == plain_first_notice():
         return True
+    if s.split("\n", 1)[0].strip() == ORPHAN_ENTITIES_HEADER:
+        # The sidecar block is header + one line of names; a model that quotes
+        # or discusses it does not START with the bracketed header verbatim.
+        return True
     # ``k`` is a small configured integer (``saturation.k``, default 10). Rather
     # than plumb the live value into every caller - which would make the check
     # depend on config and therefore fail open when the config is absent - the
@@ -266,12 +320,17 @@ def is_harness_echo(answer: object) -> bool:
 
 
 __all__ = [
+    "CHECKPOINT_ASK_PREFIX",
     "FETCH_GATE_PREFIX",
+    "FINALIZE_ASK_PREFIX",
+    "ORPHAN_ENTITIES_HEADER",
     "PLAIN_FIRST_PREFIX",
     "SUFFICIENCY_PREFIX",
     "SEARCH_CLOSED_PREFIX",
     "TOOL_OUTPUT_ELIDED",
+    "VERIFY_REJECT_PREFIX",
     "fetch_gate_notice",
+    "harness_ask_kind",
     "harness_body_kind",
     "is_elided_tool_output",
     "is_harness_authored",

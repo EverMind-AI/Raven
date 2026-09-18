@@ -711,8 +711,9 @@ def run_task(args: argparse.Namespace) -> int:
     project the work happens in, and the transcript this launcher judges is
     the one that subprocess writes. The fork passed two skill flags here
     (--wait-skill-extract / --flush-skill-buffer); installed raven has
-    neither and this product ships skillForge off, so nothing is lost by
-    their absence (verdict D5).
+    neither, and extraction is the everos plugin's own store path rather
+    than a launcher concern, so nothing is lost by their absence (verdict
+    D5, re-read when the skill lane opened).
     """
     if args.prompt_file:
         task = Path(args.prompt_file).read_text(encoding="utf-8").strip()

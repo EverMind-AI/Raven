@@ -1,6 +1,6 @@
 <div align="center" id="readme-top">
 
-![Raven banner](https://github.com/user-attachments/assets/412b7a32-9aa3-48a3-80c9-db0b8ca704be?raw=true)
+![Raven banner](https://github.com/user-attachments/assets/d1376ca8-14ce-4d03-a912-c3c2fdefe555?raw=true)
 
 <p align="center">
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
@@ -15,13 +15,19 @@
 
 <br>
 
-# Raven
+# What is Raven
 
-Raven is **The Harness of Harnesses**, a continuously evolving multi-agent ecosystem built for autonomous collaboration and open co-creation. Built on EverMind's self-evolving harness engine, it is designed to build and improve Agent Harnesses for specific models and domains, then compose their heterogeneous execution capabilities into an **All-Domain Collaboration Network** for complex, long-horizon tasks.
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/4ae8ac91-2f0c-4c81-aa7c-c15526bd77af"><img src="https://github.com/user-attachments/assets/4ae8ac91-2f0c-4c81-aa7c-c15526bd77af" alt="Raven one surface, all agents workflow" width="100%"></a>
+</p>
 
-Powered by the [EverOS](https://github.com/EverMind-AI/EverOS) memory system, Raven preserves user context, agent experience, and world knowledge across sessions. Its self-evolving harness builds on this memory to refine tools, skills, and workflows over time, helping agents learn from past work and collaborate more effectively on future tasks.
+<p align="center"><em>One Surface, All Agents: Raven generates DAGs and orchestrates multiple specialized agents for complex tasks.</em></p>
 
-**Update:** Raven now ships four agents of its own: **Raven-Research**, **Raven-Code**, **Raven-Design**, and **Raven-Oncall**, covering research, coding, visual design, and long-running job supervision.
+Raven is **The Harness of Harnesses**—a self-evolving multi-agent orchestration ecosystem. As a **Host Agent**, it brings specialized agents together through one unified surface to delegate tasks, coordinate execution, and integrate results. Its long-term vision is to extend this orchestration across devices, environments, and domains.
+
+Built on EverMind’s self-evolving harness engine and powered by [EverOS](https://github.com/EverMind-AI/EverOS), Raven preserves context across sessions and continuously improves agent harnesses and collaborative workflows.
+
+**Built-in Agents: Raven-Research**, **Raven-Code**, **Raven-Design**, and **Raven-Oncall** support research, coding, visual design, and unattended workflow automation.
 
 > Raven is pre-alpha. Interfaces and configuration may change quickly.
 
@@ -29,15 +35,13 @@ Powered by the [EverOS](https://github.com/EverMind-AI/EverOS) memory system, Ra
   <a href="https://github.com/user-attachments/assets/e333694a-0f4c-4f27-8bfe-8120ff5339a0"><img src="https://github.com/user-attachments/assets/e333694a-0f4c-4f27-8bfe-8120ff5339a0" alt="Multi-Agent Orchestration Benchmark: Node F1, Edge F1, Partial Order Accuracy, and Exact Match Rate" width="100%"></a>
 </p>
 
-<p align="center"><em>Raven on the Multi-Agent Orchestration Benchmark</em></p>
+<p align="center"><em>Raven's Performance on the Multi-Agent Orchestration Benchmark</em></p>
 
-## ❯❯ Raven Agents
+## ❯❯ Built-in Agents
 
-Raven's modular architecture powers four specialized agents, each assembled from reusable harness components with tools, skills, and workflows tailored to its domain. It can delegate a focused task to one agent or coordinate several agents in a shared workflow.
+Raven's modular architecture is designed for harness self-evolving and subagent creation. Powered by the **Raven Evolver** engine, its four built-in agents deliver **state-of-the-art (SOTA) performance in their respective domains**, combining reusable harness components with domain-specific tools, skills, and agent loops. Raven can delegate a focused task to a single agent or orchestrate multiple agents within a shared workflow.
 
-For example, Raven-Research can gather evidence, Raven-Code can implement an experiment, Raven-Oncall can run and monitor it, and Raven-Design can turn the results into charts and a presentation.
-
-Enable the agents you need during onboarding. See [`agents/README.md`](agents/README.md) for configuration details.
+> All four agents are built in and ready for orchestration out of the box.
 
 ### Raven-Research
 
@@ -47,7 +51,7 @@ Enable the agents you need during onboarding. See [`agents/README.md`](agents/RE
   <a href="https://github.com/user-attachments/assets/d072a514-58fd-41c7-8fcd-40782ebb4c80"><img src="https://github.com/user-attachments/assets/d072a514-58fd-41c7-8fcd-40782ebb4c80" alt="DeepResearch Mixed: Accuracy, Input Tokens, Output Tokens, and Cost" width="100%"></a>
 </p>
 
-<p align="center"><em>Raven-Research on DeepResearch Mixed</em></p>
+<p align="center"><em>Raven-Research's performance on the DeepResearch Mixed benchmark</em></p>
 
 ### Raven-Code
 
@@ -57,64 +61,52 @@ Enable the agents you need during onboarding. See [`agents/README.md`](agents/RE
   <a href="https://github.com/user-attachments/assets/a516ebc2-f0b4-47d4-b970-7dfd492adc0e"><img src="https://github.com/user-attachments/assets/a516ebc2-f0b4-47d4-b970-7dfd492adc0e" alt="Coding Benchmarks: SWE-bench Pro, SWE-bench Verified, WorkBuddy-Code Reward, and SWE-Refactor" width="100%"></a>
 </p>
 
-<p align="center"><em>Raven-Code on Coding Benchmarks</em></p>
+<p align="center"><em>Raven-Code's performance on coding benchmarks</em></p>
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/75f60aa2-3e2f-42fb-aa51-aa111bf078d0"><img src="https://github.com/user-attachments/assets/75f60aa2-3e2f-42fb-aa51-aa111bf078d0" alt="DataAgentBench (2026-08-24 Live): Raven-Code with Opus-5 achieves 0.8762 Pass@1" width="100%"></a>
 </p>
 
-<p align="center"><em>Raven-Code tops on DataAgentBench (2026-08-24 Live)</em></p>
+<p align="center"><em>Raven-Code tops on DataAgentBench for data analysis (2026-08-24 Live)</em></p>
 
 ### Raven-Design
 
-**Raven-Design** performs **visual design**, turning ideas and content into polished visual deliverables. It creates presentations, brand assets, charts, diagrams, and web interfaces, refining layout, typography, and visual consistency to help users communicate clearly and bring their ideas to life.
+**Raven-Design** performs **visual design**, turning ideas and content into polished visual deliverables. It creates PowerPoint slide decks, brand assets, charts, diagrams, and web interfaces, refining layout, typography, and visual consistency to help users communicate clearly and bring their ideas to life.
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9"><img src="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9" alt="PresentBench: Raven-Design, Claude Code, and public leaderboard scores" width="100%"></a>
 </p>
 
-<p align="center"><em>Raven-Design on PresentBench</em></p>
+<p align="center"><em>Raven-Design tops on PresentBench for slide generation</em></p>
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/061b5818-595b-4392-b9b6-53a1effb8347"><img src="https://github.com/user-attachments/assets/061b5818-595b-4392-b9b6-53a1effb8347" alt="Visual Design: Raven-Design, Claude Code, and Hermes on ArtifactsBench Dashboard, ArtifactsBench SVG, and GDPVal" width="100%"></a>
 </p>
 
-<p align="center"><em>Raven-Design on ArtifactsBench and GDPVal</em></p>
+<p align="center"><em>Raven-Design's performance on visual design benchmarks</em></p>
 
 ### Raven-Oncall
 
 **Raven-Oncall** enables **unattended workflow automation** for experimentation, optimization, and continuous monitoring. It autonomously manages workflows from start to completion, sustaining progress over hours or overnight, delivering results, and involving users only when human judgment is needed.
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/8e2b9721-421c-485c-b1dc-1acf901bcb2c"><img src="https://github.com/user-attachments/assets/8e2b9721-421c-485c-b1dc-1acf901bcb2c" alt="AI4AI (Nanochat 50M Pretraining): Bits Per Byte (BPB), Runtime, Tokens, and Cost" width="100%"></a>
+  <a href="https://github.com/user-attachments/assets/bffd0fa2-e750-4f09-b74a-09452765a99d"><img src="https://github.com/user-attachments/assets/bffd0fa2-e750-4f09-b74a-09452765a99d" alt="AI4AI (Nanochat 50M Pretraining): Bits Per Byte (BPB), Runtime, Tokens, and Cost" width="100%"></a>
 </p>
 
-<p align="center"><em>Raven-Oncall vs. Claude Code on AI4AI (Nanochat 50M Pretraining)</em></p>
+<p align="center"><em>Raven-Oncall vs. Claude Code on AI4AI (Nanochat 50M Pretraining) benchmark</em></p>
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9"><img src="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9" alt="AI4S Internal Benchmark: Success Rate, Average Total Runtime, Average Total Tokens, and Average Cost" width="100%"></a>
 </p>
 
-<p align="center"><em>Raven-Oncall vs. Claude Code on AI4S Internal Benchmark</em></p>
-
-## ❯❯ Benchmarks
-
-| Benchmark | Raven Result | Comparison |
-| --- | --- | --- |
-| Efficiency | `56.7%` at 27B; `58.1%` at 397B | Hermes `46.8%` / `47.9%`; `+9.9pp` at 27B |
-| Self-Evolution | Ranked `#1` on EvoAgentBench | `+6.2pp` over the next result across four methods |
-| Proactivity | `0.60` F1 on ProAgentBench | `2.4x` Hermes/OpenClaw at `0.253` |
-
-Results describe the published test configurations; model, task set, and evaluation protocol all affect outcomes.
-
-https://github.com/user-attachments/assets/3c541dae-5852-447f-8ea6-c9877612ad57
+<p align="center"><em>Raven-Oncall vs. Claude Code on internal AI4S benchmark</em></p>
 
 ## ❯❯ Connect Third-Party Agents
 
-Raven can connect to and orchestrate these third-party agents, delegating tasks and coordinating their capabilities in shared workflows.
+Raven can connect to and orchestrate agents via ACP, CLI, or OpenAI-compatible APIs, with presets for 13 **third-party agents** to simplify setup, task delegation, and coordination across shared workflows.
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/3370c883-00ac-4471-97ef-f4312df77202" width="70%" alt="Third-party agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, MiroThinker, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi">
+  <img src="https://github.com/user-attachments/assets/3370c883-00ac-4471-97ef-f4312df77202" width="80%" alt="Third-party agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, MiroThinker, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi">
 </p>
 
 ## ❯❯ Quick Start

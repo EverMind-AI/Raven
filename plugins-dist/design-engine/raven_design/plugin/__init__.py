@@ -32,9 +32,10 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from raven.agent import workdir
+from raven.agent.hook.conduct import ConductHook
 from raven.contracts.tool import Tool
 from raven_design.plugin.config import EngineConfig
-from raven_design.plugin.hook import DesignEngineHook, MisconfiguredEngineHook, build_selector
+from raven_design.plugin.hook import DesignConduct, MisconfiguredEngineHook, build_selector
 
 if TYPE_CHECKING:
     from raven.plugins.context import PluginContext
@@ -200,7 +201,9 @@ def make_hook(ctx: "PluginContext"):
         # Nothing this hook would do on any phase; declining keeps the chain
         # exactly as long as the configuration asked for.
         return None
-    return DesignEngineHook(shared.cfg, shared.selector, shared.manager)
+    # A factory rather than the conduct: the host builds one per turn, so what a
+    # turn has already done lives on that turn's instance and dies with it.
+    return ConductHook("design_engine", lambda: DesignConduct(shared.cfg, shared.selector, shared.manager))
 
 
 def _make_render_tool(ctx: "PluginContext", tool_cls_name: str):

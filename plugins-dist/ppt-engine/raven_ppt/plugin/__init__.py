@@ -31,9 +31,10 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from raven.agent.hook.conduct import ConductHook
 from raven.contracts.tool import Tool
 from raven_ppt.plugin.config import EngineConfig
-from raven_ppt.plugin.hook import MisconfiguredEngineHook, PptEngineHook
+from raven_ppt.plugin.hook import MisconfiguredEngineHook, ppt_hook
 from raven_ppt.plugin.image_search import PptImageSearchTool
 from raven_ppt.plugin.session_tools import SessionTool
 
@@ -65,7 +66,7 @@ class _Shared:
             self.cfg = EngineConfig()
         self._prototypes: dict[str, Tool] | None = None
         self._engines: dict[str, dict[str, Tool]] = {}
-        self._hook: PptEngineHook | None = None
+        self._hook: ConductHook | None = None
         self._image_search: PptImageSearchTool | None = None
         # The loop's late-bound grants, kept for the engines assembled after the
         # bind (every real one: a turn binds before the first deck call).
@@ -182,14 +183,12 @@ class _Shared:
                 self._image_search = tool
         return self._image_search
 
-    def hook(self) -> PptEngineHook:
+    def hook(self) -> ConductHook:
         if self._hook is None:
             # The locator's workspace is the agent home whose bootstrap seats
             # the host's context builder reads; it is where the first-touch
             # identity seeding lands (see hook.seed_identity).
-            self._hook = PptEngineHook(
-                home=Path(self._ctx.services.workspace), deck_per_session=self.cfg.deck_per_session
-            )
+            self._hook = ppt_hook(home=Path(self._ctx.services.workspace), deck_per_session=self.cfg.deck_per_session)
         return self._hook
 
     def deck_capable(self) -> bool:
@@ -275,7 +274,7 @@ def make_ppt_image_search(ctx: "PluginContext") -> Tool | None:
     return shared.image_search() if shared else None
 
 
-def make_hook(ctx: "PluginContext") -> PptEngineHook | MisconfiguredEngineHook | None:
+def make_hook(ctx: "PluginContext") -> ConductHook | MisconfiguredEngineHook | None:
     """The turn-frame hook: staging in, verification out.
 
     Gated on the slice alone, not on the deck imports: the fork staged material

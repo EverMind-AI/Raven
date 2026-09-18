@@ -4,31 +4,118 @@ Factory-loop tier: Versioned with the factory loop, not frozen for every
 loop — a replacement loop may ship its own strategy vocabulary and version
 this paper with it. Only the ``contract`` tier is a cross-loop promise.
 
-The four roles name the strategy *decisions* a turn makes, not four layers
-and not the loop itself. Memory assembles the window the model sees, Planning
-may prepare turn guidance, Capability picks the tool definitions one iteration
-exposes, and Action produces one usable model response. Everything else the
-turn does -- iteration accounting, hook phases, tool execution and approval,
-the three in-loop recoveries, persistence and event order -- stays with the
-L2 shell, which is what makes these four replaceable at all.
+The four roles name the strategy *decisions* a turn makes, not four layers and
+not the loop itself. Memory assembles the window the model sees and decides how
+a transcript is made to fit again mid-turn, Planning may prepare turn guidance,
+Capability picks the tool definitions one iteration exposes, and Action produces
+one usable model response and judges a call against the dispatch's Charter.
+Each also answers for the conducts seated on it: Memory their intake, Planning
+their advice, Action their review and salvage.
+
+``Sequence[AgentConduct]`` on those four, and not one conduct, because a seat
+speaks for more than a plugin: a dispatch's own judgements and anything
+generated for it join the same list once they are materialised. Today a seat
+holds the one conduct its plugin wrote, so a process running two plugins asks
+the role twice, once per seat -- composing *across* plugins stays where it has
+always been, in the hook composite, and the role composes the participants of
+the seat that asked. Everything else the turn does --
+iteration accounting, hook phases, tool execution and approval, persistence and
+event order -- stays with the L2 shell, which is what makes these four
+replaceable at all.
+
+The in-loop recoveries are split along that line rather than sitting on one
+side of it. Memory answers *what to give up* (see ``shrink``); the shell owns
+the *mechanism* -- noticing the refusal, re-entering the iteration, and
+bounding how many times a turn may pay for it. A replacement that answers
+``shrink`` with an unchanged transcript therefore does not merely decline a
+policy: the shell's ``changed`` test never fires, and an overflow the loop
+could have recovered from ends the turn.
 
 _Avoid_: reading ``ActionModule`` as "the loop". The shell owns retries, tool
-execution and events; Action owns one model decision. And reading Memory as
-the memory engine: Memory here is the turn's *window*, which the context
-engine owns; long-term recall is a different organ behind its own paper.
+execution and events; Action owns one model decision and the Charter's verdict
+on a call. And reading Memory as the memory engine: Memory here is the turn's
+*window*, which the context engine owns; long-term recall is a different organ
+behind its own paper.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from raven.contracts.agent_conduct import AgentConduct, Intake, StepView, Verdict
     from raven.contracts.assembled import AssembledContext, TokenBudget
     from raven.contracts.context import TurnContext
     from raven.contracts.llm_provider import LLMProvider, LLMResponse
 
 __tier__ = "factory_loop"
+
+
+class WindowPressure(str, Enum):
+    """Why the window is being asked to get smaller: the shell's side of the seam.
+
+    The two ``before`` pressures are asked every iteration; the three
+    ``refused`` ones only when the endpoint answered a call with the matching
+    classification, and a ``changed`` answer to one of those is the shell's
+    cue to retry the iteration.
+    """
+
+    PROACTIVE = "proactive"
+    """Before a call: the last billed context size crossed the trigger line."""
+    STANDING = "standing"
+    """Before a call: the picture window and its byte budget, applied in place."""
+    OVERFLOW = "overflow"
+    """After a call: the endpoint refused the request as too long."""
+    TOOL_IMAGES_REFUSED = "tool_images_refused"
+    """After a call: this endpoint takes no picture inside a tool result."""
+    IMAGES_TOO_LARGE = "images_too_large"
+    """After a call: the request's pictures were refused for their size."""
+
+
+@dataclass
+class WindowState:
+    """One turn's window bookkeeping: the readings and retry budgets every
+    shrink draws on.
+
+    Mutable, and held by the shell rather than the role: the counts move every
+    iteration and belong to the turn, while Memory is a generation's role and
+    outlives it. The shell creates one per turn and hands the same object to
+    every ``shrink`` call; Memory reads and advances it and never keeps it.
+
+    ``image_window`` has no default on purpose: 0 is a real value meaning "no
+    picture stays", so a state built without saying how many image-bearing
+    messages keep theirs would silently withdraw them all.
+    """
+
+    image_window: int
+    """Image-bearing messages that keep their pictures; a refusal closes it a notch."""
+    last_context_used: int = 0
+    """Billed size of the last successful call; 0 until the first usage report
+    and after any compaction, so the proactive trigger fires on fresh data only."""
+    compress_retries: int = 0
+    """Elisions and head summaries paid for this turn, against one shared cap."""
+    head_summary_failures: int = 0
+    """Summaries paid for that freed nothing; read only to say why the elisions
+    that follow are all the turn has left."""
+    reactive_summary_tried: bool = False
+    """The overflow-path summary is a last resort, once per turn."""
+    image_budget: int | None = None
+    """Bytes the standing pictures may occupy on the wire, or None for no standing pass."""
+    image_demote_retries: int = 0
+    image_strip_retries: int = 0
+
+
+@dataclass(frozen=True)
+class ShrinkResult:
+    """What Memory hands back from one ``shrink``: the list to go on with, and
+    whether it is smaller. ``changed`` false means the role had no move left
+    for this pressure, and ``messages`` is then the list it was given."""
+
+    messages: list[dict[str, Any]]
+    changed: bool
 
 
 @runtime_checkable
@@ -76,8 +163,35 @@ class MemoryModule(Protocol):
         """Build the exact message list this turn's first model call receives."""
         ...
 
+    async def shrink(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        pressure: "WindowPressure",
+        state: "WindowState",
+        model: str | None,
+    ) -> "ShrinkResult":
+        """Make the window smaller under ``pressure``, if this role has a move
+        left for it; otherwise hand the list back unchanged.
+
+        The window's mid-turn decisions, in one seat: what to give up when the
+        transcript nears the line, when a summary is worth paying for, which
+        pictures stay. The shell keeps the mechanism -- it re-enters the
+        iteration on a ``changed`` reactive answer, so the hooks and the standing
+        passes see a retry exactly as they saw the attempt -- and this role keeps
+        the policy, which is the half a generation may replace.
+        """
+        ...
+
     async def after_turn(self, session_key: str, outcome: dict[str, Any]) -> None:
         """Post-turn hook: the engine updates its manifest or archives here."""
+        ...
+
+    async def intake(self, text: str, step: "StepView", conducts: "Sequence[AgentConduct]") -> "Intake | None":
+        """What the turn's inbound text becomes before anything is assembled:
+        each conduct's ``intake`` in order, threaded, until one ends the turn.
+        Memory's because it decides what the model is shown; the seat that asks
+        hands over the conducts it speaks for and renders the answer."""
         ...
 
 
@@ -109,6 +223,12 @@ class PlanningModule(Protocol):
     """Optional turn guidance, ahead of the iterations."""
 
     async def prepare(self, request: PlanningRequest) -> PlanningResult: ...
+
+    async def advise(self, step: "StepView", conducts: "Sequence[AgentConduct]") -> str | None:
+        """The note for the next model call, composed from what each conduct
+        advises -- before the call and after it. Planning's because it is the
+        one per-iteration steer a harness may give the model."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -164,9 +284,45 @@ class ActionRequest:
 
 @runtime_checkable
 class ActionModule(Protocol):
-    """One model decision, from an assembled request to a usable response."""
+    """What the agent does next: decide it, and judge it before it runs.
+
+    Four methods because there are four moments. ``decide`` is asked by the
+    loop and answers with a response. ``judge`` is asked by
+    ``ToolRegistry.execute`` once per call the response proposed, the way the
+    permission gate beside it is asked -- so the module supplies the judgement
+    and the shell still decides what to do with it. A role that answers ``[]``
+    withholds nothing, which is what having no playbook already means: the
+    contract narrows and never grants.
+    """
 
     async def decide(self, request: ActionRequest) -> "LLMResponse": ...
+
+    def judge(
+        self,
+        name: str,
+        params: Mapping[str, Any],
+        prior: Sequence[tuple[str, Mapping[str, Any]]],
+    ) -> list[str]:
+        """Why this call must not run, or an empty list.
+
+        Sentences, not exceptions: a refusal reaches the model as the call's
+        own result, so its next attempt can be right. Synchronous and cheap by
+        contract -- this runs before every dispatch and ahead of the permission
+        gate, where anything that blocked on the network would cost the turn
+        rather than the call.
+        """
+        ...
+
+    async def review(self, step: "StepView", conducts: "Sequence[AgentConduct]") -> "Verdict":
+        """Whether one step of the turn stands, composed from each conduct's
+        ``review``: the first that ends or resamples it decides. ``judge`` is
+        the same question asked of one tool call before it runs; this is asked
+        of the model's whole step, before its tools run and after."""
+        ...
+
+    async def salvage(self, step: "StepView", conducts: "Sequence[AgentConduct]") -> Any | None:
+        """A reply for a turn that ended without one, the first a conduct offers."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -195,4 +351,7 @@ __all__ = [
     "PlanningModule",
     "PlanningRequest",
     "PlanningResult",
+    "ShrinkResult",
+    "WindowPressure",
+    "WindowState",
 ]

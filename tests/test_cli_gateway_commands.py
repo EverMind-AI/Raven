@@ -289,6 +289,99 @@ def test_a_mounted_page_takes_the_relays_that_belong_to_its_sessions() -> None:
     assert "agent.subagents.set_submit(pro_submit)" in before_mount
 
 
+class _FakeIntake:
+    def __init__(self) -> None:
+        self.submit = None
+
+    def set_submit(self, fn) -> None:
+        self.submit = fn
+
+
+class _FakeChannel:
+    def __init__(self) -> None:
+        self.intake = _FakeIntake()
+
+
+class _FakeChannelManager:
+    """The two members `_wire_channel_intake` touches: the table and the hook."""
+
+    def __init__(self, *channels, on_started=None) -> None:
+        self.channels = {f"ch{i}": ch for i, ch in enumerate(channels)}
+        self.on_started = on_started
+
+
+def test_every_channel_present_at_launch_gets_the_inbound_dispatch() -> None:
+    from raven.cli.gateway_commands import _wire_channel_intake
+
+    a, b = _FakeChannel(), _FakeChannel()
+    manager = _FakeChannelManager(a, b)
+
+    def dispatch(req) -> None: ...
+
+    _wire_channel_intake(manager, dispatch)
+
+    assert a.intake.submit is dispatch
+    assert b.intake.submit is dispatch
+
+
+def test_a_channel_started_while_the_gateway_runs_gets_the_inbound_dispatch() -> None:
+    """Both halves of a channel's wiring must survive the launch loop.
+
+    The page enables an entrance by writing config, and the manager builds and
+    starts the adapter on the spot -- after the loop that hands every channel
+    its dispatch has already run. The outlet half was taught this (`on_started`
+    registers an outlet, so a hot-started channel could be replied to); the
+    intake half was not, so such a channel logged "no spine dispatch wired" once
+    per message and dropped every one, while the page drew it connected and the
+    adapter's own login had succeeded (2026-09-14, weixin).
+    """
+    from raven.cli.gateway_commands import _wire_channel_intake
+
+    outlets: list[object] = []
+    manager = _FakeChannelManager(on_started=outlets.append)
+
+    def dispatch(req) -> None: ...
+
+    _wire_channel_intake(manager, dispatch)
+    late = _FakeChannel()
+    assert late.intake.submit is None, "nothing is wired before the manager starts it"
+
+    manager.on_started(late)
+
+    assert late.intake.submit is dispatch, "a hot-started channel must be given the dispatch"
+    assert outlets == [late], "and must keep the outlet the hook already carried"
+
+
+def test_a_manager_with_no_outlet_hook_still_wires_the_intake() -> None:
+    """A gateway built without the hub (no outlet hook) is not a reason to drop
+    the intake: the hook is composed over whatever was there, including nothing."""
+    from raven.cli.gateway_commands import _wire_channel_intake
+
+    manager = _FakeChannelManager(on_started=None)
+
+    def dispatch(req) -> None: ...
+
+    _wire_channel_intake(manager, dispatch)
+    late = _FakeChannel()
+    manager.on_started(late)
+
+    assert late.intake.submit is dispatch
+
+
+def test_the_gateway_command_wires_the_intake_through_the_helper() -> None:
+    """Pinned on the source for the reason the mounted-relay test above records:
+    the command body has no import seam, so the tie between it and the helper
+    the tests above exercise is asserted by name."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    assert "_wire_channel_intake(channels, _inbound_dispatch)" in src
+    # The old launch-only loop is gone: one path wires both the present and the late.
+    assert "_ch.intake.set_submit(_inbound_dispatch)" not in src
+
+
 def _gateway_partition_with_the_page_enabled() -> set[str]:
     """The cron partition a page-wanting gateway is built with."""
     from types import SimpleNamespace

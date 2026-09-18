@@ -29,6 +29,7 @@ from raven.providers.base import LLMProvider
 _REAL_FETCH = _pricing._fetch_openrouter_models
 
 from raven.agent.loop.bundles import ToolWiring, TurnPolicy
+from raven.agent.window import shrink
 from raven.providers.capabilities import (  # noqa: E402
     IMAGE_TOOL_RESULT_TARGETS,
     image_placeholder_text,
@@ -425,7 +426,6 @@ def _img_msg(role: str, marker: str) -> dict:
 
 
 def test_emergency_shrink_drops_older_images_and_keeps_the_newest() -> None:
-    from raven.agent.loop.main import AgentLoop
 
     messages = [
         {"role": "system", "content": "sys"},
@@ -433,7 +433,7 @@ def test_emergency_shrink_drops_older_images_and_keeps_the_newest() -> None:
         _img_msg("tool", "second"),
         _img_msg("tool", "third"),
     ]
-    out, elided = AgentLoop._emergency_shrink(messages)
+    out, elided = shrink.emergency_shrink(messages)
 
     assert elided >= 2
     assert [p["type"] for p in out[1]["content"]] == ["text", "text"]
@@ -450,14 +450,13 @@ def test_emergency_shrink_drops_older_images_and_keeps_the_newest() -> None:
 def test_emergency_shrink_reaches_images_attached_to_user_messages() -> None:
     """On the fallback path the picture rides in a user message, which the
     tool-only text pass can never touch."""
-    from raven.agent.loop.main import AgentLoop
 
     messages = [
         {"role": "system", "content": "sys"},
         {**_img_msg("user", "attached-old"), "_attached_image": True},
         {**_img_msg("user", "attached-new"), "_attached_image": True},
     ]
-    out, elided = AgentLoop._emergency_shrink(messages)
+    out, elided = shrink.emergency_shrink(messages)
 
     assert elided == 1
     assert "elided to fit the context window" in out[1]["content"][1]["text"]
@@ -465,19 +464,17 @@ def test_emergency_shrink_reaches_images_attached_to_user_messages() -> None:
 
 
 def test_emergency_shrink_does_not_mutate_the_caller_messages() -> None:
-    from raven.agent.loop.main import AgentLoop
 
     messages = [_img_msg("tool", "a"), _img_msg("tool", "b")]
-    AgentLoop._emergency_shrink(messages)
+    shrink.emergency_shrink(messages)
 
     assert messages[0]["content"][1]["type"] == "image_url"
 
 
 def test_emergency_shrink_is_a_noop_with_a_single_image() -> None:
-    from raven.agent.loop.main import AgentLoop
 
     messages = [{"role": "system", "content": "sys"}, _img_msg("tool", "only")]
-    out, elided = AgentLoop._emergency_shrink(messages)
+    out, elided = shrink.emergency_shrink(messages)
 
     assert elided == 0
     assert out[1]["content"][1]["type"] == "image_url"
@@ -706,7 +703,6 @@ def test_demote_tool_images_produces_the_placeholder_path_shape() -> None:
     """The retry must land on the already-tested fallback shape, not a third one:
     tool content becomes exactly what image_placeholder_text builds, and the
     picture follows in its own user message."""
-    from raven.agent.loop.main import AgentLoop
     from raven.providers.capabilities import image_placeholder_text
 
     blocks = [
@@ -720,7 +716,7 @@ def test_demote_tool_images_produces_the_placeholder_path_shape() -> None:
         {"role": "tool", "tool_call_id": "c1", "name": "read_file", "content": blocks, "_image_sources": provenance},
     ]
 
-    out, demoted = AgentLoop._demote_tool_images(messages)
+    out, demoted = shrink.demote_tool_images(messages)
 
     assert demoted == 1
     assert len(out) == 4
@@ -735,7 +731,7 @@ def test_demote_tool_images_produces_the_placeholder_path_shape() -> None:
 
     # A tool message stamped with nothing still hands over one entry per picture, so
     # the window's notes stay aligned with the pictures they stand for.
-    bare, _ = AgentLoop._demote_tool_images([dict(messages[2], _image_sources=None)])
+    bare, _ = shrink.demote_tool_images([dict(messages[2], _image_sources=None)])
     assert bare[1]["_image_sources"] == [{"tool": "read_file"}]
 
 
@@ -743,7 +739,6 @@ def test_demote_tool_images_is_a_noop_when_no_tool_result_has_an_image() -> None
     """Guards the retry: a refusal that was not about a tool image demotes
     nothing, the caller sees 0, and the error stays fatal instead of burning a
     second call on the identical request."""
-    from raven.agent.loop.main import AgentLoop
 
     messages = [
         {"role": "system", "content": "sys"},
@@ -752,17 +747,16 @@ def test_demote_tool_images_is_a_noop_when_no_tool_result_has_an_image() -> None
         _img_msg("user", "already-attached"),
     ]
 
-    out, demoted = AgentLoop._demote_tool_images(messages)
+    out, demoted = shrink.demote_tool_images(messages)
 
     assert demoted == 0
     assert out == messages
 
 
 def test_demote_tool_images_does_not_mutate_the_caller_messages() -> None:
-    from raven.agent.loop.main import AgentLoop
 
     messages = [{"role": "tool", "tool_call_id": "c1", "content": _img_msg("tool", "x")["content"]}]
-    AgentLoop._demote_tool_images(messages)
+    shrink.demote_tool_images(messages)
 
     assert len(messages) == 1
     assert messages[0]["content"][1]["type"] == "image_url"
@@ -772,7 +766,6 @@ def test_demote_tool_images_attaches_once_after_a_batch_of_tool_results() -> Non
     """A run of tool messages answers one assistant message, so the pictures go
     after the last of them. One in between would leave c2's tool_call unanswered
     at the point the API validates the sequence."""
-    from raven.agent.loop.main import AgentLoop
 
     messages = [
         {"role": "assistant", "content": None, "tool_calls": [{"id": "c1"}, {"id": "c2"}]},
@@ -780,7 +773,7 @@ def test_demote_tool_images_attaches_once_after_a_batch_of_tool_results() -> Non
         {"role": "tool", "tool_call_id": "c2", "content": _img_msg("tool", "two")["content"]},
     ]
 
-    out, demoted = AgentLoop._demote_tool_images(messages)
+    out, demoted = shrink.demote_tool_images(messages)
 
     assert demoted == 2
     assert [m["role"] for m in out] == ["assistant", "tool", "tool", "user"]
@@ -793,7 +786,6 @@ def test_demote_tool_images_attaches_once_after_a_batch_of_tool_results() -> Non
 def test_demote_tool_images_flushes_before_a_non_tool_message() -> None:
     """Two separate batches must not have their pictures merged into one message
     placed after the second: each batch's images belong to its own iteration."""
-    from raven.agent.loop.main import AgentLoop
 
     messages = [
         {"role": "tool", "tool_call_id": "c1", "content": _img_msg("tool", "one")["content"]},
@@ -801,7 +793,7 @@ def test_demote_tool_images_flushes_before_a_non_tool_message() -> None:
         {"role": "tool", "tool_call_id": "c2", "content": _img_msg("tool", "two")["content"]},
     ]
 
-    out, demoted = AgentLoop._demote_tool_images(messages)
+    out, demoted = shrink.demote_tool_images(messages)
 
     assert demoted == 2
     assert [m["role"] for m in out] == ["tool", "user", "assistant", "tool", "user"]

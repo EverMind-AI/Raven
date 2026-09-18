@@ -90,12 +90,27 @@ The four generation-scoped strategy roles the Agent Loop delegates to without gi
 Turn state machine: **Memory** assembles the window the model sees, **Planning** may prepare
 turn guidance, **Capability** picks the tool definitions one Iteration exposes, and **Action**
 produces one model response. The default set preserves what the loop did inline: Memory wraps
-this generation's Context Engine and adds the two turn decisions that were the shell's (which
-history slice is a candidate, and how much window the prompt may occupy), Planning passes
+this generation's Context Engine and adds the turn decisions that were the shell's (which
+history slice is a candidate, how much window the prompt may occupy, and how a transcript is
+made to fit again mid-turn), Planning passes
 messages through, Capability reports `ToolRegistry.get_definitions`, and Action dispatches the
 one streaming-or-retrying call.
 Frozen per Generation: the tool array is the prompt-cache prefix, so the set a turn runs on
 cannot move between two of its model calls.
+
+**Window Shrink** (`agent/window/`, paper `contracts/harness.py:MemoryModule.shrink`):
+How a Turn's transcript is made to fit again after it is assembled. The Memory role is
+asked under a **WindowPressure** -- `PROACTIVE` (the last billed reading crossed the
+compaction trigger), `STANDING` (the standing image window, every iteration), `OVERFLOW`
+(the provider refused the request as too long), `TOOL_IMAGES_REFUSED` (the endpoint
+refused a picture inside a tool result), `IMAGES_TOO_LARGE` (the request's pictures
+outgrew their byte budget) -- and answers with a **ShrinkResult**: the message list to go
+on with, and whether anything was given up. **WindowState** is the turn's own bookkeeping
+the shell carries between those calls: the standing image window's width, the last billed
+context size, and the retry budgets that bound how many elisions, head summaries and
+picture withdrawals one turn may pay for. The policy is Memory's; the mechanism -- noticing
+the refusal, re-entering the Iteration, bounding the retries -- stays with the Agent Loop,
+which is why `agent/window/` holds only the pure pieces both sides read.
 _Avoid_: treating the four as four architecture layers — they are L3 strategy roles the L2
 shell calls. And saying Action owns the loop: the shell keeps iteration accounting, hook
 phases, tool execution and approval, the three in-turn recoveries, persistence and event
@@ -141,8 +156,24 @@ injected messages and generation overrides for that one call); `before_iteration
 withhold tools for the iteration, the iteration phases may leave the model a harness note on
 the last message (`append_note`), and `before_user_inbound` may rewrite the inbound text
 (`modified_content`, chained through `inbound_content`). Multiple hooks chain via `CompositeHook`; the EvalEngine
-wires three concrete implementations, and an agent steers the loop with its own.
+wires three concrete implementations. It remains the loop's *timing* contract and stays open to
+any hook: what changed is that the bundled agents no longer write their product logic here, but
+as an Agent Conduct seated in this chain.
 _Avoid_: "callback" or "middleware" — neither captures the phase-specific, chain-aware semantics.
+
+**Agent Conduct** (`contracts/agent_conduct.py`, seated by `agent/hook/conduct.py`):
+What a bundled agent judges, written as verbs rather than as phases: `intake`, `select_tools`,
+`advise`, `system_addendum`, `review`, `salvage`, `outbound`, `archive`, `observe`. Each is asked
+about one step of a Turn, answered against a read-only `StepView`, and returns what it decided --
+a text, a narrower tool array, a note, a `Verdict`, a reply -- never a write into the loop's own
+state. The host builds one per Turn from a `ConductFactory`, so what a conduct has already done
+this turn is an attribute that dies with the turn. `ConductHook` seats one in the Agent Hook
+chain and renders its answers as the `HookDecision` the composite already merges, which is why
+the phases, their order and the rollback mechanism are unchanged by it. The four Harness Modules
+compose what the conducts of a seat say: Memory their `intake`, Planning their `advise`, Action
+their `review` and `salvage` -- so replacing a role replaces what a conduct's judgement does.
+_Avoid_: reading it as a replacement for Agent Hook. The phases say *when* the loop asks; a
+conduct says *what this agent judges*, and a third-party hook needs neither.
 
 **Session Mode** (`acp/modes.py`; declared under `acp.modes` in config):
 A named per-session operating profile a client switches over ACP `session/set_mode`; every
@@ -938,7 +969,8 @@ losslessly to disk, Consolidation distills across turns into memory notes, Compa
 
 **Compaction** (`agents.defaults.compaction`, `config/schema.py:CompactionConfig`):
 In-turn transcript compaction for long agentic turns, off by default: without it the
-loop's in-turn shrinks are the standing image window (`_window_images`, which retires
+loop's in-turn shrinks are the standing image window (`Memory.shrink` under
+`WindowPressure.STANDING`, which retires
 pictures the model has already looked at before every call, bounded by
 `agents.defaults.imageWindowBudgetBytes`) and the reactive, deterministic elision it has
 always run on a provider's overflow error. Enabled, two layers join them on the same usage
@@ -997,8 +1029,10 @@ A skill retrieval and injection subsystem — it fuses candidates from three sou
 (local BM25-indexed files, self-evolved skills recalled from the pluggable `MemoryBackend`
 — typically the EverOS plugin — and remote skills from the Skill Hub) via weighted RRF,
 with optional LLM gating and query rewriting before injecting them into the agent prompt.
-Skill distillation/evolution is handled by the embedded EverOS extraction pipeline
-(`skillForge.everos`), not by SkillForge itself — there is no feedback-driven evolution or
+Skill distillation/evolution is handled by the local extraction pipeline
+(`skillForge.extraction`), not by SkillForge itself — that pipeline distils skills out of
+finished turns into the workspace cache, calls no service and needs no memory plugin;
+`skillForge.everos` is the retired spelling, migrated on load. There is no feedback-driven evolution or
 versioning, and the retirement knobs (`retire_confidence`, `retirement_idle_days`) are
 unwired config placeholders, not active behavior. The name is retained; it is now a live
 module under the Memory Engine, not the old top-level husk.
@@ -1424,8 +1458,8 @@ the directory name is provisional by ruling. One ruled edge: `trajectory` (L3)
 reaches `config.admission` for the door vocabulary and builds a loop by hand for replay --
 legal, because it is a harness over recorded runs, not an entrance. One package holds two
 seats: in `agent/`, `agent/loop` is the L2 harness shell every entrance runs, and its
-siblings -- `tools`, `subagent`, `context`, `hook`, `personalizer`,
-`workdir` -- are L3 cargo the loop consumes; the "cargo does not import the loop shell"
+siblings -- `tools`, `subagent`, `context`, `hook`, `personalizer`, `workdir`,
+`harness`, `window` -- are L3 cargo the loop consumes; the "cargo does not import the loop shell"
 import-linter contract keeps the two seats apart in the shared directory, which is why
 the package is not split physically (ruled 2026-08-30). The one exception the target
 tree always named: the ACP client family -- the client, the `acp_agent` backend that

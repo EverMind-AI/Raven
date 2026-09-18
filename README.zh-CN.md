@@ -1,6 +1,6 @@
 <div align="center" id="readme-top">
 
-![Raven banner](https://github.com/user-attachments/assets/412b7a32-9aa3-48a3-80c9-db0b8ca704be?raw=true)
+![Raven banner](https://github.com/user-attachments/assets/d1376ca8-14ce-4d03-a912-c3c2fdefe555?raw=true)
 
 <p align="center">
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
@@ -15,13 +15,19 @@
 
 <br>
 
-# Raven
+# Raven 是什么
 
-Raven 是 **The Harness of Harnesses**，一个为自主协作与开放共创而构建、持续演进的多 Agent 生态系统。依托 EverMind 的自进化 harness 引擎，Raven 致力于为特定模型和领域构建、改进 Agent Harness，并将其异构执行能力组合成面向复杂长程任务的 **全领域协作网络（All-Domain Collaboration Network）**。
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/ef64cd3b-a48f-4516-9a30-47fe47a750be"><img src="https://github.com/user-attachments/assets/ef64cd3b-a48f-4516-9a30-47fe47a750be" alt="Raven unified surface and agent workflow" width="100%"></a>
+</p>
 
-借助 [EverOS](https://github.com/EverMind-AI/EverOS) 记忆系统，Raven 能跨会话保留用户上下文、Agent 经验和世界知识。自进化 harness 以这些记忆为基础，持续改进工具、技能和工作流，让 Agent 从过往工作中学习，并在后续任务中更有效地协作。
+<p align="center"><em>一个入口，全领域 Agent 协同：Raven 生成并编排任务 DAG，驱动多个专业 Agent 协作完成复杂任务。</em></p>
 
-**更新：** Raven 现已提供四个自有 Agent：**Raven-Research**、**Raven-Code**、**Raven-Design** 和 **Raven-Oncall**，覆盖研究、编程、视觉设计和长时间运行任务的监控。
+Raven 是 **The Harness of Harnesses**——一个持续自我演进的多 Agent 编排生态。作为 **Host Agent（宿主 Agent）**，它通过统一入口连接专业 Agent，负责任务委派、执行协调和结果整合。Raven 的长期目标是将这种编排能力扩展到不同设备、环境和领域。
+
+基于 EverMind 的自进化 harness 引擎，并由 [EverOS](https://github.com/EverMind-AI/EverOS) 提供支持，Raven 跨会话保存上下文，持续改进 Agent harness 与协作工作流。
+
+**内置 Agent：** **Raven-Research**、**Raven-Code**、**Raven-Design** 和 **Raven-Oncall** 支持研究、编程、视觉设计和无人值守流程自动化。
 
 > Raven 目前处于 pre-alpha 阶段，接口和配置可能快速变化。
 
@@ -31,13 +37,11 @@ Raven 是 **The Harness of Harnesses**，一个为自主协作与开放共创而
 
 <p align="center"><em>Raven 在多 Agent 编排基准测试上的表现</em></p>
 
-## ❯❯ Raven 自有 Agent
+## ❯❯ 内置 Agent
 
-Raven 通过模块化架构构建了四个专业 Agent。每个 Agent 都由可复用的 harness 组件组装而成，并搭配适合其领域的工具、技能和工作流。Raven 既可以将单项任务交给一个 Agent，也可以在同一工作流中协调多个 Agent 协作。
+Raven 的模块化架构面向 harness 自我演进和子 Agent 创建。借助 **Raven Evolver** 引擎，四个内置 Agent 在各自领域提供**先进水平（SOTA）的性能**，结合可复用的 harness 组件、领域专用工具、技能和 Agent 循环。Raven 可以将聚焦任务委派给单个 Agent，也可以在共享工作流中编排多个 Agent。
 
-例如，Raven-Research 可以收集证据，Raven-Code 实现实验，Raven-Oncall 运行并持续监控，最后由 Raven-Design 将结果制作成图表和演示文稿。
-
-在配置向导中启用所需的 Agent，配置详情见 [`agents/README.md`](agents/README.md)。
+> 四个 Agent 均已内置，开箱即可进行编排。
 
 ### Raven-Research
 
@@ -47,7 +51,7 @@ Raven 通过模块化架构构建了四个专业 Agent。每个 Agent 都由可�
   <a href="https://github.com/user-attachments/assets/d072a514-58fd-41c7-8fcd-40782ebb4c80"><img src="https://github.com/user-attachments/assets/d072a514-58fd-41c7-8fcd-40782ebb4c80" alt="DeepResearch Mixed: Accuracy, Input Tokens, Output Tokens, and Cost" width="100%"></a>
 </p>
 
-<p align="center"><em>Raven-Research 在 DeepResearch Mixed 上的表现</em></p>
+<p align="center"><em>Raven-Research 在 DeepResearch Mixed 基准测试中的表现</em></p>
 
 ### Raven-Code
 
@@ -63,58 +67,46 @@ Raven 通过模块化架构构建了四个专业 Agent。每个 Agent 都由可�
   <a href="https://github.com/user-attachments/assets/75f60aa2-3e2f-42fb-aa51-aa111bf078d0"><img src="https://github.com/user-attachments/assets/75f60aa2-3e2f-42fb-aa51-aa111bf078d0" alt="DataAgentBench (2026-08-24 Live): Raven-Code with Opus-5 achieves 0.8762 Pass@1" width="100%"></a>
 </p>
 
-<p align="center"><em>Raven-Code 位居 DataAgentBench 榜首（2026-08-24 Live）</em></p>
+<p align="center"><em>Raven-Code 在数据分析任务的 DataAgentBench 上排名第一（2026-08-24 Live）</em></p>
 
 ### Raven-Design
 
-**Raven-Design** 提供**视觉设计**能力，将想法与内容转化为精美的视觉作品。它支持演示文稿、品牌素材、图表、示意图和网页界面创作，通过持续优化布局、字体与视觉一致性，帮助用户清晰表达信息，将创意变为作品。
+**Raven-Design** 提供**视觉设计**能力，将想法与内容转化为精美的视觉作品。它支持 PowerPoint 幻灯片、品牌素材、图表、示意图和网页界面创作，通过持续优化布局、字体与视觉一致性，帮助用户清晰表达信息，将创意变为作品。
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9"><img src="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9" alt="PresentBench: Raven-Design, Claude Code, and public leaderboard scores" width="100%"></a>
 </p>
 
-<p align="center"><em>Raven-Design 在 PresentBench 上的表现</em></p>
+<p align="center"><em>Raven-Design 在 PresentBench 幻灯片生成测试中排名第一</em></p>
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/061b5818-595b-4392-b9b6-53a1effb8347"><img src="https://github.com/user-attachments/assets/061b5818-595b-4392-b9b6-53a1effb8347" alt="Visual Design: Raven-Design, Claude Code, and Hermes on ArtifactsBench Dashboard, ArtifactsBench SVG, and GDPVal" width="100%"></a>
 </p>
 
-<p align="center"><em>Raven-Design 在 ArtifactsBench 和 GDPVal 上的表现</em></p>
+<p align="center"><em>Raven-Design 在视觉设计基准测试中的表现</em></p>
 
 ### Raven-Oncall
 
 **Raven-Oncall** 为实验、优化与持续监控提供**无人值守的流程自动化**能力。它自主推进从启动到完成的整个工作流程，支持持续数小时乃至通宵运行并交付结果，仅在需要人工判断时请用户介入。
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/8e2b9721-421c-485c-b1dc-1acf901bcb2c"><img src="https://github.com/user-attachments/assets/8e2b9721-421c-485c-b1dc-1acf901bcb2c" alt="AI4AI (Nanochat 50M Pretraining): Bits Per Byte (BPB), Runtime, Tokens, and Cost" width="100%"></a>
+  <a href="https://github.com/user-attachments/assets/bffd0fa2-e750-4f09-b74a-09452765a99d"><img src="https://github.com/user-attachments/assets/bffd0fa2-e750-4f09-b74a-09452765a99d" alt="AI4AI (Nanochat 50M Pretraining): Bits Per Byte (BPB), Runtime, Tokens, and Cost" width="100%"></a>
 </p>
 
-<p align="center"><em>Raven-Oncall 与 Claude Code 在 AI4AI（Nanochat 50M 预训练）上的对比</em></p>
+<p align="center"><em>Raven-Oncall 与 Claude Code 在 AI4AI（Nanochat 50M 预训练）基准测试上的对比</em></p>
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9"><img src="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9" alt="AI4S Internal Benchmark: Success Rate, Average Total Runtime, Average Total Tokens, and Average Cost" width="100%"></a>
 </p>
 
-<p align="center"><em>Raven-Oncall 与 Claude Code 在 AI4S 内部基准测试上的对比</em></p>
-
-## ❯❯ 基准测试
-
-| 基准 | Raven 结果 | 对比 |
-| --- | --- | --- |
-| 效率 | 27B：`56.7%`；397B：`58.1%` | Hermes：`46.8%` / `47.9%`；27B 时提升 `+9.9pp` |
-| 自进化 | EvoAgentBench 排名 `#1` | 在四种方法的对比中，领先第二名 `+6.2pp` |
-| 主动性 | ProAgentBench F1 为 `0.60` | Hermes/OpenClaw 为 `0.253`，Raven 达到其 `2.4x` |
-
-以上结果对应已公布的测试配置；模型、任务集和评估协议都会影响结果。
-
-https://github.com/user-attachments/assets/3c541dae-5852-447f-8ea6-c9877612ad57
+<p align="center"><em>Raven-Oncall 与 Claude Code 在内部 AI4S 基准测试上的对比</em></p>
 
 ## ❯❯ 连接第三方 Agent
 
-Raven 可以连接并编排以下第三方 Agent，分配任务、协调各自的能力，让它们在同一工作流中协作。
+Raven 可以通过 ACP、CLI 或兼容 OpenAI 的 API 连接并编排 Agent，并提供 13 个**第三方 Agent**的预设，简化设置、任务委派和共享工作流中的协作。
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/3370c883-00ac-4471-97ef-f4312df77202" width="70%" alt="Third-party agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, MiroThinker, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi">
+  <img src="https://github.com/user-attachments/assets/3370c883-00ac-4471-97ef-f4312df77202" width="80%" alt="Third-party agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, MiroThinker, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi">
 </p>
 
 ## ❯❯ 快速开始
