@@ -756,14 +756,32 @@ def _chk_pin_model(key: str):
     return chk
 
 
+def _configured_provider_section(slug: str) -> bool:
+    """Whether this config holds a section for ``slug``."""
+    try:
+        from raven.config.loader import get_config_path, read_raw_or_raise
+
+        providers = read_raw_or_raise(get_config_path()).get("providers")
+    except Exception:  # noqa: BLE001 - an unreadable config proves nothing exists
+        return False
+    return isinstance(providers, dict) and slug in providers
+
+
 def _chk_pin_provider(key: str):
     """A pin's provider half: a configured provider's slug, or empty to unset.
 
-    Checked against the registry rather than against the config: naming a
+    Known to the registry, or already a section in this config: naming a
     provider that has no credentials yet is an ordinary order of operations
     (pick the model, then go and add the key), while naming one that does not
     exist is a typo that would otherwise surface as a silent fallback to the
     conversation's model.
+
+    The config half is not a loophole, it is the other half of the same
+    question. Raven carries no spec for every vendor LiteLLM can reach, and a
+    section the operator wrote is proof the vendor exists -- so a pin the
+    wizard stored through one surface could not be edited through this one,
+    which is how a working DeepInfra endpoint became uneditable on the page
+    that exists to edit it.
     """
     inner = _chk_str(key, 100)
 
@@ -776,7 +794,7 @@ def _chk_pin_provider(key: str):
         from raven.providers.registry import canonical_provider_name, find_by_name
 
         slug = canonical_provider_name(text)
-        if find_by_name(slug) is None:
+        if find_by_name(slug) is None and not _configured_provider_section(slug):
             raise ConfigValidationError(f"{key}: no provider named {text!r}")
         return slug
 
@@ -1152,6 +1170,7 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
         clear_everos_section,
         embedding_is_env_managed,
         everos_has_own_embedding,
+        host_embedding_section,
         set_everos_section,
     )
 
@@ -1224,10 +1243,25 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
         # model and a provider and holds no credential of its own, so an
         # address or a key sent here is refused rather than dropped: a value
         # accepted and discarded reads to the caller as one that was stored.
+        # The card renders the resolved address, because a reader configuring an
+        # endpoint wants to see where it goes -- and the row then sends it back
+        # on every save. An address equal to what the provider already answers
+        # with is this page echoing what it was shown, the same shape as the
+        # redacted key the borrow path already drops; refusing it made the row
+        # unsaveable without emptying a field nobody had touched. An address
+        # that differs is an instruction, and the block has no place for it.
+        # Only the address, and only when it matches: the card renders it as a
+        # `defaultValue`, so every save carries it back whether or not anyone
+        # touched it. The key is a placeholder rather than a value, so one that
+        # arrives here was typed on purpose and still has nowhere to live.
+        shown = host_embedding_section().get("base_url", "")
+        if shown and clean.get("base_url", "").rstrip("/") == shown.rstrip("/"):
+            clean.pop("base_url")
         stray = sorted(k for k in ("base_url", "api_key") if k in clean)
         if stray:
             raise ConfigValidationError(
-                f"{' and '.join(stray)} belongs to the provider, not to raven's embedding endpoint"
+                f"{' and '.join(stray)} belongs to the provider, not to raven's embedding endpoint; "
+                "pick the provider that serves this model instead"
             )
         from raven.config.update import EmbeddingPinError, embedding_model_change, set_embedding_endpoint
 

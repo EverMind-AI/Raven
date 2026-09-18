@@ -192,10 +192,13 @@ DS.settings = {
      handled tag tells the island to only redraw. */
   set: async (key, value) => {
     try {
-      await rpc.call('settings.set', { key, value });
+      const r = await rpc.call('settings.set', { key, value });
       await loadSettings();
       pushPermMode();
-      toast(T('gui.set.saved'));
+      /* The server says when a save costs something -- swapping the embedding
+         model invalidates every vector already stored. Discarding the answer
+         and toasting a fixed "saved" is how that reached nobody. */
+      toast(r && r.warning ? r.warning : T('gui.set.saved'));
     } catch (e) {
       toast(T('gui.plug.op_failed', { err: settingsErr(e) }));
       throw { handled: true };
@@ -209,9 +212,9 @@ DS.settings = {
        it across -- what this page holds is `****set****`. */
     if (borrowFrom) p.borrow_from = borrowFrom;
     try {
-      await rpc.call('settings.everosSet', p);
+      const r = await rpc.call('settings.everosSet', p);
       await loadEveros();
-      toast(T('gui.set.mem.saved'));
+      toast(r && r.warning ? r.warning : T('gui.set.mem.saved'));
     } catch (e) {
       toast(T('gui.plug.op_failed', { err: settingsErr(e) }));
       throw { handled: true };
