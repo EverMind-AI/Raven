@@ -1045,3 +1045,64 @@ async def test_a_denied_call_still_names_the_proxy_it_needs(monkeypatch, tmp_pat
 
     assert answer["error"] == "HTTP 403"
     assert "tools.media.proxy" in answer["hint"]
+
+
+def _raising_client(mp: pytest.MonkeyPatch, exc: Exception) -> None:
+    """Every client this module builds dies the same way, whatever the route."""
+
+    def _boom(*_a, **_kw):
+        raise exc
+
+    mp.setattr(media_gen.httpx, "AsyncClient", _boom)
+
+
+async def test_the_images_route_classes_its_failures_like_the_chat_route(tmp_path) -> None:
+    """A dedicated image model never touches chat/completions, so its own copies of
+    both handlers need the same rule -- one that drifted would put the streak back
+    where it was for every ``gpt-image`` call."""
+    with pytest.MonkeyPatch.context() as mp:
+        tool = _image_tool(
+            mp,
+            lambda _r: httpx.Response(200, json={"data": []}),
+            model="openai/gpt-image-2",
+            workspace=tmp_path / "ws",
+        )
+        unreadable = [await tool.execute("a poster", images=[str(tmp_path / f"gone-{n}.png")]) for n in ("a", "b")]
+
+    assert len({failure_class(raw) for raw in unreadable}) == 1
+    assert "gone-a.png" in json.loads(unreadable[0])["detail"]
+
+    dead = []
+    for host in ("alpha.example", "beta.example"):
+        with pytest.MonkeyPatch.context() as mp:
+            tool = _image_tool(
+                mp, lambda _r: httpx.Response(200), model="openai/gpt-image-2", workspace=tmp_path / "ws"
+            )
+            _raising_client(mp, httpx.ConnectError(f"cannot reach {host}"))
+            dead.append(await tool.execute("a poster"))
+
+    assert len({failure_class(raw) for raw in dead}) == 1
+    assert "alpha.example" in json.loads(dead[0])["detail"]
+
+
+@pytest.mark.parametrize(
+    "build,call",
+    [
+        (lambda: SpeechGenerateTool(SimpleNamespace(api_base="https://api.test", model="", api_key="k")), "read me"),
+        (lambda: VideoGenerateTool(SimpleNamespace(api_base="https://api.test", model="", api_key="k")), "a river"),
+    ],
+    ids=["speech", "video"],
+)
+async def test_every_media_tool_reads_one_dead_network_as_one_class(build, call) -> None:
+    """The streak key is ``(tool, failure_class)``, so each tool accumulates its own.
+    Speech and video each carry their own catch-all, and an exception's text names the
+    host it could not reach: left there, neither tool could ever reach the nudge."""
+    answers = []
+    for host in ("alpha.example", "beta.example"):
+        with pytest.MonkeyPatch.context() as mp:
+            _raising_client(mp, httpx.ConnectError(f"[Errno 61] cannot reach {host}"))
+            answers.append(await build().execute(call))
+
+    assert all(is_hard_tool_failure(raw) for raw in answers)
+    assert len({failure_class(raw) for raw in answers}) == 1
+    assert "alpha.example" in json.loads(answers[0])["detail"]
