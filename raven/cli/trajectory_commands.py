@@ -45,7 +45,7 @@ import shutil
 import tempfile
 from collections import Counter
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import typer
 from rich.console import Console
@@ -53,6 +53,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from raven.cli._tty_guard import die_if_not_tty
+from raven.cli.trajectory_regression_commands import regression_app
 from raven.tracing import config as tracing_config
 from raven.trajectory import store as tstore
 from raven.trajectory.bundle import collect_bundle
@@ -63,6 +64,7 @@ from raven.trajectory.verdict import VERDICT_STATUSES, read_verdicts, record_ver
 console = Console()
 
 trajectory_app = typer.Typer(help="Package, label, and protect agent trajectories.")
+trajectory_app.add_typer(regression_app, name="regression")
 
 
 @trajectory_app.callback(invoke_without_command=True)
@@ -568,6 +570,20 @@ def _print_bug_cli_summary(prep) -> None:
     console.print("  Nothing will be uploaded — the package stays on this machine.")
 
 
+def _manifest_summary(bundle_dir: Path) -> dict[str, Any] | None:
+    """Scalar attempt_id/format_version from the bundle manifest, best-effort."""
+    try:
+        manifest = json.loads((bundle_dir / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(manifest, dict):
+        return None
+    summary = {
+        key: manifest[key] for key in ("attempt_id", "format_version") if isinstance(manifest.get(key), (str, int))
+    }
+    return summary or None
+
+
 @trajectory_app.command("replay")
 def trajectory_replay(
     target: str = typer.Argument(..., metavar="BUNDLE_OR_ID", help="Bundle directory, or an attempt/trace id"),
@@ -576,15 +592,24 @@ def trajectory_replay(
         "--strict/--warn",
         help="strict: halt at the first divergence; warn (default): report divergences and keep feeding",
     ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Emit the report as JSON (schema_version 1) instead of the human summary"
+    ),
+    out: Path | None = typer.Option(None, "--out", help="Write the JSON report to this file (requires --json)"),
 ) -> None:
     """Replay a saved trajectory through the live harness (mock replay: recorded
     model replies and tool results are fed back; no real tool code runs).
 
-    Exit codes: 0 — replayed to the end; 1 — bad target; 2 — replay halted
-    (strict divergence, or the recording ran out mid-replay).
+    Exit codes: 0 — replayed to the end; 1 — bad target or bad usage; 2 —
+    replay halted (strict divergence, or the recording ran out mid-replay).
     """
     from raven.trajectory.replay import run_replay
 
+    # Validated by hand: click's own usage errors exit with code 2, which this
+    # command reserves for "replay halted".
+    if out is not None and not json_output:
+        console.print("[red]--out requires --json[/red]")
+        raise typer.Exit(code=1)
     bundle_dir = _bundle_dir_or_exit(target)
     mode = "strict" if strict else "warn"
     try:
@@ -592,6 +617,21 @@ def trajectory_replay(
     except ValueError as exc:
         console.print(f"[red]{escape(str(exc))}[/red]")
         raise typer.Exit(code=1)
+
+    if json_output:
+        text = json.dumps(report.to_dict(manifest=_manifest_summary(bundle_dir)), indent=2)
+        if out is not None:
+            try:
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(text + "\n", encoding="utf-8")
+            except OSError as exc:
+                console.print(f"[red]cannot write {escape(str(out))}: {escape(str(exc))}[/red]")
+                raise typer.Exit(code=1)
+        else:
+            print(text)
+        if report.halted:
+            raise typer.Exit(code=2)
+        return
 
     streamed = f" ({report.llm_calls_streamed} streamed)" if report.llm_calls_streamed else ""
     console.print(f"Replayed [cyan]{escape(bundle_dir.name)}[/cyan] ({mode} mode)")
