@@ -1970,7 +1970,10 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.model.pick_search': 'Search or type a model id',
     'gui.model.pick_use': 'Use {id}',
     'gui.model.pick_add_to': 'add to {name}',
-    'gui.model.pick_none': 'No models added here yet'
+    'gui.model.pick_none': 'No models added here yet',
+    'gui.settings.providers.base_override': 'Overrides the default',
+    'gui.settings.providers.key_optional_ph': 'API key, if the server wants one',
+    'gui.settings.providers.api_key_optional': 'API Key (optional)'
   },
   zh: {
     'gui.act.ing.ask_user': '等待你回答',
@@ -3640,6 +3643,9 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.model.pick_search': '搜索或输入模型 id…',
     'gui.model.pick_use': '使用 {id}',
     'gui.model.pick_add_to': '加入 {name}',
-    'gui.model.pick_none': '这一家还没有添加模型'
+    'gui.model.pick_none': '这一家还没有添加模型',
+    'gui.settings.providers.base_override': '覆盖默认',
+    'gui.settings.providers.key_optional_ph': 'API Key（服务要求时填）',
+    'gui.settings.providers.api_key_optional': 'API Key（可选）'
   }
 } as Record<Locale, Record<string, string>>
