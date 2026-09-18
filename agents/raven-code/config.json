@@ -38,8 +38,6 @@
     "disabledTools": [
       "spawn",
       "message",
-      "read_skill",
-      "use_skill",
       "hub",
       "tool_search",
       "tool_call",
@@ -49,7 +47,6 @@
       "video_generate",
       "create_playbook",
       "deliver_files",
-      "find_skill",
       "load_playbook",
       "plugin",
       "run_subagent_dag",
@@ -57,7 +54,7 @@
     ]
   },
   "memory": {
-    "backend": null,
+    "backend": "everos",
     "userId": "raven-code",
     "agentId": "raven-code",
     "memoryTopK": 5
@@ -85,13 +82,6 @@
           "CONTEXT.md"
         ]
       }
-    },
-    "disabled": [
-      "everos-memory"
-    ]
-  },
-  "skillForge": {
-    "rewriteEnabled": false,
-    "llmGateEnabled": false
+    }
   }
 }
