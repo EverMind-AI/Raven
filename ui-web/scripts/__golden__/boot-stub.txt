@@ -26,14 +26,6 @@ div.app[data-rail=on]
         svg
           path
         span
-      button#skillBtn.navi
-        svg
-          path
-        span
-      button#plugBtn.navi
-        svg
-          path
-        span
       button#playbooksBtn.navi
         svg
           circle
@@ -41,12 +33,10 @@ div.app[data-rail=on]
           circle
           path
         span
-      button#kbBtn.navi
+      button#agentsBtn.navi
         svg
-          path
-        span
-      button#memoryBtn.navi
-        svg
+          rect
+          rect
           path
         span
       div#moreFly.moresub[data-open=false]
@@ -74,8 +64,6 @@ div.app[data-rail=on]
             path
         span.who
           span.n
-          span#meSub.s
-        span#meKbd.kbd
     div#railGrip.grip
   div.main
     div#split.split[data-full=false][data-open=false]
@@ -211,37 +199,6 @@ button#railShow.ghost-ic.tipdn
   svg
     rect
     path
-section#capsPage.page[data-open=false]
-  header
-    h2#capsTitle
-  div.work
-    div.wrap
-      div#pageHero.pmhero
-        h3
-      div.cbar
-        div.cfind
-          svg.ic
-            circle
-            path
-          input#cq
-        div#cKind.pills
-          button.pill[data-k=all]
-          button.pill[data-k=on]
-          button.pill[data-k=attn]
-          button.pill[data-k=add]
-        button.pminstbtn
-          span
-        button.pminstbtn
-          span
-      div#capsBody
-        div
-      details#advAdd.adv
-        summary
-        p
-        div.row
-          input#mName
-          input#mAddr
-          button#mAdd.mini
 section#extAgentsPage.page[data-open=false]
   header
     h2
@@ -262,11 +219,6 @@ section#playbooksPage.page[data-open=false]
     h2
   div.work
     div#playbooksBody.wrap
-section#kbPage.page[data-open=false]
-  header
-    h2
-  div.work
-    div#kbBody.wrap
 section#cronPage.page[data-open=false]
   header
     h2

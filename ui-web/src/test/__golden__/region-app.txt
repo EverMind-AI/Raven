@@ -25,14 +25,6 @@ div.app
         svg
           path
         span
-      button#skillBtn.navi
-        svg
-          path
-        span
-      button#plugBtn.navi
-        svg
-          path
-        span
       button#playbooksBtn.navi
         svg
           circle
@@ -40,12 +32,10 @@ div.app
           circle
           path
         span
-      button#kbBtn.navi
+      button#agentsBtn.navi
         svg
-          path
-        span
-      button#memoryBtn.navi
-        svg
+          rect
+          rect
           path
         span
       div#moreFly.moresub[data-open=false]
@@ -73,8 +63,6 @@ div.app
             path
         span.who
           span.n
-          span#meSub.s
-        span#meKbd.kbd
     div#railGrip.grip
   div.main
     div#split.split

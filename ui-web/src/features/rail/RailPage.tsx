@@ -264,13 +264,15 @@ function Group({
         onKeyDown={enterOrSpace(flip)}
       >
         <span className="lab">{label}</span>
-        <span className="n">{String(items.length)}</span>
+        {/* No count and no rule beside it. The rows under the heading ARE the
+            count, and a hairline running to the edge drew a box around a list
+            that is already bounded by its own whitespace. What is left is the
+            name and the caret that folds it. */}
         <span className="car">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M8.5 5.5 15 12l-6.5 6.5" />
           </svg>
         </span>
-        <span className="rule" />
         {action ? (
           <button
             className="grp-go"

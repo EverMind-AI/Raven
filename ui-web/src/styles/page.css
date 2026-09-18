@@ -439,16 +439,23 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   padding: 0; flex: none; font-family: var(--sans); font-size: 11px;
   font-weight: 600; letter-spacing: .09em; text-transform: none; color: var(--faint);
 }
-.list .grp .n {
-  font-family: var(--mono); font-size: 10px; color: var(--faint);
-  font-variant-numeric: tabular-nums; flex: none;
-}
-.list .grp .rule { flex: 1; height: 1px; background: var(--line-soft); }
-.list .grp:hover .lab, .list .grp:hover .car, .list .grp:hover .n { color: var(--muted); }
+/* The caret carries the push to the far end of the row, now that the hairline
+   which used to do it is gone -- one element fewer than a spacer would be. */
+.list .grp .car { margin-right: auto; }
+.list .grp:hover .lab, .list .grp:hover .car { color: var(--muted); }
 .list .grp:focus-visible { outline: 1px solid var(--amber); outline-offset: 2px; border-radius: 6px; }
 .grp-empty { font-size: 12px; color: var(--faint); padding: 3px 10px 5px 10px; }
-.grp .grp-go { font-size: 11px; color: var(--faint); padding: 2px 8px 2px 4px; border-radius: 5px; flex: none; }
+/* The one heading that has a verb keeps it out of sight until the pointer is on
+   the row: a link beside every list would read as part of the heading, and it
+   is an errand rather than a destination. Focus reveals it too -- a keyboard has
+   no pointer to hover with. */
+.grp .grp-go {
+  font-size: 11px; color: var(--faint); padding: 2px 8px 2px 4px; border-radius: 5px; flex: none;
+  opacity: 0; transition: opacity .14s ease;
+}
+.grp:hover .grp-go, .grp .grp-go:focus-visible { opacity: 1; }
 .grp .grp-go:hover { color: var(--amber); }
+@media (prefers-reduced-motion: reduce) { .grp .grp-go { transition: none; } }
 .grp-more {
   display: block; width: 100%; text-align: left; font-size: 12px; color: var(--faint);
   padding: 6px 10px; border-radius: 8px; margin-top: 1px;
@@ -618,7 +625,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .rail-foot .me .av.anon { background: var(--raised); color: var(--faint); }
 .rail-foot .me .av.anon svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.7; }
 .rail-foot .me .who { flex: 1; min-width: 0; display: grid; }
-.rail-foot .me .who .n { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-foot .me .who .n { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-foot .me .who .s {
   font-family: var(--mono); font-size: 10.5px; color: var(--faint);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

@@ -13,15 +13,10 @@ import * as composer from './features/composer/mount'
 import * as dagSheet from './features/dag/mount'
 import { DeskApp } from './features/desk/DeskApp'
 import * as desk from './features/desk/store'
-import { plugHost, skillsHost, skillsSkeletonHost } from './features/hosts'
 import { MANIFESTS } from './features/manifests'
 import { ModelApp } from './features/model/ModelPicker'
-import { PluginsApp } from './features/plugins/PluginsPage'
-import * as pluginsTab from './features/plugins/wire'
 import * as rail from './features/rail/store'
 import * as settingsChrome from './features/settings/wire'
-import { Skeleton as SkillsSkeleton, SkillsApp } from './features/skills/SkillsPage'
-import * as skillsTab from './features/skills/wire'
 import * as subagents from './features/subagents/store'
 import * as workspace from './features/workspace/store'
 import { WorkspaceApp } from './features/workspace/WorkspacePage'
@@ -146,8 +141,6 @@ for (const domain of MANIFESTS) {
 
 const deskRoot = createRoot(portals.host('desk'))
 queueMicrotask(() => deskRoot.render(<DeskApp />))
-createRoot(skillsHost).render(<SkillsApp />)
-createRoot(skillsSkeletonHost).render(<>{Array.from({ length: 6 }, (_, i) => <SkillsSkeleton key={i} />)}</>)
 
 /* The workspace island mounts lazily: #wsBody is shared ground -- the agents
    and browser tabs draw into it through their own island roots, so the
@@ -155,7 +148,6 @@ createRoot(skillsSkeletonHost).render(<>{Array.from({ length: 6 }, (_, i) => <Sk
    workspace/store.draw). */
 workspace.setRenderer(() => createElement(WorkspaceApp))
 
-createRoot(plugHost).render(<PluginsApp />)
 
 /* The one data entry point, installed before anything can ask for it. Every
    mode has one now: a page served by a raven gets the socket, and a page opened
@@ -185,11 +177,6 @@ installComposerPalette()
 /* What a match does is the panel's (state/ws.ts); the moment the split point is
    watched from is here, after every listener the page registers itself. */
 ws.watchNarrow()
-/* The two tabs of the capabilities page, which register their renderers into
-   state/caps.ts in this order -- the plugin tab's steps are the outer half of a
-   draw and the shared hero is its last step. */
-skillsTab.install()
-pluginsTab.install()
 /* The whole-page redraw a language pick asks for, then the settings transport
    and the model chip. */
 langEffects.install()

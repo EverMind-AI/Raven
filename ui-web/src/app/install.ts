@@ -18,18 +18,14 @@ import { closeDialog as closeConnDialog } from '../features/connections/store'
 import { cronSource } from '../features/cron/source'
 import { closeSheet as closeCronSheet } from '../features/cron/store'
 import { extAgentsSource } from '../features/extAgents/source'
-import { capabilitiesSource, extPlugins, loadExt } from '../features/installed/source'
-import { knowledgeSource } from '../features/knowledge/source'
+import { capabilitiesSource, loadExt } from '../features/installed/source'
 import { memorySource } from '../features/memory/source'
 import { modelSource, openModelsForMissingProvider, tierSource } from '../features/model/source'
 import { onboardSource } from '../features/onboard/source'
 import { playbooksSource } from '../features/playbooks/source'
-import { pluginsSource } from '../features/plugins/source'
-import { onEvent as pluginsEvent } from '../features/plugins/store'
 import { markNew } from '../features/rail/store'
 import { installSessionActions } from '../features/rail/wire'
 import { bannerSource, settingsSource } from '../features/settings/source'
-import { skillsSource } from '../features/skills/source'
 import { agentsSource, startAgentHeartbeat } from '../features/subagents/source'
 import { fixtureTasksSource, tasksSource } from '../features/tasks/source'
 import { refresh as refreshTasks, reset as resetTasks } from '../features/tasks/store'
@@ -49,7 +45,6 @@ import { refusal as uploadRefusal } from '../lib/upload'
 import { liveMode } from '../rpc/chooseTransport'
 import { gateway } from '../rpc/gateway'
 import { setFault as setMemFault } from '../state/banner'
-import * as caps from '../state/caps'
 import * as page from '../state/page'
 import { clarifyRequest, dispatch, installPipeline } from '../state/session/pipeline'
 import { reconnect, switchToDraft } from '../state/session/registry'
@@ -63,9 +58,7 @@ import { showUpNote } from './updates'
 import type { ComposerSource } from '../features/composer/types'
 import type { SlashCmd } from '../features/composer/types'
 import type { TranscriptSource } from '../features/transcript/types'
-import type {
-  McpStatusParams, MemoryHealthParams, OauthDoneParams, OauthPendingParams, SystemUpdateAvailableParams,
-} from '../rpc/notifications'
+import type { MemoryHealthParams, SystemUpdateAvailableParams } from '../rpc/notifications'
 
 /* ── the palette, which no transport answers ─────────────────────────────── */
 
@@ -146,10 +139,7 @@ export function installSources(): void {
   sources.capabilities = capabilitiesSource
   sources.cron = cronSource
   sources.connections = connSource
-  sources.skills = skillsSource
-  sources.plugins = pluginsSource
   sources.memory = memorySource
-  sources.knowledge = knowledgeSource
   sources.playbooks = playbooksSource
   sources.onboard = onboardSource
   sources.browser = browserSource
@@ -221,39 +211,6 @@ function onMemoryHealth(frame: unknown): void {
   setMemFault(p && p.ok === false ? (p.error || t('gui.mem.down')) : null)
 }
 
-let pmExtSoon: ReturnType<typeof setTimeout> | undefined
-
-function onMcpStatus(frame: unknown): void {
-  const p = frame as McpStatusParams
-  const row = extPlugins().find((x) => x.m && x.m.name === p.name)
-  if (row) Object.assign(row.m as object, p)
-  else {
-    // Unknown server (fresh install, or events arriving before the first
-    // ext.list) -- coalesce the reload; startup syncs fire one event per server.
-    clearTimeout(pmExtSoon)
-    pmExtSoon = setTimeout(() => loadExt()
-      .then(() => pluginsEvent({ kind: 'rows' }))
-      .catch(() => {}), 250)
-  }
-  pluginsEvent({
-    kind: 'status', name: p.name, state: p.state, tool_count: p.tool_count, error: p.error ?? undefined,
-    auth_url: p.auth_url || null,
-  })
-}
-
-function onOauthPending(frame: unknown): void {
-  const p = frame as OauthPendingParams
-  pluginsEvent({
-    kind: 'authPending', server: p.server, url: p.url,
-    expires_in: p.expires_in, interactive: p.interactive,
-  })
-}
-
-function onOauthDone(frame: unknown): void {
-  const p = frame as OauthDoneParams
-  pluginsEvent({ kind: 'authDone', server: p.server, ok: !!p.ok, error: p.error })
-}
-
 /** Every handler the page hangs on the transport, and the one clock it starts. */
 export function installPushes(): void {
   installConnectionUI()
@@ -265,9 +222,6 @@ export function installPushes(): void {
 
   gateway().on('system.update_available', onUpdateAvailable)
   gateway().on('memory.health', onMemoryHealth)
-  gateway().on('mcp.status', onMcpStatus)
-  gateway().on('oauth.pending', onOauthPending)
-  gateway().on('oauth.done', onOauthDone)
 
   /* Screencast frames arrive as binary WS messages:
      "RVF1" + u32 header length + JSON header + raw JPEG. */
@@ -296,16 +250,9 @@ async function afterReconnect(): Promise<void> {
      rather than a failed one. Re-read them here: the session reload above
      already treats a reconnect as "refetch what the gap invalidated", and
      these are the only surfaces whose data never asks again on its own. */
-  /* Repainted, not just re-read: the island renders on its own `set`, which
-     refilling the module state does not call, so the extensions page would
-     keep showing the offline note after the reconnect it tells the reader to
-     wait for. `caps.draw` is the entry for both tabs, guarded the way the
-     language repaint guards it -- the page may not be up. */
-  loadExt()
-    .then(() => {
-      try { caps.draw() } catch { /* extensions page not built yet */ }
-    })
-    .catch(() => {})
+  /* Re-read, with nothing to repaint: the one surface these rows still reach
+     is the settings dialog, which reads them when it opens. */
+  void loadExt().catch(() => {})
 }
 
 /** The composer's two actions, the rail's three writes, and the new-task button. */

@@ -32,7 +32,6 @@ async function harness({ rows = [] as Row[] } = {}) {
     return import('../../app/install')
   }, {
     fakes: {
-      'src/state/caps': { draw: () => {} },
       'src/state/page': { show: () => {} },
       'src/state/ws': {
         draw: () => {},
