@@ -183,10 +183,13 @@ renders its answers as the `HookDecision` the composite already merges, which is
 their order and the rollback mechanism are unchanged by it. Eight of the nine verbs are composed
 by a Harness Module rather than by the seat -- Memory asks `intake`, `system_addendum` and
 `archive`, Planning asks `advise`, Capability asks `select_tools`, Action asks `review`,
-`salvage` and `judge` -- so replacing a role replaces what a participant's judgement does.
-`outbound` is the exception and says so on its own docstring: no role owns the turn's delivered
-reply, so the seat applies it directly and it is the one verb a generated participant cannot be
-handed.
+`salvage` and `judge` -- so replacing a role replaces what a participant's judgement does. Two
+verbs are exceptions and each says so on its own docstring. `outbound` has no role at all: no
+role owns the turn's delivered reply, so the seat applies it directly and it is the one verb a
+generated participant cannot be handed. `judge` has a role but no seat: the party that asks it is
+`ToolRegistry.execute`, which is not the hook chain and holds no handle on this turn's
+participants, so today the only participant in that list is the dispatch's own `checks` and
+`code`. A plugin refuses a call from `review` instead.
 _Avoid_: reading it as a replacement for Agent Hook. The phases say *when* the loop asks; a
 participant says *what this agent judges*, and a third-party hook needs neither. Unrelated to
 raven-code's **Coding Conduct** prompts, which are a different thing with a similar name.
