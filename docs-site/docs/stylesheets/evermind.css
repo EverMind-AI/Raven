@@ -11,7 +11,7 @@
  * breaks the brand's square geometry.
  */
 
-@import url("https://fonts.googleapis.com/css2?family=Bungee+Shade&family=Cormorant+Garamond:ital,wght@1,500;1,600&family=Brygada+1918:ital,wght@0,400;0,500&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@1,500;1,600&family=Brygada+1918:ital,wght@0,400;0,500&display=swap");
 
 :root {
   --em-canvas: #fcfcf5;
@@ -30,7 +30,6 @@
 
   --em-font-serif: "Cormorant Garamond", serif;
   --em-font-label: "Brygada 1918", serif;
-  --em-font-display: "Bungee Shade", sans-serif;
 }
 
 /* ------------------------------------------------- Material remapping --- */
