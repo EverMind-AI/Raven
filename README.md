@@ -101,6 +101,43 @@ Raven's modular architecture is designed for harness self-evolution and subagent
 
 <p align="center"><em>Raven-Oncall vs. Claude Code on internal AI4S benchmark</em></p>
 
+## ❯❯ Showcase
+
+Four runs that end in a deck, each captured from Raven's task graph. The graph
+shows the orchestration Raven chose: three research legs in parallel, a node
+that reduces them to one argument, and a design node that builds the slides.
+
+<table>
+<tr>
+<td width="50%" valign="top">
+<p align="center"><b>Song-dynasty domestic aesthetics</b></p>
+<a href="https://github.com/user-attachments/assets/8fa50c96-3d2d-4107-8a8c-7d041d1ac8b4"><img src="https://github.com/user-attachments/assets/8fa50c96-3d2d-4107-8a8c-7d041d1ac8b4" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a>
+<a href="https://github.com/user-attachments/assets/379328ea-e3ee-430f-865d-68ed90dae69f"><img src="https://github.com/user-attachments/assets/379328ea-e3ee-430f-865d-68ed90dae69f" alt="Cover, slides and closing slide of the Song-dynasty aesthetics deck" width="100%"></a>
+<p align="center"><em>Research x4 &rarr; Design &middot; 58 sources &middot; 1h13m &middot; 15 slides &middot; delivered in Chinese</em></p>
+</td>
+<td width="50%" valign="top">
+<p align="center"><b>How ancient Greece was whitewashed</b></p>
+<a href="https://github.com/user-attachments/assets/c8e9ac77-0377-487e-9d07-fb4fe51a0257"><img src="https://github.com/user-attachments/assets/c8e9ac77-0377-487e-9d07-fb4fe51a0257" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a>
+<a href="https://github.com/user-attachments/assets/3c5a2a9a-d6d7-40ad-b3dc-70e9f5c095df"><img src="https://github.com/user-attachments/assets/3c5a2a9a-d6d7-40ad-b3dc-70e9f5c095df" alt="Cover, slides and closing slide of the Greek polychromy deck" width="100%"></a>
+<p align="center"><em>Research x4 &rarr; Design &middot; 66 sources &middot; 1h56m &middot; 15 slides</em></p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<p align="center"><b>How pop music is manufactured</b></p>
+<a href="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451"><img src="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a>
+<a href="https://github.com/user-attachments/assets/9ab75945-81ba-4437-aec0-9ef6a633ed55"><img src="https://github.com/user-attachments/assets/9ab75945-81ba-4437-aec0-9ef6a633ed55" alt="Cover, slides and closing slide of the pop music deck" width="100%"></a>
+<p align="center"><em>Research x4 &rarr; Design &middot; 72 sources &middot; 1h49m &middot; 15 slides</em></p>
+</td>
+<td width="50%" valign="top">
+<p align="center"><b>A century of abstract art</b></p>
+<a href="https://github.com/user-attachments/assets/4b606bae-667e-4f2f-ae7d-2880b47ddbf6"><img src="https://github.com/user-attachments/assets/4b606bae-667e-4f2f-ae7d-2880b47ddbf6" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a>
+<a href="https://github.com/user-attachments/assets/b3dfce6c-366d-4e31-9a57-7c98df054618"><img src="https://github.com/user-attachments/assets/b3dfce6c-366d-4e31-9a57-7c98df054618" alt="Cover, slides and closing slide of the abstract art deck" width="100%"></a>
+<p align="center"><em>Research x4 &rarr; Design &middot; 2h09m &middot; delivered in English</em></p>
+</td>
+</tr>
+</table>
+
 ## ❯❯ Connect Third-Party Agents
 
 Raven can connect to and orchestrate agents via ACP, CLI, or OpenAI-compatible APIs, with presets for 13 **third-party agents** to simplify setup, task delegation, and coordination across shared workflows.
