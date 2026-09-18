@@ -198,28 +198,68 @@ page's wiring has run. Enforced by `import-direction`.
    renders as the value the page was served with and lists by name; (b) a
    measuring behaviour under `src/chrome/behaviour/` (the pane grips, the
    scrollbars). Writing the text, class or `innerHTML` of an element React
-   rendered is never allowed.
-   **Ratcheted by `state-dom-touch`**: a per-file count of element reaches for
-   the 30 pinned files in `state/` and `app/`, zero for `lib/` and
-   `components/` (two registered exemptions: `lib/dom.ts` IS the page's `$`,
-   and `components/Ico.tsx` builds detached SVG with `createElementNS`), and
-   every pinned module's header has to say why it reaches. `features/` and
-   `chrome/` are not counted -- rule (a) and (b) live there, so those two are
-   by review.
-   The gate counts lines whose text matches, so a comment that merely mentions
-   `querySelector` raises the count. Reword the comment; the number is a budget
-   for the code.
+   rendered is the case neither of those covers, and it is ratcheted rather
+   than forbidden outright: the 24 such writes the tree still holds are pinned
+   per file and may only fall.
+   **Ratcheted by `state-dom-touch`**: a per-file count of element reaches --
+   every match, not every line that holds one -- 79 over the 34 pinned files in
+   `state/` and `app/`, zero for `lib/` and `components/` (two registered
+   exemptions: `lib/dom.ts` IS the page's `$`, and `components/Ico.tsx` builds
+   detached SVG with `createElementNS`), and every pinned module's header has
+   to say why it reaches (`SILENT` names the one header that does not yet). A
+   reach through the page's own `$` is counted like any other, because it is
+   `document.querySelector` under a shorter name. The page frame -- `chrome/`,
+   `src/App.tsx`, `src/main.tsx` -- is counted in a table of its own, `FRAME`,
+   26 matches over ten files: rule (b) is a budget, not a licence. The writes
+   are `WRITES`, over those layers plus `lib/` and `components/`, on the same
+   terms -- down or gone, and a file absent from the table writes nothing.
+   `features/` is counted by neither -- rule (a) lives there, so that one is by
+   review.
+   Both counts read text, so a comment that merely mentions `querySelector`
+   raises one. Reword the comment; the number is a budget for the code. Two
+   things the text match does not count, the first on purpose and the second
+   not: `event.target.closest()`, which climbs from a node the handler was
+   handed rather than reaching for one, and a reach spelled through an alias
+   (`const doc = globalThis.document`), which no module does today and which
+   the gate would not see.
 3. **Language.** Every `<Domain>App` subscribes with
    `useSyncExternalStore(lang.subscribe, lang.get)`, so a flip re-renders the
    island by construction (**enforced by `island-lang`**, `NO_ROOT` naming the
-   four domains with no root of their own and why). Words come from `t(key)`
-   (`src/i18n/t.ts`) and nothing else; `lang.attr(key)` is the one other take-a-key
+   four domains with no root of their own and why). `t(key)`
+   (`src/i18n/t.ts`) is the lookup; `lang.attr(key)` is the one other take-a-key
    form, for keyed attributes the served markup did not carry, and it answers
    `undefined` until a reader has picked a language. `state/lang/effects.ts`
    holds only what is drawn rather than rendered.
    **Enforced by `i18n-keys`**: every literal key, in either take-a-key form
    (`t(` and `lang.attr(`), names an entry the catalogue carries. A key built by
    concatenation is outside it.
+   The lookup is not yet the only source of words, and what remains is pinned.
+   The unit is a maximal run of CJK -- a script written without spaces has no
+   smaller thing to call a word, and a line already pinned cannot carry a
+   second word in on the same line for free. Six runs are the served first
+   frame, the no-JavaScript shell in `src/page.html`, which no catalogue and no
+   store has reached yet (its `<html lang>` is a tag rather than a word).
+   Thirty-two more are in code, across thirteen modules: sixteen words a reader
+   sees (a `??` fallback rendered before a language is picked, a JSX literal,
+   the string `state/envChip.ts` writes, the month and day
+   `features/memory/MemoryPage.tsx` formats), two separators a reader sees (the
+   ideographic comma `features/cron/humanize.ts` joins a translated list with),
+   thirteen in three patterns matched against text and never drawn -- twelve of
+   them the range ends and class members spelling out `lib/prose.ts`'s two --
+   and one comparison against the title `chrome/ChatTop.tsx` serves.
+   **Ratcheted by `first-frame-literals`**: a count of runs per file, down or
+   gone, each with its reason in the gate's header; a string is read cooked, so
+   an escaped run counts as the characters it stands for, and a file that loses
+   a run lowers its own row in the same change. The offline fixture library is
+   out of that count -- 489 runs in ten files whose content is the demo shell
+   rather than the page's own words.
+   English source is the repo's rule rather than this page's:
+   `scripts/check_source_language.py` at the root fails a PR that adds a
+   non-English line, and lets one through only by a named zone, the `*.md`
+   suffix, a relocation of the same run, or the file having carried one at the
+   base revision. `ui-web/` is no zone, so that last pass is what the fourteen
+   files above stand on, and `first-frame-literals` is what keeps the pile from
+   growing.
 4. **Portals go at the body**, in the order `state/portals.ts` declares, and a
    place in that order is derived (`BOOT_BODY_ORDER.indexOf`), never written as
    an absolute index. By review, with `src/test/portals.test.ts` reading the
@@ -251,8 +291,22 @@ page's wiring has run. Enforced by `import-direction`.
    exists to make loud, the second makes a missing source silently do nothing.
 3. **`src/app/install.ts` assigns the seam.** The one exception is
    `src/app/boot.ts`'s claim on the first frame, which installs the session
-   source before anything below it reads (`sources.rail`). Nothing outside
-   `src/app/` assigns a member. By review.
+   source (`sources.rail`) because the `holdRail()` on the next line reads it,
+   ahead of the sequence that fills it. Nothing else assigns a member, and
+   `setSources` is the test seam rather than a second door into it.
+   **Enforced by `seam-assignment`**: every `sources.<key> = ...` in the tree
+   is the installer's or that one pinned exception's -- the row pins exactly
+   one assignment, by count, so a second write of the same key in the same file
+   fails rather than inheriting the first one's reason -- `setSources` is named
+   only in a `*.test.ts` file, and `Object.assign(sources, ...)`,
+   `Object.defineProperty(sources, ...)` and a re-export of either name belong
+   to `state/sources.ts`, which declares the seam. The doors are matched
+   against the names a file bound to the seam, so an alias is inside the rule
+   (`const s = sources`, `import { sources as s }`, `import * as s`), and a
+   destructuring target (`({ rail: sources.rail } = x)`) is the write it is.
+   Outside it: the seam handed on as a value rather than under a name -- a
+   function that returns it, a namespace renamed on the way in -- which needs
+   the type checker rather than the syntax.
 4. **One responder module per wire namespace under `src/rpc/fixtures/`**,
    registered in `fixtures/index.ts`. A responder answers the contract and
    nothing else: no clock of its own (the transport hands it `now`), no import
@@ -320,23 +374,82 @@ the `cssPrefix` its manifest declares because it named its classes
 consistently before there was a rule (six do: `kb`, `pb`, `ob`, `pm`, `su`,
 `mem`).
 
+A class the page frame introduces -- `src/chrome/`, `src/App.tsx`,
+`src/main.tsx` -- is named `chrome-<rest>`, or exactly `chrome`. A class a
+shared component in `src/components/` introduces carries its own file's name in
+kebab-case (`Skeleton.tsx` names `skeleton-<rest>`, `SetupSheet.tsx` names
+`setup-sheet-<rest>`), and that component's root class may be the bare name.
+Each file is its own namespace there, and each is held to its own name alone:
+`.model-tags` belongs to `ModelTags.tsx`, so `SetupSheet.tsx` writing it too is
+borrowing and fails -- the check names the borrower, the owner and the file. A
+class belongs to the longest of those names it carries, so an `Agent.tsx` could
+not answer for `AgentMark.tsx`'s classes. Both namespaces are styled from
+`page.css`, which is the only sheet either has, and the check reads that one
+sheet for them -- with its comments stripped first, since a comment saying a
+rule went away is where the name outlives it.
+
+Every `.tsx` under `src/` belongs to one of the three namespaces, and the check
+says so rather than assuming it: a component filed anywhere else is markup no
+list reads.
+
 **Enforced by `check-class-namespace`** (run as a gate by
 `check-class-namespace.test.mjs` and as a CLI), with three shrink-only debts:
-`LEGACY_SHARED` (86 classes two or more domains name, pinned with how many
+`LEGACY_SHARED` (the classes two or more domains name, pinned with how many
 domains each reaches), `LEGACY_LOCAL` (how many of a domain's own classes are
-still unprefixed, 342 in total) and `LEGACY_EXPR` (the same count for the
-literals inside a `className={...}` expression, 91 in total). A new shared
-class fails; one more unprefixed class in a domain fails, in an attribute or in
-an expression. Moving a domain's rules out of `page.css` into its own sheet is
-what lowers a number.
+still unprefixed) and `LEGACY_EXPR` (the same count for the literals inside a
+`className={...}` expression). The tool's OK line prints all three totals, and
+that line is the number to quote. A new shared class fails; one more unprefixed
+class in a domain fails, in an attribute or in an expression. Moving a domain's
+rules out of `page.css` into its own sheet is what lowers a number.
 
-The gate's reach is every class a domain's non-test `.tsx` files name: the
-literal attribute `className="a b"`, and inside a `className={...}` expression
-every single-quoted, double-quoted and template-literal static chunk, split on
-whitespace. A token glued to an interpolation is a stem rather than a class
-(`` `kbf-${family}` `` names `.kbf-md`, never `.kbf-`) and is not read as one.
-An expression cannot tell a class from a comparison operand, which is why its
-literals are counted in their own list rather than mixed into the other two.
+Moving a rule is not yet a mechanical change, and three facts decide how it
+goes:
+
+- **Order flips.** `build.py` reads `styles/page.css`, appends the collected
+  `.modern/domains.css` to it, and splices the pair into the page's one
+  `/*__STYLE__*/` marker. So a rule moved into `features/<domain>/styles.css`
+  lands after the whole of `page.css`, and any same-specificity rule that used
+  to win by source order now loses to it -- or starts winning where it lost.
+- **Nothing checks pixels.** The stylesheet's digest was pinned for the
+  refactor and that gate is retired; what is left records shape, not style. The
+  two boot goldens (`scripts/__golden__/`) and the region goldens
+  (`src/test/__golden__/`) hold each element's tag, id, classes and `data-*`
+  attributes, and `check-css` holds declaration-level invariants. A migration
+  brings its own verification.
+- **`features/extAgents/styles.css` is the exemplar and is empty on purpose.**
+  It establishes the mechanism -- a domain's sheet, imported by its App,
+  collected by Vite -- and says so in its header. No rule has moved yet.
+
+The two namespaces beyond `features/` carry four more shrink-only lists in the
+same tool: `LEGACY_CHROME` (136 unprefixed classes, 103 in the frame and 33 in
+the components), `LEGACY_CHROME_EXPR` (12 more inside a `className={...}`
+expression, 4 and 8), `LEGACY_BORROWED` (the 34 `LEGACY_SHARED` names the two
+help themselves to, 23 and 11, listed by name) and `UNSTYLED` (`.newrun` and
+`.tipdn`, the two classes the frame's markup writes that `page.css` does not
+define). A name in the shared vocabulary passes there too, and so does a name
+already pinned in `LEGACY_SHARED` -- counting the frame's use of a class two
+domains name would say the debt grew when nothing moved, which is what
+`LEGACY_BORROWED` is for: those names pass the counts, so the borrowings
+themselves are pinned and a new one fails.
+
+The gate's reach is every class a domain's non-test `.tsx` and `.ts` files
+name, and the same for the frame's and the shared components'. A class is read
+however it is written: the attribute `className="a b"` in either quote, a
+`class="a b"` inside a string of markup (what `dangerouslySetInnerHTML` is
+handed), a `classList.add()` / `remove()` / `toggle()` / `replace()` call, and
+inside a `className={...}` expression every single-quoted, double-quoted and
+template-literal static chunk, split on whitespace, plus the same again inside
+each `${...}` hole. A token glued to an interpolation is a stem rather than a
+class (`` `kbf-${family}` `` names `.kbf-md`, never `.kbf-`) and is not read as
+one. An expression cannot tell a class from a comparison operand, which is why
+its literals are counted in their own list rather than mixed into the other
+two, and why the defined-in-a-stylesheet half reads every attribute literal but
+only the prefixed literals of an expression.
+
+What the gate cannot read is a class that reaches the attribute as an
+identifier (`className={cls}`, `{...{ className }}`) or under another prop name
+(`cls="x"`); the tool's header says so, and section 11 has the one file where
+that matters at any scale.
 
 ## 8. Tests and gates
 
@@ -370,8 +483,13 @@ literals are counted in their own list rather than mixed into the other two.
    wholesale (`vitest -u`): edit the golden by hand from the same table the
    source change came from, and read the diff back line by line.
 
+No gate asks a module for a suite: nothing above fails because a new module
+arrived without tests, or because a branch of one goes unreached. Whether a
+change brings its tests is a review item, like the nine rules in this file
+whose verifier is a reader rather than a run.
+
 `npm test` is `vitest run` over both trees, so it is every unit suite and every
-gate at once. `README.md` lists the 35 gates and what each pins. `npm run lint`
+gate at once. `README.md` lists the 37 gates and what each pins. `npm run lint`
 is the eslint pass (section 9).
 
 ## 9. Tooling
@@ -414,7 +532,7 @@ tells you what is missing rather than the reader finding out.
 | 1 | Create `features/<domain>/` and write, in this order, `types.ts`, `source.ts` (every method name in the contract), `store.ts` (`makeStore`), `<Domain>App.tsx` (the root subscribes to `lang`), `styles.css` (prefixed classes), `manifest.ts` | `domain-shape` (a missing file or a root named something else), `island-lang` (a root that does not subscribe), `file-names` (a file named against the rule), `store-shape` (a store of its own shape), `rpc-names` (a `gateway()` call outside `source.ts`, or a name the contract does not declare) |
 | 2 | Write `src/rpc/fixtures/<domain>.ts` and register it in `fixtures/index.ts`, typed rather than cast | `offline-coverage` (a method with no answer), `fixture-shape` (an answer the contract does not accept), `fixture-now` (a clock of its own), `tsc` (a missing required field) |
 | 3 | Assign the seam in `src/app/install.ts`: `sources.<domain> = ...`, and declare the key in `manifest.ts`'s `sources` | `domain-registration` (a seam key no domain claims, or two claiming one), `tsc` (a key absent from `Sources`) |
-| 4 | Add the words to `i18n/messages.json` at the repo root, under `gui.<domain>.*` | `i18n-keys` (a key the catalogue lacks, or a shape that is not `gui.<ns>.<leaf>`) |
+| 4 | Add the words to `i18n/messages.json` at the repo root, under `gui.<domain>.*`. `ui-tui` generates its own copy of that file, so run `npm run --prefix ui-tui gen:i18n` and commit the regenerated `ui-tui/src/i18n/messages.generated.ts` in the same change | `i18n-keys` (a key the catalogue lacks, or a shape that is not `gui.<ns>.<leaf>`); the `TUI checks` job in `.github/workflows/ci.yml`, whose `npm run lint:i18n` is that generator in `--check` mode |
 | 5 | If it owns a module page, add its row to `src/state/pages.ts` and claim it in the manifest -- nothing else needs touching, because every other table derives | `domain-registration` (a page declared and unclaimed, or claimed and undeclared), `rail-nav-registry` (a button the rail cannot mark) |
 | 6 | Keep the classes prefixed, and put new rules in the domain's own sheet | `check-class-namespace` (an unprefixed or shared class) |
 | 7 | Define any new term in `CONTEXT.md` in the same change, then run `npm test`, `npm run type-check`, `npm run lint` and the build | by review (the terms), the gates (everything else) |
@@ -441,11 +559,20 @@ shrink-only: the way off a list is the fix.
 | Four more non-store subscriber groups | `app/connection.ts` and `lib/session.ts` are watcher lists rather than stores; `state/caps.ts`'s `switched` and `state/lang/store.ts`'s `afterwards` are second groups beside a store's own subscribers | `store-shape`'s `LISTENERS` |
 | Four modules hold module-level `let` with no reset | Three hold a React root a reset would have to unmount; the fourth is a pinned store | `store-shape`'s `NO_RESET` |
 | `lang.attr(key)` survives beside `t(key)` | It answers `undefined` until a language is picked, which is what keeps nine `data-tip` and twenty-four `aria-label` attributes off the first frame of a page nobody has picked for -- exactly what the served markup carries. Turning them into `t()` would change the DOM the boot and region goldens record | `state/lang/store.ts`'s `picked`, `i18n-keys`'s `KEYED` regex |
-| 86 shared class names, 342 unprefixed local ones and 91 unprefixed inside a `className={...}` | The rules are in `page.css`, whose bytes are what the two boot goldens and the region goldens are taken from; they move a domain at a time. The third list is an upper bound: an expression literal may be a comparison operand rather than a class | `check-class-namespace`'s `LEGACY_SHARED`, `LEGACY_LOCAL` and `LEGACY_EXPR` |
+| 84 shared class names, 357 unprefixed local ones and 91 unprefixed inside a `className={...}` | The rules are in `page.css`, whose bytes are what the two boot goldens and the region goldens are taken from; they move a domain at a time. The third list is an upper bound: an expression literal may be a comparison operand rather than a class. The tool's OK line prints the three totals, and is what to read rather than this row | `check-class-namespace`'s `LEGACY_SHARED`, `LEGACY_LOCAL` and `LEGACY_EXPR` |
+| 136 unprefixed classes in the two namespaces beyond `features/`, 12 more inside a `className={...}` | 103 and 4 in the page frame, 33 and 8 in the shared components. There is no `chrome/styles.css` to move a rule into, so these come down by renaming in `page.css`, in a commit that changes the DOM the goldens record | `check-class-namespace`'s `LEGACY_CHROME` and `LEGACY_CHROME_EXPR` |
+| The two namespaces borrow 34 `LEGACY_SHARED` names | 23 in the page frame and 11 in the shared components, listed by name because a name on a `LEGACY_SHARED` row passes the two counts above on purpose. One of the eleven, `warn`, is `SetupSheet.tsx` comparing a state name inside an expression rather than writing a class | `check-class-namespace`'s `LEGACY_BORROWED` |
+| `.newrun` and `.tipdn` are written and never styled | `src/chrome/Rail.tsx` puts `.newrun` on the new-session button and no rule defines it; taking it out edits `src/test/__golden__/region-app.txt`. `.tipdn` is the flag `state/tooltip.ts` reads with `classList.contains` to hang the hover pill below its control, named only in the `page.css` comment over those rules. `src/components/SetupSheet.tsx` writes two more from inside an expression (`.badtx`, `.warntx`), where the check cannot tell a class from a comparison operand and so does not read them | `check-class-namespace`'s `UNSTYLED` |
+| `src/lib/prose.ts` writes 13 classes that no class namespace holds | It builds the shell's markdown markup as HTML strings (`.cblk`, `.artf`, `.pth` and ten more), and it is a `lib/` module rather than a domain, the page frame or a shared component -- so the gate reads no prefix rule over it. A `lib` namespace would be a fourth prefix invented for one file; the classes belong with the markdown rules in `page.css` until the prose helpers move behind a component | by review (`check-class-namespace` does not read `src/lib/`) |
+| 26 imperative reaches for an element in the page frame | Not the rule's case: a portal at the body, two popovers filling a served list, the island mount boxes, and `chrome/behaviour/`'s grip drag and overlay scrollbars, which are behaviour rather than rendering and own no component tree. Counted so a third such module cannot appear unnoticed | `state-dom-touch`'s `FRAME` |
+| 24 writes of an element's text, class or markup outside `features/` | Rule (a) is a flag on a store's own region; these set `textContent`, `innerHTML` or the class of a node something else rendered. `state/session/registry.ts` and `app/updates.ts` hold four each, and eight more files the rest. A row goes when the markup says the text instead | `state-dom-touch`'s `WRITES` |
+| `state/session/registry.ts` reaches four ids and its header names none | It reaches `#stage`, `#flash`, `#title` and `#ta` through the page's own `$`, while its header is about which conversation the page is on. One sentence in that header takes the row off, and the gate then fails until it is deleted | `state-dom-touch`'s `SILENT` |
 | `.xaedit` keeps its old prefix | Five `page.css` rules scope it; it renames with them | `check-class-namespace`'s `LEGACY_LOCAL.extAgents` |
 | 205 optional contract fields the fixtures never send | Most are one state this canvas is deliberately in; the header names the few a page really draws and this library has never exercised | `fixture-shape`'s `UNSENT` |
 | 18 methods with no offline answer | Each entry says why the offline page has nothing to answer with | `offline-coverage`'s `EXEMPT` |
 | 17 files inside a runtime cycle, in two components | The session knot is the large one; `state/session/naming.ts` is in it because it was carved out of `runtime.ts`, which already was. Inverting `runtime.ts`'s two calls into it is the way back to 16 | `import-direction`'s `CYCLES` and `IN_CYCLES` |
 | 59 cross-domain edges, eight of them the desk's | Splitting the desk out of `features/workspace/` turned eight intra-domain edges into cross-domain ones. Same imports, same runtime edges, two domains | `import-direction`'s `CROSS` |
+| `src/app/boot.ts` assigns one seam key of its own, exactly once | The first frame's claim installs the session source because the `holdRail()` on the next line reads it, and the installer runs later in the boot sequence. The row pins the count, so a second write of `sources.rail` -- spelled as an assignment, a destructuring target, or through a name the file bound to the seam -- is not covered by that reason. Inverting the two is what takes the row off | `seam-assignment`'s `EXCEPTIONS` |
+| 38 non-English runs in 14 files | A run is an unbroken stretch of CJK, the nearest thing to a word in a script written without spaces. Six are the served first frame, which has no catalogue to read; sixteen words and two separators a reader sees before a language is picked, and the boot and region goldens are taken from that frame; thirteen spell out three patterns matched against text and one is a comparison with a served title | `first-frame-literals`'s `PINNED` |
 | `curly` is off | 2,063 one-line guards | `eslint.config.js` |
 | `rpc-schema/openrpc.json` disagrees with its own descriptions in three places | `CronJobInfo.next_run_at_ms` / `last_run_at_ms` are sent as null against an integer schema, and `PlaybookNode.skills` / `mcps` describe three states against an array schema. `Wire<T>` is this page's accommodation; the schema is the cure, and it is outside `ui-web/` | `src/rpc/fixtureTransport.ts`'s header |
