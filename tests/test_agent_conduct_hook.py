@@ -247,7 +247,7 @@ async def test_a_bound_harness_decides_what_a_conducts_verdict_does():
             assert len(conducts) == 1
             return Intake(text=f"{text} (as the module reads it)")
 
-    harness = SimpleNamespace(action=Lenient(), planning=Louder(), memory=Rewriting())
+    harness = SimpleNamespace(action=Lenient(), planning=Louder(), memory=Rewriting(), capability=None)
     with bind_harness(harness):
         decision = await hook.after_iteration(
             _ctx(iteration=1, response=SimpleNamespace(content="draft", tool_calls=None))
@@ -360,3 +360,67 @@ async def test_the_reason_a_resample_was_written_with_reaches_the_loops_notes():
         _ctx(iteration=1, response=SimpleNamespace(content="draft", tool_calls=None))
     )
     assert decision.rollback is True and decision.notes == ["the draft is thin"]
+
+
+@pytest.mark.asyncio
+async def test_every_verb_the_roles_seat_goes_through_them():
+    """Seven verbs have a module seat and the seat asks it. Without this the
+    three that were applied straight off the conduct had nowhere to compose two
+    participants, nowhere to vet an answer, and nothing a replacement could
+    decide -- and no test would have noticed."""
+    from raven.agent.harness import bind_harness
+
+    asked: list[str] = []
+
+    class Memory:
+        async def read_inbound(self, text, step, conducts):
+            asked.append("read_inbound")
+            return None
+
+        async def compose_addendum(self, step, conducts):
+            asked.append("compose_addendum")
+            return None
+
+        async def file_record(self, step, reply, conducts):
+            asked.append("file_record")
+            return None
+
+    class Capability:
+        async def offer(self, offered, step, conducts):
+            asked.append("offer")
+            return None
+
+    class Planning:
+        async def guide(self, step, conducts):
+            asked.append("guide")
+            return None
+
+    class Action:
+        async def judge_step(self, step, conducts):
+            asked.append("judge_step")
+            return Accept()
+
+        async def rescue(self, step, conducts):
+            asked.append("rescue")
+            return None
+
+    hook = ConductHook("probe", lambda: _Recording())
+    harness = SimpleNamespace(memory=Memory(), planning=Planning(), capability=Capability(), action=Action())
+    with bind_harness(harness):
+        ctx = _ctx(iteration=1, inbound_content="q", tools=[{"name": "web_search"}])
+        await hook.before_user_inbound(ctx)
+        await hook.before_iteration(ctx)
+        await hook.before_execute_tools(ctx)
+        await hook.after_iteration(ctx)
+        await hook.terminal_answerless(ctx)
+        await hook.after_send(SimpleNamespace(outbound_content="done", metadata={}))
+
+    assert set(asked) == {
+        "read_inbound",
+        "compose_addendum",
+        "file_record",
+        "offer",
+        "guide",
+        "judge_step",
+        "rescue",
+    }, f"a verb bypassed its role: {sorted(set(asked))}"

@@ -21,7 +21,15 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from raven.agent.harness import current_harness
-from raven.agent.harness.conducts import compose_advice, compose_intake, compose_review, compose_salvage
+from raven.agent.harness.conducts import (
+    compose_addendum,
+    compose_advice,
+    compose_intake,
+    compose_record,
+    compose_review,
+    compose_salvage,
+    compose_tools,
+)
 from raven.contracts.agent_conduct import AgentConduct, ConductFactory, StepView
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 
@@ -234,6 +242,27 @@ class ConductHook(AgentHook):
             return await compose_salvage(step, [conduct])
         return await harness.action.rescue(step, [conduct])
 
+    async def _addendum(self, step: StepView, conduct: AgentConduct):
+        """What this call adds to the system message, composed by Memory."""
+        harness = current_harness()
+        if harness is None:
+            return await compose_addendum(step, [conduct])
+        return await harness.memory.compose_addendum(step, [conduct])
+
+    async def _record(self, step: StepView, reply: str | None, conduct: AgentConduct):
+        """What the turn's record is stamped with, merged by Memory."""
+        harness = current_harness()
+        if harness is None:
+            return await compose_record(step, reply, [conduct])
+        return await harness.memory.file_record(step, reply, [conduct])
+
+    async def _tools(self, offered: list[dict[str, Any]], step: StepView, conduct: AgentConduct):
+        """The tool array this iteration carries, composed by Capability."""
+        harness = current_harness()
+        if harness is None:
+            return await compose_tools(offered, step, [conduct])
+        return await harness.capability.offer(offered, step, [conduct])
+
     async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
         seat = self._seat(ctx, fresh=True)
         text = getattr(ctx, "inbound_content", None) or ""
@@ -256,9 +285,9 @@ class ConductHook(AgentHook):
         self._strip_addendum(ctx, seat)
         step = self._step(ctx, phase="iteration")
         offered = getattr(ctx, "tools", None)
-        narrowed = await conduct.select_tools(list(offered or []), step) if offered is not None else None
+        narrowed = await self._tools(list(offered or []), step, conduct) if offered is not None else None
         note = await self._advise(step, conduct)
-        addendum = await conduct.system_addendum(step)
+        addendum = await self._addendum(step, conduct)
         if addendum is not None and addendum.reply is not None:
             return self._with_trail(
                 seat,
@@ -364,7 +393,7 @@ class ConductHook(AgentHook):
         step = self._step(ctx, phase="sent")
         reply = getattr(ctx, "outbound_content", None) or ""
         sending = await conduct.outbound(reply, step)
-        filed = await conduct.archive(step, reply or None)
+        filed = await self._record(step, reply or None, conduct)
         if filed:
             # Stamped where the loop files a turn's observers: one entry per
             # observer name, merged so another conduct's counters stand.

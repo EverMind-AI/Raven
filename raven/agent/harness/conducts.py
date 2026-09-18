@@ -10,7 +10,7 @@ through every conduct until one ends the turn.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -67,4 +67,66 @@ async def compose_salvage(step: StepView, conducts: Sequence[AgentConduct]) -> A
     return None
 
 
-__all__ = ["compose_advice", "compose_intake", "compose_review", "compose_salvage"]
+async def compose_addendum(step: StepView, conducts: Sequence[AgentConduct]) -> Intake | None:
+    """Every conduct's system addendum, joined in order; the first that answers
+    with a reply instead ends the turn and the joining stops there."""
+    texts: list[str] = []
+    notes: list[str] = []
+    for conduct in conducts:
+        addendum = await conduct.system_addendum(step)
+        if addendum is None:
+            continue
+        if addendum.note:
+            notes.append(addendum.note)
+        if addendum.reply is not None:
+            return Intake(text="", reply=addendum.reply, note="\n".join(notes) or None)
+        if addendum.text:
+            texts.append(addendum.text)
+    if not texts and not notes:
+        return None
+    return Intake(text="\n\n".join(texts), note="\n".join(notes) or None)
+
+
+async def compose_record(
+    step: StepView, reply: str | None, conducts: Sequence[AgentConduct]
+) -> dict[str, dict[str, Any]] | None:
+    """What every conduct files on the turn's record, merged by observer name:
+    a later conduct's counters join an earlier one's rather than replacing them,
+    so two participants stamping the same name both survive."""
+    filed: dict[str, dict[str, Any]] = {}
+    for conduct in conducts:
+        stamped = await conduct.archive(step, reply)
+        if not stamped:
+            continue
+        for name, counters in stamped.items():
+            if isinstance(counters, Mapping):
+                filed.setdefault(name, {}).update(dict(counters))
+            else:
+                filed[name] = counters
+    return filed or None
+
+
+async def compose_tools(
+    offered: list[dict[str, Any]], step: StepView, conducts: Sequence[AgentConduct]
+) -> list[dict[str, Any]] | None:
+    """The tool array each conduct leaves for the next, threaded in order. None
+    when nobody changed it, so the seat can tell "no opinion" from "this array"."""
+    current = list(offered)
+    changed = False
+    for conduct in conducts:
+        answer = await conduct.select_tools(list(current), step)
+        if answer is not None and answer != current:
+            current = list(answer)
+            changed = True
+    return current if changed else None
+
+
+__all__ = [
+    "compose_addendum",
+    "compose_advice",
+    "compose_intake",
+    "compose_record",
+    "compose_review",
+    "compose_salvage",
+    "compose_tools",
+]

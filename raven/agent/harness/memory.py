@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.agent.harness.conducts import compose_intake
+from raven.agent.harness.conducts import compose_addendum, compose_intake, compose_record
 from raven.agent.window import compaction, shrink
 from raven.contracts.agent_conduct import AgentConduct, Intake, StepView
 from raven.contracts.assembled import TokenBudget
@@ -383,6 +383,14 @@ class DefaultMemory:
 
     async def read_inbound(self, text: str, step: StepView, conducts: Sequence[AgentConduct]) -> Intake | None:
         return await compose_intake(text, step, conducts)
+
+    async def compose_addendum(self, step: StepView, conducts: Sequence[AgentConduct]) -> Intake | None:
+        return await compose_addendum(step, conducts)
+
+    async def file_record(
+        self, step: StepView, reply: str | None, conducts: Sequence[AgentConduct]
+    ) -> dict[str, dict[str, Any]] | None:
+        return await compose_record(step, reply, conducts)
 
 
 def bind(memory: DefaultMemory) -> MemoryModule:
