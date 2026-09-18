@@ -1366,12 +1366,20 @@ def test_doctor_fix_leaves_an_endpoint_no_provider_answers_for(
     healthy_config: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Nowhere for the key to live, and inventing a provider row from a bare URL
-    would be a worse guess than saying nothing."""
+    would be a worse guess than saying nothing.
+
+    And it says so rather than reporting the move applied: told the endpoint had
+    been carried across, an operator has no reason to look at where it still is,
+    and the next run offers the same fix again.
+    """
     _legacy_embedding(monkeypatch, tmp_path, present=True, base_url="https://nobody.test/v1")
 
-    runner.invoke(app, ["doctor", "--fix"])
+    result = runner.invoke(app, ["doctor", "--fix"])
 
     assert "embedding" not in json.loads(healthy_config.read_text(encoding="utf-8"))
+    out = " ".join(result.stdout.split())
+    assert "fixed copy the embedding endpoint" not in out, "a move that did not happen is not a fix"
+    assert "nowhere for its key to live" in out
 
 
 def test_doctor_says_nothing_when_there_is_nothing_to_move(

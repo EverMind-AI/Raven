@@ -92,33 +92,6 @@ def _legacy_everos_config_path() -> Path | None:
     return None
 
 
-def _provider_serving(base_url: str) -> str | None:
-    """Which configured provider answers at ``base_url``, if any.
-
-    The migration's one hard part: the retired block stored an address, the
-    block replacing it names a provider, and only the configured providers can
-    say which of them is that address. Compared on the host and path with a
-    trailing slash removed, because the two spellings are the same endpoint and
-    the config may hold either.
-    """
-    try:
-        from raven.config.update_providers import list_providers, resolve_provider_credentials
-    except Exception:  # noqa: BLE001 - nothing to match against
-        return None
-    want = base_url.rstrip("/")
-    for row in list_providers():
-        name = str(row.get("name") or "")
-        if not name:
-            continue
-        try:
-            resolved = resolve_provider_credentials(name)
-        except Exception:  # noqa: BLE001 - one unusable provider must not stop the search
-            continue
-        if resolved and resolved[0].rstrip("/") == want:
-            return name
-    return None
-
-
 def endpoint_is_ravens_own() -> bool:
     """Whether raven's own block names the endpoint every reader uses.
 
@@ -152,7 +125,9 @@ def adopt_legacy_endpoint(raw: dict) -> bool:
     legacy = read_legacy_embedding()
     if legacy is None:
         return False
-    provider = _provider_serving(legacy.base_url)
+    from raven.config.update_providers import provider_serving_at
+
+    provider = provider_serving_at(legacy.base_url)
     if provider is None:
         logger.warning(
             "knowledge: the EverOS endpoint at {} is not served by any configured provider, so it "
