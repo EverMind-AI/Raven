@@ -887,6 +887,15 @@ VENDORED_TOOL_FACE = {
 #: hold the line (Rank A audit, G1).
 ACP_HOST_EXTRAS = {"cron"}
 
+#: Tools a distributed plugin contributes through the entry-point lane, which
+#: this hermetic fixture cannot see either. Turning everos-memory on for the
+#: backend also offers its ``understand_media`` tool, and memory boarding a
+#: media tool onto the coding face as a side effect is exactly the kind of
+#: unledgered move this file exists to refuse -- so the disable row is the
+#: pin, as it is for the playbook rows above. raven-research holds the same
+#: line; design, oncall and ppt serve the tool deliberately.
+PLUGIN_LANE_WITHHELD = {"understand_media"}
+
 #: Tools trunk grew after the fork was cut and this product withholds.
 #: ``find_skill`` left for the skill lane above; the rest stay off the face.
 TRUNK_NEW_WITHHELD = {
@@ -927,6 +936,10 @@ def test_the_products_tool_face_is_the_forks_config_intent_minus_the_ledger(grou
     disabled = set(json.loads((RUN_PY.parent / "config.json").read_text())["tools"]["disabledTools"])
     assert TRUNK_NEW_WITHHELD <= disabled, "the withheld trunk-new tools stay disabled by config, not by luck"
     assert SKILL_LANE_TOOLS & disabled == set(), "the skill lane is open by config, not by luck"
+    assert PLUGIN_LANE_WITHHELD <= disabled, (
+        "everos-memory's tool contribution boards through plugin discovery, which this fixture "
+        "does not run: the disable row is the only pin keeping the plugin's media tool off the face"
+    )
     rendered_disabled = set(json.loads(_render(grounded).read_text())["tools"]["disabledTools"])
     superseded = grounded.superseded_host_tools()
     assert set(superseded) <= rendered_disabled, "a host name this face replaces is withheld while it serves"
