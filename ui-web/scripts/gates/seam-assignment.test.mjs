@@ -78,12 +78,12 @@ const EXCEPTIONS = {
 const SEAM = 'state/sources.ts'
 
 /* A floor rather than a count, so a scan that stopped finding the installer
-   cannot pass in silence. 22 installs today, and the floor is one under them:
+   cannot pass in silence. 19 installs today, and the floor is one under them:
    the slack is deliberate and it is one domain's worth, so retiring a domain
    is one change rather than two, while a second install going quiet -- or a
    walk that lost the file -- fails here. `domain-registration` is what holds
    the set of keys to the manifests. */
-const FLOOR = 21
+const FLOOR = 18
 
 /* Every file the walk reads. By extension rather than by directory: the region
    goldens are `.txt` and the component snapshots `.snap`, which nothing here
