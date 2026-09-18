@@ -52,13 +52,26 @@ class StepView:
     rollbacks: int
     mode: str | None
     mode_overlay: Mapping[str, Any] | None
-    tools_ran: bool
+    phase: str
+    """Which moment of the turn this is: ``user_inbound``, ``iteration``,
+    ``execute_tools``, ``after_iteration``, ``answerless`` or ``sent``. Two
+    verbs are asked at more than one of them -- ``review`` before a step's tools
+    run and again after, ``advise`` before the call and after it -- and a
+    participant that behaves differently at each should read this rather than
+    infer it from which other fields happen to be set."""
     tools: Sequence[dict[str, Any]] = ()
     """The tool definitions this call will carry, for a conduct sizing what it adds."""
     window: int | None = None
     """The context window the loop was told to assume, in tokens -- the sizing
     fallback for a caller with no active model binding to consult."""
     max_iterations: int | None = None
+
+    @property
+    def tools_ran(self) -> bool:
+        """Whether this step's tool calls have run, for the two ``review``
+        moments. Derived from ``phase`` so the two cannot disagree."""
+        return self.phase == "after_iteration"
+
     """The loop's iteration cap this turn, for a conduct that paces itself against it."""
 
 
@@ -164,7 +177,14 @@ class AgentConduct:
         ``reply + its own separator + its text``, and one that rewrites returns
         the rewrite, so neither has to be recovered from a prefix the host
         guesses at. The reply has already gone out; this is what the record and
-        every later reader see."""
+        every later reader see.
+
+        The one verb with no module seat, on purpose. The four roles are the
+        turn's *decisions* -- the window, the guidance, the tools, the model
+        call -- and none of them owns what a turn finally delivers to a person.
+        The host applies this one directly, which also means it is the one verb
+        a generated participant cannot be given: there is nothing to compose it
+        with and nothing to vet it."""
         return None
 
     async def archive(self, step: StepView, reply: str | None) -> Mapping[str, Mapping[str, Any]] | None:
@@ -172,9 +192,6 @@ class AgentConduct:
         back what it stamps on the turn's record -- observer name to counters --
         for the host to file with the reply."""
         return None
-
-    async def observe(self, step: StepView) -> None:
-        """Record without deciding."""
 
     def note(self, text: str) -> None:
         """A line for the turn's diagnostic trail, beside whatever the verb

@@ -163,6 +163,24 @@ what a plugin's judgement does. 28 lines of protocol and prose; the
 composition rules themselves live in the harness, not here.
 
 Measured at 3,406, thirty-four over the count, for the reason given above.
+
+And once more, 3,440 -> 3,470, for the closeout of the conduct contract
+(2026-09-18). Four changes, all of them narrowing what the paper claims rather
+than widening it: ``observe`` is gone, because a verb with no return value
+decides nothing and can only keep the state a participant is forbidden to
+keep; ``outbound`` says on its own docstring that it is the one verb with no
+module seat and therefore the one a generated participant cannot be handed;
+``StepView`` gains ``phase``, so a verb asked at two moments reads which one it
+is instead of inferring it from whichever other field happens to be set, and
+``tools_ran`` becomes a property derived from it so the two cannot disagree;
+and the four delegating role methods are named apart from the verbs they ask
+(``read_inbound`` asks ``intake``, ``guide`` asks ``advise``, ``judge_step``
+asks ``review``, ``rescue`` asks ``salvage``), so a reader of either name knows
+which layer they are on.
+
+Measured at 3,444. The headroom is the twenty-odd this docstring has argued
+for since the first bump, not room set aside to spend.
+
 """
 
 from __future__ import annotations
@@ -173,7 +191,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 3_440
+CONTRACTS_LINE_CEILING = 3_470
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 

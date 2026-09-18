@@ -58,10 +58,10 @@ class DefaultAction:
 
         return charter_judge(name, params, prior)
 
-    async def review(self, step: StepView, conducts: Sequence[AgentConduct]) -> Verdict:
+    async def judge_step(self, step: StepView, conducts: Sequence[AgentConduct]) -> Verdict:
         return await compose_review(step, conducts)
 
-    async def salvage(self, step: StepView, conducts: Sequence[AgentConduct]) -> Any | None:
+    async def rescue(self, step: StepView, conducts: Sequence[AgentConduct]) -> Any | None:
         return await compose_salvage(step, conducts)
 
     async def decide(self, request: ActionRequest) -> "LLMResponse":
@@ -93,7 +93,9 @@ def bind(action: DefaultAction) -> ActionModule:
     every call a dispatch's Charter refuses through.
     """
     if not isinstance(action, ActionModule):
-        raise TypeError(f"{type(action).__name__} cannot serve as the Action role: it must provide decide and judge")
+        raise TypeError(
+            f"{type(action).__name__} cannot serve as the Action role: it must provide decide, judge, judge_step and rescue"
+        )
     return action
 
 

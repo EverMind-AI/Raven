@@ -381,7 +381,7 @@ class DefaultMemory:
     async def after_turn(self, session_key: str, outcome: dict[str, Any]) -> None:
         await self._engine.after_turn(session_key, outcome)
 
-    async def intake(self, text: str, step: StepView, conducts: Sequence[AgentConduct]) -> Intake | None:
+    async def read_inbound(self, text: str, step: StepView, conducts: Sequence[AgentConduct]) -> Intake | None:
         return await compose_intake(text, step, conducts)
 
 
@@ -391,7 +391,7 @@ def bind(memory: DefaultMemory) -> MemoryModule:
     if not isinstance(memory, MemoryModule):
         raise TypeError(
             f"{type(memory).__name__} cannot serve as the Memory role: it must provide "
-            "owns_compaction, candidate_messages, token_budget, assemble, shrink, intake and after_turn"
+            "owns_compaction, candidate_messages, token_budget, assemble, shrink, read_inbound and after_turn"
         )
     return memory
 

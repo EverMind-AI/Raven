@@ -33,7 +33,7 @@ class DefaultPlanning:
     async def prepare(self, request: PlanningRequest) -> PlanningResult:
         return PlanningResult(messages=request.messages)
 
-    async def advise(self, step: StepView, conducts: Sequence[AgentConduct]) -> str | None:
+    async def guide(self, step: StepView, conducts: Sequence[AgentConduct]) -> str | None:
         return await compose_advice(step, conducts)
 
 
@@ -48,7 +48,7 @@ def bind(planning: DefaultPlanning) -> PlanningModule:
     """
     if not isinstance(planning, PlanningModule):
         raise TypeError(
-            f"{type(planning).__name__} cannot serve as the Planning role: it must provide prepare and advise"
+            f"{type(planning).__name__} cannot serve as the Planning role: it must provide prepare and guide"
         )
     return planning
 
