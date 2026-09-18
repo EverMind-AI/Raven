@@ -217,8 +217,12 @@ const UNSENT = new Set([
   'session.resume.info.config_notices', 'session.resume.info.endpoint', 'session.resume.info.update_available', 'session.resume.info.update_command', 'session.resume.info.usage.context_estimated', 'session.resume.messages[].context', 'session.resume.messages[].dag_run_id', 'session.resume.messages[].delegated', 'session.resume.messages[].diff', 'session.resume.messages[].notice', 'session.resume.messages[].origin', 'session.resume.messages[].reasoning_ms', 'session.resume.messages[].spawn_task_id', 'session.resume.messages[].turn_ended',
   // settings.everos: 1
   'settings.everos.note',
-  // settings.usage: 5
-  'settings.usage.llm.total.input_missing_calls', 'settings.usage.llm.total.output_missing_calls', 'settings.usage.session_key', 'settings.usage.session_titles', 'settings.usage.sessions',
+  // settings.everosSet: 1 -- the gateway's re-index warning, which only a real embedding move raises
+  'settings.everosSet.warning',
+  // settings.set: 1 -- the gateway's reload-only warning, which the key the gate writes (a live one) never raises
+  'settings.set.warning',
+  // settings.usage: 3
+  'settings.usage.session_key', 'settings.usage.session_titles', 'settings.usage.sessions',
   // subagents.list: 3
   'subagents.list.rows[].building', 'subagents.list.rows[].stateful', 'subagents.list.rows[].upgrade_to',
   // subagents.probe: 2

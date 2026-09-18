@@ -1852,7 +1852,7 @@ describe('reported usage', () => {
       cache_write_missing_calls: 2, legacy_cost_calls: 1,
     }
     install(snap(), { usage: async () => ({
-      days: 30, llm: { total, models: [{ model: 'test-model', ...total }] },
+      days: 30, from: '2026-01-01', to: '2026-01-30', daily: [], llm: { total, models: [{ model: 'test-model', ...total }] },
       tools: { total: 0, counts: [] },
     }) })
     await mount()
@@ -1875,7 +1875,7 @@ it('shows unknown tokens for an image model that only reports money', async () =
     cache_write_missing_calls: 1, legacy_cost_calls: 0,
   }
   install(snap(), { usage: async () => ({
-    days: 30, llm: { total, models: [{ model: 'image-model', ...total }] },
+    days: 30, from: '2026-01-01', to: '2026-01-30', daily: [], llm: { total, models: [{ model: 'image-model', ...total }] },
     tools: { total: 1, counts: [{ name: 'image_generate', count: 1 }] },
   }) })
   await mount()
@@ -1895,7 +1895,8 @@ it.each([null, 0, 0.75])('renders persisted reported cost %s without treating un
     cache_write_missing_calls: 2, legacy_cost_calls: 1,
   }
   install(snap(), { usage: async () => ({
-    days: 30, llm: { total, models: [{ model: 'reported-model', ...total }] },
+    days: 30, from: '2026-01-01', to: '2026-01-30', daily: [],
+    llm: { total, models: [{ model: 'reported-model', ...total }] },
     tools: { total: 0, counts: [] },
   }) })
   await mount()

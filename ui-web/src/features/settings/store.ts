@@ -400,6 +400,9 @@ export async function usageLoad(): Promise<void> {
     if (usage === undefined) {
       usage = {
         days: 30,
+        from: '',
+        to: '',
+        daily: [],
         llm: { total: {
           calls: 0, input_tokens: 0, output_tokens: 0, cost_usd: null,
           cache_read_tokens: null, cache_write_tokens: null, cost_missing_calls: 0,

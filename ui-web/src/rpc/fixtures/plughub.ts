@@ -127,6 +127,8 @@ export function createPlughub(_env: FixtureEnv, ext: ExtFixture): PlughubFixture
         const server: ExtFixture['mcp'][number] = {
           name: it.id, transport: 'http', state: 'connected', connected: true,
           tool_count: (preview.tools_preview || []).length, enabled: true,
+          /* A fresh install from this canvas holds whatever its form asked for. */
+          auth: 'none', credentialed: true,
         }
         if (!serverOf(it.id)) ext.mcp.push(server)
         return {
