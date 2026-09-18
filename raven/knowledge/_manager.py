@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
 from time import perf_counter
+from typing import Any
 
 from loguru import logger
 
@@ -90,6 +91,28 @@ class SearchOutcome:
     #: reason is the same sentence the base would have failed with, so it
     #: still says what to fix.
     by_keyword: dict[str, str] = field(default_factory=dict)
+
+
+def _serves(endpoint: Any, model: str, provider: str) -> bool:
+    """Whether the configured endpoint is the one this pair names.
+
+    Both halves, always. A model id does not name a credential -- which is why
+    a base records the provider beside it -- so matching on the id alone hands
+    a base recorded against one account to whatever account the pin happens to
+    name today. Two providers reselling the same model is the ordinary case
+    that makes it wrong: the query goes out on the wrong key, against vectors
+    the other endpoint produced, and the base falls back to keywords the moment
+    the pin's provider is the one that is down.
+
+    An empty ``provider`` is a base written before the field existed, and means
+    "wherever this is configured" -- the one case where the id alone decides.
+
+    Duck-typed because the same question is asked of a config and of a client,
+    and asking it three different ways is how the three answers drifted apart.
+    """
+    if endpoint is None or getattr(endpoint, "model", "") != model:
+        return False
+    return not provider or getattr(endpoint, "provider", "") == provider
 
 
 def chunk_id_for(document_id: str, text: str, occurrence: int = 0) -> str:
@@ -260,7 +283,7 @@ class KnowledgeManager:
         an embedder) is pointing at.
         """
         configured = self._embedding or load_embedding_config()
-        if configured is not None and configured.model == model and (not provider or configured.provider == provider):
+        if _serves(configured, model, provider):
             return embedding_client(configured)
         if not provider:
             return embedding_client(asking_for(self._endpoint(), model))
@@ -281,8 +304,12 @@ class KnowledgeManager:
 
         Three cases, in the order they are tried:
 
-        - the base wants what is configured now (the common one, and the only
-          one before this existed): today's client, unchanged;
+        - the base wants what is configured now -- the same model *and*, when
+          it recorded one, the same provider (the common case, and the only
+          one before this existed): today's client, unchanged. Both halves,
+          because two providers reselling one model id is ordinary, and
+          matching the id alone sends a base's queries out on another
+          account's key against vectors that account did not make;
         - the base recorded its provider: that provider's endpoint, asked for
           the base's model, because a model id does not name a credential;
         - the base recorded a model but no provider (every base written before
@@ -299,7 +326,7 @@ class KnowledgeManager:
         a configured endpoint, and only it raises when there is none.
         """
         configured = self._configured_client()
-        if configured is not None and base.embedding_model == configured.model:
+        if configured is not None and _serves(configured, base.embedding_model, base.embedding_provider):
             return configured
 
         cached = self._clients.get((base.embedding_provider, base.embedding_model))
@@ -367,7 +394,7 @@ class KnowledgeManager:
         if not self.embeds(base):
             return ""
         configured = self._embedding or load_embedding_config()
-        if configured is not None and base.embedding_model == configured.model:
+        if _serves(configured, base.embedding_model, base.embedding_provider):
             return ""
         if base.embedding_provider:
             if embedding_config_for(base.embedding_provider, base.embedding_model) is not None:

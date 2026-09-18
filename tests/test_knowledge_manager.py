@@ -641,6 +641,56 @@ async def test_switching_to_what_the_base_already_has_changes_nothing(manager) -
     assert manager.get_document(doc.id).status == "ready"
 
 
+async def test_a_base_keeps_its_own_provider_when_the_model_ids_collide(manager, endpoints) -> None:
+    """Two providers reselling one model id is ordinary, and the id alone does
+    not name a credential -- which is the whole reason a base records the
+    provider beside it. Matching on the id, the base's queries went out on the
+    pinned account's key against vectors the other account had made, and fell
+    back to keywords whenever the pinned one was the one that was down."""
+    base, _ = await _ready_base(manager)
+    manager.configure_base(base.id, embedding_provider="siliconflow")
+    # The pin serves the same model id, through somebody else.
+    manager.stub.provider = "dashscope"
+
+    client = manager._client_for(manager.get_base(base.id))
+
+    assert endpoints.built[-1].provider == "siliconflow", "the account the base records"
+    assert client is not manager.stub, "and not the pinned one that happens to share the id"
+
+
+async def test_reach_asks_about_the_provider_the_base_records(manager, monkeypatch) -> None:
+    """The other half of the same predicate. Answering from the model id alone
+    called a base reachable because the *pin* was usable, while the account it
+    actually queries through had no credential left."""
+    base, _ = await _ready_base(manager)
+    manager.configure_base(base.id, embedding_provider="gone")
+    manager.stub.provider = "dashscope"
+    monkeypatch.setattr("raven.knowledge._manager.embedding_config_for", lambda *a, **k: None)
+
+    assert manager.embedding_reach(manager.get_base(base.id)) == "no_credential"
+
+
+async def test_a_base_on_the_pin_itself_still_takes_it(manager) -> None:
+    """The common case, and the one the check above must not cost: same model,
+    same provider, today's client unchanged."""
+    base, _ = await _ready_base(manager)
+    manager.stub.provider = "siliconflow"
+    manager.configure_base(base.id, embedding_provider="siliconflow")
+
+    assert manager._client_for(manager.get_base(base.id)) is manager.stub
+
+
+async def test_a_base_with_no_provider_recorded_still_follows_the_pin(manager) -> None:
+    """An empty provider means "wherever this is configured", which is every
+    base written before the field existed -- the one case where the model id
+    alone decides."""
+    base, _ = await _ready_base(manager)
+    manager.stub.provider = "dashscope"
+
+    assert manager.get_base(base.id).embedding_provider == ""
+    assert manager._client_for(manager.get_base(base.id)) is manager.stub
+
+
 def _clear_the_pin(manager, monkeypatch) -> None:
     """Leave the deployment with no configured embedding endpoint at all.
 
