@@ -3,9 +3,9 @@
  *
  * A run in flight has to move on screen without being reopened, and there is
  * no push for it: the source polls and forwards, and every judgement about what
- * that takes belongs to the island that is drawing it. The interval was
- * untested while it lived in the legacy layer, which is the half a rewrite can
- * silently drop -- nothing else fails when a panel merely stops refreshing.
+ * that takes belongs to the island that is drawing it. The interval is the
+ * half that can be dropped silently -- nothing else fails when a panel merely
+ * stops refreshing.
  *
  * Opened by the page's wiring, beside the handlers for the pushes that do
  * exist (src/app/install.ts), so that is what this drives.

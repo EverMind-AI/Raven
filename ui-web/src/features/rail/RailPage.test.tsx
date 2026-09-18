@@ -80,10 +80,10 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
 /* The installed source, for the cases that add a write verb to it. */
 const src = (): RailSource => sources.rail as RailSource
 
-/* The nav the assembled page hands over (demo/155-bridge.js reads it off
-   NAV_OF and MORE_ROWS): every module page, the rail button each one lights
-   up, and the More group's rows in their drawn order. The default fake above
-   hands over an empty one, which is the whole page shut. */
+/* The nav the assembled page hands over (state/page.ts's navState, off the
+   page table): every module page, the rail button each one lights up, and the
+   More group's rows in their drawn order. The default fake above hands over an
+   empty one, which is the whole page shut. */
 const PAGES = ['capsPage', 'extAgentsPage', 'connectionsPage', 'memoryPage', 'cronPage']
 const BTN_OF: Record<string, string> = {
   capsPage: 'skillBtn',

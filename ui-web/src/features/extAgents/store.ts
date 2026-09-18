@@ -7,10 +7,10 @@ import { show as toast } from '../../state/toast'
 
 import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource } from './types'
 
-/* Page state, outside React on purpose: the legacy shell drives this page
- * imperatively (the More row opens it, Esc closes it, a language flip
- * redraws it), so the state lives in a plain store the shims can call,
- * and the component subscribes.
+/* Page state, outside React on purpose: two of the callers that drive this page
+ * are not React. The More row opens it (state/navfly.ts) and Esc closes it
+ * (state/escapeOrder.ts) -- so the state lives in a plain store those two can
+ * call, and the component subscribes.
  */
 
 export interface ExtAgentsState {
@@ -19,8 +19,7 @@ export interface ExtAgentsState {
      is drawn, so it does not belong to whichever source is answering. */
   sheet: string | null
   /* Bumped when the rows are replaced: the sheet's form is uncontrolled and
-     mutated in place, so a fresh answer remounts it -- the same wholesale
-     redraw the legacy xaSheetDraw performed after every mutation. */
+     mutated in place, so a fresh answer remounts it. */
   epoch: number
   /* Names this page has a test in flight for. The rows carry the server's own
      `test_running`, but they are only re-read when a call returns and a test

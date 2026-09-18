@@ -1,20 +1,13 @@
 /* Every method name the page calls is one the contract declares.
  *
- * Written against the legacy layer, which was plain JavaScript: there
- * `gateway().call('sessoin.list', ...)` type checked as readily as the spelling
- * that exists, because the compiler only saw the transport's signature where
- * the caller was TypeScript. A misspelt name is a -32601 at the moment a reader
- * opens the page that makes it, which is the one failure this refactor was
- * supposed to end.
- *
- * The layer is gone and tsc now sees every call site, so what this is still for
- * is the unchecked escape hatch: `callUnchecked` takes a plain string on either
- * side of the line, and this is what keeps it to the two names it was opened
- * for. They answer -32601 today and must go on doing so rather than being typed
- * into existence or silently dropped. The names are collected from the source
- * with the TypeScript API (scripts/gates/rpcCalls.mjs, which offline-coverage
- * reads too) and held to RPC_METHODS, which is generated from
- * rpc-schema/openrpc.json.
+ * tsc sees every typed call site, so what this is for is the unchecked escape
+ * hatch: `callUnchecked` takes a plain string on either side of the line, and
+ * this is what keeps it to the two names it was opened for. They answer -32601
+ * today and must go on doing so rather than being typed into existence or
+ * silently dropped -- a misspelt name is a -32601 at the moment a reader opens
+ * the page that makes it. The names are collected from the source with the
+ * TypeScript API (scripts/gates/rpcCalls.mjs, which offline-coverage reads too)
+ * and held to RPC_METHODS, which is generated from rpc-schema/openrpc.json.
  */
 
 import { readdirSync, readFileSync } from 'node:fs'

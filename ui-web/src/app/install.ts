@@ -2,13 +2,11 @@
  * handful of controls whose action belongs to the session rather than to the
  * chrome that carries them.
  *
- * Every line here was one file of the live layer -- twenty parts whose whole
- * body was an `install()` putting one feature's `source.ts` on the seam. They
- * are four lists now, in the order the manifest ran them, and the order is
- * load-bearing in exactly two places, both marked below.
+ * Four lists, each line putting one feature's `source.ts` on the seam, and the
+ * order is load-bearing in exactly two places, both marked below.
  *
- * Called once, from the boot (app/boot.ts), after the legacy chrome has
- * installed itself. Split into four rather than one so a test can drive the
+ * Called once, from the boot (app/boot.ts's `boot`). Split into four rather
+ * than one so a test can drive the
  * half it is about: the seam touches nothing but `sources`, while the pushes
  * need a transport and the actions need the document.
  */

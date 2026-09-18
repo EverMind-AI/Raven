@@ -85,8 +85,7 @@ function Launch(): JSX.Element {
 
 function Changes({ ws }: { ws: WsShared }): JSX.Element {
   /* The flash class rides one render and the flag drops once painted, so
-     the next arrival can raise it again -- the legacy renderer cleared it
-     while rebuilding the row. */
+     the next arrival can raise it again. */
   useEffect(() => {
     ws.changes.forEach((c) => { c.flash = false })
   })

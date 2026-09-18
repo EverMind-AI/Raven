@@ -1,8 +1,7 @@
 // @vitest-environment happy-dom
 /* The four row builders one `ext.list` read fans out into, and the hub's i18n
- * objects flattened to the one language the island sees. Untested while they
- * lived in the legacy layer, and each carries a rule a reading of the code
- * alone does not make obvious.
+ * objects flattened to the one language the island sees. Each carries a rule a
+ * reading of the code alone does not make obvious.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'

@@ -129,7 +129,7 @@ describe('desk store', () => {
     panelCalls.length = 0
     desk.openDeskFile('/workspace/a.ts')
     /* Opening the workspace runs a full workspace draw; asking for one while it
-       is already open rebuilt the legacy panel's islands for nothing. */
+       is already open rebuilds the pane's islands for nothing. */
     expect(panelCalls).toHaveLength(0)
 
     split().dataset.open = 'false'
@@ -190,9 +190,10 @@ describe('desk store', () => {
     expect(desk.get().solo).toBeNull()
   })
 
-  /* The desk cannot show itself: the panel it sits in belongs to the legacy
-     chrome. Opening the first pane has to raise it, and closing the last one
-     has to drop it, or the reader is left with an empty panel standing open. */
+  /* The desk cannot show itself: the pane it sits in belongs to the page chrome
+     (state/ws.ts, reached through state/wsPane.ts). Opening the first pane has
+     to raise it, and closing the last one has to drop it, or the reader is left
+     with an empty pane standing open. */
   it('raises the panel for the first pane and drops it with the last', () => {
     desk.openDeskFile('/workspace/a.ts')
     expect(panelCalls).toContain(true)
@@ -995,8 +996,8 @@ describe('choosing a tab on the way up', () => {
     expect(desk.get().tab).toBe('diff')
   })
 
-  /* Naming a tab beats guessing one: this is the legacy shell asking for a
-     particular view of the desk. */
+  /* Naming a tab beats guessing one: this is the pane (state/ws.ts) asking for
+     a particular view of the desk. */
   it('does not overrule a caller that named the tab', () => {
     deliver('/w/a.md')
     desk.openDeskTab('diff')

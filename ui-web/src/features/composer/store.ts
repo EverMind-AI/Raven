@@ -496,9 +496,7 @@ export function fireSend(): void {
   if (source().beforeSend?.()) return
   /* The tray is this island's, and so is what becomes of a staged file when the
      message leaves: the note is what the reader's own bubble renders from and
-     what survives into session history. The page layer used to do this by
-     reaching back in here (islands.composer.attsPending / takeAtts), which
-     was the only direction available while `send` was a shell verb. */
+     what survives into session history. */
   const pending = attsPending()
   if (pending) {
     /* Before the field is cleared, which is a change: the page layer ran this

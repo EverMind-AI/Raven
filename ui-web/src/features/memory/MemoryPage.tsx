@@ -51,8 +51,8 @@ function Tile({ name }: { name: string }): JSX.Element {
   return <span className={'pmtile th' + (h % 8)}>{(name[0] || '?').toUpperCase()}</span>
 }
 
-/* Two-click armed delete, like the legacy memArm: the first click turns the
-   button into its own confirm for four seconds, the second fires. */
+/* Two-click armed delete: the first click turns the button into its own confirm
+   for four seconds, the second fires. */
 function ArmedDelete({ onFire, style }: { onFire: () => void; style?: CSSProperties }): JSX.Element {
   const [armed, setArmed] = useState(false)
   useEffect(() => {

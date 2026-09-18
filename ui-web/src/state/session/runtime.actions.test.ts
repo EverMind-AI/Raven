@@ -272,8 +272,8 @@ interface Answer {
 /* The rail verbs as the page's wiring and its session source install them.
    The rest of those parts reaches for dozens of collaborators that have
    nothing to do with the decision under test, so those are fakes; the decision
-   is the part's own. `islands.rail.removeRow` is what "the row goes" means --
-   nothing else in leaveDeletedSession is visible from outside it. */
+   is the part's own. The rail store's `removeSessionRow` is what "the row goes"
+   means -- nothing else in leaveDeletedSession is visible from outside it. */
 async function railHarness(
   answer: Answer | Error | ((method: string, params: Record<string, unknown>) => unknown),
   { rows = [] as Row[], current = null as string | null } = {},

@@ -54,9 +54,10 @@ export function setDefaultPair(model: string, provider: string): void {
   defaultProviderLive = provider
 }
 
-/* The composer's model chip is still legacy chrome (#modelName / #modelChip,
-   redrawn by `redrawAll`), so the page publishes its painter here rather than
-   this module reaching into the DOM. Stage C makes the chip a component. */
+/* The composer's model chip is written by id rather than rendered (#modelName /
+   #modelChip, features/model/chip.ts), so its painter is published here
+   (features/settings/wire.ts) rather than this module reaching into the DOM.
+   Stage C makes the chip a component. */
 let paintChip: () => void = () => {}
 export function setChipPainter(fn: () => void): void {
   paintChip = fn

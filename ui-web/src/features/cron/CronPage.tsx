@@ -335,9 +335,9 @@ function CronDetail({ job, draft, rev, lang }: { job: CronJob; draft: CronDraft;
 /* create / edit -- one form, two hosts: the new-job sheet and the detail
    page's config card both edit the same draft shape.
 
-   Inputs are uncontrolled on purpose, mirroring the legacy form: a keystroke
-   mutates the draft object and re-renders nothing, so focus and IME
-   composition survive; only a frequency change or a refusal redraws. The
+   Inputs are uncontrolled on purpose: a keystroke mutates the draft object and
+   re-renders nothing, so focus and IME composition survive; only a frequency
+   change or a refusal redraws. The
    store's epoch key remounts this subtree whenever a draft is replaced. */
 function JobForm({ draft }: { draft: CronDraft }): JSX.Element {
   if (draft.freq === 'week' && draft.wd == null) draft.wd = 1
@@ -523,8 +523,7 @@ function JobSheet({ draft }: { draft: CronDraft }): JSX.Element | null {
   useEffect(() => {
     if (!veil) return
     veil.dataset.open = 'true'
-    /* React's autoFocus does not reach a portal reliably; focus by hand,
-       the way the legacy sheet did on open. */
+    /* React's autoFocus does not reach a portal reliably; focus by hand. */
     veil.querySelector('input')?.focus()
     const onClick = (e: MouseEvent): void => {
       if (e.target === veil) cancel()

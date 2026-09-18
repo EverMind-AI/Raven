@@ -15,12 +15,10 @@
  * never reconciles either. What IS React's is the interior App.tsx renders --
  * #dTitle's text and the close button.
  *
- * Close order is a contract rather than an accident. The legacy verb was
- * wrapped by two decorators and the reduce made their effects visible
- * outermost-first: plugins, then skills, then the base flag write, with the two
- * observers following in a microtask after all of it. CLOSE_ORDER is that
- * order, declared -- registration order is module evaluation order, which is
- * not something this contract should rest on.
+ * Close order is a contract rather than an accident: CLOSE_ORDER declares it --
+ * plugins, then skills, then the base flag write, with the two observers
+ * following in a microtask after all of it -- because registration order is
+ * module evaluation order, which is not something this contract should rest on.
  */
 
 import { makeStore } from './store'

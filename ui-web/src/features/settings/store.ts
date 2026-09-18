@@ -116,10 +116,11 @@ export async function refresh(): Promise<void> {
   }
 }
 
-/* The drawSettings shim lands here. The first draw schedules the fixture (or
-   rpc) load on a task boundary rather than inline: the boot list draws before
-   the live layer has evaluated, and the deferral lets the real source win the
-   seam before anything is fetched. */
+/* Where the boot's own draw step and the language repaint land (app/boot.ts,
+   state/lang/effects.ts). The first draw schedules the fixture (or rpc) load on
+   a task boundary rather than inline: the boot list draws before every source
+   is on the seam, and the deferral lets the real one win it before anything is
+   fetched. */
 export function redraw(): void {
   set({ tab: curTab(), epoch: get().epoch + 1 })
   if (!lazy) {
@@ -130,8 +131,8 @@ export function redraw(): void {
   }
 }
 
-/* The live layer's openSettings: load, draw, then lift the veil -- the same
-   order the legacy open kept, so the dialog never greets with fixture rows. */
+/* Load, draw, then lift the veil, in that order, so the dialog never greets
+   with fixture rows. */
 export async function open(): Promise<void> {
   lazy = true
   set({ tab: curTab() })

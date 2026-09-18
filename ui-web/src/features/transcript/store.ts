@@ -134,7 +134,7 @@ export const verbOf = (n: string): string => t('gui.act.v.' + n, undefined, rawV
 export const verbIngOf = (n: string): string => t('gui.act.ing.' + n, undefined, rawVerb(n))
 
 /* The demo replay hands the one string it displays where the live RPC hands
-   the argument object; normalised here exactly as the legacy wsArgs did. */
+   the argument object; normalised here so a row reads the same either way. */
 function parseArgs(name: string, args: unknown): Record<string, unknown> {
   if (args && typeof args === 'object') return args as Record<string, unknown>
   const s = String(args == null ? '' : args)
@@ -354,8 +354,8 @@ function bump(lane: Lane, seg: { v: number }): void {
   emit(lane)
 }
 
-/* The appends the legacy renderer followed with down(): toggles never
-   scroll (they pin the clicked row instead), so this is its own counter. */
+/* The appends that ask the view to scroll down: toggles never scroll (they pin
+   the clicked row instead), so this is its own counter. */
 function poke(lane: Lane): void {
   lane.scrollReq += 1
 }
@@ -1102,9 +1102,9 @@ function newCallData(
   return c
 }
 
-/* Row-fold transitions the legacy paintWork made: the step that just outgrew
-   a single call folds its rows for the first time, and a failure is the one
-   thing worth opening unasked -- unless the reader pinned the fold. */
+/* The row-fold transitions: the step that just outgrew a single call folds its
+   rows for the first time, and a failure is the one thing worth opening
+   unasked -- unless the reader pinned the fold. */
 function paintWork(lane: Lane, seg: StepData, grewPast1: boolean): void {
   if (seg.calls.length > 1 && grewPast1 && !seg.wkPinned) seg.wkOpen = false
   if (seg.calls.length > 1 && seg.failed && !seg.wkPinned && !seg.wkOpen) seg.wkOpen = true

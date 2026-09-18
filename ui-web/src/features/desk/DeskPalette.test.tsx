@@ -588,7 +588,8 @@ describe('the desk shelf', () => {
     expect(rowNames()).toEqual(['Landed late'])
   })
 
-  /* The legacy shell forwards view names this palette no longer has. */
+  /* The pane forwards whatever view name it was handed, cast rather than
+     validated (state/ws.ts), and it has names this palette has no tab for. */
   it('ignores a tab name it does not know instead of drawing another tab', async () => {
     deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/a.md', name: 'a.md', title: 'Comparison' }]))
     await shelf()

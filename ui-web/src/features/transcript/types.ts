@@ -401,7 +401,7 @@ export interface HistoryMessage {
    Deliberately NOT the finished list. Which of those rows counts as a product,
    and what a tile can draw of it, are presentation decisions -- they belong to
    the island that draws them, where they can be tested, rather than to the
-   legacy layer that happens to own the record. */
+   workspace record that happens to hold the rows. */
 export interface ArtifactsSource {
   changes(turn: number): WsChange[]
 }

@@ -13,9 +13,10 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import ts from 'typescript'
 
-/* Every feature's source module and everything under state/ and app/: the
-   calls moved there as each domain left the legacy layer, and the two sets
-   together are the page's whole traffic. Paths are from src/. */
+/* Every feature's source module and everything under state/ and app/: a wire
+   call may only be written in one of those (rpc-names holds every domain to
+   it), and the two sets together are the page's whole traffic. Paths are from
+   src/. */
 const sourceModules = () => readdirSync(resolve(process.cwd(), 'src/features'), { withFileTypes: true })
   .filter((e) => e.isDirectory())
   .map((e) => `features/${e.name}/source.ts`)

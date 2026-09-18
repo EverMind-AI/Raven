@@ -7,7 +7,7 @@
  * instead: the table against raven/acp/updates.py's SIDE_CHANNEL_METHODS,
  * which is the server-side roster of the pushes that are not subscription
  * events, and the table against every name the page actually registers --
- * which is the legacy layer plus the session pipeline, the two places a
+ * which is the page's own wiring plus the session pipeline, the two places a
  * handler is installed.
  *
  * The Python file is read, never written: this whole refactor stays inside

@@ -345,7 +345,8 @@ function ConnDialog({ c }: { c: ConnChannel }): JSX.Element | null {
    ride on channels.status). Secrets never echo back: a set field shows a
    placeholder, and a box left blank means "keep", never "erase". Only the
    required fields show; everything optional folds behind one line, closed,
-   with its count. Inputs are uncontrolled, as the legacy form kept them. */
+   with its count. Inputs are uncontrolled; the store's epoch is what reseeds
+   them, by keying the dialog subtree. */
 function ConnForm({ c, state }: { c: ConnChannel; state: { cls: string; text: string } }): JSX.Element {
   const inputs = useRef(new Map<string, HTMLInputElement>()).current
   const [advOpen, setAdvOpen] = useState(false)

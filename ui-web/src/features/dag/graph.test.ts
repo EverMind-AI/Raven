@@ -8,9 +8,8 @@ import { CARD, GAP_X, GAP_Y, H, PAD, SHEET, W, depths, layout, layers, ordered, 
 
 import type { DagNode, DagRun } from './types'
 
-/* T returns its key with the vars appended, so a test asserts which catalogue
-   entry was chosen AND what was interpolated into it -- the legacy code did the
-   interpolation by hand with .replace, so that is the part worth pinning. */
+/* The translator returns its key with the vars appended, so a test asserts
+   which catalogue entry was chosen AND what was interpolated into it. */
 beforeEach(() => {
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
   vi.spyOn(pageStore, 'show').mockImplementation(() => {})

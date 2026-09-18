@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
-/* What one `channels.status` answer does to the catalogue's rows. The merge
- * was untested while it lived in the legacy layer, and three of its rules are
- * about telling "no" apart from "nobody could say".
+/* What one `channels.status` answer does to the catalogue's rows. Three of the
+ * merge's rules are about telling "no" apart from "nobody could say".
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'

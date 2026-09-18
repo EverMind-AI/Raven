@@ -4,11 +4,6 @@
  * conversation the reader has left can land after the one they moved to; the
  * generation ticket is what keeps the late answer from repainting the page. A
  * synchronous stub cannot exercise that, so this runs the real functions.
- *
- * Migrated from scripts/model-refresh-live.test.mjs when the model and
- * settings sources left the legacy layer: the assertions are unchanged, and
- * what moved is how the harness reaches them -- imports of the two source
- * modules and the override part, instead of one part and its collaborators.
  */
 
 import { describe, expect, it } from 'vitest'

@@ -8,10 +8,9 @@
  * own for the same single node. What it looks like is src/chrome/Lightbox.tsx;
  * what is here is the one shot on screen.
  *
- * The islands call open() directly rather than through a shell verb. It used to
- * be `Shell.openImage` because the function lived in the legacy layer; now it
- * lives in this bundle, and routing a same-bundle call out through the page and
- * back in would only add a way for it to be missing.
+ * The islands call open() directly: it lives in this bundle, and routing a
+ * same-bundle call out through the page and back in would only add a way for it
+ * to be missing.
  */
 
 import { t } from '../i18n/t'

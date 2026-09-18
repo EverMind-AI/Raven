@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 /* The whitelist that turns one `subagents.list` row into what the page draws,
  * and the memory that keeps a probe-less refetch from blanking a health line
- * the reader just saw. Both were untested while they lived in the legacy layer.
+ * the reader just saw.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'

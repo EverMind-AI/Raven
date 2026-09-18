@@ -1,10 +1,10 @@
 /* The message catalogue and the text the page renders from it.
  *
  * One file feeds both front ends: i18n/messages.json is what the TUI generates
- * its own copy from, so one edit moves both. The lookup and its fallback chain
- * come from the legacy kernel unchanged -- the entry in the current language,
- * then its English, then the caller's fallback, then the key itself -- so a key
- * the catalogue never grew still renders as something rather than as nothing.
+ * its own copy from, so one edit moves both. The lookup falls back in one
+ * chain -- the entry in the current language, then its English, then the
+ * caller's fallback, then the key itself -- so a key the catalogue never grew
+ * still renders as something rather than as nothing.
  *
  * The language is module state rather than a parameter because every caller has
  * always meant "the current one". `code` is which column of the catalogue to

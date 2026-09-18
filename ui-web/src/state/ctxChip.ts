@@ -49,9 +49,10 @@ const RING = 47.75
 const fmtTokens = (n: number): string =>
   n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n)
 
-/* Committed synchronously, the way the five writes by id were: a caller that
-   asks for a draw and then reads the chip -- the boot list, redrawAll, the
-   turn's own completion -- has to see the ring it just asked for. */
+/* Committed synchronously: a caller that asks for a draw and then reads the
+   chip -- the boot list (app/boot.ts), the language repaint
+   (state/lang/effects.ts), the turn's own completion -- has to see the ring it
+   just asked for. */
 /* The same five fields are not a write: this runs on every report the gateway
    sends, and most of them move nothing the reader can see. */
 function unchanged(next: CtxState): boolean {

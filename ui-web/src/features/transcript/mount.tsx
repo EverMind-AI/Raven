@@ -12,9 +12,10 @@ import type { Root } from 'react-dom/client'
 
 /* The transcript island owns a lane host it appends INSIDE the container --
  * #stage for the conversation, a stage box for an agent pane -- instead of
- * the container itself. The container is shared ground the legacy layers
- * still write to (the .turnlive glyph, `innerHTML = ''` session wipes, the
- * session switch that takes a held host off the stage), and a React root
+ * the container itself. The container is shared ground other modules still
+ * write to (the composer's .turnlive glyph, the `innerHTML = ''` session wipes
+ * in state/session/, the session switch that takes a held host off the stage),
+ * and a React root
  * cannot share a container with foreign writers. The host is one
  * `display: contents` element, so layout, selectors on the segment classes
  * and the scroll math all read exactly as before; a wipe detaches the host
@@ -76,8 +77,8 @@ function laneIn(container: HTMLElement, main: boolean, view: (lane: Lane) => Rea
   seq += 1
   const lane = store.newLane(`${main ? 'main' : 'agent'}:${seq}`, main)
   const root = createRoot(host)
-  /* Synchronous like the renderer it replaces: the very next legacy line may
-     read the drawn DOM (the dag sheet selects its node right after). */
+  /* Synchronous because the very next line at the call site may read the drawn
+     DOM (the dag sheet selects its node right after). */
   flushSync(() => root.render(view(lane)))
   const rec: Mounted = { host, lane, root }
   HOSTS.set(host, rec)

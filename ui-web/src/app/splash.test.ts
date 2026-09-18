@@ -70,8 +70,7 @@ describe('hiding the splash', () => {
     expect(splash()!.dataset.off).toBe('1')
   })
 
-  /* Before anything has marked the clock the floor is already spent, which is
-     what an unset clock did in the legacy part. */
+  /* Before anything has marked the clock, the floor is already spent. */
   it('lifts it at once while the clock is unmarked', async () => {
     const { hideSplash } = await fresh()
     hideSplash()

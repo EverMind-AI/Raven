@@ -149,7 +149,7 @@ export const authLeft = (id: string): string => {
 }
 
 /* Writes the remaining time into whatever is showing it, rather than
-   re-rendering the panel once a second: same discipline as the legacy page. */
+   re-rendering the panel once a second. */
 function authTick(on: boolean): void {
   if (on && !authClock) {
     authClock = setInterval(() => {
@@ -167,9 +167,10 @@ function authTick(on: boolean): void {
   }
 }
 
-/* The chrome resync: re-render locally, then ask the shell to redraw the
-   tab chrome it owns (title, hero, the installed button) when the plugin
-   tab is actually showing -- the legacy pmRedraw guard. */
+/* The chrome resync: re-render locally, then ask the capabilities page to
+   redraw the tab chrome it owns (title, hero, the installed button), which it
+   does only while the plugin tab is showing (state/caps.ts's
+   drawIfOpenOnPlugins). */
 function sync(): void {
   set({})
   drawIfOpenOnPlugins()

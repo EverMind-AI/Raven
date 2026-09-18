@@ -1,11 +1,7 @@
 /* What the page does between "the bundle has run" and "the reader can work".
  *
- * One sequence, in one place, called once from main.tsx. It used to be two
- * halves of the legacy layer -- a guard part that claimed the splash and held
- * the rail, and a boot part that asked the gateway everything a first frame
- * needs -- and the order between them was the order two files happened to sit
- * in a manifest. The steps are the same steps, in the same order; what changed
- * is that the order is now readable as a list.
+ * One sequence, in one place, called once from main.tsx: claim the splash and
+ * hold the rail, then ask the gateway everything a first frame needs.
  *
  * Which transport answers the calls is decided before any of this runs
  * (src/rpc/chooseTransport.ts): a page opened from disk or with ?stub=1 reads the

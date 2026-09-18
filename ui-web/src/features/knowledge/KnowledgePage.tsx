@@ -1069,8 +1069,8 @@ function DocMenu({ doc, busy }: { doc: KbDoc; busy: boolean }): JSX.Element {
 
    The same thresholds and the same keys as the agents roster
    (features/extAgents/ExtAgentsPage.tsx `agoText`), spelled again rather than imported --
-   the two islands share no module, and the ratchet in
-   scripts/count-shared-globals.mjs is there to keep it that way. An
+   one domain does not import another's component, which
+   scripts/gates/import-direction.test.mjs is what keeps true. An
    unparseable stamp is shown as it came: a row dated "Invalid Date" says less
    than one dated with the string the engine actually sent. */
 function ago(iso: string): string {
@@ -1387,10 +1387,9 @@ export function KnowledgeApp(): JSX.Element {
   if (s.status && !s.status.configured) {
     /* Naming the state is not enough: the endpoint is set in a section of
        the settings dialog, and a reader told only that one is missing has to
-       go looking. Through the settings store rather than a new shell verb:
-       the island owns both halves already, and the ratchet in
-       ui-web/scripts/count-shared-globals.mjs exists to stop an island asking
-       the legacy layer for what it can reach directly. */
+       go looking. Straight into the settings store, which is one of the
+       cross-domain edges pinned in scripts/gates/import-direction.test.mjs
+       rather than a free one. */
     return (
       <div className="empty-note">
         <div className="ttl">{t('gui.kb.unconfigured')}</div>

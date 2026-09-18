@@ -1,11 +1,10 @@
 /* The whole-page redraw a language pick asks for.
  *
- * A hand-written list of nineteen calls (`redrawAll`) is what this was, and
- * what is left is only what is DRAWN rather than rendered: every component on
- * the page reads the catalogue itself and re-renders on the same notification,
- * islands included (each `<Domain>App` subscribes, which is what
- * scripts/gates/island-lang.test.mjs holds it to), so six steps that were a
- * bare `set({})` for an island went with that subscription.
+ * Only what is DRAWN rather than rendered is here: every component on the page
+ * reads the catalogue itself and re-renders on the same notification, islands
+ * included (each `<Domain>App` subscribes, which is what
+ * scripts/gates/island-lang.test.mjs holds it to), so an island that needs no
+ * more than a re-render needs no step.
  *
  * What cannot be a re-render is here: the rail's own draw and the capabilities
  * page's, the three stores whose draw commits a field their component renders
@@ -19,13 +18,13 @@
  * and a pick that fails to persist has to leave the page in exactly the state
  * the pick before it did.
  *
- * It runs after the rendered half has committed, which is the order applyI18n
- * had -- the markup was rewritten and only then was everything drawn from
- * JavaScript redrawn. `lang.onApplied` is what that ordering is (state/lang/store.ts).
+ * It runs after the rendered half has committed: the markup follows the
+ * catalogue first, and only then is everything drawn from JavaScript redrawn.
+ * `lang.onApplied` is what that ordering is (state/lang/store.ts).
  *
- * The list is in redrawAll's order, and the order is load-bearing in one place:
- * the reload at the end reopens the conversation from disk, so it has to be
- * last, and the guard in front of it is what keeps it off a streaming turn.
+ * The order is load-bearing in one place: the reload at the end reopens the
+ * conversation from disk, so it has to be last, and the guard in front of it is
+ * what keeps it off a streaming turn.
  */
 
 import { drawQueue as queueDraw, turn } from '../../features/composer/mount'

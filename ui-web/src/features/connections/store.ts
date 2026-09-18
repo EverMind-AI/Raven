@@ -15,8 +15,8 @@ import type { ConnChannel, ConnectionsSource } from './types'
 
 export interface ConnState {
   rows: ConnChannel[]
-  /* False until the first rows fetch answers: the legacy live page cleared
-     the stage on first open rather than showing a not-yet-loaded list. */
+  /* False until the first rows fetch answers: the list is not drawn at all
+     until then, so a page still loading never reads as "no channels". */
   loaded: boolean
   /* Which entry's credential dialog is up -- the old `connEdit`. */
   dialogId: string | null

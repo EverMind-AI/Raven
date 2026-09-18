@@ -47,12 +47,8 @@ const store = makeStore<BannerState>(NOTHING)
 /** The notice standing right now. */
 export const { get, subscribe } = store
 
-/* Stores AND draws. It used to only store, so that the redraw would go out
-   through the published drawBanner name and pick up the live layer's override
-   of it -- and that override cleared the host, so storing a fault put nothing
-   on screen. The override is gone (live/120-settings.js says its no to the one
-   notice it means, through the source), and with it the reason for a setter
-   whose effect depends on the caller remembering a second call. */
+/* Stores AND draws: nothing wraps or overrides the draw, so there is no reason
+   for a setter whose effect depends on the caller remembering a second call. */
 export function setFault(detail: string | null): void {
   fault = detail
   draw()

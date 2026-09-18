@@ -126,7 +126,7 @@ describe('opening and collapsing the pane', () => {
     ws.setOpen(true)
     /* Nothing had been counted when the view drew -- the badge still carried
        the placeholder page.html serves it with -- because the bump comes after
-       the draw, which is the order the legacy verb had. */
+       the draw. */
     expect(drew[0]!.badge).toBe('2')
     expect(notified).toHaveLength(1)
     expect(notified[0]!.badge).toBe('+2')

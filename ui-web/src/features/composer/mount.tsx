@@ -22,8 +22,9 @@ let roots: Root[] = []
 let liveHost: HTMLElement | null = null
 
 /* The live turn row rides the tail of #stage, which the transcript island owns
- * a lane host in and the legacy layers still wipe and park wholesale. So it
- * gets a host of its own, one `display: contents` element appended after the
+ * a lane host in and the session modules still wipe and park wholesale
+ * (state/session/registry.ts, state/session/runtime.ts). So it gets a host of
+ * its own, one `display: contents` element appended after the
  * transcript's, and the host is only attached while a turn is alive -- the row
  * used to be appended and removed the same way.
  *

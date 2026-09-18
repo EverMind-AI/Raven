@@ -200,11 +200,11 @@ function record(patch: Partial<DeskState>): void {
 }
 
 /* Only when it is not already showing. Opening the workspace is not a cheap
-   setter: it runs a full workspace draw, which unmounts and rebuilds the legacy
-   panel's islands. Every pane opened, and every click on a row whose pane was
-   already up, paid for that -- invisibly, since in desk mode the panel it
-   rebuilds is display:none. The split's own flag is the honest answer to "is it
-   open", the same way the rail reads the app's page flag. */
+   setter: it runs a full workspace draw, which unmounts and rebuilds the pane's
+   islands. Every pane opened, and every click on a row whose pane was already
+   up, would pay for that -- invisibly, since in desk mode the pane it rebuilds
+   is display:none. The split's own flag is the honest answer to "is it open",
+   the same way the rail reads the app's page flag. */
 function revealWorkspace(): void {
   const split = document.getElementById('split')
   if (split && split.dataset.open === 'true') return
@@ -419,10 +419,11 @@ export function claimDraft(key: string | null): void {
   applyPalette(key)
 }
 
-/* The callers are the legacy shell's untyped `wsPick`/`showWorkspace`, which
-   forward whatever view name they were given. An unknown one used to fall
-   through the palette's own switch and draw the agents list, so it is stopped
-   here instead: the tab does not change and the palette still opens. */
+/* The callers are the pane's `pick` and `setOpen` (state/ws.ts), which forward
+   whatever view name they were given as a `DeskTab` without validating it, and
+   features/transcript/source.ts. An unknown name falling through the palette's
+   own switch would draw the agents list, so it is stopped here instead: the tab
+   does not change and the palette still opens. */
 export function openDeskTab(tab: DeskTab): void {
   /* Asking for a view of the desk is asking for the desk, so it outranks a
      collapse this conversation had on file. */

@@ -1,11 +1,10 @@
 // @vitest-environment happy-dom
 /* The four layers that stand at the body, and who decides their order.
  *
- * Each was appended by whoever needed it -- the scrollbar module's install, two
- * statements in src/main.tsx, the legacy chrome -- and their order at the body
- * was therefore the order those four ran in. Two steps of the `--z` ladder are
- * ties broken by exactly that order (src/test/portals.test.ts says which), so
- * the table in portals.ts is the decision now and `host` is what keeps it.
+ * Two steps of the `--z` ladder are ties broken by the order the four stand at
+ * the body (src/test/portals.test.ts says which), so the table in portals.ts is
+ * the decision and `host` is what keeps it -- not whichever module happened to
+ * append first.
  *
  * What the page's own reading of the same table pins is in src/test/portals.
  * test.ts: the boot goldens, the markup, and the body while every overlay is

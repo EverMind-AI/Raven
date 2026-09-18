@@ -125,8 +125,8 @@ describe('the workspace pane', () => {
 })
 
 describe('the pane controls', () => {
-  /* One delegated click on the row, as the legacy handler had it: each button
-     names its own view. */
+  /* One delegated click on the row (WsPane.tsx's #wsTabs): each button names
+     its own view. */
   it('picks the view of whichever tab was clicked', () => {
     for (const b of [...el('wsTabs').children]) {
       act(() => {

@@ -28,8 +28,8 @@ import type { KeyboardEvent, ReactElement, ReactNode } from 'react'
 
 /* The transcript renderer: three voices, three folding depths. Machine work
  * renders as quiet activity rows, never cards; a stretch of consecutive
- * calls is one work segment. Class names and DOM shape are the legacy
- * renderer's, frozen -- page.css styles both without knowing which drew it.
+ * calls is one work segment. Class names and DOM shape are frozen:
+ * src/styles/page.css selects on them.
  */
 
 /* ── shared pieces ─────────────────────────────────────────────────────── */

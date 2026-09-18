@@ -178,8 +178,8 @@ describe('the clarify sheet', () => {
 
   /* Number picking is for a reader whose caret has left the field, which is
      where the sheet puts it on arrival -- so a number typed straight after the
-     question appears is part of the typed answer, not a pick. Carried over from
-     the legacy sheet unchanged; blurring is what the two cases apart. */
+     question appears is part of the typed answer, not a pick. Blurring is what
+     tells the two cases apart. */
   it('picks a choice by number once the focus has left the field', () => {
     const said: string[] = []
     open({ question: 'q', choices: ['one', 'two'] }, (a) => said.push(a))

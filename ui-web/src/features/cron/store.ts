@@ -20,13 +20,13 @@ export interface CronState {
      since a refresh swaps row objects without changing any identity a
      component's dep array could see. */
   rev: number
-  /* False until the first rows fetch answers: the legacy page cleared the
-     stage on first open rather than showing a not-yet-loaded empty get(). */
+  /* False until the first rows fetch answers: the list is not drawn at all
+     until then, so a page still loading never reads as "no jobs". */
   loaded: boolean
   viewId: string | null
-  /* Drafts are mutable objects edited in place by uncontrolled inputs --
-     the same discipline the legacy form kept: a keystroke changes no get()
-     anyone re-renders on, so focus and IME composition are never disturbed.
+  /* Drafts are mutable objects edited in place by uncontrolled inputs: a
+     keystroke changes no get() anyone re-renders on, so focus and IME
+     composition are never disturbed.
      `epoch` remounts the form subtrees when a draft is replaced. */
   draft: CronDraft | null
   sheet: CronDraft | null

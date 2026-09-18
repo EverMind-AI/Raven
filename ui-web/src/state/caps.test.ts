@@ -3,10 +3,9 @@
  * draw decides, and the order a draw's steps run in.
  *
  * The component that renders what is state here has its own file
- * (src/chrome/CapsPage.test.tsx). What is asserted here is what the legacy
- * chrome used to do by id, in the order it did it: the two tab layers'
- * effects, the container attributes, the hero's position, and the names the
- * other layers still call.
+ * (src/chrome/CapsPage.test.tsx). What is asserted here is what a draw decides
+ * and the order it decides it in: the two tab layers' effects, the container
+ * attributes, the hero's position, and the names the two island stores call.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -202,10 +201,10 @@ describe('the capabilities page state', () => {
   })
 })
 
-/* The chrome half of the two tabs' draws, which used to be six writes by id in
-   each of them (demo/152-skills.js, demo/153-plugins.js). The two island stores
-   and the sources are stood in for; what is asserted is the chrome each view
-   decides. The hosts are the real ones (src/features/hosts.ts): a draw appends
+/* The chrome half of the two tabs' draws -- the six values each of them
+   decides. The two island stores and the sources are stood in for; what is
+   asserted is the chrome each view decides. The hosts are the real ones
+   (src/features/hosts.ts): a draw appends
    the node the island's root renders into, and which node that is is the thing
    a tab must not get wrong. */
 describe('the two draws the dispatch reaches', () => {

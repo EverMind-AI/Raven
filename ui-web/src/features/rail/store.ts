@@ -17,7 +17,7 @@ import type { RailSnapshot, RailSource, SessRow } from './types'
  * instead of keeping a copy that could go stale. */
 
 export interface RailState {
-  /* Null until the first draw: the legacy #list started empty too. */
+  /* Null until the first draw, which is what RailPage renders nothing on. */
   snap: RailSnapshot | null
   /* True while the live boot holds the rail on skeleton rows. */
   skel: boolean
@@ -305,13 +305,11 @@ export function endRename(): void {
   finishOpen?.(true)
 }
 
-/* Inline rename in the top bar; the list follows. The DOM dance -- swap
-   #title for an input, put an h1#title back -- is the legacy one, though the
-   body no longer matches it line for line: it commits at most once, and it
+/* Inline rename in the top bar; the list follows. The DOM dance is swap #title
+   for an input, then put an h1#title back. It commits at most once, and it
    publishes that commit so a conversation switch can end an editor left
-   standing. What changed first was who persists it: the source is TOLD the new
-   title (see renamed in types.ts), where the live layer used to wrap this
-   function and hang its own blur listener off the input created here. */
+   standing; persisting is not its own -- the source is TOLD the new title (see
+   renamed in types.ts). */
 export function rename(): void {
   const h = document.getElementById('title')
   if (!h) return

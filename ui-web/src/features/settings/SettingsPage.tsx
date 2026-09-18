@@ -37,11 +37,9 @@ const deleteAllSessions = (): void => {
   }
 }
 
-/* The dialog's contents, transcribed from the legacy drawSettings pages:
-   same class names, same DOM shape, ui-web/src/styles/page.css untouched. The
-   dialog frame is the page's own root (src/App.tsx) over the static #setVeil,
-   and whether it is up is src/state/settings.ts's; the island reaches
-   both through the shell bridge, as it always has. */
+/* The dialog frame is the page's own root (src/App.tsx) over the static
+   #setVeil, and whether it is up is src/state/settings.ts's; this island
+   imports that module directly. */
 
 /* Settings is grouped, not one flat strip: the groups answer "what am I
    changing" -- myself, the agent, or the machine it runs on. */
@@ -2520,9 +2518,9 @@ function DataPage({ s }: { s: SettingsState }): JSX.Element {
 /* ---- assembly -------------------------------------------------------- */
 
 /* ---- the built-in tool inventory ------------------------------------------
-   Drawn here rather than handed back to the legacy capabilities module, which
-   is what the `renderToolset` shell verb used to do: the panel belongs to this
-   dialog, and a page that lends its own panel out cannot be read on its own.
+   Drawn here rather than handed back to the capabilities page (state/caps.ts):
+   the panel belongs to this dialog, and a page that lends its own panel out
+   cannot be read on its own.
 
    Tools are a fixed inventory the agent ships with, not a store -- which is
    why they sit under the agent here and not in a module for adding and

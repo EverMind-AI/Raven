@@ -35,12 +35,11 @@ function targetOf(node: HTMLElement): ProseTarget | null {
   return p ? { p, dir: !!node.dataset.d } : null
 }
 
-/* One test, where the legacy pair used two that disagreed: `code.pth` on the
-   click, `classList.contains('pth')` on the key. The transcript island draws
-   its path chips as buttons, so only the second of those ever matched them --
-   and this selector matches what that one matched, keyboard behaviour
-   included. The click half stays the island's own either way, because React
-   stops the native event when it stops the synthetic one. */
+/* One test for the click and the key alike. The transcript island draws its
+   path chips as buttons, so a `code.pth` selector would match none of them;
+   this one reads the class instead, keyboard behaviour included. The click half
+   stays the island's own either way, because React stops the native event when
+   it stops the synthetic one. */
 const chipAt = (node: EventTarget | null): HTMLElement | null => {
   const el = node as Element | null
   if (!el || !el.closest) return null

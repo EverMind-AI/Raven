@@ -1,11 +1,8 @@
 /* Drives one module from a test, against fakes.
  *
- * Written for the parts of the legacy page script, which used to be fragments
- * of one concatenated text: a harness could only reach a function by slicing it
- * out and evaluating it with its collaborators passed in as parameters. The
- * layer is gone and every module it held has a home, but the shape this gives a
- * case outlived it -- a collaborator is an import, which `fakes` replaces by
- * module path and export name.
+ * A collaborator is an import, which `fakes` replaces by module path and
+ * export name, so a case drives one module with everything around it stood in
+ * for.
  *
  * Every load starts from module state as fresh as a reload's, because a module
  * and the ones around it hold real state -- the panel's open view, the session

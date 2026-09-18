@@ -744,7 +744,8 @@ describe('a language flip', () => {
     expect(document.querySelector('.turnlive')!.getAttribute('aria-label')).toContain('进行中')
 
     lang = 'en'
-    /* What redrawAll() does: call the same paints again, no reload. */
+    /* What a language flip asks for (state/lang/effects.ts): the same paints
+       again, no reload. */
     act(() => {
       store.drawQueue()
       store.drawSlash('/')

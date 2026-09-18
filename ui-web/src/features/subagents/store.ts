@@ -89,7 +89,7 @@ export const source = (): SubagentsSource => ds('subagents')
 
 /* Where a pane opened from this panel goes: the floating desk, when the page
    has one. Handed in (src/main.tsx) rather than imported from
-   features/workspace/deskStore: the desk imports this store back and
+   features/desk/store: the desk imports this store back and
    subscribes to it as it evaluates, so an import in this direction would run
    that subscription against a half-built module. Null on a page with no desk
    wired, which is every test that does not ask for one. */
@@ -160,8 +160,9 @@ export const plainTitle = stripTitle
    the reader is in, and whether anything changed enough to repaint. */
 /* The read in flight, not a flag saying there is one: a caller that has to
    know when the list has answered -- restoring a window the reader had open
-   (lib/resume.ts) -- can only wait on the same read the panel is already
-   doing. Held rather than started again, so two callers share one answer. */
+   (state/session/resume.ts) -- can only wait on the same read the panel is
+   already doing. Held rather than started again, so two callers share one
+   answer. */
 let flight: Promise<void> | null = null
 let at = 0
 /* One fingerprint per drawn list, keyed by conversation as well as content,

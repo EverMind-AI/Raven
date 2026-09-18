@@ -14,9 +14,8 @@ import type { CSSProperties, JSX } from 'react'
 
 /* The plugin tab is market-first: the page IS the catalog, and what you
    already have lives one level in (the installed button top-right, back
-   arrow to return). Both views share the hub grid so they read as the
-   same place. Everything here is a transcription of the legacy renderer
-   the live layer used to carry -- class names and structure unchanged. */
+   arrow to return). Both views share the hub grid so they read as the same
+   place. */
 
 function Tile({ name }: { name: string }): JSX.Element {
   // Stable per-name hue: same plugin, same colour, every render and page.

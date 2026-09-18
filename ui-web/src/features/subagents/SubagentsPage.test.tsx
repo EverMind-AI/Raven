@@ -845,7 +845,7 @@ describe('subagents island, the detail', () => {
     rows([run], { context: async () => ctx })
     const host = document.getElementById('wsBody')!
     /* Through the mount module, because the remount is what is being tested:
-       drawWs() detaches, wipes the panel body and draws a fresh root. */
+       its draw() detaches, wipes the panel body and draws a fresh root. */
     await act(async () => {
       mount_.draw(host)
     })
@@ -2061,9 +2061,9 @@ describe('subagents island, what a spawned run opens as', () => {
 })
 
 /* The read in flight is shared with whoever asks for the same list while it is
-   still going (lib/resume.ts waits on it to put a window back). Shared state
-   has to be dropped when the conversation changes, or the next one waits on an
-   answer that was thrown away. */
+   still going (state/session/resume.ts waits on it to put a window back).
+   Shared state has to be dropped when the conversation changes, or the next one
+   waits on an answer that was thrown away. */
 describe('the list reads', () => {
   it('hand a second caller the answer the first is waiting for', async () => {
     /* Waiting on the SECOND call alone is the whole point: a caller told

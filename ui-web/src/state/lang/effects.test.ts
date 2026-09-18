@@ -1,23 +1,17 @@
 // @vitest-environment happy-dom
 /* The whole-page redraw a language pick asks for, and the order of it.
  *
- * Nineteen calls in a hand-written `redrawAll` became this, and the order was
- * never pinned by anything inside this directory: the gate on it
- * was a Python test outside ui-web that read the function's source text and
- * checked that every module page's renderer was named in it. That test goes with
- * the layer, so the order is asserted here instead -- as the sequence the calls
- * really run in, against fakes, which is more than the text check could say.
- *
- * One entry of the old list is absent: `drawCapsBadge` was an empty function
- * (the rail's module rows carry no counters), and it went with the draw shells.
+ * Nothing but this file pins that order, and it pins it as the sequence the
+ * calls really run in, against fakes -- which is more than a check on the
+ * source text of state/lang/effects.ts could say.
  */
 import { describe, expect, it } from 'vitest'
 
 import { loadPart } from '../../../scripts/module-harness.mjs'
 
-/* What is left of the nineteen, in redrawAll's order. Six island steps went
-   with the subscription each `<Domain>App` now holds on the language store:
-   they were a bare `set({})`, which is what a re-render is. */
+/* Every step `repaint` runs, in order. An island that needs no more than a
+   re-render is absent: each `<Domain>App` subscribes to the language store
+   itself (scripts/gates/island-lang.test.mjs). */
 const ORDER = [
   'sessionDraw',
   'drawFoot',
