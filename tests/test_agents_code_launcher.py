@@ -1012,10 +1012,31 @@ def test_an_explicit_discovery_choice_wins_over_the_memory_default(grounded, tmp
 
 
 def test_without_a_memory_backend_the_skill_forge_stance_is_untouched(grounded, tmp_path):
-    """The shipped product runs skillForge off (verdict D5); the memory-lane
-    default must not drag ordinary raven-code onto the push lane."""
-    rendered = json.loads(_render(grounded).read_text())
+    """The memory lane's default must not drag a backend-less run onto push.
+
+    The shipped config now names a backend, so the condition has to be built
+    rather than assumed: an operator who switches memory off keeps the pull
+    stance, and pays for no recall-shaped prefix they cannot fill.
+    """
+    source = tmp_path / "no-memory.json"
+    base = json.loads((RUN_PY.parent / "config.json").read_text())
+    base["memory"] = dict(base.get("memory") or {}, backend=None)
+    source.write_text(json.dumps(base))
+
+    rendered = json.loads(grounded.render_config(source, tmp_path / "cli-nomem", unattended=True).read_text())
     assert "discovery" not in rendered.get("skillForge", {})
+
+
+def test_the_shipped_config_takes_the_push_lane_because_it_names_a_backend(grounded):
+    """The other half of the same rule, so neither side moves unnoticed.
+
+    A backend with nothing but the pull lane recalls into a menu the model
+    cannot spend: this product's coding face does not carry the skill tools
+    the menu points at, so the bodies would be fetched and dropped.
+    """
+    rendered = json.loads(_render(grounded).read_text())
+    assert rendered["memory"]["backend"] == "everos"
+    assert rendered["skillForge"]["discovery"] == "push"
 
 
 def test_an_explicit_permissions_block_wins_over_the_hosting_default(grounded, tmp_path):

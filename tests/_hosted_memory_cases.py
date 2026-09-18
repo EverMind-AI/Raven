@@ -210,6 +210,23 @@ class HostedBackendCases:
 
     # ── store ────────────────────────────────────────────────────────
 
+    async def test_read_only_refuses_the_write_and_keeps_the_recall(self, backend, fake):
+        """A scored run reads a frozen pool and must not grow it.
+
+        The arms share one pool, a write lands in whichever arm ran first, and
+        nothing takes it back. The refusal is at the wire, not at the turn's
+        enqueue, so the write pipeline upstream keeps its ceiling, retries and
+        drain accounting; what the caller sees is a write that did not land,
+        which it already handles.
+        """
+        read_only = self.build(fake, config={"api_key": fake.KEY, "read_only": True})
+        assert await read_only.store("sess-1", [{"role": "user", "content": "I like tea"}]) is False
+        assert fake.requests == [], "read_only must not reach the wire"
+
+        fake.seed(USER, "alice drinks tea")
+        hits = await read_only.recall("tea", user_id=USER, top_k=5)
+        assert [h.text for h in hits] == ["alice drinks tea"], "reads are a separate path"
+
     async def test_store_request_shape(self, backend, fake):
         ok = await backend.store("sess-1", [{"role": "user", "content": "I like tea"}])
         assert ok is True

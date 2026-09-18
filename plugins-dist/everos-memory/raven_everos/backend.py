@@ -509,6 +509,7 @@ class EverosBackend:
         adapter: _Adapter | None = None,
     ) -> None:
         self._config = ctx.config
+        self._read_only = bool((ctx.config or {}).get("read_only", False))
         self._services = ctx.services
         self._logger = ctx.logger
         # The host's channel for a sentence the user can act on; without one the
@@ -1188,6 +1189,19 @@ class EverosBackend:
         user/assistant/tool. Empty-text messages and empty payloads
         skip the adapter call entirely.
         """
+        if self._read_only:
+            # A pool this run is scored against must not grow while it is
+            # being measured. The arms share one frozen pool, a write lands
+            # in whichever arm ran first, and nothing takes it back: there
+            # is no per-run delete, and a later run cannot tell an ingested
+            # row from one its predecessor left behind. Recall is untouched.
+            #
+            # The refusal sits here rather than on the turn enqueue so the
+            # write pipeline keeps working as it does in production (queue
+            # ceiling, retries, drain accounting, health alarm). What
+            # changes is the answer at the wire, which every caller of
+            # store() already handles as a write that did not land.
+            return False
         if not messages:
             return True
         # Per-call owners when the caller named them: the host writes on

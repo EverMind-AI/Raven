@@ -84,5 +84,12 @@
         ]
       }
     }
+  },
+  "skillForge": {
+    "router": {
+      "weights": {
+        "local": 0.0
+      }
+    }
   }
 }

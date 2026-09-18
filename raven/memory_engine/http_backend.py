@@ -130,6 +130,7 @@ class HttpMemoryBackend:
         self._user_id: str = ctx.services.user_id
         self._api_key: str = os.environ.get(self.ENV_KEY) or str(self._config.get("api_key") or "")
         self._base_url: str = str(self._config.get("base_url") or self.DEFAULT_BASE_URL).rstrip("/")
+        self._read_only = bool(self._config.get("read_only", False))
         self._client = client
         self._owns_client = client is None
         self._feedback_noop_logged = False
@@ -248,6 +249,19 @@ class HttpMemoryBackend:
         *,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
+        if self._read_only:
+            # A pool this run is scored against must not grow while it is
+            # being measured. The arms share one frozen pool, a write lands
+            # in whichever arm ran first, and nothing takes it back: there
+            # is no per-run delete, and a later run cannot tell an ingested
+            # row from one its predecessor left behind. Recall is untouched.
+            #
+            # The refusal sits here rather than on the turn enqueue so the
+            # write pipeline keeps working as it does in production (queue
+            # ceiling, retries, drain accounting, health alarm). What
+            # changes is the answer at the wire, which every caller of
+            # store() already handles as a write that did not land.
+            return False
         batch = self._normalize(messages)
         if not batch:
             # Nothing the service would keep: not a failure, and not a request.
