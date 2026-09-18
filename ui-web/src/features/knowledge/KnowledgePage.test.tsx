@@ -2387,8 +2387,11 @@ describe('renaming and deleting a base', () => {
     })
     /* The click starts work it does not await, and the toast lands only once
        the rejection has reached the store's catch and <Toasts/> has drawn it.
-       One microtask was enough on a quiet machine and not on a loaded one. */
-    await waitFor(() => expect(toasts()).toHaveLength(1))
+       One microtask was enough on a quiet machine and not on a loaded one, and
+       waitFor's own second is not enough on a machine running the whole suite
+       at once -- the wait ends on the condition, so the ceiling only decides
+       how long a real failure takes to report. */
+    await waitFor(() => expect(toasts()).toHaveLength(1), { timeout: 10_000 })
 
     expect(toasts()).toEqual(['a knowledge base called staff handbook already exists'])
     expect(document.getElementById('kbrename')).not.toBeNull()
