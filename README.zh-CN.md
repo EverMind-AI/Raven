@@ -17,6 +17,10 @@
 
 # Raven 是什么
 
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/ce9efc42-71b0-472e-97fa-a300038cb0b9"><img src="https://github.com/user-attachments/assets/ce9efc42-71b0-472e-97fa-a300038cb0b9" alt="Raven one surface, all agents workflow" width="100%"></a>
+</p>
+
 Raven 是 **The Harness of Harnesses**——一个持续自我演进的多 Agent 编排生态。作为 **Host Agent（宿主 Agent）**，它通过统一入口连接专业 Agent，负责任务委派、执行协调和结果整合。Raven 的长期目标是将这种编排能力扩展到不同设备、环境和领域。
 
 基于 EverMind 的自进化 harness 引擎，并由 [EverOS](https://github.com/EverMind-AI/EverOS) 提供支持，Raven 跨会话保存上下文，持续改进 Agent harness 与协作工作流。

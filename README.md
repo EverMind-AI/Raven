@@ -17,6 +17,10 @@
 
 # What is Raven
 
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/ce9efc42-71b0-472e-97fa-a300038cb0b9"><img src="https://github.com/user-attachments/assets/ce9efc42-71b0-472e-97fa-a300038cb0b9" alt="Raven one surface, all agents workflow" width="100%"></a>
+</p>
+
 Raven is **The Harness of Harnesses**—a self-evolving multi-agent orchestration ecosystem. As a **Host Agent**, it brings specialized agents together through one unified surface to delegate tasks, coordinate execution, and integrate results. Its long-term vision is to extend this orchestration across devices, environments, and domains.
 
 Built on EverMind’s self-evolving harness engine and powered by [EverOS](https://github.com/EverMind-AI/EverOS), Raven preserves context across sessions and continuously improves agent harnesses and collaborative workflows.
