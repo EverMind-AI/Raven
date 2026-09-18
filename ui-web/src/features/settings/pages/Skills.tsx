@@ -20,6 +20,16 @@ export function blocklist(raw: Record<string, unknown>): string[] {
 const isBuiltin = (s: SkillRow): boolean => s.source === 'builtin'
 const MAIN_FILE = 'SKILL.md'
 
+/* `inspect` answers the SKILL.md path; the uninstall removes its directory. */
+const skillDir = (path: unknown): string => String(path || '').replace(/[\\/]SKILL\.md$/, '')
+
+/* SKILL.md opens with a YAML block the registry reads; the person reads the
+   prose under it. */
+export function stripFrontmatter(body: string): string {
+  const m = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(body)
+  return m ? body.slice(m[0].length) : body
+}
+
 const TRIGGER: Record<string, string> = {
   use_skill: 'gui.settings.skills.trig_use',
   auto_inject: 'gui.settings.skills.trig_auto',
@@ -91,7 +101,7 @@ function SkillDetailView({ name }: { name: string }): JSX.Element {
   const uninstall = (): void => {
     confirm.ask(
       t('gui.settings.skills.uninstall_title', { name }),
-      t('gui.settings.skills.uninstall_body', { path: (d && d.path) || name }),
+      t('gui.settings.skills.uninstall_body', { path: skillDir(d && d.path) || name }),
       t('gui.settings.skills.uninstall'),
       () => { void store.run(`uninstall:${name}`, () => store.source().uninstallSkill(name)).then((ok) => { if (ok) back() }) },
     )
@@ -125,7 +135,7 @@ function SkillDetailView({ name }: { name: string }): JSX.Element {
             </div>
             <InstallLine d={d} />
           </div>
-          <div className="settings-md prose" dangerouslySetInnerHTML={{ __html: md(String(d.body || '')) }} />
+          <div className="settings-md prose" dangerouslySetInnerHTML={{ __html: md(stripFrontmatter(String(d.body || ''))) }} />
         </div>
       )}
     </>

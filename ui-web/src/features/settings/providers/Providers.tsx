@@ -13,15 +13,18 @@ import type { JSX } from 'react'
 export const AZURE = 'azure_openai'
 
 /* The registry's auth shapes, in the order the picker groups them. */
-export const KINDS: Array<[string, string]> = [
+const KINDS: Array<[string, string]> = [
   ['key', 'gui.settings.providers.kind_key'],
   ['oauth', 'gui.settings.providers.kind_oauth'],
   ['local', 'gui.settings.providers.kind_local'],
 ]
 export const kindOf = (p: ProviderRow): string => (p.kind === 'oauth' ? 'oauth' : p.kind === 'local' || p.kind === 'endpoint' ? 'local' : 'key')
 export const kindLabel = (p: ProviderRow): string => t((KINDS.find(([k]) => k === kindOf(p)) || KINDS[0]!)[1])
-/* Whether the pane draws a key field and an address field for this vendor. */
+/* Whether the pane draws a key field and an address field for this vendor,
+   and whether the key is what connects it: a local server may sit behind a
+   token but is reached by its address, so its key is optional. */
 export const takesKey = (p: ProviderRow): boolean => kindOf(p) !== 'oauth' && p.acceptsKey !== false
+export const needsKey = (p: ProviderRow): boolean => kindOf(p) === 'key'
 export const takesBase = (p: ProviderRow): boolean => kindOf(p) === 'local' || !!p.needsBase
 
 /* The device-flow code, shown until the provider turns connected. */
@@ -50,7 +53,7 @@ function AddBlock({ slug }: { slug: string }): JSX.Element {
   const connect = (): void => {
     const k = key.trim()
     const b = base.trim()
-    if (takesKey(p) && !k) { store.refuse(t('gui.settings.providers.key_first')); return }
+    if (needsKey(p) && !k) { store.refuse(t('gui.settings.providers.key_first')); return }
     if (takesBase(p) && !b) { store.refuse(t('gui.settings.providers.base_first')); return }
     void store.run(`connect:${p.id}`, async () => {
       const params: Record<string, unknown> = { slug: p.id }
@@ -92,7 +95,7 @@ function AddBlock({ slug }: { slug: string }): JSX.Element {
         <>
           {takesKey(p) && (
             <Row label={<>{t('gui.settings.providers.api_key')}<KeyLink url={p.keyUrl} /></>}>
-              <KeyInput className="settings-tbox" value={key} placeholder={t('gui.settings.providers.paste_key')} aria-label={t('gui.settings.providers.api_key')}
+              <KeyInput className="settings-tbox" value={key} placeholder={t(needsKey(p) ? 'gui.settings.providers.paste_key' : 'gui.settings.providers.key_optional_ph')} aria-label={t('gui.settings.providers.api_key')}
                 onChange={(e) => setKey(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') connect() }} />
             </Row>
           )}

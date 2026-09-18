@@ -97,10 +97,12 @@ describe('settings source', () => {
     const mod = await load({ 'model.set_fields': { previous: {} }, 'model.add_models': { provider: {} } })
     await mod.settingsSource.setFields('openrouter', { extra_headers: { 'X-Title': 'raven' } })
     await mod.settingsSource.addModels('openrouter', ['a', 'b'])
-    expect(seen.filter(([m]) => m.startsWith('model.'))).toEqual([
+    expect(seen.filter(([m]) => m.startsWith('model.') || m === 'settings.get')).toEqual([
       ['model.set_fields', { slug: 'openrouter', fields: { extra_headers: { 'X-Title': 'raven' } } }],
+      ['settings.get', {}],
       ['model.options', {}],
       ['model.add_models', { slug: 'openrouter', models: ['a', 'b'] }],
+      ['settings.get', {}],
       ['model.options', {}],
     ])
   })

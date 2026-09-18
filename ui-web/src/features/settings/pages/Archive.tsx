@@ -13,7 +13,7 @@ import type { JSX } from 'react'
 
 export const AUTO_ARCHIVE_DAYS = 30
 
-export function autoArchiveOn(raw: Record<string, unknown>): boolean {
+function autoArchiveOn(raw: Record<string, unknown>): boolean {
   const sessions = raw.sessions as { autoArchiveAfterDays?: number | null } | undefined
   return !!(sessions && sessions.autoArchiveAfterDays)
 }

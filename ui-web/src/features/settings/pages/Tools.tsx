@@ -26,13 +26,13 @@ const GROUP_LABEL: Record<string, string> = {
 
 /* The vendors the two web tools can run on, with where each hands out keys.
    The fetch vendors other than Jina share the search vendor's key. */
-export const WEB_SEARCH: Array<[string, string, string]> = [
+const WEB_SEARCH: Array<[string, string, string]> = [
   ['serper', 'Serper', 'https://serper.dev'], ['anysearch', 'AnySearch', 'https://anysearch.com'],
   ['serpapi', 'SerpApi', 'https://serpapi.com'], ['tavily', 'Tavily', 'https://tavily.com'],
   ['exa', 'Exa', 'https://exa.ai'], ['brave', 'Brave Search', 'https://brave.com/search/api'],
   ['firecrawl', 'Firecrawl', 'https://firecrawl.dev'],
 ]
-export const WEB_FETCH: Array<[string, string, string, boolean]> = [
+const WEB_FETCH: Array<[string, string, string, boolean]> = [
   ['jina', 'Jina Reader', 'https://jina.ai/reader', false], ['anysearch', 'AnySearch', 'https://anysearch.com', true],
   ['tavily', 'Tavily', 'https://tavily.com', true], ['exa', 'Exa', 'https://exa.ai', true],
   ['firecrawl', 'Firecrawl', 'https://firecrawl.dev', true],

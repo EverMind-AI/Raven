@@ -59,19 +59,19 @@ describe('model roles', () => {
     expect(roleProviders(role('image'), snap()).map((p) => p.id)).toEqual(['openrouter'])
     await pick('gui.settings.roles.image', 'openai/gpt-4o')
     expect(sets(calls)).toEqual([
-      { key: 'tools.media.image', value: { model: 'openai/gpt-4o' } },
+      { key: 'tools.media.image', value: { model: 'openai/gpt-4o', quality: '' } },
       { key: 'tools.disabledTools', value: ['deep_research'] },
     ])
   })
 
-  it('clearing a media role writes null and puts the tool back on the disabled list', async () => {
+  it('clearing a media role empties the model, keeps the quality, and puts the tool back on the disabled list', async () => {
     const data = snap()
     ;(data.raw.tools as { media?: unknown; disabledTools: string[] }).media = { speech: { model: 'x/tts', quality: '' } }
     const { calls } = install(data)
     await mount('model')
     await act(async () => { fireEvent.click(screen.getByLabelText('gui.settings.roles.clear {"role":"gui.settings.roles.speech"}')) })
     expect(sets(calls)).toEqual([
-      { key: 'tools.media.speech', value: null },
+      { key: 'tools.media.speech', value: { model: '', quality: '' } },
       { key: 'tools.disabledTools', value: ['image_generate', 'deep_research', 'text_to_speech'] },
     ])
   })

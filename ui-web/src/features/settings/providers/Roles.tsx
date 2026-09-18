@@ -40,8 +40,6 @@ export const ROLES: Role[] = [
   { id: 'video', media: 'video', tool: 'video_generate', optional: true },
 ]
 
-export const roleById = (id: string): Role | undefined => ROLES.find((r) => r.id === id)
-
 /* Literal keys, for the i18n gate. */
 const NAME: Record<RoleId, string> = {
   chat: 'gui.settings.roles.chat', curator: 'gui.settings.roles.curator', title: 'gui.settings.roles.title',
@@ -57,9 +55,9 @@ const USE: Record<RoleId, string> = {
 }
 export const roleName = (r: Role): string => t(NAME[r.id])
 
-export const MEDIA_PROVIDER = 'openrouter'
-export const CTX_MIN = 1024
-export const ITER_RANGE: [number, number] = [1, 200]
+const MEDIA_PROVIDER = 'openrouter'
+const CTX_MIN = 1024
+const ITER_RANGE: [number, number] = [1, 200]
 
 const dig = (raw: Record<string, unknown>, path: string): unknown =>
   path.split('.').reduce<unknown>((o, k) => (o && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined), raw)
@@ -135,11 +133,18 @@ async function setRole(r: Role, model: string, provider: string, typed: boolean)
   if (r.keys) { await src.set(r.keys[0], model); return src.set(r.keys[1], provider) }
   if (r.everos) return src.everosSet(r.everos, { model }, provider)
   if (r.media) {
-    const cur = (dig(store.get().snap.raw, `tools.media.${r.media}`) as Record<string, unknown> | undefined) || {}
-    await src.set(`tools.media.${r.media}`, { ...cur, model })
+    await src.set(`tools.media.${r.media}`, mediaSelection(r.media, model))
     return src.set('tools.disabledTools', disabledTools(store.get().snap.raw).filter((x) => x !== r.tool))
   }
   return undefined
+}
+
+/* The whole selection the checker wants -- model and quality, nothing else --
+   keeping the quality already chosen. An empty model is how the selection is
+   cleared: the key takes no null. */
+function mediaSelection(kind: string, model: string): { model: string; quality: string } {
+  const cur = (dig(store.get().snap.raw, `tools.media.${kind}`) as { quality?: unknown } | undefined) || {}
+  return { model, quality: typeof cur.quality === 'string' ? cur.quality : '' }
 }
 
 async function clearRole(r: Role): Promise<SettingsSnapshot | void> {
@@ -147,7 +152,7 @@ async function clearRole(r: Role): Promise<SettingsSnapshot | void> {
   if (r.keys) { await src.set(r.keys[0], null); return src.set(r.keys[1], null) }
   if (r.everos) return src.everosSet(r.everos, null)
   if (r.media) {
-    await src.set(`tools.media.${r.media}`, null)
+    await src.set(`tools.media.${r.media}`, mediaSelection(r.media, ''))
     const dis = disabledTools(store.get().snap.raw)
     return src.set('tools.disabledTools', r.tool && !dis.includes(r.tool) ? [...dis, r.tool] : dis)
   }
@@ -222,7 +227,7 @@ function RoleLabel({ role, extra }: { role: Role; extra?: JSX.Element }): JSX.El
   )
 }
 
-export const modelWindow = (snap: SettingsSnapshot): number | null => {
+const modelWindow = (snap: SettingsSnapshot): number | null => {
   const p = snap.providers.find((x) => x.id === snap.curProvider)
   const facts = p && p.labels && p.labels[snap.model]
   const win = facts && (facts as { context_window?: number }).context_window

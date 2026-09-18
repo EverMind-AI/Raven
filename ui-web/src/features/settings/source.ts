@@ -48,7 +48,7 @@ let everosLive: ResultOf<'settings.everos'> | null = null
    learned from `system.version`, the check that drives the update notice and
    the upgrade prompt, and the language pick. Installed by
    features/settings/wire.ts, which owns the settings transport. */
-export interface SettingsChrome {
+interface SettingsChrome {
   version(): string | null
   checkUpdate(btn: HTMLButtonElement): void | Promise<void>
   setLang(v: string): void
@@ -69,7 +69,7 @@ export function stagedPerm(): string | null {
   return staging().perm ?? null
 }
 
-export async function loadEveros(): Promise<void> {
+async function loadEveros(): Promise<void> {
   try {
     everosLive = await gateway().call('settings.everos', {})
   } catch {
@@ -131,7 +131,7 @@ export const settingsSnapshot = (): SettingsSnapshot => ({
   tools: extTools(), skills: extSkillRows(), mcp: extMcpRows(),
 }) as SettingsSnapshot
 
-export const settingsErr = (e: unknown): string => {
+const settingsErr = (e: unknown): string => {
   const err = e as { data?: { detail?: string }; message?: string }
   return (err && err.data && err.data.detail) || (err && err.message) || String(e)
 }
@@ -147,9 +147,15 @@ async function run<T>(work: Promise<T>): Promise<T> {
   }
 }
 
-/* The reload that follows a write, chosen by what the write changed. */
+/* The reload that follows a write, chosen by what the write changed. A
+   provider write reloads the config too: the display names and the Azure
+   fields are read from the provider's own section, not from model.options. */
 const afterExt = async (): Promise<SettingsSnapshot> => { await loadExt(); return settingsSnapshot() }
-const afterProviders = async (): Promise<SettingsSnapshot> => { await loadProviders(); return settingsSnapshot() }
+const afterProviders = async (): Promise<SettingsSnapshot> => {
+  await loadSettings()
+  void pushPermMode()
+  return settingsSnapshot()
+}
 
 /* The banner's draw is the shell's; what it draws for is this page's business.
    No websearch notice in live mode: a config gap belongs in the settings page,
@@ -246,6 +252,10 @@ export const settingsSource: SettingsSource = {
      itself if it fails. */
   setLang: (v) => chrome.setLang(v),
 }
+
+/* The manager's word on a server, pushed as it changes; the plugins page
+   redraws its chips from it. Returns the unsubscribe. */
+export const watchMcp = (onStatus: () => void): (() => void) => gateway().on('mcp.status', onStatus)
 
 /* Test seam only: the raw config, the path it came from and the chrome the page
    registered are all the module's. */

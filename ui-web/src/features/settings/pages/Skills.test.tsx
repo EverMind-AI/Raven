@@ -6,6 +6,7 @@ import * as confirm from '../../../state/confirm'
 import { resetSources } from '../../../state/sources'
 import { install, mount } from '../harness'
 import * as store from '../store'
+import { stripFrontmatter } from './Skills'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -46,6 +47,8 @@ describe('skills page', () => {
     await act(async () => { fireEvent.click(screen.getByText('git-flow')) })
     expect(calls[0]).toEqual(['inspectSkill', 'git-flow'])
     expect(document.querySelector('.settings-md')!.textContent).toContain('Hi')
+    expect(stripFrontmatter('---\nname: x\n---\n\n# Body\n')).toBe('\n# Body\n')
+    expect(stripFrontmatter('# No header\n')).toBe('# No header\n')
     expect(screen.getByText('notes.md')).toBeTruthy()
     expect(screen.getByText('gui.settings.skills.builtin')).toBeTruthy()
     expect(screen.queryByText('gui.settings.skills.uninstall')).toBeNull()
@@ -55,7 +58,7 @@ describe('skills page', () => {
 
   it('a hub skill shows its version, install line and uninstall, which asks first and then removes', async () => {
     const { calls } = install(undefined, {
-      inspectSkill: async (name) => ({ name, description: 'd', path: `/w/skills/${name}`, body: '', files: ['SKILL.md'], always: true, hub: true,
+      inspectSkill: async (name) => ({ name, description: 'd', path: `/w/skills/${name}/SKILL.md`, body: '', files: ['SKILL.md'], always: true, hub: true,
         install: { installed_at: '2026-08-21T08:38:00Z', version: 'v2', trigger: 'use_skill', source: 'skillhub', score_safety: 0.7 } }),
     })
     await mount('skills')

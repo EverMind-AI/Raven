@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import * as settingsDialog from '../../state/settings'
 import { resetSources, setSources } from '../../state/sources'
 import * as store from './store'
 
@@ -12,6 +13,7 @@ const snapOf = (model: string): SettingsSnapshot => ({
 
 afterEach(() => {
   store._resetForTests()
+  settingsDialog._resetForTests()
   resetSources()
 })
 
@@ -86,5 +88,26 @@ describe('settings store', () => {
     releaseFirst(null)
     await a
     expect(store.get().usage).toBe(undefined)
+  })
+})
+
+describe('settings store, the inventory push', () => {
+  it('refreshSoon reloads once per burst while the dialog is open, and not at all while it is down', async () => {
+    vi.useFakeTimers()
+    const loads: number[] = []
+    setSources({ settings: { load: async () => { loads.push(1); return snapOf('pushed') } } as unknown as SettingsSource })
+    store.set({ loaded: true })
+    store.refreshSoon()
+    await vi.advanceTimersByTimeAsync(store.REFRESH_SOON_MS + 50)
+    expect(loads).toHaveLength(0)
+    settingsDialog.open()
+    store.refreshSoon()
+    store.refreshSoon()
+    store.refreshSoon()
+    await vi.advanceTimersByTimeAsync(store.REFRESH_SOON_MS + 50)
+    expect(loads).toHaveLength(1)
+    expect(store.get().snap.model).toBe('pushed')
+    settingsDialog.close()
+    vi.useRealTimers()
   })
 })

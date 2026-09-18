@@ -83,6 +83,6 @@ describe('tools page', () => {
     await act(async () => { fireEvent.click(screen.getByText('image_generate')) })
     await act(async () => { fireEvent.click(screen.getByLabelText('gui.settings.roles.change {"role":"gui.settings.roles.image"}')) })
     await act(async () => { fireEvent.click(screen.getByText('openai/gpt-4o')) })
-    expect(calls[0]).toEqual(['set', { key: 'tools.media.image', value: { model: 'openai/gpt-4o' } }])
+    expect(calls[0]).toEqual(['set', { key: 'tools.media.image', value: { model: 'openai/gpt-4o', quality: '' } }])
   })
 })

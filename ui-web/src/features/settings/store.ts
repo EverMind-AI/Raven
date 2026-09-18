@@ -150,6 +150,16 @@ const curTab = (): SectionId => {
   return (SECTIONS as string[]).includes(id) ? (id as SectionId) : 'general'
 }
 
+/* A reload coalesced over a burst of pushes -- an MCP sync reports one status
+   per server -- and skipped while the dialog is down: nothing is looking. */
+let refreshTimer: ReturnType<typeof setTimeout> | null = null
+export const REFRESH_SOON_MS = 300
+export function refreshSoon(): void {
+  if (!settingsDialog.isOpen() || !get().loaded) return
+  if (refreshTimer) clearTimeout(refreshTimer)
+  refreshTimer = setTimeout(() => { refreshTimer = null; void refresh() }, REFRESH_SOON_MS)
+}
+
 export async function refresh(): Promise<void> {
   set({ loaded: true })
   try {
@@ -318,13 +328,15 @@ async function oauthPoll(): Promise<void> {
   if (Date.now() > o.until) { oauthStop(); set({ oauth: { ...o, expired: true } }) }
 }
 
-export function oauthStop(): void {
+function oauthStop(): void {
   if (oauthTimer) clearInterval(oauthTimer)
   oauthTimer = null
 }
 
 export function _resetForTests(): void {
   oauthStop()
+  if (refreshTimer) clearTimeout(refreshTimer)
+  refreshTimer = null
   store._resetForTests()
   store.set(initial())
   lazy = false

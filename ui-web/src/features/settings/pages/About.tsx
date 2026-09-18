@@ -8,9 +8,14 @@ import * as store from '../store'
 
 import type { JSX } from 'react'
 
-export function workspacePath(raw: Record<string, unknown>): string {
+/* The configured workspace, else the default beside the config file: the
+   home the gateway runs from, not the operator's. */
+export function workspacePath(raw: Record<string, unknown>, configPath: string): string {
   const agents = raw.agents as { defaults?: { workspace?: string } } | undefined
-  return (agents && agents.defaults && agents.defaults.workspace) || '~/.raven/workspace'
+  const stated = agents && agents.defaults && agents.defaults.workspace
+  if (stated) return stated
+  const dir = configPath.replace(/[\\/][^\\/]*$/, '')
+  return dir ? `${dir}/workspace` : '~/.raven/workspace'
 }
 
 export function About(): JSX.Element {
@@ -30,7 +35,7 @@ export function About(): JSX.Element {
         <PathVal path={s.snap.configPath} onCopy={() => copyOrOpen(s.snap.configPath)} />
       </Row>
       <Row label={t('gui.settings.about.storage')}>
-        <PathVal path={workspacePath(s.snap.raw)} onCopy={() => copyOrOpen(workspacePath(s.snap.raw))} />
+        <PathVal path={workspacePath(s.snap.raw, s.snap.configPath)} onCopy={() => copyOrOpen(workspacePath(s.snap.raw, s.snap.configPath))} />
       </Row>
     </Card>
   )

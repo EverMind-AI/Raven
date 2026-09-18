@@ -12,7 +12,7 @@ import type { McpSnapshot } from '../../../rpc/generated'
 import type { AuthField } from '../../plugins/types'
 import type { JSX } from 'react'
 
-export type PlugChip = 'none' | 'connected' | 'connecting' | 'setup' | 'failed'
+type PlugChip = 'none' | 'connected' | 'connecting' | 'setup' | 'failed'
 
 /* What the chip says. Off shows nothing; a toggle or retry in flight is
    connecting; a credential the server still lacks is "needs setup" whatever

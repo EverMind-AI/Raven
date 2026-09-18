@@ -7042,6 +7042,18 @@
     "gui.model.pick_none": {
       "en": "No models added here yet",
       "zh": "这一家还没有添加模型"
+    },
+    "gui.settings.providers.base_override": {
+      "en": "Overrides the default",
+      "zh": "覆盖默认"
+    },
+    "gui.settings.providers.key_optional_ph": {
+      "en": "API key, if the server wants one",
+      "zh": "API Key（服务要求时填）"
+    },
+    "gui.settings.providers.api_key_optional": {
+      "en": "API Key (optional)",
+      "zh": "API Key（可选）"
     }
   }
 }

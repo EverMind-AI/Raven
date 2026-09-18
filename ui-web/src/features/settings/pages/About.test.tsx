@@ -27,7 +27,7 @@ describe('about page', () => {
     await mount('about')
     expect(screen.getByText('0.2.1')).toBeTruthy()
     expect(screen.getByText('/home/me/.raven/config.json')).toBeTruthy()
-    expect(screen.getByText('~/.raven/workspace')).toBeTruthy()
+    expect(screen.getByText('/home/me/.raven/workspace')).toBeTruthy()
     await act(async () => { fireEvent.click(screen.getAllByLabelText('gui.settings.copy_path')[0]!) })
     expect(copied.values).toEqual(['/home/me/.raven/config.json'])
   })
@@ -35,8 +35,9 @@ describe('about page', () => {
   it('reads the storage location from agents.defaults.workspace when set', () => {
     const raw = snap().raw
     ;(raw.agents as { defaults: Record<string, unknown> }).defaults.workspace = '/data/raven'
-    expect(workspacePath(raw)).toBe('/data/raven')
-    expect(workspacePath({})).toBe('~/.raven/workspace')
+    expect(workspacePath(raw, '/home/me/.raven/config.json')).toBe('/data/raven')
+    expect(workspacePath({}, '/home/me/.raven/config.json')).toBe('/home/me/.raven/workspace')
+    expect(workspacePath({}, '')).toBe('~/.raven/workspace')
   })
 
   it('the check button hands itself to the chrome, which owns the version check', async () => {

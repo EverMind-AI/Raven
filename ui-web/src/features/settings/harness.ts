@@ -23,7 +23,7 @@ export const providers = (): ProviderRow[] => [
     apiBase: 'https://openrouter.ai/api/v1', defaultApiBase: 'https://openrouter.ai/api/v1', headers: { 'X-Title': '****set****' } },
   { id: 'openai', name: 'OpenAI', models: [], configured: [], on: false, kind: 'key', acceptsKey: true, keyUrl: 'https://platform.openai.com/api-keys' },
   { id: 'minimax_global', name: 'MiniMax Global', models: [], configured: [], on: false, kind: 'oauth', acceptsKey: false },
-  { id: 'ollama', name: 'Ollama', models: [], configured: [], on: false, kind: 'local', acceptsKey: false, needsBase: true },
+  { id: 'ollama', name: 'Ollama', models: [], configured: [], on: false, kind: 'local', acceptsKey: true, needsBase: true },
 ]
 
 export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
@@ -34,6 +34,7 @@ export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
       tools: { disabledTools: ['image_generate', 'deep_research'], web: { search: { provider: 'serper' } } },
       skillForge: { blocklist: ['sql-style'] },
       sessions: { autoArchiveAfterDays: null },
+      providers: { anthropic: { modelOverlay: { 'claude-opus-4-5': { label: 'Opus', description: 'the big one' } } } },
     },
     configPath: '/home/me/.raven/config.json',
     everos: { available: true, sections: { llm: { model: 'openai/gpt-4o', base_url: 'https://openrouter.ai/api/v1', api_key_set: true } } },

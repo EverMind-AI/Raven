@@ -21,8 +21,8 @@ import { staging } from '../../state/session/staging'
 import { show as toast } from '../../state/toast'
 import * as chip from '../model/chip'
 import { setChipPainter } from '../model/source'
-import { checkVersion, savePermMode, setSettingsChrome } from './source'
-import { redraw as redrawSettings } from './store'
+import { checkVersion, savePermMode, setSettingsChrome, watchMcp } from './source'
+import { redraw as redrawSettings, refreshSoon } from './store'
 
 /* The version check the rail-foot notice already does, on demand. No new
    backend: system.version carries the answer. */
@@ -86,4 +86,10 @@ export function install(): void {
   })
 
   chip.install()
+
+  /* The plugins page draws each server's chip from the manager's word; a
+     connect finishes after the toggle that started it returned, so the page
+     re-reads when the manager says so rather than showing the state at the
+     moment of the write. */
+  watchMcp(refreshSoon)
 }

@@ -152,3 +152,35 @@ describe('provider detail', () => {
     vi.useRealTimers()
   })
 })
+
+describe('provider detail, the address of a direct vendor', () => {
+  it('lives in the advanced card and is written on its own through set_fields', async () => {
+    const { calls } = install()
+    await open('anthropic')
+    const boxes = screen.getAllByLabelText('gui.settings.providers.base') as HTMLInputElement[]
+    expect(boxes).toHaveLength(1)
+    await act(async () => { fireEvent.change(boxes[0]!, { target: { value: 'https://proxy.example/v1' } }); fireEvent.keyDown(boxes[0]!, { key: 'Enter' }) })
+    expect(calls).toEqual([['setFields', { slug: 'anthropic', fields: { api_base: 'https://proxy.example/v1' } }]])
+  })
+
+  it('lists only the names a person stated, never the catalogue\'s own', async () => {
+    const data = snap()
+    data.providers = data.providers.map((p) => (p.id === 'openrouter' ? { ...p, labels: { 'openai/gpt-4o': { label: 'GPT-4o' } } } : p))
+    install(data)
+    await open('openrouter')
+    expect(screen.queryByText('GPT-4o')).toBeNull()
+  })
+})
+
+describe('provider detail, Azure', () => {
+  it('shows the stored deployment and API version from the config section', async () => {
+    const data = snap()
+    data.providers = [...data.providers, { id: 'azure_openai', name: 'Azure OpenAI', models: [], configured: [], on: true, kind: 'endpoint', acceptsKey: true, needsBase: true }]
+    ;(data.raw.providers as Record<string, unknown>).azure_openai = { apiBase: 'https://acme.openai.azure.com', deployment: 'gpt-4o-eu', apiVersion: '2024-10-21' }
+    install(data)
+    await open('azure_openai')
+    expect((screen.getByLabelText('gui.settings.providers.deployment') as HTMLInputElement).value).toBe('gpt-4o-eu')
+    expect((screen.getByLabelText('gui.settings.providers.api_version') as HTMLInputElement).value).toBe('2024-10-21')
+    expect((screen.getByLabelText('gui.settings.providers.base') as HTMLInputElement).value).toBe('https://acme.openai.azure.com')
+  })
+})

@@ -7,7 +7,7 @@ import { KeyInput } from '../../../components/KeyInput'
 import { t } from '../../../i18n/t'
 import { Card, Chip, Crumb, Grow, IconBtn, KeyLink, Row, Rov, Spin, Tag } from '../Fields'
 import * as store from '../store'
-import { AZURE, OauthNote, kindLabel, kindOf, takesBase, takesKey } from './Providers'
+import { AZURE, OauthNote, kindLabel, kindOf, needsKey, takesBase, takesKey } from './Providers'
 import { roleName, rolesUsing } from './Roles'
 
 import type { ProviderRow } from '../types'
@@ -17,7 +17,7 @@ const busy = (slug: string): string => `prov:${slug}`
 
 function Connection({ p }: { p: ProviderRow }): JSX.Element {
   const [key, setKey] = useState('')
-  const [base, setBase] = useState(p.apiBase || p.defaultApiBase || '')
+  const [base, setBase] = useState(p.apiBase || rawStr(store.get().snap.raw, p.id, 'apiBase') || p.defaultApiBase || '')
   const kind = kindOf(p)
   const disconnect = (): void => {
     const used = rolesUsing(store.get().snap, p.id)
@@ -27,8 +27,8 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
   const save = (): void => {
     const k = key.trim()
     const b = base.trim()
-    if (takesKey(p) && !k && !p.on) { store.refuse(t('gui.settings.providers.key_first')); return }
-    if (!takesKey(p) && !b) { store.refuse(t('gui.settings.providers.base_first')); return }
+    if (needsKey(p) && !k && !p.on) { store.refuse(t('gui.settings.providers.key_first')); return }
+    if (takesBase(p) && !b) { store.refuse(t('gui.settings.providers.base_first')); return }
     const params: Record<string, unknown> = { slug: p.id }
     if (k) params.api_key = k
     if (b) params.api_base = b
@@ -58,14 +58,25 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
           <Row label={t('gui.settings.providers.billing')}><Rov>{t('gui.settings.providers.subscription')}</Rov></Row>
         </>
       )}
+      {kind !== 'oauth' && !needsKey(p) && takesBase(p) && (
+        <Row stack label={t('gui.settings.providers.base')}>
+          <span className="settings-taglist">
+            <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')} placeholder="http://localhost:11434"
+              onChange={(e) => setBase(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
+            <button type="button" className="mini" disabled={store.isBusy(busy(p.id))} onClick={save}>{btn}</button>
+            {off}
+          </span>
+        </Row>
+      )}
       {kind !== 'oauth' && takesKey(p) && (
-        <Row stack label={<>{t('gui.settings.providers.api_key')}<KeyLink url={p.keyUrl} /></>}>
+        <Row stack label={<>{t(needsKey(p) ? 'gui.settings.providers.api_key' : 'gui.settings.providers.api_key_optional')}<KeyLink url={p.keyUrl} /></>}>
           <span className="settings-taglist">
             <KeyInput className="settings-tbox" value={key} aria-label={t('gui.settings.providers.api_key')}
               placeholder={p.on ? t('gui.settings.key_set_ph') : t('gui.settings.providers.paste_key')}
               onChange={(e) => setKey(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
-            <button type="button" className="mini" disabled={store.isBusy(busy(p.id))} onClick={save}>{btn}</button>
-            {off}
+            {needsKey(p) && <button type="button" className="mini" disabled={store.isBusy(busy(p.id))} onClick={save}>{btn}</button>}
+            {!needsKey(p) && <button type="button" className="mini ghost" disabled={store.isBusy(busy(p.id))} onClick={save}>{t('gui.settings.update')}</button>}
+            {needsKey(p) && off}
           </span>
         </Row>
       )}
@@ -79,7 +90,7 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
           </span>
         </Row>
       )}
-      {kind !== 'oauth' && takesKey(p) && (takesBase(p) || p.kind === 'endpoint') && (
+      {kind !== 'oauth' && needsKey(p) && (takesBase(p) || p.kind === 'endpoint') && (
         <Row label={t('gui.settings.providers.base')}>
           <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')}
             placeholder={p.needsBase ? 'https://' : t('gui.settings.providers.base_default')}
@@ -91,19 +102,31 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
   )
 }
 
+/* The provider's own config section, for the fields model.options does not
+   carry (Azure's deployment and API version, an address it left out). */
+function rawSection(raw: Record<string, unknown>, slug: string): Record<string, unknown> {
+  const providers = raw.providers as Record<string, Record<string, unknown>> | undefined
+  return (providers && providers[slug]) || {}
+}
+const rawStr = (raw: Record<string, unknown>, slug: string, key: string): string => {
+  const v = rawSection(raw, slug)[key]
+  return typeof v === 'string' ? v : ''
+}
+
 function AzureFields({ p }: { p: ProviderRow }): JSX.Element {
-  const [deploy, setDeploy] = useState('')
-  const [ver, setVer] = useState('')
+  const raw = store.get().snap.raw
+  const [deploy, setDeploy] = useState(rawStr(raw, p.id, 'deployment'))
+  const [ver, setVer] = useState(rawStr(raw, p.id, 'apiVersion'))
   const write = (fields: Record<string, string>): void => { void store.run(busy(p.id), () => store.source().setFields(p.id, fields)) }
   return (
     <>
       <Row label={t('gui.settings.providers.deployment')}>
         <input className="settings-tbox" value={deploy} aria-label={t('gui.settings.providers.deployment')} placeholder={t('gui.settings.providers.deployment_ph')}
-          onChange={(e) => setDeploy(e.currentTarget.value)} onBlur={() => { if (deploy.trim()) write({ deployment: deploy.trim() }) }} />
+          onChange={(e) => setDeploy(e.currentTarget.value)} onBlur={() => { if (deploy.trim() && deploy.trim() !== rawStr(store.get().snap.raw, p.id, 'deployment')) write({ deployment: deploy.trim() }) }} />
       </Row>
       <Row label={t('gui.settings.providers.api_version')}>
         <input className="settings-tbox" value={ver} aria-label={t('gui.settings.providers.api_version')} placeholder="2024-10-21"
-          onChange={(e) => setVer(e.currentTarget.value)} onBlur={() => { if (ver.trim()) write({ api_version: ver.trim() }) }} />
+          onChange={(e) => setVer(e.currentTarget.value)} onBlur={() => { if (ver.trim() && ver.trim() !== rawStr(store.get().snap.raw, p.id, 'apiVersion')) write({ api_version: ver.trim() }) }} />
       </Row>
     </>
   )
@@ -225,11 +248,29 @@ function KvForm({ fields, onSave, onCancel, saveLabel }: {
   )
 }
 
+/* What the person stated about a model, from the config section itself:
+   `labels` folds these into the registry's own names, so it cannot tell a
+   name somebody chose from one the catalogue ships. */
+function statedOverlays(raw: Record<string, unknown>, slug: string): Array<[string, { label?: string; description?: string }]> {
+  const providers = raw.providers as Record<string, { modelOverlay?: Record<string, { label?: string; description?: string }> }> | undefined
+  const overlay = (providers && providers[slug] && providers[slug].modelOverlay) || {}
+  return Object.entries(overlay).filter(([, v]) => v && (v.label || v.description))
+}
+
 function Advanced({ p }: { p: ProviderRow }): JSX.Element {
   const s = store.get()
   const headers = Object.entries(p.headers || {})
-  const overlays = Object.entries(p.labels || {}).filter(([, v]) => v && v.label)
+  const overlays = statedOverlays(s.snap.raw, p.id)
   const listed = p.configured || []
+  /* The address of a vendor whose connection card has no address row: an
+     override of the registry's default, written on its own. */
+  const [base, setBase] = useState(p.apiBase || '')
+  const showBase = takesKey(p) && !takesBase(p) && p.kind !== 'endpoint'
+  const setBaseField = (): void => {
+    const b = base.trim()
+    if (b === (p.apiBase || '')) return
+    void store.run(busy(p.id), () => store.source().setFields(p.id, { api_base: b }))
+  }
   const setHeader = (name: string, value: string | null): void => {
     void store.run(busy(p.id), () => store.source().setFields(p.id, { extra_headers: { [name]: value } }))
   }
@@ -251,6 +292,12 @@ function Advanced({ p }: { p: ProviderRow }): JSX.Element {
   }
   return (
     <Card title={t('gui.settings.providers.advanced')}>
+      {showBase && (
+        <Row label={t('gui.settings.providers.base')} sub={t('gui.settings.providers.base_override')}>
+          <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')} placeholder={p.defaultApiBase || t('gui.settings.providers.base_default')}
+            onChange={(e) => setBase(e.currentTarget.value)} onBlur={setBaseField} onKeyDown={(e) => { if (e.key === 'Enter') setBaseField() }} />
+        </Row>
+      )}
       <Row stack label={t('gui.settings.providers.headers')}>
         <div style={{ width: '100%' }}>
           {headers.length > 0 && (
@@ -282,7 +329,7 @@ function Advanced({ p }: { p: ProviderRow }): JSX.Element {
               {overlays.map(([model, v]) => (
                 <div key={model} className="settings-kvrow">
                   <span className="settings-kvn">{model}</span>
-                  <span className="settings-kvv" style={{ color: 'var(--text)' }}>{v.label}{v.description ? ` · ${v.description}` : ''}</span>
+                  <span className="settings-kvv" style={{ color: 'var(--text)' }}>{v.label || model}{v.description ? ` · ${v.description}` : ''}</span>
                   <IconBtn glyph="x" label={t('gui.settings.providers.remove_label', { model })} onClick={() => clearOverlay(model)} />
                 </div>
               ))}
