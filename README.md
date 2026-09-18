@@ -353,6 +353,8 @@ The following runtime packages and modules form the canonical commit scopes unde
 
 | Package | What it is |
 |---|---|
+| `a2a` | A2A server surface: serves the host agent to peer agents over the Agent2Agent protocol |
+| `a2a_client` | A2A client: calls configured remote agents, and holds the outbound origin boundary |
 | `acp` | ACP server surface: exposes Raven to external agent hosts |
 | `acp_client` | ACP client, capability negotiation, and adapters for third-party agent events |
 | `agent` | Agent Loop, Harness Modules, tool execution, and subagent orchestration |

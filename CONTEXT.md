@@ -1444,8 +1444,9 @@ member, seated inner here as well so every package appears in one roster), `conf
 `eval_engine` and `proactive_engine` (L3 shelf members -- proactive_engine originates
 turns through its schedulers and sentinel but is an engine the loop and the assembly root
 consume, not a transport), and `core` (the L2 assembly root). `templates` is packaged data
-and takes no seat. Surfaces: `cli`, `rpc`, and `acp` (an entrance: Raven serving as an
-agent for another host). `browser` and `importer` are seated inner (feature
+and takes no seat. Surfaces: `cli`, `rpc`, `acp` (an entrance: Raven serving as an
+agent for another host) and `a2a` (the same entrance for a peer agent, over
+Agent2Agent rather than ACP). `browser` and `importer` are seated inner (feature
 libraries consumed by surfaces, importing none themselves -- the edge is watched
 by the contract now, not by a ruling note). `evolver` is not a seat at all: it left the
 package for the repo-level `evolver/` tool (outside the wheel) that drives raven as a library,
@@ -1467,20 +1468,28 @@ speaks it, and the `acp_dialects` that translate other vendors' tool records -- 
 out to the top-level `acp_client/` shelf (2026-08-31), which joined the inner-layers
 seat list and stays under the cargo contract.
 `acp_client/` is named for its side of ACP (Raven driving somebody else's agent);
-`acp/` is the other side, the entrance.
+`acp/` is the other side, the entrance. `a2a_client/` and `a2a/` split on the
+same line for the same reason, and `a2a_client` is seated inner beside
+`acp_client`.
 
-**Surfaces law** (ruled 2026-08-31):
-The three entrances relate asymmetrically. A SERVED surface (`rpc`, `acp`)
-never imports the launcher or a sibling surface's insides -- two import-linter
-contracts pin `{rpc, acp} -x-> cli` and `rpc -x-> acp` with zero exceptions.
-The LAUNCHER direction (`cli -> rpc/acp`) is sanctioned by the existing axiom
+**Surfaces law** (ruled 2026-08-31; `a2a` joined 2026-09-15):
+The four entrances relate asymmetrically. A SERVED surface (`rpc`, `acp`, `a2a`)
+never imports the launcher or a sibling surface's insides -- import-linter
+contracts pin `{rpc, acp, a2a} -x-> cli` and `rpc -x-> acp` with zero
+exceptions, and "inner layers know no surface" names all four. Naming every
+surface in that contract is load-bearing rather than tidy: a contract can only
+break on an edge it names, so an unseated surface is not a watched one no matter
+what the run reports.
+The LAUNCHER direction (`cli -> rpc/acp/a2a`) is sanctioned by the existing axiom
 that an entrance brings its own transport-side wiring: the cli is the entrance
 that assembles and hosts the others. What a served surface genuinely needs
 from the cli arrives by registration (`rpc/cli_socket.py` carries the console
 feature's command table; `rpc/serve_control.py` is owned by the reading side
-and armed by the host). The one remaining directed edge -- acp hosting an rpc
-stack over its translator -- is pinned to the single `raven.rpc.bootstrap`
-facade module by the roster guard in `tests/test_l4_entrances.py`.
+and armed by the host). Two directed edges remain, and each is pinned to the one
+module built for hosting, by a roster guard in `tests/test_l4_entrances.py`
+rather than by an `ignore_imports` entry: acp hosting an rpc stack over its
+translator reaches `raven.rpc.bootstrap` only, and the ws gateway mounting the
+A2A face reaches `raven.a2a.gate` only.
 
 **Updates** (`updates/`):
 The install's own lifecycle as an inner feature library (the browser/importer
