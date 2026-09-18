@@ -8465,6 +8465,56 @@
           "type": "object"
         }
       }
+    },
+    {
+      "name": "tasks.list",
+      "summary": "Every unit of delegated work one conversation started, as run-level rows with their nodes inline.",
+      "description": "A spawn is one row with one node; a run_subagent_dag run (a playbook run included) is one row carrying its graph. Built off disk from the run dir, the session node registry and the instance registry, so no live graph tool is needed and a reload answers the same as a live page. Bodies -- a node's messages, output and rendered prompt -- stay on dag.node and subagent.context. Newest first.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "Whose tasks to list. An empty or unknown key answers with an empty list, not an error."
+          }
+        },
+        {
+          "name": "kind",
+          "required": false,
+          "schema": {
+            "$ref": "#/components/schemas/TaskKind"
+          },
+          "description": "With id, narrows the answer to one task. Ids are unique within a kind, not across kinds."
+        },
+        {
+          "name": "id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "description": "A run id for kind=dag, the record (node) id for kind=spawn. Ignored without kind."
+        }
+      ],
+      "result": {
+        "name": "TasksListResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tasks"
+          ],
+          "properties": {
+            "tasks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/TaskRow"
+              }
+            }
+          }
+        }
+      },
+      "errors": []
     }
   ],
   "components": {
@@ -12624,6 +12674,356 @@
         "required": [
           "ok"
         ]
+      },
+      "TaskKind": {
+        "description": "Which delegation path made a task: a spawn call, or a run_subagent_dag run (a playbook run is one).",
+        "type": "string",
+        "enum": [
+          "spawn",
+          "dag"
+        ]
+      },
+      "TaskStatus": {
+        "description": "A task's state, derived from its nodes' recorded states, first rule that matches: a run superseded by a replan that started is cancelled (one that did not start is failed); any failed node -> failed; any interrupted -> interrupted; any pending/running/exception -> running; any cancelled or skipped -> cancelled; else completed. A spawn is its one node's state.",
+        "type": "string",
+        "enum": [
+          "running",
+          "completed",
+          "failed",
+          "interrupted",
+          "cancelled"
+        ]
+      },
+      "TaskCounts": {
+        "description": "How many of the task's nodes sit in each state. Counted from graph.json, so skipped nodes are counted too.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "total",
+          "pending",
+          "running",
+          "completed",
+          "failed",
+          "skipped",
+          "cancelled",
+          "interrupted",
+          "exception"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer"
+          },
+          "pending": {
+            "type": "integer"
+          },
+          "running": {
+            "type": "integer"
+          },
+          "completed": {
+            "type": "integer"
+          },
+          "failed": {
+            "type": "integer"
+          },
+          "skipped": {
+            "type": "integer"
+          },
+          "cancelled": {
+            "type": "integer"
+          },
+          "interrupted": {
+            "type": "integer"
+          },
+          "exception": {
+            "type": "integer",
+            "description": "Nodes suspended on a verdict, waiting for resolve_dag_node. A running row with one of these is waiting on a decision, not working."
+          }
+        }
+      },
+      "TaskReplan": {
+        "description": "Present only on a run a replan superseded, read from graph.json's top-level replan entry. started=false means the successor never began; error says why.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "run_id",
+          "started"
+        ],
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "description": "The successor run."
+          },
+          "from_node": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "TaskFile": {
+        "description": "One file a node wrote, as the lane that ran it recorded the tool result. The in-process lane records these; the acp and cli lanes record none yet. The diff body is not here: a client builds it from the node's messages.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "op",
+          "add",
+          "del"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string",
+            "enum": [
+              "write",
+              "edit"
+            ]
+          },
+          "add": {
+            "type": "integer"
+          },
+          "del": {
+            "type": "integer"
+          },
+          "size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Bytes after the write, when the lane could measure it."
+          }
+        }
+      },
+      "TaskNode": {
+        "description": "One step of a task: a graph node, or a spawn's single node.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "node_id",
+          "agent",
+          "status",
+          "depends_on",
+          "files"
+        ],
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "description": "The model's own id for the step, unique across the session."
+          },
+          "node_summary": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The step's one-line title. Null on a run written before the field existed."
+          },
+          "agent": {
+            "type": "string",
+            "description": "The roster name of the agent that runs it."
+          },
+          "instance": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The stateful handle, named or minted. Null for a node of an agent that keeps no session."
+          },
+          "status": {
+            "$ref": "#/components/schemas/DagSnapshotNodeStatus"
+          },
+          "depends_on": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "May name a node outside this task: node ids are the session's, and a later graph may depend on an earlier run's completed node."
+          },
+          "started_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Epoch milliseconds."
+          },
+          "ended_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Epoch milliseconds; null while running, and for an interrupted node nothing recorded an end for."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it failed, capped at 500 characters."
+          },
+          "tokens_in": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Null when the lane cannot report usage -- never zero for that."
+          },
+          "tokens_out": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tool_call_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Null means zero calls or an unreporting lane; the record cannot tell the two apart."
+          },
+          "tool_failure_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many of those calls reported failure. A completed node with all its calls failed is not a clean run."
+          },
+          "has_output": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the node wrote an output at all. A completed node without one is why a downstream reference of it fails."
+          },
+          "prompt_template": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The template as dispatched, placeholders unexpanded. Null for a spawn."
+          },
+          "inputs": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "The node's declared inputs, per key: a literal, {file: path} or {node: id}."
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Absent means the agent's own menu; an empty list means none."
+          },
+          "mcps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Same three-valued reading as skills."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskFile"
+            }
+          }
+        }
+      },
+      "TaskRow": {
+        "description": "One unit of delegated work a conversation started, with its nodes inline.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "counts",
+          "nodes"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The run id for a dag; the record (node) id for a spawn."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TaskKind"
+          },
+          "task_summary": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the whole task was dispatched for. Null on a run written before the field existed."
+          },
+          "status": {
+            "$ref": "#/components/schemas/TaskStatus"
+          },
+          "replan": {
+            "$ref": "#/components/schemas/TaskReplan"
+          },
+          "playbook": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The library name of the playbook that dispatched this run, derived from the node-id prefix the executor writes; null when none matches."
+          },
+          "started_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Epoch milliseconds; the earliest node start."
+          },
+          "ended_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Epoch milliseconds; the latest node end, null while running."
+          },
+          "agent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A spawn's agent. Null for a dag, whose nodes name their own."
+          },
+          "handle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A spawn's instance handle -- what subagent.cancel_instance takes. Null for a dag; a dag is stopped through subagent.interrupt on its run id."
+          },
+          "counts": {
+            "$ref": "#/components/schemas/TaskCounts"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskNode"
+            }
+          }
+        }
       }
     },
     "errors": {

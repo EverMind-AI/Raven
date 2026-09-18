@@ -905,6 +905,106 @@ class DagNodeResult(_Strict):
     node: DagNodeDetail
 
 
+# ---------------------------------------------------------------------------
+# tasks.* -- a conversation's delegated work as tasks, read off disk
+# ---------------------------------------------------------------------------
+
+TaskKind = Literal["spawn", "dag"]
+
+TaskStatus = Literal["running", "completed", "failed", "interrupted", "cancelled"]
+
+
+class TaskCounts(_Strict):
+    total: int
+    pending: int
+    running: int
+    completed: int
+    failed: int
+    skipped: int
+    cancelled: int
+    interrupted: int
+    exception: int = Field(
+        ...,
+        description=(
+            "Nodes suspended on a verdict, waiting for resolve_dag_node. A running row with one of these "
+            "is waiting on a decision, not working."
+        ),
+    )
+
+
+class TaskReplan(_Strict):
+    """Present only on a run a replan superseded; ``started=false`` means the successor never began."""
+
+    run_id: str
+    from_node: str | None = None
+    reason: str | None = None
+    started: bool
+    error: str | None = None
+
+
+class TaskFile(_Strict):
+    """One file a node wrote, as the lane that ran it recorded the tool result."""
+
+    path: str
+    op: Literal["write", "edit"]
+    add: int
+    del_: int = Field(..., alias="del")
+    size: int | None = None
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+class TaskNode(_Strict):
+    """One step of a task: a graph node, or a spawn's single node."""
+
+    node_id: str
+    node_summary: str | None = None
+    agent: str
+    instance: str | None = None
+    status: DagSnapshotNodeStatus
+    depends_on: list[str]
+    started_at: int | None = None
+    ended_at: int | None = None
+    error: str | None = Field(default=None, description="Why it failed, capped at 500 characters.")
+    tokens_in: int | None = Field(default=None, description="Null when the lane cannot report usage -- never zero for that.")
+    tokens_out: int | None = None
+    tool_call_count: int | None = None
+    tool_failure_count: int | None = None
+    has_output: bool | None = None
+    prompt_template: str | None = None
+    inputs: dict[str, Any] | None = None
+    skills: list[str] | None = None
+    mcps: list[str] | None = None
+    files: list[TaskFile]
+
+
+class TaskRow(_Strict):
+    """One unit of delegated work a conversation started, with its nodes inline."""
+
+    id: str
+    kind: TaskKind
+    task_summary: str | None = None
+    status: TaskStatus
+    replan: TaskReplan | None = None
+    playbook: str | None = None
+    started_at: int | None = None
+    ended_at: int | None = None
+    agent: str | None = None
+    handle: str | None = None
+    counts: TaskCounts
+    nodes: list[TaskNode]
+
+
+class TasksListParams(_Strict):
+    session_key: str
+    kind: TaskKind | None = None
+    id: str | None = None
+
+
+class TasksListResult(_Strict):
+    tasks: list[TaskRow]
+
+
 class CronMissedItem(_Strict):
     name: str
     scheduled_at: str
@@ -4644,6 +4744,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # dag.*
     "dag.get": (DagGetParams, DagGetResult),
     "dag.node": (DagNodeParams, DagNodeResult),
+    "tasks.list": (TasksListParams, TasksListResult),
 }
 
 __all__ = [

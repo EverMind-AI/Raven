@@ -43,6 +43,7 @@ from raven.rpc.methods.slash_routing import register_slash_routing_methods
 from raven.rpc.methods.subagent import register_subagent_methods
 from raven.rpc.methods.subagents import register_subagents_methods
 from raven.rpc.methods.system import register_system_methods
+from raven.rpc.methods.tasks import register_tasks_methods
 from raven.rpc.methods.terminal import register_terminal_methods
 from raven.rpc.methods.turn import (
     register_session_interrupt_method,
@@ -142,6 +143,7 @@ def register_aligned_methods_except_system(
     register_subagents_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_instance_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_dag_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    register_tasks_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_session_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_terminal_methods(dispatcher)
     register_stub_methods(dispatcher)
