@@ -235,6 +235,14 @@ and `src/chrome/PermPopover.tsx` and `TierPopover.tsx` are the two the dock
 raises.
 _Avoid_: "pop" and "panel" for this.
 
+**Task**:
+One row of `tasks.list` as the desk's tasks tab draws it (`features/tasks/`): a spawn or a
+DAG run this conversation started, with its nodes inline. The row is the list's, the pane it
+opens is the desk's (`kind: 'task'`), and the node's context comes from `dag.node` /
+`subagent.context` through the transcript's renderer -- the domain holds the rows and what
+is picked, never a copy of the record.
+_Avoid_: "task" for a turn or for the composer's draft.
+
 **Pane**:
 A resizable column: the workspace pane beside the chat (`src/state/ws.ts` holds
 it, `src/chrome/WsPane.tsx` renders it, and the islands drawn inside it ask it
