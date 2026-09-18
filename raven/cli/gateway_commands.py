@@ -37,6 +37,7 @@ from raven.utils.workspace import sync_workspace_templates
 
 if TYPE_CHECKING:
     from raven.config.schema import GatewayPageConfig
+    from raven.core.runtime import SwapCoordinator
 
 console = Console()
 
@@ -208,6 +209,44 @@ def page_target(page_config: "GatewayPageConfig", page_port: int | None) -> int 
     if page_port is not None:
         return page_port
     return page_config.port if page_config.enabled else None
+
+
+def _retire_generation_watchers(swaps: "SwapCoordinator", agent) -> None:
+    """Stop the skill watcher of every generation still owned at shutdown.
+
+    ``ContextBuilder`` starts a ``SkillFileWatcher`` in ``__init__``, so a
+    generation owns a daemon thread parked inside watchfiles' Rust ``watch()``
+    from the moment it is built, whether or not it ever served. Daemon status
+    does not make process exit safe while the thread sits in native code:
+    ``Py_FinalizeEx`` tears the interpreter down under that call and the
+    process dies of SIGSEGV once every Python shutdown step has already
+    succeeded, so a systemd or docker stop records a crash instead of the
+    clean stop it was.
+
+    Three seats can hold one at once -- the bound generation, a candidate
+    staged that the serving loop never consumed, and a candidate ``take``
+    handed out whose binding a cancelled unbind never finished. None of this
+    goes through ``RavenRuntime.discard``: that method is contract-bound to
+    stay call-free, because a call there would mean an organ was started
+    before FREEZE, and this watcher is exactly such an organ.
+
+    One seat raising must not strand the seats behind it; a sweep that stops
+    early still leaves a watcher parked in native code, which is the whole
+    failure being closed here.
+    """
+    seats = [agent]
+    # Read before take(), which parks a staged candidate in that same seat.
+    stranded = swaps.in_transition
+    staged = swaps.take()
+    if staged is not None:
+        seats.append(staged.runtime.loop)
+    if stranded is not None:
+        seats.append(stranded.runtime.loop)
+    for loop in seats:
+        try:
+            loop.context.skills.stop_file_watcher()
+        except Exception:
+            logger.exception("skill watcher stop failed during shutdown; continuing")
 
 
 def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, above the ceiling)
@@ -1102,29 +1141,12 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 await close_pool()
                 await agent.close_mcp()
                 agent.stop()
-                # A reload can stage a generation that this shutdown reaches
-                # before the serving loop consumes it. It was built, so it owns
-                # a skill watcher, and no unbind will ever retire it. take()'s
-                # swapping flag is inert here: only release() reads it, and this
-                # process is not going to reach one.
-                staged = swaps.take()
-                if staged is not None:
-                    # Not through discard(): that method is contract-bound to
-                    # stay call-free, because a call there would mean an organ
-                    # was started before FREEZE. The watcher is exactly such an
-                    # organ -- the context builder starts it in __init__ -- so
-                    # it is retired here rather than pretending otherwise.
-                    staged.runtime.loop.context.skills.stop_file_watcher()
-                # The context builder's skill watcher is a daemon thread parked
-                # inside watchfiles' Rust watch(). Daemon status does not make
-                # process exit safe while it sits in native code: Py_FinalizeEx
-                # tears the interpreter down under that call and the process
-                # dies of SIGSEGV once this whole chain has already succeeded,
-                # so a systemd or docker stop records a crash instead of the
-                # clean stop it was. Stopped here rather than in AgentLoop.stop,
-                # whose other caller is the generation swap -- that one keeps
-                # the process running and must keep auto-refresh with it.
-                agent.context.skills.stop_file_watcher()
+                # Not folded into AgentLoop.stop: its other caller is the
+                # generation swap, which keeps the process running and has to
+                # keep auto-refresh with it. take()'s swapping flag is inert
+                # here -- only release() reads it, and this process reaches
+                # none.
+                _retire_generation_watchers(swaps, agent)
                 await channels.stop_all()
                 # Stop the memory-backend plugin last so any
                 # in-flight backend.store / backend.feedback calls

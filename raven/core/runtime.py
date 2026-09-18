@@ -315,6 +315,7 @@ class SwapCoordinator:
         self._booting = True
         self._swapping = False
         self._candidate: SwapCandidate | None = None
+        self._in_transition: SwapCandidate | None = None
         self._last_accept: float | None = None
         self._tasks: set[asyncio.Task] = set()
         self._clock = clock
@@ -323,6 +324,11 @@ class SwapCoordinator:
     @property
     def in_flight(self) -> bool:
         return self._in_flight
+
+    @property
+    def in_transition(self) -> SwapCandidate | None:
+        """The candidate handed out by take() that no loop is running yet."""
+        return self._in_transition
 
     def begin(self) -> str | None:
         """Claim the swap slot; None when claimed, else the refusal reason."""
@@ -349,6 +355,13 @@ class SwapCoordinator:
         candidate, self._candidate = self._candidate, None
         if candidate is not None:
             self._swapping = True
+            # Handing it over is not giving it away. The caller holds it in a
+            # local across the outgoing generation's unbind, and a shutdown
+            # cancelling that await drops the local with the coroutine: the
+            # candidate is then staged nowhere and bound nowhere, while the
+            # build it came from already started its skill watcher. Keeping a
+            # reference here is what lets a teardown still find it.
+            self._in_transition = candidate
         return candidate
 
     def release(self) -> None:
@@ -357,6 +370,9 @@ class SwapCoordinator:
         if self._swapping:
             self.generation += 1
             self._swapping = False
+        # Wiring is done, so the caller's own binding now points at this
+        # generation and an ordinary teardown reaches it.
+        self._in_transition = None
         self._booting = False
         self._in_flight = False
 

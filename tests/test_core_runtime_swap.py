@@ -543,3 +543,29 @@ async def test_disposing_a_generation_stops_its_skill_watcher():
     stopped: list[str] = []
     await _runtime_with_watcher(stopped).dispose()
     assert stopped == ["watcher"]
+
+
+def test_a_taken_candidate_stays_owned_until_its_loop_runs():
+    """``take`` hands the candidate over but must not stop owning it.
+
+    ``_serve_generations`` binds ``take``'s result to a local and only then
+    awaits the outgoing generation's unbind; the nonlocal ``agent`` starts
+    pointing at the new loop after that await. A shutdown cancelling it
+    unwinds the coroutine and the local dies with it, leaving the candidate
+    staged nowhere and bound nowhere -- so the teardown chain reaches neither,
+    and its watcher is still parked in native code when ``Py_FinalizeEx``
+    runs. Ownership therefore has to span ``take`` through the ``release``
+    that immediately precedes ``agent.run()``, not just the ``take`` call.
+    """
+    from raven.core.runtime import SwapCandidate, SwapCoordinator
+
+    stopped: list[str] = []
+    candidate = SwapCandidate(None, None, None, None, _runtime_with_watcher(stopped))
+    swaps = SwapCoordinator(min_interval_s=0.0)
+    swaps.stage(candidate)
+
+    assert swaps.take() is candidate
+    assert swaps.in_transition is candidate
+
+    swaps.release()
+    assert swaps.in_transition is None

@@ -529,8 +529,9 @@ def test_shutdown_stops_the_skill_file_watcher() -> None:
     ``raven/trajectory/replay.py`` stops the same watcher for the same reason;
     the teardown chain here is the other long-lived owner.
 
-    The chain is a closure inside the serve command with no import seam, so this
-    pins the call in the command source the way the ``/stop`` test above does.
+    The chain is a closure inside the serve command with no import seam, so what
+    this pins is the wiring: that the teardown reaches the seam. What the seam
+    then does is pinned by the executable tests further down.
     """
     import inspect
 
@@ -538,7 +539,7 @@ def test_shutdown_stops_the_skill_file_watcher() -> None:
 
     src = inspect.getsource(gateway_commands.register)
     teardown = src.split("cron.stop()", 1)[1]
-    assert "stop_file_watcher()" in teardown
+    assert "_retire_generation_watchers(swaps, agent)" in teardown
 
 
 def test_unbinding_a_generation_retires_it_through_dispose() -> None:
@@ -561,26 +562,6 @@ def test_unbinding_a_generation_retires_it_through_dispose() -> None:
     src = inspect.getsource(gateway_commands.register)
     unbind = src.split("async def _unbind_generation", 1)[1].split("async def _request_swap", 1)[0]
     assert "runtime.dispose()" in unbind
-
-
-def test_shutdown_retires_a_staged_but_unconsumed_generation() -> None:
-    """A candidate the serving loop never consumed still has to be retired.
-
-    ``_request_swap`` builds the next generation -- which starts its watcher --
-    stages it, and stops the serving loop. A shutdown landing before the loop
-    calls ``take`` leaves that generation in the coordinator: it is not the
-    bound ``agent``, so the teardown chain's own stop does not reach it, and no
-    unbind will ever run for it. Left there its watcher is still parked in
-    native code when the interpreter finalizes.
-    """
-    import inspect
-
-    from raven.cli import gateway_commands
-
-    src = inspect.getsource(gateway_commands.register)
-    teardown = src.split("cron.stop()", 1)[1]
-    assert "swaps.take()" in teardown
-    assert "staged.runtime.loop.context.skills.stop_file_watcher()" in teardown
 
 
 def test_cron_config_notify_missed_defaults_on() -> None:
@@ -1051,3 +1032,134 @@ def test_sigterm_cancels_the_main_task_instead_of_raising_ki() -> None:
     assert "main_task = asyncio.current_task()" in src
     assert "raise KeyboardInterrupt" not in src, "the signal-frame KI shortcut must stay gone"
     assert "if term_signalled:" in src, "the cancelled branch owns the SIGTERM case"
+
+
+def _watched_loop(stopped: list[str], name: str):
+    """A stand-in loop carrying the one collaborator retirement must reach."""
+    from types import SimpleNamespace
+
+    skills = SimpleNamespace(stop_file_watcher=lambda: stopped.append(name))
+    return SimpleNamespace(context=SimpleNamespace(skills=skills))
+
+
+class _Swaps:
+    """A coordinator stub shaped like the two seats a shutdown has to drain."""
+
+    def __init__(self, staged=None, in_transition=None) -> None:
+        self._staged = staged
+        self.in_transition = in_transition
+
+    def take(self):
+        staged, self._staged = self._staged, None
+        return staged
+
+
+def test_retiring_generation_watchers_reaches_every_seat() -> None:
+    """Three generations can own a watcher at once, and all three must go.
+
+    A generation's watcher starts in the context builder's ``__init__``, so
+    every built generation owns one whether or not it ever served: the bound
+    one, a candidate staged but never consumed, and a candidate ``take`` handed
+    out that a cancelled unbind never finished binding. Any one of them left
+    running is a daemon thread parked in watchfiles' Rust ``watch()`` when
+    ``Py_FinalizeEx`` tears the interpreter down, which is the SIGSEGV.
+    """
+    from types import SimpleNamespace
+
+    from raven.cli.gateway_commands import _retire_generation_watchers
+
+    stopped: list[str] = []
+    swaps = _Swaps(
+        staged=SimpleNamespace(runtime=SimpleNamespace(loop=_watched_loop(stopped, "staged"))),
+        in_transition=SimpleNamespace(runtime=SimpleNamespace(loop=_watched_loop(stopped, "in_transition"))),
+    )
+
+    _retire_generation_watchers(swaps, _watched_loop(stopped, "bound"))
+
+    assert sorted(stopped) == ["bound", "in_transition", "staged"]
+
+
+def test_retiring_generation_watchers_survives_a_failing_stop() -> None:
+    """One stop raising must not strand the watchers behind it.
+
+    The whole point of the sweep is that no watcher outlives it; a sweep that
+    abandons the rest on the first exception still exits -11, so the failure
+    is logged and the next seat is tried.
+    """
+    from types import SimpleNamespace
+
+    from raven.cli.gateway_commands import _retire_generation_watchers
+
+    stopped: list[str] = []
+
+    def _boom() -> None:
+        raise RuntimeError("watcher stop failed")
+
+    bound = SimpleNamespace(context=SimpleNamespace(skills=SimpleNamespace(stop_file_watcher=_boom)))
+    swaps = _Swaps(
+        staged=SimpleNamespace(runtime=SimpleNamespace(loop=_watched_loop(stopped, "staged"))),
+        in_transition=SimpleNamespace(runtime=SimpleNamespace(loop=_watched_loop(stopped, "in_transition"))),
+    )
+
+    _retire_generation_watchers(swaps, bound)
+
+    assert sorted(stopped) == ["in_transition", "staged"]
+
+
+def test_retiring_generation_watchers_tolerates_empty_seats() -> None:
+    """The common shutdown has nothing staged and nothing in transition."""
+    from raven.cli.gateway_commands import _retire_generation_watchers
+
+    stopped: list[str] = []
+    _retire_generation_watchers(_Swaps(), _watched_loop(stopped, "bound"))
+
+    assert stopped == ["bound"]
+
+
+def test_a_swap_cancelled_mid_unbind_leaves_no_live_watcher_thread(tmp_path) -> None:
+    """The cancellation window, executed against real watcher threads.
+
+    ``_serve_generations`` binds ``take``'s result to a local and only then
+    awaits the outgoing generation's unbind. A shutdown cancelling that await
+    unwinds the coroutine, and with it the only reference to a generation that
+    was fully built -- so its ``SkillFileWatcher`` thread is still parked in
+    watchfiles' Rust ``watch()`` when ``Py_FinalizeEx`` runs, which is the
+    SIGSEGV. Counting live threads by name is what makes the leak visible:
+    the candidate is reachable from neither the coordinator's staging slot nor
+    the bound loop, so no assertion about those two would catch it.
+    """
+    import threading
+    import time
+    from types import SimpleNamespace
+
+    from raven.cli.gateway_commands import _retire_generation_watchers
+    from raven.core.runtime import SwapCandidate, SwapCoordinator
+    from raven.memory_engine.skill_forge.catalog import LocalSkillCatalog
+
+    def _live() -> int:
+        return sum(1 for t in threading.enumerate() if t.name == "SkillFileWatcher")
+
+    def _loop_over(catalog):
+        return SimpleNamespace(context=SimpleNamespace(skills=catalog))
+
+    (tmp_path / "bound").mkdir()
+    (tmp_path / "candidate").mkdir()
+    before = _live()
+    bound = LocalSkillCatalog(tmp_path / "bound")
+    candidate = LocalSkillCatalog(tmp_path / "candidate")
+    assert _live() == before + 2, "both generations must really be watching"
+
+    swaps = SwapCoordinator(min_interval_s=0.0)
+    swaps.stage(SwapCandidate(None, None, None, None, SimpleNamespace(loop=_loop_over(candidate))))
+    assert swaps.take() is not None
+    # The local a cancelled unbind would drop is simply never stored.
+
+    _retire_generation_watchers(swaps, _loop_over(bound))
+
+    # stop() joins with a 1s timeout, so this only ever spans a slow join --
+    # and stays under the suite's 3s idle ceiling on the failing path too.
+    for _ in range(20):
+        if _live() == before:
+            break
+        time.sleep(0.1)
+    assert _live() == before, "a generation's watcher outlived the shutdown"
