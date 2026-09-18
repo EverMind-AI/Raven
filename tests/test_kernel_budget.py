@@ -195,6 +195,20 @@ product has spoken and never instead of it. 47 lines of protocol and prose.
 
 Measured at 3,477.
 
+
+And once more, 3,500 -> 3,540 (2026-09-18), for the verb that lets a
+dispatch's own judgements be a participant rather than something a role reads
+for itself. ``AgentConduct.judge`` is the one synchronous verb -- it runs before
+every tool dispatch and ahead of the permission gate -- and it was already pure
+data, a list of sentences. Adding it is what makes the participant list the only
+route an external judgement takes: a Charter's ``checks`` and ``code`` answer it
+through a thin shell, and a judgement generated for one dispatch can join the
+same list without a second way in. ``ActionModule.judge`` takes the list; the
+merge is a veto, so the first participant that refuses decides and the rest are
+not asked. 30 lines of protocol and prose.
+
+Measured at 3,515.
+
 """
 
 from __future__ import annotations
@@ -205,7 +219,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 3_500
+CONTRACTS_LINE_CEILING = 3_540
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 

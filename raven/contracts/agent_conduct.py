@@ -181,6 +181,25 @@ class AgentConduct:
         a generated participant can say is what every participant may say."""
         return None
 
+    def judge(
+        self,
+        name: str,
+        params: Mapping[str, Any],
+        prior: Sequence[tuple[str, Mapping[str, Any]]],
+    ) -> Sequence[str]:
+        """Why this one tool call must not run, or nothing.
+
+        Sentences, not exceptions: a refusal reaches the model as the call's own
+        result, so its next attempt can be right. The one synchronous verb, and
+        cheap by contract -- it runs before every dispatch and ahead of the
+        permission gate, where anything that blocked on the network would cost
+        the turn rather than the call.
+
+        Already pure data, which is why a dispatch's own ``checks`` and ``code``
+        answer here: they are participants like any other, asked after the
+        plugins so that a product's own rules speak first."""
+        return ()
+
     async def outbound(self, reply: str, step: StepView) -> str | None:
         """What this turn sends in place of ``reply``, or None to leave it.
 

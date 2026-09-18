@@ -336,8 +336,15 @@ class ActionModule(Protocol):
         name: str,
         params: Mapping[str, Any],
         prior: Sequence[tuple[str, Mapping[str, Any]]],
+        conducts: "Sequence[AgentConduct]" = (),
     ) -> list[str]:
-        """Why this call must not run, or an empty list.
+        """Why this call must not run, or an empty list, composed from each
+        participant's ``judge``: the first that refuses decides, since a veto
+        needs one voice and two reasons for one refusal read as confusion.
+
+        The dispatch's own ``checks`` and ``code`` are a participant here rather
+        than something this role reads for itself, which is what lets a judgement
+        generated for one dispatch join the same list.
 
         Sentences, not exceptions: a refusal reaches the model as the call's
         own result, so its next attempt can be right. Synchronous and cheap by
