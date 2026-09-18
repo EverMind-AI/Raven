@@ -46,6 +46,7 @@ from raven.knowledge.parser.doc_parser import LegacyDocParser
 from raven.knowledge.parser.docx_parser import DocxParser
 from raven.knowledge.parser.excel_parser import ExcelParser
 from raven.knowledge.parser.image_parser import ImageParser
+from raven.knowledge.parser.ppt_parser import PptParser
 from raven.knowledge.parser.text_parser import TextParser
 
 
@@ -197,7 +198,15 @@ def _default_parsers() -> list[ParserBase]:
     stopped offering pictures the moment a pin was cleared would look like the
     build had lost the ability to read them.
     """
-    return [StructuredTextParser(), DocxParser(), LegacyDocParser(), ExcelParser(), ImageParser(), TextParser()]
+    return [
+        StructuredTextParser(),
+        DocxParser(),
+        LegacyDocParser(),
+        ExcelParser(),
+        PptParser(),
+        ImageParser(),
+        TextParser(),
+    ]
 
 
 def supported_extensions() -> list[str]:

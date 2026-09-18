@@ -53,9 +53,13 @@ retained in `LICENSES/`.
   figure-describing prompt (`rag/prompts/vision_llm_figure_describe_prompt.md`
   and its with-context variant), and `raven/knowledge/parser/image_parser.py`
   follows `deepdoc.parser.figure_parser.VisionFigureParser` in what it asks a
-  vision model for and in carrying the prose around a figure into the call. The
-  parser package's layout follows `deepdoc.parser` the same way; each module
-  names its origin in its own docstring.
+  vision model for and in carrying the prose around a figure into the call.
+  `raven/knowledge/parser/ppt_parser.py` follows
+  `deepdoc.parser.ppt_parser.RAGFlowPptParser`: shapes read in the order they
+  sit on the slide rather than the order the file lists them, bulleted
+  paragraphs marked by their indent, group shapes walked through, and one
+  string per slide. The parser package's layout follows `deepdoc.parser` the
+  same way; each module names its origin in its own docstring.
 - Modifications: rewritten rather than vendored -- it carries no RAGFlow
   import, is written against this package's Section and Chunk shapes, keeps the
   positional metadata RAGFlow discards, and answers a tokenizer failure with an
@@ -65,7 +69,12 @@ retained in `LICENSES/`.
   renders the first. The figure path drops the OCR ladder RAGFlow puts in front
   of the vision model -- there is no OCR engine in this tree -- and the two
   prompts are merged into one template whose context sections are omitted when
-  there is no context, rather than rendered empty.
+  there is no context, rather than rendered empty. The slide parser reads the
+  OOXML package with the standard library instead of python-pptx, which this
+  package does not carry, and reads slide order through the presentation's own
+  relationships -- python-pptx resolves that, and the part names do not. Its
+  sections are marked atomic, so one slide is one chunk; RAGFlow returns the
+  slides as strings and leaves the merging to its caller.
 
 ## agentscope (web-service framework)
 - Upstream source: https://github.com/agentscope-ai/agentscope

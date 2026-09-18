@@ -32,6 +32,7 @@ from raven.knowledge._chunker import ChunkerBase
 from raven.knowledge._sections import SECTION_ORDINAL
 from raven.knowledge._types import Chunk, DataBlock, Section, TextBlock
 from raven.knowledge.parser import (
+    ATOMIC,
     BBOX,
     ELEMENTS,
     LAYOUT_TYPE,
@@ -307,7 +308,15 @@ class NaiveChunker(ChunkerBase):
             return []
         self._lift_context(units)
         merged = self._merge(units)
-        written = _overlapped([unit.whole() for unit in merged], self.overlap_size)
+        written = _overlapped(
+            [unit.whole() for unit in merged],
+            self.overlap_size,
+            # An atomic chunk takes no overlap and lends none of its own to the
+            # chunk beside it: it stands for one thing -- a slide -- and text
+            # from the slide before it, carried in, would make the chunk say
+            # what that page does not.
+            standalone=[unit.kind == "atomic" for unit in merged],
+        )
 
         return [
             Chunk(
@@ -350,6 +359,23 @@ class NaiveChunker(ChunkerBase):
                     )
                 )
                 units[-1].block = section.content  # type: ignore[attr-defined]
+                continue
+            if section.metadata.get(ATOMIC):
+                # Before `_rows`, which is the whole point: an atomic section's
+                # element spans say where each part of it sits, not where it
+                # may be cut, and decomposing by them is exactly what this flag
+                # exists to stop. `kind` is not "text", so the merge below
+                # leaves it standing alone as well.
+                units.append(
+                    _Unit(
+                        text=section.content.text,
+                        kind="atomic",
+                        metadata=dict(section.metadata),
+                        source=section.source,
+                        tokens=count_tokens(section.content.text),
+                        origin=origin,
+                    )
+                )
                 continue
             for text, kind, metadata in _rows(section):
                 if kind in ("table", "figure"):
@@ -537,7 +563,7 @@ def _head_sentences(text: str, budget: int) -> str:
     return held.strip()
 
 
-def _overlapped(texts: list[str], size: int) -> list[tuple[str, int]]:
+def _overlapped(texts: list[str], size: int, standalone: list[bool] | None = None) -> list[tuple[str, int]]:
     """Repeat each chunk's neighbours at its ends.
 
     What a reader means by overlap: a chunk carries the tail of the one before
@@ -552,10 +578,14 @@ def _overlapped(texts: list[str], size: int) -> list[tuple[str, int]]:
     """
     if size <= 0 or len(texts) < 2:
         return [(text, 0) for text in texts]
+    alone = standalone or [False] * len(texts)
     overlapped: list[tuple[str, int]] = []
     for at, text in enumerate(texts):
-        head = _tail_tokens(texts[at - 1], size) if at > 0 else ""
-        tail = _head_tokens(texts[at + 1], size) if at + 1 < len(texts) else ""
+        if alone[at]:
+            overlapped.append((text, 0))
+            continue
+        head = _tail_tokens(texts[at - 1], size) if at > 0 and not alone[at - 1] else ""
+        tail = _head_tokens(texts[at + 1], size) if at + 1 < len(texts) and not alone[at + 1] else ""
         parts = [part for part in (head, text, tail) if part]
         # How far the chunk's own text moved, so the element spans can follow.
         overlapped.append(("\n".join(parts), len(head) + 1 if head else 0))

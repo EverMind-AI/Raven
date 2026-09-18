@@ -143,6 +143,42 @@ class _StubVision:
         return self.text
 
 
+def _deck_of(slides: list[str]) -> bytes:
+    """A minimal slide deck, one text box a slide."""
+    import io
+    import zipfile
+
+    namespaces = (
+        'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as package:
+        entries = "".join(f'<p:sldId id="{256 + n}" r:id="rId{n + 2}"/>' for n in range(len(slides)))
+        package.writestr(
+            "ppt/presentation.xml",
+            f"<p:presentation {namespaces}><p:sldIdLst>{entries}</p:sldIdLst></p:presentation>",
+        )
+        rels = "".join(
+            f'<Relationship Id="rId{n + 2}" Target="slides/slide{n + 1}.xml" '
+            f'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide"/>'
+            for n in range(len(slides))
+        )
+        package.writestr(
+            "ppt/_rels/presentation.xml.rels",
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            f"{rels}</Relationships>",
+        )
+        for n, text in enumerate(slides):
+            package.writestr(
+                f"ppt/slides/slide{n + 1}.xml",
+                f"<p:sld {namespaces}><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r>"
+                f"<a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>",
+            )
+    return buffer.getvalue()
+
+
 def _docx_with_picture() -> bytes:
     """A minimal Word package holding one paragraph and one embedded picture."""
     import io
@@ -253,6 +289,26 @@ async def test_reindexing_replaces_instead_of_duplicating(manager) -> None:
 
     hits = (await manager.search([base.id], "alpha", top_k=10)).hits
     assert len({h.chunk.text for h in hits}) == len(hits)
+
+
+async def test_a_deck_indexes_one_chunk_a_slide(manager) -> None:
+    """The end-to-end shape the slide parser exists for: a chunk and a page are
+    the same thing, so a hit can take the preview to the slide it came from."""
+    deck = _deck_of(["Opening remarks", "The second slide", "Closing"])
+    base = await manager.create_base(name="decks")
+    # Small enough that any other parser's sections would be cut several times
+    # over, which is what makes this a test of the guarantee rather than of the
+    # size of the fixture.
+    manager.configure_base(base.id, chunk_size=4)
+    document = manager.add_document(base.id, filename="deck.pptx", content=deck)
+
+    indexed = await manager.index_document(document.id)
+
+    assert indexed.status == "ready"
+    assert indexed.chunk_count == 3
+    chunks, _ = await manager.document_chunks(document.id)
+    assert [piece.chunk.metadata["page_number"] for piece in chunks] == [1, 2, 3]
+    assert [piece.chunk.text for piece in chunks] == ["Opening remarks", "The second slide", "Closing"]
 
 
 async def test_an_unparseable_upload_fails_that_document_only(manager) -> None:

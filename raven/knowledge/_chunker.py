@@ -14,6 +14,7 @@ from bisect import bisect_right
 from itertools import accumulate
 
 from raven.knowledge._types import Chunk, DataBlock, Section, TextBlock
+from raven.knowledge.parser import ATOMIC
 
 #: How far back a cut may be walked to land between words instead of inside
 #: one. A tenth of the budget: far enough to clear any ordinary word, short
@@ -59,6 +60,12 @@ class ChunkerBase(ABC):
     - **DataBlock pass-through**: a Section whose content is a
       :class:`DataBlock` becomes a single Chunk
       with the same content; multimodal data is never sliced.
+    - **Atomic sections**: a Section marked
+      :data:`~raven.knowledge.parser.ATOMIC` becomes exactly one
+      Chunk -- not split however long it runs, and nothing merged
+      into it. A parser sets it when its sections are already the
+      unit a reader means, and a slide is the case: a reader says
+      "slide 12", and a deck's preview can only scroll to a page.
     - **Continuous indexing**: ``chunk_index`` runs from ``0`` to
       ``total_chunks - 1`` across the entire output list, even
       when the input contains many Sections.
@@ -166,11 +173,17 @@ class ApproxTokenChunker(ChunkerBase):
         chunks: list[Chunk] = []
         for section in sections:
             contents: list[TextBlock | DataBlock]
-            if isinstance(section.content, TextBlock):
-                contents = [TextBlock(text=piece) for piece in self._split_text(section.content.text)]
-            else:
+            if not isinstance(section.content, TextBlock):
                 # DataBlock pass-through: never slice multimodal data
                 contents = [section.content]
+            elif section.metadata.get(ATOMIC):
+                # One section, one chunk, whatever its size. Honoured here as
+                # well as in the naive chunker because which chunker a base
+                # runs is a setting, and a guarantee a parser relies on cannot
+                # depend on one.
+                contents = [section.content]
+            else:
+                contents = [TextBlock(text=piece) for piece in self._split_text(section.content.text)]
 
             chunks.extend(
                 Chunk(

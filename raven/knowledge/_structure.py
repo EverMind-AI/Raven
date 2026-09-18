@@ -35,7 +35,7 @@ from html.parser import HTMLParser
 from raven.knowledge._chunker import ApproxTokenChunker
 from raven.knowledge._sections import MAX_SECTION_CHARS, SECTION_ORDINAL, SECTION_TEXT
 from raven.knowledge._types import Chunk, Section, TextBlock
-from raven.knowledge.parser import ELEMENTS, ParserBase
+from raven.knowledge.parser import ATOMIC, ELEMENTS, ParserBase
 
 _ATX_HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
 _CODE_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
@@ -416,6 +416,11 @@ class HeadingAwareChunker(ApproxTokenChunker):
         that falls through to cutting by length.
         """
         text = section.content.text if isinstance(section.content, TextBlock) else ""
+        if section.metadata.get(ATOMIC):
+            # One section, one piece. Checked before the spans, which on an
+            # atomic section say where its parts sit rather than where it may
+            # be cut -- cutting on them is what this flag exists to stop.
+            return [text]
         spans = section.metadata.get(ELEMENTS)
         if not isinstance(spans, list) or not spans:
             # The budget, not `chunk_size`: the caller narrowed it by what the

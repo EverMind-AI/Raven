@@ -56,6 +56,25 @@ LAYOUT_TYPE = "layout_type"
 ELEMENTS = "elements"
 """Metadata key: a list of :class:`ElementSpan` dicts, in reading order."""
 
+ATOMIC = "atomic"
+"""Metadata key: this section is one chunk, whole.
+
+Set by a parser whose sections are already the unit a reader means, and
+honoured by every chunker: the section is not split however long it runs, and
+nothing is merged into it.
+
+A slide is the case it exists for. A reader says "slide 12"; they do not say
+"the third shape of slide 12", and a deck's preview can only scroll to a page
+-- so a chunk that is half a slide, or one that spans two, breaks the one thing
+the page can do with a hit. Without this the element spans a slide carries are
+exactly what the chunker would cut on, which is the opposite of what they are
+for here: on a slide they say where each shape sits, not where the text may be
+divided.
+
+Deliberately not inferred from a layout type. A spreadsheet row is a table row
+and a slide is not a figure; asking "is this section atomic" of the layout
+would make one format's answer depend on another's vocabulary."""
+
 
 class LayoutType(StrEnum):
     """What a parsed region is, as the source file marks it.
@@ -273,6 +292,7 @@ class ParserBase(ABC):
 
 
 __all__ = [
+    "ATOMIC",
     "BBOX",
     "BBox",
     "ELEMENTS",
