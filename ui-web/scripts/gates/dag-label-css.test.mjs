@@ -15,13 +15,17 @@ import { describe, expect, it } from 'vitest'
 import { decls as declsOf } from './css.mjs'
 
 describe('a dag node label', () => {
-  /* One line, cut at the end of the box, with the cut marked. Drop any one of
-     the three and the label wraps, or spills, or stops with no sign that there
-     was more. */
+  /* Two lines, cut at the end of the box, with the cut marked. A step is
+     titled by a sentence rather than by an id, and one line of a 196px box is
+     not a sentence -- so the clamp replaced the `nowrap`, and it is the clamp
+     that now ends the text. What this case is about is unchanged: the box ends
+     the label, and the reader can see that it did. Drop the clamp or the
+     overflow and the title spills across the step beside it. */
   it('is ended by the box it is in', () => {
     const id = declsOf('.daggraph .nd .id')
     expect(id).not.toBeNull()
-    expect(id.get('white-space')).toBe('nowrap')
+    expect(id.get('-webkit-line-clamp')).toBe('2')
+    expect(id.get('display')).toBe('-webkit-box')
     expect(id.get('overflow')).toBe('hidden')
     expect(id.get('text-overflow')).toBe('ellipsis')
     /* And it must be allowed to be narrower than its text, or the flex line

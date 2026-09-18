@@ -347,7 +347,7 @@ function NodeCard({ node, onClose }: { node: TaskNode; onClose: () => void }): J
    downward: the width is the docked pane's to spare, the height is what a
    reader scrolling a column of steps pays for each one, and the gap between
    layers is what a curve needs to read as a curve rather than as a kink. */
-const COLUMN: Dims = { W: 216, H: 46, GAP_X: 240, GAP_Y: 106, PAD: 16 }
+const COLUMN: Dims = { W: 196, H: 78, GAP_X: 220, GAP_Y: 118, PAD: 16 }
 
 function Fork({ task }: { task: TaskRow }): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
