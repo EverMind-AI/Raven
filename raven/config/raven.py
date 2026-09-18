@@ -1614,7 +1614,12 @@ def load_raven_config(config_path: Path | None = None) -> RavenConfig:
         # floor, so legacy leaves reach their new home before the blocks are
         # extracted (the base loader persisted the rewrite; this is the
         # in-memory twin for the extension blocks).
-        data = _migrate_config(data, pop_extension_keys=False, from_version=_migration_version(actual_path))
+        data = _migrate_config(
+            data,
+            pop_extension_keys=False,
+            from_version=_migration_version(actual_path),
+            config_path=actual_path,
+        )
         for key in EXTENSION_KEYS:
             if key in data and data[key] is not None:
                 overrides[key] = data[key]

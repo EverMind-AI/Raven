@@ -1013,8 +1013,10 @@ A skill retrieval and injection subsystem — it fuses candidates from three sou
 (local BM25-indexed files, self-evolved skills recalled from the pluggable `MemoryBackend`
 — typically the EverOS plugin — and remote skills from the Skill Hub) via weighted RRF,
 with optional LLM gating and query rewriting before injecting them into the agent prompt.
-Skill distillation/evolution is handled by the embedded EverOS extraction pipeline
-(`skillForge.everos`), not by SkillForge itself — there is no feedback-driven evolution or
+Skill distillation/evolution is handled by the local extraction pipeline
+(`skillForge.extraction`), not by SkillForge itself — that pipeline distils skills out of
+finished turns into the workspace cache, calls no service and needs no memory plugin;
+`skillForge.everos` is the retired spelling, migrated on load. There is no feedback-driven evolution or
 versioning, and the retirement knobs (`retire_confidence`, `retirement_idle_days`) are
 unwired config placeholders, not active behavior. The name is retained; it is now a live
 module under the Memory Engine, not the old top-level husk.
