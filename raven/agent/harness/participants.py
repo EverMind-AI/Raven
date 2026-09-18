@@ -172,6 +172,14 @@ def compose_judge(
     """
     for participant in participants:
         refusals = participant.judge(name, params, prior)
+        # A bare ``str`` satisfies ``Sequence[str]`` structurally, so neither
+        # the annotation nor a type checker objects -- and iterating it turns
+        # one sentence into one refusal per character, which is the opposite of
+        # the invariant this module opens with. ``charter_code.run_judge``
+        # coerced it where the composition used to live; moving the
+        # composition out a layer has to bring the handling with it.
+        if isinstance(refusals, str):
+            refusals = [refusals] if refusals.strip() else []
         said = [line for line in refusals if isinstance(line, str) and line] if refusals else []
         if said:
             return said

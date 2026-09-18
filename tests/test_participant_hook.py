@@ -315,30 +315,34 @@ async def test_each_phase_names_itself_on_the_step():
     ], f"a phase is mislabelled: {seen}"
 
 
-def test_a_seated_participant_is_not_asked_to_judge_a_tool_call():
-    """``judge`` has a role but no seat, and the contract says so. The party
-    that asks it is the tool registry, which is not the hook chain and holds no
-    handle on this turn's participants -- so today only a dispatch's own rules
-    answer it. Pinned rather than left implicit: whoever wires the seat through
-    should have to come here and say the prose has changed."""
+def test_the_registry_asks_judge_with_no_participants_at_all():
+    """``judge`` has a role but no seat, and three docstrings now say so. What
+    makes those sentences true is this: the one party that asks the verb is the
+    tool registry, and it passes nothing, so the list the role composes holds
+    only the dispatch's own rules.
+
+    Asserted on the argument rather than on the refusal that comes back. A test
+    that only checked "the Charter still refuses" would stay green after someone
+    plumbed the seat's participants through -- which is the change these
+    docstrings would silently outlive. Here that change makes ``handed``
+    non-empty and turns this red, which is the point."""
     from raven.agent.harness import DefaultAction
     from raven.agent.subagent.charter import Charter, CheckRule, charter_scope
     from raven.agent.tools.registry import ToolRegistry
 
-    asked: list[str] = []
+    handed: list[tuple] = []
 
-    class ProductRules(AgentParticipant):
-        def judge(self, name, params, prior):
-            asked.append(name)
-            return ["the product refuses this one"]
+    class Spy(DefaultAction):
+        def ask_judge(self, name, params, prior, participants=()):
+            handed.append(tuple(participants))
+            return super().ask_judge(name, params, prior, participants)
 
-    ParticipantHook("product", ProductRules)  # seated is not enough; nothing carries it across
-    registry = ToolRegistry(verifier_provider=lambda: DefaultAction())
+    registry = ToolRegistry(verifier_provider=Spy)
     with charter_scope(Charter(checks=(CheckRule(tool="write_file", path_prefix="out/"),))):
         refusals = registry._verifier_refusals("write_file", {"path": "/etc/passwd"})
 
+    assert handed == [()], f"the registry handed the role participants: {handed}"
     assert refusals, "the dispatch's own rules must still be asked"
-    assert asked == [], "a seated participant is not on the registry's list -- see AgentParticipant.judge"
 
 
 @pytest.mark.asyncio

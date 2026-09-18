@@ -46,6 +46,12 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    # The one name a paper takes from outside the kernel, and type-only: the
+    # shapes the shell reads a participant's answer into live in the harness
+    # because a participant answers with a plain mapping and a host class on a
+    # paper is what a generated judgement cannot build. Import-time closure is
+    # unaffected, which is what "the kernel stands alone" is about; the edge is
+    # written down beside that contract in pyproject.toml.
     from raven.agent.harness.participants import Intake, Verdict
     from raven.contracts.assembled import AssembledContext, TokenBudget
     from raven.contracts.context import TurnContext
@@ -349,6 +355,14 @@ class ActionModule(Protocol):
         The dispatch's own ``checks`` and ``code`` are a participant here rather
         than something this role reads for itself, which is what lets a judgement
         generated for one dispatch join the same list.
+
+        They are also, today, the only participant in it. The party that asks
+        this verb is ``ToolRegistry.execute``, which is not the hook chain: a
+        turn's participants live in its hook context and a registry holds no
+        handle on them, so ``participants`` arrives empty on every production
+        call and the composition above describes an order nothing yet fills.
+        A plugin refuses a call from ``review`` instead. Stated here because a
+        reader of this protocol has no reason to open the participant paper.
 
         Sentences, not exceptions: a refusal reaches the model as the call's
         own result, so its next attempt can be right. Synchronous and cheap by

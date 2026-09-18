@@ -448,6 +448,29 @@ def test_a_plugins_own_rules_speak_before_the_dispatchs() -> None:
         ]
 
 
+def test_one_sentence_of_refusal_stays_one_sentence() -> None:
+    """A bare ``str`` satisfies ``Sequence[str]`` structurally, so a participant
+    that refuses with one sentence passes every annotation and every type check
+    -- and iterating it yields one refusal per character. Eighteen refusals for
+    a malformed answer is the opposite of "a malformed answer is silence", and
+    this seam exists to carry judgements that are generated rather than written,
+    where a bare string is a plausible thing to answer."""
+    from raven.agent.harness.participants import compose_judge
+
+    class Sentence:
+        def judge(self, name, params, prior):
+            return "write under ./out/"
+
+    class Blank:
+        def judge(self, name, params, prior):
+            return "   "
+
+    assert compose_judge("write_file", {}, [], [Sentence()]) == ["write under ./out/"]
+    assert compose_judge("write_file", {}, [], [Blank(), Sentence()]) == ["write under ./out/"], (
+        "whitespace is not a refusal, and must not stop the next participant"
+    )
+
+
 def test_a_participant_that_says_nothing_lets_the_next_one_speak() -> None:
     """A veto stops at the first refusal, not at the first participant."""
     from raven.agent.harness.action import DefaultAction
