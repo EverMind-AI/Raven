@@ -362,6 +362,10 @@ export interface ModelOptionProvider {
   homepage?: string
   is_current?: boolean
   key_env?: null | string
+  /* Where the vendor hands out API keys; null when the registry has no page. */
+  key_url?: null | string
+  /* Custom request headers by name, each value redacted by the server. */
+  extra_headers?: Record<string, string>
   /* Keyed by the id as it appears in `models`. The tags are drawn as glyphs
      (see components/modelTags.ts); an absent list means the registry publishes
      nothing, not that the model cannot. `context_window` comes from the tables

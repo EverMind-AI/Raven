@@ -32,6 +32,17 @@
             },
             "description": "Session channels to include; defaults to tui."
           }
+        },
+        {
+          "name": "archived",
+          "required": false,
+          "schema": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "True lists only archived sessions; absent or false lists the live ones."
+          }
         }
       ],
       "result": {
@@ -1249,6 +1260,14 @@
           }
         },
         {
+          "name": "description",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "One line about the model; an empty string clears it, as it does for label."
+          }
+        },
+        {
           "name": "capabilities",
           "required": false,
           "schema": {
@@ -1297,6 +1316,152 @@
           "properties": {
             "provider": {
               "$ref": "#/components/schemas/ModelOptionProvider"
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
+    },
+    {
+      "name": "model.add_models",
+      "summary": "Append several model ids to a provider's curated list in one write; ids already present are skipped.",
+      "params": [
+        {
+          "name": "slug",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "models",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "ModelAddModelsResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider"
+          ],
+          "properties": {
+            "provider": {
+              "$ref": "#/components/schemas/ModelOptionProvider"
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
+    },
+    {
+      "name": "model.set_fields",
+      "summary": "Patch a provider's non-credential fields (api_base, deployment, api_version, extra_headers as a patch of {name: value | null}); the key stays with model.save_key.",
+      "params": [
+        {
+          "name": "slug",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "fields",
+          "required": true,
+          "schema": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            }
+          }
+        }
+      ],
+      "result": {
+        "name": "ModelSetFieldsResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "previous"
+          ],
+          "properties": {
+            "previous": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "description": "Previous values, header values redacted."
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
+    },
+    {
+      "name": "model.oauth_login",
+      "summary": "Start an OAuth provider's device-code sign-in for a page: answers with the verification URL, the user code and its lifetime at once, and keeps polling in the background until the token lands or the code expires; model.options then reports the provider authenticated.",
+      "params": [
+        {
+          "name": "slug",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "ModelOauthLoginResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "verification_uri",
+            "user_code",
+            "expires_in"
+          ],
+          "properties": {
+            "verification_uri": {
+              "type": "string"
+            },
+            "user_code": {
+              "type": "string"
+            },
+            "expires_in": {
+              "type": "integer",
+              "description": "Seconds the code stays valid; the gateway polls until then."
             }
           }
         }
@@ -3589,6 +3754,109 @@
       }
     },
     {
+      "name": "plug.retry",
+      "summary": "Connect one configured server again without opening a browser: the explicit retry for a server parked in error.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "PlugRetryResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "mcp": {
+              "$ref": "#/components/schemas/McpSnapshot"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "plug.revoke",
+      "summary": "Forget one server's OAuth credential and disconnect it.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "PlugRevokeResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "mcp": {
+              "$ref": "#/components/schemas/McpSnapshot"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "plug.configure",
+      "summary": "Rewrite the credential fields a catalog template put into one installed server; an empty value clears a field. Refused for a server no ledger names.",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "form",
+          "required": false,
+          "schema": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      ],
+      "result": {
+        "name": "PlugConfigureResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "mcp": {
+              "$ref": "#/components/schemas/McpSnapshot"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
       "name": "skillhub.search",
       "summary": "Search the skill hub; installed skills are flagged.",
       "params": [
@@ -4382,6 +4650,13 @@
             },
             "previous": {
               "$ref": "#/components/schemas/JsonValue"
+            },
+            "warning": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted."
             }
           },
           "required": [
@@ -4413,6 +4688,28 @@
               "null"
             ]
           }
+        },
+        {
+          "name": "from",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "First day (YYYY-MM-DD), inclusive; clamped to 90 days back."
+          }
+        },
+        {
+          "name": "to",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Last day (YYYY-MM-DD), inclusive; today when absent."
+          }
         }
       ],
       "result": {
@@ -4422,6 +4719,19 @@
           "properties": {
             "days": {
               "type": "integer"
+            },
+            "from": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            },
+            "daily": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/DailyUsage"
+              },
+              "description": "One entry per day of the range, zeros for days without a file."
             },
             "llm": {
               "$ref": "#/components/schemas/LlmUsage"
@@ -4450,6 +4760,9 @@
           },
           "required": [
             "days",
+            "from",
+            "to",
+            "daily",
             "llm",
             "tools"
           ],
@@ -4542,6 +4855,13 @@
           "properties": {
             "applied": {
               "type": "boolean"
+            },
+            "warning": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted."
             }
           },
           "required": [
@@ -4598,6 +4918,13 @@
           "properties": {
             "applied": {
               "type": "boolean"
+            },
+            "warning": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted."
             }
           },
           "required": [
@@ -7973,7 +8300,7 @@
           "required": true,
           "schema": {
             "type": "string",
-            "description": "One of list, inspect, search, browse, install."
+            "description": "One of list, inspect, search, browse, install, open."
           }
         },
         {
@@ -7988,6 +8315,17 @@
           "required": false,
           "schema": {
             "type": "integer"
+          }
+        },
+        {
+          "name": "file",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`open`: a file name relative to the skill's directory."
           }
         }
       ],
@@ -8010,7 +8348,7 @@
               "additionalProperties": {
                 "$ref": "#/components/schemas/JsonValue"
               },
-              "description": "`inspect`: one skill's metadata, {} when unknown.",
+              "description": "`inspect`: one skill's metadata (name, description, category, path, body, files, always, hub, hub_id, install), {} when unknown.",
               "type": "object"
             },
             "results": {
@@ -8048,6 +8386,13 @@
             },
             "name": {
               "type": "string"
+            },
+            "opened": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "`open`."
             }
           },
           "required": [],
@@ -8903,6 +9248,76 @@
         ],
         "type": "object"
       },
+      "DailyUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "date": {
+            "type": "string"
+          },
+          "calls": {
+            "type": "integer"
+          },
+          "input_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "output_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cache_read_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cost_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cache_write_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cost_missing_calls": {
+            "type": "integer"
+          },
+          "cache_read_missing_calls": {
+            "type": "integer"
+          },
+          "cache_write_missing_calls": {
+            "type": "integer"
+          },
+          "legacy_cost_calls": {
+            "type": "integer"
+          },
+          "input_missing_calls": {
+            "type": "integer",
+            "default": 0
+          },
+          "output_missing_calls": {
+            "type": "integer",
+            "default": 0
+          }
+        },
+        "required": [
+          "date",
+          "calls",
+          "cost_missing_calls",
+          "cache_read_missing_calls",
+          "cache_write_missing_calls",
+          "legacy_cost_calls"
+        ],
+        "type": "object"
+      },
       "LlmUsage": {
         "additionalProperties": false,
         "properties": {
@@ -9273,6 +9688,25 @@
           "auth_url": {
             "description": "The authorization URL this server is parked on, when it is. Carried on the pull because the `oauth.pending` notification that also carries it is dropped when no client is attached, which is every connect started at assembly time.",
             "type": "string"
+          },
+          "auth": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "none",
+              "apikey",
+              "oauth"
+            ],
+            "description": "How the server authenticates (ext.list rows only)."
+          },
+          "credentialed": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether it holds the credential that mode needs (ext.list rows only)."
           }
         },
         "required": [
@@ -9842,6 +10276,13 @@
           "homepage": {
             "type": "string"
           },
+          "key_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the vendor hands out API keys; null when the registry has no console link."
+          },
           "docs": {
             "type": "string",
             "description": "The vendor's own model index. Distinct from `homepage`: the question a settings page asks is which model to put here, and a marketing front page does not answer it."
@@ -9891,6 +10332,13 @@
           "protocol_overrides": {
             "type": "object",
             "description": "Explicit user protocol overrides keyed by model id.",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "extra_headers": {
+            "type": "object",
+            "description": "Custom request headers by name, each value redacted.",
             "additionalProperties": {
               "type": "string"
             }

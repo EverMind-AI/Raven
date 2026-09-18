@@ -55,11 +55,14 @@ const PLUGINS: ExtPlugin[] = [
    for an authorization, failed, and switched off. The rail's attention badge
    counts the middle two, which is why both are here. */
 const MCP: ExtMcp[] = [
-  { name: 'websearch', transport: 'http', state: 'auth_required', connected: false, tool_count: 2, enabled: true },
+  { name: 'websearch', transport: 'http', state: 'auth_required', connected: false, tool_count: 2, enabled: true,
+    auth: 'oauth', credentialed: false },
   { name: 'github', transport: 'http', state: 'error', connected: false, tool_count: 3, enabled: true,
-    error: 'handshake failed: token expired (HTTP 401)' },
-  { name: 'notion', transport: 'http', state: 'disconnected', connected: false, tool_count: 3, enabled: false },
-  { name: 'sqlite', transport: 'stdio', state: 'connected', connected: true, tool_count: 2, enabled: true },
+    error: 'handshake failed: token expired (HTTP 401)', auth: 'apikey', credentialed: true },
+  { name: 'notion', transport: 'http', state: 'disconnected', connected: false, tool_count: 3, enabled: false,
+    auth: 'oauth', credentialed: true },
+  { name: 'sqlite', transport: 'stdio', state: 'connected', connected: true, tool_count: 2, enabled: true,
+    auth: 'none', credentialed: true },
 ]
 
 /** The inventory, shared with the two hubs and with the settings answer. */

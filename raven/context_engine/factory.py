@@ -82,6 +82,7 @@ def build_context_engine(
     skill_forge_config: "SkillForgeConfig | None" = None,
     skill_hub_client: "SkillHubClient | None" = None,
     provider_pool: "ProviderPool | None" = None,
+    blocklist_reader: "Callable[[], frozenset[str]] | None" = None,
 ) -> ContextEngine:
     """Build the one :class:`ContextAssembler` from a flat SegmentBuilder list.
 
@@ -150,6 +151,7 @@ def build_context_engine(
                 list_subagents=list_subagents,
                 min_safety=skill_forge_router_config.hub.min_safety,
                 blocklist=(getattr(skill_forge_config, "blocklist", None) if skill_forge_config is not None else None),
+                blocklist_reader=blocklist_reader,
                 auto_install=str(getattr(skill_forge_config, "auto_install", "auto") or "auto"),
                 install_audit_path=(
                     workspace / "skills" / "hub" / "installs.jsonl" if skill_hub_client is not None else None
@@ -184,6 +186,7 @@ def build_context_engine(
             policy=SkillPolicy.create(
                 min_safety=skill_forge_router_config.hub.min_safety,
                 blocklist=(getattr(skill_forge_config, "blocklist", None) if skill_forge_config is not None else None),
+                blocklist_reader=blocklist_reader,
             ),
         )
     dropped = frozenset(getattr(config, "drop_segments", None) or ())

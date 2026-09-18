@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from raven.memory_engine.skill_local.local_pool import LocalPool
 from raven.memory_engine.skill_local.registry import SkillRegistry
@@ -38,6 +38,7 @@ class LocalSkillCatalog:
         builtin_skills_dir: Path | None = None,
         *,
         start_watcher: bool = True,
+        blocklist_reader: Callable[[], frozenset[str]] | None = None,
     ):
         # R1: build extra_dirs from config.local_dirs. List order = priority
         # (later overrides earlier on name collision). Each tuple:
@@ -70,23 +71,18 @@ class LocalSkillCatalog:
         )
 
         self._config = config
-        self._blocklist = normalize_blocklist(getattr(config, "blocklist", None))
+        frozen = normalize_blocklist(getattr(config, "blocklist", None))
+        # A reader rather than a copy: the settings page flips names on disk and
+        # the next turn has to see it, the way the tool switches already do.
+        # Without a reader the list is the one the config carried at build time.
+        self._blocklist_reader: Callable[[], frozenset[str]] = blocklist_reader or (lambda: frozen)
 
         # Local-pool BM25 retrieval over file-based skills (workspace +
         # builtin). Always available — no model, no GPU. Blocklisted
         # skills are hidden from the index via a filtered registry view
         # so they never surface through retrieval; the router pool drop
         # in SkillsSegmentBuilder stays the backstop for other sources.
-        pool_registry: Any = self._registry
-        if self._blocklist:
-            skipped = sorted({m.name for m in self._registry.list_all() if self._is_blocked(m.name)})
-            if skipped:
-                log.info(
-                    "skill blocklist: hiding blocked skill(s) from the local pool: %s",
-                    ", ".join(skipped),
-                )
-            pool_registry = _BlocklistRegistryView(self._registry, self._blocklist)
-        self._local_pool = LocalPool(pool_registry)
+        self._local_pool = LocalPool(_BlocklistRegistryView(self._registry, self._blocklist_reader))
 
         # Background SKILL.md watcher. Auto-started by default so the
         # common long-lived consumer (ContextBuilder) picks up hand-edits
@@ -108,8 +104,11 @@ class LocalSkillCatalog:
 
     # ── Pool/registry access (for LocalSkillSource) ──────────────────
 
+    def _current_blocklist(self) -> frozenset[str]:
+        return self._blocklist_reader()
+
     def _is_blocked(self, name: str) -> bool:
-        return is_blocked(self._blocklist, name)
+        return is_blocked(self._current_blocklist(), name)
 
     @property
     def registry(self) -> SkillRegistry:
@@ -514,12 +513,32 @@ class _BlocklistRegistryView:
     skills from the BM25 index while delegating everything else to the
     real registry, so index rebuilds keep flowing through unchanged."""
 
-    def __init__(self, registry: SkillRegistry, blocklist: frozenset[str]) -> None:
+    def __init__(self, registry: SkillRegistry, reader: Callable[[], frozenset[str]]) -> None:
         self._registry = registry
-        self._blocklist = blocklist
+        self._reader = reader
+        self._logged: frozenset[str] | None = None
+
+    def revision(self) -> frozenset[str]:
+        """What a cached view of this registry would have to be rebuilt for.
+
+        The pool holds a BM25 index over what `list_all` returned; the only
+        thing that changes what it returns without a file event is this list,
+        so the list is the token.
+        """
+        return self._reader()
 
     def list_all(self) -> list[SkillMeta]:
-        return [m for m in self._registry.list_all() if not is_blocked(self._blocklist, m.name)]
+        blocklist = self._reader()
+        rows = self._registry.list_all()
+        if blocklist != self._logged:
+            self._logged = blocklist
+            skipped = sorted(m.name for m in rows if is_blocked(blocklist, m.name))
+            if skipped:
+                log.info(
+                    "skill blocklist: hiding blocked skill(s) from the local pool: %s",
+                    ", ".join(skipped),
+                )
+        return [m for m in rows if not is_blocked(blocklist, m.name)]
 
     def __getattr__(self, item: str) -> Any:
         return getattr(self._registry, item)

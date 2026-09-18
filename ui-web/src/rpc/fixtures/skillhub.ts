@@ -5,7 +5,7 @@
  * same way the real hub does, so the installed shelf answers the change.
  */
 
-import type { FixtureEnv, Fixtures } from '../fixtureTransport'
+import type { FixtureEnv, Fixtures, Wire } from '../fixtureTransport'
 import type { ResultOf } from '../generated'
 import type { ExtFixture } from './ext'
 
@@ -62,7 +62,7 @@ export interface SkillhubFixture {
   fixtures: Fixtures
 }
 
-export function createSkillhub(_env: FixtureEnv, ext: ExtFixture): SkillhubFixture {
+export function createSkillhub(env: FixtureEnv, ext: ExtFixture): SkillhubFixture {
   const item = (e: Entry): Item => {
     const installed = ext.skills.find((s) => s.name === e.name)
     return {
@@ -76,6 +76,27 @@ export function createSkillhub(_env: FixtureEnv, ext: ExtFixture): SkillhubFixtu
 
   return {
     fixtures: {
+      /* The registry's own view of an installed skill, for the settings
+         detail: a body made of the row's own words, one file, and an install
+         stamp on the hub-installed ones. */
+      'skills.manage': (p): Wire<ResultOf<'skills.manage'>> => {
+        if (p.action === 'open') return { opened: true }
+        if (p.action === 'inspect') {
+          const s = ext.skills.find((x) => x.name === p.query)
+          if (!s) return { info: {} }
+          return {
+            info: {
+              name: s.name, description: s.description, path: `~/.raven/workspace/skills/${s.name}`,
+              body: `# ${s.name}\n\n${s.description}\n`, files: ['SKILL.md'], source: s.source, always: s.always,
+              hub: s.hub, hub_id: s.hub_id,
+              install: s.hub
+                ? { installed_at: new Date(env.now()).toISOString(), version: 'v1', trigger: 'use_skill', source: 'skillhub', score_safety: 0.9 }
+                : null,
+            },
+          }
+        }
+        return { skills: { workspace: ext.skills.map((x) => x.name) } }
+      },
       'skillhub.search': (p) => {
         const params = p as { query?: string; category?: string; page?: number; limit?: number }
         const q = (params.query || '').toLowerCase()

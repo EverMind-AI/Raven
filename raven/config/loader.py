@@ -93,6 +93,9 @@ EXTENSION_KEYS = (
     # consequence as sessionTitle above if omitted: a config carrying the
     # block would fail base Config validation instead of being read.
     "embedding",
+    # Session housekeeping the settings page controls (raven.rpc.methods.session).
+    # Same consequence as sessionTitle above if omitted.
+    "sessions",
 )
 
 # Paths already warned about as malformed in this process; repeated

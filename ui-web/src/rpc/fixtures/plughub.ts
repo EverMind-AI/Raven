@@ -127,6 +127,8 @@ export function createPlughub(_env: FixtureEnv, ext: ExtFixture): PlughubFixture
         const server: ExtFixture['mcp'][number] = {
           name: it.id, transport: 'http', state: 'connected', connected: true,
           tool_count: (preview.tools_preview || []).length, enabled: true,
+          /* A fresh install from this canvas holds whatever its form asked for. */
+          auth: 'none', credentialed: true,
         }
         if (!serverOf(it.id)) ext.mcp.push(server)
         return {
@@ -147,6 +149,23 @@ export function createPlughub(_env: FixtureEnv, ext: ExtFixture): PlughubFixture
       /* Nothing to authorize against: the card keeps the state it had, which
          is what an authorization that cannot be started looks like. */
       'plug.auth': (p) => ({ name: p.name }),
+      'plug.retry': (p) => {
+        const server = serverOf(p.name)
+        if (server) { server.state = 'connected'; server.connected = true; delete server.error }
+        return { name: p.name, ...(server ? { mcp: server } : {}) }
+      },
+      'plug.revoke': (p) => {
+        const server = serverOf(p.name)
+        if (server) { server.credentialed = false; server.state = 'auth_required'; server.connected = false }
+        return { name: p.name, ...(server ? { mcp: server } : {}) }
+      },
+      /* An empty value retires the credential; anything else is one. */
+      'plug.configure': (p) => {
+        const server = serverOf(p.name)
+        const set = Object.values(p.form || {}).some((v) => !!v)
+        if (server) { server.credentialed = set; server.state = set ? 'connected' : 'disconnected'; server.connected = set }
+        return { name: p.name, ...(server ? { mcp: server } : {}) }
+      },
     },
   }
 }

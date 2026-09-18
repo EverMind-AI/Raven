@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 179 methods, 97 component schemas.
+// 184 methods, 97 component schemas.
 
 /* eslint-disable */
 /**
@@ -232,7 +232,7 @@ export interface TranscriptNotice {
 export interface TranscriptDelegated {
   kind: 'spawn' | 'dag';
   label: string;
-  status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled';
+  status: 'ok' | 'error' | 'exception' | 'notice';
   /**
    * Set for kind=dag, so a client can open the run.
    */
@@ -342,6 +342,21 @@ export interface ApiUsageTotals {
   input_missing_calls?: number;
   output_missing_calls?: number;
 }
+export interface DailyUsage {
+  date: string;
+  calls: number;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cache_read_tokens?: number | null;
+  cost_usd?: number | null;
+  cache_write_tokens?: number | null;
+  cost_missing_calls: number;
+  cache_read_missing_calls: number;
+  cache_write_missing_calls: number;
+  legacy_cost_calls: number;
+  input_missing_calls?: number;
+  output_missing_calls?: number;
+}
 export interface LlmUsage {
   total: ApiUsageTotals;
   /**
@@ -415,17 +430,6 @@ export interface FsEntry {
    */
   size: number;
 }
-export interface FsDirEntry {
-  name: string;
-  /**
-   * Absolute.
-   */
-  path: string;
-  /**
-   * True when a session may be pinned here; false inside the agent's own data (see raven.agent.workdir).
-   */
-  ok: boolean;
-}
 /**
  * One row, projected card-sized. ``kind`` decides which optional fields
  * carry a value: the four memory types share only ``id`` and ``kind``.
@@ -497,6 +501,14 @@ export interface McpSnapshot {
    * The authorization URL this server is parked on, when it is. Carried on the pull because the `oauth.pending` notification that also carries it is dropped when no client is attached, which is every connect started at assembly time.
    */
   auth_url?: string;
+  /**
+   * How the server authenticates (ext.list rows only).
+   */
+  auth?: ('none' | 'apikey' | 'oauth') | null;
+  /**
+   * Whether it holds the credential that mode needs (ext.list rows only).
+   */
+  credentialed?: boolean | null;
 }
 /**
  * What the install actually landed, which is what uninstall replays.
@@ -587,10 +599,6 @@ export interface SessionListItem {
    * User pinned this session to the top of the picker.
    */
   pinned?: boolean;
-  /**
-   * The directory this session was pinned to when it was created, absolute; absent for a session that runs where the policy default puts it. What the rail groups by.
-   */
-  workdir?: string;
 }
 export interface SessionMessage {
   /**
@@ -718,10 +726,6 @@ export interface SubagentRow {
   probe_status: 'ready' | 'attention' | 'missing' | 'unknown';
   probe_detail: string;
   has_api_key: boolean;
-  /**
-   * The agent answered the handshake and then refused to open a session without a credential. Measured by the capability snapshot, not inferred from probe_status, which reads `attention` both for this and for an installed agent nothing has verified -- two rows that need opposite things from the reader. Always false for a kind with no handshake to be refused in.
-   */
-  needs_auth?: boolean;
   mcps: string[];
   allow_mcp_secrets: boolean;
   last_test_ok?: boolean;
@@ -733,6 +737,10 @@ export interface ModelOptionProvider {
   slug: string;
   name: string;
   homepage?: string;
+  /**
+   * Where the vendor hands out API keys; null when the registry has no console link.
+   */
+  key_url?: string | null;
   /**
    * The vendor's own model index. Distinct from `homepage`: the question a settings page asks is which model to put here, and a marketing front page does not answer it.
    */
@@ -762,6 +770,12 @@ export interface ModelOptionProvider {
    * Explicit user protocol overrides keyed by model id.
    */
   protocol_overrides?: {
+    [k: string]: string;
+  };
+  /**
+   * Custom request headers by name, each value redacted.
+   */
+  extra_headers?: {
     [k: string]: string;
   };
   total_models: number;
@@ -991,7 +1005,7 @@ export interface TurnStartedEvent {
     delegated?: {
       kind: 'spawn' | 'dag';
       label: string;
-      status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled';
+      status: 'ok' | 'error' | 'exception' | 'notice';
       /**
        * Which node of the run this is about. Present only on `kind: dag` with `status: exception`, where the report concerns one node rather than the whole run.
        */
@@ -1208,7 +1222,7 @@ export interface SubagentDeliveredEvent {
      * The spawn's display label, or the dag's run_id.
      */
     label: string;
-    status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled';
+    status: 'ok' | 'error' | 'exception' | 'notice';
     /**
      * Set for kind=dag, so a client can open the run.
      */
@@ -1634,6 +1648,10 @@ export interface SessionListParams {
    * Session channels to include; defaults to tui.
    */
   channels?: string[];
+  /**
+   * True lists only archived sessions; absent or false lists the live ones.
+   */
+  archived?: boolean | null;
 }
 export interface SessionListResult {
   sessions: SessionListItem[];
@@ -1957,6 +1975,10 @@ export interface ModelAddModelParams {
   slug: string;
   model: string;
   label?: string;
+  /**
+   * One line about the model; an empty string clears it, as it does for label.
+   */
+  description?: string;
   capabilities?: string[];
   input_modalities?: string[];
   output_modalities?: string[];
@@ -1964,6 +1986,40 @@ export interface ModelAddModelParams {
 }
 export interface ModelAddModelResult {
   provider: ModelOptionProvider;
+}
+export interface ModelAddModelsParams {
+  slug: string;
+  models: string[];
+  session_id?: string;
+}
+export interface ModelAddModelsResult {
+  provider: ModelOptionProvider;
+}
+export interface ModelSetFieldsParams {
+  slug: string;
+  fields: {
+    [k: string]: JsonValue;
+  };
+}
+export interface ModelSetFieldsResult {
+  /**
+   * Previous values, header values redacted.
+   */
+  previous: {
+    [k: string]: JsonValue;
+  };
+}
+export interface ModelOauthLoginParams {
+  slug: string;
+  session_id?: string;
+}
+export interface ModelOauthLoginResult {
+  verification_uri: string;
+  user_code: string;
+  /**
+   * Seconds the code stays valid; the gateway polls until then.
+   */
+  expires_in: number;
 }
 export interface ModelRemoveModelParams {
   slug: string;
@@ -2595,6 +2651,14 @@ export interface McpSnapshot1 {
    * The authorization URL this server is parked on, when it is. Carried on the pull because the `oauth.pending` notification that also carries it is dropped when no client is attached, which is every connect started at assembly time.
    */
   auth_url?: string;
+  /**
+   * How the server authenticates (ext.list rows only).
+   */
+  auth?: ('none' | 'apikey' | 'oauth') | null;
+  /**
+   * Whether it holds the credential that mode needs (ext.list rows only).
+   */
+  credentialed?: boolean | null;
 }
 export interface PlugRemoveParams {
   name: string;
@@ -2619,6 +2683,30 @@ export interface PlugAuthParams {
   name: string;
 }
 export interface PlugAuthResult {
+  name: string;
+  mcp?: McpSnapshot;
+}
+export interface PlugRetryParams {
+  name: string;
+}
+export interface PlugRetryResult {
+  name: string;
+  mcp?: McpSnapshot;
+}
+export interface PlugRevokeParams {
+  name: string;
+}
+export interface PlugRevokeResult {
+  name: string;
+  mcp?: McpSnapshot;
+}
+export interface PlugConfigureParams {
+  name: string;
+  form?: {
+    [k: string]: string;
+  };
+}
+export interface PlugConfigureResult {
   name: string;
   mcp?: McpSnapshot;
 }
@@ -2840,6 +2928,10 @@ export interface SettingsSetParams {
 export interface SettingsSetResult {
   applied: boolean;
   previous: JsonValue;
+  /**
+   * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
+   */
+  warning?: string | null;
 }
 export interface SettingsUsageParams {
   /**
@@ -2847,9 +2939,23 @@ export interface SettingsUsageParams {
    */
   days?: number;
   session_key?: string | null;
+  /**
+   * First day (YYYY-MM-DD), inclusive; clamped to 90 days back.
+   */
+  from?: string | null;
+  /**
+   * Last day (YYYY-MM-DD), inclusive; today when absent.
+   */
+  to?: string | null;
 }
 export interface SettingsUsageResult {
   days: number;
+  from: string;
+  to: string;
+  /**
+   * One entry per day of the range, zeros for days without a file.
+   */
+  daily: DailyUsage[];
   llm: LlmUsage;
   tools: ToolUsage;
   session_key?: string | null;
@@ -2892,6 +2998,10 @@ export interface SettingsEverosSetParams {
 }
 export interface SettingsEverosSetResult {
   applied: boolean;
+  /**
+   * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
+   */
+  warning?: string | null;
 }
 export interface ChannelsStatusParams {}
 export interface ChannelsStatusResult {
@@ -2952,34 +3062,6 @@ export interface FsListResult {
    * Directories first, dotfiles omitted, capped at 500.
    */
   entries: FsEntry[];
-}
-export interface FsDirsParams {
-  /**
-   * Absolute directory to list the subdirectories of; the user's home directory when omitted.
-   */
-  path?: string;
-}
-export interface FsDirsResult {
-  /**
-   * The directory listed, resolved.
-   */
-  path: string;
-  /**
-   * One level up; null at the filesystem root.
-   */
-  parent?: string;
-  /**
-   * The user's home directory, where the browser starts.
-   */
-  home: string;
-  /**
-   * Whether the listed directory itself may be a session's working directory.
-   */
-  ok: boolean;
-  /**
-   * Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found.
-   */
-  entries: FsDirEntry[];
 }
 export interface FsReadParams {
   path: string;
@@ -4023,11 +4105,15 @@ export interface ShellExecResult {
 }
 export interface SkillsManageParams {
   /**
-   * One of list, inspect, search, browse, install.
+   * One of list, inspect, search, browse, install, open.
    */
   action: string;
   query?: string;
   page?: number;
+  /**
+   * `open`: a file name relative to the skill's directory.
+   */
+  file?: string | null;
 }
 export interface SkillsManageResult {
   /**
@@ -4037,7 +4123,7 @@ export interface SkillsManageResult {
     [k: string]: string[];
   };
   /**
-   * `inspect`: one skill's metadata, {} when unknown.
+   * `inspect`: one skill's metadata (name, description, category, path, body, files, always, hub, hub_id, install), {} when unknown.
    */
   info?: {
     [k: string]: JsonValue;
@@ -4062,6 +4148,10 @@ export interface SkillsManageResult {
    */
   installed?: boolean;
   name?: string;
+  /**
+   * `open`.
+   */
+  opened?: boolean | null;
 }
 export interface SubagentInterruptParams {
   subagent_id: string;
@@ -4124,6 +4214,9 @@ export interface RpcMethods {
   'model.disconnect': { params: ModelDisconnectParams; result: ModelDisconnectResult };
   'model.fetch_models': { params: ModelFetchModelsParams; result: ModelFetchModelsResult };
   'model.add_model': { params: ModelAddModelParams; result: ModelAddModelResult };
+  'model.add_models': { params: ModelAddModelsParams; result: ModelAddModelsResult };
+  'model.set_fields': { params: ModelSetFieldsParams; result: ModelSetFieldsResult };
+  'model.oauth_login': { params: ModelOauthLoginParams; result: ModelOauthLoginResult };
   'model.remove_model': { params: ModelRemoveModelParams; result: ModelRemoveModelResult };
   'model.endpoints': { params: ModelEndpointsParams; result: ModelEndpointsResult };
   'model.add_endpoint': { params: ModelAddEndpointParams; result: ModelAddEndpointResult };
@@ -4175,6 +4268,9 @@ export interface RpcMethods {
   'plug.remove': { params: PlugRemoveParams; result: PlugRemoveResult };
   'plug.toggle': { params: PlugToggleParams; result: PlugToggleResult };
   'plug.auth': { params: PlugAuthParams; result: PlugAuthResult };
+  'plug.retry': { params: PlugRetryParams; result: PlugRetryResult };
+  'plug.revoke': { params: PlugRevokeParams; result: PlugRevokeResult };
+  'plug.configure': { params: PlugConfigureParams; result: PlugConfigureResult };
   'skillhub.search': { params: SkillhubSearchParams; result: SkillhubSearchResult };
   'skillhub.detail': { params: SkillhubDetailParams; result: SkillhubDetailResult };
   'skillhub.install': { params: SkillhubInstallParams; result: SkillhubInstallResult };
@@ -4200,7 +4296,6 @@ export interface RpcMethods {
   'channels.configure': { params: ChannelsConfigureParams; result: ChannelsConfigureResult };
   'channels.qr': { params: ChannelsQrParams; result: ChannelsQrResult };
   'fs.list': { params: FsListParams; result: FsListResult };
-  'fs.dirs': { params: FsDirsParams; result: FsDirsResult };
   'fs.read': { params: FsReadParams; result: FsReadResult };
   'fs.upload': { params: FsUploadParams; result: FsUploadResult };
   'fs.reveal': { params: FsRevealParams; result: FsRevealResult };
@@ -4321,7 +4416,6 @@ export const RPC_METHODS = [
   "delegation.status",
   "deliverables.list",
   "ext.list",
-  "fs.dirs",
   "fs.list",
   "fs.open",
   "fs.read",
@@ -4351,13 +4445,16 @@ export const RPC_METHODS = [
   "memory.stats",
   "model.add_endpoint",
   "model.add_model",
+  "model.add_models",
   "model.disconnect",
   "model.endpoints",
   "model.fetch_models",
+  "model.oauth_login",
   "model.options",
   "model.remove_endpoint",
   "model.remove_model",
   "model.save_key",
+  "model.set_fields",
   "model.set_protocol",
   "playbooks.create",
   "playbooks.credentials.clear",
@@ -4372,8 +4469,11 @@ export const RPC_METHODS = [
   "playbooks.set_enabled",
   "playbooks.validate",
   "plug.auth",
+  "plug.configure",
   "plug.install",
   "plug.remove",
+  "plug.retry",
+  "plug.revoke",
   "plug.toggle",
   "plughub.detail",
   "plughub.search",

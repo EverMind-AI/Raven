@@ -131,11 +131,20 @@ export async function loadExt(): Promise<void> {
   toolsLive = ext.tools.filter((tool) => !tool.mcp_server).map(mkToolRow)
   skillsLive = ext.skills.map(mkSkillRow)
   pluginsLive = ext.plugins.map(mkPluginRow).concat(ext.mcp.map(mkMcpRow))
+  skillRowsLive = ext.skills
+  mcpRowsLive = ext.mcp
   extLoaded = true
 }
 
 /** The rows the one boot-time read filled, each read at call time. */
 export const extTools = (): ToolRow[] => toolsLive
+/* The wire rows themselves, for the settings pages: the skill and MCP rows
+   above drop the fields those pages switch on (`always`, `auth`,
+   `credentialed`). */
+let skillRowsLive: ResultOf<'ext.list'>['skills'] = []
+let mcpRowsLive: ResultOf<'ext.list'>['mcp'] = []
+export const extSkillRows = (): ResultOf<'ext.list'>['skills'] => skillRowsLive
+export const extMcpRows = (): ResultOf<'ext.list'>['mcp'] => mcpRowsLive
 export const extSkills = (): InstalledSkill[] => skillsLive
 export const extPlugins = (): InstalledRow[] => pluginsLive
 export const extIsLoaded = (): boolean => extLoaded
