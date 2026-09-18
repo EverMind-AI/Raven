@@ -2451,99 +2451,32 @@ textarea:focus, textarea:focus-visible,
   background: var(--wash); }
 /* New-task state: no header title, the composer holds the centre line. */
 .chat[data-fresh] #title, .chat[data-fresh] #renameBtn { visibility: hidden; }
-/* Below the true centre: the lockup owns the upper field, the composer
-   answers it from just under the fold. */
-.chat[data-fresh] .dock { bottom: 35%; transform: translateY(50%); }
-/* The composer's box is what the crew perches on, so it has to be the
-   containing block for them, and it must not clip what hangs over its edge. */
-.chat[data-fresh] .dock-in { overflow: visible; }
+/* The landing page does not move the composer. It used to float it up to the
+   centre at 640px with a hero lockup over it and five characters perched on
+   it; the composer then jumped down and widened the moment the first message
+   landed. One position, one width, and the lockup sits in the empty column
+   above it -- which is the whole of the difference between the two states. */
 .dock { container-type: inline-size; container-name: dock; }
-/* Hero proportions: a 744px two-row box reads wide and flat against a small
-   lockup. Narrower box, larger lockup -- the pair balances near 1:2. */
-.chat[data-fresh] .dock-in { max-width: 640px; }
-/* The wordmark above the centred composer: glyph + name, one warm breath of
-   light behind them, nothing else. Hidden the moment content exists. */
-/* ── the crew ────────────────────────────────────────────────────
-   Five characters perched on the composer. Purely decorative: no pointer
-   events, empty alt, aria-hidden -- the textarea, the buttons and the reader's
-   focus order are untouched. Positions are anchored to the composer box, so
-   they follow it when it grows a line rather than floating off on their own.
-   Only on screen while the task is still empty; the first message takes the
-   whole column and they go. */
-/* Three layers, not one. The concept sheet uses occlusion: Content leans over
-   the top edge and the card cuts off its lower half, which is what welds the
-   group to the composer instead of parking it in front. So the back layer
-   sits under the card and the front layer over it, with the card between.
-   Both track the composer's own box: same width, same centring. */
-.crew { position: absolute; top: 0; left: 0; right: 0; max-width: 640px; height: 0;
-  margin: 0 auto; pointer-events: none; user-select: none; display: none; }
-.crew-back  { z-index: 1; }
-.crew-front { z-index: 3; }
-.chat[data-fresh] .crew { display: block; animation: crewin .45s ease backwards; }
-/* The card is the middle layer, and it has to say so: without a z-index of
-   its own it would paint in DOM order and swallow the front four. */
-/* Opaque only while the task is empty. backdrop-filter samples whatever is
-   behind the element and paints the blurred result, which swallows anything
-   layered underneath -- that is what hid the character meant to lean from
-   behind the card. With no transcript below yet the glass has nothing to
-   show through it anyway, so it costs nothing here and stays untouched the
-   moment there is content to read through it. */
-.chat[data-fresh] .dock-in {
-  position: relative; z-index: 2;
-  background: var(--ink);
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-}
-.rv { position: absolute; height: auto; display: block; }
-/* The contact shadow is what welds them to the card. On the layer, not on
-   each image: one filter means one compositing layer instead of five, which
-   is what broke rendering when these lived inside the backdrop-filtered box.
-   Soft and offset down -- a character standing on an edge casts onto it. */
-.crew-front { filter: drop-shadow(0 10px 9px rgba(17, 21, 30, .30)) drop-shadow(0 2px 3px rgba(17, 21, 30, .18)); }
-.crew-back  { filter: drop-shadow(0 8px 8px rgba(17, 21, 30, .24)); }
-
-/* Measured off the finished render (composer 930x168 there) and expressed
-   against this one: widths are ratios of the composer's width, the perched
-   three are placed by that same ratio, the two at the sides by its height.
-   Content overhangs the left edge slightly, exactly as the sheet does. */
-.rv-content  { width: 124px; left: -1.6%; top: -82px; }
-.rv-main     { width: 118px; left: 32.2%; top: -114px; }
-.rv-research { width: 107px; left: 76.3%; top: -88px; }
-.rv-coding   { width: 86px;  right: -74px; top: 14px; }
-.rv-data     { width: 97px;  left: -79px;  top: 58px; }
-/* Narrower column: the two at the sides tuck in before they reach the
-   controls. The perched three keep their footing. */
-@container dock (max-width: 900px) {
-  .rv-coding { right: -44px; width: 72px; }
-  .rv-data   { left: -40px;  width: 74px; }
-}
-/* Narrower still: only the pair that frames the composer survives, and
-   Content comes to the front -- a short card would cut away too much of it. */
-@container dock (max-width: 720px) {
-  .rv-coding, .rv-data, .rv-research { display: none; }
-  .crew-back { z-index: 3; }
-  .rv-content { width: 92px; left: 1%;  top: -58px; }
-  .rv-main    { width: 92px; left: 46%; top: -77px; }
-}
-@keyframes crewin { from { opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .chat[data-fresh] .crew { animation: none; } }
-/* The offset from the composer's centre is half its height plus the breathing
-   room: too small a number and the wordmark sits on the box's shoulder. */
+/* Above the true centre of the empty column, not measured off the composer:
+   the composer no longer moves, so there is nothing to measure from, and a
+   lockup pinned to the middle of the space it stands in is what reads as
+   centred to the eye -- slightly above the geometric centre, which is what the
+   -78% is for. */
 #brand {
-  position: absolute; left: 0; right: 0; bottom: calc(35% + 300px);
+  position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-78%);
   display: none; flex-direction: column; align-items: center; justify-content: center;
-  gap: 0; pointer-events: none; z-index: 4;
+  gap: 14px; pointer-events: none; z-index: 4;
 }
 .chat[data-fresh] #brand { display: flex; animation: brandin .5s cubic-bezier(.2, .7, .3, 1) backwards; }
-/* Slot for the mark. Empty until there is artwork to put in it -- a mark that
-   is not ready is worse than a wordmark standing on its own. */
-#brand .mk { width: 62px; height: 62px; flex: none; margin-bottom: 22px; }
-#brand .mk:empty { display: none; }
-/* One name in one voice: the serif is the whole gesture, so nothing in it is
-   set apart by colour or weight. */
+/* The mark is the silhouette (components/RavenMark.tsx), inked in the page's
+   own text colour, with its eyes cut to the ground it stands on. */
+#brand .mk { flex: none; display: block; color: var(--text); --mark-eye: var(--page); }
+/* A greeting, not a hero. The 70px serif wordmark this replaced was the single
+   largest thing on the page, and it was announcing the product to someone who
+   had already opened it. */
 #brand .wl {
-  font-family: var(--serif); font-size: 70px; font-weight: 400;
-  letter-spacing: -.008em; color: var(--text); line-height: 1;
+  font-size: 20px; font-weight: 600;
+  letter-spacing: .01em; color: var(--text); line-height: 1.5;
 }
 @keyframes brandin { from { opacity: 0; transform: translateY(12px); } }
 @media (prefers-reduced-motion: reduce) { .chat[data-fresh] #brand { animation: none; } }
@@ -4559,7 +4492,6 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
    744px wide underneath, off-axis with it. */
 .dock .sheets { display: flex; flex-direction: column; gap: 8px;
   max-width: var(--col); margin: 0 auto; }
-.chat[data-fresh] .dock .sheets { max-width: 640px; }
 /* The dock passes pointer events through so its gutter still belongs to the
    page; .dock-in takes them back for the card. The rack never did, so every
    sheet in it was inert -- the options could be read and not clicked. Taken
@@ -4589,7 +4521,6 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
    which fades the chips themselves out at the edge they scroll past. */
 #taskRuns { display: contents; }
 .runs { position: relative; max-width: var(--col); margin: 0 auto 8px; pointer-events: auto; }
-.chat[data-fresh] .runs { max-width: 640px; }
 .trun {
   flex: none; display: inline-flex; align-items: center; gap: 7px;
   max-width: 200px; padding: 5px 10px; border-radius: 9px; cursor: pointer;

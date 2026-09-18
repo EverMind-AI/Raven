@@ -106,8 +106,10 @@ describe('the chat column chrome', () => {
     expect(el('title').textContent).not.toBe('')
     expect(document.querySelector('.chat > .top > .spacer')).toBeTruthy()
     expect(document.querySelector('#brand .wl')?.textContent).toBe('Raven Agent')
-    /* #brand .mk:empty hides the slot, so the emptiness is load-bearing. */
-    expect(document.querySelector('#brand .mk')?.childNodes).toHaveLength(0)
+    /* The slot carries the mark now (components/RavenMark.tsx), drawn rather
+       than fetched -- so it is one element, and it is hidden from the reader
+       along with the lockup around it. */
+    expect(document.querySelector('#brand .mk > svg')).toBeTruthy()
     for (const svg of [...top().querySelectorAll('svg'), ...el('backpill').querySelectorAll('svg')]) {
       expect(svg.getAttribute('aria-hidden')).toBe('true')
     }
