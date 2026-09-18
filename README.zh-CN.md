@@ -25,7 +25,79 @@ Raven 是 **The Harness of Harnesses**，一个为自主协作与开放共创而
 
 > Raven 目前处于 pre-alpha 阶段，接口和配置可能快速变化。
 
-## 📊 基准测试
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/e333694a-0f4c-4f27-8bfe-8120ff5339a0"><img src="https://github.com/user-attachments/assets/e333694a-0f4c-4f27-8bfe-8120ff5339a0" alt="Multi-Agent Orchestration Benchmark: Node F1, Edge F1, Partial Order Accuracy, and Exact Match Rate" width="100%"></a>
+</p>
+
+<p align="center"><em>Raven 在多 Agent 编排基准测试上的表现</em></p>
+
+## ❯❯ Raven 自有 Agent
+
+Raven 通过模块化架构构建了四个专业 Agent。每个 Agent 都由可复用的 harness 组件组装而成，并搭配适合其领域的工具、技能和工作流。Raven 既可以将单项任务交给一个 Agent，也可以在同一工作流中协调多个 Agent 协作。
+
+例如，Raven-Research 可以收集证据，Raven-Code 实现实验，Raven-Oncall 运行并持续监控，最后由 Raven-Design 将结果制作成图表和演示文稿。
+
+在配置向导中启用所需的 Agent，配置详情见 [`agents/README.md`](agents/README.md)。
+
+### Raven-Research
+
+**Raven-Research** 为复杂问题、文献综述与技术分析提供**自主深度研究**能力。它交付清晰、结构化且来源可追溯的研究报告，帮助用户理解陌生领域、比较不同方案，并作出有依据的决策。
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/d072a514-58fd-41c7-8fcd-40782ebb4c80"><img src="https://github.com/user-attachments/assets/d072a514-58fd-41c7-8fcd-40782ebb4c80" alt="DeepResearch Mixed: Accuracy, Input Tokens, Output Tokens, and Cost" width="100%"></a>
+</p>
+
+<p align="center"><em>Raven-Research 在 DeepResearch Mixed 上的表现</em></p>
+
+### Raven-Code
+
+**Raven-Code** 支持**智能体驱动的软件开发**，将需求转化为可运行、经过测试的代码。它支持功能实现、调试、重构、数据处理与数据分析，帮助用户在遵循项目规范的前提下构建新能力、解决问题并提升代码质量。
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/a516ebc2-f0b4-47d4-b970-7dfd492adc0e"><img src="https://github.com/user-attachments/assets/a516ebc2-f0b4-47d4-b970-7dfd492adc0e" alt="Coding Benchmarks: SWE-bench Pro, SWE-bench Verified, WorkBuddy-Code Reward, and SWE-Refactor" width="100%"></a>
+</p>
+
+<p align="center"><em>Raven-Code 在编程基准测试中的表现</em></p>
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/75f60aa2-3e2f-42fb-aa51-aa111bf078d0"><img src="https://github.com/user-attachments/assets/75f60aa2-3e2f-42fb-aa51-aa111bf078d0" alt="DataAgentBench (2026-08-24 Live): Raven-Code with Opus-5 achieves 0.8762 Pass@1" width="100%"></a>
+</p>
+
+<p align="center"><em>Raven-Code 位居 DataAgentBench 榜首（2026-08-24 Live）</em></p>
+
+### Raven-Design
+
+**Raven-Design** 提供**视觉设计**能力，将想法与内容转化为精美的视觉作品。它支持演示文稿、品牌素材、图表、示意图和网页界面创作，通过持续优化布局、字体与视觉一致性，帮助用户清晰表达信息，将创意变为作品。
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9"><img src="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9" alt="PresentBench: Raven-Design, Claude Code, and public leaderboard scores" width="100%"></a>
+</p>
+
+<p align="center"><em>Raven-Design 在 PresentBench 上的表现</em></p>
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/061b5818-595b-4392-b9b6-53a1effb8347"><img src="https://github.com/user-attachments/assets/061b5818-595b-4392-b9b6-53a1effb8347" alt="Visual Design: Raven-Design, Claude Code, and Hermes on ArtifactsBench Dashboard, ArtifactsBench SVG, and GDPVal" width="100%"></a>
+</p>
+
+<p align="center"><em>Raven-Design 在 ArtifactsBench 和 GDPVal 上的表现</em></p>
+
+### Raven-Oncall
+
+**Raven-Oncall** 为实验、优化与持续监控提供**无人值守的流程自动化**能力。它自主推进从启动到完成的整个工作流程，支持持续数小时乃至通宵运行并交付结果，仅在需要人工判断时请用户介入。
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/8e2b9721-421c-485c-b1dc-1acf901bcb2c"><img src="https://github.com/user-attachments/assets/8e2b9721-421c-485c-b1dc-1acf901bcb2c" alt="AI4AI (Nanochat 50M Pretraining): Bits Per Byte (BPB), Runtime, Tokens, and Cost" width="100%"></a>
+</p>
+
+<p align="center"><em>Raven-Oncall 与 Claude Code 在 AI4AI（Nanochat 50M 预训练）上的对比</em></p>
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9"><img src="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9" alt="AI4S Internal Benchmark: Success Rate, Average Total Runtime, Average Total Tokens, and Average Cost" width="100%"></a>
+</p>
+
+<p align="center"><em>Raven-Oncall 与 Claude Code 在 AI4S 内部基准测试上的对比</em></p>
+
+## ❯❯ 基准测试
 
 | 基准 | Raven 结果 | 对比 |
 | --- | --- | --- |
@@ -37,7 +109,15 @@ Raven 是 **The Harness of Harnesses**，一个为自主协作与开放共创而
 
 https://github.com/user-attachments/assets/3c541dae-5852-447f-8ea6-c9877612ad57
 
-## 🚀 快速开始
+## ❯❯ 连接第三方 Agent
+
+Raven 可以连接并编排以下第三方 Agent，分配任务、协调各自的能力，让它们在同一工作流中协作。
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/3370c883-00ac-4471-97ef-f4312df77202" width="70%" alt="Third-party agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, MiroThinker, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi">
+</p>
+
+## ❯❯ 快速开始
 
 ### 📦 安装
 
@@ -59,70 +139,77 @@ Windows PowerShell 5.1 可能拒绝重定向，请改用直连安装地址：
 irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex
 ```
 
+也可以从源码检出安装，适合基于代码做开发，或运行尚未发布的版本：
+
+```bash
+git clone https://github.com/EverMind-AI/Raven.git
+cd Raven
+./install.sh
+```
+
+以文件方式运行时，`install.sh` 会以可编辑（editable）模式安装该检出目录：Raven 及其内置插件都链接回你的工作树，TUI 包和内置页面也从该目录构建。通过管道运行时，即使身处克隆仓库中也始终安装已发布的 wheel，这样一行命令的安装就不会使用工作树中的任意内容。如需在管道方式下强制使用可编辑安装，请设置 `RAVEN_LOCAL_SRC=<dir>`。
+
 这些 Agent 随 Raven 一同发布：wheel 包包含 `agents/` 产品目录，首次使用时会将其复制到 Raven 主目录；源码安装则直接读取仓库中的目录。配置向导会逐一询问是否启用，并为所选 Agent 注册其适配的模型，或使用当前 Raven 的 LLM。详见 [`agents/README.md`](agents/README.md)。
 
-### 🧭 完成引导并运行
+## ❯❯ 自托管
+
+Raven 可以直接从源码仓库运行，也可以作为单个 Docker Compose 服务运行。Compose 部署通过 nginx 提供已构建的页面，在同一个容器中运行 Raven 引擎及其子服务，并将持久化状态保存到命名卷中。
+
+### 📝 前置条件
+
+使用 Docker 部署时，请安装 Docker Engine 和 Docker Compose v2。使用源码部署时，请安装 Python 3.12、`uv`、Node.js 和 npm，并在启动引擎前安装仓库依赖。
+
+### 🐳 使用 Docker Compose 启动
+
+仓库中的 Compose 配置会在构建镜像时完成页面和 Python 环境的构建，因此无需在宿主机上单独构建：
 
 ```bash
-raven
+cd docker
+docker compose up
 ```
 
-首次启动时，Raven 会引导你完成配置，然后打开终端界面。可选步骤可以跳过。
+打开 <http://127.0.0.1:18793>。Compose 容器运行完整的 `gateway` 引擎，因此在 **设置 > 模型服务商（Settings > Model providers）** 中添加模型服务商后，无需重启即可在下一轮使用。
 
-运行 `raven onboard` 重新配置，或运行 `raven doctor` 检查配置。
+容器布局、登录流程、模型服务商配置和运维说明详见 [`docker/README.md`](docker/README.md)。
 
-### ⬆️ 升级
+### ⚙️ 配置
+
+Docker 先读取 [`docker/.env`](docker/.env) 中已提交的默认值，再加载可选的、被 Git 忽略的 `docker/.env.local` 覆盖这些默认值。请将凭据和部署相关的覆盖项写入 `.env.local`，不要写入已提交的文件。
+
+Raven 将配置、会话、工作区、日志和记忆保存在 `RAVEN_HOME` 下。Compose 镜像通过 `raven-data` 卷将其映射到 `/data`。升级或重启时请保留该卷；`docker compose down -v` 会删除卷及其中的数据。
+
+### 🛠️ 构建 Docker 镜像
+
+使用 Makefile 目标构建镜像：
 
 ```bash
-raven upgrade --check
-raven upgrade
+make docker-build
 ```
 
-升级会保留配置、会话和记忆。Raven 不会自动更新。
+默认标签是 `raven:local`。如需选择其他标签或可选依赖集：
 
-## 🤝 Raven 自有 Agent
+```bash
+make docker-build DOCKER_IMAGE=raven:local
+docker build -t raven:local --build-arg RAVEN_EXTRAS="channels,tools,sandbox" .
+```
 
-Raven 通过模块化架构构建了四个性能领先的 Agent。每个 Agent 都由可复用的 harness 组件组装而成，并搭配适合其领域的工具、技能和工作流。Raven 既可以将单项任务交给一个 Agent，也可以在同一工作流中协调多个 Agent 协作。
+要通过 Compose 运行本地构建的镜像，请设置 `RAVEN_IMAGE=raven:local`（也可以在命令前直接设置该变量），然后在 `docker/` 目录运行 `docker compose up`。对应的 Makefile 快捷方式是 `RAVEN_IMAGE=raven:local make docker-up`。使用 `make docker-down` 停止服务。
 
-| Agent | 能力 |
-| --- | --- |
-| **Raven-Research** | 检索实时网络信息，阅读并比较不同来源，生成带引用和参考资料的研究报告。 |
-| **Raven-Code** | 以领先的编程能力编写、运行和调试代码，覆盖功能开发、缺陷修复、代码重构、脚本编写和测试。 |
-| **Raven-Design** | 创作、编辑和审阅视觉作品，包括品牌素材、示意图、图表、插画、图标、演示文稿和界面设计。 |
-| **Raven-Oncall** | 在本地或远程机器上运行并监控实验和长时间任务，评估结果、调整后续运行方案，并汇报最终结果。 |
+### 🚀 从源码启动服务
 
-例如，Raven-Research 可以收集证据，Raven-Code 实现实验，Raven-Oncall 运行并持续监控，最后由 Raven-Design 将结果制作成图表和演示文稿。
+在仓库根目录运行：
 
-在配置向导中启用所需的 Agent，配置详情见 [`agents/README.md`](agents/README.md)。
+```bash
+make install-deps
+make build-ui
+uv run raven web
+```
 
-## 🔌 预设第三方 Agent
+`raven web` 会打开本地页面，并在终端退出后保持引擎运行。默认地址是 `http://127.0.0.1:18792`。调试时可以使用 `uv run raven web --foreground`，使用 `uv run raven web --stop` 停止常驻引擎。首次启动时可以暂时不配置模型，之后在 **设置 > 模型服务商（Settings > Model providers）** 中添加，或运行 `uv run raven onboard`。
 
-Raven 为以下第三方 Agent 提供预设，方便你将它们的能力接入 Raven 的编排工作流。
+如果只需要启动引擎而不打开浏览器页面，请使用 `uv run raven gateway`。
 
-<table width="100%">
-<tr>
-<td width="20%" align="center"><img src="ui-web/src/assets/agents/claudecode-color.svg" alt="Claude Code" width="64" height="64"><br><strong>Claude Code</strong></td>
-<td width="20%" align="center"><img src="ui-web/src/assets/agents/codex-color.svg" alt="Codex" width="64" height="64"><br><strong>Codex</strong></td>
-<td width="20%" align="center"><img src="ui-web/src/assets/agents/opencode.svg" alt="OpenCode" width="64" height="64"><br><strong>OpenCode</strong></td>
-<td width="20%" align="center"><img src="ui-web/src/assets/agents/hermesagent.svg" alt="Hermes Agent" width="64" height="64"><br><strong>Hermes Agent</strong></td>
-<td width="20%" align="center"><img src="ui-web/src/assets/agents/openclaw-color.svg" alt="OpenClaw" width="64" height="64"><br><strong>OpenClaw</strong></td>
-</tr>
-<tr>
-<td align="center"><img src="ui-web/src/assets/agents/miromind.svg" alt="MiroThinker" width="64" height="64"><br><strong>MiroThinker</strong></td>
-<td align="center"><img src="ui-web/src/assets/agents/copilot-color.svg" alt="GitHub Copilot" width="64" height="64"><br><strong>GitHub Copilot</strong></td>
-<td align="center"><img src="ui-web/src/assets/agents/qwen-color.svg" alt="Qwen Code" width="64" height="64"><br><strong>Qwen Code</strong></td>
-<td align="center"><img src="ui-web/src/assets/agents/codebuddy-color.svg" alt="CodeBuddy" width="64" height="64"><br><strong>CodeBuddy</strong></td>
-<td align="center"><img src="ui-web/src/assets/agents/qoder-color.svg" alt="Qoder" width="64" height="64"><br><strong>Qoder</strong></td>
-</tr>
-<tr>
-<td align="center"><img src="ui-web/src/assets/agents/grok.svg" alt="Grok Build" width="64" height="64"><br><strong>Grok Build</strong></td>
-<td align="center"><img src="ui-web/src/assets/agents/kimi.svg" alt="Kimi Code" width="64" height="64"><br><strong>Kimi Code</strong></td>
-<td align="center"><img src="ui-web/src/assets/agents/pi.svg" alt="Pi" width="64" height="64"><br><strong>Pi</strong></td>
-<td colspan="2"></td>
-</tr>
-</table>
-
-## 🧩 核心系统
+## ❯❯ 核心系统
 
 | 系统 | 能力 |
 | --- | --- |
@@ -140,7 +227,7 @@ Raven 为以下第三方 Agent 提供预设，方便你将它们的能力接入 
 </div>
 
 
-## 🌐 启动 WebUI
+## ❯❯ 启动 WebUI
 
 Raven 的 WebUI 将对话、多 Agent 协作和工作区管理整合到浏览器中。你可以在同一界面与 Agent 对话、跟踪任务进度、查看文件和输出，以及浏览记忆与技能。
 
@@ -156,7 +243,7 @@ raven web
 
 > **截图占位 3：** 记忆与技能管理。
 
-## 📋 命令参考
+## ❯❯ 命令参考
 
 | 命令 | 用途 |
 | --- | --- |
@@ -194,75 +281,7 @@ raven web
 
 运行 `raven --help` 或 `raven <command> --help` 查看完整命令说明。
 
-## 🏠 自托管
-
-Raven 可以直接从源码仓库运行，也可以作为单个 Docker Compose 服务运行。Compose 部署通过 nginx 提供已构建的页面，在同一个容器中运行 Raven 引擎及其子服务，并将持久化状态保存到命名卷中。
-
-### 📝 前置条件
-
-使用 Docker 部署时，请安装 Docker Engine 和 Docker Compose v2。使用源码部署时，请安装 Python 3.12、`uv`、Node.js 和 npm，并在启动引擎前安装仓库依赖。
-
-### 🐳 使用 Docker Compose 启动
-
-仓库中的 Compose 配置会在构建镜像时完成页面和 Python 环境的构建，因此无需在宿主机上单独构建：
-
-```bash
-cd docker
-docker compose up
-```
-
-打开 <http://127.0.0.1:18793>。Compose 容器运行完整的 `gateway` 引擎，因此在 **设置 > 模型（Settings > Model Providers）** 中添加模型服务商后，无需重启即可在下一轮使用。
-
-容器布局、登录流程、模型服务商配置和运维说明详见 [`docker/README.md`](docker/README.md)。
-
-### ⚙️ 配置
-
-Docker 先读取 [`docker/.env`](docker/.env) 中已提交的默认值，再加载可选的、被 Git 忽略的 `docker/.env.local` 覆盖这些默认值。请将凭据和部署相关的覆盖项写入 `.env.local`，不要写入已提交的文件。常用配置包括：
-
-| 变量 | 用途 |
-| --- | --- |
-| `RAVEN_WEB_PORT` | Compose 发布到宿主机的端口，默认为 `18793` |
-| `RAVEN_AUTO_LOGIN` | 自动为本地浏览器登录；对远程开放时设为 `0` |
-| `RAVEN_EXTRAS` | 可选镜像扩展，例如 `channels`、`tools`、`sandbox`、`browser` 或 `eval` |
-| `RAVEN_PLUGINS` | 要安装到镜像中的内置插件，包括 `everos-memory` |
-| `RAVEN_PROVIDER` | 可选模型服务商，在容器启动时写入 `config.json` |
-| `RAVEN_API_KEY` | 可选模型服务商密钥；本地服务商可以留空 |
-| `RAVEN_API_BASE` | 可选自定义端点；无需密钥的本地服务商只需设置此项 |
-
-Raven 将配置、会话、工作区、日志和记忆保存在 `RAVEN_HOME` 下。Compose 镜像通过 `raven-data` 卷将其映射到 `/data`。升级或重启时请保留该卷；`docker compose down -v` 会删除卷及其中的数据。
-
-### 🛠️ 构建 Docker 镜像
-
-使用 Makefile 目标构建镜像：
-
-```bash
-make docker-build
-```
-
-默认标签是 `raven:local`。如需选择其他标签或可选依赖集：
-
-```bash
-make docker-build DOCKER_IMAGE=raven:local
-docker build -t raven:local --build-arg RAVEN_EXTRAS="channels,tools,sandbox" .
-```
-
-要通过 Compose 运行本地构建的镜像，请设置 `RAVEN_IMAGE=raven:local`（也可以在命令前直接设置该变量），然后在 `docker/` 目录运行 `docker compose up`。对应的 Makefile 快捷方式是 `RAVEN_IMAGE=raven:local make docker-up`。使用 `make docker-down` 停止服务。
-
-### 🚀 从源码启动服务
-
-在仓库根目录运行：
-
-```bash
-make install-deps
-make build-ui
-uv run raven web
-```
-
-`raven web` 会打开本地页面，并在终端退出后保持引擎运行。默认地址是 `http://127.0.0.1:18792`。调试时可以使用 `uv run raven web --foreground`，使用 `uv run raven web --stop` 停止常驻引擎。首次启动时可以暂时不配置模型，之后在 **设置 > 模型（Settings > Models）** 中添加，或运行 `uv run raven onboard`。
-
-如果只需要启动引擎而不打开浏览器页面，请使用 `uv run raven gateway`。
-
-## 📚 文档
+## ❯❯ 文档
 
 - [文档索引](docs/README.md)
 - [开发工作流](docs/dev.md)
@@ -279,7 +298,7 @@ uv run raven web
 
 </div>
 
-## 🗂️ 仓库布局
+## ❯❯ 仓库布局
 
 共享的 Python 运行时位于 `raven/`，Agent 定义、插件发行包、前端和开发工具与其并列存放。
 
@@ -347,7 +366,7 @@ docs/                  # 安装、开发与设计文档
 | `updates` | 版本发现、升级规划、安装交接与更新提示 |
 | `utils` | 共享工具函数，包括原子文件写入 |
 
-## 🏗️ 架构
+## ❯❯ 架构
 
 各运行时入口都通过同一个 **装配根（Assembly Root）** `raven/core/runtime.py:build_runtime` 组装 Raven。配置与插件贡献共同决定每一代运行时的组件；Spine 围绕 Agent Loop 调度轮次并传递事件。
 
@@ -388,9 +407,75 @@ WebUI 和 React/Ink TUI 共用 [`rpc-schema/openrpc.json`](rpc-schema/openrpc.js
 
 </div>
 
-## 🌐 EverMind 生态
+## ❯❯ EverMind 生态
 
-Raven 是 [EverMind](https://evermind.ai/) 开源生态的一部分。欢迎了解 [EverOS](https://github.com/EverMind-AI/EverOS)、[EverAlgo](https://github.com/EverMind-AI/EverAlgo)、[HyperMem](https://github.com/EverMind-AI/HyperMem)、[EvoAgentBench](https://github.com/EverMind-AI/EvoAgentBench)、[EverMemBench](https://github.com/EverMind-AI/EverMemBench) 和 [EverMe](https://github.com/EverMind-AI/EverMe)。
+[EverMind](https://evermind.ai/) 将记忆研究、可用于生产环境的产品与实际集成连接为一个开源生态。
+
+<table>
+<tr>
+<th colspan="2">产品</th>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/EverOS">EverOS</a></strong></td>
+<td>优先本地运行、以 Markdown 为原生格式的长期记忆运行时，面向 Agent 与用户。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/Raven">Raven</a></strong></td>
+<td>以记忆为核心、能够自我改进的 Agent harness，支持主动行为、上下文控制和技能演化。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/EverMe">EverMe (CLI)</a></strong></td>
+<td>用于跨设备、跨 Agent 个人记忆的 CLI 与 Agent 插件套件。</td>
+</tr>
+<tr>
+<th colspan="2">研究与评估</th>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/SkillCorpus">SkillCorpus</a></strong></td>
+<td>经过整理、可用于检索的 Agent 技能语料库，配套检索与评估工具。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/EverAlgo">EverAlgo</a></strong></td>
+<td>为 EverOS 提供无状态的提取、排序、解析和记忆算子。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/HyperMem">HyperMem</a></strong></td>
+<td>基于超图的分层记忆，支持从粗到细检索长期对话内容。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/MSA">MSA</a></strong></td>
+<td>Memory Sparse Attention，支持可扩展的潜在记忆与 100M Token 上下文。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/EverMemBench">EverMemBench</a></strong></td>
+<td>评估记忆系统的事实召回、应用推理和个性化泛化能力。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/EverMind-AI/EvoAgentBench">EvoAgentBench</a></strong></td>
+<td>对 Agent 自进化、迁移效率、错误规避和技能使用进行纵向评估。</td>
+</tr>
+<tr>
+<th colspan="2"><a href="https://github.com/EverMind-AI/plugins">集成</a></th>
+</tr>
+<tr>
+<td><strong><a href="https://docs.openclaw.ai">OpenClaw</a></strong></td>
+<td><a href="https://github.com/EverMind-AI/plugins/tree/main/openclaw">OpenClaw 插件</a>，用于自动召回、记忆采集和会话记忆生命周期管理。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a></strong></td>
+<td><a href="https://github.com/EverMind-AI/plugins/tree/main/hermes">Hermes 插件</a>，为 Hermes 提供跨会话的持久化记忆。</td>
+</tr>
+<tr>
+<td><strong><a href="https://github.com/deepseek-ai/DeepSeek-Harness">DeepSeek Harness</a></strong></td>
+<td><a href="https://github.com/EverMind-AI/plugins/tree/main/dsh">DSH 插件</a>，为 DeepSeek Harness Agent 提供记忆能力。</td>
+</tr>
+<tr>
+<td><strong><a href="https://dify.ai">Dify</a></strong></td>
+<td>提供<a href="https://github.com/EverMind-AI/plugins/tree/main/dify">自托管</a>与<a href="https://github.com/EverMind-AI/plugins/tree/main/dify_cloud">云端</a>工具，在工作流和 Agent 中显式搜索与存储记忆。</td>
+</tr>
+</table>
+
+这些项目共同构成 EverMind 从研究到运行时的技术体系，将方法与基准转化为可复用的记忆基础设施、产品和 Agent 集成。
 
 <br>
 <div align="right">
@@ -399,10 +484,10 @@ Raven 是 [EverMind](https://evermind.ai/) 开源生态的一部分。欢迎了�
 
 </div>
 
-## 🤝 参与贡献
+## ❯❯ 参与贡献
 
 欢迎提交 issue 和 pull request。请先阅读[开发工作流](docs/dev.md)，遵循 [AGENTS.md](AGENTS.md) 中的仓库规则，并在 [GitHub Discussions](https://github.com/EverMind-AI/Raven/discussions) 中讨论设计方案。
 
-## ⚖️ 许可证
+## ❯❯ 许可证
 
 [Apache 许可证 2.0](LICENSE)

@@ -146,7 +146,12 @@ def _strip_payload(payload: Any, ref_key: str) -> Any:
     return kept
 
 
-def _check_replayable(recording) -> None:
+def replayability_problems(recording) -> list[str]:
+    """Why ``recording`` cannot replay end to end (empty = fully replayable).
+
+    The replay contract a loaded recording must meet: turn inputs to drive
+    the loop, an input and output payload per model call, a name and usable
+    result per tool call. Shared by the minimize gate and case validation."""
     problems: list[str] = []
     if not recording.turns:
         problems.append("no recorded turn inputs")
@@ -160,6 +165,11 @@ def _check_replayable(recording) -> None:
             problems.append(f"tool call #{i + 1} has no tool.input payload")
         if call.result is None:
             problems.append(f"tool call #{i + 1} has no usable tool.output payload")
+    return problems
+
+
+def _check_replayable(recording) -> None:
+    problems = replayability_problems(recording)
     if problems:
         raise ValueError("bundle is not fully replayable, refusing to minimize: " + "; ".join(problems))
 

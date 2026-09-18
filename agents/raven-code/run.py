@@ -230,7 +230,10 @@ def _seed_prompt(target: Path, wanted: str | None, pristine: set[str] | frozense
         return
     target.parent.mkdir(parents=True, exist_ok=True)
     if not target.exists() or target.read_text(encoding="utf-8") != wanted:
-        target.write_text(wanted, encoding="utf-8")
+        # newline="" so the seed is the carried asset byte for byte. The default
+        # translates each line ending to os.linesep, which on Windows writes a
+        # CRLF copy of an LF source; the guide is asserted equal to its asset.
+        target.write_text(wanted, encoding="utf-8", newline="")
     receipt.write_text(hashlib.sha256(wanted.encode()).hexdigest() + "\n", encoding="ascii")
 
 

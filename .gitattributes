@@ -1,0 +1,23 @@
+# Line endings belong to the repository, not to the checkout.
+#
+# Without this file a Windows clone under core.autocrlf=true lands every source
+# file as CRLF, and the checks that read bytes rather than lines fail on a tree
+# that is otherwise correct: ui-web/scripts/check-page.mjs anchors a script
+# payload on "<script>\n", ui-web's boot-order and open-conversation tests slice
+# their source on "\n}\n", and gen-rpc-client --check compares its own LF output
+# against the file on disk. Each one reports a defect that is not there.
+* text=auto eol=lf
+
+# Shipped as bytes. text=auto already detects these, but naming them keeps the
+# detection out of the answer for the formats where a wrong guess corrupts the
+# file rather than merely reformatting it.
+*.png binary
+*.jpg binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.ttf binary
+*.woff binary
+*.woff2 binary
+*.pptx binary
+*.xlsx binary

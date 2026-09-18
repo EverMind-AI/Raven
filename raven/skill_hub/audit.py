@@ -25,6 +25,12 @@ from pathlib import Path
 
 from raven.utils.atomic_io import locked_append
 
+#: The stamp ``write_install_meta`` leaves in a bundle's skill directory. Named
+#: here, beside the writer, so the two readers that decide "was this installed
+#: from the hub" -- the page's skill list and ``skillhub.remove`` -- test for
+#: the same file the installer wrote rather than a spelling of their own.
+INSTALL_META = ".install-meta.json"
+
 logger = logging.getLogger(__name__)
 
 
@@ -72,7 +78,7 @@ def write_install_meta(
     """
     if not skill_dir:
         return
-    path = Path(skill_dir) / ".install-meta.json"
+    path = Path(skill_dir) / INSTALL_META
     if path.exists():
         return
     record = {
@@ -88,4 +94,4 @@ def write_install_meta(
         logger.warning("failed to write install meta to %s", path, exc_info=True)
 
 
-__all__ = ["record_install", "write_install_meta"]
+__all__ = ["INSTALL_META", "record_install", "write_install_meta"]
