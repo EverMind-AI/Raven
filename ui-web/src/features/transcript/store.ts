@@ -1761,7 +1761,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
           open: () => {
             const src = source()
             if (isDag) src.openDagRun?.(String(d.run_id || d.label || ''))
-            else src.openSpawn?.('', String(d.label || ''))
+            else src.openSpawn?.('', String(d.label || ''), d.node_id)
           },
         })
       } else {

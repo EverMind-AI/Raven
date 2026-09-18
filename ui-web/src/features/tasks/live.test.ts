@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
   applyNodeUpdated, applyRunCompleted, applyRunReplanned, applyRunStarted, applySubagentStatus,
@@ -135,6 +135,20 @@ describe('applyRunCompleted', () => {
     const result = applyRunCompleted(base, { run_id: 'other', dir: '/d', summary: {}, files: [] })
     expect(result.rows).toEqual(base)
     expect(result.refetch).toBeUndefined()
+  })
+
+  it('replaying the same completion frame keeps the first ended_at rather than restamping it', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(5000)
+    const once = applyRunCompleted(base, {
+      run_id: 'r1', dir: '/d', summary: {}, files: [{ node: 'a', status: 'completed' }],
+    })
+    vi.setSystemTime(9000)
+    const twice = applyRunCompleted(once.rows, {
+      run_id: 'r1', dir: '/d', summary: {}, files: [{ node: 'a', status: 'completed' }],
+    })
+    expect(twice.rows[0]!.ended_at).toBe(once.rows[0]!.ended_at)
+    vi.useRealTimers()
   })
 })
 

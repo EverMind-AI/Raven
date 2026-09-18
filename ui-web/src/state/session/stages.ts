@@ -100,7 +100,7 @@ export const STAGES: readonly Stage[] = [
         body: d.content || '',
         open: () => {
           if (isDag) { ds('transcript').openDagRun!(d.run_id || d.label || ''); return }
-          ds('transcript').openSpawn!('', d.label || '')
+          ds('transcript').openSpawn!('', d.label || '', d.node_id)
         },
       })
     }

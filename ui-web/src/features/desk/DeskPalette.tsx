@@ -24,7 +24,7 @@ import type { DeliveryRow } from '../workspace/types'
 import type { DeskGeometry, DeskTab } from './types'
 import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent } from 'react'
 
-/* The three tabs, in the prototype's own order (产物 · 任务 · diff), each
+/* The three tabs, in the prototype's own order (deliverables, tasks, diff), each
    carrying its own badge. Two of the three carry what is new in them, because
    a reader who is on one tab has exactly one question about the other two.
    The tasks tab carries something else: how many are running right now,

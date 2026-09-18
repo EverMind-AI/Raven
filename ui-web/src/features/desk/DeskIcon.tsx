@@ -34,6 +34,13 @@ export function DeskIcon({ kind }: { kind: DeskTab | 'file' | 'agents' }): JSX.E
       <path d="M3.5 8.5 12 13l8.5-4.5M12 13v7" />
     </svg>
   )
+  if (kind === 'diff') return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M7 4h10a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3z" />
+      <path d="M8 12h8" />
+      <path d="M12 8v8" />
+    </svg>
+  )
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
       <rect x="4" y="4" width="16" height="16" rx="3" />

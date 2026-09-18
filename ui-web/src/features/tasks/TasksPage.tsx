@@ -82,8 +82,15 @@ function taskDuration(row: TaskRow, now: number): number | null {
    not. */
 function stepLine(row: TaskRow): string {
   const c = row.counts
-  if (c.total <= 1) return ''
-  if (row.status === 'running') return t('gui.tasks.step', { i: c.completed + 1, n: c.total })
+  /* A running row stuck on a suspended node is not merely "in progress": the
+     main agent has to answer resolve_dag_node before it moves again, which
+     reads differently from ordinary progress in the list, the pane and
+     anywhere else this line is drawn. */
+  const awaiting = row.status === 'running' && c.exception ? t('gui.tasks.step_awaiting', { n: c.exception }) : ''
+  if (c.total <= 1) return awaiting
+  if (row.status === 'running') {
+    return [t('gui.tasks.step', { i: c.completed + 1, n: c.total }), awaiting].filter(Boolean).join(' · ')
+  }
   if (row.status === 'completed') return t('gui.tasks.step_all_done', { n: c.total })
   if (row.status === 'interrupted') return t('gui.tasks.step_stopped', { d: c.completed, k: c.completed + 1 })
   const parts: string[] = []
@@ -339,11 +346,11 @@ function nodeSubtitle(node: TaskNode): string {
   if (dur) parts.push(dur)
   const tk = tokensText(node)
   if (tk) parts.push(tk)
-  if (node.tool_call_count != null) {
-    parts.push(node.tool_failure_count
+  parts.push(node.tool_call_count == null
+    ? '—'
+    : (node.tool_failure_count
       ? t('gui.tasks.tools_n', { n: node.tool_call_count }) + ' · ' + t('gui.tasks.tools_failed_n', { n: node.tool_failure_count })
-      : t('gui.tasks.tools_n', { n: node.tool_call_count }))
-  }
+      : t('gui.tasks.tools_n', { n: node.tool_call_count })))
   if (node.status === 'completed' && node.has_output === false) parts.push(t('gui.tasks.no_output'))
   return parts.join(' · ')
 }
@@ -518,6 +525,23 @@ function inputText(v: unknown): string {
   return JSON.stringify(v)
 }
 
+/* A `depends_on` entry (or an `inputs` value shaped `{node: id}`) that names
+   no node of this task refers to a node of a different run: node ids are
+   unique inside one session, not across it, so a later graph can depend on an
+   earlier one's completed node. The board draws only this task's own nodes
+   and already leaves such an id undrawn; this is the work order's own line
+   for it. */
+function externalDeps(node: TaskNode, row: TaskRow): string[] {
+  const known = new Set(row.nodes.map((n) => n.node_id))
+  const ids = new Set<string>()
+  node.depends_on.forEach((id) => { if (!known.has(id)) ids.add(id) })
+  Object.values(node.inputs || {}).forEach((v) => {
+    const id = v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>).node : null
+    if (typeof id === 'string' && !known.has(id)) ids.add(id)
+  })
+  return [...ids]
+}
+
 function OrderTab({ row, node, roster, rec }: {
   row: TaskRow; node: TaskNode; roster: SubagentRow[]; rec: RecordLoad
 }): JSX.Element {
@@ -526,6 +550,7 @@ function OrderTab({ row, node, roster, rec }: {
   const rendered = dispatched ? rec.record?.dispatch ?? null : null
   const text = rendered ?? node.prompt_template ?? null
   const inputs = node.inputs ? Object.entries(node.inputs) : []
+  const external = externalDeps(node, row)
   return (
     <div className="tkorder">
       <div className="tkfield">
@@ -544,6 +569,11 @@ function OrderTab({ row, node, roster, rec }: {
             )}
         </div>
       </div>
+      {external.map((id) => (
+        <p className="tknote" key={id}>
+          {t('gui.tasks.depends_on_pre')} <b className="mono">{id}</b> {t('gui.tasks.depends_on_post')}
+        </p>
+      ))}
       <div className="tkfield">
         <div className="tkfk">{t('gui.tasks.skills')}</div>
         <div className="tkfv">{node.skills && node.skills.length ? listOrDash(node.skills) : t('gui.tasks.skills_none')}</div>
@@ -629,12 +659,37 @@ function StopButton({ row }: { row: TaskRow }): JSX.Element {
 }
 
 function WhyBanner({ row, onPick }: { row: TaskRow; onPick: (id: string) => void }): JSX.Element | null {
+  const replan = row.replan
+  /* A replan that started reads as cancelled rather than failed (contract
+     rule 0), and its banner names the successor instead of a bad node --
+     there is nothing here that failed, just a run this one handed off from. */
+  if (replan?.started) {
+    const successor = store.byKey('dag', replan.run_id)
+    return (
+      <div className="tkwhy">
+        <p>{t('gui.tasks.replan_superseded')}</p>
+        {successor
+          ? (
+            <button className="tkwhyat" onClick={() => desk.openDeskTask(successor)}>
+              {t('gui.tasks.replan_at', { id: replan.run_id })}
+            </button>
+          )
+          : <p className="tknote">{replan.run_id}</p>}
+      </div>
+    )
+  }
   const cold = row.status === 'interrupted'
   if (row.status !== 'failed' && !cold) return null
   const bad = row.nodes.find((n) => n.status === 'failed' || n.status === 'interrupted')
+  /* A replan that never started (the row still reads failed) explains itself
+     through `replan.error`, not through a node's own error -- the successor
+     is what did not come up, and no node here is the reason why. */
+  const text = replan
+    ? (replan.error || t('gui.tasks.why_failed_fallback'))
+    : (cold ? t('gui.tasks.why_interrupted') : (bad?.error || t('gui.tasks.why_failed_fallback')))
   return (
     <div className={'tkwhy' + (cold ? ' tkcold' : '')}>
-      <p>{cold ? t('gui.tasks.why_interrupted') : (bad?.error || t('gui.tasks.why_failed_fallback'))}</p>
+      <p>{text}</p>
       {bad
         ? (
           <button className="tkwhyat" onClick={() => onPick(bad.node_id)}>
@@ -704,41 +759,47 @@ function Chips({ row }: { row: TaskRow }): JSX.Element | null {
 
 export function TaskPane({ task, full = false }: { task: TaskRow; full?: boolean }): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The store's own row for this pane, not the snapshot the desk opened it
+     with (`pane.row`, taken once when the pane opened): a live event moves
+     the store forward while a held snapshot does not, which left a pane open
+     on a stopped run still showing "running" and its stop button. Falls back
+     to the snapshot only while the store holds no row for this (kind, id) yet. */
+  const row = s.rows.find((r) => r.kind === task.kind && r.id === task.id) || task
   const [now, setNow] = useState(Date.now())
   const [roster, setRoster] = useState<SubagentRow[]>([])
   useEffect(() => {
-    if (task.status !== 'running') return
+    if (row.status !== 'running') return
     const id = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(id)
-  }, [task.status])
+  }, [row.status])
   useEffect(() => { void store.source()?.roster().then(setRoster).catch(() => {}) }, [])
-  const paneId = paneIdOf(task)
+  const paneId = paneIdOf(row)
   const mine = s.nodes[paneId] ?? null
-  const picked = mine && task.nodes.some((n) => n.node_id === mine) ? mine : null
-  const node = task.nodes.find((n) => n.node_id === picked) || null
+  const picked = mine && row.nodes.some((n) => n.node_id === mine) ? mine : null
+  const node = row.nodes.find((n) => n.node_id === picked) || null
   const pick = (id: string | null): void => store.pickNode(paneId, id)
   return (
     <div className={'tkview' + (full ? ' full' : '')}>
       <div className="tkhead">
-        <span className={'dot ' + dotOf(task.status)} />
-        <b>{task.task_summary || task.id}</b>
-        {task.status === 'failed' ? <ErrorTag /> : null}
+        <span className={'dot ' + dotOf(row.status)} />
+        <b>{row.task_summary || row.id}</b>
+        {row.status === 'failed' ? <ErrorTag /> : null}
       </div>
-      <StatusBar row={task} now={now} />
-      <WhyBanner row={task} onPick={pick} />
-      <Chips row={task} />
+      <StatusBar row={row} now={now} />
+      <WhyBanner row={row} onPick={pick} />
+      <Chips row={row} />
       {full
         ? (
           <div className="tkwork">
-            <Fork row={task} paneId={paneId} />
+            <Fork row={row} paneId={paneId} />
             {node
-              ? <NodePanel row={task} node={node} onClose={() => pick(null)} roster={roster} />
+              ? <NodePanel row={row} node={node} onClose={() => pick(null)} roster={roster} />
               : <div className="tkpick">{t('gui.tasks.pick_node')}</div>}
           </div>
         )
         : node
-          ? <NodePanel row={task} node={node} onClose={() => pick(null)} roster={roster} />
-          : <Fork row={task} paneId={paneId} />}
+          ? <NodePanel row={row} node={node} onClose={() => pick(null)} roster={roster} />
+          : <Fork row={row} paneId={paneId} />}
     </div>
   )
 }

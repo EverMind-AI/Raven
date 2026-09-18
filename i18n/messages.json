@@ -7119,6 +7119,26 @@
       "en": "One step did not make it.",
       "zh": "有一步没跑成。"
     },
+    "gui.tasks.replan_superseded": {
+      "en": "Superseded by a replan.",
+      "zh": "被一次重新规划取代了。"
+    },
+    "gui.tasks.replan_at": {
+      "en": "continues as: {id}",
+      "zh": "转到：{id}"
+    },
+    "gui.tasks.step_awaiting": {
+      "en": "{n} steps awaiting a decision",
+      "zh": "{n} 步待裁决"
+    },
+    "gui.tasks.depends_on_pre": {
+      "en": "depends on",
+      "zh": "依赖"
+    },
+    "gui.tasks.depends_on_post": {
+      "en": "(another task)",
+      "zh": "（另一个任务）"
+    },
     "gui.tasks.ctx_none": {
       "en": "Not started yet.",
       "zh": "还没开始。"

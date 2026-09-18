@@ -37,7 +37,7 @@ export const tasksSource: TasksSource = {
       return gateway().call('subagent.interrupt', { subagent_id: row.id }).then((r) => !!r.found)
     }
     return gateway()
-      .call('subagent.cancel_instance', { session_key: openKey(), agent: row.agent || '', handle: row.handle || row.id })
+      .call('subagent.cancel_instance', { session_key: openKey(), agent: row.agent || '', handle: row.handle || '' })
       .then((r) => !!r.found)
   },
   node: (row: TaskRow, node: TaskNode) => {

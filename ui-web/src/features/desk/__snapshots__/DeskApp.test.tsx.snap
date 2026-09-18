@@ -17,7 +17,8 @@ exports[`asking for the instance list > keeps its rendered shape 1`] = `
         span.lb
       button
         svg
-          rect
+          path
+          path
           path
         span.lb
   div.desk-body

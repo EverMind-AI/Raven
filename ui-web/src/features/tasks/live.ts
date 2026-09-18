@@ -140,7 +140,9 @@ export function applyRunCompleted(rows: readonly TaskRow[], p: RunCompletedPaylo
     : row.nodes
   const next: TaskRow = {
     ...row, nodes, counts: countsOf(nodes), status: files.length ? deriveStatus(nodes) : 'cancelled',
-    ended_at: Date.now(),
+    /* The frame carries no timestamp of its own, and a replayed frame must not
+       restamp an ending this row already has. */
+    ended_at: row.ended_at ?? Date.now(),
   }
   return { rows: rows.map((r, i) => (i === at ? next : r)), refetch: { kind: 'dag', id: p.run_id } }
 }

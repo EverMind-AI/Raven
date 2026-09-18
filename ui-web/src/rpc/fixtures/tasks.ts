@@ -95,6 +95,25 @@ function scenarioForkJoin(env: FixtureEnv): TaskRow[] {
     id: '20260918T093000123456Z-fork01a2', kind: 'dag', status: 'running', nodes,
     task_summary: 'Put together the release announcement', started_at: started,
   })
+  /* An earlier attempt at the same announcement, replanned into the run
+     above: `replan.started` is true, so the row reads cancelled rather than
+     failed and its why banner links to the successor instead of naming a
+     bad node. */
+  const supersededNodes = [
+    node({
+      node_id: 'render_deck_v1', agent: 'Raven-Code', status: 'exception',
+      node_summary: 'Render a one-slide summary deck',
+      started_at: started - 90 * SEC, tool_call_count: 1, tool_failure_count: 0,
+    }),
+  ]
+  const superseded = row({
+    id: '20260918T092500123456Z-fork0019', kind: 'dag', status: 'cancelled', nodes: supersededNodes,
+    task_summary: 'Put together the release announcement', started_at: started - 90 * SEC,
+    replan: {
+      run_id: dag.id, from_node: 'render_deck_v1',
+      reason: 'the deck renderer needed a different template', started: true,
+    },
+  })
   const spawnNodes = [
     node({
       node_id: 'clean-build-cache', agent: 'Raven-Code', status: 'running',
@@ -107,7 +126,7 @@ function scenarioForkJoin(env: FixtureEnv): TaskRow[] {
     task_summary: 'Clear the stale build cache', agent: 'Raven-Code', handle: 'clean-build-cache',
     started_at: now - 20 * SEC,
   })
-  return [spawn, dag]
+  return [spawn, superseded, dag]
 }
 
 /* Scenario 2, session 'b': a playbook-dispatched dag with one failed node and

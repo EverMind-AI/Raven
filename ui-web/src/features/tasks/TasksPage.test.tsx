@@ -206,6 +206,88 @@ describe('a task pane', () => {
     expect(document.querySelector('.tkwhy')).toBeNull()
   })
 
+  it('follows the store row rather than the snapshot the pane opened with', async () => {
+    const running = task({ id: 'a', kind: 'dag', status: 'running' })
+    store.set((prev) => ({ ...prev, rows: [running], loaded: true }))
+    render(<TaskPane task={running} />)
+    expect(document.querySelector('.tkbaract')).not.toBeNull()
+    expect(document.querySelector('.tkbar .st')?.textContent).toBe('gui.tasks.running')
+
+    await act(async () => {
+      store.set((prev) => ({ ...prev, rows: [{ ...running, status: 'completed' }] }))
+    })
+
+    expect(document.querySelector('.tkbaract')).toBeNull()
+    expect(document.querySelector('.tkbar .st')?.textContent).toBe('gui.tasks.st_completed')
+  })
+
+  it('falls back to the opening snapshot while the store holds no row for it yet', () => {
+    const running = task({ id: 'a', kind: 'dag', status: 'running' })
+    render(<TaskPane task={running} />)
+    expect(document.querySelector('.tkbaract')).not.toBeNull()
+  })
+
+  describe('a replan banner', () => {
+    it('names the successor and opens it on the desk', async () => {
+      const successor = task({ id: 'r2', kind: 'dag', status: 'running' })
+      const superseded = task({
+        id: 'r1', kind: 'dag', status: 'cancelled',
+        replan: { run_id: 'r2', from_node: 'n1', reason: 'needed a retry', started: true },
+      })
+      store.set((prev) => ({ ...prev, rows: [successor, superseded], loaded: true }))
+      render(<TaskPane task={superseded} />)
+
+      expect(document.querySelector('.tkwhy p')?.textContent).toBe('gui.tasks.replan_superseded')
+      expect(document.querySelector('.tkwhyat')?.textContent).toBe('gui.tasks.replan_at {"id":"r2"}')
+
+      await act(async () => { (document.querySelector('.tkwhyat') as HTMLElement).click() })
+      expect(desk.get().panes.map((p) => p.id)).toEqual(['task:dag:r2'])
+    })
+
+    it('just names the id when the successor never turns up in the store', () => {
+      const superseded = task({
+        id: 'r1', kind: 'dag', status: 'cancelled',
+        replan: { run_id: 'r2', from_node: 'n1', reason: 'needed a retry', started: true },
+      })
+      render(<TaskPane task={superseded} />)
+      expect(document.querySelector('.tkwhyat')).toBeNull()
+      expect(document.querySelector('.tkwhy')?.textContent).toContain('r2')
+    })
+
+    it('prefers replan.error over a node error when the replan never started', () => {
+      const failed = task({
+        id: 'r1', kind: 'dag', status: 'failed',
+        replan: { run_id: 'r2', from_node: 'n1', reason: 'x', started: false, error: 'no capacity for a retry' },
+        nodes: [node({ node_id: 'n1', status: 'failed', error: 'HTTP 500' })],
+      })
+      render(<TaskPane task={failed} />)
+      expect(document.querySelector('.tkwhy p')?.textContent).toBe('no capacity for a retry')
+      expect(document.querySelector('.tkwhyat')).not.toBeNull()
+    })
+  })
+
+  describe('awaiting a decision', () => {
+    it('flags a running row stuck on a suspended node', () => {
+      const stuck = task({
+        id: 'a', kind: 'dag', status: 'running',
+        counts: counts({ total: 2, completed: 1, exception: 1 }),
+        nodes: [node({ node_id: 'n1', status: 'completed' }), node({ node_id: 'n2', status: 'exception' })],
+      })
+      render(<TaskPane task={stuck} />)
+      expect(document.querySelector('.tkbar')?.textContent).toContain('gui.tasks.step_awaiting {"n":1}')
+    })
+
+    it('says so even for a single-node run with no other step to report', () => {
+      const stuck = task({
+        id: 'a', kind: 'dag', status: 'running',
+        counts: counts({ total: 1, exception: 1 }),
+        nodes: [node({ node_id: 'n1', status: 'exception' })],
+      })
+      render(<TaskPane task={stuck} />)
+      expect(document.querySelector('.tkbar')?.textContent).toContain('gui.tasks.step_awaiting {"n":1}')
+    })
+  })
+
   describe('output chips', () => {
     beforeEach(() => { workspace.reset() })
 
@@ -350,5 +432,48 @@ describe('the node panel', () => {
     act(() => { (document.querySelectorAll('.tktabs button')[1] as HTMLElement).click() })
     expect(document.querySelector('.tkspecid span')?.textContent).toBe('gui.tasks.run_label')
     expect(document.querySelector('.tkspecid b')?.textContent).toBe('run-123')
+  })
+
+  it('shows a dash rather than nothing when the lane never reported a tool count', () => {
+    const done = task({
+      id: 'a', kind: 'dag', status: 'completed',
+      nodes: [node({ node_id: 'n1', status: 'completed', started_at: 1000, ended_at: 2000, tool_call_count: null })],
+    })
+    pick(done)
+    expect(document.querySelector('.tksub')?.textContent).toContain('—')
+  })
+
+  describe('a cross-run dependency', () => {
+    it('names a depends_on id that belongs to another task, in mono', () => {
+      const withExternal = task({
+        id: 'a', kind: 'dag', status: 'running',
+        nodes: [node({ node_id: 'n1', status: 'pending', depends_on: ['other-run-node'] })],
+      })
+      pick(withExternal)
+      expect(document.querySelector('.tknote')?.textContent)
+        .toBe('gui.tasks.depends_on_pre other-run-node gui.tasks.depends_on_post')
+      expect(document.querySelector('.tknote .mono')?.textContent).toBe('other-run-node')
+    })
+
+    it('reads one out of an {node} input as well as out of depends_on', () => {
+      const withExternalInput = task({
+        id: 'a', kind: 'dag', status: 'running',
+        nodes: [node({ node_id: 'n1', status: 'pending', inputs: { source: { node: 'other-run-node' } } })],
+      })
+      pick(withExternalInput)
+      expect(document.querySelector('.tknote .mono')?.textContent).toBe('other-run-node')
+    })
+
+    it('says nothing for a depends_on id that belongs to this same task', () => {
+      const internal = task({
+        id: 'a', kind: 'dag', status: 'running',
+        nodes: [
+          node({ node_id: 'n1', status: 'completed' }),
+          node({ node_id: 'n2', status: 'pending', depends_on: ['n1'] }),
+        ],
+      })
+      pick(internal, 1)
+      expect(document.querySelector('.tknote')).toBeNull()
+    })
   })
 })

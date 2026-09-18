@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { fromDagNode, fromSpawnContext, stepsOf } from './source'
+import { setCurrent } from '../../lib/session'
+import { FixtureTransport } from '../../rpc/fixtureTransport'
+import { setGateway } from '../../rpc/gateway'
+import { fromDagNode, fromSpawnContext, stepsOf, tasksSource } from './source'
 
 import type { DagNodeDetail, SubagentContextResult, TranscriptMessage } from '../../rpc/generated'
+import type { TaskRow } from './types'
 
 describe('stepsOf', () => {
   it('reads a thought off an assistant entry', () => {
@@ -103,5 +107,42 @@ describe('fromSpawnContext', () => {
       messages: [{ role: 'user', text: 'go' }, { role: 'assistant', text: 'the answer' }],
     }))
     expect(rec.answer).toBe('the answer')
+  })
+})
+
+describe('stop', () => {
+  const row = (over: Partial<TaskRow> & Pick<TaskRow, 'id' | 'kind' | 'status'>): TaskRow => ({
+    task_summary: null, started_at: null, ended_at: null, agent: null, handle: null,
+    counts: { total: 1, pending: 0, running: 1, completed: 0, failed: 0, skipped: 0, cancelled: 0, interrupted: 0, exception: 0 },
+    nodes: [],
+    ...over,
+  })
+
+  function withTransport(): unknown[][] {
+    const calls: unknown[][] = []
+    const transport = new FixtureTransport({})
+    transport.call = (async (method: string, params: unknown) => {
+      calls.push([method, params])
+      return { found: true }
+    }) as typeof transport.call
+    setGateway(transport)
+    setCurrent('s1')
+    return calls
+  }
+
+  it('stops a spawn by its own handle, not by the record id', async () => {
+    const calls = withTransport()
+    await tasksSource.stop(row({ id: 'call-9', kind: 'spawn', status: 'running', agent: 'raven', handle: 'named-handle' }))
+    expect(calls).toEqual([
+      ['subagent.cancel_instance', { session_key: 's1', agent: 'raven', handle: 'named-handle' }],
+    ])
+  })
+
+  it('sends an empty handle rather than the record id when the row never got one', async () => {
+    const calls = withTransport()
+    await tasksSource.stop(row({ id: 'call-9', kind: 'spawn', status: 'running', agent: 'raven', handle: null }))
+    expect(calls).toEqual([
+      ['subagent.cancel_instance', { session_key: 's1', agent: 'raven', handle: '' }],
+    ])
   })
 })
