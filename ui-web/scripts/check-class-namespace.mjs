@@ -163,14 +163,22 @@ const SHARED = new Set([
 // family is one domain's rows that a second domain drew the same way. Either
 // end of a row here can retire it: move the rule into one domain's styles.css
 // and prefix it there, or put the name in SHARED on purpose.
+//
+// Twenty-five rows left this table without a class being renamed anywhere.
+// Skills, plugins and knowledge were readers of most of the `.pm*`, `.hub*`
+// and `.p*` names, so a name they shared with one other domain is that one
+// domain's alone now and is counted on LEGACY_LOCAL instead; a name only they
+// shared is gone with them. The page's total debt is unchanged; where it is
+// counted is not.
 const LEGACY_SHARED = {
-  a: 4, act: 3, ag: 2, body: 2, btn: 3, cap: 6, cfind: 2, chev: 2, chgs: 2,
-  cmd: 2, ct: 2, d: 4, dact: 3, empty: 2, faint: 2, foot: 4, gap: 3,
-  'ghost-ic': 3, h: 3, hd: 5, hubcard: 2, hubgrid: 2, hubpage: 2, ic: 5, k: 3, kd: 3, key: 5, l1: 5, l2: 5, lb: 3, mk: 2, n: 7, none: 2, okpill: 2, one: 2, perr: 2, ph: 2, pill: 2, pmback: 3, pmcard: 2,
-  pmchips: 2, pmcnt: 2, pmdesc: 3, pmdhead: 4, pmdmeta: 4, pmhead: 2, pmhero: 5,
-  pmid: 2, pmnm: 2, pmpub: 2, pmsec: 4, pmsign: 2, pnote: 3,
-  'provider-choice-action': 2, rm: 2, row: 3, sheet: 2, shot: 3, sk: 4, skel: 4, step: 2, sulist: 3, sustate: 2, swi: 2, sz: 2, t: 2, tag: 2,
-  tipdn: 3, tm: 2, top: 2, v: 3, val: 2, w: 3, warn: 2, wkg: 3, wsnote: 2, wt: 2,
+  a: 4, ag: 2, body: 2, btn: 3, cap: 4, cfind: 2, chev: 2, chgs: 2,
+  cmd: 2, ct: 2, d: 4, empty: 2, foot: 2, gap: 3,
+  'ghost-ic': 3, h: 3, hd: 4, ic: 4, k: 3, kd: 2, key: 5, l1: 3, l2: 3, lb: 3,
+  mk: 2, n: 5, none: 2, ph: 2,
+  pmdhead: 2, pmdmeta: 2, pmhero: 5, pmsec: 2,
+  'provider-choice-action': 2, rm: 2, row: 2, sheet: 2, shot: 3, sk: 3, skel: 3,
+  step: 2, sulist: 3, sustate: 2, sz: 2, t: 2,
+  tipdn: 3, tm: 2, v: 3, val: 2, w: 3, warn: 2, wkg: 3, wsnote: 2,
 }
 
 // How many of a domain's own classes -- the ones no other domain names -- still
@@ -186,7 +194,14 @@ const LEGACY_LOCAL = {
   /* Up from 24 for `.hot`, which BrowserPage.tsx sets with classList rather
      than in the markup: a class this check had never read, not a new one. The
      two rows below moved the same way -- `.drop` and `.halt` in composer,
-     `.caret` in transcript, the last of them written into a string of HTML. */
+     `.caret` in transcript, the last of them written into a string of HTML.
+
+     Several rows below rise again without a class being added anywhere.
+     Skills, plugins and knowledge were three of the readers of the page's
+     shared vocabulary -- `.lab`, `.rule`, `.meta`, `.seg` and the rest -- so a
+     class those domains shared with one other is that one domain's alone now,
+     and moves off the shared tally onto its own. The page's total debt is
+     unchanged; where it is counted is not. */
   browser: 25,
   /* Up from 9, and none of the two is new code: this branch deletes the old
      settings page, which also named `.icb`, `.other`, `.srow` and `.what`, so
@@ -194,7 +209,9 @@ const LEGACY_LOCAL = {
      settings rows below fall to zero by the same deletion. */
   composer: 11,
   connections: 6,
-  cron: 15,
+  /* Up from 15 for `.ff` and `.swi`, which the skills page and the plugins
+     page were the other reader of. */
+  cron: 17,
   /* Up from 7, and every one of the six is a class that MOVED here rather than
      a new one: the pan-and-zoom viewport the playbook page carried became
      features/dag/Board.tsx so the task board could read it too, and its
@@ -203,18 +220,19 @@ const LEGACY_LOCAL = {
      them is one rename over one file now instead of two. */
   dag: 13,
   desk: 5,
-  extAgents: 5,
+  extAgents: 7,
   installed: 0,
-  knowledge: 0,
-  memory: 6,
+  /* Up from 6 by the same move: `.faint`, `.hubpage`, `.pmcnt`, `.pmsign` and
+     `.pnote` were the memory hub's names, shared with the two hubs that are
+     gone. */
+  memory: 11,
   model: 6,
   onboard: 1,
-  playbooks: 13,
-  plugins: 3,
+  /* Up from 13 for `.tag`, the skills page's other reader. */
+  playbooks: 14,
   rail: 11,
   settings: 0,
-  skills: 4,
-  subagents: 39,
+  subagents: 38,
   /* Down from 8: the node panel's inline "still running" line -- a plain
      `className="dot run"`, the one attribute-form use of `.dot` this domain
      had -- is gone with the line it lived on (the head already says a
@@ -222,13 +240,9 @@ const LEGACY_LOCAL = {
      inside a `className={...}` expression, which `LEGACY_EXPR` already
      counted. */
   tasks: 7,
-  /* Up by two. The transcript's turn shapes are `.turn` and `.msg` now, which
-     retires `.ask`, `.answer-turn` and `.b` -- three names for two. The row
-     rises anyway because the two modifiers those shapes carry, `.me` and
-     `.ai`, used to be written inside a className expression and are literal
-     attributes here: they moved onto this list from the one below, which falls
-     by one in the same change. */
-  transcript: 76,
+  /* Up from 74 for `.act`, `.dact` and `.pmdesc`, which the plugins page drew
+     the same way the transcript does. */
+  transcript: 77,
   workspace: 37,
 }
 
@@ -247,15 +261,12 @@ const LEGACY_EXPR = {
   desk: 2,
   extAgents: 1,
   installed: 0,
-  knowledge: 0,
   memory: 1,
   model: 3,
   onboard: 1,
   playbooks: 7,
-  plugins: 2,
   rail: 2,
   settings: 0,
-  skills: 2,
   tasks: 5,
   subagents: 6,
   transcript: 25,
@@ -271,11 +282,11 @@ const LEGACY_EXPR = {
 // goldens take their bytes from -- so these two come down by renaming, in a
 // commit that changes the DOM the goldens record.
 const LEGACY_CHROME = {
-  /* Up from 103: `.icb`, `.led`, `.note` and `.tick` were borrowed from names
-     the old settings page shared with the frame, and this branch deletes that
-     page. Nothing new is written -- the four move off the borrowed list and on
-     to this one. */
-  chrome: 106,
+  /* Up from 89: `.icb`, `.led`, `.note` and `.tick` were borrowed from names
+     the old settings page shared with the frame, and that page is gone.
+     Nothing new is written -- the four move off the borrowed list and on to
+     this one. */
+  chrome: 92,
   components: 33,
 }
 
@@ -336,9 +347,8 @@ const UNSTYLED = {
 // expression cannot tell from a class.
 const LEGACY_BORROWED = {
   chrome: [
-    'body', 'btn', 'cfind', 'chev', 'cmd', 'foot', 'ghost-ic', 'hd', 'ic',
-    'lb', 'mk', 'n', 'pill', 'pmhero', 'row', 'sheet', 't',
-    'tipdn', 'top',
+    'body', 'btn', 'chev', 'cmd', 'foot', 'ghost-ic', 'hd', 'ic',
+    'lb', 'mk', 'n', 'sheet', 't', 'tipdn',
   ],
   components: ['a', 'cap', 'hd', 'key', 'l1', 'l2', 'n', 'skel', 'sustate', 'warn'],
 }

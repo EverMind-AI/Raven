@@ -13,7 +13,7 @@
  * C11 (features/desk/store.ts's registered `desk.escapeOpen()`, for its own
  * fullscreen -> node -> pane -> collapse retreat). What is asserted against
  * it is now the table, every entry's own predicate and action against a
- * fixture page, and all hundred and five pairs of layers. The three
+ * fixture page, and all seventy-eight pairs of layers. The three
  * capture-phase handlers
  * each open sheet registers run *before* the table and two of them act on
  * Escape without stopping propagation, so one Escape can both deny an approval
@@ -29,7 +29,6 @@ import * as connections from '../features/connections/store'
 import * as cron from '../features/cron/store'
 import * as desk from '../features/desk/store'
 import * as extAgents from '../features/extAgents/store'
-import * as knowledge from '../features/knowledge/store'
 import * as memory from '../features/memory/store'
 import * as playbooks from '../features/playbooks/store'
 import { resetTranslator, setTranslator } from '../i18n/t'
@@ -43,9 +42,9 @@ import { resetSources, sources } from './sources'
 
 import type { ComposerSource } from '../features/composer/types'
 
-/* The fifteen, in the order Escape reaches them. Each item is the text the
+/* The thirteen, in the order Escape reaches them. Each item is the text the
    chain tests to decide whether that layer is on screen -- a selector for the
-   twelve elements, the predicate's own name for the last three, which have no
+   ten elements, the predicate's own name for the last three, which have no
    element of their own to look at. */
 const LAYER_IDS = [
   '.lightbox',
@@ -56,8 +55,6 @@ const LAYER_IDS = [
   '#cronPage',
   '#memoryPage',
   '#playbooksPage',
-  '#kbPage',
-  '#capsPage',
   '#extAgentsPage',
   '#connectionsPage',
   'setIsOpen()',
@@ -77,12 +74,10 @@ const PAGE = [
   '<div class="find" id="findBox" hidden><input id="sfind"></div>',
   '<div class="chat"><div class="dock"><div class="sheets" id="sheetRack"></div>',
   '<div class="dock-in"><textarea id="ta"></textarea></div></div></div>',
-  '<section class="page" id="capsPage" data-open="false"></section>',
   '<section class="page" id="extAgentsPage" data-open="false"></section>',
   '<section class="page" id="connectionsPage" data-open="false"></section>',
   '<section class="page" id="memoryPage" data-open="false"></section>',
   '<section class="page" id="playbooksPage" data-open="false"></section>',
-  '<section class="page" id="kbPage" data-open="false"></section>',
   '<section class="page" id="cronPage" data-open="false"></section>',
   '<div class="veil" id="jobVeil" data-open="false"><button id="jobNo"></button></div>',
   '<aside class="detail" id="detail" data-open="false"><div class="body" id="dBody"></div></aside>',
@@ -103,7 +98,6 @@ const spies = {
   cronClose: vi.fn(),
   memClose: vi.fn(),
   pbClose: vi.fn(),
-  kbClose: vi.fn(),
   extAgentsClose: vi.fn(),
   stop: vi.fn(),
 }
@@ -135,10 +129,6 @@ const LAYERS: Record<string, { up: () => void; taken: () => boolean }> = {
   '#cronPage': { up: flag('cronPage'), taken: called(spies.cronClose) },
   '#memoryPage': { up: flag('memoryPage'), taken: called(spies.memClose) },
   '#playbooksPage': { up: flag('playbooksPage'), taken: called(spies.pbClose) },
-  '#kbPage': { up: flag('kbPage'), taken: called(spies.kbClose) },
-  /* The capabilities page closes through the page store, which lowers all
-     seven sections -- so its own mark is the one section it was asked about. */
-  '#capsPage': { up: flag('capsPage'), taken: lowered('capsPage') },
   '#extAgentsPage': { up: flag('extAgentsPage'), taken: called(spies.extAgentsClose) },
   '#connectionsPage': { up: flag('connectionsPage'), taken: called(spies.connClose) },
   'setIsOpen()': { up: () => settingsDialog.open(), taken: () => !settingsDialog.isOpen() },
@@ -174,7 +164,6 @@ beforeEach(() => {
   vi.spyOn(cron, 'close').mockImplementation(spies.cronClose)
   vi.spyOn(memory, 'close').mockImplementation(spies.memClose)
   vi.spyOn(playbooks, 'closePage').mockImplementation(spies.pbClose)
-  vi.spyOn(knowledge, 'close').mockImplementation(spies.kbClose)
   vi.spyOn(extAgents, 'close').mockImplementation(spies.extAgentsClose)
   sources.composer = { stop: spies.stop } as unknown as ComposerSource
   settingsDialog.close()
@@ -208,11 +197,11 @@ const key = (k: string, over: Partial<KeyboardEventInit> = {}): KeyboardEvent =>
 }
 
 describe('the Escape priority order', () => {
-  it('is the order the table reaches the fifteen layers in', () => {
+  it('is the order the table reaches the thirteen layers in', () => {
     expect(escapeOrder.ESCAPE_ORDER.map((layer) => layer.id)).toEqual([...LAYER_IDS])
   })
 
-  it('has no sixteenth entry, and every entry is in the fixture', () => {
+  it('has no fourteenth entry, and every entry is in the fixture', () => {
     expect(escapeOrder.ESCAPE_ORDER).toHaveLength(LAYER_IDS.length)
     expect(Object.keys(LAYERS)).toEqual([...LAYER_IDS])
   })
@@ -235,8 +224,8 @@ describe('the Escape priority order', () => {
   const pairs = LAYER_IDS.flatMap((first, i) =>
     LAYER_IDS.slice(i + 1).map((second) => ({ first, second })))
 
-  it('has a hundred and five pairs to answer for', () => {
-    expect(pairs).toHaveLength(105)
+  it('has seventy-eight pairs to answer for', () => {
+    expect(pairs).toHaveLength(78)
   })
 
   it.each(pairs)('takes back $first and leaves $second alone', ({ first, second }) => {

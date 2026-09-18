@@ -27,11 +27,9 @@ import { hostPlatformSet } from '../lib/platform'
 import { setCurrent as sessionSet } from '../lib/session'
 import { hasUpdateFlag } from '../rpc/capabilities'
 import { gateway } from '../rpc/gateway'
-import * as caps from '../state/caps'
 import { draw as drawCtx } from '../state/ctxChip'
 import { setRuntime } from '../state/envChip'
 import { bootError } from '../state/failureBar'
-import { draw as drawFoot } from '../state/foot'
 import { load as loadLang } from '../state/lang/pick'
 import { load as lookLoad } from '../state/look'
 import { draw as drawPerm } from '../state/perm'
@@ -104,7 +102,6 @@ async function sequence(): Promise<void> {
     await loadLang()
     const v = await gateway().call('system.version', {})
     if (v.raven_version) appVersionSet(v.raven_version)
-    drawFoot()
     /* Absent until system.version carries them; the row simply stays hidden,
        so an older server degrades to no notice rather than a broken one. */
     if (hasUpdateFlag(v)) showUpNote('ver', latestOf(v))
@@ -197,8 +194,6 @@ export function bootPage(): void {
     ['drawPerm', (): void => drawPerm()],
     ['loadTier', (): void => { void loadTier() }],
     ['drawCtx', (): void => drawCtx()],
-    ['drawCaps', (): void => caps.draw()],
-    ['drawFoot', (): void => drawFoot()],
     ['bumpWs', (): void => bumpWs()],
     ['drawSettings', (): void => redrawSettings()],
     ['setRuntime', (): void => setRuntime()],

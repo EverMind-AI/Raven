@@ -3,11 +3,9 @@
 exports[`rail island > keeps its rendered shape 1`] = `
 "div.grp
   span.lab
-  span.n
   span.car
     svg
       path
-  span.rule
 div.sess
   div.t
     span
@@ -22,11 +20,9 @@ div.sess
         path
 div.grp
   span.lab
-  span.n
   span.car
     svg
       path
-  span.rule
   button.grp-go
 div.sess
   div.t
@@ -42,11 +38,9 @@ div.sess
         path
 div.grp
   span.lab
-  span.n
   span.car
     svg
       path
-  span.rule
 div.sess
   div.t
     span

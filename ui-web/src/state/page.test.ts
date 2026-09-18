@@ -7,14 +7,14 @@
  * mark, the rail mark and the overlay closes all happen first, and only then
  * does each subscriber run, in the order it registered.
  *
- * The seven sections are src/App.tsx's markup now, and it renders each with the
+ * The five sections are src/App.tsx's markup now, and it renders each with the
  * flag the page is served with; this store is still the one that writes it, and
  * the markup below is what each case drives it against.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-/** The seven module pages, as NAV_OF keys them. */
-const PAGES = ['capsPage', 'extAgentsPage', 'connectionsPage', 'memoryPage', 'playbooksPage', 'kbPage', 'cronPage'] as const
+/** The five module pages, as NAV_OF keys them. */
+const PAGES = ['extAgentsPage', 'connectionsPage', 'memoryPage', 'playbooksPage', 'cronPage'] as const
 
 interface Fresh {
   page: typeof import('./page')
@@ -37,7 +37,7 @@ async function fresh(): Promise<Fresh> {
   return { page, spent }
 }
 
-/* The page as show() reaches it: the shell mark, the seven sections with their
+/* The page as show() reaches it: the shell mark, the five sections with their
    own scroller, and the shared drawer the switch closes. */
 beforeEach(() => {
   document.body.innerHTML =
@@ -57,7 +57,7 @@ const onlyOpen = (open: string | null): Record<string, string> =>
   Object.fromEntries(PAGES.map((id) => [id, String(id === open)]))
 
 describe('showing a module page', () => {
-  it('writes the open flag on all seven sections', async () => {
+  it('writes the open flag on all five sections', async () => {
     const { page } = await fresh()
     page.show('memoryPage')
     expect(flags()).toEqual(onlyOpen('memoryPage'))
@@ -74,9 +74,9 @@ describe('showing a module page', () => {
 
   it('scrolls the page it opens back to the top', async () => {
     const { page } = await fresh()
-    const work = document.querySelector<HTMLElement>('#kbPage .work')!
+    const work = document.querySelector<HTMLElement>('#playbooksPage .work')!
     work.scrollTop = 240
-    page.show('kbPage')
+    page.show('playbooksPage')
     expect(work.scrollTop).toBe(0)
   })
 
@@ -104,7 +104,7 @@ describe('showing a module page', () => {
       const drawer = document.getElementById('detail')!
       drawer.dataset.open = 'true'
       page.show(id)
-      expect(drawer.dataset.open, id).toBe(id === 'capsPage' || id === 'memoryPage' ? 'true' : 'false')
+      expect(drawer.dataset.open, id).toBe(id === 'memoryPage' ? 'true' : 'false')
     }
   })
 

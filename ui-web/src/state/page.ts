@@ -10,10 +10,6 @@
  * answer is a field here as well, so a caller can ask without a selector.
  *
  * The two tabs that used to decorate this function subscribe here instead
- * (features/skills/wire.ts, features/plugins/wire.ts). Registration order is the
- * order their side effects are visible in: every effect below runs first, then
- * each subscriber in turn.
- *
  * What a switch asks of an island is registered rather than imported: three
  * calls used to reach into features/ from here, which put every store that
  * opens a page in the closure of every other and made this module the largest
@@ -114,8 +110,8 @@ export function show(id: PageId | null): void {
      session behind it stops claiming one too. */
   ;(document.querySelector('.app') as HTMLElement).dataset.page = id ? 'on' : 'off'
   spend('markNav')
-  /* caps and memory both use the shared detail drawer */
-  if (id !== 'capsPage' && id !== 'memoryPage') detail.close()
+  /* the memory page uses the shared detail drawer */
+  if (id !== 'memoryPage') detail.close()
   /* Same rule for the overlays a single page owns: the channel drawer and the
      new-job sheet used to survive the switch and sit over whatever came next,
      still showing the entry the reader had left behind. */

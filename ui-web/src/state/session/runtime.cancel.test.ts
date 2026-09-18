@@ -36,7 +36,6 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
     return import('./pipeline')
   }, {
     fakes: {
-      'src/state/caps': { draw: () => {} },
       'src/state/page': { show: () => {} },
       'src/state/ws': { setOpen: () => {}, reset: () => {} },
       'src/state/session/conversation': {

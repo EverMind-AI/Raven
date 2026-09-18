@@ -35,15 +35,12 @@ import { manifest as dag } from './dag/manifest'
 import { manifest as desk } from './desk/manifest'
 import { manifest as extAgents } from './extAgents/manifest'
 import { manifest as installed } from './installed/manifest'
-import { manifest as knowledge } from './knowledge/manifest'
 import { manifest as memory } from './memory/manifest'
 import { manifest as model } from './model/manifest'
 import { manifest as onboard } from './onboard/manifest'
 import { manifest as playbooks } from './playbooks/manifest'
-import { manifest as plugins } from './plugins/manifest'
 import { manifest as rail } from './rail/manifest'
 import { manifest as settings } from './settings/manifest'
-import { manifest as skills } from './skills/manifest'
 import { manifest as subagents } from './subagents/manifest'
 import { manifest as tasks } from './tasks/manifest'
 import { manifest as transcript } from './transcript/manifest'
@@ -76,7 +73,7 @@ export interface DomainManifest {
   readonly cssPrefix?: string
 }
 
-/** The twenty, alphabetically: nothing reads them in an order. */
+/** The eighteen, alphabetically: nothing reads them in an order. */
 export const MANIFESTS: readonly DomainManifest[] = [
   browser,
   composer,
@@ -86,15 +83,12 @@ export const MANIFESTS: readonly DomainManifest[] = [
   desk,
   extAgents,
   installed,
-  knowledge,
   memory,
   model,
   onboard,
   playbooks,
-  plugins,
   rail,
   settings,
-  skills,
   subagents,
   tasks,
   transcript,
