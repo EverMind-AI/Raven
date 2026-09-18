@@ -1,9 +1,10 @@
 """The documentation site's pages keep the two properties a broken move costs.
 
-Both failures are silent. A repository-relative link still renders and the
-site still builds; only a click shows the 404. A page added in one language
-only leaves the other language's reader on a fallback they cannot tell from
-a translation.
+A repository-relative link in a .md page is already caught by mkdocs build
+--strict; this guard catches non-.md targets (e.g., docker/.env) that --strict
+misses, and runs in the ordinary test suite without needing the docs uv group.
+A page added in one language only leaves the other language's reader on a
+fallback they cannot tell from a translation.
 """
 
 from __future__ import annotations
@@ -33,8 +34,10 @@ def test_every_page_has_both_languages() -> None:
 
 
 def test_no_page_links_into_the_repository_by_a_relative_path() -> None:
+    pages = _pages()
+    assert pages, "no pages found -- did SITE move?"
     offenders: list[str] = []
-    for page in _pages():
+    for page in pages:
         for target in LINK.findall(page.read_text(encoding="utf-8")):
             link = target.split("#", 1)[0].split(" ", 1)[0]
             if not link or link.startswith(("http://", "https://", "mailto:")):
@@ -44,6 +47,7 @@ def test_no_page_links_into_the_repository_by_a_relative_path() -> None:
             offenders.append(f"{page.name} -> {target}")
 
     assert not offenders, (
-        "a repository-relative link resolves from the repo root but 404s from the "
-        f"published page; make it an absolute github.com URL: {offenders}"
+        "repository-relative links in non-.md targets are not caught by mkdocs "
+        "build --strict; make them absolute github.com URLs: "
+        f"{offenders}"
     )
