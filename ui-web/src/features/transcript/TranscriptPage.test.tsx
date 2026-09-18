@@ -140,8 +140,8 @@ describe('transcript island, history', () => {
     act(() => {
       mount.history([{ role: 'user', text: `look\n\n${ATT_NOTE}\n- uploads/shot.png` }])
     })
-    expect($<HTMLImageElement>('.ask .shot')?.src).toBe('data:image/png;base64,eA==')
-    expect($('.ask .achip')).toBeNull()
+    expect($<HTMLImageElement>('.turn.me .shot')?.src).toBe('data:image/png;base64,eA==')
+    expect($('.turn.me .achip')).toBeNull()
   })
 
   /* Whether a tool result counts as a failure is the source's call, not this
@@ -640,8 +640,8 @@ describe('transcript island, history', () => {
         { role: 'assistant', text: 'the config was wrong', timestamp: iso(t0 + 3000) },
       ])
     })
-    const ask = $('.ask')
-    expect(ask?.querySelector('.b')?.textContent).toBe('check the login timeout')
+    const ask = $('.turn.me')
+    expect(ask?.querySelector('.msg.me')?.textContent).toBe('check the login timeout')
     expect(ask?.querySelector('.ansfoot .turnmeta')?.textContent).toBeTruthy()
     /* Everything that led to the answer folded behind one line with the
        question-to-answer span on it. */
@@ -786,8 +786,8 @@ describe('transcript island, history', () => {
     openFolds()
     expect($('.tfold')?.textContent).toContain('let me check the log')
     /* And it lands AFTER the work it introduced, as a finished turn does. */
-    const order = [...document.querySelectorAll('.ask, .tfold, .answer')].map((n) => n.className.split(' ')[0])
-    expect(order).toEqual(['ask', 'tfold', 'answer'])
+    const order = [...document.querySelectorAll('.turn.me, .tfold, .answer')].map((n) => n.className.split(' ')[0])
+    expect(order).toEqual(['turn', 'tfold', 'answer'])
     expect(mount.turnKept()).toBe(true)
   })
 
@@ -867,9 +867,9 @@ describe('transcript island, history', () => {
       ])
     })
     expect($('.answer .prose')?.textContent).toBe('let me check the log')
-    const order = [...document.querySelectorAll('.ask, .tfold, .answer, .tnote')]
+    const order = [...document.querySelectorAll('.turn.me, .tfold, .answer, .tnote')]
       .map((n) => n.className.split(' ')[0])
-    expect(order).toEqual(['ask', 'tfold', 'answer', 'tnote'])
+    expect(order).toEqual(['turn', 'tfold', 'answer', 'tnote'])
     /* The work is inside the fold, not lost with it. */
     openFolds()
     expect($('.tfold .tfb .wkin .wrow .vb')?.textContent).toBe('en:gui.act.v.read_file')
@@ -1410,7 +1410,7 @@ describe('a delegated result coming back', () => {
         { role: 'assistant', text: 'all three came back clean', timestamp: iso(t0 + 11000) },
       ])
     })
-    const asks = [...document.querySelectorAll('.ask .b')].map((n) => n.textContent)
+    const asks = [...document.querySelectorAll('.msg.me')].map((n) => n.textContent)
     expect(asks).toEqual(['research it'])
     expect(document.body.textContent).not.toContain('BEGIN UNTRUSTED')
     expect(document.body.textContent).not.toContain('END UNTRUSTED')
@@ -1522,9 +1522,9 @@ describe('a delegated result coming back', () => {
     }))
     /* Two turns, two bars, each with only its own file. */
     expect(bars.map((b) => b.file)).toEqual(['parent.md', 'delegated.md'])
-    const order = [...document.querySelectorAll('.ask, .sdlv, .answer, .arts')]
+    const order = [...document.querySelectorAll('.turn.me, .sdlv, .answer, .arts')]
       .map((n) => n.className.split(' ')[0])
-    expect(order).toEqual(['ask', 'answer', 'arts', 'sdlv', 'answer', 'arts'])
+    expect(order).toEqual(['turn', 'answer', 'arts', 'sdlv', 'answer', 'arts'])
   })
 
   /* The test this whole change exists for: the two paths that draw the same
@@ -1608,8 +1608,8 @@ describe("the turn's delivered files and file changes", () => {
     expect($$('.achange .ca').map((n) => n.textContent)).toEqual(['+1', '+1'])
     expect($$('.achange .cd').map((n) => n.textContent)).toEqual(['\u22120', '\u22120'])
     expect($('.achanges')?.textContent).not.toContain('delivered')
-    const turn = $('.answer-turn') as HTMLElement
-    expect(Array.from(turn.children).map((node) => node.className)).toEqual(['answer in', 'arts', 'ansfoot'])
+    const turn = $('.turn.ai') as HTMLElement
+    expect(Array.from(turn.children).map((node) => node.className)).toEqual(['msg ai', 'ansfoot'])
     expect(turn.querySelector('.answer .ansfoot')).toBeNull()
     expect(turn.querySelector(':scope > .ansfoot .turnmeta')?.textContent).toBeTruthy()
   })
@@ -2122,7 +2122,7 @@ describe('transcript island, streaming', () => {
     /* The prose-only step gave way to the answer block where it stood. */
     expect($('.answer .prose')?.textContent).toBe('the whole answer')
     expect($$('.step')).toHaveLength(0)
-    expect($('.answer .ansfoot .turnmeta')?.textContent).toBeTruthy()
+    expect($('.turn.ai > .ansfoot .turnmeta')?.textContent).toBeTruthy()
   })
 })
 
@@ -2527,7 +2527,7 @@ describe('transcript island, the agent stage', () => {
 
     expect([...box.querySelectorAll('.answer .prose')].map((n) => n.textContent))
       .toEqual(['Here is the digest.'])
-    expect(box.querySelectorAll('.ask')).toHaveLength(2)
+    expect(box.querySelectorAll('.turn.me')).toHaveLength(2)
   })
 
   it('holds nothing from a settled turn when the pane opens mid-question', () => {
@@ -2580,7 +2580,7 @@ describe('transcript island, the agent stage', () => {
         messages: [{ role: 'user', text: 'survey the repo', timestamp: iso(t0) }],
       }, { key: 'sp:a1', reset: true })
     })
-    expect(box.querySelector('.ask .b')?.textContent).toBe('survey the repo')
+    expect(box.querySelector('.msg.me')?.textContent).toBe('survey the repo')
     /* The answer being written is DRAWN, not withheld: a record that never
        reports itself settled used to hide a finished answer forever. */
     at('half an ans', 'run')
@@ -2606,7 +2606,7 @@ describe('transcript island, the agent stage', () => {
       mount.agentStage(box, { status: 'run', messages: [{ role: 'user', text: 'retry ok' }] },
         { key: 'sp:a1', reset: true })
     })
-    expect(box.querySelector('.ask .b')?.textContent).toBe('retry ok')
+    expect(box.querySelector('.msg.me')?.textContent).toBe('retry ok')
     expect(box.textContent).not.toContain('rpc timeout')
     expect($$('.wsempty').length).toBe(0)
   })

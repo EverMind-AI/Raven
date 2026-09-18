@@ -22,3 +22,51 @@
   line-height: 1.7;
   color: var(--muted);
 }
+
+/* Carrying on with the sub-agent that ran this step.
+ *
+ * A step's executor is a stateful instance and outlives the step: once it has
+ * run there is someone there to answer, which is what this field is for. A
+ * step nobody started and one that was skipped never got an instance, so the
+ * flow tab draws no field for them rather than an inert one.
+ *
+ * One line, not the page's composer. The pane is 440px wide with a graph above
+ * it, and the full composer -- attachments, a queue, a model chip -- is a
+ * second window inside a panel. The arrow is the shared `SendGlyph`, so this
+ * button and both real composers keep drawing the same glyph.
+ */
+.tkchat {
+  flex: none;
+  margin-top: 10px;
+}
+.tkchatbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface);
+  border-radius: 11px;
+  padding: 6px 6px 6px 13px;
+}
+.tkchatbox input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+}
+.tkchatbox input::placeholder { color: var(--faint); }
+.tkgo {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--black);
+  color: var(--ink);
+  display: grid;
+  place-items: center;
+  transition: opacity .15s;
+}
+.tkgo:disabled { opacity: .22; cursor: default; }

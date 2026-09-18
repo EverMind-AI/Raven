@@ -329,13 +329,26 @@ describe("a node's execution flow", () => {
     expect(fenced[0]).toContain('[END UNTRUSTED subagent #spot]')
   })
 
-  /* The record is read, not continued: the main agent is what dispatches, and a
-     second place to type would be a conversation nobody is listening to. */
-  it('offers nowhere to type', async () => {
+  /* The record can be carried on with: a step's executor is a stateful
+     instance that outlives the step, so the flow tab ends in a field addressed
+     to it by name. */
+  it("ends the flow with a field addressed to the step's own sub-agent", async () => {
     await openFirst(recorded)
 
-    expect(document.querySelector('.tkcard input')).toBeNull()
-    expect(document.querySelector('.tkcard textarea')).toBeNull()
+    const box = document.querySelector('.tkchat input') as HTMLInputElement
+    expect(box).not.toBeNull()
+    expect(box.placeholder).toBe('gui.tasks.chat_on {"agent":"Raven-Research"}')
+    /* Nothing to send yet, so the arrow is not offering to. */
+    expect((document.querySelector('.tkgo') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  /* The work order is what the step was asked, which is settled; the field
+     belongs to the flow, which is the conversation it carries on. */
+  it('keeps the field off the work order', async () => {
+    await openFirst(recorded)
+    await act(async () => { (document.querySelectorAll('.tktabs button')[1] as HTMLElement).click() })
+
+    expect(document.querySelector('.tkchat')).toBeNull()
   })
 
   it('folds the process, names its cost, and opens it in the order it happened', async () => {
