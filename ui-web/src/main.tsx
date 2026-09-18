@@ -89,7 +89,7 @@ session.onChange(() => {
   sheets.sync()
   dagSheet.sync()
   /* The desk palette is open or shut per conversation, and this is the event
-     that says which one is on screen -- see deskStore.sync. */
+     that says which one is on screen -- see features/desk/store.ts's sync. */
   desk.sync()
   rail.draw()
 })

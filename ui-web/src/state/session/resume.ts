@@ -53,7 +53,7 @@ async function whenListed<T>(pick: () => T | null, ask: () => Promise<void>, ope
   await ask()
   const found = pick()
   /* Nothing to do when it is still not there: the row has been forgotten, or the
-     read failed. Either way the intent stays on file (see deskStore.replaying),
+     read failed. Either way the intent stays on file (see features/desk/store.ts's replaying),
      so the next reload asks again rather than deciding from one failed read that
      the reader never had that window. */
   if (found) open(found)

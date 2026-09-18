@@ -45,8 +45,9 @@ const bar = (): HTMLElement => document.querySelector('#capsPage .cbar') as HTML
 const kids = (parent: Element): string[] =>
   Array.from(parent.children).map((c) => c.id || (c.getAttribute('class') ?? '') || c.tagName.toLowerCase())
 
-/* Both tabs' installed buttons, created the way the two legacy parts create
-   them on install: empty, and only then synced. */
+/* Both tabs' installed buttons, created the way the two wire modules
+   (features/skills/wire.ts, features/plugins/wire.ts) create them on install:
+   empty, and only then synced. */
 function createButtons(): void {
   act(() => {
     caps.installedButton('skill', { hidden: false, label: null, badge: null })

@@ -56,8 +56,7 @@ export function setDefaultPair(model: string, provider: string): void {
 
 /* The composer's model chip is written by id rather than rendered (#modelName /
    #modelChip, features/model/chip.ts), so its painter is published here
-   (features/settings/wire.ts) rather than this module reaching into the DOM.
-   Stage C makes the chip a component. */
+   (features/settings/wire.ts) rather than this module reaching into the DOM. */
 let paintChip: () => void = () => {}
 export function setChipPainter(fn: () => void): void {
   paintChip = fn

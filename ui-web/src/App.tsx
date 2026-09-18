@@ -76,8 +76,8 @@ import type { JSX } from 'react'
 
 /* A veil's own click, for the three dialogs that close when the reader clicks
    beside them. The veil IS the region, and the panel inside it is a child, so
-   a click on the scrim is a click on the veil itself -- which is the guard the
-   legacy handlers had. A listener rather than an onClick because every handler
+   a click on the scrim is a click on the veil itself, which is the whole
+   guard. A listener rather than an onClick because every handler
    passed in is a module function, so it is registered once and not on every
    render. */
 function useScrim(id: string, close: () => void): void {

@@ -288,7 +288,7 @@ describe('settings island', () => {
     expect(document.getElementById('setTitle')!.textContent).toBe('gui.set.pg.channel')
   })
 
-  /* The picker is legacy chrome, so the island cannot watch it: after a pick
+  /* The picker is page chrome, so the island cannot watch it: after a pick
      it has to re-read the model from the source or the card keeps showing the
      old one. Nothing exercised that callback, because the fixture had no
      picker at all and pickDefault returned early. */
@@ -1405,7 +1405,7 @@ describe('settings island', () => {
   })
 
 
-  /* ---- the toolset panel, which used to be drawn by the legacy layer ---- */
+  /* ---- the toolset panel ---- */
 
   const toolset = async () => {
     await act(async () => {

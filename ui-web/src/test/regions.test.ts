@@ -2,8 +2,8 @@
 /* A golden per top-level region of the page, taken from the markup that ships
  * today.
  *
- * Stage C moved every one of these nineteen regions out of src/page.html and
- * into App.tsx, one PR at a time. The promise was that the DOM does not move:
+ * Every one of these nineteen regions moved out of src/page.html and into
+ * App.tsx, one step at a time. The promise was that the DOM does not move:
  * an element's tag, id, classes, data-* attributes and the order of its children
  * all stay as they are. So the golden was written once, here, off page.html --
  * and each step changed only where the test got the markup from, never the

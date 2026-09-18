@@ -405,9 +405,8 @@ export function sync(): void {
 
 /* The draft on screen just became this conversation.
  *
- * Announced by the page that performs it -- main.tsx binds this beside the
- * composer's claim on its own draft, the one legacy call that already says
- * this -- rather than inferred here. At the pointer, "the draft became this
+ * Announced by the session runtime that performs it (state/session/runtime.ts)
+ * rather than inferred here. At the pointer, "the draft became this
  * session" and "the reader opened this session while a draft was up" are the
  * same move, null to an id, and three sites make the second one: opening a
  * conversation from the rail, forking one, and opening a cron run (the last two

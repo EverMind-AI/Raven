@@ -4,17 +4,16 @@
  * Two steps of the `--z` ladder in src/styles/page.css are deliberate ties --
  * `--z-shade` with `--z-tip` at 90, and `--z-picker` with the inline 46 the two
  * composer popovers set -- so for those four elements the DOM order at the body
- * IS the whole of the stacking decision. It used to be an accident of who ran
- * first: the scrollbar layer was appended by its own install(), the model
- * picker's wrapper and #deskHost by src/main.tsx, the tooltip layer by the
- * legacy chrome, and nothing said they had to land in that order.
+ * IS the whole of the stacking decision. Left to the appending code, that order
+ * would be an accident of which module ran first, and nothing would say the
+ * four had to land in the order the stylesheet assumes.
  *
  * The order is declared here instead, once, and `host` is what hands out the
  * four boot-time layers: made on first ask, appended in the order of this
  * table rather than the order of the asking. The tie at 90 reads backwards from
  * what page.css's comment intends -- the shade covers the tooltip, because
  * .tipp is appended at boot and .upshade only when an upgrade starts -- and
- * what stage C reproduces is the measurement, not the intent.
+ * this table reproduces the measurement, not the intent.
  *
  * Three kinds are distinguished, because each breaks differently:
  *   static   -- at the body from the page root's first commit, and the writer

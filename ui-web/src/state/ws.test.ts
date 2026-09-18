@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-/* The workspace pane's own state: the writes the six legacy verbs made, in the
- * order they made them.
+/* The workspace pane's own state: the writes its six verbs make, in the order
+ * they make them.
  *
  * The order is the part worth pinning. Every one of these verbs ends by handing
  * over to the island (`draw`) or to the desk (`notifyDesk`), and both of those

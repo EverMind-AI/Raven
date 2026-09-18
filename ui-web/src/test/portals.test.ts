@@ -117,7 +117,7 @@ describe('the portal table', () => {
   it('gives the tooltip layer a place before the update shade, breaking the tie at 90', () => {
     /* page.css says the tie is deliberate and reads as if a tooltip may sit on
        the shade; the DOM says otherwise, because .tipp is appended while the
-       page installs and .upshade only when an upgrade starts. Stage C copies
+       page installs and .upshade only when an upgrade starts. The table copies
        what is measured, not what the comment intends. */
     expect(BOOT_BODY_ORDER.indexOf('div.tipp')).toBeGreaterThan(-1)
     expect(PORTALS.find((p) => p.id === '.tipp')!.at).toBe(21)

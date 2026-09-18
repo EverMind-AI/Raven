@@ -417,7 +417,7 @@ export async function promote(preview?: string, atPointer?: (id: string) => void
   // filed under the session that just came into being.
   /* One announcement, two owners: the composer's draft text and the desk's
      palette are both filed under the draft and have to follow it to the
-     session (see deskStore.claimDraft). */
+     session (see features/desk/store.ts's claimDraft). */
   claimComposerDraft(sessionCurrent())
   claimDeskDraft(sessionCurrent())
   await applyStagedModel(draftRt, s.id, gen)

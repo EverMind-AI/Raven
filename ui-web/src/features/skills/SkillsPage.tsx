@@ -15,7 +15,7 @@ import type { JSX } from 'react'
 
 /* The skill tab mirrors the plugin tab exactly: the market IS the page,
    what you already have lives one level in (the installed button top-right
-   is legacy chrome, back arrow to return), a category chip row filters,
+   is the capabilities page's, back arrow to return), a category chip row filters,
    and every card opens the shared detail drawer. */
 const HUB_CATS: Array<[string, string]> = [
   ['', 'gui.hubcat.all'],

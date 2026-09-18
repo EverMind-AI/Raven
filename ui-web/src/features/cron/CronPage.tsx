@@ -516,7 +516,7 @@ function AtInput({ draft }: { draft: CronDraft }): JSX.Element {
 
 /* The new-job sheet, rendered into the static #jobVeil container the page
    markup keeps; the veil's own open flag and click-outside behaviour are
-   managed here because nothing legacy owns them any more. */
+   all managed here. */
 function JobSheet({ draft }: { draft: CronDraft }): JSX.Element | null {
   const veil = document.getElementById('jobVeil')
   const cancel = (): void => store.closeSheet()

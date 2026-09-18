@@ -354,8 +354,8 @@ function emptyAfterConnect(op: ProviderOp, params: Record<string, unknown>, snap
   return row && !(row.configured ?? []).length ? slug : null
 }
 
-/* The default-model picker is legacy live chrome; the source hands the
-   island a door to it. Returns false when no picker is behind the page. */
+/* The default-model picker is page chrome (features/model); the source hands
+   the island a door to it. Returns false when no picker is behind the page. */
 export function pickDefault(anchor: HTMLElement): boolean {
   const s = source()
   if (!s.pickModel) return false

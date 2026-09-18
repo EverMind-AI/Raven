@@ -17,7 +17,7 @@ import type { RailSnapshot, RailSource, SessRow } from './types'
  * instead of keeping a copy that could go stale. */
 
 export interface RailState {
-  /* Null until the first draw, which is what RailPage renders nothing on. */
+  /* Null until the first draw; RailPage renders nothing until then. */
   snap: RailSnapshot | null
   /* True while the live boot holds the rail on skeleton rows. */
   skel: boolean
@@ -91,8 +91,7 @@ const saveGrpFold = (): void => {
     /* private mode */
   }
 }
-/* Which capped groups stand fully expanded; page-lifetime only, like the
-   legacy listOpen set. */
+/* Which capped groups stand fully expanded; page-lifetime only. */
 const listOpen = new Set<string>()
 
 export const isFolded = (gid: string): boolean => grpFold.has(gid)

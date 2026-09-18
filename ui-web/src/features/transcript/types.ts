@@ -308,7 +308,7 @@ export interface Lane {
   main: boolean
   epoch: number
   listV: number
-  /* bumps when legacy would have tail-followed; the view scrolls on it */
+  /* bumps on every append that asks the view to scroll down */
   scrollReq: number
   segs: Seg[]
   listeners: Set<() => void>
@@ -336,8 +336,8 @@ export interface Lane {
   empty: string
 }
 
-/* What a legacy caller gets back from newStep()/tool(): the same handle
-   surface the old widgets returned, driving the store instead of the DOM. */
+/* What a caller gets back from newStep()/tool(): a handle that drives the
+   store, so the session pipeline never touches the DOM. */
 export interface CallHandle {
   done(ok: boolean, res: unknown, ms: number, diff?: string | string[] | null, truncated?: boolean): void
   /* The run a restored spawn call started, from the `spawn_task_id` the server

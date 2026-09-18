@@ -16,9 +16,9 @@ import * as desk from './store'
 
 import type { InstanceRow } from '../subagents/types'
 
-/* Recorded rather than ignored: the panel the desk lives in is legacy chrome,
-   so telling it to open and to shut is the desk's only way to be seen. It was
-   a no-op fake, which left both calls cuttable with the suite green. */
+/* Recorded rather than ignored: the pane the desk lives in is page chrome
+   (state/ws.ts), so telling it to open and to shut is the desk's only way to
+   be seen. A no-op fake would leave both calls cuttable with the suite green. */
 const panelCalls: boolean[] = []
 
 /* What `subagents.instances()` answers, which is what the agents tab counts. */

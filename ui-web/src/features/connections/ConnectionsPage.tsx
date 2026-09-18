@@ -275,7 +275,7 @@ function ConnRow({ c, sel }: { c: ConnChannel; sel: boolean }): JSX.Element {
 /* The configuration dialog, rendered into the static #connVeil container the
    page markup keeps. Lifting the form out of the card is what lets the page
    be a list; the veil's open flag, click-outside and focus behaviour are
-   managed here because nothing legacy owns them any more. */
+   all managed here. */
 function ConnDialog({ c }: { c: ConnChannel }): JSX.Element | null {
   const veil = document.getElementById('connVeil')
   useEffect(() => {

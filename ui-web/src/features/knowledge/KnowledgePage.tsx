@@ -1069,8 +1069,8 @@ function DocMenu({ doc, busy }: { doc: KbDoc; busy: boolean }): JSX.Element {
 
    The same thresholds and the same keys as the agents roster
    (features/extAgents/ExtAgentsPage.tsx `agoText`), spelled again rather than imported --
-   one domain does not import another's component, which
-   scripts/gates/import-direction.test.mjs is what keeps true. An
+   one domain does not import another's component, and
+   scripts/gates/import-direction.test.mjs is what keeps it that way. An
    unparseable stamp is shown as it came: a row dated "Invalid Date" says less
    than one dated with the string the engine actually sent. */
 function ago(iso: string): string {

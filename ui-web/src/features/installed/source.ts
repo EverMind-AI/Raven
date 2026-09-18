@@ -140,7 +140,8 @@ export const extSkills = (): InstalledSkill[] => skillsLive
 export const extPlugins = (): InstalledRow[] => pluginsLive
 export const extIsLoaded = (): boolean => extLoaded
 /* Whether that read has happened, and making it happen. The capabilities page
-   is still legacy chrome, so this one has no island of its own. */
+   is page chrome (chrome/CapsPage.tsx, state/caps.ts), so this one has no
+   domain of its own. */
 export const capabilitiesSource: CapabilitiesSource = {
   loaded: () => extLoaded,
   load: async () => { await loadExt(); return true },
