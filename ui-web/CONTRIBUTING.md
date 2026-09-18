@@ -385,8 +385,8 @@ goes:
 
 The two namespaces beyond `features/` carry three more shrink-only lists in the
 same tool: `LEGACY_CHROME` (136 unprefixed classes, 103 in the frame and 33 in
-the components), `LEGACY_CHROME_EXPR` (10 more inside a `className={...}`
-expression, 1 and 9) and `UNSTYLED` (`.newrun`, the one class the frame's
+the components), `LEGACY_CHROME_EXPR` (9 more inside a `className={...}`
+expression, 1 and 8) and `UNSTYLED` (`.newrun`, the one class the frame's
 markup writes that no stylesheet defines). A name in the shared vocabulary
 passes there too, and so does a name already pinned in `LEGACY_SHARED` --
 counting the frame's use of a class two domains name would say the debt grew
@@ -512,7 +512,7 @@ shrink-only: the way off a list is the fix.
 | Four modules hold module-level `let` with no reset | Three hold a React root a reset would have to unmount; the fourth is a pinned store | `store-shape`'s `NO_RESET` |
 | `lang.attr(key)` survives beside `t(key)` | It answers `undefined` until a language is picked, which is what keeps nine `data-tip` and twenty-four `aria-label` attributes off the first frame of a page nobody has picked for -- exactly what the served markup carries. Turning them into `t()` would change the DOM the boot and region goldens record | `state/lang/store.ts`'s `picked`, `i18n-keys`'s `KEYED` regex |
 | 86 shared class names, 342 unprefixed local ones and 91 unprefixed inside a `className={...}` | The rules are in `page.css`, whose bytes are what the two boot goldens and the region goldens are taken from; they move a domain at a time. The third list is an upper bound: an expression literal may be a comparison operand rather than a class | `check-class-namespace`'s `LEGACY_SHARED`, `LEGACY_LOCAL` and `LEGACY_EXPR` |
-| 136 unprefixed classes in the two namespaces beyond `features/`, 10 more inside a `className={...}` | 103 and 1 in the page frame, 33 and 9 in the shared components. There is no `chrome/styles.css` to move a rule into, so these come down by renaming in `page.css`, in a commit that changes the DOM the goldens record | `check-class-namespace`'s `LEGACY_CHROME` and `LEGACY_CHROME_EXPR` |
+| 136 unprefixed classes in the two namespaces beyond `features/`, 9 more inside a `className={...}` | 103 and 1 in the page frame, 33 and 8 in the shared components. There is no `chrome/styles.css` to move a rule into, so these come down by renaming in `page.css`, in a commit that changes the DOM the goldens record | `check-class-namespace`'s `LEGACY_CHROME` and `LEGACY_CHROME_EXPR` |
 | `.newrun` is written and never styled | `src/chrome/Rail.tsx` puts it on the new-session button and no rule defines it; taking it out edits `src/test/__golden__/region-app.txt`. `src/components/SetupSheet.tsx` writes two more from inside an expression (`.badtx`, `.warntx`), where the check cannot tell a class from a comparison operand and so does not read them | `check-class-namespace`'s `UNSTYLED` |
 | 26 imperative reaches for an element in the page frame | Not the rule's case: a portal at the body, two popovers filling a served list, the island mount boxes, and `chrome/behaviour/`'s grip drag and overlay scrollbars, which are behaviour rather than rendering and own no component tree. Counted so a third such module cannot appear unnoticed | `state-dom-touch`'s `FRAME` |
 | `.xaedit` keeps its old prefix | Five `page.css` rules scope it; it renames with them | `check-class-namespace`'s `LEGACY_LOCAL.extAgents` |

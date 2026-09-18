@@ -219,7 +219,7 @@ const LEGACY_CHROME = {
 
 const LEGACY_CHROME_EXPR = {
   chrome: 1,
-  components: 9,
+  components: 8,
 }
 
 // A class the markup writes that no stylesheet defines: a rule renamed or
