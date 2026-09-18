@@ -45,6 +45,7 @@
       "image_generate",
       "text_to_speech",
       "video_generate",
+      "understand_media",
       "create_playbook",
       "deliver_files",
       "load_playbook",
