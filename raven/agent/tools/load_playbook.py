@@ -27,6 +27,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from raven.contracts.tool import Tool
+from raven.playbook.stint_spec import MAX_ROUNDS
 from raven.plugins.context import BindDeclinedError
 
 if TYPE_CHECKING:
@@ -165,6 +166,21 @@ class LoadPlaybookTool(Tool):
                         "refused, so use this to complete a playbook, never to modify one."
                     ),
                 },
+                # The one exception to the line `fills` draws. A multi-round
+                # playbook keeps going for as many rounds as it is given, and how
+                # many is a question about today's run rather than about the
+                # file -- so "run it for three rounds" has somewhere to land.
+                # Everything else the file says still stands.
+                "max_rounds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": MAX_ROUNDS,
+                    "description": (
+                        "Multi-round playbooks only: how many rounds this run may take, when the "
+                        "user said a number. Omit it and the playbook's own budget applies -- do "
+                        "not guess one."
+                    ),
+                },
             },
             "required": ["name"],
         }
@@ -174,9 +190,10 @@ class LoadPlaybookTool(Tool):
         name: str,
         params: dict[str, Any] | None = None,
         fills: dict[str, dict[str, Any]] | None = None,
+        max_rounds: int | None = None,
         **kwargs: Any,
     ) -> str:
-        plan = await self._runtime.load(name, params or {}, fills or {})
+        plan = await self._runtime.load(name, params or {}, fills or {}, max_rounds=max_rounds)
         if plan is None:
             known = ", ".join(self._runtime.names()) or "(none installed)"
             return f"Error: no playbook named {name!r}. Available: {known}"

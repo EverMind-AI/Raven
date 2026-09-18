@@ -21,6 +21,7 @@ Nothing here calls an LLM or touches disk.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from itertools import combinations
 
 from raven.agent.subagent.dag_graph import collect_static_graph_errors
 from raven.playbook.params import param_refs
@@ -133,12 +134,146 @@ def validate_structure(
         # made the whole playbook fail to load, which drops it out of the library:
         # an optional section, written wrong, costing a saved procedure.
         return errors
+    if spec.mode == "stint":
+        return errors + validate_roles(spec, known_agents=known_agents)
     return errors + validate_graph_nodes(
         spec.nodes or [],
         param_names,
         known_agents=known_agents,
         allow_blank_fillable=allow_blank_fillable,
     )
+
+
+def validate_roles(spec: PlaybookSpec, *, known_agents: Iterable[str] | None = None) -> list[str]:
+    """What a role table has to satisfy that the model alone cannot check.
+
+    The shape of the table -- unique labels, resolvable dependencies, no cycle --
+    is on :class:`PlaybookSpec` itself, because it needs nothing but the table.
+    What needs the rest of the world is here: the roster the roles are cast
+    from, the params their prompts reference, and the one overlap in the
+    ownership grid that has no sensible reading.
+    """
+    param_names = set(spec.params)
+    roles = spec.roles or []
+    errors: list[str] = []
+    names = set(known_agents) if known_agents is not None else None
+
+    for role in roles:
+        if names is not None and role.name not in names:
+            errors.append(f"role {role.label!r}: no agent named {role.name!r} on this machine")
+        for ref in param_refs(role.prompt_template):
+            if ref not in param_names:
+                errors.append(f"role {role.label!r}: params.{ref} names no declared param")
+        if not role.prompt_template.strip():
+            errors.append(f"role {role.label!r}: promptTemplate is what the role is told, and it is empty")
+
+    # Two owners of one path is the one overlap with no reading: an owner beside
+    # an appender is the shape the grid is built on, and two appenders is
+    # order-independent, so neither of those is a contest.
+    owners: dict[str, list[str]] = {}
+    for role in roles:
+        for pattern in role.owns:
+            owners.setdefault(pattern, []).append(role.label)
+    for pattern, claimants in sorted(owners.items()):
+        if len(set(claimants)) > 1:
+            errors.append(f"{pattern} is owned by {', '.join(sorted(set(claimants)))}; one path has one owner")
+
+    errors.extend(_concurrent_and_enforced(roles))
+    errors.extend(_read_fences_nobody_holds(roles))
+
+    verify_names = [entry.name for entry in (spec.verify or [])]
+    duplicated = sorted({name for name in verify_names if verify_names.count(name) > 1})
+    if duplicated:
+        errors.append(f"two verify entries share the name {', '.join(duplicated)}")
+    if spec.verify and not any(role.verify_after for role in roles):
+        errors.append(f"verify declares {', '.join(sorted(set(verify_names)))} and no role runs any of them")
+
+    paths = [entry.path for entry in (spec.memory or [])]
+    repeated = sorted({path for path in paths if paths.count(path) > 1})
+    if repeated:
+        errors.append(f"memory names {', '.join(repeated)} twice, with two sets of limits")
+    return errors
+
+
+def _read_fences_nobody_holds(roles: list) -> list[str]:
+    """A role told its reads are fenced, where nothing fences them.
+
+    ``enforce.read: hard`` reaches the guard text and stops there: it swaps in
+    "Reading outside the paths above is refused at the tool gate" and changes
+    nothing else. No gate refuses the read, so the sentence is false, and a role
+    that believes it will not open the file it needed to do its work.
+
+    Refused at load rather than shipped as prose to fix later, on the rule this
+    repo already states for the same case elsewhere: a boundary announced as
+    enforced and unenforceable is worse than one announced as prompt policy.
+    ``reads`` under the default ``soft`` still points a role at where to start,
+    and says so in those words.
+    """
+    return [
+        f"{role.label} asks for enforce.read: hard, which nothing enforces yet -- "
+        f"the grade reaches the prompt and no gate refuses a read. Use soft, which says "
+        f"the same paths are where to start rather than a fence."
+        for role in roles
+        if getattr(getattr(role, "enforce", None), "read", "soft") == "hard"
+    ]
+
+
+def _concurrent_and_enforced(roles: list) -> list[str]:
+    """Two roles that can run at once, where one of them is held to its paths.
+
+    A plan has one checkout and the roles share it, so what a role wrote is
+    measured as the difference the *tree* shows since that role started. Two
+    roles running at once are two sets of changes in one tree: the first to
+    finish is graded against everything both of them wrote, and its judge
+    reverts and quarantines the other's work for being outside its own paths.
+
+    Observed, not feared. Two roles with disjoint ``owns``, each writing only
+    what it owned: the first judged came back as `dev-a wrote 1 path(s) it may
+    not write: src/b/work.py`, and `src/b/work.py` was gone. Nothing errors --
+    it reads as a role that would not stay in its lane.
+
+    So the combination is refused where it is declared, rather than left to
+    surface as violations in round four. Two ways out, and the message names
+    both: order the roles, or say that their boundaries are not enforced. What
+    would make it work properly is a checkout per concurrent role, which is a
+    merge problem and not a validation rule.
+    """
+    order = {role.label: index for index, role in enumerate(roles)}
+    reaches: dict[str, set[str]] = {role.label: set() for role in roles}
+
+    def walk(label: str, seen: set[str]) -> set[str]:
+        if label in seen:
+            return set()
+        seen.add(label)
+        found: set[str] = set()
+        for role in roles:
+            if role.label != label:
+                continue
+            for dependency in role.depends_on:
+                found.add(dependency)
+                found |= walk(dependency, seen)
+        return found
+
+    for role in roles:
+        reaches[role.label] = walk(role.label, set())
+
+    def held(label: str) -> bool:
+        role = next(one for one in roles if one.label == label)
+        return bool(role.owns or role.appends) and role.enforce.write == "hard"
+
+    errors = []
+    for first, second in combinations(sorted(order, key=order.__getitem__), 2):
+        if second in reaches[first] or first in reaches[second]:
+            continue
+        if not (held(first) or held(second)):
+            continue
+        errors.append(
+            f"{first} and {second} wait on nothing between them, so they run at once in one checkout, "
+            f"and what {'both are' if held(first) and held(second) else 'one is'} held to is measured off "
+            "that one tree -- each would have the other's work reverted. Put one after the other with "
+            "dependsOn, or set enforce.write: soft on both."
+        )
+    return errors
 
 
 def validate_graph_nodes(

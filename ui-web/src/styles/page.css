@@ -6739,3 +6739,31 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .wchip svg { flex: none; width: 13px; height: 13px; color: var(--faint); }
 .tkout { margin-top: 9px; font-size: 12px; line-height: 1.7; color: var(--muted);
   background: var(--surface); border-radius: 8px; padding: 9px 10px; }
+
+/* -- playbook runs (plans) ---------------------------------------------
+   A run is read for three things: is it still going, how far did it get, and
+   is it waiting on me. Those are the three lines on a card; everything else
+   is behind the click. */
+.pbviews { display: flex; gap: 4px; margin: 0 0 10px; }
+.pbviews .mini.on { border-color: var(--gold); color: var(--gold); }
+.pbviews .n { font-family: var(--mono); opacity: .7; margin-left: 4px; }
+.pncard { align-items: stretch; text-align: left; }
+.pncard.live { border-left: 2px solid var(--gold); }
+.pnlive { font-size: 11.5px; color: var(--gold); white-space: nowrap; }
+.pnmeta { font-size: 12px; color: var(--muted); }
+.pndim { font-size: 11.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; }
+.pnid { font-family: var(--mono); }
+.pnwait { font-size: 12px; color: var(--gold); }
+.pntable { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 12px; }
+.pntable td { padding: 4px 8px; border-top: 1px solid var(--line-soft); }
+.pnnum { font-family: var(--mono); width: 2.5em; }
+.pnviol { font-size: 12px; color: var(--muted); padding: 2px 8px; }
+.pnq { border: 1px solid var(--line-soft); border-radius: 10px; padding: 8px 10px; margin: 8px 0; display: grid; gap: 6px; }
+.pnq.done { opacity: .72; }
+.pnqhead { display: flex; gap: 8px; align-items: baseline; }
+.pnqtag { font-size: 11.5px; color: var(--gold); }
+.pnq.done .pnqtag { color: var(--muted); }
+.pnqtext { font-size: 13px; }
+.pnqanswer { font-size: 12.5px; color: var(--muted); }
+.pnqform { display: flex; gap: 6px; }
+.pnqform input { flex: 1 1 auto; min-width: 0; }

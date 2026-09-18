@@ -1749,6 +1749,57 @@ The three-state outcome an EvalJudge returns: `completed` (goal addressed), `fai
 (visible error / missed objective), or `unknown` (indeterminate). The `AfterIterationHook`
 writes completed/failed (never unknown) into `HISTORY.md`.
 
+### Stint (a playbook that takes many rounds)
+
+**Stint** (`mode: stint`):
+A playbook's third mode. It declares roles rather than nodes, and the driver compiles one
+sub-agent graph per round, so a run of thirty rounds is thirty graphs on the shared dispatch
+path rather than one long process. Entrance `raven playbook run <name>`; design doc
+`docs/specs/2026-09-17-playbook-rounds-design.md`.
+
+**Stint record** (`raven/stint/record.py`):
+One multi-round run: an id, a checkout of its own, and a record on disk. `RUNNING`, `PAUSED`,
+`STOPPED`, `FINISHED` or `INTERRUPTED`; *unfinished* is anything but `FINISHED` and `STOPPED`,
+*live* is `RUNNING` or `INTERRUPTED`. The record is what lets any process take a plan up again,
+so nothing depends on the process that started it still being alive.
+
+**Round**:
+One pass of every role, in dependency order. Each role opens a fresh conversation, so what one
+round learned reaches the next only by being written down.
+
+**Role** (`roles[]`):
+A named seat in a round -- `as` names it, `name` says which roster entry plays it. The model,
+the tools and the servers come from that roster row, never from the playbook, so a playbook
+somebody hands you cannot overrule your own settings.
+
+**Journal** (`memory[]` with `append: true`):
+The append-only file the roles hand over through. Only the most recent rounds reach a prompt
+(`recentRounds`, `maxChars`); the rest is in the commit log.
+
+**Ownership** (`owns` / `appends`, `raven/stint/ownership.py`):
+What a role may write, what it may only add to, and everything else, which it may not touch.
+One path has one owner. Declared in the playbook, rendered into the role's prompt, refused at
+the write, and undone afterwards -- four layers, because a prompt is not a fence and a fence a
+role can shell around is not one either.
+
+**Violation** (`violations/`):
+A write outside a role's paths, found by comparing the stage's own commits and worktree against
+what the role declared. The change is reverted and the file it wrote is kept as evidence.
+
+**Check** (`verify[]`, `raven/stint/verify.py`):
+A real command -- a build, a test run -- that a role's work is measured by before any model
+judges it. The one signal in a round that is not a model's opinion.
+
+**Handback** (`maxHandbacks`):
+A failed check returned to the role that caused it, with the failure text, up to a budget.
+When the budget runs out the round records the failure and carries on: failing the node would
+skip every role downstream, which is not what a failed check means.
+
+**Backlog** (`.stint/backlog.json`):
+The one structured thing the roles share: cards moving through a state machine, one transition
+per role. `raven playbook stint task` is how a person or a role moves one.
+
+
 ### Trajectory
 
 **Attempt**:

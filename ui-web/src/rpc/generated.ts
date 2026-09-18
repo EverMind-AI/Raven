@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 195 methods, 109 component schemas.
+// 197 methods, 114 component schemas.
 
 /* eslint-disable */
 /**
@@ -32,7 +32,6 @@ export type DagSnapshotNodeStatus =
  */
 export type TurnEvent =
   | MessageStartEvent
-  | MessageInjectedEvent
   | TurnStartedEvent
   | EpisodeStartEvent
   | NoticeEvent
@@ -146,14 +145,6 @@ export interface SessionInitInfo {
    * The resumed session's name, when it has one. Absent on a fresh session, which has nothing to name yet. Carried on the bundle rather than fetched separately because a client resuming a session is already being told what it is resuming.
    */
   title?: string;
-  /**
-   * A turn is in flight on this session right now.
-   */
-  running?: boolean;
-  /**
-   * How long the turn in flight has been running, in milliseconds, measured on the server; null when nothing is running or the question carries no readable stamp. The elapsed rather than the stamp it was measured from: that stamp is a server wall clock, and a client in another timezone reading it against its own clock gets the offset between the two back as the turn's age.
-   */
-  running_ms?: number | null;
 }
 /**
  * ``info.usage`` — the boot baseline, refreshed by each turn's completion.
@@ -207,10 +198,6 @@ export interface TranscriptMessage {
    * A file tool's unified diff of the change it made, on its role='tool' entry.
    */
   diff?: string;
-  /**
-   * The files that call made vanish, on its role='tool' entry. Absent when it removed none.
-   */
-  file_removed?: TranscriptFileRemoval[];
   turn_ended?: TranscriptTurnEnded;
   notice?: TranscriptNotice;
   /**
@@ -218,10 +205,6 @@ export interface TranscriptMessage {
    */
   origin?: string;
   delegated?: TranscriptDelegated;
-  /**
-   * Set on a user entry merged into a turn already running, not the prompt that opened one. A reader draws it INSIDE the turn: no new turn number, no fold closed over the narration above it, and the text before it is still that turn's narration rather than its answer.
-   */
-  mid_turn?: boolean;
 }
 export interface TranscriptToolCall {
   id: string;
@@ -230,16 +213,6 @@ export interface TranscriptToolCall {
    * JSON-encoded arguments; re-serialized when stored as an object.
    */
   arguments: string;
-}
-/**
- * One file a stored tool call made vanish, on its role='tool' entry. The line count and not the body: the text of a removed file is what the live event carries, while a reloaded page needs to know the file went and how big the hole is.
- */
-export interface TranscriptFileRemoval {
-  path: string;
-  /**
-   * Lines the file held when it went; 0 when unknown.
-   */
-  del: number;
 }
 /**
  * Why a turn's transcript stops where it does.
@@ -416,21 +389,15 @@ export interface ToolUsageCount {
 }
 export interface EverosSection {
   /**
-   * Empty when nothing is pinned for this role.
+   * Empty when the shipped placeholder is still in place.
    */
   model: string;
-  /**
-   * The vendor serving `model`. Empty when nothing is pinned.
-   */
+  base_url: string;
   provider: string;
   /**
-   * Whether that provider has a usable credential -- the same question the memory gate answers, so the card and the gate cannot disagree. No key ever goes on the wire.
+   * Whether a key is stored; the value never goes on the wire.
    */
   api_key_set: boolean;
-  /**
-   * The endpoint came from exported EVEROS_<ROLE>__* variables, which outrank raven. The slot is read-only: raven cannot edit a shell.
-   */
-  env_managed?: boolean;
 }
 export interface ChannelField {
   key: string;
@@ -671,10 +638,6 @@ export interface SessionListItem {
    */
   pinned?: boolean;
   /**
-   * A turn is in flight on this session right now.
-   */
-  running?: boolean;
-  /**
    * The directory this session was pinned to when it was created, absolute; absent for a session that runs where the policy default puts it. What the rail groups by.
    */
   workdir?: string;
@@ -841,7 +804,7 @@ export interface SubagentRow {
     group?: string;
   }[];
   /**
-   * What subagents.update accepts for model on this row, by rule rather than by kind, and not ownership, which is own: raven for the built-in row and for one of raven's own acp rows whose handshake advertised no menu -- both pick from raven's own provider catalogue; agent for an acp row picking from the choices its handshake advertised (model_choices); fixed for an openai row, whose model is a plain config value, and for a cli row, which has no menu at all. The menu, not the whole vocabulary: one of raven's own acp rows also accepts a host-qualified id under either rule, since it runs on raven's providers whatever it advertised.
+   * What subagents.update accepts for model on this row, by kind -- not ownership, which is own: raven for the built-in row, picking from raven's own provider catalogue; agent for an acp row, raven's own or not, picking from the choices its handshake advertised (model_choices); fixed for an openai row, whose model is a plain config value, and for a cli row, which has no menu at all.
    */
   model_source?: 'raven' | 'agent' | 'fixed';
 }
@@ -1153,20 +1116,6 @@ export interface MessageStartEvent {
     target?: DirectTarget;
   };
 }
-export interface MessageInjectedEvent {
-  type: 'message.injected';
-  /**
-   * A message merged into the turn already running on this conversation. `message.start` cannot say this: that event opens a turn, and an inject joins one. `target` names the conversation this event belongs to; absent is the main agent.
-   */
-  payload: {
-    /**
-     * The id minted for this text, not the running turn's. It is what the fallback turn's events carry if the host ends before draining it, which is how a client tells the two views of one message apart.
-     */
-    turn_id: string;
-    content: string;
-    target?: DirectTarget;
-  };
-}
 export interface EpisodeStartEvent {
   type: 'episode.start';
   payload: {
@@ -1259,19 +1208,6 @@ export interface FileChange {
    */
   before?: string;
 }
-/**
- * One file a tool call made vanish, with the text it held when known. The counterpart of FileChange and not one of them: a removal has no after, and its before is a best effort -- absent means unknown, not that the file was empty.
- */
-export interface FileRemoval {
-  /**
-   * Absolute path of the file that is gone.
-   */
-  path: string;
-  /**
-   * The contents the file held before it went, when they could be captured. Absent means unknown -- not that the file was empty -- so a client draws the deletion with whatever it already knew of the file.
-   */
-  before?: string;
-}
 export interface ToolCompleteEvent {
   type: 'tool.complete';
   payload: {
@@ -1290,10 +1226,6 @@ export interface ToolCompleteEvent {
      */
     diff?: string;
     file_change?: FileChange;
-    /**
-     * The files this call made vanish. Absent on every call that removed nothing, which is nearly all of them.
-     */
-    file_removed?: FileRemoval[];
   };
 }
 export interface MessageCompleteEvent {
@@ -1684,7 +1616,7 @@ export interface PlaybookRow {
   name: string;
   description: string;
   task_summary: string;
-  mode: 'dag' | 'prompt';
+  mode: 'dag' | 'prompt' | 'stint';
   confirm: boolean;
   origin: string;
   disabled: boolean;
@@ -1723,9 +1655,7 @@ export interface PlaybookNode {
   };
 }
 /**
- * One whole playbook: its identity, its runtime inputs, and either the graph
- * (``mode: dag``) or the assembly guidance a model turns into one
- * (``mode: prompt``). ``path`` is the file this was read from.
+ * One whole playbook: its identity, its runtime inputs, and the shape it runs as -- the graph (``mode: dag``), the assembly guidance a model turns into one (``mode: prompt``), or the roles and stopping rules of a multi-round run (``mode: stint``, under ``rounds``). ``path`` is the file this was read from.
  *
  * ``version`` is the spec format version the file declares, not a revision of
  * the playbook's content.
@@ -1735,7 +1665,7 @@ export interface PlaybookDetail {
   description: string;
   task_summary: string;
   version: number;
-  mode: 'dag' | 'prompt';
+  mode: 'dag' | 'prompt' | 'stint';
   confirm: boolean;
   origin: string;
   disabled: boolean;
@@ -1749,6 +1679,7 @@ export interface PlaybookDetail {
   mcp_servers?: {
     [k: string]: PlaybookMcpServer;
   };
+  stint?: PlaybookStint;
 }
 /**
  * One MCP server the playbook itself carries, as the file declares it. Carries every field the runtime reads to decide what the server is and whether it runs. `env` and `headers` are declarations rather than resolved values: a carried server references a credential through `{{ params.X }}` and the run supplies it, so nothing here is ever a secret's value, and `has_oauth_config` says only whether the file declares OAuth endpoints, never what they are.
@@ -1768,6 +1699,53 @@ export interface PlaybookMcpServer {
   enabled?: boolean;
   auth?: 'none' | 'apikey' | 'oauth';
   has_oauth_config?: boolean;
+}
+/**
+ * What `mode: stint` adds to a playbook, and what a person approving one has to be able to read: who runs, what each may write, which commands run, and when it stops. Absent on every other mode.
+ */
+export interface PlaybookStint {
+  roles: PlaybookRole[];
+  carried: PlaybookCarried[];
+  checks: PlaybookCheck[];
+  max_rounds: number;
+  until: string;
+  report: 'round' | 'end';
+}
+/**
+ * One role of a `mode: stint` playbook: who plays it, what it waits on, and the paths it is judged against. `terminal` marks a role nothing else waits on -- the only kind whose output the plan reads when deciding whether to open another round, and so the only kind that can end one early.
+ */
+export interface PlaybookRole {
+  label: string;
+  agent: string;
+  node_summary: string;
+  depends_on: string[];
+  owns: string[];
+  appends: string[];
+  reads: string[];
+  enforce_read: 'soft' | 'hard';
+  enforce_write: 'soft' | 'hard';
+  journal_section: string;
+  verify_after: string[];
+  max_handbacks: number;
+  terminal: boolean;
+}
+/**
+ * A file rounds hand to each other. `append` marks the journal: the one that may only grow, and the one a window of `recent_rounds` is read back from.
+ */
+export interface PlaybookCarried {
+  path: string;
+  append: boolean;
+  recent_rounds: number;
+  max_chars: number;
+}
+/**
+ * One objective check a round may run. `run` is a real shell command, which is why a playbook that declares any must be approved before it starts.
+ */
+export interface PlaybookCheck {
+  name: string;
+  run: string;
+  timeout_sec: number;
+  needs_display: boolean;
 }
 /**
  * One `secret` param of a playbook and whether this machine holds a value for it. Never the value.
@@ -1825,7 +1803,7 @@ export interface TaskReplan {
  */
 export interface TaskFile {
   path: string;
-  op: 'add' | 'write' | 'edit' | 'delete';
+  op: 'write' | 'edit';
   add: number;
   del: number;
   /**
@@ -1940,6 +1918,51 @@ export interface TaskRow {
   handle?: string | null;
   counts: TaskCounts;
   nodes: TaskNode[];
+}
+/**
+ * One round of a plan, as the list needs it.
+ */
+export interface StintRoundRow {
+  index: number;
+  run_id: string;
+  attempt: number;
+  status: string;
+  checks: string[];
+  violations: string[];
+}
+/**
+ * Something a round asked a person, and what came back.
+ */
+export interface StintQuestionRow {
+  round: number;
+  role: string;
+  text: string;
+  answer: string;
+}
+/**
+ * One multi-round run a rounds playbook started.
+ */
+export interface StintRow {
+  stint_id: string;
+  playbook: string;
+  round_index: number;
+  max_rounds: number;
+  status: string;
+  live: boolean;
+  stop_reason: string;
+  workdir: string;
+  branch: string;
+  started_at_ms: number;
+  ended_at_ms: number;
+  open_questions: number;
+}
+/**
+ * One plan, whole: every round it ran and everything it is waiting on.
+ */
+export interface StintDetail {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
 }
 export interface SessionListParams {
   /**
@@ -2177,10 +2200,6 @@ export interface TurnSubscribeParams {
 }
 export interface TurnSubscribeResult {
   subscription_id: string;
-  /**
-   * A turn is in flight on this session, and this subscription receives the rest of it.
-   */
-  running?: boolean;
 }
 export interface TurnUnsubscribeParams {
   subscription_id: string;
@@ -3297,42 +3316,23 @@ export interface SettingsEverosResult {
    * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
    */
   note?: string | null;
-  /**
-   * Whether raven manages this EverOS root. False makes the role slots read-only: raven neither writes that install's config nor starts or stops its server.
-   */
-  owned?: boolean;
-  /**
-   * Which roles each vendor can serve, so a slot does not offer a provider that cannot do the job. Keyed by provider name.
-   */
-  supports?: {
-    [k: string]: string[];
-  };
-  /**
-   * Roles that cannot be cleared, so the page knows which slots get a clear control. Sent rather than mirrored: a mirrored copy drew one on a slot whose clear the write refuses.
-   */
-  required?: string[];
 }
 export interface SettingsEverosSetParams {
-  /**
-   * Which EverOS role: llm, embedding, rerank or multimodal.
-   */
   section: string;
   /**
-   * Model id, as the provider names it.
+   * Merged into the section; ignored when clearing.
    */
-  model?: string | null;
+  fields?: {
+    [k: string]: string;
+  };
   /**
-   * Which configured provider serves `model`. Its address and key are what the call goes out on, resolved at spawn time rather than copied -- so rotating a key is one edit in the provider and every role serving on it follows.
+   * Drop the section; refused for llm and embedding.
    */
-  provider?: string | null;
+  clear?: boolean;
   /**
-   * Rerank only, and only for a self-hosted endpoint: which request shape EverOS must post (`deepinfra` / `vllm` / `dashscope`). A curated vendor's shape comes from the vendor table and this is ignored; somebody's own server is the one case nothing but the operator can answer.
+   * Take api_key and base_url from this connected provider, copied not referenced. Wins over the same keys in `fields`, which cannot carry a real key: the page only ever sees a redacted one.
    */
-  protocol?: string | null;
-  /**
-   * Drop the role; refused for llm and embedding.
-   */
-  clear?: boolean | null;
+  borrow_from?: string;
 }
 export interface SettingsEverosSetResult {
   applied: boolean;
@@ -3428,17 +3428,6 @@ export interface FsDirsResult {
    * Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found.
    */
   entries: FsDirEntry[];
-}
-export interface FsPickDirParams {}
-export interface FsPickDirResult {
-  /**
-   * The folder chosen, absolute and resolved; absent when the dialog was dismissed.
-   */
-  path?: string;
-  /**
-   * Whether a session may be pinned to the chosen folder (see raven.agent.workdir); false with no path.
-   */
-  ok: boolean;
 }
 export interface FsReadParams {
   path: string;
@@ -3836,36 +3825,6 @@ export interface ApprovalRespondResult {
    */
   ok: boolean;
 }
-export interface ApprovalRevokeParams {
-  /**
-   * The answered request whose grant to take back.
-   */
-  approval_id: string;
-}
-export interface ApprovalRevokeResult {
-  /**
-   * False when that answer wrote no rule of its own, the undo came twice, or the file could not be written.
-   */
-  ok: boolean;
-}
-export interface ApprovalPendingParams {
-  /**
-   * One conversation's requests; every conversation's when absent.
-   */
-  session_id?: string;
-  /**
-   * Compatibility spelling of session_id.
-   */
-  conversation_id?: string;
-}
-export interface ApprovalPendingResult {
-  /**
-   * Each open request's approval.request params, exactly as they were first sent.
-   */
-  requests: {
-    [k: string]: JsonValue;
-  }[];
-}
 export interface ClarifyRespondParams {
   answer: string;
   request_id?: string;
@@ -3984,68 +3943,17 @@ export interface SessionSteerResult {
   hint?: string;
 }
 export interface SessionUsageParams {
-  /**
-   * Full session_key to report on.
-   */
-  session_id: string;
+  session_id?: string;
 }
 export interface SessionUsageResult {
   /**
-   * Recorded calls under this session's root.
+   * Human-readable explanation of why this method is not supported in v0.1.
    */
-  calls: number;
+  error: string;
   /**
-   * The model this session runs on now.
+   * Optional hint to the user (e.g., 'Press Ctrl+C').
    */
-  model: string;
-  /**
-   * Fresh input tokens; cache excluded.
-   */
-  input: number;
-  /**
-   * Output tokens.
-   */
-  output: number;
-  /**
-   * Cache-read tokens.
-   */
-  cache_read: number;
-  /**
-   * Cache-write tokens.
-   */
-  cache_write: number;
-  /**
-   * input + output + cache_read + cache_write.
-   */
-  total: number;
-  /**
-   * Sum of provider-reported USD; null when no call reported a price.
-   */
-  cost_usd?: number | null;
-  /**
-   * exact when every call reported a price; estimated when some did not.
-   */
-  cost_status: 'estimated' | 'exact';
-  /**
-   * Calls with no reported price, left out of cost_usd.
-   */
-  cost_missing_calls: number;
-  /**
-   * Context window of the session's model; 0 when unknown.
-   */
-  context_max: number;
-  /**
-   * Estimated tokens the next call would send.
-   */
-  context_used: number;
-  /**
-   * context_used as a percentage of context_max.
-   */
-  context_percent: number;
-  /**
-   * True when context_used is a tiktoken estimate.
-   */
-  context_estimated: boolean;
+  hint?: string;
 }
 export interface SkillsReloadParams {}
 export interface SkillsReloadResult {
@@ -4737,6 +4645,56 @@ export interface ImportStopParams {}
 export interface ImportStopResult {
   stopped: boolean;
 }
+export interface MemoryDeleteParams {
+  kind: 'episode' | 'profile' | 'agent_case' | 'agent_skill';
+  id: string;
+}
+export interface MemoryDeleteResult {
+  ok: boolean;
+  /**
+   * Deleting an episode also drops its derived facts and foresight.
+   */
+  removed: number;
+}
+export interface PlaybooksStintsListParams {}
+export interface PlaybooksStintsListResult {
+  stints: StintRow[];
+}
+export interface PlaybooksStintsGetParams {
+  stint_id: string;
+}
+/**
+ * One plan, whole: every round it ran and everything it is waiting on.
+ */
+export interface PlaybooksStintsGetResult {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
+}
+export interface PlaybooksStintsStopParams {
+  stint_id: string;
+}
+/**
+ * One plan, whole: every round it ran and everything it is waiting on.
+ */
+export interface PlaybooksStintsStopResult {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
+}
+export interface PlaybooksStintsAnswerParams {
+  stint_id: string;
+  question: number;
+  text: string;
+}
+/**
+ * One plan, whole: every round it ran and everything it is waiting on.
+ */
+export interface PlaybooksStintsAnswerResult {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
+}
 
 // ---------------------------------------------------------------------------
 // Method map -- generated from the contract's method list.
@@ -4856,7 +4814,6 @@ export interface RpcMethods {
   'channels.qr': { params: ChannelsQrParams; result: ChannelsQrResult };
   'fs.list': { params: FsListParams; result: FsListResult };
   'fs.dirs': { params: FsDirsParams; result: FsDirsResult };
-  'fs.pick_dir': { params: FsPickDirParams; result: FsPickDirResult };
   'fs.read': { params: FsReadParams; result: FsReadResult };
   'fs.upload': { params: FsUploadParams; result: FsUploadResult };
   'deck.templates.list': { params: DeckTemplatesListParams; result: DeckTemplatesListResult };
@@ -4880,8 +4837,6 @@ export interface RpcMethods {
   'playbooks.run': { params: PlaybooksRunParams; result: PlaybooksRunResult };
   'playbooks.create': { params: PlaybooksCreateParams; result: PlaybooksCreateResult };
   'approval.respond': { params: ApprovalRespondParams; result: ApprovalRespondResult };
-  'approval.revoke': { params: ApprovalRevokeParams; result: ApprovalRevokeResult };
-  'approval.pending': { params: ApprovalPendingParams; result: ApprovalPendingResult };
   'clarify.respond': { params: ClarifyRespondParams; result: ClarifyRespondResult };
   'confirm.respond': { params: ConfirmRespondParams; result: ConfirmRespondResult };
   'slash.exec': { params: SlashExecParams; result: SlashExecResult };
@@ -4939,6 +4894,11 @@ export interface RpcMethods {
   'import.run': { params: ImportRunParams; result: ImportRunResult };
   'import.status': { params: ImportStatusParams; result: ImportStatusResult };
   'import.stop': { params: ImportStopParams; result: ImportStopResult };
+  'memory.delete': { params: MemoryDeleteParams; result: MemoryDeleteResult };
+  'playbooks.stints.list': { params: PlaybooksStintsListParams; result: PlaybooksStintsListResult };
+  'playbooks.stints.get': { params: PlaybooksStintsGetParams; result: PlaybooksStintsGetResult };
+  'playbooks.stints.stop': { params: PlaybooksStintsStopParams; result: PlaybooksStintsStopResult };
+  'playbooks.stints.answer': { params: PlaybooksStintsAnswerParams; result: PlaybooksStintsAnswerResult };
 }
 
 /** The literal union of callable method names. */
@@ -4949,9 +4909,7 @@ export type ResultOf<M extends RpcMethod> = RpcMethods[M]['result'];
 
 /** Method names present in the contract, for a runtime guard at the edges. */
 export const RPC_METHODS = [
-  "approval.pending",
   "approval.respond",
-  "approval.revoke",
   "browser.close",
   "browser.frame",
   "browser.input",
@@ -4994,7 +4952,6 @@ export const RPC_METHODS = [
   "fs.dirs",
   "fs.list",
   "fs.open",
-  "fs.pick_dir",
   "fs.read",
   "fs.reveal",
   "fs.upload",
@@ -5021,6 +4978,7 @@ export const RPC_METHODS = [
   "mcp.list",
   "mcp.test",
   "mcp.tools",
+  "memory.delete",
   "memory.list",
   "memory.stats",
   "model.add_endpoint",
@@ -5047,6 +5005,10 @@ export const RPC_METHODS = [
   "playbooks.oauth.clear",
   "playbooks.run",
   "playbooks.set_enabled",
+  "playbooks.stints.answer",
+  "playbooks.stints.get",
+  "playbooks.stints.list",
+  "playbooks.stints.stop",
   "playbooks.validate",
   "plug.auth",
   "plug.configure",

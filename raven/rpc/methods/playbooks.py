@@ -53,8 +53,74 @@ def _shape(spec: PlaybookSpec) -> list[dict[str, Any]]:
 
     The card's diagram needs no prompt and no agent name, and a list that
     carried them would ship every template in the library on page open.
+
+    A ``rounds`` playbook answers with its roles. It has no ``nodes`` -- a round
+    is compiled into them when it is dispatched -- but the picture the reader
+    wants is the same picture: who runs, and in what order. Answering with an
+    empty list drew a card with nothing on it, which reads as a playbook that
+    does nothing.
     """
+    if spec.mode == "stint":
+        return [{"id": role.label, "depends_on": list(role.depends_on)} for role in (spec.roles or [])]
     return [{"id": node.id, "depends_on": list(node.depends_on)} for node in (spec.nodes or [])]
+
+
+def _stint_wire(spec: PlaybookSpec) -> dict[str, Any]:
+    """The four sections `mode: stint` adds, as the page reads them.
+
+    Explicit rather than ``model_dump`` for the reason ``_node_wire`` is: the
+    page's contract must not change shape because a spec model grew a field.
+
+    ``run`` goes out in full. It is a shell command the stint will execute on the
+    reader's machine, and the one moment they are asked to approve that is the
+    moment they are looking at this.
+    """
+    from raven.playbook.stint import terminal_roles
+    from raven.playbook.stint_spec import DEFAULT_MAX_ROUNDS
+
+    last = terminal_roles(spec)
+    stop = spec.stop
+    return {
+        "roles": [
+            {
+                "label": role.label,
+                "agent": role.name,
+                "node_summary": role.node_summary,
+                "depends_on": list(role.depends_on),
+                "owns": list(role.owns),
+                "appends": list(role.appends),
+                "reads": list(role.reads),
+                "enforce_read": role.enforce.read,
+                "enforce_write": role.enforce.write,
+                "journal_section": role.journal_section,
+                "verify_after": list(role.verify_after),
+                "max_handbacks": role.max_handbacks,
+                "terminal": role.label in last,
+            }
+            for role in (spec.roles or [])
+        ],
+        "carried": [
+            {
+                "path": entry.path,
+                "append": entry.append,
+                "recent_rounds": entry.recent_rounds,
+                "max_chars": entry.max_chars,
+            }
+            for entry in (spec.memory or [])
+        ],
+        "checks": [
+            {
+                "name": check.name,
+                "run": check.run,
+                "timeout_sec": check.timeout_sec,
+                "needs_display": check.needs_display,
+            }
+            for check in (spec.verify or [])
+        ],
+        "max_rounds": stop.max_rounds if stop is not None else DEFAULT_MAX_ROUNDS,
+        "until": stop.until if stop is not None else "",
+        "report": stop.report if stop is not None else "round",
+    }
 
 
 def _row(store: PlaybookStore, name: str, disabled: set[str]) -> dict[str, Any]:
@@ -154,6 +220,11 @@ async def playbooks_get(params: dict) -> dict:
             },
             "nodes": [_node_wire(n) for n in (spec.nodes or [])],
             "prompts": spec.prompts or "",
+            # Only where there is one. A page that reads this key on a dag
+            # playbook is asking about a section the file does not have, and an
+            # empty one would answer "no roles, no checks, stops after 0 rounds"
+            # -- three statements about a stint that does not exist.
+            **({"stint": _stint_wire(spec)} if spec.mode == "stint" else {}),
             # The declarations, not resolved values: a carried server references
             # a credential through `{{ params.X }}` and the run supplies it, so
             # what the file holds is the reference and that is what goes out. A
@@ -553,7 +624,7 @@ async def playbooks_run(
 ) -> dict:
     """Run one playbook, through the same entry the model's tool and the CLI use.
 
-    Answers the executor's own plan verbatim -- ``kind`` and ``reply`` -- rather
+    Answers the executor's own stint verbatim -- ``kind`` and ``reply`` -- rather
     than a shape of this layer's devising. A ``dag`` playbook dispatches and the
     reply is the receipt (the run id is in it, and ``_run_id_of`` states why it
     lives in the text rather than in a field of its own); a ``prompt`` one comes
@@ -623,21 +694,21 @@ async def playbooks_run(
     # ``create_task``, which copies the context it is created in, and a binding
     # that has already been reset by then is one the detached run never sees.
     with workdir.bind(session_workdir), use_binding(loop.binding_for_session(session_key)):
-        plan = await runtime.load(
+        stint = await runtime.load(
             name,
             params.get("params") or {},
             params.get("fills") or {},
             allow_disabled=_CALLER_NAMED_IT,
             confirmed=bool(params.get("confirmed")),
         )
-    if plan is None:
+    if stint is None:
         # ``_known_name`` already proved the directory exists, so a miss here is
         # the runtime's own view disagreeing: a file that will not parse is absent
         # from it. Told apart rather than reported as one, because one is fixed by
         # editing the file and the other by enabling the playbook -- and with
         # ``allow_disabled`` true above, only the first can actually reach here.
         raise ConfigValidationError(f"playbook {name!r} does not load; validate it to see why")
-    return {"name": name, "kind": plan.kind, "reply": plan.reply}
+    return {"name": name, "kind": stint.kind, "reply": stint.reply}
 
 
 def _generation_budget_s() -> float:
@@ -758,6 +829,145 @@ async def playbooks_create(
     }
 
 
+def _stint_stores() -> list[Any]:
+    """Every stint store on this machine, one per conversation.
+
+    A stint is kept beside the conversation that started it, and the page lists
+    the machine's stints rather than one conversation's. Reading a single store
+    showed an empty page while a stint was running, which reads as "nothing has
+    run" and not as "you are looking in the wrong place".
+
+    Still only files: a stint is read far more often than it is run -- what round
+    is it on, what did it undo, what is it waiting for -- and constructing the
+    sub-agent stack to answer would make opening the page cost what a dispatch
+    costs.
+    """
+    from raven.agent.subagent.history import dag_root
+    from raven.config.loader import load_config
+    from raven.session.manager import SessionManager
+    from raven.stint.record import STINTS_DIRNAME, StintStore
+
+    sessions = SessionManager(load_config().workspace_path).sessions_dir
+    roots = [dag_root(path) / STINTS_DIRNAME for path in sorted(sessions.glob("*/*")) if path.is_dir()]
+    return [StintStore(root) for root in roots if root.is_dir()]
+
+
+def _stint_row(record: Any) -> dict[str, Any]:
+    stop = (record.spec.get("stop") or {}) if isinstance(record.spec, dict) else {}
+    return {
+        "stint_id": record.stint_id,
+        "playbook": record.playbook,
+        "round_index": record.round_index,
+        "max_rounds": int(stop.get("maxRounds") or stop.get("max_rounds") or 0),
+        "status": record.status,
+        "live": record.live,
+        "stop_reason": record.stop_reason,
+        "workdir": record.workdir,
+        "branch": record.branch,
+        "started_at_ms": record.started_at_ms,
+        "ended_at_ms": record.ended_at_ms,
+        "open_questions": sum(1 for q in record.questions if not str(q.get("answer") or "").strip()),
+    }
+
+
+def _stint_detail(record: Any) -> dict[str, Any]:
+    return {
+        "stint": _stint_row(record),
+        "rounds": [
+            {
+                "index": entry.index,
+                "run_id": entry.run_id,
+                "attempt": entry.attempt,
+                "status": entry.status,
+                "checks": [f"{row.get('name')}={row.get('status')}" for row in entry.verify],
+                "violations": list(entry.violations),
+            }
+            for entry in record.rounds
+        ],
+        "questions": [
+            {
+                "round": int(question.get("round") or 0),
+                "role": str(question.get("role") or ""),
+                "text": str(question.get("text") or ""),
+                "answer": str(question.get("answer") or ""),
+            }
+            for question in record.questions
+        ],
+    }
+
+
+def _require_stint(params: dict) -> tuple[Any, Any]:
+    """The stint and the store holding it, so a writer writes back where it read."""
+    from raven.rpc.errors import ConfigValidationError
+    from raven.stint.record import mark_adrift
+
+    stint_id = str(params.get("stint_id") or "").strip()
+    if not stint_id:
+        raise ConfigValidationError("stint_id is required")
+    stores = _stint_stores()
+    mark_adrift(stores)
+    for store in stores:
+        record = store.read(stint_id)
+        if record is not None:
+            return store, record
+    raise ConfigValidationError(f"no stint {stint_id} on this machine")
+
+
+async def playbooks_stints_list(params: dict) -> dict:
+    """Every stint, newest first.
+
+    Stints whose holder has gone quiet are marked on the way past, so the page
+    stops showing a corpse as work in progress. Marking only: taking one up
+    again spends money and hours and stays a person's call.
+    """
+    from raven.stint.record import mark_adrift
+
+    stores = _stint_stores()
+    mark_adrift(stores)
+    found = [record for store in stores for record in store.list()]
+    found.sort(key=lambda record: (record.started_at_ms, record.stint_id), reverse=True)
+    return {"stints": [_stint_row(record) for record in found]}
+
+
+async def playbooks_stints_get(params: dict) -> dict:
+    """One stint, whole."""
+    return _stint_detail(_require_stint(params)[1])
+
+
+async def playbooks_stints_stop(params: dict) -> dict:
+    """Open no further rounds.
+
+    The round in flight is somebody else's process and is not interrupted: it
+    finishes and reports, and the hand-over that would have opened the next one
+    reads this and ends the stint instead. Throwing away a round already paid for
+    would be the worse of the two answers.
+    """
+    from raven.stint.record import STOPPED
+
+    store, record = _require_stint(params)
+    if record.live:
+        record.status = STOPPED
+        record.stop_reason = "a person stopped the stint"
+        store.write(record)
+    return _stint_detail(record)
+
+
+async def playbooks_stints_answer(params: dict) -> dict:
+    """Answer a question a round left, for the round after this one to read."""
+    import time
+
+    from raven.rpc.errors import ConfigValidationError
+
+    store, record = _require_stint(params)
+    position = int(params.get("question") or 0)
+    if not 0 <= position < len(record.questions):
+        raise ConfigValidationError(f"{record.stint_id} has no question {position}")
+    record.questions[position]["answer"] = str(params.get("text") or "")
+    record.questions[position]["answered_at"] = int(time.time() * 1000)
+    store.write(record)
+    return _stint_detail(record)
+
+
 def register_playbooks_methods(
     dispatcher: Dispatcher,
     *,
@@ -787,9 +997,14 @@ def register_playbooks_methods(
         return await playbooks_create(p, agent_loop_factory=agent_loop_factory)
 
     dispatcher.register("playbooks.create", _create)
+    dispatcher.register("playbooks.stints.list", playbooks_stints_list)
+    dispatcher.register("playbooks.stints.get", playbooks_stints_get)
+    dispatcher.register("playbooks.stints.stop", playbooks_stints_stop)
+    dispatcher.register("playbooks.stints.answer", playbooks_stints_answer)
 
 
 __all__ = [
+    "playbooks_create",
     "playbooks_credentials_clear",
     "playbooks_credentials_get",
     "playbooks_credentials_set",
@@ -797,7 +1012,10 @@ __all__ = [
     "playbooks_list",
     "playbooks_oauth_authorize",
     "playbooks_oauth_clear",
-    "playbooks_create",
+    "playbooks_stints_answer",
+    "playbooks_stints_get",
+    "playbooks_stints_list",
+    "playbooks_stints_stop",
     "playbooks_run",
     "register_playbooks_methods",
 ]

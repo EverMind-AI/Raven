@@ -15,6 +15,7 @@ from raven.playbook import (
 )
 from raven.playbook.agent_profiles import PlaybookAgentProfile
 from raven.playbook.prompt import emit_tool
+from raven.playbook.types import PlaybookSpec
 
 ROSTER_DESCRIPTIONS = {
     "research-raven": "deep retrieval and fact-checking",
@@ -417,7 +418,30 @@ def test_the_decoded_field_set_tracks_the_contract():
         "mcp_servers",
         "blockingQuestions",
         "assumptions",
+        "roles",
+        "memory",
+        "verify",
+        "stop",
     }
+
+
+def test_the_generator_cannot_write_a_rounds_playbook():
+    """`verify` is shell and a plan runs for hours unattended.
+
+    The emit schema is derived from the spec, so a section added for a person to
+    write by hand becomes a section the model may emit unless it is withheld --
+    and the day that happens, a generated file gets to run commands on somebody
+    else's machine with one approval covering thirty rounds of them. Pinned here
+    rather than trusted to whoever adds the next section.
+    """
+    schema = emit_tool()[0]["function"]["parameters"]
+    offered = set(schema["properties"])
+
+    assert schema["properties"]["mode"]["enum"] == ["dag", "prompt"]
+    assert offered.isdisjoint(set(PlaybookSpec.STINT_SECTIONS)), sorted(offered & set(PlaybookSpec.STINT_SECTIONS))
+    assert set(PlaybookSpec.STINT_SECTIONS) == {"roles", "memory", "verify", "stop", "setup"}, (
+        "a new rounds section must be withheld too, not just added to the spec"
+    )
 
 
 async def test_unknown_skills_degrade_into_notes():

@@ -2094,7 +2094,7 @@ export interface PlaybookRow {
   name: string;
   description: string;
   task_summary: string;
-  mode: 'dag' | 'prompt';
+  mode: 'dag' | 'prompt' | 'stint';
   confirm: boolean;
   origin: string;
   disabled: boolean;
@@ -2139,9 +2139,7 @@ export interface PlaybookNode {
   };
 }
 /**
- * One whole playbook: its identity, its runtime inputs, and either the graph
- * (``mode: dag``) or the assembly guidance a model turns into one
- * (``mode: prompt``). ``path`` is the file this was read from.
+ * One whole playbook: its identity, its runtime inputs, and the shape it runs as -- the graph (``mode: dag``), the assembly guidance a model turns into one (``mode: prompt``), or the roles and stopping rules of a multi-round run (``mode: stint``, under ``rounds``). ``path`` is the file this was read from.
  *
  * ``version`` is the spec format version the file declares, not a revision of
  * the playbook's content.
@@ -2154,7 +2152,7 @@ export interface PlaybookDetail {
   description: string;
   task_summary: string;
   version: number;
-  mode: 'dag' | 'prompt';
+  mode: 'dag' | 'prompt' | 'stint';
   confirm: boolean;
   origin: string;
   disabled: boolean;
@@ -2168,6 +2166,7 @@ export interface PlaybookDetail {
   mcp_servers?: {
     [k: string]: PlaybookMcpServer;
   };
+  stint?: PlaybookStint;
 }
 /**
  * One MCP server the playbook itself carries, as the file declares it. Carries every field the runtime reads to decide what the server is and whether it runs. `env` and `headers` are declarations rather than resolved values: a carried server references a credential through `{{ params.X }}` and the run supplies it, so nothing here is ever a secret's value, and `has_oauth_config` says only whether the file declares OAuth endpoints, never what they are.
@@ -2190,6 +2189,65 @@ export interface PlaybookMcpServer {
   enabled?: boolean;
   auth?: 'none' | 'apikey' | 'oauth';
   has_oauth_config?: boolean;
+}
+/**
+ * What `mode: stint` adds to a playbook, and what a person approving one has to be able to read: who runs, what each may write, which commands run, and when it stops. Absent on every other mode.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybookStint".
+ */
+export interface PlaybookStint {
+  roles: PlaybookRole[];
+  carried: PlaybookCarried[];
+  checks: PlaybookCheck[];
+  max_rounds: number;
+  until: string;
+  report: 'round' | 'end';
+}
+/**
+ * One role of a `mode: stint` playbook: who plays it, what it waits on, and the paths it is judged against. `terminal` marks a role nothing else waits on -- the only kind whose output the plan reads when deciding whether to open another round, and so the only kind that can end one early.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybookRole".
+ */
+export interface PlaybookRole {
+  label: string;
+  agent: string;
+  node_summary: string;
+  depends_on: string[];
+  owns: string[];
+  appends: string[];
+  reads: string[];
+  enforce_read: 'soft' | 'hard';
+  enforce_write: 'soft' | 'hard';
+  journal_section: string;
+  verify_after: string[];
+  max_handbacks: number;
+  terminal: boolean;
+}
+/**
+ * A file rounds hand to each other. `append` marks the journal: the one that may only grow, and the one a window of `recent_rounds` is read back from.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybookCarried".
+ */
+export interface PlaybookCarried {
+  path: string;
+  append: boolean;
+  recent_rounds: number;
+  max_chars: number;
+}
+/**
+ * One objective check a round may run. `run` is a real shell command, which is why a playbook that declares any must be approved before it starts.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybookCheck".
+ */
+export interface PlaybookCheck {
+  name: string;
+  run: string;
+  timeout_sec: number;
+  needs_display: boolean;
 }
 /**
  * One `secret` param of a playbook and whether this machine holds a value for it. Never the value.
@@ -2396,6 +2454,72 @@ export interface TaskRow {
   handle?: string | null;
   counts: TaskCounts;
   nodes: TaskNode[];
+}
+/**
+ * One round of a plan, as the list needs it.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "StintRoundRow".
+ */
+export interface StintRoundRow {
+  index: number;
+  run_id: string;
+  attempt: number;
+  status: string;
+  checks: string[];
+  violations: string[];
+}
+/**
+ * Something a round asked a person, and what came back.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "StintQuestionRow".
+ */
+export interface StintQuestionRow {
+  round: number;
+  role: string;
+  text: string;
+  answer: string;
+}
+/**
+ * One multi-round run a rounds playbook started.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "StintRow".
+ */
+export interface StintRow {
+  stint_id: string;
+  playbook: string;
+  round_index: number;
+  max_rounds: number;
+  status: string;
+  live: boolean;
+  stop_reason: string;
+  workdir: string;
+  branch: string;
+  started_at_ms: number;
+  ended_at_ms: number;
+  open_questions: number;
+}
+/**
+ * One plan, whole: every round it ran and everything it is waiting on.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "StintDetail".
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsGetResult".
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsStopResult".
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsAnswerResult".
+ */
+export interface StintDetail {
+  stint: StintRow;
+  rounds: StintRoundRow[];
+  questions: StintQuestionRow[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -6379,6 +6503,60 @@ export interface ImportStopParams {}
 export interface ImportStopResult {
   stopped: boolean;
 }
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MemoryDeleteParams".
+ */
+export interface MemoryDeleteParams {
+  kind: 'episode' | 'profile' | 'agent_case' | 'agent_skill';
+  id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MemoryDeleteResult".
+ */
+export interface MemoryDeleteResult {
+  ok: boolean;
+  /**
+   * Deleting an episode also drops its derived facts and foresight.
+   */
+  removed: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsListParams".
+ */
+export interface PlaybooksStintsListParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsListResult".
+ */
+export interface PlaybooksStintsListResult {
+  stints: StintRow[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsGetParams".
+ */
+export interface PlaybooksStintsGetParams {
+  stint_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsStopParams".
+ */
+export interface PlaybooksStintsStopParams {
+  stint_id: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksStintsAnswerParams".
+ */
+export interface PlaybooksStintsAnswerParams {
+  stint_id: string;
+  question: number;
+  text: string;
+}
 
 // ---- Schema-name aliases for structurally-deduplicated types ----
 export type BrowserManageResult = StubResult;
@@ -6388,6 +6566,9 @@ export type ImageAttachResult = StubResult;
 export type PlaybooksCredentialsClearResult = OkResult;
 export type PlaybooksCredentialsSetResult = OkResult;
 export type PlaybooksOauthClearResult = OkResult;
+export type PlaybooksStintsAnswerResult = StintDetail;
+export type PlaybooksStintsGetResult = StintDetail;
+export type PlaybooksStintsStopResult = StintDetail;
 export type ProcessStopResult = StubResult;
 export type PromptBackgroundResult = StubResult;
 export type PromptSubmitResult = StubResult;
