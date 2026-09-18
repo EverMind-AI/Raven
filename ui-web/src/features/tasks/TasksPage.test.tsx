@@ -180,6 +180,33 @@ describe('a task pane', () => {
     expect(document.querySelectorAll('.tkkv dd')[0]?.textContent).toBe('n1')
   })
 
+  /* Two open tasks are two panes, and what one describes is its own. A single
+     selected-node field moved both: with ids that differ the other pane's card
+     vanished, and with ids two tasks share -- which is what these two have --
+     it opened a card nobody asked it for. */
+  it('keeps each open pane on the step its own reader picked', async () => {
+    const other = task({ id: 'b', name: 'Draft the note', nodes: withNodes.nodes })
+    render(<><TaskPane task={withNodes} /><TaskPane task={other} /></>)
+    const panes = (): Element[] => [...document.querySelectorAll('.tkview')]
+
+    await act(async () => {
+      fireEvent.click(panes()[1]!.querySelectorAll('.daggraph .nd')[0] as Element)
+    })
+
+    expect(panes()[1]!.querySelector('.tkch h4')?.textContent).toBe('Read the spot price')
+    expect(panes()[0]!.querySelector('.tkcard')).toBeNull()
+    expect(panes()[0]!.querySelector('.gstage')).not.toBeNull()
+
+    /* And the other way: the first pane picks a different step, and neither
+       pane is moved off what it was showing. */
+    await act(async () => {
+      fireEvent.click(panes()[0]!.querySelectorAll('.daggraph .nd')[1] as Element)
+    })
+
+    expect(panes()[0]!.querySelector('.tkch h4')?.textContent).toBe('Reconcile')
+    expect(panes()[1]!.querySelector('.tkch h4')?.textContent).toBe('Read the spot price')
+  })
+
   it('gives the board back when the card is closed', async () => {
     render(<TaskPane task={withNodes} />)
     await pick(0)
@@ -596,6 +623,24 @@ describe('the running strip', () => {
        other one, and a chip is too narrow for both. */
     expect(chips.map((c) => c.querySelector('.st')?.textContent))
       .toEqual(['gui.tasks.step {"i":3,"n":5}', 'gui.tasks.step {"i":4,"n":7}'])
+  })
+
+  /* The strip is the dock's, and the dock is not remounted when the reader
+     opens another conversation -- so nothing takes it down and its own effect
+     has already stopped asking. Left as it was it would show the conversation
+     they left, and never request the one they opened. The switch clears the
+     panel through state/ws.ts's reset (registered in src/app/install.ts). */
+  it("drops one conversation's runs and asks for the next one's", async () => {
+    rows = [task({ id: 'a', name: 'Cross-check quotes', state: 'run' })]
+    await draw()
+    expect([...document.querySelectorAll('.trun .nm')].map((c) => c.textContent))
+      .toEqual(['Cross-check quotes'])
+
+    rows = [task({ id: 'b', name: 'Draft the note', state: 'run' })]
+    await act(async () => { store.reset() })
+
+    expect([...document.querySelectorAll('.trun .nm')].map((c) => c.textContent))
+      .toEqual(['Draft the note'])
   })
 
   /* An empty strip is a gap above the box the reader types in. Saying "no

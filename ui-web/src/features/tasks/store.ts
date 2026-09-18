@@ -17,8 +17,12 @@ export interface TasksState {
      the docked one, so this single field is also which of the two the panel
      is showing. */
   open: string | null
-  /* Which node of the open task the detail panel is describing. */
-  node: string | null
+  /* Which node each task's pane is describing, keyed by task id.
+     Per pane, not one field: the desk opens a pane per task (`task:<id>`), so a
+     single selected node would move every open pane when the reader picked in
+     one of them -- with node ids that differ the other pane's card vanished,
+     and with ids two tasks share it opened a card nobody asked it for. */
+  nodes: Record<string, string>
   /* Pointed at from either side: the composer chips and the list light each
      other up, and neither owns the pointer. */
   hover: string | null
@@ -34,7 +38,7 @@ export interface TasksState {
 }
 
 const initial: TasksState = {
-  rows: [], open: null, node: null, hover: null, tab: 'flow', tabPinned: false, loaded: false,
+  rows: [], open: null, nodes: {}, hover: null, tab: 'flow', tabPinned: false, loaded: false,
 }
 
 const store = makeStore<TasksState>(initial)
@@ -80,16 +84,23 @@ export const byId = (id: string | null): TaskRow | null =>
 
 export const opened = (): TaskRow | null => byId(store.get().open)
 
-export function open(id: string | null): void {
-  const task = byId(id)
-  /* The first node is selected with the task, so the detail panel never opens
-     onto an empty right half. */
-  patch({ open: id, node: task && task.nodes.length ? (task.nodes[0] as { id: string }).id : null })
+/* Which row the list has expanded. The selection inside a task is the pane's
+   own and is not touched here: a pane opens on the steps, and the node it
+   describes is whichever one the reader picked in that pane. */
+export const open = (id: string | null): void => patch({ open: id })
+
+export const close = (): void => patch({ open: null })
+
+/** Which node that task's pane is describing, once the reader has picked one. */
+export const nodeOf = (task: string): string | null => store.get().nodes[task] ?? null
+
+/** Picks in one pane, leaving what every other pane is describing where it is. */
+export function pickNode(task: string, id: string | null): void {
+  const nodes = { ...store.get().nodes }
+  if (id) nodes[task] = id
+  else delete nodes[task]
+  patch({ nodes })
 }
-
-export const close = (): void => patch({ open: null, node: null })
-
-export const pickNode = (id: string | null): void => patch({ node: id })
 
 /* Only the reader pins a tab. The card reads `tabPinned` to know whether its
    own per-node default still applies. */

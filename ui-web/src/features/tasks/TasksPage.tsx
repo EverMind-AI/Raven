@@ -327,7 +327,7 @@ function Fork({ task }: { task: TaskRow }): JSX.Element {
       fitKey={task.id}
       label={t('gui.tasks.canvas')}
       owns=".nd"
-      arrowsTaken={!!s.node}
+      arrowsTaken={!!s.nodes[task.id]}
     >
       <DagGraph
         dims={COLUMN}
@@ -335,8 +335,8 @@ function Fork({ task }: { task: TaskRow }): JSX.Element {
         now={Date.now()}
         surface="sheet"
         flow="down"
-        selectedId={s.node}
-        onPick={(n) => store.pickNode(n.id)}
+        selectedId={s.nodes[task.id] ?? null}
+        onPick={(n) => store.pickNode(task.id, n.id)}
       />
     </Board>
   )
@@ -405,8 +405,11 @@ export function TaskPane({ task, full = false }: { task: TaskRow; full?: boolean
   const s = useSyncExternalStore(store.subscribe, store.get)
   /* Per pane, not per store: two open tasks are two panes, and a single
      selected-node field would move both when the reader picked in one. Nothing
-     is selected until the reader picks, so the pane opens on the steps. */
-  const picked = s.node && task.nodes.some((n) => n.id === s.node) ? s.node : null
+     is selected until the reader picks, so the pane opens on the steps.
+     Checked against this task's own steps as well, because a refresh can land
+     a task whose nodes no longer carry the id the reader picked. */
+  const mine = s.nodes[task.id] ?? null
+  const picked = mine && task.nodes.some((n) => n.id === mine) ? mine : null
   const node = task.nodes.find((n) => n.id === picked) || null
   return (
     <div className={'tkview' + (full ? ' full' : '')}>
@@ -430,12 +433,12 @@ export function TaskPane({ task, full = false }: { task: TaskRow; full?: boolean
           <div className="tkwork">
             <Fork task={task} />
             {node
-              ? <NodeCard node={node} onClose={() => store.pickNode(null)} />
+              ? <NodeCard node={node} onClose={() => store.pickNode(task.id, null)} />
               : <div className="tkpick">{t('gui.tasks.pick_node')}</div>}
           </div>
         )
         : node
-          ? <NodeCard node={node} onClose={() => store.pickNode(null)} />
+          ? <NodeCard node={node} onClose={() => store.pickNode(task.id, null)} />
           : <Fork task={task} />}
     </div>
   )
