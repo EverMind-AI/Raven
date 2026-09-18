@@ -1827,6 +1827,99 @@ class TestTheHttpAdapterSkipsAnEmptyAdd:
         await adapter.memorize("s", [], is_final=True)
         assert posted == ["http://x/api/v2/memory/flush"], posted
 
+    async def test_read_only_refuses_the_write_and_leaves_recall_alone(self, tmp_path: Path) -> None:
+        """A pool an arm is scored against must not grow while it is being measured.
+
+        There is no per-run delete, and a later run cannot tell a row this run
+        ingested from one its predecessor left behind -- so the first arm's
+        writes would sit in every arm after it. The refusal is at the wire, not
+        at the enqueue, so the write pipeline keeps behaving as in production.
+        """
+        writing = _FakeAdapter()
+        assert await _backend(tmp_path, adapter=writing).store("s", [{"role": "user", "content": "hi"}]) is True
+        assert writing.memorize_calls != []
+
+        frozen_adapter = _FakeAdapter()
+        frozen = _backend(tmp_path, adapter=frozen_adapter, read_only=True)
+        assert await frozen.store("s", [{"role": "user", "content": "hi"}]) is False
+        assert frozen_adapter.memorize_calls == [], "read_only must not reach the wire"
+        await frozen.recall("hi", agent_id="default", top_k=5)
+        assert frozen_adapter.search_calls != [], "recall is untouched"
+
+    async def test_every_route_carries_the_pool_the_config_named(self) -> None:
+        """Search was the one route that dropped the namespace, so it read an empty pool.
+
+        EverOS files rows under ``<app_id>/<project_id>`` and a search never crosses
+        that line. Sending the pair on add but not on search writes where the config
+        said and reads where it did not: recall comes back empty, no error is raised,
+        and an arm scored against a frozen pool silently runs with no memory.
+        """
+        bodies: dict[str, dict] = {}
+
+        class _Resp:
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self):
+                return {"data": {}}
+
+        class _Client:
+            async def post(self, url, **kw):
+                bodies[url.rsplit("/", 1)[-1]] = kw.get("json") or {}
+                return _Resp()
+
+        adapter = _HttpEverosAdapter(base_url="http://x", api_key=None, app_id="raven", project_id="scb-lite-pool")
+        adapter._client = _Client()
+        adapter._caps = {}  # skip the /health round trip _search_tuning would make
+        await adapter.search(user_id=None, agent_id="default", query="q", top_k=5)
+        await adapter.memorize("s", [{"role": "user", "content": "hi"}], is_final=True)
+
+        for route in ("search", "add", "flush"):
+            assert bodies[route]["app_id"] == "raven", route
+            assert bodies[route]["project_id"] == "scb-lite-pool", route
+
+    async def test_a_caller_naming_its_own_pool_wins_over_the_config(self) -> None:
+        """The host writes on behalf of a sub-agent whose content belongs elsewhere."""
+        seen: dict = {}
+
+        class _Resp:
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self):
+                return {}
+
+        class _Client:
+            async def post(self, url, **kw):
+                seen.update(kw.get("json") or {})
+                return _Resp()
+
+        adapter = _HttpEverosAdapter(base_url="http://x", api_key=None, app_id="raven", project_id="scb-lite-pool")
+        adapter._client = _Client()
+        await adapter.memorize("s", [{"role": "user", "content": "hi"}], project_id="other-pool")
+        assert seen["app_id"] == "raven" and seen["project_id"] == "other-pool"
+
+    async def test_an_unnamed_pool_sends_nothing_and_lets_the_server_decide(self) -> None:
+        """The bundled local server is single-tenant; naming a pool there is noise."""
+        seen: dict = {}
+
+        class _Resp:
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self):
+                return {}
+
+        class _Client:
+            async def post(self, url, **kw):
+                seen.update(kw.get("json") or {})
+                return _Resp()
+
+        adapter = _HttpEverosAdapter(base_url="http://x", api_key=None)
+        adapter._client = _Client()
+        await adapter.memorize("s", [{"role": "user", "content": "hi"}])
+        assert "app_id" not in seen and "project_id" not in seen
+
     async def test_an_empty_non_final_memorize_posts_nothing(self) -> None:
         posted: list[str] = []
 

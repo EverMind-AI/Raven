@@ -249,11 +249,19 @@ class _HttpEverosAdapter:
         base_url: str,
         *,
         api_key: str | None = None,
+        app_id: str | None = None,
+        project_id: str | None = None,
         timeout_s: float = _DEFAULT_HTTP_TIMEOUT_S,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
+        # EverOS stores under ``<app_id>/<project_id>/{users,agents}/...`` and a
+        # search never crosses that boundary. Unset means the server's own
+        # default namespace, which is what a single-tenant local server wants;
+        # a shared server needs both named or reads land in the wrong pool.
+        self._app_id = app_id
+        self._project_id = project_id
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(timeout_s),
@@ -269,6 +277,24 @@ class _HttpEverosAdapter:
         if self._api_key:
             return {"Authorization": f"Bearer {self._api_key}"}
         return {}
+
+    def _scope(self, app_id: str | None = None, project_id: str | None = None) -> dict[str, str]:
+        """The ``app_id`` / ``project_id`` pair to send, caller's overriding ours.
+
+        Every route that touches stored rows takes the same pair. Sending it on
+        add but not on search is the failure that hides best: the write lands in
+        the named pool, the read looks in the default one and comes back empty,
+        and an arm scored against a frozen pool silently degrades to no memory
+        at all with nothing in the logs to say so.
+        """
+        out: dict[str, str] = {}
+        resolved_app = app_id if app_id is not None else self._app_id
+        resolved_project = project_id if project_id is not None else self._project_id
+        if resolved_app is not None:
+            out["app_id"] = str(resolved_app)
+        if resolved_project is not None:
+            out["project_id"] = str(resolved_project)
+        return out
 
     async def _capabilities(self) -> dict[str, bool]:
         """What the server built, from ``/health``, cached for this adapter.
@@ -350,6 +376,7 @@ class _HttpEverosAdapter:
             body["include_profile"] = True
         if agent_id is not None:
             body["agent_id"] = agent_id
+        body.update(self._scope())
         body.update(await self._search_tuning(agent_id=agent_id))
         url = f"{self._base_url}/api/v2/memory/search"
         r = await self._client.post(url, json=body, headers=self._headers())
@@ -374,10 +401,7 @@ class _HttpEverosAdapter:
                 "session_id": session_id,
                 "messages": payload_messages,
             }
-            if app_id is not None:
-                body["app_id"] = app_id
-            if project_id is not None:
-                body["project_id"] = project_id
+            body.update(self._scope(app_id, project_id))
             url = f"{self._base_url}/api/v2/memory/add"
             r = await self._client.post(url, json=body, headers=self._headers(), timeout=_MEMORIZE_TIMEOUT_S)
             r.raise_for_status()
@@ -388,10 +412,7 @@ class _HttpEverosAdapter:
         # and raising there would skip the flush that was the whole point.
         if is_final:
             flush_body: dict[str, Any] = {"session_id": session_id}
-            if app_id is not None:
-                flush_body["app_id"] = app_id
-            if project_id is not None:
-                flush_body["project_id"] = project_id
+            flush_body.update(self._scope(app_id, project_id))
             flush_url = f"{self._base_url}/api/v2/memory/flush"
             fr = await self._client.post(
                 flush_url,
@@ -569,8 +590,13 @@ class EverosBackend:
     def _make_http_adapter(self) -> _Adapter:
         """Construct an :class:`_HttpEverosAdapter` from plugin config.
 
-        Pulls ``base_url`` / ``api_key`` / ``timeout_s`` out of
-        ``ctx.config`` with documented defaults.
+        Pulls ``base_url`` / ``api_key`` / ``app_id`` / ``project_id`` /
+        ``timeout_s`` out of ``ctx.config`` with documented defaults.
+
+        ``app_id`` / ``project_id`` name the EverOS namespace this run reads and
+        writes. Omitted, they are not sent at all and the server picks its own
+        default -- correct for the bundled local server, wrong for a shared one,
+        where a pool that was ingested under a name is only reachable by it.
         """
         base_url = self._config.get("base_url") or DEFAULT_EVEROS_BASE_URL
         api_key = self._config.get("api_key")
@@ -580,6 +606,8 @@ class EverosBackend:
         return _HttpEverosAdapter(
             base_url,
             api_key=api_key,
+            app_id=self._config.get("app_id"),
+            project_id=self._config.get("project_id"),
             timeout_s=timeout_s,
         )
 
