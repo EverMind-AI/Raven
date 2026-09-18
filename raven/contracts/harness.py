@@ -9,9 +9,19 @@ not the loop itself. Memory assembles the window the model sees and decides how
 a transcript is made to fit again mid-turn, Planning may prepare turn guidance,
 Capability picks the tool definitions one iteration exposes, and Action produces
 one usable model response and judges a call against the dispatch's Charter.
-Everything else the turn does -- iteration accounting, hook phases, tool
-execution and approval, persistence and event order -- stays with the L2 shell,
-which is what makes these four replaceable at all.
+Each also answers for the conducts seated on it: Memory their intake, Planning
+their advice, Action their review and salvage.
+
+``Sequence[AgentConduct]`` on those four, and not one conduct, because a seat
+speaks for more than a plugin: a dispatch's own judgements and anything
+generated for it join the same list once they are materialised. Today a seat
+holds the one conduct its plugin wrote, so a process running two plugins asks
+the role twice, once per seat -- composing *across* plugins stays where it has
+always been, in the hook composite, and the role composes the participants of
+the seat that asked. Everything else the turn does --
+iteration accounting, hook phases, tool execution and approval, persistence and
+event order -- stays with the L2 shell, which is what makes these four
+replaceable at all.
 
 The in-loop recoveries are split along that line rather than sitting on one
 side of it. Memory answers *what to give up* (see ``shrink``); the shell owns
@@ -36,6 +46,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from raven.contracts.agent_conduct import AgentConduct, Intake, StepView, Verdict
     from raven.contracts.assembled import AssembledContext, TokenBudget
     from raven.contracts.context import TurnContext
     from raven.contracts.llm_provider import LLMProvider, LLMResponse
@@ -176,6 +187,13 @@ class MemoryModule(Protocol):
         """Post-turn hook: the engine updates its manifest or archives here."""
         ...
 
+    async def intake(self, text: str, step: "StepView", conducts: "Sequence[AgentConduct]") -> "Intake | None":
+        """What the turn's inbound text becomes before anything is assembled:
+        each conduct's ``intake`` in order, threaded, until one ends the turn.
+        Memory's because it decides what the model is shown; the seat that asks
+        hands over the conducts it speaks for and renders the answer."""
+        ...
+
 
 @dataclass(frozen=True)
 class PlanningRequest:
@@ -205,6 +223,12 @@ class PlanningModule(Protocol):
     """Optional turn guidance, ahead of the iterations."""
 
     async def prepare(self, request: PlanningRequest) -> PlanningResult: ...
+
+    async def advise(self, step: "StepView", conducts: "Sequence[AgentConduct]") -> str | None:
+        """The note for the next model call, composed from what each conduct
+        advises -- before the call and after it. Planning's because it is the
+        one per-iteration steer a harness may give the model."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -262,8 +286,8 @@ class ActionRequest:
 class ActionModule(Protocol):
     """What the agent does next: decide it, and judge it before it runs.
 
-    Two methods because there are two moments and two callers. ``decide`` is
-    asked by the loop and answers with a response. ``judge`` is asked by
+    Four methods because there are four moments. ``decide`` is asked by the
+    loop and answers with a response. ``judge`` is asked by
     ``ToolRegistry.execute`` once per call the response proposed, the way the
     permission gate beside it is asked -- so the module supplies the judgement
     and the shell still decides what to do with it. A role that answers ``[]``
@@ -287,6 +311,17 @@ class ActionModule(Protocol):
         gate, where anything that blocked on the network would cost the turn
         rather than the call.
         """
+        ...
+
+    async def review(self, step: "StepView", conducts: "Sequence[AgentConduct]") -> "Verdict":
+        """Whether one step of the turn stands, composed from each conduct's
+        ``review``: the first that ends or resamples it decides. ``judge`` is
+        the same question asked of one tool call before it runs; this is asked
+        of the model's whole step, before its tools run and after."""
+        ...
+
+    async def salvage(self, step: "StepView", conducts: "Sequence[AgentConduct]") -> Any | None:
+        """A reply for a turn that ended without one, the first a conduct offers."""
         ...
 
 

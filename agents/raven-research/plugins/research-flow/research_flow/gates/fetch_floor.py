@@ -23,7 +23,8 @@ from __future__ import annotations
 
 import logging
 
-from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.loop_hooks import HookDecision
+from research_flow.gates.base import Gate, GateCtx
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ _NOTE_NEVER_FETCHED = "[note: {searches} searches and no page opened yet - " + _
 _NOTE_SINCE_FETCH = "[note: {searches} searches since the last page was opened - " + _NOTE_TAIL
 
 
-class FetchFloorObserver(AgentHook):
+class FetchFloorObserver(Gate):
     """Nudge a search-only turn to start opening sources."""
 
     def __init__(self, min_searches: int = 5, max_notes: int = 2) -> None:
@@ -52,7 +53,7 @@ class FetchFloorObserver(AgentHook):
     def name(self) -> str:
         return "FetchFloorObserver"
 
-    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def after_iteration(self, ctx: GateCtx) -> HookDecision:
         if not getattr(ctx.response, "has_tool_calls", False):
             return HookDecision()
         messages = ctx.messages or []

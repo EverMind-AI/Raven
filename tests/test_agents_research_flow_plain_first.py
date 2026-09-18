@@ -450,11 +450,15 @@ def test_the_turn_frame_hands_a_plain_verdict_to_the_plain_first_gate(tmp_path):
         d = await hook.before_iteration(ctx)
         return d, meta, is_plain_turn()
 
-    d, meta, plain = asyncio.run(turn())
-    assert plain is True and meta["dr_turn_mode"].source == PLAIN_TURN_SOURCE and meta["dr_turn_mode"].research is True
+    d, _meta, plain = asyncio.run(turn())
+    # The verdict is the conduct's own turn fact now, not a key on the loop's dict.
+    facts = hook.conduct._facts
+    assert (
+        plain is True and facts["dr_turn_mode"].source == PLAIN_TURN_SOURCE and facts["dr_turn_mode"].research is True
+    )
     names = [t["function"]["name"] for t in d.modified_tools]
     assert "web_search" not in names and REQUEST_RESEARCH_TOOL in names
-    assert meta["plain_first"]["entry"] == "plain_turn"
+    assert facts["plain_first"]["entry"] == "plain_turn"
 
 
 def test_without_plain_first_the_frame_builds_the_two_way_gate(tmp_path):

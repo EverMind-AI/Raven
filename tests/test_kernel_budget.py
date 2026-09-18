@@ -138,6 +138,31 @@ summary both read it, and neither package may import the other.
 
 Measured at 3,170, thirty over the count rather than one, for the reason the
 first bump gave.
+
+3,200 -> 3,410 (2026-09-18), and this is that review. The change is a whole
+paper: contracts/agent_conduct.py, 191 lines, the nine verbs a sub-agent
+implements instead of the six hook phases (``AgentConduct``, its ``StepView``
+of fourteen read-only fields, the ``Intake`` and ``Verdict`` it answers with,
+the per-turn ``ConductFactory``, and a diagnostic trail so a gate's one-line
+findings still reach the loop's notes). It sits beside ``loop_hooks`` rather
+than replacing it: the phases remain the loop's timing contract, this is the
+judgement contract, and an adapter seats one in the other. Surveyed before it
+was written -- 42 real hook implementations across five plugins read fourteen
+context fields and used six decision fields, and every one of them fits one of
+the verbs -- so the paper is sized to what exists, not to what might.
+Factory-loop tier, so the contract-tier digest and ``CONTRACTS_VERSION`` do
+not move with it.
+
+Measured at 3,379, thirty-one over the count, for the reason given above.
+
+3,410 -> 3,440 (2026-09-18), when the conducts were seated on the roles:
+``MemoryModule.intake``, ``PlanningModule.advise`` and ``ActionModule.review``
+/ ``salvage`` -- the four verbs a conduct answers that belong to a role rather
+than to the seat, each taking this turn's conducts so a replaced role decides
+what a plugin's judgement does. 28 lines of protocol and prose; the
+composition rules themselves live in the harness, not here.
+
+Measured at 3,406, thirty-four over the count, for the reason given above.
 """
 
 from __future__ import annotations
@@ -148,7 +173,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 3_200
+CONTRACTS_LINE_CEILING = 3_440
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 
