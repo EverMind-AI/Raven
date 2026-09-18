@@ -733,17 +733,16 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   transition: padding-right .24s ease; }
 .main[data-shift="true"] { padding-right: 340px; }
 
-/* No rule under the header: the same short fade the composer uses, so the
-   header and the transcript read as one sheet rather than two stacked panes.
-   z-index puts the fade above the transcript -- code blocks inside the scroller
-   are positioned too, and would otherwise paint over it on the way up. */
+/* Nothing under the header -- no rule, and no fade either. It used to hang a
+   24px ramp from --ink over the top of the scroller so the two read as one
+   sheet; on the wash that ramp is a flat white band across a gradient, which is
+   the seam it was put there to hide. The ground is continuous now, so the
+   header needs nothing to blend into it.
+   `position: relative; z-index: 2` stays: the header's own popovers anchor
+   against it, and code blocks in the scroller are positioned too. */
 .top {
   display: flex; align-items: center; gap: 10px; padding: 0 16px 0 20px;
   height: 52px; flex: none; position: relative; z-index: 2;
-}
-.top::after {
-  content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 24px;
-  background: linear-gradient(to bottom, var(--ink), transparent); pointer-events: none;
 }
 .top h1 {
   font-size: 15px; font-weight: 500; margin: 0; min-width: 0; max-width: 52%;
