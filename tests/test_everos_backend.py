@@ -895,7 +895,7 @@ class TestAgentSearchConversion:
         assert hits[0].metadata["confidence"] == pytest.approx(0.85)
         assert hits[0].metadata["type"] == "skill"
 
-    async def test_cases_include_key_insight(self, tmp_path: Path) -> None:
+    async def test_cases_carry_intent_approach_and_insight(self, tmp_path: Path) -> None:
         adapter = _FakeAdapter(
             search_response=_agent_search_data(
                 cases=[
@@ -912,9 +912,29 @@ class TestAgentSearchConversion:
         )
         b = _backend(tmp_path, adapter=adapter)
         hits = await b.recall("git", agent_id="agent:default", top_k=5)
-        assert "resolve git conflict" in hits[0].text
-        assert "use rerere" in hits[0].text
+        assert hits[0].text == "resolve git conflict\n\nstep-by-step\n\nuse rerere"
         assert hits[0].metadata["type"] == "case"
+
+    async def test_case_missing_fields_leave_no_blank_paragraph(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """An everos that answers without ``approach`` still reads as prose."""
+        adapter = _FakeAdapter(
+            search_response=_agent_search_data(
+                cases=[
+                    SimpleNamespace(
+                        id="c1",
+                        task_intent="resolve git conflict",
+                        key_insight="use rerere",
+                        score=0.8,
+                    ),
+                ],
+            )
+        )
+        b = _backend(tmp_path, adapter=adapter)
+        hits = await b.recall("git", agent_id="agent:default", top_k=5)
+        assert hits[0].text == "resolve git conflict\n\nuse rerere"
 
 
 # ---------------------------------------------------------------------------
