@@ -575,6 +575,9 @@ async def test_search_projects_the_hit_to_score_document_and_text() -> None:
     assert out["hits"] == [
         {
             "score": 0.87,
+            # What that number is. Always stated, so a surface never has to
+            # guess what an absent field meant.
+            "retrieval": "vector",
             "document_id": "d1",
             "text": "the answer",
             # Where in its document the chunk sat, which is the first thing
@@ -1173,6 +1176,59 @@ async def test_a_search_with_no_top_k_leaves_the_number_to_the_engine() -> None:
     await kb.knowledge_search({"base_ids": ["b1"], "query": "what", "top_k": 3})
 
     assert asked == [None, 3]
+
+
+async def test_a_keyword_answer_says_so_on_every_hit_and_once_on_the_answer() -> None:
+    """An unreachable embedding endpoint turns a search into an ordinary
+    looking result set scored on another scale. Forwarded as a bare number
+    under a field documented as a similarity, that is a silent change of
+    retrieval mode -- so the mode travels with it."""
+    from raven.knowledge import SearchOutcome
+    from raven.knowledge._types import Chunk, TextBlock, VectorSearchResult
+
+    hit = VectorSearchResult(
+        score=8.42,
+        document_id="d1",
+        chunk=Chunk(content=TextBlock(text="alpha"), source="a.md", chunk_index=0, total_chunks=1),
+        retrieval="keyword",
+    )
+    manager = _FakeManager([], {})
+
+    async def _search(base_ids, query, top_k=None):
+        return SearchOutcome(hits=[hit], by_keyword={"b1": "the model could not be reached"})
+
+    manager.search = _search  # type: ignore[assignment]
+    kb._set_manager_for_tests(manager)
+
+    out = await kb.knowledge_search({"base_ids": ["b1"], "query": "alpha"})
+
+    assert out["hits"][0]["retrieval"] == "keyword"
+    assert out["by_keyword"] == [{"base_id": "b1", "reason": "the model could not be reached"}]
+
+
+async def test_an_ordinary_search_says_vector_and_nothing_else() -> None:
+    """The field is always present, so a surface never has to guess what an
+    absent one meant."""
+    from raven.knowledge import SearchOutcome
+    from raven.knowledge._types import Chunk, TextBlock, VectorSearchResult
+
+    hit = VectorSearchResult(
+        score=0.83,
+        document_id="d1",
+        chunk=Chunk(content=TextBlock(text="alpha"), source="a.md", chunk_index=0, total_chunks=1),
+    )
+    manager = _FakeManager([], {})
+
+    async def _search(base_ids, query, top_k=None):
+        return SearchOutcome(hits=[hit])
+
+    manager.search = _search  # type: ignore[assignment]
+    kb._set_manager_for_tests(manager)
+
+    out = await kb.knowledge_search({"base_ids": ["b1"], "query": "alpha"})
+
+    assert out["hits"][0]["retrieval"] == "vector"
+    assert out["by_keyword"] == []
 
 
 async def test_chunks_answer_carries_what_the_parser_found(monkeypatch) -> None:

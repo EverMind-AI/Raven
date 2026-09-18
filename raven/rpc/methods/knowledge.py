@@ -727,8 +727,14 @@ async def knowledge_documents_delete(params: dict[str, Any]) -> dict[str, Any]:
 async def knowledge_search(params: dict[str, Any]) -> dict[str, Any]:
     """Nearest chunks across the named bases.
 
-    ``score`` is a similarity, so higher is nearer -- the direction every caller
-    already reads.
+    ``score`` runs one direction whatever found the hit -- higher is nearer --
+    but what it *is* differs, so every hit says. A base whose embedding model
+    cannot be reached is searched by keyword instead of not at all, and its
+    hits are BM25 scores on the index's own scale: unbounded, and not
+    comparable by value with the cosine similarities beside them. Without
+    ``retrieval`` on the hit and ``by_keyword`` on the answer, an endpoint
+    going down turned into a normal-looking result set, differently scaled,
+    with nothing anywhere saying retrieval had changed mode.
     """
     raw_ids = params.get("base_ids")
     base_ids = [str(b) for b in raw_ids if str(b).strip()] if isinstance(raw_ids, list) else []
@@ -750,6 +756,9 @@ async def knowledge_search(params: dict[str, Any]) -> dict[str, Any]:
         "hits": [
             {
                 "score": float(hit.score),
+                # What that number is: a cosine similarity, or a BM25 score
+                # from the keyword fallback.
+                "retrieval": str(getattr(hit, "retrieval", "vector") or "vector"),
                 "document_id": hit.document_id,
                 "text": getattr(hit.chunk, "text", "") or "",
                 # Which piece of its document this was, and of how many. A
@@ -766,6 +775,12 @@ async def knowledge_search(params: dict[str, Any]) -> dict[str, Any]:
             }
             for hit in found.hits
         ],
+        # Which bases answered by words, and why their vectors could not be
+        # reached. Not an error -- those bases are in the results above -- but
+        # a reader comparing two sets of hits has to be told that some of them
+        # came from a different kind of match, and the reason is the sentence
+        # that says what to fix.
+        "by_keyword": [{"base_id": base_id, "reason": reason} for base_id, reason in found.by_keyword.items()],
         # Rounded here rather than in the surface: this is a measurement, and
         # microseconds of it are noise either way.
         "search_ms": round(found.search_ms, 1),

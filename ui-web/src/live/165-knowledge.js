@@ -119,5 +119,12 @@ DS.knowledge = {
   search: (baseIds, query, topK) =>
     rpc
       .call('knowledge.search', { base_ids: baseIds, query, top_k: topK })
-      .then((r) => ({ hits: (r && r.hits) || [], search_ms: (r && r.search_ms) || 0, embed_ms: (r && r.embed_ms) || 0 })),
+      .then((r) => ({
+        hits: (r && r.hits) || [],
+        /* Which bases answered by words. Empty on an ordinary search, and the
+           panel says nothing then. */
+        by_keyword: (r && r.by_keyword) || [],
+        search_ms: (r && r.search_ms) || 0,
+        embed_ms: (r && r.embed_ms) || 0,
+      })),
 };

@@ -110,9 +110,20 @@ class VectorStoreBase(ABC):
         """
 
     @abstractmethod
-    async def set_chunks_enabled(self, collection: str, chunk_ids: list[str], enabled: bool) -> int:
+    async def renumber(self, collection: str, document_id: str) -> int:
+        """Renumber a document's pieces 0..N-1, and answer with N.
+
+        Called after a hand edit adds or removes one: the chunker's contract is
+        that indexes run without gaps and every piece agrees on the total, and
+        a store that keeps the old numbers reports positions its own document
+        disagrees with."""
+
+    @abstractmethod
+    async def set_chunks_enabled(
+        self, collection: str, chunk_ids: list[str], enabled: bool, *, document_id: str = ""
+    ) -> int:
         """Turn pieces on or off, and answer with how many rows changed."""
 
     @abstractmethod
-    async def delete_chunks(self, collection: str, chunk_ids: list[str]) -> None:
+    async def delete_chunks(self, collection: str, chunk_ids: list[str], *, document_id: str = "") -> None:
         """Remove pieces outright. Unlike disabling, nothing is kept."""

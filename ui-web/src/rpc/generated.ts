@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 183 methods, 97 component schemas.
+// 183 methods, 98 component schemas.
 
 /* eslint-disable */
 /**
@@ -1492,6 +1492,10 @@ export interface KnowledgeDocument {
  */
 export interface KnowledgeHit {
   score: number;
+  /**
+   * How this hit was found, and therefore what `score` is: `vector` is a cosine similarity in 0..1, `keyword` a BM25 score on the index's own unbounded scale. The two are not comparable by value.
+   */
+  retrieval?: 'vector' | 'keyword';
   document_id: string;
   text: string;
   chunk_index?: number;
@@ -1660,6 +1664,13 @@ export interface KnowledgeChunk {
    * Whether a person wrote this piece. It is deleted with every other piece when the document is reindexed.
    */
   manual?: boolean;
+}
+/**
+ * One base that answered by words, and why its vectors were out of reach.
+ */
+export interface KnowledgeFallback {
+  base_id: string;
+  reason: string;
 }
 export interface SessionListParams {
   /**
@@ -4039,6 +4050,10 @@ export interface KnowledgeSearchParams {
 }
 export interface KnowledgeSearchResult {
   hits: KnowledgeHit[];
+  /**
+   * The bases that answered by keyword rather than by meaning, each with the reason its vectors could not be reached. Empty on an ordinary search.
+   */
+  by_keyword?: KnowledgeFallback[];
   search_ms?: number;
   embed_ms?: number;
 }

@@ -641,6 +641,136 @@ async def test_switching_to_what_the_base_already_has_changes_nothing(manager) -
     assert manager.get_document(doc.id).status == "ready"
 
 
+def _clear_the_pin(manager, monkeypatch) -> None:
+    """Leave the deployment with no configured embedding endpoint at all.
+
+    The fixture hands the manager a stub through both `_embedding` and a
+    patched `_client`, so a test about the pin being absent has to undo both --
+    including the seam, or `_configured_client` answers with the stub it was
+    handed and the path under test is never reached.
+    """
+    monkeypatch.setattr(manager, "_embedding", None)
+    monkeypatch.setattr("raven.knowledge._manager.load_embedding_config", lambda: None)
+    monkeypatch.setattr(manager, "_client", KnowledgeManager._client.__get__(manager))
+
+
+async def test_a_base_keeps_its_own_provider_when_the_pin_is_cleared(manager, endpoints, monkeypatch) -> None:
+    """The pin is the default for a *new* base, not a precondition for an old
+    one. Asking for it first and failing when there is none made every base
+    that records its own provider unsearchable the moment somebody cleared the
+    pin -- while `embedding_reach` went on calling those bases reachable."""
+    base, _ = await _ready_base(manager)
+    manager.configure_base(base.id, embedding_provider="siliconflow")
+    served = endpoints.serve("stub-embed")
+
+    _clear_the_pin(manager, monkeypatch)
+
+    outcome = await manager.search([base.id], "alpha", top_k=1)
+
+    assert outcome.hits, "the base still answers by meaning"
+    assert served.calls == [["alpha"]], "through the provider it recorded"
+    assert outcome.by_keyword == {}, "and not by falling back to words"
+
+
+async def test_reach_and_the_client_agree_about_a_base_with_no_pin(manager, endpoints, monkeypatch) -> None:
+    """The two used to disagree, which is the part that made this hard to see:
+    the page said reachable and the indexer said no endpoint is configured."""
+    base, _ = await _ready_base(manager)
+    manager.configure_base(base.id, embedding_provider="siliconflow")
+    endpoints.serve("stub-embed")
+    _clear_the_pin(manager, monkeypatch)
+
+    record = manager.get_base(base.id)
+    assert manager.embedding_reach(record) == "", "the page calls it reachable"
+    assert manager._client_for(record) is not None, "and so does the indexer"
+
+
+async def test_a_base_with_no_provider_and_no_pin_still_says_so(manager, monkeypatch) -> None:
+    """The one case that genuinely needs the configured endpoint keeps needing
+    it, and says which."""
+    base, _ = await _ready_base(manager)
+    _clear_the_pin(manager, monkeypatch)
+
+    with pytest.raises(KnowledgeError, match="no embedding endpoint is configured"):
+        manager._client_for(manager.get_base(base.id))
+
+
+# ── chunk edits stay inside their document ────────────────────────
+
+
+async def _two_documents(manager):
+    """Two documents in one base holding the same sentence."""
+    base = await manager.create_base(name="handbook")
+    manager.configure_base(base.id, chunk_size=12)
+    one = manager.add_document(base.id, filename="one.md", content=b"alpha alpha shared sentence")
+    two = manager.add_document(base.id, filename="two.md", content=b"alpha alpha shared sentence")
+    await manager.index_pending()
+    return base, one, two
+
+
+async def test_disabling_a_chunk_cannot_reach_another_document(manager) -> None:
+    """A chunk id names its text, and two documents in one base can hold the
+    same sentence -- so an id from one of them must not switch the identical
+    row in the other."""
+    base, one, two = await _two_documents(manager)
+    held, _ = await manager.document_chunks(two.id)
+    borrowed = [piece.chunk_id for piece in held]
+
+    changed = await manager.set_chunks_enabled(one.id, borrowed, False)
+
+    assert changed == 0, "nothing in this document matched those ids"
+    after, _ = await manager.document_chunks(two.id)
+    assert all(piece.enabled for piece in after), "and the other document is untouched"
+
+
+async def test_deleting_a_chunk_cannot_reach_another_document(manager) -> None:
+    """The same rule, and here the count depends on it: an unscoped delete
+    removed the other document's rows and then rewrote this document's
+    count, leaving both wrong."""
+    base, one, two = await _two_documents(manager)
+    held, before = await manager.document_chunks(two.id)
+    borrowed = [piece.chunk_id for piece in held]
+
+    remaining = await manager.delete_chunks(one.id, borrowed)
+
+    _, still = await manager.document_chunks(two.id)
+    assert still == before, "the other document kept every piece"
+    assert remaining == manager.get_document(one.id).chunk_count
+    assert remaining > 0, "and this one kept its own"
+
+
+# ── a hand edit leaves the numbering intact ───────────────────────
+
+
+async def test_deleting_the_middle_piece_renumbers_the_rest(manager) -> None:
+    """`chunk_index` runs 0..N-1 and every piece agrees on N -- the chunker's
+    own contract, which a hand edit has to leave standing. Deleting the middle
+    of three left 0 and 2 of 3, so a hit reported a position its document
+    disagreed with."""
+    base, doc = await _ready_base(manager)
+    held, total = await manager.document_chunks(doc.id)
+    assert total >= 2, "the fixture has to be more than one chunk for this to mean anything"
+
+    await manager.delete_chunks(doc.id, [held[0].chunk_id])
+
+    after, count = await manager.document_chunks(doc.id)
+    assert [piece.chunk.chunk_index for piece in after] == list(range(count))
+    assert {piece.chunk.total_chunks for piece in after} == {count}
+
+
+async def test_an_appended_piece_renumbers_the_document(manager) -> None:
+    """The mirror: the rows already there said "of N" while the new one said
+    "of N+1"."""
+    base, doc = await _ready_base(manager)
+
+    written = await manager.add_chunk(doc.id, "A note somebody typed.")
+
+    after, count = await manager.document_chunks(doc.id)
+    assert [piece.chunk.chunk_index for piece in after] == list(range(count))
+    assert {piece.chunk.total_chunks for piece in after} == {count}
+    assert written.chunk.total_chunks == count, "including the piece that was just written"
+
+
 async def test_a_new_base_records_who_served_its_model(manager) -> None:
     """Recorded at creation because a model id does not name a credential: the
     query has to go back out on that provider's address later."""

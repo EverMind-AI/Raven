@@ -235,6 +235,19 @@ class KnowledgeManager:
             )
         return embedding_client(config)
 
+    def _configured_client(self) -> EmbeddingClient | None:
+        """Today's endpoint, or ``None`` when there is not one.
+
+        The optional half of :meth:`_client`. A deployment with no embedding
+        pin is an ordinary state for every base that records its own provider,
+        and asking the question in a form that raises is what made those bases
+        unsearchable the moment the pin was cleared.
+        """
+        try:
+            return self._client()
+        except KnowledgeError:
+            return None
+
     def _client_named(self, provider: str, model: str) -> EmbeddingClient:
         """The client for a model a reader picked, on the provider serving it.
 
@@ -276,9 +289,16 @@ class KnowledgeManager:
           which is the last thing left to try. Whether it still serves that
           model is not knowable from here -- if it does not, the embed fails
           and the base answers by keyword instead.
+
+        The configured endpoint is resolved *optionally*, and that is the whole
+        point of the order: asking for it first and failing when there is none
+        made a base whose own provider still has credentials unsearchable the
+        moment the global pin was cleared, while ``embedding_reach`` went on
+        reporting that same base as reachable. Only the third case above needs
+        a configured endpoint, and only it raises when there is none.
         """
-        configured = self._client()
-        if base.embedding_model == configured.model:
+        configured = self._configured_client()
+        if configured is not None and base.embedding_model == configured.model:
             return configured
 
         cached = self._clients.get((base.embedding_provider, base.embedding_model))
@@ -852,7 +872,11 @@ class KnowledgeManager:
         if found is None or not chunk_ids:
             return 0
         _, base = found
-        return await self._store.set_chunks_enabled(base.id, chunk_ids, enabled)
+        # Scoped to the document, not just to its base: a chunk id names its
+        # text, two documents in one base can hold the same sentence, and a
+        # caller holding an id from one of them must not be able to switch the
+        # identical row in the other.
+        return await self._store.set_chunks_enabled(base.id, chunk_ids, enabled, document_id=document_id)
 
     async def delete_chunks(self, document_id: str, chunk_ids: list[str]) -> int:
         """Remove pieces of one document. Returns how many are left after it.
@@ -865,8 +889,11 @@ class KnowledgeManager:
         if found is None or not chunk_ids:
             return 0
         _, base = found
-        await self._store.delete_chunks(base.id, chunk_ids)
-        _, total = await self._store.list_chunks(base.id, document_id)
+        # Scoped for the same reason the switch above is -- and here the count
+        # depends on it: an unscoped delete could remove another document's
+        # rows and then rewrite *this* document's count, leaving both wrong.
+        await self._store.delete_chunks(base.id, chunk_ids, document_id=document_id)
+        total = await self._store.renumber(base.id, document_id)
         self._records.set_status(document_id, "ready", chunk_count=total)
         return total
 
@@ -993,8 +1020,12 @@ class KnowledgeManager:
                 )
             ],
         )
-        self._records.set_status(document_id, "ready", chunk_count=total + 1)
-        return stored
+        # Renumbered, not counted: the rows already there still say "of N",
+        # and a document where one row says "of N+1" and the rest say "of N"
+        # reports positions it does not have.
+        counted = await self._store.renumber(base.id, document_id)
+        self._records.set_status(document_id, "ready", chunk_count=counted)
+        return stored.model_copy(update={"chunk": chunk.model_copy(update={"total_chunks": counted})})
 
     def _chunker_for(self, base: KnowledgeBaseRecord) -> ChunkerBase:
         """The chunker this base is configured for.

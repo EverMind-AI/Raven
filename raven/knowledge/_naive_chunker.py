@@ -30,7 +30,12 @@ from dataclasses import dataclass, field
 
 from raven.knowledge._chunker import ChunkerBase
 from raven.knowledge._types import Chunk, DataBlock, Section, TextBlock
-from raven.knowledge.parser import ELEMENTS, LAYOUT_TYPE, LayoutType
+from raven.knowledge.parser import BBOX, ELEMENTS, LAYOUT_TYPE, PAGE_END, PAGE_NUMBER, LayoutType
+
+#: Where a section records the headings above it. Not a parser constant: the
+#: structured parsers write it and the page reads it, and a merged chunk has to
+#: keep each part's own path or a citation names the wrong heading.
+HEADING_PATH = "heading_path"
 
 #: RAGFlow's own default: a newline, and the sentence marks of both scripts it
 #: serves -- full stop, semicolon, exclamation and question mark in their
@@ -135,10 +140,82 @@ class _Unit:
     #: Non-text content a parser could not reduce to a string. Carried whole:
     #: an image is not merged with anything and is not cut.
     block: DataBlock | None = None
+    #: What this unit is made of, in order: the metadata of each piece that was
+    #: folded into it, and where that piece landed in ``text``. One entry until
+    #: something merges into it -- and the reason it is kept is that a merged
+    #: chunk whose metadata is only the first piece's states a page number, a
+    #: box and a heading that are true of a fraction of what a reader is
+    #: looking at.
+    parts: "list[tuple[int, int, dict]]" = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.parts:
+            self.parts = [(0, len(self.text), self.metadata)]
+
+    def absorb(self, other: "_Unit", joiner: str = "\n") -> None:
+        """Fold ``other`` into this unit, keeping track of where it landed."""
+        at = len(self.text) + len(joiner)
+        self.text = f"{self.text}{joiner}{other.text}"
+        self.tokens += other.tokens
+        self.parts.extend((start + at, end + at, metadata) for start, end, metadata in other.parts)
 
     def whole(self) -> str:
         parts = [part for part in (self.above, self.text, self.below) if part]
         return "\n".join(parts)
+
+    def merged_metadata(self, shift: int = 0) -> dict:
+        """The metadata of a chunk made of these parts.
+
+        ``shift`` is what got prepended to the text before this chunk was
+        written out -- lifted context, or an overlap tail. The spans below
+        address the chunk's *final* text, so they move with it; unshifted they
+        would point a reader at the wrong sentence, which is worse than not
+        pointing anywhere.
+
+        One part: its own metadata, unchanged -- which is every chunk in a
+        document whose sections are bigger than the chunk size, and the case
+        this must not disturb.
+
+        Several: the first part's, because a chunk is filed where it starts,
+        and then corrected where "where it starts" would be a lie about the
+        rest. The page becomes a range, because that is what the shape already
+        had room for (``page_number`` and ``page_end``). The box is dropped
+        when the parts do not share a page, because a rectangle spanning two
+        sheets of paper is not a location. And every part is written into
+        ``elements`` with the character range it occupies here, which is the
+        list this was always going to need: each piece keeps its own page, box
+        and layout, addressed by where it sits in the text of this chunk.
+        """
+        if len(self.parts) == 1:
+            return dict(self.metadata)
+
+        merged = dict(self.parts[0][2])
+        pages = [
+            page
+            for _, _, metadata in self.parts
+            for page in (metadata.get(PAGE_NUMBER), metadata.get(PAGE_END))
+            if isinstance(page, int)
+        ]
+        if pages:
+            merged[PAGE_NUMBER] = min(pages)
+            merged[PAGE_END] = max(pages)
+        if len(set(pages)) > 1:
+            merged.pop(BBOX, None)
+        merged[ELEMENTS] = [
+            {
+                "reading_order": order,
+                "layout_type": str(metadata.get(LAYOUT_TYPE) or LayoutType.TEXT),
+                "char_start": start + shift,
+                "char_end": end + shift,
+                **{
+                    key: metadata[key]
+                    for key in (PAGE_NUMBER, PAGE_END, BBOX, HEADING_PATH)
+                    if metadata.get(key) is not None
+                },
+            }
+            for order, (start, end, metadata) in enumerate(self.parts)
+        ]
+        return merged
 
 
 class NaiveChunker(ChunkerBase):
@@ -146,7 +223,16 @@ class NaiveChunker(ChunkerBase):
 
     Deliberately flat: unlike every other chunker here, a chunk may span two
     sections, because in this mode sections are not a boundary a reader asked
-    to keep. The chunk carries the metadata of the section it starts in.
+    to keep. Refusing to cross one turns a document of short sections into a
+    chunk per section, each too small to answer anything.
+
+    A chunk that crossed carries metadata merged to match: the page becomes a
+    range, a box that would span pages is dropped, and every piece that went in
+    is recorded in ``elements`` with the character range it occupies -- so a
+    hit in the middle still resolves to the page and box it came from. See
+    :meth:`_Unit.merged_metadata`. Metadata that described only the first
+    section would be worse than none, because it reads as a fact about the
+    whole chunk.
     """
 
     def __init__(
@@ -187,17 +273,19 @@ class NaiveChunker(ChunkerBase):
             return []
         self._lift_context(units)
         merged = self._merge(units)
-        texts = _overlapped([unit.whole() for unit in merged], self.overlap_size)
+        written = _overlapped([unit.whole() for unit in merged], self.overlap_size)
 
         return [
             Chunk(
                 content=unit.block if unit.block is not None else TextBlock(text=text),
                 source=unit.source,
                 chunk_index=index,
-                total_chunks=len(texts),
-                metadata=dict(unit.metadata),
+                total_chunks=len(written),
+                # Both shifts: the prose lifted in front of a table or a figure
+                # moves its text down as surely as an overlap tail does.
+                metadata=unit.merged_metadata(shift + (len(unit.above) + 1 if unit.above else 0)),
             )
-            for index, (unit, text) in enumerate(zip(merged, texts, strict=True))
+            for index, (unit, (text, shift)) in enumerate(zip(merged, written, strict=True))
         ]
 
     # ── units ─────────────────────────────────────────────────────
@@ -276,9 +364,7 @@ class NaiveChunker(ChunkerBase):
                 merged.append(unit)
                 open_text = len(merged) - 1
                 continue
-            held = merged[open_text]
-            held.text = f"{held.text}\n{unit.text}"
-            held.tokens += unit.tokens
+            merged[open_text].absorb(unit)
         return merged
 
 
@@ -377,7 +463,7 @@ def _head_sentences(text: str, budget: int) -> str:
     return held.strip()
 
 
-def _overlapped(texts: list[str], size: int) -> list[str]:
+def _overlapped(texts: list[str], size: int) -> list[tuple[str, int]]:
     """Repeat each chunk's neighbours at its ends.
 
     What a reader means by overlap: a chunk carries the tail of the one before
@@ -391,19 +477,15 @@ def _overlapped(texts: list[str], size: int) -> list[str]:
     split.
     """
     if size <= 0 or len(texts) < 2:
-        return texts
-    return [
-        "\n".join(
-            part
-            for part in (
-                _tail_tokens(texts[at - 1], size) if at > 0 else "",
-                text,
-                _head_tokens(texts[at + 1], size) if at + 1 < len(texts) else "",
-            )
-            if part
-        )
-        for at, text in enumerate(texts)
-    ]
+        return [(text, 0) for text in texts]
+    overlapped: list[tuple[str, int]] = []
+    for at, text in enumerate(texts):
+        head = _tail_tokens(texts[at - 1], size) if at > 0 else ""
+        tail = _head_tokens(texts[at + 1], size) if at + 1 < len(texts) else ""
+        parts = [part for part in (head, text, tail) if part]
+        # How far the chunk's own text moved, so the element spans can follow.
+        overlapped.append(("\n".join(parts), len(head) + 1 if head else 0))
+    return overlapped
 
 
 def _tail_tokens(text: str, size: int) -> str:

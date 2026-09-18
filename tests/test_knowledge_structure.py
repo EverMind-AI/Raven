@@ -390,3 +390,48 @@ def test_a_section_with_no_element_spans_is_cut_as_before():
     chunks = _chunk([section], chunk_size=100, overlap=10)
 
     assert len(chunks) > 1
+
+
+def _tokens(text: str) -> int:
+    """The same estimate the chunker sizes with."""
+    return len(text.encode("utf-8")) // 4
+
+
+def test_the_heading_prefix_is_paid_out_of_the_chunk_budget():
+    """The prefix is prepended to every piece after the first, so the split has
+    to be made against what is left after it. Split at the full size instead,
+    every later chunk comes back over the limit the budget exists to keep --
+    which is an embedding input limit, not a preference."""
+    path = ["Handbook", "Operations", "Escalation policy"]
+    section = Section(
+        content=TextBlock(text=" ".join(f"word{n}" for n in range(400))),
+        source="handbook.docx",
+        metadata={"heading_path": path},
+    )
+
+    chunks = _chunk([section], chunk_size=64, overlap=8)
+
+    assert len(chunks) > 1, "the section has to be split for this to mean anything"
+    assert max(_tokens(chunk.content.text) for chunk in chunks) <= 64
+
+
+def test_an_element_too_big_on_its_own_is_split_against_the_budget_too():
+    """The other branch, and the same rule: one paragraph longer than any
+    window still has to come back in pieces that fit with the prefix on."""
+    section = _with_elements([" ".join(f"word{n}" for n in range(400))])
+    section.metadata["heading_path"] = ["Handbook", "Operations", "Escalation policy"]
+
+    chunks = _chunk([section], chunk_size=64, overlap=8)
+
+    assert len(chunks) > 1
+    assert max(_tokens(chunk.content.text) for chunk in chunks) <= 64
+
+
+def test_a_section_with_no_heading_still_cuts_at_the_full_size():
+    """Nothing is prefixed to it, so nothing is taken off its budget."""
+    section = Section(content=TextBlock(text=" ".join(f"word{n}" for n in range(400))), source="n.md", metadata={})
+
+    chunks = _chunk([section], chunk_size=64, overlap=8)
+
+    assert max(_tokens(chunk.content.text) for chunk in chunks) <= 64
+    assert len(chunks) < 20, "and is not cut finer than it was asked to be"

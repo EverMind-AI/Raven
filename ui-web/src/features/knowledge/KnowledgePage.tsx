@@ -668,6 +668,7 @@ function Hit({ hit, at, docs }: { hit: KbHit; at: number; docs: KbDoc[] }): JSX.
   const from = docs.find((d) => d.id === hit.document_id)
   const name = from?.source || hit.source || t('gui.kb.recall_gone')
   const family = from ? store.fileFamily(from) : 'file'
+  const keyword = hit.retrieval === 'keyword'
   return (
     <div className="kbhit">
       <button className="kbhithd" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
@@ -689,10 +690,22 @@ function Hit({ hit, at, docs }: { hit: KbHit; at: number; docs: KbDoc[] }): JSX.
             #{(hit.chunk_index ?? 0) + 1}
           </span>
         ) : null}
-        {/* The similarity, not only the rank: a recall test is run to find out
-            how near the near thing actually was, and three hits at 0.83 mean
-            something different from one at 0.83 over two at 0.31. */}
-        <span className="kbhitsc">{hit.score.toFixed(3)}</span>
+        {/* The score, not only the rank: a recall test is run to find out how
+            near the near thing actually was, and three hits at 0.83 mean
+            something different from one at 0.83 over two at 0.31.
+
+            Labelled by what it is. A base whose embedding model cannot be
+            reached answers by keyword, and a BM25 score is unbounded and on
+            another scale entirely -- printed as "0.831" beside a cosine
+            similarity it reads as a worse match rather than as a different
+            kind of measurement. */}
+        <span
+          className={`kbhitsc${keyword ? ' kbhitbm' : ''}`}
+          title={t(keyword ? 'gui.kb.recall_bm25' : 'gui.kb.recall_cosine')}
+        >
+          {keyword ? hit.score.toFixed(2) : hit.score.toFixed(3)}
+          {keyword && <span className="kbhitkw">{t('gui.kb.recall_kw')}</span>}
+        </span>
         <span className="kbhitrk">{t('gui.kb.recall_rank', { n: at + 1 })}</span>
         <span className="kbhitcv" aria-hidden="true">
           {open ? '\u2303' : '\u2304'}
@@ -848,8 +861,11 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
     setSep(store.DEFAULTS.separator)
     setSize(String(store.DEFAULTS.chunk_size))
     setLap(String(store.DEFAULTS.chunk_overlap))
-    setTableCtx('0')
-    setImageCtx('0')
+    // From DEFAULTS like every other field above. Written as zero, this button
+    // turned the context feature off instead of restoring it -- the engine,
+    // the record and this store all default these to 64.
+    setTableCtx(String(store.DEFAULTS.table_context_size))
+    setImageCtx(String(store.DEFAULTS.image_context_size))
   }
   const write = (): void => {
     const picked = pairOf(embed)
@@ -1123,6 +1139,17 @@ function RecallDialog({ s }: { s: ReturnType<typeof store.getState> }): JSX.Elem
         </div>
 
         {s.searching && <Wait label={t('gui.kb.recall_run')} />}
+        {/* Said once, above the results, and not only per hit: an endpoint
+            that has gone turns a search into a differently-scaled but entirely
+            ordinary-looking set of hits, and the reason it changed mode is
+            what a reader can act on. */}
+        {s.byKeyword.length > 0 && !s.searching ? (
+          <div className="kbfellback" role="status">
+            <b>{t('gui.kb.recall_fellback', { n: s.byKeyword.length })}</b>
+            <span>{s.byKeyword[0]?.reason}</span>
+          </div>
+        ) : null}
+
         {s.hits && !s.searching ? (
           <div className="kbstats">
             <b>{t('gui.kb.recall_n', { n: s.hits.length })}</b>

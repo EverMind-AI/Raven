@@ -5812,6 +5812,18 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .kbhitix, .kbhitsc { flex: none; font-family: var(--mono); font-size: 11px; color: var(--faint); }
 /* The score is the measurement the test was run to see, so it reads as one. */
 .kbhitsc { color: var(--amber); }
+/* A keyword score is not the measurement this panel usually shows, so it does
+   not wear the colour that one does -- and it carries a mark, because the two
+   numbers sit in the same column and only one of them is a similarity. */
+.kbhitbm { color: var(--muted); }
+.kbhitkw { margin-left: 3px; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+/* Above the hits, not beside one: the whole result set changed kind. */
+.kbfellback {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 6px 10px; margin-bottom: 8px; border-radius: 8px;
+  border: 1px solid var(--amber); color: var(--muted); font-size: 11.5px;
+}
+.kbfellback b { color: var(--amber); font-weight: 600; }
 .kbhitrk { flex: none; font-size: 11.5px; color: var(--muted); }
 .kbhitcv { flex: none; color: var(--faint); font-size: 12px; }
 .kbhithd:hover { background: var(--raised); border-radius: 10px; }

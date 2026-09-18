@@ -169,7 +169,8 @@ export interface KnowledgeSource {
   search(baseIds: string[], query: string, topK?: number): Promise<KbSearch>
 }
 
-/* One hit. `score` is a similarity, so higher is nearer. */
+/* One hit. `score` runs one direction whatever found it -- higher is nearer --
+   and `retrieval` says what the number is. */
 /* One indexed piece of a document, as the search sees it.
 
    The positional fields are there for the formats that have them -- a page and
@@ -213,6 +214,12 @@ export interface KbChunkPage {
 
 export interface KbHit {
   score: number
+  /* How this hit was found: `vector` is a cosine similarity in 0..1,
+     `keyword` a BM25 score on the index's own unbounded scale. The two are not
+     comparable by value, so a surface showing both has to say which is which
+     rather than printing them under one heading. Absent from a gateway that
+     predates the field, which only ever searched by vector. */
+  retrieval?: 'vector' | 'keyword' 
   document_id: string
   text: string
   /* Which piece of its document this was, and of how many. A chunk read on
@@ -228,8 +235,18 @@ export interface KbHit {
    its job; `embed_ms` is the round trip to the configured embedding endpoint,
    which is the larger number and the one that describes the provider rather
    than the retrieval. */
+/* One base that answered by words, and why its vectors were out of reach. */
+export interface KbFallback {
+  base_id: string
+  reason: string
+}
+
 export interface KbSearch {
   hits: KbHit[]
+  /* The bases that answered by keyword rather than by meaning. Empty on an
+     ordinary search; a reader comparing two sets of results has to be told
+     that retrieval changed mode, because the hits themselves look normal. */
+  by_keyword?: KbFallback[]
   search_ms: number
   embed_ms: number
 }

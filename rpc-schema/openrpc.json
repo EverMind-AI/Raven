@@ -7939,6 +7939,13 @@
               },
               "type": "array"
             },
+            "by_keyword": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/KnowledgeFallback"
+              },
+              "description": "The bases that answered by keyword rather than by meaning, each with the reason its vectors could not be reached. Empty on an ordinary search."
+            },
             "search_ms": {
               "type": "number"
             },
@@ -12098,6 +12105,14 @@
           "score": {
             "type": "number"
           },
+          "retrieval": {
+            "type": "string",
+            "enum": [
+              "vector",
+              "keyword"
+            ],
+            "description": "How this hit was found, and therefore what `score` is: `vector` is a cosine similarity in 0..1, `keyword` a BM25 score on the index's own unbounded scale. The two are not comparable by value."
+          },
           "document_id": {
             "type": "string"
           },
@@ -12533,6 +12548,23 @@
           "total_chunks",
           "text"
         ]
+      },
+      "KnowledgeFallback": {
+        "additionalProperties": false,
+        "description": "One base that answered by words, and why its vectors were out of reach.",
+        "properties": {
+          "base_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_id",
+          "reason"
+        ],
+        "type": "object"
       }
     },
     "errors": {

@@ -418,7 +418,10 @@ class HeadingAwareChunker(ApproxTokenChunker):
         text = section.content.text if isinstance(section.content, TextBlock) else ""
         spans = section.metadata.get(ELEMENTS)
         if not isinstance(spans, list) or not spans:
-            return self._split_text(text)
+            # The budget, not `chunk_size`: the caller narrowed it by what the
+            # heading prefix costs, and a split at the full size hands back
+            # pieces that are over the limit the moment the prefix goes on.
+            return self._split_text(text, budget)
 
         pieces: list[str] = []
         held = ""
@@ -439,7 +442,7 @@ class HeadingAwareChunker(ApproxTokenChunker):
                 continue
             # One element past the budget on its own. Split it, and keep the
             # last piece open so the element after it can still share a chunk.
-            parts = self._split_text(element)
+            parts = self._split_text(element, budget)
             pieces.extend(parts[:-1])
             held = parts[-1]
         if held:

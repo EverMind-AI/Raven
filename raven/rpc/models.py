@@ -3801,10 +3801,15 @@ class KnowledgeDocumentsListResult(_Strict):
 
 
 class KnowledgeHit(_Strict):
-    """One search hit. ``score`` is a similarity, so higher is nearer -- the
-    direction every caller already reads."""
+    """One search hit. ``score`` runs one direction whatever found it -- higher
+    is nearer -- and ``retrieval`` says what it is."""
 
     score: float
+    #: How this hit was found: ``vector`` for a cosine similarity in 0..1,
+    #: ``keyword`` for a BM25 score on the index's own unbounded scale. The two
+    #: are not comparable by value, and a surface that labels both "similarity"
+    #: is stating something false about each.
+    retrieval: Literal["vector", "keyword"] = "vector"
     document_id: str
     text: str
     #: Which piece of its document this was, and of how many. A chunk read on
@@ -3983,6 +3988,13 @@ class KnowledgeSearchParams(_Strict):
     top_k: int | None = None
 
 
+class KnowledgeFallback(_Strict):
+    """One base that answered by words, and why its vectors were out of reach."""
+
+    base_id: str
+    reason: str
+
+
 class KnowledgeSearchResult(_Strict):
     """The hits, and what each half of the search cost.
 
@@ -3991,6 +4003,11 @@ class KnowledgeSearchResult(_Strict):
     job. A surface reporting one number as the search time wants the second."""
 
     hits: list[KnowledgeHit]
+    #: The bases that answered by words rather than by meaning, each with the
+    #: reason its vectors could not be reached. Empty on an ordinary search.
+    #: Carried because an unreachable endpoint otherwise produces a normal
+    #: looking result set on a different scale, with nothing saying so.
+    by_keyword: list[KnowledgeFallback] = Field(default_factory=list)
     search_ms: float = 0.0
     embed_ms: float = 0.0
 

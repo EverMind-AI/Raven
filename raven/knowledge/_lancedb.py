@@ -43,15 +43,24 @@ def _sql_quote(value: str) -> str:
     return f"'{escaped}'"
 
 
-def _id_predicate(chunk_ids: list[str]) -> str:
-    """The clause matching a set of chunk ids.
+def _id_predicate(chunk_ids: list[str], document_id: str = "") -> str:
+    """The clause matching a set of chunk ids inside one document.
 
     An empty id never matches: rows from a build before ids existed all carry
     one, and a caller asking to act on "" means something went wrong upstream,
     not that every unnamed row in the document should change at once.
+
+    ``document_id`` is the other half of that, and it is not a convenience: a
+    chunk id is unique to its text, two documents in one base can hold the same
+    sentence, and a collection-wide predicate lets a caller holding an id from
+    one document change or delete the identical row in another. Scoping the
+    write is what makes "these pieces of this document" the thing that happens.
     """
     wanted = ", ".join(_sql_quote(chunk_id) for chunk_id in chunk_ids if chunk_id)
-    return f"chunk_id IN ({wanted})" if wanted else "false"
+    if not wanted:
+        return "false"
+    clause = f"chunk_id IN ({wanted})"
+    return f"document_id = {_sql_quote(document_id)} AND {clause}" if document_id else clause
 
 
 def _filter_predicate(metadata_filter: dict[str, Any] | None) -> str | None:
@@ -286,6 +295,10 @@ class LanceDBVectorStore(VectorStoreBase):
                 document_id=row["document_id"],
                 chunk=Chunk.model_validate_json(row["chunk_json"]),
                 chunk_id=row.get("chunk_id") or "",
+                # Marked here, by the call that knows: a hit that travels
+                # without it reaches a surface as a number on an unstated
+                # scale, and the surface has no way to ask.
+                retrieval="keyword",
             )
             for row in rows
         ]
@@ -335,19 +348,62 @@ class LanceDBVectorStore(VectorStoreBase):
             return stored[offset:], total
         return stored[offset : offset + limit], total
 
-    async def set_chunks_enabled(self, collection: str, chunk_ids: list[str], enabled: bool) -> int:
+    async def renumber(self, collection: str, document_id: str) -> int:
+        """Renumber a document's pieces 0..N-1 and answer with N.
+
+        What a chunker guarantees on the way in, restored after a hand edit on
+        the way through: ``chunk_index`` runs without gaps and every piece
+        carries the same ``total_chunks``. Deleting the middle of three leaves
+        0 and 2 of 3 otherwise, and appending one leaves N rows claiming N and
+        a new row claiming N+1 -- so a hit reports a position its own document
+        disagrees with, and "piece 7 of 12" stops being a fact.
+
+        The order is the one already stored, so nothing moves: this rewrites
+        the numbers rows are sorted by, never the sort. Only rows whose numbers
+        actually changed are written back.
+        """
+        if not await self.has_collection(collection):
+            return 0
+        table = await self._writable(collection)
+        rows = await (
+            table.query()
+            .where(f"document_id = {_sql_quote(document_id)}")
+            .select(["chunk_index", "chunk_json", "chunk_id"])
+            .to_list()
+        )
+        if not rows:
+            return 0
+        ordered = sorted(rows, key=lambda row: int(row.get("chunk_index") or 0))
+        total = len(ordered)
+        for index, row in enumerate(ordered):
+            chunk = Chunk.model_validate_json(row["chunk_json"])
+            if chunk.chunk_index == index and chunk.total_chunks == total:
+                continue
+            chunk.chunk_index = index
+            chunk.total_chunks = total
+            # By chunk id, which is what names one row; the index column is
+            # being rewritten here and cannot also be the thing addressed by.
+            await table.update(
+                {"chunk_index": index, "chunk_json": chunk.model_dump_json()},
+                where=_id_predicate([row.get("chunk_id") or ""], document_id),
+            )
+        return total
+
+    async def set_chunks_enabled(
+        self, collection: str, chunk_ids: list[str], enabled: bool, *, document_id: str = ""
+    ) -> int:
         """Turn pieces on or off. Returns how many rows the store changed."""
         if not chunk_ids or not await self.has_collection(collection):
             return 0
         table = await self._writable(collection)
-        result = await table.update({"enabled": enabled}, where=_id_predicate(chunk_ids))
+        result = await table.update({"enabled": enabled}, where=_id_predicate(chunk_ids, document_id))
         return int(getattr(result, "rows_updated", 0) or 0)
 
-    async def delete_chunks(self, collection: str, chunk_ids: list[str]) -> None:
+    async def delete_chunks(self, collection: str, chunk_ids: list[str], *, document_id: str = "") -> None:
         if not chunk_ids or not await self.has_collection(collection):
             return
         table = await self._writable(collection)
-        await table.delete(_id_predicate(chunk_ids))
+        await table.delete(_id_predicate(chunk_ids, document_id))
 
     async def list_documents(
         self,

@@ -7171,6 +7171,22 @@
       "en": "Rank #{n}",
       "zh": "第 {n} 名"
     },
+    "gui.kb.recall_kw": {
+      "en": "kw",
+      "zh": "关键词"
+    },
+    "gui.kb.recall_bm25": {
+      "en": "A keyword (BM25) score. Its scale is the index's own and is not comparable with a similarity.",
+      "zh": "关键词（BM25）得分。其量纲由索引决定，不能与相似度直接比较。"
+    },
+    "gui.kb.recall_cosine": {
+      "en": "A vector similarity, from 0 to 1.",
+      "zh": "向量相似度（0 到 1）。"
+    },
+    "gui.kb.recall_fellback": {
+      "en": "{n} knowledge base(s) answered by keyword, not by meaning",
+      "zh": "有 {n} 个知识库此次按关键词检索，而非按语义检索"
+    },
     "gui.kb.recall_chunk": {
       "en": "Chunk {n} of {total}",
       "zh": "第 {n} / {total} 块"

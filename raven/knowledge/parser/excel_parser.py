@@ -215,8 +215,21 @@ def _csv_sheet(raw: bytes, filename: str, encoding: str) -> Sheet:
         text = raw.decode(encoding)
     except UnicodeDecodeError:
         # A spreadsheet writing "csv" on Windows still writes cp1252 as often
-        # as not, and a file that cannot be decoded is a file with no rows.
-        text = raw.decode("utf-8", errors="replace")
+        # as not, so that is what the fallback decodes -- as itself. Decoding
+        # it as UTF-8 with replacement, which is what this used to do, turns
+        # every accented byte into U+FFFD before it is indexed: "Cafe" with an
+        # acute accent becomes "Caf" and a replacement mark, permanently and
+        # without a word anywhere saying so.
+        try:
+            text = raw.decode("cp1252")
+        except UnicodeDecodeError as error:
+            # Neither encoding reads it, so nothing here knows what the bytes
+            # say. Refused rather than mangled: a file indexed as its own
+            # replacement characters is worse than one that says it could not
+            # be read, because only the second can be acted on.
+            raise ValueError(
+                f"{filename!r} is not readable as {encoding} or cp1252; save it as UTF-8 and upload it again"
+            ) from error
     text = text.lstrip("\ufeff")
     sample = text[:4096]
     try:

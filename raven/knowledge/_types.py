@@ -103,17 +103,28 @@ class StoredChunk(BaseModel):
 
 
 class VectorSearchResult(BaseModel):
-    """One hit. ``score`` is a similarity -- higher is nearer.
+    """One hit. ``score`` runs the same direction whatever found it: higher is
+    nearer.
 
-    Stated as similarity rather than distance because that is the direction
-    every caller already reads: the reranker sorts descending, and a relevance
-    floor is a lower bound.
+    Stated that way rather than as a distance because it is the direction every
+    caller already reads: the reranker sorts descending, and a relevance floor
+    is a lower bound. What the number *means* is :attr:`retrieval`'s business,
+    and the two scales are not comparable by value -- see :func:`_merged`.
     """
 
     score: float
     document_id: str
     chunk: Chunk
     chunk_id: str = ""
+    retrieval: Literal["vector", "keyword"] = "vector"
+    """How this hit was found, and therefore what ``score`` is.
+
+    ``vector`` is a cosine similarity in 0..1; ``keyword`` is a BM25 score on
+    the index's own scale, which is unbounded and not calibrated to the first.
+    Carried on the hit rather than inferred by the caller because a base falls
+    back to keywords per search, and a merged result set can hold both -- a
+    reader shown 8.4 beside 0.62 under one heading called "similarity" is being
+    told something false about both."""
     """Which stored piece this was, when the store knows.
 
     Empty for rows written before ids existed. A hit that cannot be named is

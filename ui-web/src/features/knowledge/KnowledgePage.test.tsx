@@ -575,6 +575,79 @@ describe('the write surface', () => {
     expect(status.querySelector('.kbdocwarn')).toBeNull()
   })
 
+  it('says when a search answered by words instead of by meaning', async () => {
+    /* The failure this exists for: an unreachable embedding endpoint turns a
+       search into a perfectly ordinary looking set of hits, scored on another
+       scale, with nothing anywhere saying retrieval changed mode. */
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd1', status: 'ready' })],
+      search: async () => ({
+        hits: [{ score: 8.42, retrieval: 'keyword' as const, document_id: 'd1', text: 'alpha' }],
+        by_keyword: [{ base_id: 'b1', reason: "the model 'bge-m3' could not be reached" }],
+        search_ms: 3,
+        embed_ms: 0,
+      }),
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await act(async () => {
+      store.openRecall()
+    })
+    await act(async () => {
+      fireEvent.change(document.querySelector('.kbask .kbname') as HTMLInputElement, {
+        target: { value: 'alpha' },
+      })
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.recall_run').click()
+    })
+
+    const notice = document.querySelector('.kbfellback') as HTMLElement
+    expect(notice).not.toBeNull()
+    expect(notice.textContent).toContain('could not be reached')
+    /* And the score is not dressed as a similarity. */
+    const score = document.querySelector('.kbhitsc') as HTMLElement
+    expect(score.classList.contains('kbhitbm')).toBe(true)
+    expect(score.textContent).toContain('gui.kb.recall_kw')
+    expect(score.getAttribute('title')).toBe('gui.kb.recall_bm25')
+  })
+
+  it('leaves an ordinary search unmarked', async () => {
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd1', status: 'ready' })],
+      search: async () => ({
+        hits: [{ score: 0.83, document_id: 'd1', text: 'alpha' }],
+        by_keyword: [],
+        search_ms: 3,
+        embed_ms: 12,
+      }),
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await act(async () => {
+      store.openRecall()
+    })
+    await act(async () => {
+      fireEvent.change(document.querySelector('.kbask .kbname') as HTMLInputElement, {
+        target: { value: 'alpha' },
+      })
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.recall_run').click()
+    })
+
+    expect(document.querySelector('.kbfellback')).toBeNull()
+    const score = document.querySelector('.kbhitsc') as HTMLElement
+    expect(score.classList.contains('kbhitbm')).toBe(false)
+    expect(score.getAttribute('title')).toBe('gui.kb.recall_cosine')
+  })
+
   it('does not answer into a panel the reader has left', async () => {
     /* Opening b1 then b2 must not paint b1 documents under b2. */
     let release: (d: never[]) => void = () => {}
@@ -2751,7 +2824,10 @@ describe('the knowledge base settings', () => {
   })
 
   it('puts the defaults back without saving them', async () => {
-    const saved = await openSettings({}, { top_k: 40, chunk_size: 2048, chunk_overlap: 400 })
+    const saved = await openSettings(
+      {},
+      { top_k: 40, chunk_size: 2048, chunk_overlap: 400, table_context_size: 10, image_context_size: 10 },
+    )
 
     await act(async () => {
       ;(screen.getByText('gui.kb.set_restore').closest('button') as HTMLButtonElement).click()
@@ -2766,6 +2842,16 @@ describe('the knowledge base settings', () => {
     expect((field('gui.kb.set_lap').querySelector('input') as HTMLInputElement).value).toBe(
       String(store.DEFAULTS.chunk_overlap),
     )
+    /* The two context sizes too, and from DEFAULTS rather than from zero:
+       written as zero this button turned the feature off instead of restoring
+       it, which is the opposite of what it says. */
+    expect((field('gui.kb.set_tablectx').querySelector('input') as HTMLInputElement).value).toBe(
+      String(store.DEFAULTS.table_context_size),
+    )
+    expect((field('gui.kb.set_imagectx').querySelector('input') as HTMLInputElement).value).toBe(
+      String(store.DEFAULTS.image_context_size),
+    )
+    expect(store.DEFAULTS.table_context_size).toBeGreaterThan(0), 'or the check above proves nothing'
     /* Restoring is an edit like any other: nothing is written until Save. */
     expect(saved).toEqual([])
   })

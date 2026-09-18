@@ -233,3 +233,96 @@ def test_chunks_may_span_sections() -> None:
     chunks = _chunk([_plain("first section"), _plain("second section")], chunk_size=1000)
 
     assert _texts(chunks) == ["first section\nsecond section"]
+
+
+# -- what a crossed boundary costs, and what is paid ----------------
+
+
+def _placed(text: str, order: int, page: int, x0: float = 72.0) -> Section:
+    """A section that knows where it came from, the way a parser leaves one."""
+    return Section(
+        content=TextBlock(text=text),
+        source="report.docx",
+        metadata={
+            "reading_order": order,
+            "page_number": page,
+            "page_end": page,
+            "layout_type": "text",
+            "bbox": {"x0": x0, "x1": x0 + 400.0},
+            "heading_path": ["Handbook", f"Part {order}"],
+        },
+    )
+
+
+def test_a_chunk_from_one_section_keeps_that_section_metadata() -> None:
+    """The ordinary case, and the one the merging below must not disturb: a
+    chunk that crossed nothing is filed exactly where its section was."""
+    section = _placed("Revenue held up.", 0, 3)
+
+    chunks = _chunk([section], chunk_size=1000)
+
+    assert chunks[0].metadata == section.metadata
+
+
+def test_a_merged_chunk_reports_the_pages_it_actually_covers() -> None:
+    """It used to report the first section's page as the chunk's page, which
+    is not a smaller truth -- it is a false one: the reader is looking at two
+    pages and being told a number that is right about the top of it."""
+    chunks = _chunk([_placed("Second quarter.", 0, 3), _placed("Third quarter.", 1, 4)], chunk_size=1000)
+
+    assert len(chunks) == 1, "the two sections merged, which is the point of this chunker"
+    assert (chunks[0].metadata["page_number"], chunks[0].metadata["page_end"]) == (3, 4)
+
+
+def test_a_merged_chunk_drops_a_box_that_would_span_pages() -> None:
+    """A rectangle across two sheets of paper is not a location, and drawing
+    one would put a highlight somewhere nothing was said."""
+    chunks = _chunk([_placed("Second quarter.", 0, 3), _placed("Third quarter.", 1, 4)], chunk_size=1000)
+
+    assert "bbox" not in chunks[0].metadata
+
+
+def test_a_merged_chunk_keeps_a_box_when_the_parts_share_a_page() -> None:
+    chunks = _chunk([_placed("Second quarter.", 0, 3), _placed("Third quarter.", 1, 3)], chunk_size=1000)
+
+    assert chunks[0].metadata["bbox"] == {"x0": 72.0, "x1": 472.0}
+
+
+def test_every_part_of_a_merged_chunk_says_where_it_came_from() -> None:
+    """The list the positional metadata was always going to need once chunks
+    could cross: each piece addressed by where it sits in *this* chunk, with
+    its own page, box and heading path, so a hit in the middle still resolves
+    to the place it was written."""
+    chunks = _chunk([_placed("Second quarter.", 0, 3), _placed("Third quarter.", 1, 4)], chunk_size=1000)
+
+    text = chunks[0].content.text
+    spans = chunks[0].metadata["elements"]
+    assert [text[span["char_start"] : span["char_end"]] for span in spans] == [
+        "Second quarter.",
+        "Third quarter.",
+    ]
+    assert [span["page_number"] for span in spans] == [3, 4]
+    assert [span["heading_path"] for span in spans] == [["Handbook", "Part 0"], ["Handbook", "Part 1"]]
+
+
+def test_the_spans_survive_the_overlap_being_prepended() -> None:
+    """Overlap puts the previous chunk's tail in front of this one's text, so
+    an unshifted span points at the neighbour's words instead of its own."""
+    sections = [_placed(f"Part {n} text.", n, n + 1) for n in range(4)]
+
+    chunks = _chunk(sections, chunk_size=6, separator="\n", overlap_size=3)
+
+    merged = next(chunk for chunk in chunks if len(chunk.metadata.get("elements", [])) > 1)
+    for span in merged.metadata["elements"]:
+        quoted = merged.content.text[span["char_start"] : span["char_end"]]
+        assert quoted.startswith("Part ") and quoted.endswith("text."), quoted
+
+
+def test_a_section_with_no_positions_merges_without_inventing_any() -> None:
+    """Plain text has no page and no box, and a merged chunk of it must not
+    acquire one."""
+    chunks = _chunk([_plain("first section"), _plain("second section")], chunk_size=1000)
+
+    assert "page_number" not in chunks[0].metadata
+    assert "bbox" not in chunks[0].metadata
+    assert len(chunks[0].metadata["elements"]) == 2, "but it still says what went in"

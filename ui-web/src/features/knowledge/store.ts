@@ -6,6 +6,7 @@ import type {
   KbChunk,
   KbChunkQuery,
   KbDoc,
+  KbFallback,
   KbHit,
   KbProvider,
   KbSettings,
@@ -53,6 +54,10 @@ interface State {
   /* What the last search cost, for the line above the results. Null until one
      has been run, which is a different state from one that found nothing. */
   cost: { search_ms: number; embed_ms: number } | null
+  /* Why the last search answered by words, when it did. The panel says so
+     above the hits: their scores are BM25 on another scale entirely, and a
+     result set that looks ordinary is exactly what makes that worth saying. */
+  byKeyword: KbFallback[]
   /* A search is in flight. Its own flag rather than `busy`: that one gates
      every write on the page, and a search changes nothing. */
   searching: boolean
@@ -137,6 +142,7 @@ const EMPTY: State = {
   busy: false,
   query: '',
   hits: null,
+  byKeyword: [],
   cost: null,
   searching: false,
   recall: false,
@@ -271,7 +277,7 @@ export async function open_(id: string): Promise<void> {
   /* A query typed in the base being left must not spend a request, nor land
      its hits in the base being opened. */
   cancelSearch()
-  set({ openId: id, docs: [], query: '', hits: null, viewing: null, picked: [] })
+  set({ openId: id, docs: [], query: '', hits: null, byKeyword: [], viewing: null, picked: [] })
   try {
     const docs = await source().documents(id)
     /* The reader may have gone back or opened another base while this was in
@@ -284,7 +290,7 @@ export async function open_(id: string): Promise<void> {
 
 export function back(): void {
   cancelSearch()
-  set({ openId: null, docs: [], query: '', hits: null, viewing: null, picked: [] })
+  set({ openId: null, docs: [], query: '', hits: null, byKeyword: [], viewing: null, picked: [] })
 }
 
 /* At most this many files out of one folder. A source tree holds tens of
@@ -781,7 +787,7 @@ export function closeRecall(): void {
    states, and only the first one has a count to report. */
 export function clearRecall(): void {
   cancelSearch()
-  set({ query: '', hits: null, cost: null, searching: false })
+  set({ query: '', hits: null, byKeyword: [], cost: null, searching: false })
 }
 
 export function setQuery(query: string): void {
@@ -795,7 +801,7 @@ export async function searchNow(query: string): Promise<void> {
   set({ query })
   cancelSearch()
   if (!baseId || !text) {
-    set({ hits: null, cost: null })
+    set({ hits: null, byKeyword: [], cost: null })
     return
   }
   const mine = seq
@@ -807,7 +813,11 @@ export async function searchNow(query: string): Promise<void> {
     const base = state.bases.find((b) => b.id === baseId)
     const found = await source().search([baseId], text, base?.top_k)
     if (state.openId !== baseId || mine !== seq) return
-    set({ hits: found.hits, cost: { search_ms: found.search_ms, embed_ms: found.embed_ms } })
+    set({
+      hits: found.hits,
+      byKeyword: found.by_keyword ?? [],
+      cost: { search_ms: found.search_ms, embed_ms: found.embed_ms },
+    })
     remember(text)
   } catch (e) {
     if (state.openId === baseId && mine === seq) toast((e as Error)?.message || String(e))

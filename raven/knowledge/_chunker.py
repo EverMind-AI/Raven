@@ -56,8 +56,6 @@ class ChunkerBase(ABC):
 
     Subclasses must guarantee:
 
-    - **No cross-Section merging**: every output :class:`Chunk` is
-      derived from exactly one input :class:`Section`.
     - **DataBlock pass-through**: a Section whose content is a
       :class:`DataBlock` becomes a single Chunk
       with the same content; multimodal data is never sliced.
@@ -66,8 +64,26 @@ class ChunkerBase(ABC):
       when the input contains many Sections.
     - **Consistent total_chunks**: every output Chunk carries the
       same ``total_chunks`` value (the length of the output list).
-    - **Metadata inheritance**: each output Chunk's ``source`` and
-      ``metadata`` are copied from its parent Section.
+    - **Metadata that describes the chunk**: an output Chunk's
+      ``source`` and ``metadata`` describe what is actually in it.
+      A chunk built from one Section inherits that Section's
+      metadata unchanged; a chunk that merged several carries
+      metadata merged to match -- a page *range* rather than one
+      page, and an ``elements`` span per part saying where each
+      came from. Metadata that still describes only the first part
+      is worse than none: it reads as a fact about the whole chunk.
+
+    Whether a chunk may span two Sections is a **strategy's** choice,
+    not a rule of this base. The structural chunkers
+    (:class:`ApproxTokenChunker`,
+    :class:`~raven.knowledge._structure.HeadingAwareChunker`) keep the
+    boundary, because the structure a parser found is the thing they
+    are for. :class:`~raven.knowledge._naive_chunker.NaiveChunker`
+    deliberately crosses it: sections are not a boundary a reader in
+    that mode asked to keep, and refusing to merge across them turns a
+    document of short sections into a chunk per section, each too small
+    to answer anything. What crossing costs is the metadata, which is
+    why the rule above is stated as it is.
     """
 
     @abstractmethod
@@ -173,28 +189,38 @@ class ApproxTokenChunker(ChunkerBase):
 
         return chunks
 
-    def _split_text(self, text: str) -> list[str]:
-        """Split text into pieces of at most ``chunk_size`` approx tokens.
+    def _split_text(self, text: str, budget: int | None = None) -> list[str]:
+        """Split text into pieces of at most ``budget`` approx tokens.
 
         Consecutive pieces share approximately ``overlap`` tokens.
 
         Args:
             text (`str`):
                 The text to split.
+            budget (`int | None`):
+                Tokens a piece may reach, defaulting to ``chunk_size``. A
+                caller that will prepend something to each piece passes what is
+                left after it -- :class:`~raven.knowledge._structure.HeadingAwareChunker`
+                prefixes a heading path, and a split that ignored the narrowed
+                figure hands back pieces that are over the limit once the
+                prefix is on them.
 
         Returns:
             `list[str]`:
                 The text pieces, in document order.
         """
-        if self._approx_count_tokens(text) <= self.chunk_size:
+        size = self.chunk_size if budget is None else max(1, budget)
+        if self._approx_count_tokens(text) <= size:
             return [text]
 
         # Cumulative UTF-8 byte length after each character, so that
         # the byte length of text[i:j] == byte_offsets[j] - byte_offsets[i]
         byte_offsets = [0, *accumulate(len(c.encode("utf-8")) for c in text)]
 
-        chunk_bytes = self.chunk_size * 4
-        overlap_bytes = self.overlap * 4
+        chunk_bytes = size * 4
+        # Never as much as the piece itself, or a budget at or below the
+        # overlap would step back to where it started and never terminate.
+        overlap_bytes = min(self.overlap, max(0, size - 1)) * 4
 
         pieces: list[str] = []
         start = 0
