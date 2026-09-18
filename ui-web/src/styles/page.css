@@ -37,7 +37,18 @@
      against a warm workspace reads as two applications. So the whole dark ramp
      is neutral now, which is what moves --ink, --surface, --raised, --line and
      the three text greys below as well as the names introduced here. */
-  --page:     #fafaf8;   /* the ground a conversation is read on */
+  --page:     #fafaf8;   /* the ground a module page is read on */
+  /* The ground a CONVERSATION is read on: the same paper, with a cool cast
+     falling from the top right and a warm one rising from the bottom left. It
+     is a gradient rather than a flat fill because the column that sits on it is
+     a run of white cards -- on one flat tone they read as a stack of paper on a
+     desk of the same paper, and the edge of each card is the only thing saying
+     otherwise. Its last layer is --page, so it stands alone as a background. */
+  --wash:
+    radial-gradient(60% 55% at 85% 0%, rgba(214, 224, 242, .55), rgba(214, 224, 242, 0) 70%),
+    radial-gradient(55% 50% at 20% 100%, rgba(246, 236, 214, .75), rgba(246, 236, 214, 0) 70%),
+    radial-gradient(40% 45% at 70% 90%, rgba(242, 233, 214, .5), rgba(242, 233, 214, 0) 70%),
+    linear-gradient(180deg, #fafaf8 0%, #f7f7f5 100%);
   --side-bg:  #ffffff;   /* the rail, one step lighter than the page */
   --paper:    #ffffff;   /* a card laid on the page: an answer, a sheet */
   --hover:    #ececea;   /* a row the pointer is on */
@@ -165,6 +176,7 @@
 
     /* The dark counterparts of the light block's surfaces -- see there. */
     --page:     #141414;
+    --wash:     linear-gradient(180deg, #151515, #121212);
     --side-bg:  #171717;
     --paper:    #202020;
     --hover:    #242424;
@@ -193,7 +205,8 @@
   --line-soft: #282828; --text: #e8e8e6; --muted: #afafad; --faint: #8a8a88;
   --link: #86abe4; --amber: #e8cf49; --amber-dp: #6f6114; --moss: #7fbf6a;
   --clay: #d96a5b; --gold: #e0a030; --sky: #6fa8d6; --shadow: 0 18px 40px -24px #000c;
-  --page: #141414; --side-bg: #171717; --paper: #202020; --hover: #242424;
+  --page: #141414; --wash: linear-gradient(180deg, #151515, #121212);
+  --side-bg: #171717; --paper: #202020; --hover: #242424;
   --selected: #2e2e2e; --text-3: #9b9b9b; --ph: #6e6e6e; --black: #e8e8e6;
   --bubble-me: #343434; --bubble-me-fg: #ededeb;
   --ring: rgba(255, 255, 255, .07); --ring-2: rgba(255, 255, 255, .14);
@@ -210,6 +223,11 @@
   --link: #3b6fd4; --amber: #a8801c; --amber-dp: #eee4c8; --moss: #3f7d2c;
   --clay: #b4402f; --gold: #9a7016; --sky: #2f6d9e;
   --page: #fafaf8; --side-bg: #ffffff; --paper: #ffffff; --hover: #ececea;
+  --wash:
+    radial-gradient(60% 55% at 85% 0%, rgba(214, 224, 242, .55), rgba(214, 224, 242, 0) 70%),
+    radial-gradient(55% 50% at 20% 100%, rgba(246, 236, 214, .75), rgba(246, 236, 214, 0) 70%),
+    radial-gradient(40% 45% at 70% 90%, rgba(242, 233, 214, .5), rgba(242, 233, 214, 0) 70%),
+    linear-gradient(180deg, #fafaf8 0%, #f7f7f5 100%);
   --selected: #eaeae7; --text-3: #8a8a88; --ph: #b8b8b8; --black: #111111;
   --bubble-me: #2e2e2e; --bubble-me-fg: #ffffff;
   --ring: rgba(0, 0, 0, .03); --ring-2: rgba(0, 0, 0, .05);
@@ -566,8 +584,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 @keyframes sigin { from { opacity: 0; transform: scale(.4); } }
 
 .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
-.dot.run { background: var(--amber); animation: pulse 1.6s ease-in-out infinite; }
-.dot.err, .dot.bad { background: var(--clay); }
+.dot.run { background: var(--amber); animation: pulse 1.6s ease-in-out infinite;
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--amber) 18%, transparent); }
+.dot.err, .dot.bad { background: var(--clay);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--clay) 15%, transparent); }
 .dot.que { background: var(--gold); }
 /* `ok` and `bad` are what agentDot() has always returned, and neither had a
    colour: a finished sub-agent's marker was a 6px transparent box, so the one
@@ -584,27 +604,27 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    last session in the list rather than a fixture of the rail. */
 .rail-foot { display: grid; gap: 2px; padding: 6px 8px 8px; border-top: 1px solid var(--line-soft); margin-top: 4px; }
 
-.me {
+.rail-foot .me {
   display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
   padding: 5px 8px; border-radius: 7px;
 }
-.me:hover { background: var(--raised); }
-.me[aria-expanded="true"] { background: var(--raised); }
-.me .av {
+.rail-foot .me:hover { background: var(--raised); }
+.rail-foot .me[aria-expanded="true"] { background: var(--raised); }
+.rail-foot .me .av {
   flex: none; width: 24px; height: 24px; border-radius: 50%;
   background: var(--amber-dp); color: var(--amber);
   display: grid; place-items: center; font-size: 12px; font-weight: 600;
 }
-.me .av.anon { background: var(--raised); color: var(--faint); }
-.me .av.anon svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.7; }
-.me .who { flex: 1; min-width: 0; display: grid; }
-.me .who .n { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.me .who .s {
+.rail-foot .me .av.anon { background: var(--raised); color: var(--faint); }
+.rail-foot .me .av.anon svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.7; }
+.rail-foot .me .who { flex: 1; min-width: 0; display: grid; }
+.rail-foot .me .who .n { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-foot .me .who .s {
   font-family: var(--mono); font-size: 10.5px; color: var(--faint);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.me .chev { flex: none; color: var(--faint); font-size: 11px; }
-.me .kbd { flex: none; font-family: var(--mono); font-size: 10px; color: var(--faint); }
+.rail-foot .me .chev { flex: none; color: var(--faint); font-size: 11px; }
+.rail-foot .me .kbd { flex: none; font-family: var(--mono); font-size: 10px; color: var(--faint); }
 
 
 /* One material for every transient floating surface -- context menu, rail
@@ -862,14 +882,17 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    had to re-agree with its neighbours about the space between them, and a turn
    whose last block happened to be a fold sat closer than one that ended in
    prose. One gap here answers it for all of them. */
+/* The column IS the flex container, not the lane inside it: the lane host is
+   `display: contents` and sets that inline (features/transcript/mount.tsx), so
+   it generates no box and the turns are this element's own flex items. A rule
+   putting the column on the lane cannot win against that inline style, and the
+   turns fell back to blocks -- which is what left a question left-aligned in a
+   column it was supposed to be pulled to the right of. */
 .col {
   max-width: calc(var(--col) + 72px); margin: 0 auto; min-width: 0;
   padding: 26px 36px calc(var(--lift, 96px) + 26px);
+  display: flex; flex-direction: column; gap: 14px;
 }
-/* The lane is what holds the turns -- `.col` is the measure they sit in, and a
-   stage can carry more than one lane -- so the column rhythm belongs here, on
-   the element the turns are actually children of. */
-.col > [data-tsl] { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 
 .banner {
   /* minus the column's side padding, so the card lines up with the prose edge */
@@ -2085,7 +2108,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    that ghosting IS the transition, which is why the old fade band above the
    composer is gone. Only the card takes pointer events; the gutter around it
    still belongs to the page. */
-.dock { position: absolute; left: 0; right: 0; bottom: 22px; padding: 0 36px;
+.dock { position: absolute; left: 0; right: 0; bottom: 22px; padding: 0 36px 0 36px;
   z-index: 5; pointer-events: none; }
 /* Below the card, not inside it: a legal-ish caption printed on the glass
    would read as part of the reader's own draft.
@@ -2197,6 +2220,9 @@ textarea {
   min-height: 46px; max-height: min(200px, 24vh); padding: 2px 0; line-height: 1.6;
 }
 textarea::placeholder { color: var(--faint); }
+/* The composer's own field: one line's leading, and the space under the last
+   line that keeps a descender off the row of controls below it. */
+.dock-in textarea { line-height: 22px; padding: 4px 0 6px; }
 /* WebKit paints its own focus ring on text controls; ours is the container
    border, so suppress it where we already show focus. */
 textarea:focus, textarea:focus-visible,
@@ -2243,7 +2269,7 @@ textarea:focus, textarea:focus-visible,
 .dock-in:focus-within .tool-btn, .tool-btn:hover { opacity: 1; }
 .tool-btn:hover { color: var(--text); background: var(--raised); }
 .go {
-  flex: none; width: 30px; height: 30px; border-radius: 50%;
+  flex: none; width: 30px; height: 30px; border-radius: 50%; margin-left: 6px;
   background: var(--black); color: var(--ink); display: grid; place-items: center;
   transition: opacity .15s, background .15s;
 }
@@ -2251,7 +2277,9 @@ textarea:focus, textarea:focus-visible,
 .go.halt { background: var(--clay); color: var(--ink-on-accent); }
 
 /* wraps instead of pushing the usage line past the edge on a narrow window */
-.under { display: flex; align-items: center; gap: 8px 10px; margin-top: 10px; padding: 0 4px 1px 6px; flex-wrap: wrap; }
+/* Pulled left of the field it sits under, so the first control's own padding
+   lines its glyph up with the text above rather than with its box. */
+.under { display: flex; align-items: center; gap: 2px; margin: 6px 0 0 -6px; padding: 0; flex-wrap: wrap; }
 .tries { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .try {
   border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px;
@@ -2377,7 +2405,8 @@ textarea:focus, textarea:focus-visible,
     padding-left: var(--tl-pad, 78px);
   }
 }
-.chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
+.chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative;
+  background: var(--wash); }
 /* New-task state: no header title, the composer holds the centre line. */
 .chat[data-fresh] #title, .chat[data-fresh] #renameBtn { visibility: hidden; }
 /* Below the true centre: the lockup owns the upper field, the composer
@@ -4551,18 +4580,24 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
 .runrail:active { cursor: grabbing; }
 .runs[data-l] .runrail { --fade-l: 28px; }
 .runs[data-r] .runrail { --fade-r: 28px; }
+/* A tag, not a pill: it names one running task in about ten characters, and the
+   whole sentence is in its title. Squared off at the corners and on the page's
+   own quiet ground -- a white capsule under a white composer read as a second
+   composer, and the two of them stacked was the loudest thing on the page. */
 .trun {
   flex: none; display: inline-flex; align-items: center; gap: 7px;
-  max-width: 280px; padding: 5px 10px; border-radius: 999px; cursor: pointer;
-  border: 1px solid var(--line); background: var(--ink); box-shadow: var(--elev);
-  font-size: 12px; color: var(--text);
+  max-width: 200px; padding: 5px 10px; border-radius: 9px; cursor: pointer;
+  border: 1px solid var(--line-soft); background: var(--surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .04), 0 8px 20px -16px rgba(0, 0, 0, .4);
+  font-size: 12px; color: var(--muted);
+  transition: border-color .14s ease, background .14s ease;
 }
 /* Lit from either side: the pointer may be on this chip or on the same task's
    row in the panel, and both light the pair. */
 .trun:hover, .trun.hl { border-color: var(--muted); }
 .trun:focus-visible { outline: 1.5px solid var(--amber); outline-offset: 2px; }
-.trun .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.trun .st { flex: none; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.trun .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.trun .st { flex: none; font-family: var(--mono); font-size: 12px; color: var(--muted); }
 
 .csheet {
   border-radius: 12px; padding: 12px 14px;
@@ -4981,7 +5016,7 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
    a column that slides 162px left over a composer that does not would read as a
    layout fault. One inset, both containers. */
 .chat:not([data-fresh]) .scroll { padding-right: var(--desk-reserve, 0px); }
-.chat:not([data-fresh]) .dock { padding-right: calc(22px + var(--desk-reserve, 0px)); }
+.chat:not([data-fresh]) .dock { padding-right: calc(36px + var(--desk-reserve, 0px)); }
 @media (prefers-reduced-motion: reduce) {
   .chat:not([data-fresh]) .scroll, .chat:not([data-fresh]) .dock { transition: none; }
 }
