@@ -68,8 +68,16 @@ def failure_class(model_text: str) -> str:
     place coarseness buys nothing. Coarseness is for model-facing prose, which varies
     without meaning anything; an envelope's ``error`` is written by the tool from a
     small fixed vocabulary, so equal strings really are the same failure and different
-    ones really are different. The variable parts a page brings with it -- the URL, the
-    host -- travel in the envelope's own keys, not in this one.
+    ones really are different.
+
+    That vocabulary is a convention its producers keep, not something this module can
+    enforce: nothing here can stop a tool interpolating an exception into ``error``,
+    and a writer that does splits one repeated cause into a class per host, so the
+    streak never reaches the nudge. The variable parts a page brings with it -- the
+    URL, the host, the exception's own text -- therefore belong in the envelope's other
+    keys, and this one carries only what a reader could enumerate. The failure mode is
+    the mirror of the one above: there, distinct causes counted as one; here, one cause
+    counts as many.
     """
     if (error := _envelope_error(model_text)) is not None:
         return f"envelope:{' '.join(error.lower().split())[:120]}"

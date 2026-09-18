@@ -527,6 +527,20 @@ reader -- a malformed one leaves the turn unbounded rather than raising inside t
 """
 
 
+TURN_ASK_KIND_KEY = "turn_ask_kind"
+"""Where a product leaves the labeller for its own harness-injected asks.
+
+The same seam as ``TURN_BUDGETS_KEY`` and for the same reason, carrying a callable
+rather than a dict because what it holds is knowledge of wording: only the product that
+writes an ask can name it. The loop pairs the name with the structural marker on the
+injected message, so the boolean "the harness asked and the model never answered" holds
+whether or not this key is set, and only the sub-label depends on it.
+
+Unlike ``observers`` this entry stays in the process -- it is never filed onto a message
+or sent to a client -- so a callable here crosses no serialization boundary.
+"""
+
+
 @dataclass(frozen=True)
 class TurnBudgets:
     """The bounds one turn runs under, beyond the iteration cap.
@@ -579,3 +593,14 @@ def turn_budgets(metadata: dict[str, Any] | None) -> TurnBudgets:
         ),
         dead_end_reasons=tuple(str(r) for r in reasons) if isinstance(reasons, (list, tuple)) else (),
     )
+
+
+def turn_ask_kind(metadata: dict[str, Any] | None) -> Callable[[object], "str | None"] | None:
+    """Read the product's ask labeller off the turn's hook metadata, or ``None``.
+
+    Tolerant for the reason :func:`turn_budgets` is: a non-callable left under the key
+    must leave the turn labelled the way it was rather than raise inside the loop, since
+    what this names is a measurement and an instrument may not end the turn it measures.
+    """
+    value = (metadata or {}).get(TURN_ASK_KIND_KEY)
+    return value if callable(value) else None

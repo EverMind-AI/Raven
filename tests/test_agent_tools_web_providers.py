@@ -25,6 +25,7 @@ from typing import Any
 import httpx
 import pytest
 
+from raven.agent.loop.failure_streak import failure_class, is_hard_tool_failure
 from raven.agent.tools import web as web_mod
 from raven.agent.tools.web import (
     DEFAULT_FETCH_PROVIDER,
@@ -412,6 +413,57 @@ async def test_a_reader_status_error_names_the_vendor_and_status_only(
     envelope = json.loads(raw)
     assert "SECRET-KEY-123" not in raw
     assert envelope["error"] == f"{FETCH_PROVIDERS[vendor].label} answered HTTP 402"
+
+
+@contextmanager
+def _transport_dies(monkeypatch: pytest.MonkeyPatch, exc: Exception):
+    """A reader whose transport raises the same way whatever the host."""
+
+    class _Dead(_Recorder):
+        def _answer(self, method: str, url: str, kwargs: dict[str, Any]) -> httpx.Response:
+            raise exc
+
+    monkeypatch.setattr(web_mod.httpx, "AsyncClient", _Dead(None))
+    yield
+
+
+async def test_one_transport_fault_on_two_hosts_is_one_streak_class(
+    monkeypatch: pytest.MonkeyPatch, _open_gate: None
+) -> None:
+    """One broken reader walked across hosts has to read as one repeated cause.
+
+    ``failure_class`` keys an envelope on its ``error`` string alone, so an
+    exception's own text there carries the host into the key: the same dead
+    certificate on two hosts becomes two classes, the streak never reaches
+    ``_LOOP_BREAK_THRESHOLD``, and the nudge that exists for exactly this -- a
+    model repeating one dead call -- never fires. The host stays in the envelope
+    for the model to read; it just does not decide the class.
+    """
+    envelopes = []
+    for host in ("alpha.example.com", "beta.example.org"):
+        exc = httpx.ConnectError(f"[SSL: CERTIFICATE_VERIFY_FAILED] hostname '{host}' does not match")
+        with _transport_dies(monkeypatch, exc):
+            envelopes.append(await WebFetchTool(api_key="k", provider="jina").execute(f"https://{host}/p"))
+
+    assert all(is_hard_tool_failure(raw) for raw in envelopes)
+    assert len({failure_class(raw) for raw in envelopes}) == 1
+    assert "alpha.example.com" in envelopes[0] and "beta.example.org" in envelopes[1]
+
+
+async def test_two_vendor_refusals_stay_two_streak_classes(monkeypatch: pytest.MonkeyPatch, _open_gate: None) -> None:
+    """The other direction, which the fix above must not trade away.
+
+    A vendor that answered without a page composes its own message here, and two
+    different refusals are two causes: folding them onto the exception type would
+    make a drained key and a blocked page one streak, which is the failure
+    ``failure_class`` was written to avoid.
+    """
+    with _patched(monkeypatch, {"code": 401, "message": "bad key"}):
+        spent = await WebFetchTool(api_key="k", provider="anysearch").execute("https://a.example")
+    with _patched(monkeypatch, {"results": [], "failed_results": [{"url": "https://a.example", "error": "blocked"}]}):
+        blocked = await WebFetchTool(api_key="k", provider="tavily").execute("https://a.example")
+
+    assert failure_class(spent) != failure_class(blocked)
 
 
 def test_every_reader_is_covered_by_the_fetch_table() -> None:

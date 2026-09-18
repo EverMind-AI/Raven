@@ -19,7 +19,15 @@ import json
 
 import pytest
 
-from raven.agent.loop import TURN_BUDGETS_KEY, AgentLoop, TurnBudgets, turn_budgets, turn_path
+from raven.agent.loop import (
+    TURN_ASK_KIND_KEY,
+    TURN_BUDGETS_KEY,
+    AgentLoop,
+    TurnBudgets,
+    turn_ask_kind,
+    turn_budgets,
+    turn_path,
+)
 from raven.agent.loop.bundles import EngineWiring, HostWiring, ToolWiring, TurnPolicy
 from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.contracts.loop_hooks import AgentHook, HookDecision
@@ -470,6 +478,90 @@ class _Salvages(_Budgeted):
         return HookDecision(short_circuit_result=self.answer)
 
 
+_FINALIZE_ASK = "[finalize] The research budget for this turn is spent. Write the report now."
+
+
+def _drafts_then_dies() -> list[LLMResponse]:
+    """An attempt that says something once, then answers nothing at all.
+
+    The first reply is what gives a gate an iteration to bounce: ``after_iteration``
+    fires on a response, so an attempt that is empty from its first call never
+    reaches one, and the ask this file is about would land on the rerun instead of
+    on the turn that died.
+    """
+    return [LLMResponse(content="A first pass.", finish_reason="stop"), *_dead()]
+
+
+def _names_the_ask(content: object) -> str | None:
+    """A product's labeller for its own asks, the way the research flow's is."""
+    return "finalize" if str(content or "").startswith("[finalize]") else None
+
+
+class _AsksOnce(_Budgeted):
+    """A product's gate that bounces one iteration with a question of its own.
+
+    The research chain's finalize, checkpoint and verify gates all land this way:
+    ``rollback`` with ``rollback_inject``, which the loop appends carrying its
+    injected-message marker.
+    """
+
+    def __init__(self, ask_kind=None, **budgets) -> None:
+        super().__init__(**budgets)
+        self._ask_kind = ask_kind
+        self.asked = False
+
+    async def before_user_inbound(self, ctx) -> HookDecision:
+        await super().before_user_inbound(ctx)
+        if self._ask_kind is not None:
+            ctx.metadata[TURN_ASK_KIND_KEY] = self._ask_kind
+        return HookDecision()
+
+    async def after_iteration(self, ctx) -> HookDecision:
+        if self.asked:
+            return HookDecision()
+        self.asked = True
+        return HookDecision(rollback=True, rollback_inject=[{"role": "user", "content": _FINALIZE_ASK}])
+
+
+@pytest.mark.asyncio
+async def test_a_product_that_names_its_ask_can_narrow_the_rerun_to_it(tmp_path):
+    """The three names a product can give its asks have to be reachable.
+
+    ``stranded_of`` takes the labeller from the turn's metadata, so a product that
+    leaves one there gets its own name for the question the turn died on. Without
+    the seam wired every harness ask reads as ``stranded:harness_ask_unknown``, and
+    an operator narrowing the rerun to one of them matches nothing -- switching off
+    the rerun they meant to narrow.
+    """
+    hook = _AsksOnce(_names_the_ask, dead_end_retries=1, dead_end_reasons=("stranded:finalize",))
+    provider = _Scripted(_drafts_then_dies(), _answers("Alice Smith won it."))
+    agent = _loop(tmp_path, provider, [hook])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert hook.asked, "the gate never got to ask, so this pins nothing"
+    assert provider.attempts_used == 2, "the turn died on the ask but the filter did not match its name"
+    assert out[0] == "Alice Smith won it."
+
+
+@pytest.mark.asyncio
+async def test_a_product_that_names_nothing_still_re_runs_on_the_structure(tmp_path):
+    """The boolean may not depend on the seam, only the sub-label.
+
+    An agent that leaves no labeller is every other agent on this loop: the ask is
+    still recognised structurally, so a rerun budgeted on ``stranded`` alone fires
+    exactly as it did before the key existed.
+    """
+    hook = _AsksOnce(None, dead_end_retries=1, dead_end_reasons=("stranded",))
+    provider = _Scripted(_drafts_then_dies(), _answers("Alice Smith won it."))
+    agent = _loop(tmp_path, provider, [hook])
+
+    out = await agent._process_message(_req(), session_key="s1")
+
+    assert provider.attempts_used == 2
+    assert out[0] == "Alice Smith won it."
+
+
 class _Timed(_Scripted):
     """A scripted provider whose calls cost the turn's clock. It lets a test say what
     the research took and what the gate took as two separate numbers, which is the
@@ -733,3 +825,21 @@ def test_a_well_formed_budget_is_read_whole():
     )
 
     assert budgets == TurnBudgets(wall_clock_seconds=3600.0, dead_end_retries=2, dead_end_reasons=("stranded",))
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [None, {}, {TURN_ASK_KIND_KEY: None}, {TURN_ASK_KIND_KEY: "finalize"}, {TURN_ASK_KIND_KEY: ["finalize"]}],
+)
+def test_a_labeller_that_is_not_callable_leaves_the_ask_unnamed(metadata):
+    """The other side of the same tolerance, and it matters more than the budget's.
+
+    What this key names is a measurement, and an instrument may not end the turn it
+    measures: handed a string, a reader that returned it unchecked would have the loop
+    call it mid-turn. Unnamed is the reading every agent that writes nothing gets.
+    """
+    assert turn_ask_kind(metadata) is None
+
+
+def test_a_callable_labeller_is_handed_back_as_it_is():
+    assert turn_ask_kind({TURN_ASK_KIND_KEY: _names_the_ask}) is _names_the_ask

@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent.hook.composite import CompositeHook
-from raven.agent.loop import TURN_BUDGETS_KEY
+from raven.agent.loop import TURN_ASK_KIND_KEY, TURN_BUDGETS_KEY
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 from research_flow.config import FlowConfig
 from research_flow.gates.ask_user import (
@@ -76,6 +76,7 @@ from research_flow.gates.verify import DraftReviewerGate
 from research_flow.state import SessionStore
 from research_flow.support.evidence_round import EvidenceRound
 from research_flow.support.fetch_gate_core import FetchGate
+from research_flow.support.harness_text import harness_ask_kind
 from research_flow.support.ledger import close_product_ledger, ledger_path, open_product_ledger
 from research_flow.support.process_appendix import build_appendix, read_ledger
 from research_flow.support.search_saturation import SearchSaturation
@@ -229,6 +230,12 @@ class TurnFrame(AgentHook):
             "dead_end_retries": self._cfg.dead_end_retry.max_retries if self._cfg.dead_end_retry.enabled else 0,
             "dead_end_reasons": list(self._cfg.dead_end_retry.reasons),
         }
+        # This product's asks are this product's wording, so the loop is handed the
+        # name for them rather than a copy of the prefixes. Without it a dead end on
+        # any of the three reads as ``stranded:harness_ask_unknown``, and a
+        # ``dead_end_reasons`` narrowed to one of them would match nothing and switch
+        # off the rerun it meant to narrow.
+        ctx.metadata[TURN_ASK_KIND_KEY] = harness_ask_kind
         ctx.metadata.pop(_TURN_MODE_KEY, None)
         text = ctx.inbound_content or ""
         ctx.metadata[_USER_TEXT_KEY] = text

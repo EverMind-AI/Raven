@@ -68,6 +68,7 @@ from raven.agent.loop._shared import (
     strip_think_blocks,
     time,
     trace,
+    turn_ask_kind,
     turn_budgets,
     turn_question,
     uuid4,
@@ -2119,6 +2120,7 @@ class TurnPathMixin:
         # handed: rebuilt afterwards it would carry the failed attempt's research, and
         # the whole point is to start again from the question.
         budgets = turn_budgets(turn_hook_meta)
+        ask_kind = turn_ask_kind(turn_hook_meta)
         retries_left = budgets.dead_end_retries
         attempt_no = 1
         retry_seed = [dict(m) for m in initial_messages] if retries_left else None
@@ -2144,7 +2146,7 @@ class TurnPathMixin:
             # and it is asked inside the attempt now; a recovery nudge left sitting at
             # the end would otherwise become what the turn is judged to have ended on.
             turn = [m for m in msgs[turn_start_idx:] if not any(m.get(k) for k in _TURN_TRANSIENT_KEYS)]
-            reasons = dead_reasons(messages=turn, final_content=final_content, status=status)
+            reasons = dead_reasons(messages=turn, final_content=final_content, status=status, ask_kind=ask_kind)
             if budgets.dead_end_reasons:
                 reasons = [r for r in reasons if r.startswith(budgets.dead_end_reasons)]
             return reasons

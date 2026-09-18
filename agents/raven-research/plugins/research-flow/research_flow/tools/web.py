@@ -1840,11 +1840,27 @@ class WebFetchTool(Tool):
             logger.error("WebFetch error for {}: {} answered HTTP {}", url, self.spec.label, status)
             return json.dumps({"error": f"{self.spec.label} answered HTTP {status}", "url": url}, ensure_ascii=False)
         except httpx.ProxyError as e:
+            # The same rule as the status half above, and it reaches further than the
+            # row on disk: ``failure_class`` keys the loop's streak on this envelope's
+            # ``error`` alone, so a host interpolated here splits one repeated cause
+            # into a class per host and the stop-repeating nudge never fires. The
+            # exception's own text moves to ``detail``, which keeps it in front of the
+            # model and inside ``is_hard_tool_failure``'s transient-marker scan.
             logger.error("WebFetch proxy error for {}: {}", url, e)
-            return json.dumps({"error": f"Proxy error: {e}", "url": url}, ensure_ascii=False)
-        except Exception as e:
+            return json.dumps({"error": "Proxy error", "detail": str(e), "url": url}, ensure_ascii=False)
+        except _ProviderPageError as e:
+            # Not folded into the transport case below: this type exists to say the
+            # vendor answered without a page, and its message is composed here from a
+            # fixed set of phrases rather than taken from an exception, so it already
+            # is the vocabulary the streak wants. Naming it by type instead would make
+            # every vendor's refusal one class.
             logger.error("WebFetch error for {}: {}", url, e)
             return json.dumps({"error": str(e), "url": url}, ensure_ascii=False)
+        except Exception as e:
+            # The type, not the text: an SSL or connection failure spells the host in
+            # its message, and two hosts behind one broken reader are one cause.
+            logger.error("WebFetch error for {}: {}", url, e)
+            return json.dumps({"error": type(e).__name__, "detail": str(e), "url": url}, ensure_ascii=False)
 
         # A stub is not an answer. The reader returns 200 with a redirect notice, an empty
         # client-side shell or a licence banner, and the turn then reasons from a page it
