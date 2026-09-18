@@ -462,6 +462,9 @@ async def test_a_hard_stop_reads_cancelled_from_the_node_registry_not_all(worksp
     row = (await tasks_list({"session_key": SESSION}))["tasks"][0]
     assert row["status"] == "cancelled"
     assert [n["status"] for n in row["nodes"]] == ["completed", "cancelled", "skipped"]
+    # The registry stamps a skipped node with the finalize moment; a node that
+    # never ran has no clock of its own to show.
+    assert row["nodes"][2]["started_at"] is None and row["nodes"][2]["ended_at"] is None
     assert row["counts"] == {
         "total": 3,
         "pending": 0,
@@ -488,6 +491,26 @@ async def test_a_dead_runs_claimed_node_reads_interrupted(workspace: Path) -> No
     assert row["status"] == "interrupted"
 
 
+async def test_a_live_runs_claimed_but_undispatched_node_reads_pending_with_no_clock(workspace: Path) -> None:
+    """`claim_node` writes `running` and the claim time for EVERY node of a run
+    at start, so the registry cannot tell an executing node from one still
+    waiting on its dependencies. Only the node the runner dispatched has an
+    instance row; the other reads `pending`, with no clock of its own."""
+    from raven.agent.subagent.instances import get_registry
+
+    session_dir = _session_dir(workspace)
+    await _make_run(session_dir, RUN_ID, _GRAPH, ["n1", "n2"])
+    await get_registry().upsert_dag_node(SESSION, RUN_ID, "n1", "Raven", "running")
+    loop = _loop_stub(live_run_ids=frozenset({RUN_ID}))
+
+    row = (await tasks_list({"session_key": SESSION}, agent_loop_factory=_factory(loop)))["tasks"][0]
+    n1, n2 = row["nodes"]
+    assert n1["status"] == "running" and isinstance(n1["started_at"], int) and n1["ended_at"] is None
+    assert n2["status"] == "pending" and n2["started_at"] is None and n2["ended_at"] is None
+    assert row["status"] == "running"
+    assert row["counts"]["running"] == 1 and row["counts"]["pending"] == 1
+
+
 async def test_a_node_no_layer_has_ever_heard_of_reads_pending(workspace: Path) -> None:
     """`n2` is declared in `graph.json` but was never claimed in the node
     registry at all (a run that claims nodes progressively rather than all at
@@ -498,14 +521,14 @@ async def test_a_node_no_layer_has_ever_heard_of_reads_pending(workspace: Path) 
     loop = _loop_stub(live_run_ids=frozenset({RUN_ID}))
 
     row = (await tasks_list({"session_key": SESSION}, agent_loop_factory=_factory(loop)))["tasks"][0]
-    assert [n["status"] for n in row["nodes"]] == ["running", "pending"]
+    # `n1` is claimed but has no instance row either: claimed is not dispatched.
+    assert [n["status"] for n in row["nodes"]] == ["pending", "pending"]
     assert row["status"] == "running"
 
 
 async def test_a_suspended_node_of_a_dead_run_reads_interrupted(workspace: Path) -> None:
     """`exception` (suspended on `resolve_dag_node`) is a non-terminal status
-    too -- `subagent.py::_dag_rows` was missing it from this same rule until
-    the sibling fix in this change."""
+    too, and reads `interrupted` once nothing is executing the run."""
     session_dir = _session_dir(workspace)
     store = await _make_run(session_dir, RUN_ID, _GRAPH, ["n1", "n2"])
     async with index_guard(store.registry_root):

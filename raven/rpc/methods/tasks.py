@@ -19,7 +19,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from raven.agent.subagent.dag_store import REGISTRY_FILENAME, UNRECORDED
+from raven.agent.subagent.dag_store import REGISTRY_FILENAME, RUNNING, UNRECORDED
 from raven.agent.subagent.history import dag_root, nodes_root, session_history_root
 from raven.agent.subagent.instances import get_registry
 from raven.rpc.methods.session import _safe_invoke_factory
@@ -278,7 +278,10 @@ def _dag_node_state(
         # `unrecorded` is a sentinel `dag_store.read_session_nodes` computes
         # for an entry with no status of its own, not a value ever written --
         # but a raw entry could still lack the key, so it is treated the same.
-        if isinstance(status, str) and status and status != UNRECORDED:
+        # `running` here is `claim_node`'s: every node of a run is claimed at
+        # start, so it says "this run owns the id", not "this node is
+        # executing" -- whether it is falls to the instance row below.
+        if isinstance(status, str) and status and status not in (UNRECORDED, RUNNING):
             return status, _int_or_none(reg_entry.get("started_at_ms")), _int_or_none(reg_entry.get("ended_at_ms"))
 
     row = instance_rows_by_node.get(node_id)
@@ -348,6 +351,10 @@ def _dag_row(
         status, started, ended = _dag_node_state(nid, entry, registry_nodes, by_node)
         if status in _NOT_LIVE_PENDING and not live:
             status = "interrupted"
+        if status == "skipped":
+            # Never ran: the registry stamps it with the moment the run was
+            # finalized, which is not a clock this node ever had.
+            started = ended = None
         call_count, failure_count = _tool_counts(entry or {})
         node: dict[str, Any] = {
             "node_id": nid,
