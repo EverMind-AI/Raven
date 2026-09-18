@@ -2,10 +2,11 @@
 
 A tool-heavy turn appends results for tens of iterations while the context is
 assembled only once, so the working transcript grows until it hits the model's
-window. The loop has always owned the reactive half of that problem: on a
-provider's overflow error it elides older tool-result bodies and retries
-(``_emergency_shrink``). This module carries the pure pieces of the other
-half, used by the loop only when ``agents.defaults.compaction.enabled`` is on:
+window. The reactive half of that problem -- on a provider's overflow error,
+elide older tool-result bodies and retry (``shrink.emergency_shrink``) -- and
+the proactive half below are both decided by the Memory role; this module
+carries the pure pieces of the proactive half, read only when
+``agents.defaults.compaction.enabled`` is on:
 
 - trigger arithmetic: when the last observed context size crosses the line
   (``should_compact`` / ``reserved_tokens``), act before the next call instead
@@ -16,8 +17,8 @@ half, used by the loop only when ``agents.defaults.compaction.enabled`` is on:
   ``tail_budget``.
 
 The MemoryConsolidator operates at turn boundaries and never runs inside a
-turn; this module, ``_emergency_shrink`` and the standing image window
-(``_window_images``, which retires pictures the model has already looked at
+turn; this module, ``shrink.emergency_shrink`` and the standing image window
+(``shrink.window_images``, which retires pictures the model has already looked at
 before every call) are the only in-turn mechanisms.
 """
 
@@ -25,7 +26,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from raven.agent.loop.recovery import REASONING_EFFORT_LADDER
+from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
 
 SUMMARY_MARKER = "[Context summary — earlier steps were compacted to fit the context window]"
 
@@ -72,7 +73,7 @@ SUMMARY_MAX_TOKENS = 32_000
 _SUMMARY_ESTIMATE_SLACK = 0.05
 
 # A handoff brief is mechanical: read the transcript, list what it says. The
-# floor of ``recovery.REASONING_EFFORT_LADDER`` rather than the turn's own
+# floor of ``REASONING_EFFORT_LADDER`` rather than the turn's own
 # effort, which is what the two failures above were run at.
 SUMMARY_REASONING_EFFORT = REASONING_EFFORT_LADDER[-1]
 

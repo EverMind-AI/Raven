@@ -6,13 +6,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from raven.agent.loop import compaction
 from raven.agent.loop._shared import (
     _ABORTED_ACTION_REPLY,
-    _ATTACHED_IMAGE_KEY,
     _DELEGATED_KEY,
     _HOOK_INJECTED_KEY,
-    _IMAGE_SOURCES_KEY,
     _MAX_ITER_STATIC_FALLBACK,
     _MAX_ITER_SYNTHESIS_PROMPT,
     _MID_TURN_USER_KEY,
@@ -48,23 +45,16 @@ from raven.agent.loop._shared import (
     _display_label,
     _file_change_payload,
     _first_line,
-    _image_sources,
     _runtime_origin,
     _stamp_reasoning_ms,
     _strip_inline_images,
-    _wire_image_bytes,
-    _withdrawn_image_note,
     append_hook_note,
     asyncio,
     autofill_resolver,
     classify_empty_response,
     current_autofill,
-    estimate_prompt_tokens,
     failure_class,
-    filed_image_note,
-    image_placeholder_text,
     is_hard_tool_failure,
-    is_image_part,
     is_only_think_debris,
     json,
     logger,
@@ -87,7 +77,9 @@ from raven.agent.loop.dead_end import NO_RESPONSE_FALLBACK, dead_reasons
 from raven.agent.loop.first_call import FirstCallGuard
 from raven.agent.loop.recovery import ContinuationGate, DraftGate, cut_reasoning_head, lower_reasoning_effort
 from raven.agent.tools.registry import call_failed
-from raven.contracts.harness import ActionRequest, CapabilityRequest, PlanningRequest
+from raven.agent.window import shrink
+from raven.agent.window.images import ATTACHED_IMAGE_KEY, IMAGE_SOURCES_KEY, filed_image_note, image_sources
+from raven.contracts.harness import ActionRequest, CapabilityRequest, PlanningRequest, WindowPressure, WindowState
 from raven.contracts.loop_hooks import HookDecision
 from raven.permissions.turn import set_current_tool_call_id
 from raven.providers.first_byte import first_byte_budget
@@ -131,7 +123,7 @@ _SAID_LOG_MAX_CHARS = 2000
 # its nudges and prefills, and an attached image rides its own key. They are
 # dropped before persistence, so a reader asking what the turn ended on has to
 # drop them too, or it answers about a message nobody is going to keep.
-_TURN_TRANSIENT_KEYS = ("_recovery_synthetic", _ATTACHED_IMAGE_KEY)
+_TURN_TRANSIENT_KEYS = ("_recovery_synthetic", ATTACHED_IMAGE_KEY)
 
 
 def _log_what_the_model_said(response: Any) -> None:
@@ -371,311 +363,6 @@ class TurnPathMixin:
             **generation,
         )
 
-    @classmethod
-    def _emergency_shrink(cls, messages: list[dict]) -> tuple[list[dict], int]:
-        """Elide the bodies of older tool-result messages to fit a tighter window.
-
-        Mid-turn context overflow is almost always accumulated tool output, so
-        replacing the content of all but the most recent few ``role="tool"``
-        messages with a short placeholder frees the most tokens while keeping
-        system / user / assistant reasoning intact. Deterministic, no extra LLM
-        call. Returns ``(new_messages, num_elided)``; ``num_elided == 0`` means
-        there was nothing worth eliding (caller should not bother retrying).
-
-        Three passes, cheapest loss first: the pictures tools showed, then older
-        tool bodies, then -- only when those two freed nothing -- the pictures
-        the user sent, all but the newest.
-        """
-        messages, elided = cls._elide_older_images(messages)
-
-        placeholder = "[earlier tool output elided to fit the context window]"
-        tool_idxs = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
-        shrunk = messages
-        if len(tool_idxs) > cls._SHRINK_KEEP_RECENT_TOOL_RESULTS:
-            elide = set(tool_idxs[: -cls._SHRINK_KEEP_RECENT_TOOL_RESULTS])
-            shrunk = []
-            for i, m in enumerate(messages):
-                if i in elide and m.get("content") and m.get("content") != placeholder:
-                    clean = dict(m)
-                    clean["content"] = placeholder
-                    shrunk.append(clean)
-                    elided += 1
-                else:
-                    shrunk.append(m)
-        if elided:
-            return shrunk, elided
-        # Nothing a result picture or a tool body could give back. The pictures the
-        # user sent go last, newest kept: a turn that is nothing but pasted
-        # screenshots overflows on them alone, and this path could reach them
-        # before the standing window narrowed the first pass to results.
-        out = list(shrunk)
-        changed, _ = cls._window_images(out, cls._SHRINK_KEEP_RECENT_IMAGES, reason="context", any_role=True)
-        return (out, changed) if changed else (shrunk, 0)
-
-    @staticmethod
-    def _demote_tool_images(messages: list[dict]) -> tuple[list[dict], int]:
-        """Move images out of tool results into a following user message.
-
-        The recovery for an endpoint that refuses a picture in ``role="tool"``.
-        Produces exactly the message list a ``False`` capability verdict would
-        have built in the first place, so the retry lands on the already-tested
-        placeholder path rather than inventing a third shape.
-
-        A run of consecutive tool messages is one batch answering one assistant
-        message, so the pictures pulled out of it are attached once after the last
-        of them -- putting one between two tool results leaves a tool_call
-        unanswered where the API checks the sequence (measured, see the batching
-        comment in the tool loop).
-
-        Returns ``(new_messages, num_demoted)``; ``0`` means no tool result
-        carried an image, so the refusal was about something else and the caller
-        should not retry.
-        """
-        out: list[dict] = []
-        pending: list[dict] = []
-        pending_sources: list[dict] = []
-        demoted = 0
-
-        def flush() -> None:
-            if pending:
-                out.append(
-                    {
-                        "role": "user",
-                        "content": list(pending),
-                        _ATTACHED_IMAGE_KEY: True,
-                        _IMAGE_SOURCES_KEY: list(pending_sources),
-                    }
-                )
-                pending.clear()
-                pending_sources.clear()
-
-        for m in messages:
-            content = m.get("content")
-            if m.get("role") != "tool":
-                flush()
-                out.append(m)
-                continue
-            if not isinstance(content, list):
-                out.append(m)
-                continue
-            images = [p for p in content if is_image_part(p)]
-            if not images:
-                out.append(m)
-                continue
-            clean = dict(m)
-            clean["content"] = image_placeholder_text(content)
-            sources = clean.pop(_IMAGE_SOURCES_KEY, None) or [{"tool": m.get("name")} for _ in images]
-            out.append(clean)
-            pending.extend(images)
-            pending_sources.extend(sources)
-            demoted += len(images)
-        flush()
-        return out, demoted
-
-    @classmethod
-    def _window_images(
-        cls,
-        messages: list[dict],
-        keep: int,
-        *,
-        budget: int | None = None,
-        reason: str = "superseded",
-        any_role: bool = False,
-    ) -> tuple[int, int]:
-        """Withdraw the pictures the request should no longer carry, in place.
-
-        Two modes. Without ``budget``, every image-bearing message but the newest
-        ``keep`` loses its pictures: the shape the overflow path and the refusal
-        ladder want. With ``budget`` (base64 bytes, the size the pictures have on the
-        wire and what the request body is charged), nothing happens while the pictures
-        still live in the transcript fit under it, and the moment they do not, every
-        message but the newest ``keep`` loses its pictures at once.
-        A collapse rather than a slide because each withdrawal is a break in the
-        prefix an upstream cache can match: sliding one message out per new batch
-        broke the prefix on 16 of 60 calls in one measured run (19 of 41 in the
-        other) and the hit rate went from 84.5% to 64.7%; collapsing when the
-        budget is hit breaks it once or a handful of times per deck, and the
-        pictures stay in view for longer in between.
-
-        In place: each withdrawn message is replaced in ``messages`` by a copy whose
-        image parts have become notes (:func:`_withdrawn_image_note`), so what the
-        model has been told about a picture it can no longer see is part of the
-        transcript from then on, not something recomputed per request.
-
-        Prefix-stable by construction. A message is touched only while it still
-        carries a picture, so one withdrawn on an earlier iteration is byte for
-        byte what it was; between two iterations either nothing changes or one
-        collapse does. That is the property a cached prefix needs, and the reason
-        this is not a pure function returning a fresh list.
-
-        The pictures tools showed, on either transport: a ``tool`` message where
-        the endpoint carries them there, the following ``user`` message the loop
-        attached where it does not. A picture the user sent is the subject of the
-        turn rather than a result, and stays -- unless ``any_role``, which is for
-        the request the endpoint has already refused, when there is nothing else
-        left to take out. Remote references count toward ``keep`` but weigh
-        nothing in the budget: their size is unknowable without fetching them.
-
-        Returns ``(messages_changed, pictures_withdrawn)``; ``(0, 0)`` means
-        nothing had to go.
-        """
-        bearing = [
-            i
-            for i, m in enumerate(messages)
-            if (any_role or m.get("role") == "tool" or m.get(_ATTACHED_IMAGE_KEY))
-            and isinstance(m.get("content"), list)
-            and any(is_image_part(p) for p in m["content"])
-        ]
-        if budget is not None:
-            live = sum(_wire_image_bytes(p) for i in bearing for p in messages[i]["content"])
-            if live <= budget:
-                return 0, 0
-        stale = bearing[:-keep] if keep else bearing
-        pictures = 0
-        for i in stale:
-            m = messages[i]
-            sources = m.get(_IMAGE_SOURCES_KEY) or []
-            total = sum(1 for p in m["content"] if is_image_part(p))
-            parts: list[Any] = []
-            seen = 0
-            for p in m["content"]:
-                if not is_image_part(p):
-                    parts.append(p)
-                    continue
-                source = sources[seen] if seen < len(sources) else {}
-                seen += 1
-                note = _withdrawn_image_note(source, index=seen, total=total, reason=reason, keep=keep)
-                parts.append({"type": "text", "text": note})
-            clean = dict(m)
-            clean["content"] = parts
-            messages[i] = clean
-            pictures += total
-        return len(stale), pictures
-
-    @classmethod
-    def _elide_older_images(cls, messages: list[dict]) -> tuple[list[dict], int]:
-        """Drop pictures from all but the most recent image-bearing message, for the
-        overflow path.
-
-        Run before the tool-text pass because an image is by far the densest
-        thing in the window -- one costs up to 1568 tokens, which is more than
-        most tool outputs -- so dropping a stale picture buys more room than
-        eliding several text results, and costs less of what the model still
-        needs. The standing window (``_IMAGE_WINDOW_RECENT_MESSAGES``) has
-        usually already done this; the tighter count here is for the turn whose
-        window was not enough.
-
-        A new list, like the rest of the overflow path: the caller rebinds.
-        """
-        out = list(messages)
-        changed, _ = cls._window_images(out, cls._SHRINK_KEEP_RECENT_IMAGES, reason="context")
-        return (out, changed) if changed else (messages, 0)
-
-    async def _summarize_head(self, messages: list[dict], model: str | None) -> tuple[list[dict], str]:
-        """Replace the transcript head with one LLM-written handoff brief.
-
-        The system prefix and the first user message never enter the summary,
-        and a recent tail (``preserve_recent_tokens`` budget) stays verbatim so
-        the model keeps its most recent working state. The summary runs on the
-        turn's own provider and model: a pinned summary model would outlive a
-        model switch and then route every summary to a retired endpoint.
-
-        It does not run at the turn's own reasoning effort. That was the shape
-        first written -- a model call of the turn like any other -- and the
-        reason it has to go is that the two are not alike: a turn thinks in
-        order to decide, while a handoff brief is a transcript read back, and
-        thinking is spent from the same budget as the brief. Measured, two
-        summary calls at the turn's effort returned an empty body having spent
-        the whole budget before the brief began, and compaction then degraded
-        to blind elision for the rest of the run.
-
-        The ceiling is ``SUMMARY_MAX_TOKENS`` bounded by the model's own and by
-        what is left of the window once the request is built, so raising the
-        budget can neither turn a summary into a request a small model refuses
-        nor into one that asks for more than the window has left.
-
-        Returns ``(messages, verdict)`` with verdict one of ``"changed"``
-        (head replaced), ``"failed"`` (a summary call was paid for and freed
-        nothing -- the caller must count it against the shared retry budget or
-        a failing endpoint would be paid once per iteration) or ``"skipped"``
-        (no call was made: the head is too small to be worth one, or the window
-        has no room left to answer in). Anything but ``"changed"`` returns the
-        input untouched, so the caller degrades to pruning plus the existing
-        overflow path and is never worse off than today.
-        """
-        cfg = self._compaction
-        limit = self.context_window_tokens
-        ceiling = self._wire_output_ceiling(model or self.model)
-        reserved = compaction.reserved_tokens(cfg.reserved_tokens, ceiling)
-        budget = compaction.tail_budget(cfg.preserve_recent_tokens, limit, reserved)
-        split = compaction.select_split(messages, budget, estimate_prompt_tokens)
-        protect_end = compaction.protected_prefix_end(messages)
-        if split is None or protect_end is None:
-            return messages, "skipped"
-        transcript = compaction.render_transcript(messages[protect_end:split])
-        request = [
-            {"role": "system", "content": compaction.SUMMARY_INSTRUCTIONS},
-            {"role": "user", "content": transcript},
-        ]
-        # Bounded by the request that is about to go out, not by the trigger's
-        # arithmetic: the rendering caps each message, so the head that
-        # overflowed the window is not the size it reaches the summary at.
-        budget = compaction.summary_output_budget(limit, estimate_prompt_tokens(request), ceiling)
-        if budget <= 0:
-            # A warning rather than an error, and repeated per iteration by
-            # design: nothing was paid for, so this does not count against the
-            # retry budget the paid failures share, and the state it reports
-            # usually resolves as pruning shrinks the head. It sits beside the
-            # per-iteration elision warning that says the same thing.
-            logger.warning(
-                "Transcript head summary has no room to answer in ({} head message(s), {} chars, "
-                "{} of window): compaction falls back to eliding older items, which drops them "
-                "rather than summarizing them",
-                split - protect_end,
-                len(transcript),
-                limit,
-            )
-            return messages, "skipped"
-        try:
-            response = await self.provider.chat(
-                messages=request,
-                tools=None,
-                model=model or self.model,
-                max_tokens=budget,
-                reasoning_effort=compaction.SUMMARY_REASONING_EFFORT,
-            )
-        except Exception as exc:
-            logger.warning("Transcript head summary call raised: {}", exc)
-            return messages, "failed"
-        summary = (response.content or "").strip()
-        if response.finish_reason == "length":
-            # A cut brief is worse than no brief: it is non-empty, so it would
-            # be accepted below and replace the head it stops halfway through.
-            logger.error(
-                "Transcript head summary was cut at its {}-token budget ({} head message(s), {} chars). "
-                "Compaction falls back to eliding older items rather than replacing the head with a "
-                "brief that stops mid-sentence",
-                budget,
-                split - protect_end,
-                len(transcript),
-            )
-            return messages, "failed"
-        if response.finish_reason == "error" or not summary:
-            # The reason decides the fix (transcript too long vs endpoint
-            # refusal vs empty completion), so record it -- and say what the
-            # turn does next, because the consequence is what a reader needs
-            # and it lands later, in a line about eliding that on its own looks
-            # like ordinary housekeeping.
-            logger.error(
-                "Transcript head summary failed ({} head message(s), {} chars): {}. "
-                "Compaction falls back to eliding older items, which drops them rather than summarizing them",
-                split - protect_end,
-                len(transcript),
-                str(response.content or "empty summary")[:300],
-            )
-            return messages, "failed"
-        return compaction.build_compacted(messages, split, summary), "changed"
-
     async def _synthesize_final_on_exhaustion(
         self,
         messages: list[dict],
@@ -860,30 +547,16 @@ class TurnPathMixin:
         # (used to label the shadow-git commit and stamp the ``LoopOutcome``).
         status = "completed"
 
-        # Context-overflow recovery: bound the number of emergency shrinks so a
-        # turn that overflows even after eliding can't loop forever.
-        compress_retries = 0
-        # In-turn transcript compaction (config-gated, factory-off). The
-        # proactive trigger arms on the billed context size of the last
-        # successful call: 0 until the first usage report and after any
-        # compaction, so it only ever fires on fresh data.
-        last_context_used = 0
-        # The reactive summary is a last resort, once per turn: an overflow
-        # retry that finds nothing left to elide may summarize the head
-        # instead of surfacing a fatal error.
-        reactive_summary_tried = False
-        # Image-demotion recovery: bound per turn, same reason.
-        image_demote_retries = 0
-        # Image-size refusals: the window below closes a notch per refusal; bounded too.
-        image_strip_retries = 0
-        # The image window: pictures stay while they fit the budget, and collapse
-        # to the newest ``image_window`` messages when they do not. Applied to the
-        # live list every iteration, so a picture withdrawn once stays withdrawn;
-        # a size refusal closes both for the rest of the turn. A budget of 0 in the
-        # settings means no standing pass at all: ``None`` here, and the window
+        # The turn's window bookkeeping: the last billed context size, the retry
+        # budgets every shrink draws on, and the picture window. Held here and
+        # handed to the Memory role each time it is asked to make the window
+        # smaller, because that role outlives the turn. A budget of 0 in the
+        # settings means no standing image pass: ``None`` here, and the window
         # only starts to act once a refusal has closed it a notch.
-        image_window = self._IMAGE_WINDOW_RECENT_MESSAGES
-        image_budget: int | None = self._recovery_limits.image_window_budget_bytes or None
+        window = WindowState(
+            image_window=shrink.IMAGE_WINDOW_RECENT_MESSAGES,
+            image_budget=self._recovery_limits.image_window_budget_bytes or None,
+        )
         # Retryable model errors that outlasted the provider's own ladder: how many
         # of the loop's longer waits this turn has spent.
         error_waits = 0
@@ -924,10 +597,6 @@ class TurnPathMixin:
         # a later retry must not read the turn's own effort again and hand back
         # the value that already came up empty.
         empty_retry_effort: str | None = None
-        # Head summaries this turn that were paid for and freed nothing. Read
-        # only to tell a reader why the elisions that follow are all this turn
-        # has left; the retry budget itself is ``compress_retries``.
-        head_summary_failures = 0
         # Said once per turn, not once per retry: three identical copies
         # of it in one transcript are noise, and the escalation for advice
         # that did not work is `loop_break_nudge`, not repetition.
@@ -1097,79 +766,23 @@ class TurnPathMixin:
                         messages.append({"role": "user", "content": inj_text, _MID_TURN_USER_KEY: True})
                         logger.info("inject: merged a mid-turn user message")
 
-            # Proactive compaction layer (config-gated, factory-off): the same
-            # usage reading the overflow recovery consults, acted on before the
-            # next call so recovery does not have to wait for the window to
-            # blow. Deterministic pruning runs first; the LLM head summary runs
-            # only when pruning is not enough, and shares the overflow-retry
-            # budget so summary calls stay bounded per turn. Placed above the
-            # autofill publish: compaction rebinds ``messages``, and a snapshot
-            # published before the rebind would go quietly stale.
-            if self._compaction.enabled and last_context_used:
-                limit = self.context_window_tokens
-                reserved = compaction.reserved_tokens(
-                    self._compaction.reserved_tokens,
-                    self._wire_output_ceiling(effective_model),
-                )
-                if compaction.should_compact(last_context_used, limit, reserved, self._compaction.trigger_ratio):
-                    projected = last_context_used
-                    if self._compaction.prune:
-                        pruned, elided = self._emergency_shrink(messages)
-                        if elided > 0:
-                            # No server reading exists for the pruned list until
-                            # the next response, so judge the summary tier by
-                            # projecting the estimated savings onto the observed
-                            # size (local estimates do not know the server's
-                            # tokenizer; the delta is safer than the absolute).
-                            saved = max(0, estimate_prompt_tokens(messages) - estimate_prompt_tokens(pruned))
-                            messages = pruned
-                            projected = max(0, last_context_used - saved)
-                            last_context_used = 0
-                            logger.warning(
-                                "Context near window; elided {} older transcript item(s) before the next call{}",
-                                elided,
-                                (
-                                    " (the head summary failed earlier this turn, so eliding is all that is left)"
-                                    if head_summary_failures
-                                    else ""
-                                ),
-                            )
-                    if (
-                        compaction.should_compact(projected, limit, reserved, self._compaction.trigger_ratio)
-                        and compress_retries < self._MAX_COMPRESS_RETRIES
-                    ):
-                        summarized, verdict = await self._summarize_head(messages, effective_model)
-                        if verdict != "skipped":
-                            compress_retries += 1
-                        if verdict == "failed":
-                            head_summary_failures += 1
-                        if verdict == "changed":
-                            messages = summarized
-                            last_context_used = 0
-                            logger.warning(
-                                "Context near window; summarized the transcript head before the next call ({}/{})",
-                                compress_retries,
-                                self._MAX_COMPRESS_RETRIES,
-                            )
-
-            # The standing image window. Before the snapshot and the hooks below
-            # so every reader of ``messages`` this iteration sees the same list
-            # the model will; in place so the notes it writes are the transcript
-            # from here on rather than a per-request rewrite (see _window_images).
-            windowed = withdrawn = 0
-            if image_budget is not None or image_window < self._IMAGE_WINDOW_RECENT_MESSAGES:
-                windowed, withdrawn = self._window_images(
-                    messages, image_window, budget=image_budget, reason="budget" if image_budget else "superseded"
-                )
-            if windowed:
-                logger.info(
-                    "Image window: withdrew {} picture(s) from {} older message(s); the newest {} keep theirs "
-                    "(budget {} bytes)",
-                    withdrawn,
-                    windowed,
-                    image_window,
-                    image_budget,
-                )
+            # The two window passes, before the snapshot and the hooks below so
+            # every reader of ``messages`` this iteration sees the list the model
+            # will. The Memory role decides whether the transcript is near its
+            # line and what to give up; this loop rebinds what it hands back.
+            # Compaction rebinds ``messages``, which is why it sits above the
+            # autofill publish: a snapshot published before the rebind would go
+            # quietly stale.
+            ahead = await self.harness.memory.shrink(
+                messages, pressure=WindowPressure.PROACTIVE, state=window, model=effective_model
+            )
+            messages = ahead.messages
+            # The standing image window: the notes it writes are the transcript
+            # from here on rather than a per-request rewrite.
+            standing = await self.harness.memory.shrink(
+                messages, pressure=WindowPressure.STANDING, state=window, model=effective_model
+            )
+            messages = standing.messages
 
             # Same seam and the same reason as the drain above: only the loop's
             # own task may touch ``messages``, and only here is every tool
@@ -1342,7 +955,7 @@ class TurnPathMixin:
                         response.usage.get("cache_creation_input_tokens", 0) or 0
                     )
                 if context_used > 0:
-                    last_context_used = context_used
+                    window.last_context_used = context_used
             if usage_sink is not None and response.usage:
                 # An explicitly configured window always wins over the live
                 # table -- that is what setting it means. Otherwise the live
@@ -1367,122 +980,42 @@ class TurnPathMixin:
                 usage_sink["context_used"] = context_used
                 usage_sink["context_percent"] = round(100 * context_used / context_max) if context_max else 0
 
-            # Context-window overflow recovery: the structured classifier flags
-            # should_compress (a smaller window won't help, but eliding the bulk
-            # of accumulated tool output will). Shrink in place and retry this
-            # iteration instead of surfacing it as a fatal error. Bounded.
+            # Recoveries that retry this iteration. The classifier on the response
+            # says what kind of refusal this was; the Memory role says whether it
+            # has a move left for it and makes it. ``continue`` re-enters the
+            # iteration at the top, so the hooks and the standing passes see the
+            # retry as they saw the attempt, and ``iteration`` is not billed for
+            # a call that did no work.
             cls_ = response.error_classification
-            if (
-                response.finish_reason == "error"
-                and cls_ is not None
-                and cls_.should_compress
-                and compress_retries < self._MAX_COMPRESS_RETRIES
-            ):
-                shrunk, elided = self._emergency_shrink(messages)
-                if elided > 0:
-                    messages = shrunk
-                    compress_retries += 1
-                    iteration -= 1  # the overflowed call did no work; don't bill it
-                    last_context_used = 0
-                    logger.warning(
-                        "Context overflow; elided {} old tool result(s), retrying ({}/{})",
-                        elided,
-                        compress_retries,
-                        self._MAX_COMPRESS_RETRIES,
-                    )
+            refused = response.finish_reason == "error" and cls_ is not None
+            retry_model = call_model or effective_model
+            if refused and cls_.should_compress:
+                shrunk = await self.harness.memory.shrink(
+                    messages, pressure=WindowPressure.OVERFLOW, state=window, model=retry_model
+                )
+                messages = shrunk.messages
+                if shrunk.changed:
+                    iteration -= 1
                     continue
-                if self._compaction.enabled and not reactive_summary_tried:
-                    reactive_summary_tried = True
-                    summarized, verdict = await self._summarize_head(messages, call_model or effective_model)
-                    if verdict == "failed":
-                        head_summary_failures += 1
-                    if verdict == "changed":
-                        messages = summarized
-                        compress_retries += 1
-                        iteration -= 1  # same discipline: the overflowed call did no work
-                        last_context_used = 0
-                        logger.warning(
-                            "Context overflow with nothing left to elide; summarized the "
-                            "transcript head, retrying ({}/{})",
-                            compress_retries,
-                            self._MAX_COMPRESS_RETRIES,
-                        )
-                        continue
-
-            # Image-in-tool-result refused: this endpoint takes a picture only in
-            # a user message. Rebuild onto the placeholder path -- the shape a
-            # False capability verdict would have produced -- and retry this
-            # iteration. Also cache the verdict so the rest of the process stops
-            # paying for the attempt: the static table in `capabilities` guessed
-            # wrong, and this is how it self-corrects.
-            if (
-                response.finish_reason == "error"
-                and cls_ is not None
-                and cls_.should_drop_tool_images
-                and image_demote_retries < self._MAX_IMAGE_DEMOTE_RETRIES
-            ):
-                demoted_messages, demoted = self._demote_tool_images(messages)
-                if demoted > 0:
-                    messages = demoted_messages
-                    self._image_tool_result_ok[call_model or effective_model] = False
-                    image_demote_retries += 1
-                    iteration -= 1  # the refused call did no work; don't bill it
-                    logger.warning(
-                        "Endpoint refused {} image(s) in a tool result; moved them "
-                        "to a user message and retrying ({}/{})",
-                        demoted,
-                        image_demote_retries,
-                        self._MAX_IMAGE_DEMOTE_RETRIES,
-                    )
+            if refused and cls_.should_drop_tool_images:
+                demoted = await self.harness.memory.shrink(
+                    messages, pressure=WindowPressure.TOOL_IMAGES_REFUSED, state=window, model=retry_model
+                )
+                messages = demoted.messages
+                if demoted.changed:
+                    # Cached so the rest of the process stops paying for the
+                    # attempt: the static table in ``capabilities`` guessed wrong
+                    # about this endpoint, and this is how it self-corrects.
+                    self._image_tool_result_ok[retry_model] = False
+                    iteration -= 1
                     continue
-
-            # Pictures refused for their size. Moving them keeps the bytes and the
-            # refusal, waiting does not shrink them, and `unknown` would have spent
-            # the whole error ladder on them -- so the window closes a notch and the
-            # same ask goes again. A notch, not a one-off strip: the strip left the
-            # history as it was, and both measured runs refused again a few calls
-            # later once the pictures had built back up (amber 09:59 and 10:05, red
-            # 11:14 and 11:39, 2026-09-05). First notch: the budget goes and only the
-            # newest message keeps its pictures, since that is the one the model has
-            # not read yet; when it alone is over the cap the second notch takes it
-            # too. The closed window then stands for the rest of the turn, so the
-            # refusal cannot recur.
-            #
-            # At zero the model sees no picture for the rest of the turn, and the
-            # notes say so. Accepted rather than papered over with a per-batch byte
-            # budget: reaching zero takes a single batch over the cap on its own,
-            # which at the measured render sizes means a build of thirty-odd pages
-            # returned in one call, and the four measured refusals were all
-            # accumulation (75-80 pictures over 14-19 messages; the window's replay
-            # peak on those same runs is 6.87 MB against a cap measured at ~26.3 MB
-            # decoded). Add the budget when a run actually gets here.
-            if (
-                response.finish_reason == "error"
-                and cls_ is not None
-                and cls_.strip_images
-                and image_strip_retries < self._MAX_IMAGE_STRIP_RETRIES
-            ):
-                withdrawn = 0
-                while not withdrawn and (image_budget is not None or image_window > 0):
-                    if image_budget is not None or image_window > 1:
-                        image_budget = None
-                        image_window = min(image_window, 1)
-                    else:
-                        image_window = 0
-                    _, withdrawn = self._window_images(
-                        messages, image_window, reason="refused", any_role=image_window == 0
-                    )
-                if withdrawn > 0:
-                    image_strip_retries += 1
-                    iteration -= 1  # the refused call did no work; don't bill it
-                    logger.warning(
-                        "Endpoint refused the request's pictures as too large; withdrew {} and closed the "
-                        "image window to {} for the rest of the turn, retrying ({}/{})",
-                        withdrawn,
-                        image_window,
-                        image_strip_retries,
-                        self._MAX_IMAGE_STRIP_RETRIES,
-                    )
+            if refused and cls_.strip_images:
+                withdrawn = await self.harness.memory.shrink(
+                    messages, pressure=WindowPressure.IMAGES_TOO_LARGE, state=window, model=retry_model
+                )
+                messages = withdrawn.messages
+                if withdrawn.changed:
+                    iteration -= 1
                     continue
 
             if response.has_tool_calls:
@@ -1676,13 +1209,13 @@ class TurnPathMixin:
                     # Provenance for the pictures, taken here where the tool, the
                     # round and the captions are all still in one place. The
                     # window reads it back when it withdraws them.
-                    sources = _image_sources(tool_call.name, result_blocks or [], iteration) if result_blocks else []
+                    sources = image_sources(tool_call.name, result_blocks or [], iteration) if result_blocks else []
                     if blocks:
                         messages = self.context.add_tool_result(
                             messages, tool_call.id, tool_call.name, model_text, blocks, trusted_note=watch_note
                         )
                         if sources:
-                            messages[-1][_IMAGE_SOURCES_KEY] = sources
+                            messages[-1][IMAGE_SOURCES_KEY] = sources
                     else:
                         # Keep the long-standing 4-arg call for text results so no
                         # existing caller or test double sees a signature change.
@@ -1830,8 +1363,8 @@ class TurnPathMixin:
                         {
                             "role": "user",
                             "content": pending_images,
-                            _ATTACHED_IMAGE_KEY: True,
-                            _IMAGE_SOURCES_KEY: pending_sources,
+                            ATTACHED_IMAGE_KEY: True,
+                            IMAGE_SOURCES_KEY: pending_sources,
                         }
                     )
                 # Dispatched before prev_had_tool_calls is set: a rollback means
@@ -2940,7 +2473,7 @@ class TurnPathMixin:
                 first_user_pending = False
             if entry.get("_recovery_synthetic"):
                 continue  # #1a synthetic recovery nudge — never persist scaffolding
-            if entry.get(_ATTACHED_IMAGE_KEY):
+            if entry.get(ATTACHED_IMAGE_KEY):
                 # Already filtered upstream; kept because this is the last gate
                 # before a write that cannot be undone, unlike the code above it.
                 continue
@@ -2969,7 +2502,7 @@ class TurnPathMixin:
             if tool_metadata := entry.pop(_TOOL_METADATA_KEY, None):
                 entry["metadata"] = tool_metadata
             # Provenance of pictures that lived for this turn only; nothing to file.
-            entry.pop(_IMAGE_SOURCES_KEY, None)
+            entry.pop(IMAGE_SOURCES_KEY, None)
             # A withdrawn picture's note is filed without this turn's reasons: on
             # the tool-result transport the message outlives the turn, and a
             # resumed session would otherwise replay "this turn's pictures outgrew

@@ -366,3 +366,44 @@ def test_the_judge_cache_does_not_grow_without_a_ceiling() -> None:
             assert len(_COMPILED) <= MAX_COMPILED
     finally:
         _COMPILED.clear()
+
+
+# --------------------------------------------------------------------------- #
+# The registry seat                                                            #
+# --------------------------------------------------------------------------- #
+
+
+def test_a_registry_nobody_handed_a_role_still_refuses_what_the_charter_refuses() -> None:
+    """Most registries this tree builds take no Action role, and one of them --
+    the curator's -- dispatches inside the turn's charter scope. An absent role
+    is "nobody chose one here", not "this dispatch carries no Charter"."""
+    from raven.agent.tools.registry import ToolRegistry
+
+    registry = ToolRegistry()
+    with charter_scope(_rules()):
+        assert registry._verifier_refusals("write_file", {"path": "/etc/passwd"}) == [
+            "write under ./out/",
+            "read it first",
+        ]
+        assert registry._verifier_refusals("write_file", {"path": "./out/a"}) == ["read it first"]
+    assert registry._verifier_refusals("write_file", {"path": "/etc/passwd"}) == [], (
+        "outside a dispatch there is no playbook to enforce"
+    )
+
+
+def test_an_injected_role_is_asked_instead_of_the_default() -> None:
+    """The provider is the seam a replacement uses; when one is installed it is
+    the only thing asked, charter or no charter."""
+    from raven.agent.tools.registry import ToolRegistry
+
+    asked: list[str] = []
+
+    class Loud:
+        def judge(self, name, params, prior):
+            asked.append(name)
+            return ["the role said no"]
+
+    registry = ToolRegistry(verifier_provider=lambda: Loud())
+    with charter_scope(_rules()):
+        assert registry._verifier_refusals("write_file", {"path": "./out/a"}) == ["the role said no"]
+    assert asked == ["write_file"]
