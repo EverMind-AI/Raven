@@ -163,12 +163,12 @@ const LEGACY_SHARED = {
   cmd: 3, ct: 3, d: 5, empty: 2, ff: 2, foot: 2, gap: 3,
   'ghost-ic': 3, grp: 2, h: 4, hd: 5, ic: 4,
   icb: 2, k: 4, kd: 2, key: 5, l1: 3, l2: 3, lb: 4, led: 2, mk: 2, n: 6, none: 2,
-  note: 2, ph: 2, 
+  note: 2, ph: 2,
   pmdhead: 2, pmdmeta: 2, pmhero: 5,
   pmsec: 2, pnote: 2,
   'provider-choice-action': 2, rm: 3, row: 2, sheet: 2, shot: 3, sk: 3, skel: 3,
   srow: 2, step: 2, sulist: 3, sustate: 2, swi: 2, sz: 2, t: 3, tag: 2, tick: 2,
-  tipdn: 3, tm: 2, v: 3, val: 2, w: 4, warn: 3, wkg: 3, wsnote: 2, 
+  tipdn: 3, tm: 2, v: 3, val: 2, w: 4, warn: 3, wkg: 3, wsnote: 2,
 }
 
 // How many of a domain's own classes -- the ones no other domain names -- still
@@ -220,7 +220,7 @@ const LEGACY_LOCAL = {
      `.ai`, used to be written inside a className expression and are literal
      attributes here: they moved onto this list from the one below, which falls
      by one in the same change. */
-  transcript: 76,
+  transcript: 77,
   workspace: 37,
 }
 
@@ -260,7 +260,7 @@ const LEGACY_EXPR = {
 // goldens take their bytes from -- so these two come down by renaming, in a
 // commit that changes the DOM the goldens record.
 const LEGACY_CHROME = {
-  chrome: 103,
+  chrome: 89,
   components: 33,
 }
 
@@ -318,9 +318,8 @@ const UNSTYLED = {
 // expression cannot tell from a class.
 const LEGACY_BORROWED = {
   chrome: [
-    'body', 'btn', 'cfind', 'chev', 'cmd', 'foot', 'ghost-ic', 'hd', 'ic', 'icb',
-    'lb', 'led', 'mk', 'n', 'note', 'pill', 'pmhero', 'row', 'sheet', 't',
-    'tick', 'tipdn', 'top',
+    'body', 'btn', 'chev', 'cmd', 'foot', 'ghost-ic', 'hd', 'ic', 'icb',
+    'lb', 'led', 'mk', 'n', 'note', 'sheet', 't', 'tick', 'tipdn',
   ],
   components: ['a', 'cap', 'hd', 'key', 'l1', 'l2', 'led', 'n', 'skel', 'sustate', 'warn'],
 }
