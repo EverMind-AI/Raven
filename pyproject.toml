@@ -553,6 +553,10 @@ dev = [
     "ruff==0.15.12",
     "ty==0.0.80",
 ]
+docs = [
+    "mkdocs-material>=9.5",
+    "mkdocs-static-i18n>=1.0",
+]
 
 [tool.importlinter]
 root_package = "raven"
