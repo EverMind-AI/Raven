@@ -2,6 +2,17 @@ div#onb
 div.app[data-rail=on]
   aside.rail[data-counts=pending]
     div.railtop
+      span.wordmark
+        svg
+          rect
+          path
+          circle
+          ellipse
+          ellipse
+          circle
+          circle
+          path
+          path
       button#railBtn.ghost-ic.tipdn
         svg
           rect
@@ -15,14 +26,6 @@ div.app[data-rail=on]
         svg
           path
         span
-      button#skillBtn.navi
-        svg
-          path
-        span
-      button#plugBtn.navi
-        svg
-          path
-        span
       button#playbooksBtn.navi
         svg
           circle
@@ -30,12 +33,10 @@ div.app[data-rail=on]
           circle
           path
         span
-      button#kbBtn.navi
+      button#agentsBtn.navi
         svg
-          path
-        span
-      button#memoryBtn.navi
-        svg
+          rect
+          rect
           path
         span
       div#moreFly.moresub[data-open=false]
@@ -63,8 +64,6 @@ div.app[data-rail=on]
             path
         span.who
           span.n
-          span#meSub.s
-        span#meKbd.kbd
     div#railGrip.grip
   div.main
     div#split.split
@@ -91,10 +90,18 @@ div.app[data-rail=on]
         div#wsGrip.grip
         div#brand
           span.mk
+            svg
+              rect
+              path
+              circle
+              ellipse
+              ellipse
+              circle
+              circle
+              path
+              path
           span.wl
         div.dock
-          div.crew.crew-back
-            img.rv.rv-content
           div#sheetRack.sheets
           div.dock-in
             div#queued.queued
@@ -143,11 +150,6 @@ div.app[data-rail=on]
                 span#tierPopLab.lab
               div#tierList
               div.note
-          div.crew.crew-front
-            img.rv.rv-main
-            img.rv.rv-research
-            img.rv.rv-coding
-            img.rv.rv-data
       aside#ws.ws
         div.ws-top
           div#wsTabs.wseg
@@ -183,37 +185,6 @@ button#railShow.ghost-ic.tipdn
   svg
     rect
     path
-section#capsPage.page[data-open=false]
-  header
-    h2#capsTitle
-  div.work
-    div.wrap
-      div#pageHero.pmhero
-        h3
-      div.cbar
-        div.cfind
-          svg.ic
-            circle
-            path
-          input#cq
-        div#cKind.pills
-          button.pill[data-k=all]
-          button.pill[data-k=on]
-          button.pill[data-k=attn]
-          button.pill[data-k=add]
-        button.pminstbtn
-          span
-        button.pminstbtn
-          span
-      div#capsBody
-        div
-      details#advAdd.adv
-        summary
-        p
-        div.row
-          input#mName
-          input#mAddr
-          button#mAdd.mini
 section#extAgentsPage.page[data-open=false]
   header
     h2
@@ -234,11 +205,6 @@ section#playbooksPage.page[data-open=false]
     h2
   div.work
     div#playbooksBody.wrap
-section#kbPage.page[data-open=false]
-  header
-    h2
-  div.work
-    div#kbBody.wrap
 section#cronPage.page[data-open=false]
   header
     h2

@@ -486,6 +486,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.collapse_rail': 'Collapse sidebar',
     'gui.collapse_ws': 'Collapse workspace',
     'gui.commands': 'Commands',
+    'gui.brand.hi': "Hi, I'm Raven Agent",
     'gui.composer_ph': 'Do anything',
     'gui.compress.done': 'Archived {n} messages - {before} to {after} tokens',
     'gui.compress.fail': 'Compact failed: {err}',
@@ -2045,6 +2046,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.tasks.rec_unread': 'No record read for this step yet',
     'gui.tasks.canvas': 'Task graph - drag to pan, ctrl and scroll to zoom',
     'gui.tasks.pick_node': 'Pick a step to read it',
+    'gui.tasks.chat_on': 'Continue with {agent}',
     'gui.tasks.tab_order': 'Work order'
   },
   zh: {
@@ -2253,6 +2255,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.collapse_rail': '收起侧边栏',
     'gui.collapse_ws': '收起工作区',
     'gui.commands': '命令',
+    'gui.brand.hi': 'Hi，我是 Raven Agent',
     'gui.composer_ph': '想做什么都可以',
     'gui.compress.done': '已归档 {n} 条消息 · {before} → {after} tokens',
     'gui.compress.fail': '压缩失败：{err}',
@@ -3780,6 +3783,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.tasks.rec_unread': '尚未读取这一步的过程记录',
     'gui.tasks.canvas': '任务流程图 · 拖动平移，按住 ctrl 滚动缩放',
     'gui.tasks.pick_node': '选中一个步骤查看',
+    'gui.tasks.chat_on': '继续和 {agent} 对话',
     'gui.tasks.tab_order': '任务单'
   }
 } as Record<Locale, Record<string, string>>

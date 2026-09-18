@@ -8,7 +8,7 @@
  *
  * What cannot be a re-render is here: the rail's own draw and the capabilities
  * page's, the three stores whose draw commits a field their component renders
- * (the permission chip, the rail foot, the context ring), the model label --
+ * (the permission chip, the context ring), the model label --
  * the one step left that writes an element by id -- the settings dialog's
  * epoch, the nav flyout's marks, the transcript's per-lane version bump, the
  * composer's queue, the shared drawer and the one reload.
@@ -33,10 +33,8 @@ import { draw as sessionDraw } from '../../features/rail/store'
 import { redraw as redrawSettings } from '../../features/settings/store'
 import { redraw as redrawTranscript } from '../../features/transcript/mount'
 import { current as sessionCurrent } from '../../lib/session'
-import * as caps from '../caps'
 import { draw as drawCtx } from '../ctxChip'
 import * as detail from '../detail'
-import { draw as drawFoot } from '../foot'
 import { draw as drawNavRows } from '../navfly'
 import { draw as drawPerm } from '../perm'
 import { isDraft } from '../session/registry'
@@ -45,7 +43,6 @@ import * as lang from './store'
 
 export function repaint(): void {
   sessionDraw()
-  drawFoot()
   modelLabel()
   drawPerm()
   drawCtx()
@@ -53,7 +50,6 @@ export function repaint(): void {
      are keyed on it, so a flip rebuilds each one rather than diffing a tree
      whose words all moved. */
   redrawSettings()
-  try { caps.draw() } catch { /* extensions not loaded yet */ }
   /* The rows' own words follow the catalogue on their own (chrome/MoreFly.tsx);
      what this asks for is the mark on each of them, which is written from
      outside React and is the one thing a re-render leaves alone. */

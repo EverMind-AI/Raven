@@ -24,19 +24,18 @@ vi.mock('../features/cron/store', async (original) => ({
   ...(await original<Record<string, unknown>>()),
   open: () => opens.list.push('cronPage'),
 }))
-vi.mock('../features/extAgents/store', async (original) => ({
+vi.mock('../features/memory/store', async (original) => ({
   ...(await original<Record<string, unknown>>()),
-  open: () => opens.list.push('extAgentsPage'),
+  open: () => opens.list.push('memoryPage'),
 }))
 
 /* NAV_OF, as far as the flyout is concerned: which button a page lights up.
    The three rows all light up the group's own parent. */
 const NAV_OF: Record<string, string> = {
-  capsPage: 'skillBtn',
-  extAgentsPage: 'moreBtn',
+  extAgentsPage: 'agentsBtn',
   connectionsPage: 'moreBtn',
   cronPage: 'moreBtn',
-  memoryPage: 'memoryBtn',
+  memoryPage: 'moreBtn',
 }
 
 interface Harness {
@@ -138,7 +137,7 @@ describe('the nav flyout', () => {
     const seen = install()
     draw()
     rows()[2]!.click()
-    expect(seen.opened).toEqual(['cronPage'])
+    expect(seen.opened).toEqual(['memoryPage'])
     expect(seen.marks).toBe(1)
   })
 
@@ -223,7 +222,7 @@ describe('marking the rows', () => {
     fly().dataset.open = 'true'
     openPage('cronPage')
     expect(mark()).toBe(true)
-    expect(marked()).toEqual(['false', 'false', 'true'])
+    expect(marked()).toEqual(['true', 'false', 'false'])
     openPage(null)
     mark()
     expect(marked()).toEqual(['false', 'false', 'false'])
@@ -233,7 +232,7 @@ describe('marking the rows', () => {
     install()
     draw()
     fly().dataset.open = 'true'
-    openPage('memoryPage')
+    openPage('extAgentsPage')
     mark()
     expect(marked()).toEqual(['false', 'false', 'false'])
   })
@@ -258,15 +257,15 @@ describe('together with the rail', () => {
     openPage('cronPage')
     railMarkNew()
     expect(current('moreBtn')).toBe('false')
-    expect(marked()).toEqual(['false', 'false', 'true'])
+    expect(marked()).toEqual(['true', 'false', 'false'])
   })
 
   it('leaves the other nav buttons to the rail', () => {
     install()
     toggle(true)
-    openPage('memoryPage')
+    openPage('extAgentsPage')
     railMarkNew()
-    expect(current('memoryBtn')).toBe('true')
+    expect(current('agentsBtn')).toBe('true')
     expect(current('moreBtn')).toBe('false')
     expect(marked()).toEqual(['false', 'false', 'false'])
   })

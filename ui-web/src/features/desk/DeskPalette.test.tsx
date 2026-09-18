@@ -426,7 +426,7 @@ describe('the desk shelf', () => {
        it by this class -- the bubble being a sibling is what broke the
        positional rule it used to use. */
     expect([...document.querySelectorAll('.desk-tabs button .lb')].map((n) => n.textContent))
-      .toEqual(['gui.ws.deliverables', 'Diff', 'gui.ws.tasks'])
+      .toEqual(['gui.ws.deliverables', 'gui.ws.tasks', 'Diff'])
 
     await act(async () => {
       desk.set({ tab: 'deliverables' })

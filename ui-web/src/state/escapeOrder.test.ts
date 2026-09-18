@@ -25,7 +25,6 @@ import * as turn from '../features/composer/turn'
 import * as connections from '../features/connections/store'
 import * as cron from '../features/cron/store'
 import * as extAgents from '../features/extAgents/store'
-import * as knowledge from '../features/knowledge/store'
 import * as memory from '../features/memory/store'
 import * as playbooks from '../features/playbooks/store'
 import { resetTranslator, setTranslator } from '../i18n/t'
@@ -52,8 +51,6 @@ const LAYER_IDS = [
   '#cronPage',
   '#memoryPage',
   '#playbooksPage',
-  '#kbPage',
-  '#capsPage',
   '#extAgentsPage',
   '#connectionsPage',
   'setIsOpen()',
@@ -72,12 +69,10 @@ const PAGE = [
   '<div class="find" id="findBox" hidden><input id="sfind"></div>',
   '<div class="chat"><div class="dock"><div class="sheets" id="sheetRack"></div>',
   '<div class="dock-in"><textarea id="ta"></textarea></div></div></div>',
-  '<section class="page" id="capsPage" data-open="false"></section>',
   '<section class="page" id="extAgentsPage" data-open="false"></section>',
   '<section class="page" id="connectionsPage" data-open="false"></section>',
   '<section class="page" id="memoryPage" data-open="false"></section>',
   '<section class="page" id="playbooksPage" data-open="false"></section>',
-  '<section class="page" id="kbPage" data-open="false"></section>',
   '<section class="page" id="cronPage" data-open="false"></section>',
   '<div class="veil" id="jobVeil" data-open="false"><button id="jobNo"></button></div>',
   '<aside class="detail" id="detail" data-open="false"><div class="body" id="dBody"></div></aside>',
@@ -98,7 +93,6 @@ const spies = {
   cronClose: vi.fn(),
   memClose: vi.fn(),
   pbClose: vi.fn(),
-  kbClose: vi.fn(),
   extAgentsClose: vi.fn(),
   stop: vi.fn(),
 }
@@ -130,10 +124,8 @@ const LAYERS: Record<string, { up: () => void; taken: () => boolean }> = {
   '#cronPage': { up: flag('cronPage'), taken: called(spies.cronClose) },
   '#memoryPage': { up: flag('memoryPage'), taken: called(spies.memClose) },
   '#playbooksPage': { up: flag('playbooksPage'), taken: called(spies.pbClose) },
-  '#kbPage': { up: flag('kbPage'), taken: called(spies.kbClose) },
   /* The capabilities page closes through the page store, which lowers all
      seven sections -- so its own mark is the one section it was asked about. */
-  '#capsPage': { up: flag('capsPage'), taken: lowered('capsPage') },
   '#extAgentsPage': { up: flag('extAgentsPage'), taken: called(spies.extAgentsClose) },
   '#connectionsPage': { up: flag('connectionsPage'), taken: called(spies.connClose) },
   'setIsOpen()': { up: () => settingsDialog.open(), taken: () => !settingsDialog.isOpen() },
@@ -161,7 +153,6 @@ beforeEach(() => {
   vi.spyOn(cron, 'close').mockImplementation(spies.cronClose)
   vi.spyOn(memory, 'close').mockImplementation(spies.memClose)
   vi.spyOn(playbooks, 'closePage').mockImplementation(spies.pbClose)
-  vi.spyOn(knowledge, 'close').mockImplementation(spies.kbClose)
   vi.spyOn(extAgents, 'close').mockImplementation(spies.extAgentsClose)
   sources.composer = { stop: spies.stop } as unknown as ComposerSource
   settingsDialog.close()
@@ -221,7 +212,7 @@ describe('the Escape priority order', () => {
     LAYER_IDS.slice(i + 1).map((second) => ({ first, second })))
 
   it('has ninety-one pairs to answer for', () => {
-    expect(pairs).toHaveLength(91)
+    expect(pairs).toHaveLength(66)
   })
 
   it.each(pairs)('takes back $first and leaves $second alone', ({ first, second }) => {

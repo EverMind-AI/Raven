@@ -1203,6 +1203,10 @@
       "en": "Commands",
       "zh": "命令"
     },
+    "gui.brand.hi": {
+      "en": "Hi, I'm Raven Agent",
+      "zh": "Hi，我是 Raven Agent"
+    },
     "gui.composer_ph": {
       "en": "Do anything",
       "zh": "想做什么都可以"
@@ -7298,6 +7302,10 @@
     "gui.tasks.pick_node": {
       "en": "Pick a step to read it",
       "zh": "选中一个步骤查看"
+    },
+    "gui.tasks.chat_on": {
+      "en": "Continue with {agent}",
+      "zh": "继续和 {agent} 对话"
     },
     "gui.tasks.tab_order": {
       "en": "Work order",

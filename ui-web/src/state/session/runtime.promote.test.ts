@@ -51,7 +51,6 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
      without them. */
   await loadPart(async () => { await import('./runtime'); return import('../../app/install') }, {
     fakes: {
-      'src/state/caps': { draw: () => {} },
       'src/state/page': { show: () => {} },
       'src/state/ws': { setOpen: () => {}, reset: () => {} },
       'src/state/session/conversation': {

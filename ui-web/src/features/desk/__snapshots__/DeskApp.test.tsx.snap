@@ -12,11 +12,11 @@ exports[`asking for the instance list > keeps its rendered shape 1`] = `
       button
         svg
           rect
+          rect
           path
         span.lb
       button
         svg
-          rect
           rect
           path
         span.lb

@@ -135,7 +135,7 @@ function remember(): void {
   })
 }
 
-const TABS: readonly DeskTab[] = ['deliverables', 'diff', 'tasks']
+const TABS: readonly DeskTab[] = ['deliverables', 'tasks', 'diff']
 
 /* What each tab is counting, as the identity of every item in it -- read from
    the source that tab draws from, so "what is in it" and "what is new in it"

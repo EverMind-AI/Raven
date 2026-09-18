@@ -92,7 +92,6 @@ const WRITE = /\.(?:innerHTML|outerHTML|textContent|innerText|className)\s*\+?=(
 /* TOUCH matches, per file, as the tree stands. Down or gone only. */
 const PINNED = {
   'state/banner.ts': 1,
-  'state/caps.ts': 3,
   'state/confirm.ts': 2,
   'state/detail.ts': 3,
   'state/envChip.ts': 3,

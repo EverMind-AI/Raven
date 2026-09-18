@@ -16,6 +16,7 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
+import { SendGlyph } from '../../components/Ico'
 import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
 import { Board } from '../dag/Board'
@@ -274,6 +275,34 @@ function FlowTab({ node }: { node: TaskNode }): JSX.Element {
 /* ── one node, described ───────────────────────────────────────────────
    Fills the node area rather than sitting beside it in the docked pane: it is
    not wide enough for both, and closing the card brings the column back. */
+/* Whether there is anyone left to talk to. A step's executor is a stateful
+   instance that outlives the step, so a step that ran can be carried on with;
+   one nobody started and one that was skipped never got an instance, and a
+   field offering to reach them would be offering nothing. */
+const reachable = (status: string): boolean => status !== 'pending' && status !== 'skipped'
+
+/* Static: there is no `tasks.*` method on the contract for this yet, so the
+   field takes what the reader types and the arrow lights when it is worth
+   sending. What it will send is the one thing still missing. */
+function NodeChat({ node }: { node: TaskNode }): JSX.Element {
+  const [draft, setDraft] = useState('')
+  return (
+    <div className="tkchat">
+      <div className="tkchatbox">
+        <input
+          type="text"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder={t('gui.tasks.chat_on', { agent: node.agent })}
+        />
+        <button className="tkgo" disabled={!draft.trim()} aria-label={t('gui.send')}>
+          <SendGlyph />
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function NodeCard({ node, onClose }: { node: TaskNode; onClose: () => void }): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   /* Flow first, because what happened is the usual question -- except on a step
@@ -297,6 +326,10 @@ function NodeCard({ node, onClose }: { node: TaskNode; onClose: () => void }): J
         ))}
       </div>
       {tab === 'flow' ? <FlowTab node={node} /> : <OrderTab node={node} />}
+      {/* Under the flow, not under the work order: the order is what this step
+          was asked, which is settled, and the flow is the conversation the
+          field carries on. */}
+      {tab === 'flow' && reachable(node.status) ? <NodeChat node={node} /> : null}
     </div>
   )
 }
@@ -314,7 +347,7 @@ function NodeCard({ node, onClose }: { node: TaskNode; onClose: () => void }): J
    downward: the width is the docked pane's to spare, the height is what a
    reader scrolling a column of steps pays for each one, and the gap between
    layers is what a curve needs to read as a curve rather than as a kink. */
-const COLUMN: Dims = { W: 216, H: 46, GAP_X: 240, GAP_Y: 106, PAD: 16 }
+const COLUMN: Dims = { W: 196, H: 78, GAP_X: 220, GAP_Y: 118, PAD: 16 }
 
 function Fork({ task }: { task: TaskRow }): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)

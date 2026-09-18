@@ -95,8 +95,8 @@ describe('the page root', () => {
       'dTitle', 'dClose', 'dBody',
       'setModal', 'snav', 'snavList', 'setTitle', 'setSub', 'setClose', 'spanels',
       'railShow', 'split', 'jobVeil', 'connVeil', 'menu', 'toasts',
-      'capsPage', 'extAgentsPage', 'connectionsPage', 'memoryPage', 'playbooksPage', 'kbPage', 'cronPage',
-      'extAgentsBody', 'connectionsBody', 'memoryBody', 'playbooksBody', 'kbBody', 'cronBody',
+      'extAgentsPage', 'connectionsPage', 'memoryPage', 'playbooksPage', 'cronPage',
+      'extAgentsBody', 'connectionsBody', 'memoryBody', 'playbooksBody', 'cronBody',
     ]) {
       expect(document.querySelectorAll(`#${id}`), id).toHaveLength(1)
     }
@@ -111,7 +111,7 @@ describe('the page root', () => {
     render()
     for (const id of [
       'dBody', 'snavList', 'spanels',
-      'extAgentsBody', 'connectionsBody', 'memoryBody', 'playbooksBody', 'kbBody', 'cronBody',
+      'extAgentsBody', 'connectionsBody', 'memoryBody', 'playbooksBody', 'cronBody',
     ]) {
       expect(document.getElementById(id)!.childNodes, id).toHaveLength(0)
     }
@@ -149,7 +149,7 @@ describe('the page root', () => {
     for (const id of ['cfTitle', 'cfNo', 'cfYes', 'dTitle', 'setTitle']) {
       expect(document.getElementById(id)!.textContent, id).not.toBe('')
     }
-    for (const sel of ['#extAgentsPage h2', '#connectionsPage h2', '#memoryPage h2', '#playbooksPage h2', '#kbPage h2', '#cronPage h2']) {
+    for (const sel of ['#extAgentsPage h2', '#connectionsPage h2', '#memoryPage h2', '#playbooksPage h2', '#cronPage h2']) {
       expect(document.querySelector(sel)!.textContent, sel).not.toBe('')
     }
     expect(document.querySelector('.wm')!.textContent).not.toBe('')

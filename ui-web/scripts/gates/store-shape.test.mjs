@@ -60,9 +60,6 @@ const LISTENERS = {
   ...SHAPE,
   'app/connection.ts': 'the connection state watchers, which are app wiring rather than a store',
   'lib/session.ts': 'the session-key watchers, which carry no value of their own',
-  'state/caps.ts':
-    '`switched`: what the two tabs run after a switch, a second group beside the '
-    + "store's own subscribers",
   'state/lang/store.ts':
     '`afterwards`: lang.onApplied, the group that runs after the rendered half '
     + 'has committed',

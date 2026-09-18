@@ -50,7 +50,6 @@
 import { useEffect, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import { CapsPage } from './chrome/CapsPage'
 import { ChatTop } from './chrome/ChatTop'
 import { Dock } from './chrome/Dock'
 import { FailureBars } from './chrome/FailureBar'
@@ -271,7 +270,6 @@ function RailShow(): JSX.Element {
 
 /* One of the six module pages whose whole interior is a heading and the empty
    box its island roots itself in. The seventh, the capabilities page, serves two
-   modules and has a file of its own (src/chrome/CapsPage.tsx).
 
    The heading is drawn and then hidden (`.page > header h2{display:none}`,
    src/styles/page.css): the strip stays for breathing room and the scroll fade,
@@ -335,7 +333,7 @@ export function App(): JSX.Element {
           while an entrance is "where you find it" -- the same brand can be
           both (a Slack plugin and a Slack entrance) and the two point in
           opposite directions. */}
-      {PAGES.map((page) => (page.own ? <CapsPage key={page.id} /> : <ModulePage key={page.id} page={page} />))}
+      {PAGES.map((page) => <ModulePage key={page.id} page={page} />)}
       {/* The new-job sheet renders here from the cron island
           (src/features/cron/CronPage.tsx); only the veil is this file's. */}
       <div className="veil" id="jobVeil" data-open="false" />

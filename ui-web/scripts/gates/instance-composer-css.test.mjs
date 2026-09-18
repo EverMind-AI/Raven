@@ -93,13 +93,16 @@ describe('the sub-agent composer against the page composer', () => {
     expect(instanceDockDecls(stylesheet)).toEqual([])
   })
 
-  it('takes the glass from the shared card rather than its own copy', () => {
-    /* The four declarations that make the card a material. A sub-agent's
-       composer must inherit every one of them: restated, they are what would
-       drift. */
+  it('takes its material from the shared card rather than its own copy', () => {
+    /* The declarations that make the card a material. A sub-agent's composer
+       must inherit every one of them: restated, they are what would drift.
+       The card is a solid pane now rather than glass -- the blur, the rim
+       light and the border went with that -- so the names below moved; what
+       this case pins is unchanged, that one rule owns them and the pane's
+       copy names none of them. */
     const shared = css.match(/\n\.dock-in \{[^}]*\}/)
     expect(shared).toBeTruthy()
-    for (const prop of ['backdrop-filter', 'background', 'border', '--rim']) {
+    for (const prop of ['background', 'border-radius', 'box-shadow']) {
       expect(shared[0]).toContain(prop)
     }
     const own = instanceDockProps()
