@@ -31,8 +31,12 @@ REPO = Path(__file__).resolve().parent.parent
 #: stale: a new rollback in an unlisted tree fails as an unmapped root.
 REGISTERED_HOOK: dict[str, tuple[str, str]] = {
     "agents/raven-research/plugins/research-flow": ("research_flow/flow.py", "ResearchFlowHook"),
-    "plugins-dist/design-engine": ("raven_design/plugin/hook.py", "DesignEngineHook"),
-    "plugins-dist/ppt-engine": ("raven_ppt/plugin/hook.py", "PptEngineHook"),
+    # design-engine no longer builds a rollback itself: its conduct answers
+    # ``Resample`` and ``ConductHook`` renders that as the rollback, so the
+    # declaration lives on the adapter, once, for every conduct seated in it.
+    # ppt-engine and oncall-flow: same shape as design-engine, their conducts
+    # answer through the adapter, so the adapter's declaration is theirs too.
+    "raven/agent/hook": ("conduct.py", "ConductHook"),
 }
 
 SEARCH_ROOTS = ("agents", "plugins-dist", "raven", "evolver")

@@ -23,6 +23,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
+from raven.agent.harness.conducts import compose_review, compose_salvage
+from raven.contracts.agent_conduct import AgentConduct, StepView, Verdict
 from raven.contracts.harness import ActionModule, ActionRequest
 
 if TYPE_CHECKING:
@@ -55,6 +57,12 @@ class DefaultAction:
         from raven.agent.subagent.charter import judge as charter_judge
 
         return charter_judge(name, params, prior)
+
+    async def review(self, step: StepView, conducts: Sequence[AgentConduct]) -> Verdict:
+        return await compose_review(step, conducts)
+
+    async def salvage(self, step: StepView, conducts: Sequence[AgentConduct]) -> Any | None:
+        return await compose_salvage(step, conducts)
 
     async def decide(self, request: ActionRequest) -> "LLMResponse":
         if request.on_token_delta is not None or request.on_reasoning_delta is not None:

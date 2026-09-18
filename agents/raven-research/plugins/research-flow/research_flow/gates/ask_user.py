@@ -21,7 +21,7 @@ never runs on a clarify turn, which is what makes the verify gate and the report
 bar structurally unreachable here instead of exempted by a flag.
 
 **Two ContextVars, in opposite directions**, for the same reason the conversation
-module has three: ``AgentHookContext`` carries ``session_key`` and not the
+module has three: ``GateCtx`` carries ``session_key`` and not the
 ``Session``, so a gate can neither read nor write session state.
 
 * ``stash_pending_clarify`` / ``take_pending_clarify`` - gate to loop. The flow
@@ -58,8 +58,9 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
-from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.loop_hooks import HookDecision
 from raven.i18n import t_in
+from research_flow.gates.base import Gate, GateCtx
 from research_flow.gates.conversation import is_research_turn
 from research_flow.gates.report_shape import REPORT_SECTIONS, ReportShape
 
@@ -112,7 +113,7 @@ _QUESTION_MARK_RE = re.compile(r"[?\uff1f]")
 def own_text(text: str) -> str:
     """The user's own words, with this build's injected blocks taken back off.
 
-    ``AgentHookContext.turn_question`` is captured at loop entry, which is AFTER
+    ``GateCtx.turn_question`` is captured at loop entry, which is AFTER
     assembly - so on a dr@3.4 product arm it carries the report reminder (~250
     chars of English) and, on a later turn, the research memo and a previous
     brief. Three things go wrong if that string is used as the question:
@@ -604,7 +605,7 @@ def is_reply_to(pending: PendingClarify, text: str, *, threshold: float = 0.05) 
 # ---------------------------------------------------------------------------
 
 
-class AskUserGate(AgentHook):
+class AskUserGate(Gate):
     """Turns one ``ask_user`` call into the turn's reply, and withholds the tool
     once asking is no longer allowed.
 
@@ -649,7 +650,7 @@ class AskUserGate(AgentHook):
     def name(self) -> str:
         return "AskUserGate"
 
-    def _state(self, ctx: AgentHookContext) -> dict[str, Any]:
+    def _state(self, ctx: GateCtx) -> dict[str, Any]:
         """The turn's namespace, seeded so a quiet turn still reports.
 
         Every field is written whether or not the gate fired: "asked nothing" and
@@ -675,7 +676,7 @@ class AskUserGate(AgentHook):
         return state
 
     @staticmethod
-    def _searched(ctx: AgentHookContext) -> bool:
+    def _searched(ctx: GateCtx) -> bool:
         """Has this TURN already retrieved anything?
 
         The scan starts at ``ctx.turn_base``, never 0. A full-list scan finds the
@@ -694,7 +695,7 @@ class AskUserGate(AgentHook):
                     return True
         return False
 
-    async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def before_iteration(self, ctx: GateCtx) -> HookDecision:
         # A grant is one response's authority. Any grant still standing at an
         # iteration boundary belonged to a call that never executed, and
         # leaving it would let a later, ungranted call in the same turn spend
@@ -769,7 +770,7 @@ class AskUserGate(AgentHook):
             modified_tools=[t for t in (ctx.tools or []) if (t.get("function") or {}).get("name") != _TOOL]
         )
 
-    async def before_execute_tools(self, ctx: AgentHookContext) -> HookDecision:
+    async def before_execute_tools(self, ctx: GateCtx) -> HookDecision:
         proposed = list(getattr(ctx.response, "tool_calls", None) or [])
         mine = [c for c in proposed if getattr(c, "name", "") == _TOOL]
         if not mine:
@@ -851,7 +852,7 @@ class AskUserGate(AgentHook):
         return HookDecision(short_circuit_result=render_handoff(payload))
 
 
-def is_prose_clarify(ctx: AgentHookContext) -> bool:
+def is_prose_clarify(ctx: GateCtx) -> bool:
     """Whether this terminal response is a clarify the model wrote as text.
 
     Structural, and nothing here reads the prose as language: the contract
@@ -895,7 +896,7 @@ def is_prose_clarify(ctx: AgentHookContext) -> bool:
     return bool(_QUESTION_MARK_RE.search(content))
 
 
-class ClarifyExemptHook(AgentHook):
+class ClarifyExemptHook(Gate):
     """Forwards to a terminal gate, except on the response that IS the clarify.
 
     The tool path needs none of this: ``before_execute_tools`` short-circuits and
@@ -922,7 +923,7 @@ class ClarifyExemptHook(AgentHook):
     there is. See ``is_prose_clarify`` for the four conditions.
     """
 
-    def __init__(self, inner: AgentHook) -> None:
+    def __init__(self, inner: Gate) -> None:
         self._inner = inner
 
     @property
@@ -930,19 +931,19 @@ class ClarifyExemptHook(AgentHook):
         return f"ClarifyExempt({self._inner.name})"
 
     @property
-    def inner(self) -> AgentHook:
+    def inner(self) -> Gate:
         return self._inner
 
-    async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
+    async def before_user_inbound(self, ctx: GateCtx) -> HookDecision:
         return await self._inner.before_user_inbound(ctx)
 
-    async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def before_iteration(self, ctx: GateCtx) -> HookDecision:
         return await self._inner.before_iteration(ctx)
 
-    async def before_execute_tools(self, ctx: AgentHookContext) -> HookDecision:
+    async def before_execute_tools(self, ctx: GateCtx) -> HookDecision:
         return await self._inner.before_execute_tools(ctx)
 
-    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def after_iteration(self, ctx: GateCtx) -> HookDecision:
         if is_prose_clarify(ctx):
             # The commit marker the tool path already sets, and the reason this
             # wrapper does not need a fourth copy: the loop reads it for
@@ -969,10 +970,10 @@ class ClarifyExemptHook(AgentHook):
             return HookDecision()
         return await self._inner.after_iteration(ctx)
 
-    async def terminal_answerless(self, ctx: AgentHookContext) -> HookDecision:
+    async def terminal_answerless(self, ctx: GateCtx) -> HookDecision:
         return await self._inner.terminal_answerless(ctx)
 
-    async def after_send(self, ctx: AgentHookContext) -> HookDecision:
+    async def after_send(self, ctx: GateCtx) -> HookDecision:
         return await self._inner.after_send(ctx)
 
 

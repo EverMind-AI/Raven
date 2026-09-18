@@ -654,9 +654,9 @@ def test_no_identity_file_ships_and_none_is_seeded():
     assert not (RUN_PY.parent / "soul.md").exists()
     wheel = Path(raven_design.__file__).parent
     assert not (wheel / "prompts").exists()
-    from raven_design.plugin.hook import DesignEngineHook
+    from raven_design.plugin.hook import DesignConduct
 
-    assert not hasattr(DesignEngineHook, "seed_identity")
+    assert not hasattr(DesignConduct, "seed_identity")
 
 
 # --- the pinned tool face: fork config intent, said as plugin admission --------

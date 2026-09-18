@@ -36,8 +36,9 @@ import asyncio
 import logging
 import time
 
-from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.loop_hooks import HookDecision
 from raven.security.trust import wrap_untrusted
+from research_flow.gates.base import Gate, GateCtx
 from research_flow.support.answer_text import closing_tag_bar, visible_answer
 from research_flow.support.harness_text import harness_body_kind, is_harness_echo
 from research_flow.support.ledger import ledger_append
@@ -94,7 +95,7 @@ _SALVAGE_SYSTEM = (
 # explicit.
 
 
-class ForcedFinalizeGate(AgentHook):
+class ForcedFinalizeGate(Gate):
     """Refuse to let an answerless terminal turn stand: nudge, then salvage."""
 
     def __init__(
@@ -127,7 +128,7 @@ class ForcedFinalizeGate(AgentHook):
     def name(self) -> str:
         return "ForcedFinalizeGate"
 
-    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def after_iteration(self, ctx: GateCtx) -> HookDecision:
         if getattr(ctx.response, "has_tool_calls", False):
             return HookDecision()
         content = getattr(ctx.response, "content", None) or ""
@@ -188,7 +189,7 @@ class ForcedFinalizeGate(AgentHook):
         logger.warning("force-finalize: salvage unavailable; passing the answerless final through")
         return HookDecision(notes=["force_finalize_failopen"])
 
-    async def terminal_answerless(self, ctx: AgentHookContext) -> HookDecision:
+    async def terminal_answerless(self, ctx: GateCtx) -> HookDecision:
         """Last seam: the turn is over and carries no answer — salvage or fail open.
 
         Reached by the exits ``after_iteration`` never sees (provider error,
@@ -227,7 +228,7 @@ class ForcedFinalizeGate(AgentHook):
                     return content
         return ""
 
-    async def _salvage(self, ctx: AgentHookContext, content: str) -> str | None:
+    async def _salvage(self, ctx: GateCtx, content: str) -> str | None:
         task = task_for(ctx)
         notes = self._excerpt(content, self._reasoning_excerpt_chars)
         evidence = self._evidence_pack(ctx.messages or [])
@@ -358,7 +359,7 @@ class ForcedFinalizeGate(AgentHook):
         state["salvage_answer_chars"] = len(answer)
 
     @staticmethod
-    def _fail(ctx: AgentHookContext, reason: str) -> None:
+    def _fail(ctx: GateCtx, reason: str) -> None:
         """Record why a salvage produced nothing, on the trajectory.
 
         Which failure mode dominates decides the fix (a stall wants a longer
