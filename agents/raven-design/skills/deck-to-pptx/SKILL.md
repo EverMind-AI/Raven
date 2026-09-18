@@ -142,8 +142,6 @@ row or the node that answers and so on.
 
 ## Mechanics that bite here
 
-For what is drawn with python-pptx directly; the helper modules handle these themselves.
-
 - **A connector lands on a box at both ends.** A line into empty space is a node you did
   not draw, and nothing checks for it.
 - **A hand-drawn table does not reflow.** Every box is placed absolutely, so a cell that
