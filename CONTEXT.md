@@ -171,8 +171,8 @@ _Avoid_: "callback" or "middleware" — neither captures the phase-specific, cha
 What a bundled agent judges, written as verbs rather than as phases: `intake`, `select_tools`,
 `advise`, `system_addendum`, `review`, `salvage`, `judge`, `outbound`, `archive`. Each is asked
 about one step of a Turn, answered against a read-only `StepView` whose `phase` says which of
-the six moments is asking, and answered in plain data -- a string, a list of names, a mapping
-built by `Intake`, `Accept`, `Resample` or `End` -- never a write into the loop's own state and
+the six moments is asking, and answered in plain data -- a string, a narrower list of tool
+definitions, a mapping built by `Intake`, `Accept`, `Resample` or `End` -- never a write into the loop's own state and
 never an instance of a host class, so a judgement compiled from a dispatch's own source can
 answer the same verbs a plugin does. Three invariants hold for every participant whatever its
 origin: it is shown facts it cannot write, it answers with data the host interprets, and an

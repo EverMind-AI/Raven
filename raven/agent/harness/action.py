@@ -45,7 +45,9 @@ class DefaultAction:
 
         The dispatch's own judgements are one participant among them, asked
         after whatever the caller passes, so a product's own rules speak first
-        and their wording is what the model reads.
+        and their wording is what the model reads. There is one caller,
+        ``ToolRegistry._verifier_refusals``, and it passes nothing: the order
+        is real and tested, but nothing arrives in ``participants`` today.
 
         Imported in the call, not for style: ``raven.agent.subagent`` pulls its
         manager and every backend on package import, so naming the charter at

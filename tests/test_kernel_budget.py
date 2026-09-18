@@ -140,11 +140,14 @@ Measured at 3,170, thirty over the count rather than one, for the reason the
 first bump gave.
 
 3,200 -> 3,410 (2026-09-18), and this is that review. The change is a whole
-paper: contracts/participant.py, 191 lines, the nine verbs a sub-agent
-implements instead of the six hook phases (``AgentParticipant``, its ``StepView``
+paper: contracts/agent_conduct.py, 191 lines, the nine verbs a sub-agent
+implements instead of the six hook phases (``AgentConduct``, its ``StepView``
 of fourteen read-only fields, the ``Intake`` and ``Verdict`` it answers with,
-the per-turn ``ParticipantFactory``, and a diagnostic trail so a gate's one-line
-findings still reach the loop's notes). It sits beside ``loop_hooks`` rather
+the per-turn ``ConductFactory``, and a diagnostic trail so a gate's one-line
+findings still reach the loop's notes). Left in the names and the count it was
+written with: an entry here is a dated record of one bump, not a description of
+the file today, and the paper has since been renamed to contracts/participant.py
+and grown past 191 lines -- both under their own entries below. It sits beside ``loop_hooks`` rather
 than replacing it: the phases remain the loop's timing contract, this is the
 judgement contract, and an adapter seats one in the other. Surveyed before it
 was written -- 42 real hook implementations across five plugins read fourteen
@@ -221,6 +224,21 @@ reader cannot check by reading the code.
 
 Measured at 3,528.
 
+
+And once more, 3,550 -> 3,570 (2026-09-18), for review. Prose again, and again
+about what the papers do not do. The ``judge`` disclosure had landed in two of
+its four homes; ``ActionModule.ask_judge`` on this paper was a third, and it is
+the one a reader of the role protocol meets first, phrased without naming
+anything the earlier fix touched -- which is why grepping the claim rather than
+the symbol is what found it. The other addition is the type-only edge from this
+paper to ``raven.agent.harness.participants``: the first the kernel has, taken
+knowingly when ``Verdict`` and ``Intake`` moved off the paper so a generated
+judgement could build what a participant answers with. It costs nothing at
+import time and lint-imports does not see it, so it is written down here and
+beside the contract it bends rather than left for the next reader to find.
+
+Measured at 3,542.
+
 """
 
 from __future__ import annotations
@@ -231,7 +249,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 3_550
+CONTRACTS_LINE_CEILING = 3_570
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 
