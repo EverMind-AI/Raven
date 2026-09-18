@@ -40,6 +40,31 @@ def _message_text(content: Any, cap: int = 120) -> str:
     return text[:cap]
 
 
+def _stored_key(path: Path) -> str | None:
+    """The session key a transcript claims, or None when it claims none.
+
+    Reads the leading metadata record only. ``session_path`` asks this of files
+    it is deciding between, so it runs on the way to opening one rather than
+    after, and the whole transcript is the wrong amount to read to learn its
+    first line. A file whose head is missing, unreadable, or keyless answers
+    None: absent is not the same as belonging to somebody else, and the caller
+    treats the two differently.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            head = f.readline()
+    except OSError:
+        return None
+    try:
+        data = json.loads(head)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict) or data.get("_type") != "metadata":
+        return None
+    stored = data.get("key")
+    return stored if isinstance(stored, str) and stored else None
+
+
 def new_chat_id(now: datetime | None = None) -> str:
     """Mint an opaque, sortable per-session chat_id: ``YYYYMMDD_HHMMSS_xxxxxx``.
 
@@ -308,12 +333,31 @@ class SessionManager:
         from a run started in a different directory -- keeps its existing file.
         Without that, resuming by id would silently open an empty session next
         to the real transcript rather than continuing it.
+
+        The search runs whatever this process groups by, gateway included. Its
+        group is the channel name, so a conversation started by a terminal
+        entrypoint sits under a slug it never looks in -- yet ``list_sessions``
+        scans every group, so the gateway offers that conversation and then
+        could not open it. Worse than the empty transcript that produced: the
+        write verbs resolve through here too, so a rename or a turn from the
+        page filed a second transcript under the channel and split the
+        conversation across two files.
+
+        A candidate is adopted only once its own metadata says it is this
+        session. The glob matches on the chat_id alone, and the chat_id does not
+        name a channel: ``cli:<id>`` and ``tui:<id>`` are two conversations, and
+        taking the first file with the right stem handed one of them the other's
+        transcript to append to. The stored key is what tells them apart. A file
+        that carries no key is adopted regardless -- it predates the field, and
+        the stem is the only identity it has.
         """
         chat_id = safe_filename(key.partition(":")[2])
         path = self._group_dir(key) / f"{chat_id}.jsonl"
-        if self.project_slug and not path.exists():
-            for existing in self.sessions_dir.glob(f"*/{chat_id}.jsonl"):
-                return existing
+        if not path.exists():
+            for existing in sorted(self.sessions_dir.glob(f"*/{chat_id}.jsonl")):
+                stored = _stored_key(existing)
+                if stored is None or stored == key:
+                    return existing
         return path
 
     def session_dir(self, key: str) -> Path:
