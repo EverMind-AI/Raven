@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { markNew as railMarkNew } from '../features/rail/store'
-import * as railStore from '../features/rail/store'
 import { resetTranslator, setTranslator } from '../i18n/t'
 import { mountPageRoot } from '../test/pageRoot'
 import * as confirmStore from './confirm'
@@ -47,16 +46,18 @@ interface Harness {
 
 /* The rail island's own marker is watched rather than stood in for: the
    interplay cases below are about what it and this module write into the same
-   strip, so it has to really run, and the count is what the spy recorded. */
+   strip, so it has to really run. It registers itself on this module when its
+   own module evaluates, so the call a case below triggers passes through no
+   binding a spy could replace; what a case counts instead is the one question
+   every mark asks -- navState(), which markNew() alone calls, once each. */
 function install(): Harness {
   opens.list.length = 0
-  const marker = vi.spyOn(railStore, 'markNew')
-  marker.mockClear()
-  const seen: Harness = { opened: opens.list, get marks() { return marker.mock.calls.length } }
+  const nav = vi.spyOn(pageStore, 'navState').mockImplementation(() => ({ pages: Object.keys(NAV_OF), btnOf: (p) => NAV_OF[p] }))
+  nav.mockClear()
+  const seen: Harness = { opened: opens.list, get marks() { return nav.mock.calls.length } }
   setTranslator((key) => key)
   vi.spyOn(pageStore, 'show').mockImplementation(() => {})
   vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
-  vi.spyOn(pageStore, 'navState').mockImplementation(() => ({ pages: Object.keys(NAV_OF), btnOf: (p) => NAV_OF[p] }))
   setSources({ rail: { snapshot: () => ({ rows: [], cur: 'a', busy: false, query: '' }) } as unknown as RailSource })
   return seen
 }

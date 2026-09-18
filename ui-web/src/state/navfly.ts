@@ -23,17 +23,16 @@
  * group open" -- mark() included -- is an imperative one, so it stays a write by
  * id; the button's `aria-expanded` is the same fact rendered from `open` below.
  *
- * The three openers are imported from the islands that own those pages, and
- * markNew from the rail's store. That last one and this module import each
- * other, which is safe only because neither reads the other while it loads:
- * both edges are calls inside functions, so the binding is resolved when the
- * reader clicks rather than while the bundle evaluates.
+ * The three openers are imported from the islands that own those pages. The
+ * rail's marker is not: it registers itself here instead (`onMark` below), so
+ * the edge between the two runs one way -- the rail reads this module and this
+ * module is only read -- where importing it back made the two a knot whose
+ * evaluation order was the bundler's to decide rather than either file's.
  */
 
 import { open as openConnections } from '../features/connections/wire'
 import { open as openCron } from '../features/cron/store'
 import { open as openExtAgents } from '../features/extAgents/store'
-import { markNew } from '../features/rail/store'
 import { makeStore } from './store'
 
 export interface NavRow {
@@ -72,6 +71,19 @@ export interface NavFlyState {
    flag, not a teardown. */
 const NONE: readonly NavRow[] = []
 const store = makeStore<NavFlyState>({ open: false, rows: NONE })
+
+/* The rail island's markNew, which it registers here when its own module
+   evaluates (features/rail/store.ts): the buttons above these rows are the
+   rail's to write, and this layer may not import a domain to ask. Spent
+   synchronously at the two moments below, so a picked row and a fold each
+   leave one decided strip behind them in the same task. Empty on a page whose
+   rail never evaluated, which is a page with no buttons to decide. */
+let remark: (() => void) | null = null
+
+/** Registers what re-decides the rail's marks when this group changes. */
+export function onMark(fn: () => void): void {
+  remark = fn
+}
 
 /** The group's state, for <MoreFly/> and for the fold's own button. */
 export const { get, subscribe } = store
@@ -121,11 +133,11 @@ export function mark(): boolean {
 
 /* A row's own click. The group stays open on a pick: it is navigation now, and
    the row's own current mark is the answer to "where am I". Here rather than in
-   the component so that the rows reach markNew() through the seam this module
-   already has with the rail, instead of a second edge into it from chrome/. */
+   the component so that the rows ask for the marks through the registration
+   above, instead of a second edge into the rail from chrome/. */
 export function pick(row: NavRow): void {
   row.go()
-  markNew()
+  remark?.()
 }
 
 export function toggle(force?: boolean): void {
@@ -135,7 +147,7 @@ export function toggle(force?: boolean): void {
   if (open) draw()
   box.dataset.open = String(open)
   set({ open })
-  markNew()
+  remark?.()
 }
 
 /* Back to the state a fresh page starts in: folded, with no rows drawn. For a

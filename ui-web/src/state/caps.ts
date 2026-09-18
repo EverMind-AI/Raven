@@ -121,6 +121,11 @@ const hooks: Partial<DrawHooks> = {}
 /** The page's state, for <CapsPage/>. */
 export const { get, subscribe } = store
 
+/* Which of the two rail buttons the section lights, told to the page store
+   rather than read out of here by it: the tab is this module's, and the page
+   store is the module this one already imports to open and close the page. */
+page.onNavButton('capsPage', () => (get().tab === 'plugin' ? 'plugBtn' : 'skillBtn'))
+
 /** A patch, merged into the page's state. */
 export function set(next: Partial<CapsState>): void {
   store.set((prev) => ({ ...prev, ...next }))

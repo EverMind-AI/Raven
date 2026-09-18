@@ -29,8 +29,9 @@
  *
  * The cycles are pinned the same way: every strongly connected component of
  * the runtime graph has to be a subset of one listed in CYCLES, and no more
- * files may be inside one than are today. Two of the four are two modules
- * each and were one fifteen-module knot before the bag went.
+ * files may be inside one than are today. Two pairs stood beside the two left,
+ * and each dissolved the same way an upward edge does: the call that closed it
+ * is registered by the module that owns the answer rather than imported back.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
@@ -105,7 +106,6 @@ const PINNED = [
   'state/lang/effects.ts -> features/transcript/mount.tsx',
   'state/navfly.ts -> features/connections/wire.ts',
   'state/navfly.ts -> features/cron/store.ts',
-  'state/navfly.ts -> features/rail/store.ts',
   'state/navfly.ts -> features/extAgents/store.ts',
   'state/session/conversation.ts -> features/transcript/mount.tsx',
   'state/session/conversation.ts -> features/transcript/tail.ts',
@@ -239,8 +239,10 @@ const CROSS = [
 /* The runtime cycles, members and all. Every strongly connected component has
    to be a subset of one of these, and the files inside one may only get fewer:
    a cycle that breaks into two smaller ones is an improvement, a new knot is
-   not. The two pairs were one fifteen-module component while state/page.ts
-   reached the island bag, and that one was not module-eval-safe. */
+   not. Two pairs stood here as well -- state/caps.ts with state/page.ts, and
+   state/navfly.ts with the rail's store -- both of them inside one
+   fifteen-module component while state/page.ts reached the island bag, and
+   neither module-eval-safe until the one call back was registered instead. */
 const CYCLES = [
   [
     'features/composer/store.ts',
@@ -249,14 +251,6 @@ const CYCLES = [
     'features/transcript/TranscriptPage.tsx',
     'features/transcript/mount.tsx',
     'features/workspace/store.ts',
-  ],
-  [
-    'state/caps.ts',
-    'state/page.ts',
-  ],
-  [
-    'features/rail/store.ts',
-    'state/navfly.ts',
   ],
   [
     'features/model/source.ts',
@@ -274,12 +268,12 @@ const CYCLES = [
 ]
 
 /* How many files sit inside a runtime cycle today. Down or equal, with one
-   exception on the record: naming.ts was carved OUT of runtime.ts, which is
-   already a member of the ten-file component below, so the count went 20 -> 21
+   exception on the record: naming.ts was carved OUT of runtime.ts, which was
+   already a member of the session component above, so the count rose by one
    without a new knot or a new edge between modules -- the same cycle, one more
    file inside it. The way back down is to invert the two calls runtime.ts
    makes into it (beginNaming, namingDeclined), not another file on the list. */
-const IN_CYCLES = 21
+const IN_CYCLES = 17
 
 const TEST = (rel) => rel.includes('.test.') || rel.startsWith('test/')
 

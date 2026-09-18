@@ -1,6 +1,6 @@
 import { t } from '../../i18n/t'
 import { setCurrent } from '../../lib/session'
-import { mark as navMark } from '../../state/navfly'
+import { mark as navMark, onMark } from '../../state/navfly'
 import { navState } from '../../state/page'
 import { NAV_BUTTONS } from '../../state/pages'
 import { ds } from '../../state/sources'
@@ -182,6 +182,12 @@ export function markNew(): void {
     if (b) b.setAttribute('aria-current', String(id === top))
   }
 }
+
+/* The flyout needs the strip decided again at its own two moments -- a row
+   picked, the group folded either way -- and it cannot call here, because
+   state/ may not import a domain. So the writer registers itself with it,
+   which leaves the mark on one writer and the import on one direction. */
+onMark(markNew)
 
 /* Every session at once, from the settings page's data section. Same guard as
    the pin: no source installed means there is nothing to delete from. */

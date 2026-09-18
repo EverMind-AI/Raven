@@ -33,8 +33,9 @@ the store, the naming, the gates -- are `CONTRIBUTING.md`. The vocabulary is
 Nothing is published on `window`, and nothing outside the bundle reaches in: a
 module imports what it calls, and the direction those imports may run in is
 `scripts/gates/import-direction.test.mjs`. Where the direction forbids the
-import -- `src/state/` calling into a domain -- the call goes through a seam the
-page's wiring fills (`state/page.ts`'s `onShow`).
+import -- `src/state/` calling into a domain -- the call goes through a callback
+the state module declares and the domain fills (`state/page.ts`'s `onShow`,
+`state/navfly.ts`'s `onMark`).
 
 ## Adding a domain
 

@@ -21,7 +21,6 @@
  * wiring (src/app/install.ts) and spent in the order `show` spells out.
  */
 
-import * as caps from './caps'
 import * as detail from './detail'
 import { PAGES, pageOf } from './pages'
 
@@ -29,13 +28,24 @@ import type { PageId } from './pages'
 
 export type { PageId }
 
+/* Which of a page's two buttons is lit, answered by the module whose own state
+   decides it. The one page with two is the capabilities page and the answer is
+   whichever of its tabs stands open, and reading that tab from here made this
+   module and state/caps.ts import each other. Filled at that module's
+   evaluation and empty until then: a page driven from a test lights the first
+   of the two, which is the tab its section is served on. */
+const buttonOf = new Map<string, () => string>()
+
+/** Registers which of a page's two buttons its own state means. */
+export function onNavButton(page: PageId, pick: () => string): void {
+  buttonOf.set(page, pick)
+}
+
 /** The pages, and the button each lights up -- what markNew asks of the page
  *  registry. The More rows are not in here: the nav flyout marks its own.
  *
- *  Which button comes from the table (state/pages.ts); which of two is asked
- *  here, because the one page with two is the capabilities page and the answer
- *  is whichever of its tabs stands open -- and this module is where the tab is
- *  already read. */
+ *  Which button comes from the table (state/pages.ts); which of two comes from
+ *  whoever registered the answer above. */
 export function navState(): { pages: string[]; btnOf(p: string): string | undefined } {
   return {
     pages: PAGES.map((page) => page.id),
@@ -43,7 +53,7 @@ export function navState(): { pages: string[]; btnOf(p: string): string | undefi
       const buttons = pageOf(p)?.navButtons
       if (!buttons) return undefined
       if (buttons.length < 2) return buttons[0]
-      return caps.get().tab === 'plugin' ? 'plugBtn' : 'skillBtn'
+      return buttonOf.get(p)?.() ?? buttons[0]
     },
   }
 }

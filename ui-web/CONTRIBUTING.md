@@ -60,9 +60,9 @@ state -/-> features      (at runtime; a type import erases, and a call the
 
 **Enforced by `import-direction`**, which reads the source text the way Vite
 resolves it and holds four things: the ranking above, every upward edge the
-tree has today (`PINNED`, 90 rows), every cross-domain edge into something that
+tree has today (`PINNED`, 89 rows), every cross-domain edge into something that
 is not a sibling's public surface (`CROSS`, 59 rows), and the runtime cycles
-(`CYCLES`, four components; `IN_CYCLES`, 21 files inside one). All four are
+(`CYCLES`, two components; `IN_CYCLES`, 17 files inside one). All four are
 ratchets: they may shrink, never grow. A new upward edge fails, and the fix is
 to invert the call -- a registered callback (`state/page.ts`'s `onShow`) or the
 sibling's `source.ts` -- not another line on the list.
@@ -180,9 +180,11 @@ effects and the session pipeline all read and write from outside any component.
 ### 3.2 Calling into a domain from `state/`
 
 `state/` does not import `features/` at runtime. Where the page's machinery has
-to ask a domain to do something, the domain registers a callback and
-`src/app/install.ts` fills it -- `state/page.ts`'s three `onShow` slots are the
-pattern. Enforced by `import-direction`.
+to ask a domain to do something, the state module declares a slot and the domain
+fills it: `src/app/install.ts` fills `state/page.ts`'s three `onShow` slots, and
+`features/rail/store.ts` fills `state/navfly.ts`'s `onMark` at its own module
+evaluation, because a fold the reader can click carries no guarantee that the
+page's wiring has run. Enforced by `import-direction`.
 
 ## 4. Rendering
 
@@ -439,7 +441,7 @@ shrink-only: the way off a list is the fix.
 | Three casts left in `rpc/fixtures/turn.ts` | `:340` and `:380` narrow a script table's loose data into `ToolArgs`; `:383` builds a pushed frame with `as unknown as TurnEvent`. The last is the same "check off" the answers were cleared of, but it is on a push rather than an answer, and clearing it means typing the script table's rows as the dag event union first | by review |
 | 205 optional contract fields the fixtures never send | Most are one state this canvas is deliberately in; the header names the few a page really draws and this library has never exercised | `fixture-shape`'s `UNSENT` |
 | 18 methods with no offline answer | Each entry says why the offline page has nothing to answer with | `offline-coverage`'s `EXEMPT` |
-| 21 files inside a runtime cycle, in four components | The session knot is the large one; `state/session/naming.ts` is in it because it was carved out of `runtime.ts`, which already was. Inverting `runtime.ts`'s two calls into it is the way back to 20 | `import-direction`'s `CYCLES` and `IN_CYCLES` |
+| 17 files inside a runtime cycle, in two components | The session knot is the large one; `state/session/naming.ts` is in it because it was carved out of `runtime.ts`, which already was. Inverting `runtime.ts`'s two calls into it is the way back to 16 | `import-direction`'s `CYCLES` and `IN_CYCLES` |
 | 59 cross-domain edges, eight of them the desk's | Splitting the desk out of `features/workspace/` turned eight intra-domain edges into cross-domain ones. Same imports, same runtime edges, two domains | `import-direction`'s `CROSS` |
 | `curly` is off | 2,063 one-line guards | `eslint.config.js` |
 | `rpc-schema/openrpc.json` disagrees with its own descriptions in three places | `CronJobInfo.next_run_at_ms` / `last_run_at_ms` are sent as null against an integer schema, and `PlaybookNode.skills` / `mcps` describe three states against an array schema. `Wire<T>` is this page's accommodation; the schema is the cure, and it is outside `ui-web/` | `src/rpc/fixtureTransport.ts`'s header |
