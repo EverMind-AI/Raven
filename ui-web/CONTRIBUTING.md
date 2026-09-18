@@ -198,19 +198,30 @@ page's wiring has run. Enforced by `import-direction`.
    renders as the value the page was served with and lists by name; (b) a
    measuring behaviour under `src/chrome/behaviour/` (the pane grips, the
    scrollbars). Writing the text, class or `innerHTML` of an element React
-   rendered is never allowed.
-   **Ratcheted by `state-dom-touch`**: a per-file count of element reaches for
-   the 30 pinned files in `state/` and `app/`, zero for `lib/` and
-   `components/` (two registered exemptions: `lib/dom.ts` IS the page's `$`,
-   and `components/Ico.tsx` builds detached SVG with `createElementNS`), and
-   every pinned module's header has to say why it reaches. The page frame --
-   `chrome/`, `src/App.tsx`, `src/main.tsx` -- is counted in a table of its
-   own, `FRAME`, 26 lines over ten files: rule (b) is a budget, not a licence.
-   `features/` is not counted -- rule (a) lives there, so that one is by
+   rendered is the case neither of those covers, and it is ratcheted rather
+   than forbidden outright: the 24 such writes the tree still holds are pinned
+   per file and may only fall.
+   **Ratcheted by `state-dom-touch`**: a per-file count of element reaches --
+   every match, not every line that holds one -- 79 over the 34 pinned files in
+   `state/` and `app/`, zero for `lib/` and `components/` (two registered
+   exemptions: `lib/dom.ts` IS the page's `$`, and `components/Ico.tsx` builds
+   detached SVG with `createElementNS`), and every pinned module's header has
+   to say why it reaches (`SILENT` names the one header that does not yet). A
+   reach through the page's own `$` is counted like any other, because it is
+   `document.querySelector` under a shorter name. The page frame -- `chrome/`,
+   `src/App.tsx`, `src/main.tsx` -- is counted in a table of its own, `FRAME`,
+   26 matches over ten files: rule (b) is a budget, not a licence. The writes
+   are `WRITES`, over those layers plus `lib/` and `components/`, on the same
+   terms -- down or gone, and a file absent from the table writes nothing.
+   `features/` is counted by neither -- rule (a) lives there, so that one is by
    review.
-   The gate counts lines whose text matches, so a comment that merely mentions
-   `querySelector` raises the count. Reword the comment; the number is a budget
-   for the code.
+   Both counts read text, so a comment that merely mentions `querySelector`
+   raises one. Reword the comment; the number is a budget for the code. Two
+   things the text match does not count, the first on purpose and the second
+   not: `event.target.closest()`, which climbs from a node the handler was
+   handed rather than reaching for one, and a reach spelled through an alias
+   (`const doc = globalThis.document`), which no module does today and which
+   the gate would not see.
 3. **Language.** Every `<Domain>App` subscribes with
    `useSyncExternalStore(lang.subscribe, lang.get)`, so a flip re-renders the
    island by construction (**enforced by `island-lang`**, `NO_ROOT` naming the
@@ -521,6 +532,8 @@ shrink-only: the way off a list is the fix.
 | 136 unprefixed classes in the two namespaces beyond `features/`, 9 more inside a `className={...}` | 103 and 1 in the page frame, 33 and 8 in the shared components. There is no `chrome/styles.css` to move a rule into, so these come down by renaming in `page.css`, in a commit that changes the DOM the goldens record | `check-class-namespace`'s `LEGACY_CHROME` and `LEGACY_CHROME_EXPR` |
 | `.newrun` is written and never styled | `src/chrome/Rail.tsx` puts it on the new-session button and no rule defines it; taking it out edits `src/test/__golden__/region-app.txt`. `src/components/SetupSheet.tsx` writes two more from inside an expression (`.badtx`, `.warntx`), where the check cannot tell a class from a comparison operand and so does not read them | `check-class-namespace`'s `UNSTYLED` |
 | 26 imperative reaches for an element in the page frame | Not the rule's case: a portal at the body, two popovers filling a served list, the island mount boxes, and `chrome/behaviour/`'s grip drag and overlay scrollbars, which are behaviour rather than rendering and own no component tree. Counted so a third such module cannot appear unnoticed | `state-dom-touch`'s `FRAME` |
+| 24 writes of an element's text, class or markup outside `features/` | Rule (a) is a flag on a store's own region; these set `textContent`, `innerHTML` or the class of a node something else rendered. `state/session/registry.ts` and `app/updates.ts` hold four each, and eight more files the rest. A row goes when the markup says the text instead | `state-dom-touch`'s `WRITES` |
+| `state/session/registry.ts` reaches four ids and its header names none | It reaches `#stage`, `#flash`, `#title` and `#ta` through the page's own `$`, while its header is about which conversation the page is on. One sentence in that header takes the row off, and the gate then fails until it is deleted | `state-dom-touch`'s `SILENT` |
 | `.xaedit` keeps its old prefix | Five `page.css` rules scope it; it renames with them | `check-class-namespace`'s `LEGACY_LOCAL.extAgents` |
 | 205 optional contract fields the fixtures never send | Most are one state this canvas is deliberately in; the header names the few a page really draws and this library has never exercised | `fixture-shape`'s `UNSENT` |
 | 18 methods with no offline answer | Each entry says why the offline page has nothing to answer with | `offline-coverage`'s `EXEMPT` |

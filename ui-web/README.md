@@ -112,7 +112,7 @@ conventions they are written to are `CONTRIBUTING.md` section 8.
 | `domain-shape` | the files a domain has and the name its root component exports |
 | `domain-registration` | every domain declared once, every page claimed by one domain, every seam key answered by one |
 | `store-shape` | one store shape and one set of verbs; the listener set lives only in `state/store.ts` |
-| `state-dom-touch` | how often each module in `state/` and `app/` may reach for an element, how often the page frame -- `chrome/`, `App.tsx`, `main.tsx` -- may, and zero for `lib/` and `components/` |
+| `state-dom-touch` | how often each module in `state/` and `app/` may reach for an element -- counted per match, the page's own `$` included -- how often the page frame -- `chrome/`, `App.tsx`, `main.tsx` -- may, zero for `lib/` and `components/`, and how many text, class and markup writes each of those files still holds |
 | `seam-assignment` | only `app/install.ts` puts a source on the data seam, plus the first frame's one pinned exception, held to exactly one assignment; `setSources` stays the test seam |
 | `island-lang` | every island's root subscribes to the language store |
 | `i18n-keys` | every literal key exists in the catalogue, sits under a namespace, and the namespace belongs to one domain |
