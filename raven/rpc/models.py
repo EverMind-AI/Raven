@@ -3879,6 +3879,28 @@ class KnowledgeDocumentsIndexResult(_Strict):
     document: KnowledgeDocument
 
 
+class KnowledgeChunkPart(_Strict):
+    """One piece of a chunk that merged several, and where it came from.
+
+    The naive strategy merges across section boundaries, so a chunk can hold
+    two pages, two headings and two sections. The flattened fields on the chunk
+    can only carry the first of each, which is why this exists: without it a
+    merged chunk reads as a chunk of its first section, and the half that came
+    from elsewhere is attributed to a place it was never written.
+    """
+
+    #: Where this piece sits in the chunk's own text.
+    char_start: int
+    char_end: int
+    layout_type: str = ""
+    page_number: int | None = None
+    heading_path: list[str] = Field(default_factory=list)
+    #: Which section of the document this piece was cut from. The section
+    #: identity: a heading path is not one, because two same-named children of
+    #: a parent share it. Absent when the parser recorded none.
+    section_ordinal: int | None = None
+
+
 class KnowledgeChunk(_Strict):
     """One indexed piece of a document, as the search sees it.
 
@@ -3899,8 +3921,17 @@ class KnowledgeChunk(_Strict):
     layout_type: str = ""
     #: The 1-based page the piece starts on, for a format that has pages.
     page_number: int | None = None
-    #: The heading path the piece sits under, outermost first.
+    #: The 1-based page it ends on. Equal to ``page_number`` unless the piece
+    #: runs over a page boundary, which it can whenever it merged.
+    page_end: int | None = None
+    #: The heading path the piece sits under, outermost first. The path of the
+    #: section it *starts* in when it merged several; each part carries its own.
     heading_path: list[str] = Field(default_factory=list)
+    #: Where each piece of a merged chunk came from. Empty for a chunk that
+    #: merged nothing -- the fields above already say where that one is -- so a
+    #: non-empty list is itself the statement that this chunk crossed a
+    #: boundary.
+    parts: list[KnowledgeChunkPart] = Field(default_factory=list)
     #: What addresses this piece. Derived from its text, so it survives a
     #: rebuild of the same document. Empty on rows written before ids existed:
     #: readable, but not actionable until the document is reindexed.

@@ -1419,6 +1419,16 @@ function ChunkRow({
   const path = chunk.heading_path ?? []
   const id = chunk.chunk_id || ''
   const on = chunk.enabled !== false
+  const page = typeof chunk.page_number === 'number' ? chunk.page_number : null
+  /* A chunk that crossed a section boundary. The fields above describe where
+     it *starts*, so on their own they say this piece is on one page under one
+     heading while half of what is being read came from somewhere else. The
+     parts are where that is recoverable, and the badge below is the only thing
+     on the row that says to look. */
+  const parts = chunk.parts ?? []
+  const last = typeof chunk.page_end === 'number' ? chunk.page_end : null
+  const spread = page !== null && last !== null && last > page
+  const origins = [...new Set(parts.map((part) => part.section_ordinal).filter((n) => typeof n === 'number'))]
   return (
     <div className={`kbchunk${on ? '' : ' off'}`}>
       <div className="kbchunkhd">
@@ -1431,8 +1441,32 @@ function ChunkRow({
         />
         <span className="kbchunkix">#{chunk.chunk_index + 1}</span>
         {chunk.layout_type && <span className="kbchunkty">{chunk.layout_type}</span>}
-        {typeof chunk.page_number === 'number' && (
-          <span className="kbchunkpg">{t('gui.kb.chunks_page', { n: chunk.page_number })}</span>
+        {page !== null && (
+          <span className="kbchunkpg" title={spread ? t('gui.kb.chunk_show_first_page', { n: page }) : undefined}>
+            {spread ? t('gui.kb.chunks_pages', { from: page, to: last }) : t('gui.kb.chunks_page', { n: page })}
+          </span>
+        )}
+        {/* What the flattened fields cannot say. Hovering names every piece:
+            which section it came from, what page, and under which heading --
+            because the row's own heading and page are the first part's, and a
+            reader with no way to see that reads them as the whole chunk's. */}
+        {parts.length > 1 && (
+          <span
+            className="kbchunkspan"
+            title={parts
+              .map((part) =>
+                t('gui.kb.chunk_part', {
+                  section: typeof part.section_ordinal === 'number' ? part.section_ordinal + 1 : '?',
+                  page: typeof part.page_number === 'number' ? part.page_number : '?',
+                  path: (part.heading_path ?? []).join(' > ') || '-',
+                }),
+              )
+              .join('\n')}
+          >
+            {origins.length > 1
+              ? t('gui.kb.chunk_sections', { n: origins.length })
+              : t('gui.kb.chunk_merged', { n: parts.length })}
+          </span>
         )}
         {chunk.manual && <span className="kbchunkty kbwritten">{t('gui.kb.chunk_written')}</span>}
         {path.length > 0 && (

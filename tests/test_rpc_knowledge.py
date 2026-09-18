@@ -1231,6 +1231,85 @@ async def test_an_ordinary_search_says_vector_and_nothing_else() -> None:
     assert out["by_keyword"] == []
 
 
+async def test_a_merged_chunk_carries_where_each_of_its_parts_came_from() -> None:
+    """The flattened fields describe where a chunk starts, which is all they
+    can do once a chunk can merge across sections. Sent alone they say this
+    piece is on page 4 under one heading while half of it came from page 9
+    under another, and the row has no route to the difference."""
+
+    class _Chunk:
+        chunk_index = 0
+        total_chunks = 1
+        text = "Third.\nSeventh."
+        metadata = {
+            "layout_type": "text",
+            "page_number": 4,
+            "page_end": 9,
+            "heading_path": ["Handbook", "Part 3"],
+            "elements": [
+                {
+                    "reading_order": 0,
+                    "layout_type": "text",
+                    "char_start": 0,
+                    "char_end": 6,
+                    "page_number": 4,
+                    "heading_path": ["Handbook", "Part 3"],
+                    "section_ordinal": 3,
+                },
+                {
+                    "reading_order": 1,
+                    "layout_type": "text",
+                    "char_start": 7,
+                    "char_end": 15,
+                    "page_number": 9,
+                    "heading_path": ["Handbook", "Part 7"],
+                    "section_ordinal": 7,
+                },
+            ],
+        }
+
+    class _Held:
+        chunk = _Chunk()
+        chunk_id = "c1"
+        enabled = True
+        manual = False
+
+    row = kb._chunk_row(_Held())
+
+    assert row["page_number"] == 4
+    assert row["page_end"] == 9, "and where it ends, which one page cannot say"
+    assert [part["section_ordinal"] for part in row["parts"]] == [3, 7]
+    assert [part["page_number"] for part in row["parts"]] == [4, 9]
+    assert row["parts"][1]["heading_path"] == ["Handbook", "Part 7"]
+    assert (row["parts"][0]["char_start"], row["parts"][0]["char_end"]) == (0, 6)
+
+
+async def test_a_chunk_that_merged_nothing_carries_no_parts() -> None:
+    """Its own fields already say where it is, and a list of one would make
+    "this chunk was merged" unreadable from the answer."""
+
+    class _Chunk:
+        chunk_index = 0
+        total_chunks = 1
+        text = "Alone."
+        metadata = {
+            "page_number": 4,
+            "heading_path": ["Handbook"],
+            "elements": [{"reading_order": 0, "layout_type": "text", "char_start": 0, "char_end": 6}],
+        }
+
+    class _Held:
+        chunk = _Chunk()
+        chunk_id = "c1"
+        enabled = True
+        manual = False
+
+    row = kb._chunk_row(_Held())
+
+    assert row["parts"] == []
+    assert row["page_end"] is None
+
+
 async def test_chunks_answer_carries_what_the_parser_found(monkeypatch) -> None:
     """The row is flattened for the page: which piece it is, what kind of
     region, what page. The parser records more -- a box, the character range
@@ -1270,7 +1349,12 @@ async def test_chunks_answer_carries_what_the_parser_found(monkeypatch) -> None:
                 "text": "the body of it",
                 "layout_type": "heading",
                 "page_number": 3,
+                # Where it ends, and what it merged. Both empty here: this
+                # chunk came from one section and stayed on one page, which is
+                # the ordinary shape and the one that must not grow noise.
+                "page_end": None,
                 "heading_path": ["Terms", "Payment"],
+                "parts": [],
                 "chunk_id": "abc123",
                 "enabled": True,
                 "manual": False,

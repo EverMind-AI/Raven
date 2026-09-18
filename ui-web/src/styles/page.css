@@ -5434,10 +5434,15 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .kbchunkhd > input[type='checkbox'] { margin: 0; flex: none; }
 /* The number is the reading order, so it reads first and stays put. */
 .kbchunkix { font-size: 11px; font-weight: 600; color: var(--muted); flex: none; }
-.kbchunkty, .kbchunkpg {
+.kbchunkty, .kbchunkpg, .kbchunkspan {
   font-size: 10.5px; color: var(--muted); flex: none;
   border: 1px solid var(--line-soft); border-radius: 5px; padding: 0 4px;
 }
+/* A piece that crossed a section boundary. The badge is the only thing on the
+   row saying the heading and page beside it describe where the chunk starts
+   rather than the whole of it, so it carries the cursor that invites the
+   hover that names every part. */
+.kbchunkspan { cursor: help; border-style: dashed; }
 .kbwritten { color: var(--gold); border-color: var(--gold); }
 .kbchunkpath {
   font-size: 10.5px; color: var(--muted); min-width: 0;

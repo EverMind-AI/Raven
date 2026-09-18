@@ -651,26 +651,77 @@ def _chunk_ids(params: dict[str, Any]) -> list[str]:
     return ids
 
 
+def _page(value: Any) -> int | None:
+    """A page number, or ``None`` for anything that is not one."""
+    return int(value) if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def _path(value: Any) -> list[str]:
+    return [str(part) for part in value] if isinstance(value, list) else []
+
+
+def _chunk_parts(metadata: dict[str, Any]) -> list[dict[str, Any]]:
+    """Where each piece of a merged chunk came from, in order.
+
+    Empty for a chunk that merged nothing, which is most of them: its own
+    fields already say where it is, and repeating that as a list of one would
+    make "this chunk was merged" unreadable from the answer.
+
+    Present, it is the only place the truth is. The naive strategy merges
+    across section boundaries, so a chunk can hold two pages, two headings and
+    two sections -- and the flattened fields beside this one can only carry the
+    first of each. A reader given those alone is told the chunk is on page 4
+    under one heading when half of what they are reading came from page 9 under
+    another, and nothing about the row says so.
+    """
+    spans = metadata.get("elements")
+    if not isinstance(spans, list) or len(spans) < 2:
+        return []
+    parts: list[dict[str, Any]] = []
+    for span in spans:
+        if not isinstance(span, dict):
+            continue
+        ordinal = span.get("section_ordinal")
+        parts.append(
+            {
+                "char_start": int(span.get("char_start") or 0),
+                "char_end": int(span.get("char_end") or 0),
+                "layout_type": str(span.get("layout_type") or ""),
+                "page_number": _page(span.get("page_number")),
+                "heading_path": _path(span.get("heading_path")),
+                # The section identity, when the parser recorded one. A heading
+                # path is not a substitute: two same-named children of one
+                # parent share it.
+                "section_ordinal": int(ordinal) if isinstance(ordinal, int) and not isinstance(ordinal, bool) else None,
+            }
+        )
+    return parts
+
+
 def _chunk_row(held: Any) -> dict[str, Any]:
     """One stored piece as the page reads it, positional metadata flattened.
 
-    The parser records more than this -- a box, the character range each
-    element of a section occupies -- and none of it has a reader yet. What is
-    lifted out here is what a person scanning a list of pieces uses: which
-    heading it sits under, what kind of region it is, what page to turn to,
-    and what can be done to it.
+    The flattened fields describe where the chunk *starts*, which is all they
+    can do for a chunk that merged several sections -- so ``parts`` carries the
+    rest, and is empty for a chunk that merged nothing. Without it a merged
+    chunk reads as a chunk of its first section, and the reader has no route to
+    the other one: the box and the character ranges stay in the metadata, but
+    which page, which heading and which section each piece came from is exactly
+    what a person scanning this list is using.
     """
     chunk = getattr(held, "chunk", held)
     metadata = getattr(chunk, "metadata", None) or {}
-    page = metadata.get("page_number")
-    path = metadata.get("heading_path")
     return {
         "chunk_index": int(getattr(chunk, "chunk_index", 0) or 0),
         "total_chunks": int(getattr(chunk, "total_chunks", 0) or 0),
         "text": getattr(chunk, "text", "") or "",
         "layout_type": str(metadata.get("layout_type") or ""),
-        "page_number": int(page) if isinstance(page, int) and page > 0 else None,
-        "heading_path": [str(part) for part in path] if isinstance(path, list) else [],
+        "page_number": _page(metadata.get("page_number")),
+        # The last page this piece touches. Equal to the first unless the chunk
+        # runs over a page boundary, which it can whenever it merged.
+        "page_end": _page(metadata.get("page_end")),
+        "heading_path": _path(metadata.get("heading_path")),
+        "parts": _chunk_parts(metadata),
         "chunk_id": str(getattr(held, "chunk_id", "") or ""),
         "enabled": bool(getattr(held, "enabled", True)),
         "manual": bool(getattr(held, "manual", False)),

@@ -1237,6 +1237,95 @@ describe('viewing the original file', () => {
     expect(first.querySelector('.kbchunkpath')?.textContent).toBe('Terms')
   })
 
+  it('says on the row when a piece was cut from more than one section', async () => {
+    /* The row's page and heading are the first part's, which is all they can
+       be once a chunk can merge across sections. Shown alone they read as
+       facts about the whole piece: this one is half of section 7 on page 9,
+       labelled as section 3 on page 4, with nothing saying so. */
+    source({
+      bases: async () => [base({ id: 'b1', name: 'handbook' })],
+      documents: async () => [doc({ id: 'd1', source: 'contract.pdf', status: 'ready' })],
+      chunks: async () => ({
+        chunks: [
+          {
+            chunk_index: 0,
+            total_chunks: 1,
+            text: 'Third.\nSeventh.',
+            layout_type: 'text',
+            page_number: 4,
+            page_end: 9,
+            heading_path: ['Handbook', 'Part 3'],
+            parts: [
+              {
+                char_start: 0,
+                char_end: 6,
+                page_number: 4,
+                heading_path: ['Handbook', 'Part 3'],
+                section_ordinal: 3,
+              },
+              {
+                char_start: 7,
+                char_end: 15,
+                page_number: 9,
+                heading_path: ['Handbook', 'Part 7'],
+                section_ordinal: 7,
+              },
+            ],
+            chunk_id: 'c1',
+          },
+        ],
+        total: 1,
+      }),
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await clickName('contract.pdf')
+    await act(async () => {})
+
+    const row = document.querySelector('.kbchunk') as HTMLElement
+    /* The page badge stops claiming one page. */
+    expect(row.querySelector('.kbchunkpg')?.textContent).toBe('gui.kb.chunks_pages {"from":4,"to":9}')
+    /* And the badge names the sections, with every part behind the hover --
+       the only route on this row to where the second half came from. */
+    const span = row.querySelector('.kbchunkspan') as HTMLElement
+    expect(span.textContent).toBe('gui.kb.chunk_sections {"n":2}')
+    expect(span.getAttribute('title')).toContain('"section":4')
+    expect(span.getAttribute('title')).toContain('"section":8')
+    expect(span.getAttribute('title')).toContain('Handbook > Part 7')
+  })
+
+  it('leaves a piece that merged nothing exactly as it was', async () => {
+    source({
+      bases: async () => [base({ id: 'b1', name: 'handbook' })],
+      documents: async () => [doc({ id: 'd1', source: 'contract.pdf', status: 'ready' })],
+      chunks: async () => ({
+        chunks: [
+          {
+            chunk_index: 0,
+            total_chunks: 1,
+            text: 'Alone.',
+            page_number: 4,
+            heading_path: ['Handbook'],
+            chunk_id: 'c1',
+          },
+        ],
+        total: 1,
+      }),
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await clickName('contract.pdf')
+    await act(async () => {})
+
+    const row = document.querySelector('.kbchunk') as HTMLElement
+    expect(row.querySelector('.kbchunkspan')).toBeNull()
+    expect(row.querySelector('.kbchunkpg')?.textContent).toBe('gui.kb.chunks_page {"n":4}')
+  })
+
   const chunk = (over: Partial<KbChunk> = {}): KbChunk => ({
     chunk_index: 0,
     total_chunks: 1,

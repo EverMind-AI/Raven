@@ -12523,12 +12523,23 @@
             ],
             "description": "The 1-based page the piece starts on, where the format has pages."
           },
+          "page_end": {
+            "type": "integer",
+            "description": "The 1-based page this piece ends on. Equal to `page_number` unless it runs over a page boundary, which it can whenever it merged."
+          },
           "heading_path": {
             "type": "array",
             "items": {
               "type": "string"
             },
             "description": "The headings the piece sits under, outermost first."
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeChunkPart"
+            },
+            "description": "Where each piece of a merged chunk came from. Empty for a chunk that merged nothing, so a non-empty list is itself the statement that this chunk crossed a section boundary."
           },
           "chunk_id": {
             "type": "string",
@@ -12563,6 +12574,39 @@
         "required": [
           "base_id",
           "reason"
+        ],
+        "type": "object"
+      },
+      "KnowledgeChunkPart": {
+        "additionalProperties": false,
+        "description": "One piece of a chunk that merged several, and where it came from. The naive strategy merges across section boundaries, so a chunk can hold two pages, two headings and two sections; the flattened fields on the chunk can only carry the first of each.",
+        "properties": {
+          "char_start": {
+            "type": "integer"
+          },
+          "char_end": {
+            "type": "integer"
+          },
+          "layout_type": {
+            "type": "string"
+          },
+          "page_number": {
+            "type": "integer"
+          },
+          "heading_path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "section_ordinal": {
+            "type": "integer",
+            "description": "Which section of the document this piece was cut from. The section identity: a heading path is not one, because two same-named children of a parent share it."
+          }
+        },
+        "required": [
+          "char_start",
+          "char_end"
         ],
         "type": "object"
       }

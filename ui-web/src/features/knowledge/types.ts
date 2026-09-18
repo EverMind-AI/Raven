@@ -185,7 +185,17 @@ export interface KbChunk {
   text: string
   layout_type?: string
   page_number?: number | null
+  /* The last page this piece touches. Equal to `page_number` unless it runs
+     over a page boundary, which it can whenever it merged. */
+  page_end?: number | null
+  /* The heading path it sits under -- of the section it *starts* in when it
+     merged several. Each part below carries its own. */
   heading_path?: string[]
+  /* Where each piece of a merged chunk came from. Empty for a chunk that
+     merged nothing, so a non-empty list is itself the statement that this
+     chunk crossed a section boundary. Without it the row shows the first
+     section's page and heading as if they described the whole piece. */
+  parts?: KbChunkPart[]
   /* What addresses this piece. Derived from its text, so it survives a rebuild
      of the same document. */
   chunk_id?: string
@@ -195,6 +205,18 @@ export interface KbChunk {
   /* Whether a person wrote it rather than a parser cutting it. It goes with
      every other piece when the document is reindexed. */
   manual?: boolean
+}
+
+/* One piece of a chunk that merged several, and where it came from. */
+export interface KbChunkPart {
+  char_start: number
+  char_end: number
+  layout_type?: string
+  page_number?: number | null
+  heading_path?: string[]
+  /* The section identity. A heading path is not one: two same-named children
+     of a parent share it. */
+  section_ordinal?: number | null
 }
 
 /* How a page of chunks is asked for. Absent members mean "the first page of

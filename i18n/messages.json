@@ -3151,6 +3151,26 @@
       "en": "p.{n}",
       "zh": "第 {n} 页"
     },
+    "gui.kb.chunks_pages": {
+      "en": "p.{from}-{to}",
+      "zh": "第 {from}-{to} 页"
+    },
+    "gui.kb.chunk_show_first_page": {
+      "en": "This piece spans pages. Show page {n}, where it starts.",
+      "zh": "该分块跨越多页。显示其起始页：第 {n} 页。"
+    },
+    "gui.kb.chunk_sections": {
+      "en": "{n} sections",
+      "zh": "{n} 个小节"
+    },
+    "gui.kb.chunk_merged": {
+      "en": "{n} parts",
+      "zh": "{n} 个片段"
+    },
+    "gui.kb.chunk_part": {
+      "en": "section {section}, page {page} -- {path}",
+      "zh": "第 {section} 个小节，第 {page} 页 -- {path}"
+    },
     "gui.kb.download": {
       "en": "Download",
       "zh": "下载"

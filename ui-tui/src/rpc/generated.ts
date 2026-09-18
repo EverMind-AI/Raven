@@ -2068,9 +2068,17 @@ export interface KnowledgeChunk {
    */
   page_number?: number | null;
   /**
+   * The 1-based page this piece ends on. Equal to `page_number` unless it runs over a page boundary, which it can whenever it merged.
+   */
+  page_end?: number;
+  /**
    * The headings the piece sits under, outermost first.
    */
   heading_path?: string[];
+  /**
+   * Where each piece of a merged chunk came from. Empty for a chunk that merged nothing, so a non-empty list is itself the statement that this chunk crossed a section boundary.
+   */
+  parts?: KnowledgeChunkPart[];
   /**
    * What addresses this piece. Derived from its text, so it survives a rebuild of the same document. Empty on rows written before ids existed, which can be read but not acted on until the document is reindexed.
    */
@@ -2083,6 +2091,23 @@ export interface KnowledgeChunk {
    * Whether a person wrote this piece. It is deleted with every other piece when the document is reindexed.
    */
   manual?: boolean;
+}
+/**
+ * One piece of a chunk that merged several, and where it came from. The naive strategy merges across section boundaries, so a chunk can hold two pages, two headings and two sections; the flattened fields on the chunk can only carry the first of each.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeChunkPart".
+ */
+export interface KnowledgeChunkPart {
+  char_start: number;
+  char_end: number;
+  layout_type?: string;
+  page_number?: number;
+  heading_path?: string[];
+  /**
+   * Which section of the document this piece was cut from. The section identity: a heading path is not one, because two same-named children of a parent share it.
+   */
+  section_ordinal?: number;
 }
 /**
  * One base that answered by words, and why its vectors were out of reach.
