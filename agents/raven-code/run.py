@@ -433,6 +433,25 @@ def render_config(source: Path, partition: Path, mode: str | None = None, *, una
     # each and neither drags the other along.
     tools_slice = flow_slice.setdefault("tools", {})
     tools_slice.setdefault("enabled", True)
+
+    # A wired memory backend gets a lane that actually reaches the prompt.
+    # Trunk's discovery default is "pull": the router runs, but the model only
+    # sees a name menu and is expected to fetch bodies with find_skill /
+    # read_skill -- tools this product disables. So on this product, pull is a
+    # dead end, and a backend wired without further ceremony recalled twenty
+    # rows per turn that no one ever saw (measured 2026-09-18: the memory arm's
+    # first prompt matched the no-memory arm to within noise). Two setdefaults
+    # close that trap; both yield to an explicit choice in the config:
+    #   discovery "push"  -- recalled bodies render into the system prefix,
+    #   local weight 0.0  -- the two bundled demo skills (weather, dag) score
+    #     on common words and their source weight (0.96) outranks any backend
+    #     (0.9), so at the default budget they'd shadow every recalled row.
+    # A config with no memory backend is untouched: the shipped product's
+    # skillForge-off stance (verdict D5) stands.
+    if (config.get("memory") or {}).get("backend"):
+        forge = config.setdefault("skillForge", {})
+        forge.setdefault("discovery", "push")
+        forge.setdefault("router", {}).setdefault("weights", {}).setdefault("local", 0.0)
     # The tool fence travels through the slice because a plugin factory cannot
     # read it: these tools replace the host's own by name, and the host grants
     # its own the workspace root only when tools.restrictToWorkspace is on.

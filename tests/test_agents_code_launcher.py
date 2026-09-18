@@ -943,6 +943,40 @@ def test_the_one_shot_render_opens_the_ask_tier_because_nobody_can_answer(ground
     assert load_config(rendered).permissions.mode == "full"
 
 
+def test_a_wired_memory_backend_gets_the_push_lane(grounded, tmp_path):
+    """Pull discovery is a dead end on this product: the menu's fetch tools
+    (find_skill / read_skill) are disabled, so recalled bodies reach the model
+    only if they are pushed into the system prefix. Left on trunk's default,
+    a wired backend recalled twenty rows per turn that no one ever saw."""
+    source = tmp_path / "mem.json"
+    base = json.loads((RUN_PY.parent / "config.json").read_text())
+    base["memory"] = {"backend": "memos", "memoryTopK": 0, "userId": "pool", "agentId": "pool"}
+    source.write_text(json.dumps(base))
+    rendered = json.loads(grounded.render_config(source, tmp_path / "mem-part").read_text())
+    assert rendered["skillForge"]["discovery"] == "push"
+    # The bundled demo skills outweigh any backend (0.96 > 0.9) and score on
+    # common words; with a backend wired they would shadow every recalled row.
+    assert rendered["skillForge"]["router"]["weights"]["local"] == 0.0
+
+
+def test_an_explicit_discovery_choice_wins_over_the_memory_default(grounded, tmp_path):
+    source = tmp_path / "mem-pull.json"
+    base = json.loads((RUN_PY.parent / "config.json").read_text())
+    base["memory"] = {"backend": "memos", "memoryTopK": 0, "userId": "pool", "agentId": "pool"}
+    base["skillForge"] = {"discovery": "pull", "router": {"weights": {"local": 0.5}}}
+    source.write_text(json.dumps(base))
+    rendered = json.loads(grounded.render_config(source, tmp_path / "mem-pull-part").read_text())
+    assert rendered["skillForge"]["discovery"] == "pull"
+    assert rendered["skillForge"]["router"]["weights"]["local"] == 0.5
+
+
+def test_without_a_memory_backend_the_skill_forge_stance_is_untouched(grounded, tmp_path):
+    """The shipped product runs skillForge off (verdict D5); the memory-lane
+    default must not drag ordinary raven-code onto the push lane."""
+    rendered = json.loads(_render(grounded).read_text())
+    assert "discovery" not in rendered.get("skillForge", {})
+
+
 def test_an_explicit_permissions_block_wins_over_the_hosting_default(grounded, tmp_path):
     source = tmp_path / "tight.json"
     base = json.loads((RUN_PY.parent / "config.json").read_text())
