@@ -6158,7 +6158,8 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    Fills the node area rather than sitting beside it: the docked pane is not
    wide enough for both, and closing the card brings the column back. */
 .tkcard { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
-.tkch { display: flex; align-items: flex-start; gap: 8px; }
+.tkch { display: flex; align-items: flex-start; gap: 8px; padding-bottom: 8px;
+  border-bottom: 1px solid var(--line-soft); }
 /* The id is the title. It is the name every other field keys off -- a
    dependency names it, a placeholder names it -- so it is set in the face
    those references are written in. */
@@ -6258,11 +6259,14 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   background: var(--surface); border-radius: 8px; padding: 9px 11px; }
 .tklive { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--faint); }
 
-/* The two tabs of a node card. */
-.tktabs { display: flex; gap: 2px; margin: -2px 0 2px; }
+/* The two tabs of a node card: one small segmented control, the same shape
+   the workspace switcher's `.wseg` already wears, rather than an underline --
+   440px of card is not the width an underline tab strip reads well at. */
+.tktabs { display: flex; gap: 2px; width: fit-content; margin: -2px 0 2px;
+  padding: 2px; border-radius: 8px; background: var(--surface); }
 .tktabs button { font-size: 12px; color: var(--muted); background: none; border: 0;
-  border-bottom: 1.5px solid transparent; padding: 5px 10px; cursor: pointer; }
-.tktabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--text); }
+  border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+.tktabs button[aria-selected="true"] { background: var(--raised); color: var(--text); font-weight: 600; }
 /* The same token the runtime uses for the same condition, carried by colour.
    Beside the name, never instead of it. */
 .tkerr { flex: none; font-family: var(--mono); font-size: 10px; color: var(--clay);
@@ -6282,10 +6286,10 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 /* A door, not a label: each chip opens the thing it names -- the product in the
    preview, the changed file in its diff -- so it is a control and wears the
    affordances of one. */
-.wchip { font-family: var(--mono); font-size: 10px; color: var(--muted); line-height: 1.6;
-  background: var(--surface); border: 1px solid var(--line-soft); border-radius: 5px; padding: 2px 6px;
-  cursor: pointer; }
-.wchip:hover { border-color: var(--line); color: var(--text); }
+.wchip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text);
+  line-height: 1.6; background: var(--surface); border: 1px solid transparent; border-radius: 8px;
+  padding: 4px 10px; cursor: pointer; }
+.wchip:hover { background: var(--raised); }
 .wchip:focus-visible { outline: 1.5px solid var(--amber); outline-offset: 1px; }
 .tkout { margin-top: 9px; font-size: 12px; line-height: 1.7; color: var(--muted);
   background: var(--surface); border-radius: 8px; padding: 9px 10px; }

@@ -23,11 +23,25 @@
   color: var(--muted);
 }
 
-/* The list row's optional playbook chip, and the size a written file's chip
-   prints -- both small, muted, secondary facts beside the row's main text. */
-.tksrc, .tkkd {
-  font-size: 11px;
-  color: var(--muted);
+/* The list row's optional playbook chip: a quiet, monospaced category label,
+   never competing with the row's own name. */
+.tksrc {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--faint);
+  background: var(--surface);
+  border-radius: 5px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+/* A written file's chip prints its size in the same quiet register as the
+   chip that carries it -- a secondary fact riding along, not a second name. */
+.tkkd {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--faint);
 }
 
 /* The status bar above a task's board: dot, status word, duration, step
@@ -37,65 +51,132 @@
   align-items: center;
   gap: 6px;
   font-size: 12px;
+  color: var(--faint);
 }
+.tkbar .st {
+  color: var(--muted);
+  font-weight: 500;
+}
+/* Stop is a quiet verb at the end of the line, not the one thing on it that
+   looks like a button -- red only on hover, since stopping a whole run is
+   rarely what the reader came here to do. */
 .tkbaract {
   margin-left: auto;
+  flex: none;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.tkbaract:hover:not(:disabled) {
+  color: var(--clay);
+  background: color-mix(in oklab, var(--clay) 8%, transparent);
+}
+.tkbaract:disabled {
+  opacity: .5;
+  cursor: default;
 }
 
 /* The "why" banner: a red band for a failure, a cooler one for an
-   interruption, with a button underneath linking to the node it happened
-   on. */
+   interruption, with a link underneath to the node it happened on. */
 .tkwhy {
   margin: 8px 0;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--clay) 12%, transparent);
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--clay) 7%, var(--ink));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--clay) 18%, transparent);
+}
+.tkwhy p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text);
 }
 .tkwhy.tkcold {
-  background: color-mix(in srgb, var(--muted) 14%, transparent);
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
 }
 .tkwhyat {
   display: block;
-  margin-top: 4px;
-  font-size: 12px;
+  margin-top: 5px;
+  font-size: 11.5px;
   color: var(--muted);
+  cursor: pointer;
+}
+.tkwhyat:hover {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 /* The board's own frame, and the lane drawn behind the nodes that share one
-   stateful conversation. */
+   stateful conversation -- a session boundary, which is a different kind of
+   fact than the "after" an arrow says, so it gets a different colour (the
+   same sky the rest of the app reserves for that one meaning). */
 .tkfork {
   overflow: visible;
 }
 .tklane {
   position: absolute;
-  border: 1px dashed var(--line);
-  border-radius: 10px;
+  border: 1px dashed color-mix(in oklab, var(--sky) 45%, transparent);
+  border-radius: 15px;
+  background: color-mix(in oklab, var(--sky) 6%, var(--ink));
   pointer-events: none;
 }
 .tklane b {
   position: absolute;
-  top: -8px;
-  left: 8px;
-  font-size: 10px;
+  top: -9px;
+  left: 13px;
+  font-family: var(--mono);
+  font-size: 9.5px;
   font-weight: 500;
-  color: var(--muted);
+  color: var(--sky);
   background: var(--ink);
-  padding: 0 4px;
+  padding: 0 6px;
 }
 
 /* The node panel's header: a back control, the title block, and the
    subtitle line under it. */
 .tkback {
   flex: none;
+  width: 26px;
+  height: 26px;
+  margin-left: -6px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--muted);
+}
+.tkback:hover {
+  color: var(--text);
+  background: var(--raised);
 }
 .tktt {
+  flex: 1;
   display: flex;
   flex-direction: column;
+  gap: 1px;
   min-width: 0;
 }
+.tktt b {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .tksub {
-  font-size: 11px;
-  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* The context tab: a console-only step, an ended-without-an-answer banner,
@@ -106,24 +187,60 @@
   gap: 8px;
 }
 .tkconsole {
+  padding: 3px 0;
   font-size: 12px;
   color: var(--muted);
 }
 .tkerrb {
-  font-size: 12px;
+  font-size: 12.5px;
+  line-height: 1.6;
   color: var(--clay);
+  background: color-mix(in oklab, var(--clay) 8%, var(--paper));
+  border-radius: 9px;
+  padding: 9px 11px;
 }
 .tktrunc {
-  font-size: 11px;
-  color: var(--muted);
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--faint);
 }
+/* The reply dock: an input riding in a pill of its own, the way the
+   composer's own field does, with the send action as a small dark pill. */
 .tkdock {
   display: flex;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface);
+  border-radius: 11px;
+  padding: 6px 6px 6px 13px;
 }
 .tkdock input {
   flex: 1;
   min-width: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  font-size: 13px;
+  color: var(--text);
+}
+.tkdock input::placeholder {
+  color: var(--faint);
+}
+.tkdock button {
+  flex: none;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
+  background: var(--text);
+  cursor: pointer;
+}
+.tkdock button:disabled {
+  opacity: .35;
+  cursor: default;
 }
 
 /* The work-order tab: one row per field, the missing-agent warning, and the
@@ -131,41 +248,86 @@
 .tkorder {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
 }
 .tkfield {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 6px;
 }
 .tkfk {
-  font-size: 11px;
-  color: var(--muted);
+  font-size: 11.5px;
+  color: var(--faint);
 }
+/* The value sits inside its own box, the way a filled-in form field does --
+   what separates one field from the next is the box, not just the vertical
+   gap, and a run's answers do not get a dropdown arrow or a clear button:
+   this one already went out, and nothing here changes what was sent. */
 .tkfv {
-  font-size: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--ink);
+  padding: 6px 10px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text);
+}
+.tkagent {
+  font-weight: 500;
 }
 .tkagent.tkmiss {
-  color: var(--clay);
+  color: var(--gold);
 }
 .tkfix {
   margin-left: 6px;
-  font-size: 11px;
-  color: var(--clay);
+  font-size: 12px;
+  color: var(--gold);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.tkfix:hover {
+  color: var(--text);
 }
 .tkhd {
   margin-left: 6px;
+  font-family: var(--mono);
   font-size: 11px;
   color: var(--muted);
 }
 .tkspecid {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-  font-size: 11px;
+  gap: 7px;
+  margin-top: 2px;
+  padding-top: 11px;
+  border-top: 1px solid var(--line-soft);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--faint);
+}
+.tkspecid b {
+  font-weight: 400;
   color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tkspeccopy {
+  margin-left: auto;
+  flex: none;
+  padding: 2px 7px;
+  border-radius: 6px;
   font-size: 11px;
+  color: var(--faint);
+  cursor: pointer;
+}
+.tkspeccopy:hover {
+  color: var(--text);
+  background: var(--surface);
 }
