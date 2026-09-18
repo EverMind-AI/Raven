@@ -6,5 +6,9 @@ Installation, self-hosting, and the command reference for
 To install Raven for the first time, follow Quick Start in the
 [README](https://github.com/EverMind-AI/Raven#-quick-start).
 
-These pages cover self-hosting, launching the web UI, the command reference, and
-the repo layout.
+- [Self-Hosting](self-hosting.md) - Docker Compose, configuration, and running
+  from a source checkout.
+- [Launch WebUI](webui.md) - starting and stopping the local page.
+- [Command Reference](commands.md) - the CLI surface.
+- [Repo Layout](repo-layout.md) - the packages under `raven/` and the top-level
+  trees, which are also the canonical commit scopes.

@@ -39,3 +39,7 @@ plugins:
 
 nav:
   - Home: index.md
+  - Self-Hosting: self-hosting.md
+  - Launch WebUI: webui.md
+  - Command Reference: commands.md
+  - Repo Layout: repo-layout.md
