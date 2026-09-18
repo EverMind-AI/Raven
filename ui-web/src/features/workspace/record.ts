@@ -12,14 +12,15 @@
  * the redraw -- is the page's (src/state/ws.ts), not this module's.
  */
 
-import { islands } from '../registry'
-import { T } from '../../i18n/t'
-import { sources } from '../../state/sources'
-import { panel } from '../../state/wsPanel'
+import { t } from '../../i18n/t'
+import { pane } from '../../state/wsPane'
+import * as hunks from './hunks'
+import { shortPath } from './source'
+import { shared as workspaceShared } from './store'
 
 import type { WsChange, WsHunk, WsShared } from './types'
 
-const record = (): WsShared => islands.workspace.shared()
+const record = (): WsShared => workspaceShared()
 
 /* The two front ends hand over different shapes -- the live RPC gives the
    whole argument object, a replayed call gives the one string it displays.
@@ -41,7 +42,7 @@ export function wsRecordChange(path: string, kind: string, hunk: WsHunk): WsChan
   const key = String(path)
   let c = WS.changes.find((x) => x.key === key && x.turn === WS.turn)
   if (!c) {
-    const shown = sources.workspace!.shortPath(key)
+    const shown = shortPath(key)
     const cut = shown.lastIndexOf('/')
     /* The newest change is the one you came here to read, so it arrives
        expanded. `auto` marks it as opened by us, so the next arrival folds it
@@ -65,21 +66,21 @@ export function wsOnTool(name: string, args: unknown, _silent?: boolean): void {
   const path = (a.path || a.file_path || '') as string
   let hit: WsChange | null = null
   if (name === 'edit_file' && path) {
-    hit = wsRecordChange(path, 'edit', islands.workspace.hunkFromEdit(a.old_text as string, a.new_text as string))
+    hit = wsRecordChange(path, 'edit', hunks.fromEdit(a.old_text as string, a.new_text as string))
   } else if (name === 'write_file' && path) {
-    hit = wsRecordChange(path, 'write', islands.workspace.hunkFromWrite(a.content as string))
+    hit = wsRecordChange(path, 'write', hunks.fromWrite(a.content as string))
   } else if (name === 'web_fetch' && a.url) {
-    WS.urls.unshift({ url: String(a.url), kind: 'fetch', at: T('gui.sess.just_now') })
+    WS.urls.unshift({ url: String(a.url), kind: 'fetch', at: t('gui.sess.just_now') })
   } else if (name === 'web_search' && a.query) {
-    WS.urls.unshift({ url: String(a.query), kind: 'search', at: T('gui.sess.just_now') })
+    WS.urls.unshift({ url: String(a.query), kind: 'search', at: t('gui.sess.just_now') })
   } else return
 
-  const shown = panel().view()
+  const shown = pane().view()
   if (hit && shown.open && shown.tab === 'diff') hit.flash = true
   /* Draw before counting: the Changes view marks rows seen as it renders, so
      counting first would flash a badge that the very next line clears. */
-  if (panel().showsTurn()) panel().draw()
-  panel().bump()
+  if (pane().showsTurn()) pane().draw()
+  pane().bump()
 }
 
 export function wsOnToolDone(
@@ -94,14 +95,14 @@ export function wsOnToolDone(
     const path = (a.path || a.file_path || '') as string
     const c = WS.changes.find((x) => x.key === path && x.turn === WS.turn)
     if (c) {
-      const h = islands.workspace.hunkFromUnified(diff)
+      const h = hunks.fromUnified(diff)
       const stale = c.hunks.pop()
       if (stale) { c.add -= stale.add; c.del -= stale.del }
       c.hunks.push(h); c.add += h.add; c.del += h.del
     }
   }
-  if (panel().showsTurn()) panel().draw()
-  panel().bump()
+  if (pane().showsTurn()) pane().draw()
+  pane().bump()
 }
 
 /* ── resumed sessions ──────────────────────────────────────────────────
@@ -152,8 +153,8 @@ export function wsOnHistory(messages: StoredMessage[] | null | undefined): void 
   })
   /* Restored rows have no completion event coming, and nothing counts as
      unread because none of it arrived while the reader was away. */
-  WS.urls.forEach((u) => { u.at = T('gui.ws.turn_earlier') })
+  WS.urls.forEach((u) => { u.at = t('gui.ws.turn_earlier') })
   WS.changes.forEach((c) => { c.seen = true })
   WS.unseen = 0
-  panel().bump()
+  pane().bump()
 }

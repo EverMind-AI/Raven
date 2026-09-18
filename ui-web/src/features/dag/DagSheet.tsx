@@ -19,16 +19,15 @@
 
 import { useEffect, useLayoutEffect, useState, useSyncExternalStore } from 'react'
 
+import { CHEVRON_DOWN, CROSS, Glyph } from '../../components/Ico'
 import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
-import { CHEVRON_DOWN, CROSS, Glyph } from '../../components/Ico'
-import { getState as subState, subscribe as subSubscribe } from '../subagents/store'
+import { get as subState, subscribe as subSubscribe } from '../subagents/store'
 import { DagGraph } from './DagGraph'
 import { SHEET, ordered, summary } from './graph'
 import * as store from './store'
 
 import type { DagRun } from './types'
-import type { TranscriptSource } from '../transcript/types'
 import type { JSX } from 'react'
 
 const anyRunning = (d: DagRun): boolean => [...d.nodes.values()].some((n) => n.status === 'running')
@@ -44,7 +43,7 @@ const anyRunning = (d: DagRun): boolean => [...d.nodes.values()].some((n) => n.s
    host, and the host belongs to mount.tsx. Folding is a store action for the
    opposite reason: the flag rides on the run, so it survives the reader
    switching conversations and coming back. */
-export function Sheet({ sess, host, onClose }: { sess: string; host: HTMLElement; onClose: () => void }): JSX.Element | null {
+export function DagSheet({ sess, host, onClose }: { sess: string; host: HTMLElement; onClose: () => void }): JSX.Element | null {
   useSyncExternalStore(store.subscribe, store.version)
   const sub = useSyncExternalStore(subSubscribe, subState)
   const d = store.run(sess)
@@ -94,7 +93,7 @@ export function Sheet({ sess, host, onClose }: { sess: string; host: HTMLElement
       </div>
       <DagGraph dims={SHEET} nodes={nodes} now={Date.now()} surface="sheet"
         selectedId={sel && sel.run_id === d.run_id ? sel.node : null}
-        onPick={(n) => ds<TranscriptSource>('transcript').openDagNode?.(d.run_id, n.id, n.node_summary)} />
+        onPick={(n) => ds('transcript').openDagNode?.(d.run_id, n.id, n.node_summary)} />
     </>
   )
 }

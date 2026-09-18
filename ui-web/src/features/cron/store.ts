@@ -1,14 +1,17 @@
 import { t } from '../../i18n/t'
+import * as page from '../../state/page'
 import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
 
 import type { CronDraft, CronJob, CronSource } from './types'
-import * as page from '../../state/page'
 
-/* Page state, outside React on purpose: the legacy shell drives this page
- * imperatively (nav opens it, Esc closes it, a finished turn refreshes it,
- * a language flip redraws it), so the state lives in a plain store the
- * shims can call, and the component subscribes.
+/* Page state, outside React on purpose: the callers that drive this page are
+ * not React. The rail's flyout and the nav open it (state/navfly.ts), the
+ * Escape order closes it (state/escapeOrder.ts), the boot prefetches it
+ * (app/boot.ts) and the page's own teardown shuts its sheet
+ * (app/install.ts) -- so the state lives in a plain store those four can
+ * call, and the component subscribes.
  */
 
 export interface CronState {
@@ -17,51 +20,41 @@ export interface CronState {
      since a refresh swaps row objects without changing any identity a
      component's dep array could see. */
   rev: number
-  /* False until the first rows fetch answers: the legacy page cleared the
-     stage on first open rather than showing a not-yet-loaded empty state. */
+  /* False until the first rows fetch answers: the list is not drawn at all
+     until then, so a page still loading never reads as "no jobs". */
   loaded: boolean
   viewId: string | null
-  /* Drafts are mutable objects edited in place by uncontrolled inputs --
-     the same discipline the legacy form kept: a keystroke changes no state
-     anyone re-renders on, so focus and IME composition are never disturbed.
+  /* Drafts are mutable objects edited in place by uncontrolled inputs: a
+     keystroke changes no get() anyone re-renders on, so focus and IME
+     composition are never disturbed.
      `epoch` remounts the form subtrees when a draft is replaced. */
   draft: CronDraft | null
   sheet: CronDraft | null
   epoch: number
-  /* Bumped only by a language flip: run stamps arrive language-baked from
-     the source, so the flip must refetch them, while the plain redraws the
-     island's own controls ask for must not. */
-  lang: number
 }
 
-let state: CronState = { rows: [], rev: 0, loaded: false, viewId: null, draft: null, sheet: null, epoch: 0, lang: 0 }
-const listeners = new Set<() => void>()
+const store = makeStore<CronState>({ rows: [], rev: 0, loaded: false, viewId: null, draft: null, sheet: null, epoch: 0 })
 
-export const getState = (): CronState => state
+export const { get, subscribe, _resetForTests } = store
 
-export function subscribe(l: () => void): () => void {
-  listeners.add(l)
-  return () => listeners.delete(l)
+/** A patch, merged into the page's state. */
+export function set(patch: Partial<CronState>): void {
+  store.set((prev) => ({ ...prev, ...patch }))
 }
 
-function set(patch: Partial<CronState>): void {
-  state = { ...state, ...patch }
-  for (const l of listeners) l()
-}
-
-export const source = (): CronSource => ds<CronSource>('cron')
+export const source = (): CronSource => ds('cron')
 
 export async function refresh(): Promise<void> {
   try {
     const rows = await source().rows()
-    set({ rows, loaded: true, rev: state.rev + 1 })
+    set({ rows, loaded: true, rev: get().rev + 1 })
   } catch (e) {
     toast(t('gui.op.load_failed', { detail: String((e as Error).message || e) }))
-    set({ loaded: true, rev: state.rev + 1 })
+    set({ loaded: true, rev: get().rev + 1 })
   }
 }
 
-/* Boot calls this through the shim to prefetch without opening the page. */
+/* app/boot.ts calls this to prefetch the rows without opening the page. */
 export function warm(): Promise<void> {
   return source()
     .rows()
@@ -80,7 +73,7 @@ export function close(): void {
 }
 
 export function openDetail(j: CronJob): void {
-  set({ viewId: j.id, draft: { ...j }, epoch: state.epoch + 1 })
+  set({ viewId: j.id, draft: { ...j }, epoch: get().epoch + 1 })
 }
 
 export function backToList(): void {
@@ -92,7 +85,7 @@ export function backToList(): void {
    via epoch), never merely dropped -- a null draft here would fall through
    to the list with viewId still set. */
 export function viewSaved(saved: CronJob | null): void {
-  set({ viewId: saved ? saved.id : null, draft: saved ? { ...saved } : null, epoch: state.epoch + 1 })
+  set({ viewId: saved ? saved.id : null, draft: saved ? { ...saved } : null, epoch: get().epoch + 1 })
   void refresh()
 }
 
@@ -110,7 +103,7 @@ export function openSheet(j?: CronDraft): void {
     runs: [],
     fresh: true,
   }
-  set({ sheet: draft, epoch: state.epoch + 1 })
+  set({ sheet: draft, epoch: get().epoch + 1 })
 }
 
 export function closeSheet(): void {
@@ -118,12 +111,8 @@ export function closeSheet(): void {
 }
 
 /* A language flip changes nothing in this state, but every visible string
-   comes from T(), so a re-render is the whole redraw. */
+   comes from t(), so a re-render is the whole redraw. The island's own controls
+   ask for this after writing a draft in place, which no get() can see. */
 export function redraw(): void {
   set({})
-}
-
-/* The shim's redraw: what the legacy language flip calls. */
-export function langRedraw(): void {
-  set({ lang: state.lang + 1 })
 }

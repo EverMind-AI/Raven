@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { mountPageRoot } from '../test/pageRoot'
 import { draw } from './foot'
 import { resetSources, setSources } from './sources'
-import { mountPageRoot } from '../test/pageRoot'
 
 import type { SettingsSource } from '../features/settings/types'
 

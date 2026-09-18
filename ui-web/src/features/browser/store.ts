@@ -1,10 +1,10 @@
 import { t } from '../../i18n/t'
-import { ds } from '../../state/sources'
 import { open as openUrl } from '../../lib/openUrl'
+import { ds } from '../../state/sources'
 import { sources } from '../../state/sources'
+import { pane } from '../../state/wsPane'
 
 import type { BrowserReply, BrowserSource, BrowserTabRow, ChromiumSource, FrameHead } from './types'
-import { panel } from '../../state/wsPanel'
 
 /* Page state, outside React on purpose: the panel drives this view imperatively
  * (state/ws.ts mounts and unmounts it per redraw, frames land from the
@@ -55,7 +55,7 @@ const initial: BrowserState = {
 let state: BrowserState = { ...initial }
 const listeners = new Set<() => void>()
 
-export const getState = (): BrowserState => state
+export const get = (): BrowserState => state
 
 export function subscribe(l: () => void): () => void {
   listeners.add(l)
@@ -101,7 +101,7 @@ let canvasEl: HTMLCanvasElement | null = null
 let stageEl: HTMLElement | null = null
 let urlEl: HTMLInputElement | null = null
 
-export const source = (): BrowserSource => ds<BrowserSource>('browser')
+export const source = (): BrowserSource => ds('browser')
 const chromium = (): ChromiumSource => source() as ChromiumSource
 
 export function setHost(el: HTMLElement): void {
@@ -145,7 +145,7 @@ export const noFavAdd = (origin: string): void => {
 }
 
 export function showing(): boolean {
-  const shown = panel().view()
+  const shown = pane().view()
   return shown.open && shown.tab === 'browser'
 }
 
@@ -457,9 +457,9 @@ export async function closeBrowser(): Promise<void> {
   set({ started: false, url: '', hasFrame: false })
 }
 
-/* Leaving the browser view -- another tab, another session, the panel shut --
-   must drop the watch; the demo drawWs wrapper calls this on every repaint
-   that lands somewhere else. */
+/* Leaving the browser view -- another tab, another session, the pane shut --
+   must drop the watch; the pane's mount calls this on every repaint that lands
+   somewhere else (features/workspace/store.ts). */
 export function hidden(): void {
   void watch(false)
   tick(false)

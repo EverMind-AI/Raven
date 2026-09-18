@@ -117,7 +117,7 @@ export const hasNamingFlag = (answer: unknown): boolean => field(answer, 'naming
  * the file survived stays at the site, for the same reason as `naming`:
  * "nothing at all" is not "nothing was there", and reading it as the second
  * drops a row whose file may still exist. Sites: `removeSession` and
- * `deleteAllSessions` in src/features/rail/leave.ts, which must not disagree
+ * `deleteAllSessions` in src/features/rail/wire.ts, which must not disagree
  * about one answer.
  */
 export const hasStillOnDisk = (answer: unknown): boolean => field(answer, 'still_on_disk') !== undefined
@@ -127,7 +127,7 @@ export const hasStillOnDisk = (answer: unknown): boolean => field(answer, 'still
  * gateway carries the field, and the notice row simply stays hidden -- an
  * older gateway degrades to no notice rather than to a broken one. Sites: the
  * boot check and its unawaited re-check in src/app/boot.ts, and the
- * settings page's own check button (src/features/settings/chrome.ts).
+ * settings page's own check button (src/features/settings/wire.ts).
  */
 export const hasUpdateFlag = (version: unknown): boolean => !!field(version, 'update_available')
 
@@ -146,7 +146,7 @@ export const hasBinaryFrames = (): boolean => has('browser.frame')
  * A `subagents.list` row carries `building`. Always false from a current
  * gateway (the fork-era venv build is gone); carried for an older one, where
  * the row was the only place the page learned a build was in flight. Site:
- * `xaRowOf` in src/features/xa/source.ts.
+ * `extAgentRowOf` in src/features/extAgents/source.ts.
  */
 export const hasBuildFlag = (row: unknown): boolean => !!field(row, 'building')
 

@@ -11,15 +11,14 @@
  * The column itself is here too now: src/App.tsx renders it as one of the two
  * children of #split.
  *
- * Literals go through lang.text(key, literal): the served markup carries
- * data-i18n* keys and state/lang/store.ts applies a language by walking the document
- * and rewriting them, so a component rendering one of those keyed literals has
- * two writers and has to read the same catalogue to agree with the other one.
+ * Words go through t(key), which reads the language the page resolved before
+ * its first frame (state/lang/store.ts); the key each line speaks is the
+ * argument to that call.
  *
  * What this does NOT own, though it renders the elements:
  *   - #wsBody's children. It is shared ground for three islands: the workspace
  *     view roots itself in it, and the browser and sub-agent views are handed
- *     the cleared box (features/workspace/store.ts's draw), so React must not
+ *     the cleared box (features/workspace/store.ts's mount), so React must not
  *     own that child list.
  *   - the tab strip's aria-selected and #wsWide's four attributes, which the
  *     pane's state writes at the moment it decides them (src/state/ws.ts).
@@ -37,8 +36,10 @@
  */
 
 import { useEffect, useSyncExternalStore } from 'react'
+
 import { composing } from '../features/composer/store'
-import { islands } from '../features/registry'
+import { toggleDesk } from '../features/desk/store'
+import { t } from '../i18n/t'
 import * as lang from '../state/lang'
 import * as ws from '../state/ws'
 
@@ -63,7 +64,7 @@ function useOutsideControls(): void {
     }
     pane?.addEventListener('keydown', keydown)
     const toggle = document.getElementById('wsBtn')
-    if (toggle) toggle.onclick = () => islands.workspace.toggleDesk()
+    if (toggle) toggle.onclick = () => toggleDesk()
     return () => {
       pane?.removeEventListener('keydown', keydown)
       if (toggle) toggle.onclick = null
@@ -89,20 +90,20 @@ function WsTabs(): JSX.Element {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <rect x="4" y="4" width="16" height="16" rx="3" /><path d="M12 8.5v7M8.5 12h7" />
         </svg>
-        <span className="lb" data-i18n="gui.ws.changes">{lang.text('gui.ws.changes', 'Diff')}</span>
+        <span className="lb">{t('gui.ws.changes')}</span>
         <span className="bdg" id="wsUnseen" hidden />
       </button>
       <button role="tab" data-w="browser" aria-selected="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <circle cx="12" cy="12" r="8" /><path d="M4.5 12h15M12 4.5c-4.5 4.5-4.5 10.5 0 15M12 4.5c4.5 4.5 4.5 10.5 0 15" />
         </svg>
-        <span className="lb" data-i18n="gui.ws.browser">{lang.text('gui.ws.browser', '浏览器')}</span>
+        <span className="lb">{t('gui.ws.browser')}</span>
       </button>
       <button role="tab" data-w="agents" aria-selected="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <rect x="4" y="8" width="16" height="11" rx="3" /><path d="M12 4.5V8M8.5 13h.01M15.5 13h.01" />
         </svg>
-        <span className="lb" data-i18n="gui.ws.agents">{lang.text('gui.ws.agents', '子智能体')}</span>
+        <span className="lb">{t('gui.ws.agents')}</span>
         <span className="rundot" id="wsAgentRun" hidden />
       </button>
     </div>
@@ -122,8 +123,6 @@ function WsActs(): JSX.Element {
         className="ghost-ic wsfull tipdn"
         id="wsWide"
         aria-pressed="false"
-        data-i18n-tip="gui.ws.expand_panel"
-        data-i18n-aria="gui.ws.expand_panel"
         data-tip={lang.attr('gui.ws.expand_panel')}
         aria-label={lang.attr('gui.ws.expand_panel')}
         onClick={() => ws.setFull(!ws.wide)}
@@ -146,8 +145,6 @@ function WsActs(): JSX.Element {
         className="ghost-ic wstog tipdn"
         id="wsClose"
         aria-expanded="true"
-        data-i18n-tip="gui.collapse_ws"
-        data-i18n-aria="gui.collapse_ws"
         data-tip={lang.attr('gui.collapse_ws')}
         aria-label={lang.attr('gui.collapse_ws')}
         onClick={() => ws.setOpen(false)}
@@ -166,7 +163,7 @@ export function WsPane(): JSX.Element {
   useOutsideControls()
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
-    <aside className="ws" id="ws" data-i18n-aria="gui.workspace" aria-label={lang.attr('gui.workspace')}>
+    <aside className="ws" id="ws" aria-label={lang.attr('gui.workspace')}>
       <div className="ws-top">
         <WsTabs />
         <WsActs />

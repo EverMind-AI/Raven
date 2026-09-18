@@ -1,13 +1,13 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import * as store from './perm'
-import { mountPageRoot } from '../test/pageRoot'
 import { resetTranslator, setTranslator } from '../i18n/t'
+import { mountPageRoot } from '../test/pageRoot'
+import * as store from './perm'
 
 /* The stored tier is read when the store is reset, so a case that cares about
    it seeds localStorage and then asks for the reset. This was resetModules plus
-   a fresh dynamic import, which a store cannot have: <PermChip/> and <PermPop/>
+   a fresh dynamic import, which a store cannot have: <PermChip/> and <PermPopover/>
    render from THIS copy of the module, and a second copy would be a store with
    nothing subscribed to it. */
 async function load(stored?: string | null): Promise<typeof store> {
@@ -21,9 +21,9 @@ function wire(): void {
   setTranslator((key) => key)
 }
 
-/* The chip and the panel are the page root's now (src/chrome/PermChip.tsx,
-   src/chrome/PermPop.tsx), so the fixture is the one band they render into --
-   the composer card comes with them, and the card is what the panel has to
+/* The chip and the popover are the page root's now (src/chrome/PermChip.tsx,
+   src/chrome/PermPopover.tsx), so the fixture is the one band they render into --
+   the composer card comes with them, and the card is what the popover has to
    open clear of. */
 function markup(): void {
   document.body.innerHTML = '<div class="dock"></div>'
@@ -64,7 +64,7 @@ describe('the permission chip', () => {
     const perm = await load('full')
     expect(perm.current()).toBe('full')
     perm.draw()
-    /* The risky tier is marked as such on the chip, not just in the panel. */
+    /* The risky tier is marked as such on the chip, not just in the popover. */
     expect(chip().classList.contains('risk')).toBe(true)
   })
 
@@ -99,7 +99,7 @@ describe('the permission chip', () => {
   })
 })
 
-describe('the permission panel', () => {
+describe('the permission popover', () => {
   it('lists the three tiers strictest first, as a radio group', async () => {
     const perm = await load()
     perm.open()
@@ -117,7 +117,7 @@ describe('the permission panel', () => {
     expect(pop().querySelectorAll('svg.tick').length).toBe(1)
   })
 
-  it('reparents the panel to the body so fixed positioning means the viewport', async () => {
+  it('reparents the popover to the body so fixed positioning means the viewport', async () => {
     const perm = await load()
     expect(pop().parentElement!.className).toBe('dock-in')
     perm.open()
@@ -134,7 +134,7 @@ describe('the permission panel', () => {
     const perm = await load()
     perm.open()
     /* happy-dom measures everything as zero, so the useful assertion is the
-       floor: the panel never lands at a negative offset. */
+       floor: the popover never lands at a negative offset. */
     expect(parseFloat(pop().style.left)).toBeGreaterThanOrEqual(8)
     expect(parseFloat(pop().style.top)).toBeGreaterThanOrEqual(8)
   })
@@ -143,7 +143,7 @@ describe('the permission panel', () => {
     /* happy-dom measures everything as zero, so the two boxes this turns on are
        given the rects they have on the running page: the card at 436..562 and
        the chip on its bottom bar at 518. Raised off the chip -- which is what
-       this did -- the panel's lower edge landed at 512 and its body covered the
+       this did -- the popover's lower edge landed at 512 and its body covered the
        field, the attachment row and anything staged in them. */
     const perm = await load()
     const card = document.querySelector('.dock-in')!
@@ -153,7 +153,7 @@ describe('the permission panel', () => {
     }
     box(card, 436, 562, 126)
     box(chip(), 518, 539, 21)
-    /* The panel's own height, which happy-dom would otherwise report as 0 and
+    /* The popover's own height, which happy-dom would otherwise report as 0 and
        leave the assertion true for the wrong reason. */
     box(pop(), 0, 0, 240)
     perm.open()
@@ -184,7 +184,7 @@ describe('the permission panel', () => {
     expect(pop().querySelectorAll('svg.tick').length).toBe(1)
   })
 
-  it('toggles, since the panel has no close button of its own', async () => {
+  it('toggles, since the popover has no close button of its own', async () => {
     const perm = await load()
     perm.toggle()
     expect(perm.isOpen()).toBe(true)

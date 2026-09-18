@@ -3,7 +3,7 @@
  * They used to be spread over ten modules, each registering its own from its
  * own install(), and the order they ended up in was an accident of which file
  * main.tsx called first. That order is a
- * contract, not an accident: three of them are capture-phase and run before the
+ * contract, not an accident: five of them are capture-phase and run before the
  * element the reader clicked ever sees the event, and inside one phase the
  * first handler registered runs first. So the popover arbitration closes the
  * two composer popovers only after the menu writer has closed the menu, the
@@ -30,20 +30,20 @@ import { onResize as dropBars, onScroll as barsOnScroll } from '../chrome/behavi
 import { trap as linkTrap } from '../features/browser/store'
 import { fitField, parkDraftNow } from '../features/composer/mount'
 import { composing } from '../features/composer/store'
-import { islands } from '../features/registry'
-import { T } from '../i18n/t'
+import { open as openSettings } from '../features/settings/store'
+import { t } from '../i18n/t'
 import { isMac } from '../lib/platform'
 import { onContextMenu } from './contextMenu'
+import * as escapeOrder from './escapeOrder'
 import { toggle as toggleFind } from './find'
 import { onPointerDown as menuAway } from './menu'
-import * as overlays from './overlays'
-import { close as closePermPop } from './perm'
+import { close as closePermPopover } from './perm'
 import { onClick as chipClick, onKey as chipKey } from './proseChips'
 import { get as railOpen, set as setRail } from './rail'
 import { clamp as clampSelection } from './selection'
 import { close as closeSettings, isOpen as settingsIsOpen } from './settings'
 import { onDblClick as shellZoom, onMouseDown as shellDrag } from './shellWindow'
-import { close as closeTierPop } from './tier'
+import { close as closeTierPopover } from './tier'
 import * as tip from './tooltip'
 
 /* The two composer popovers have no close button and no Escape branch: a
@@ -54,8 +54,8 @@ import * as tip from './tooltip'
    not here: it folds on its own toggle only, never on an outside click. */
 function awayFromPopovers(event: PointerEvent): void {
   const target = event.target as Element
-  if (!target.closest('#permPop') && !target.closest('#permChip')) closePermPop()
-  if (!target.closest('#tierPop') && !target.closest('#tierChip')) closeTierPop()
+  if (!target.closest('#permPop') && !target.closest('#permChip')) closePermPopover()
+  if (!target.closest('#tierPop') && !target.closest('#tierChip')) closeTierPopover()
 }
 
 /* Code blocks come and go with every answer, so the click is caught once here
@@ -68,25 +68,25 @@ function copyCodeBlock(event: MouseEvent): void {
   if (!pre) return
   if (navigator.clipboard) navigator.clipboard.writeText(pre.textContent ?? '')
   button.classList.add('ok')
-  button.title = T('gui.code.copied')
-  button.setAttribute('aria-label', T('gui.code.copied'))
+  button.title = t('gui.code.copied')
+  button.setAttribute('aria-label', t('gui.code.copied'))
   setTimeout(() => {
     button.classList.remove('ok')
-    button.title = T('gui.code.copy')
-    button.setAttribute('aria-label', T('gui.code.copy'))
+    button.title = t('gui.code.copy')
+    button.setAttribute('aria-label', t('gui.code.copy'))
   }, 1500)
 }
 
-/* The Escape order (state/overlays.ts) and the three shortcuts that have always
-   shared its handler. They share it because splitting them would add a
+/* The Escape order (state/escapeOrder.ts) and the three shortcuts that have
+   always shared its handler. They share it because splitting them would add a
    registration, and the sequence above is what this file is for. */
-function onEscapeChain(e: KeyboardEvent): void {
+function onEscapeOrder(e: KeyboardEvent): void {
   /* Escape ends an open composition; it must not also close a panel or halt
      the running turn behind the reader's back. The guard is the composer
      field's own, which is where the page's other Enter handlers ask it. */
   if (composing(e)) return
   const inField = /INPUT|TEXTAREA/.test(document.activeElement?.tagName ?? '')
-  if (e.key === 'Escape' && overlays.dispatch()) return
+  if (e.key === 'Escape' && escapeOrder.dispatch()) return
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
     e.preventDefault(); setRail(true); toggleFind(true)
   }
@@ -105,15 +105,15 @@ function onSettingsKey(e: KeyboardEvent): void {
   if (e.key !== ',' || !(isMac() ? e.metaKey : e.ctrlKey)) return
   e.preventDefault()
   if (settingsIsOpen()) { closeSettings(); return }
-  void islands.settings.open()
+  void openSettings()
 }
 
 /* Its own entry point, because the order table it reads has a gate of its own
-   that installs this listener and nothing else (state/overlays.test.ts). The
+   that installs this listener and nothing else (state/escapeOrder.test.ts). The
    page reaches it through installGlobalListeners below, which is the only
    caller that may run. */
-export function installEscapeChain(): void {
-  document.addEventListener('keydown', onEscapeChain)
+export function installEscapeOrder(): void {
+  document.addEventListener('keydown', onEscapeOrder)
 }
 
 /** Every document- and window-level listener the page holds. Called once. */
@@ -152,7 +152,7 @@ export function installGlobalListeners(): void {
   document.addEventListener('dblclick', shellZoom)
   document.addEventListener('selectionchange', clampSelection)
   document.addEventListener('click', copyCodeBlock)
-  installEscapeChain()
+  installEscapeOrder()
   document.addEventListener('keydown', onSettingsKey)
   /* The loaded page. The splash is the boot sequence's to lift, so what is
      left on this event is the one URL flag that asks for the canned onboarding

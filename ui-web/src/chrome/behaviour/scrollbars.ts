@@ -9,7 +9,7 @@
  * Behaviour, not rendering: nothing here belongs to a component tree. The
  * thumbs are positioned from measurements taken at the moment of the scroll,
  * over elements owned by whatever layer drew them, so this stays a plain
- * module the way it was a plain block of the legacy shell.
+ * module that state/globalListeners.ts installs once.
  *
  * SB_HIDE is how long a bar stays after the last scroll event. Long enough to
  * read where you are in a long transcript, short enough that it is gone before
@@ -34,8 +34,8 @@ interface Bars {
 const AXES: readonly Axis[] = ['v', 'h']
 
 const sbMap = new WeakMap<HTMLElement, Bars>()
-/* Which thumbs already carry their pointerdown listener. An expando on the
-   node in the legacy shell; a WeakSet says the same thing in types. */
+/* Which thumbs already carry their pointerdown listener. A WeakSet rather than
+   a flag on the node, so a thumb that goes away is forgotten with it. */
 const dragWired = new WeakSet<HTMLElement>()
 
 /* Whoever is showing a bar right now. A scroller that moved without being
@@ -53,7 +53,7 @@ const layer = (): HTMLElement => portals.host('sbars')
 
 /* The scroll event from the document, the documentElement and the window all
    mean the same scroller. */
-export function root(target: EventTarget | null): HTMLElement | null {
+function root(target: EventTarget | null): HTMLElement | null {
   const el =
     target === document || target === document.documentElement || target === window
       ? document.scrollingElement

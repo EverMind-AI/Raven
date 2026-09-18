@@ -1,13 +1,14 @@
-import { ds } from '../../state/sources'
 import * as detail from '../../state/detail'
+import * as page from '../../state/page'
+import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
 
 import type { MemItem, MemKind, MemStats, MemorySource } from './types'
-import * as page from '../../state/page'
 
-/* Page state, outside React on purpose: the legacy shell drives this page
- * imperatively (nav opens it, Esc closes it, a language flip redraws it),
- * so the state lives in a plain store the shims can call, and the
- * component subscribes.
+/* Page state, outside React on purpose: the caller that closes this page is
+ * not React -- the Escape order asks the domain's own verb for it
+ * (state/escapeOrder.ts) -- so the state lives in a plain store it can call,
+ * and the component subscribes.
  */
 
 export const MEM_PAGE_SIZE = 20
@@ -34,7 +35,7 @@ export interface MemoryState {
   detail: MemItem | null
 }
 
-let state: MemoryState = {
+const store = makeStore<MemoryState>({
   kind: 'episode',
   page: 1,
   q: '',
@@ -45,24 +46,18 @@ let state: MemoryState = {
   note: '',
   err: '',
   detail: null,
-}
-const listeners = new Set<() => void>()
+})
 let debounce: ReturnType<typeof setTimeout> | undefined
 let busy = false
 
-export const getState = (): MemoryState => state
+export const { get, subscribe, _resetForTests } = store
 
-export function subscribe(l: () => void): () => void {
-  listeners.add(l)
-  return () => listeners.delete(l)
+/** A patch, merged into the page's state. */
+export function set(patch: Partial<MemoryState>): void {
+  store.set((prev) => ({ ...prev, ...patch }))
 }
 
-function set(patch: Partial<MemoryState>): void {
-  state = { ...state, ...patch }
-  for (const l of listeners) l()
-}
-
-export const source = (): MemorySource => ds<MemorySource>('memory')
+const source = (): MemorySource => ds('memory')
 
 function failure(e: unknown): string {
   const err = e as { data?: { detail?: string }; message?: string }
@@ -75,7 +70,7 @@ export async function load(): Promise<void> {
      installing the plugin the page would keep saying it is missing. */
   set({ phase: 'loading', err: '', note: '' })
   try {
-    const r = await source().list({ kind: state.kind, page: state.page, page_size: MEM_PAGE_SIZE, q: state.q || null })
+    const r = await source().list({ kind: get().kind, page: get().page, page_size: MEM_PAGE_SIZE, q: get().q || null })
     set({ items: r.items || [], total: r.total || 0, note: r.note || '', phase: 'ready' })
   } catch (e) {
     if ((e as { down?: boolean }).down) set({ phase: 'down' })
@@ -83,15 +78,15 @@ export async function load(): Promise<void> {
   }
 }
 
-export function refreshStats(): Promise<void> {
+function refreshStats(): Promise<void> {
   return source()
     .stats()
-    .then((stats) => set({ stats, note: (stats && stats.note) || state.note }))
+    .then((stats) => set({ stats, note: (stats && stats.note) || get().note }))
     .catch(() => set({ stats: null }))
 }
 
 export function open(): void {
-  page.show('memPage')
+  page.show('memoryPage')
   void refreshStats()
   void load()
 }
@@ -101,7 +96,7 @@ export function close(): void {
 }
 
 export function setKind(kind: MemKind): void {
-  if (state.kind === kind) return
+  if (get().kind === kind) return
   clearTimeout(debounce)
   closeDetail()
   set({ kind, page: 1, q: '', items: [] })
@@ -111,16 +106,16 @@ export function setKind(kind: MemKind): void {
 /* A keystroke changes no pixels until the reload lands, so the query is
    stored without notifying -- the debounced reload is the only redraw. */
 export function search(q: string): void {
-  state = { ...state, q }
+  set({ q })
   clearTimeout(debounce)
   debounce = setTimeout(() => {
-    state = { ...state, page: 1 }
+    set({ page: 1 })
     void load()
   }, 350)
 }
 
 export function pageBy(delta: number): void {
-  set({ page: state.page + delta })
+  set({ page: get().page + delta })
   void load()
 }
 
@@ -134,7 +129,7 @@ export function openDetail(it: MemItem): void {
   set({ detail: it })
 }
 
-export function closeDetail(): void {
+function closeDetail(): void {
   detail.close()
 }
 
@@ -143,8 +138,8 @@ export function closeDetail(): void {
    the drawer has finished fading, or the card is gone from inside a panel that
    is still on screen. `gen` is which open the drop belongs to: the item cannot
    answer that, because reopening the same row hands back the same object. */
-export function detailDismissed(): void {
-  if (!state.detail) return
+function detailDismissed(): void {
+  if (!get().detail) return
   const gen = detail.get().gen
   detail.dropAfterFade(
     () => set({ detail: null }),
@@ -170,10 +165,4 @@ export function remove(it: MemItem): void {
     .finally(() => {
       busy = false
     })
-}
-
-/* A language flip changes nothing in this state, but every visible string
-   comes from T(), so a re-render is the whole redraw. */
-export function redraw(): void {
-  set({})
 }

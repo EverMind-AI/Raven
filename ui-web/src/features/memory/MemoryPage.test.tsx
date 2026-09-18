@@ -2,16 +2,15 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { MemoryApp } from './MemoryPage'
-import * as store from './store'
-
-import { domSnapshot } from '../../test/domSnapshot'
-import { resetSources, setSources, sources } from '../../state/sources'
-
-import { resetTranslator, setTranslator } from '../../i18n/t'
+import { setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
 import * as detail from '../../state/detail'
 import * as pageStore from '../../state/page'
+import { resetSources, setSources } from '../../state/sources'
+import { domSnapshot } from '../../test/domSnapshot'
+import { MemoryApp } from './MemoryPage'
+import * as store from './store';
+
 import type { MemItem, MemStats, MemorySource } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -49,13 +48,13 @@ function install(over: Partial<MemorySource> = {}, stats: MemStats | null = null
   vi.spyOn(pageStore, 'show').mockImplementation((id) => shellCalls.push(['showPage', id]))
   setSources({ memory: source })
   document.body.innerHTML =
-    '<section id="memPage"><div id="memBody"></div></section>' +
+    '<section id="memoryPage"><div id="memoryBody"></div></section>' +
     '<aside id="detail" data-open="false"><b id="dTitle">—</b><div id="dBody"></div></aside>'
   return { source, calls, shellCalls }
 }
 
 async function mount() {
-  const view = render(<MemoryApp />, { container: document.getElementById('memBody')! })
+  const view = render(<MemoryApp />, { container: document.getElementById('memoryBody')! })
   await act(async () => {
     store.open()
   })
@@ -63,7 +62,8 @@ async function mount() {
 }
 
 afterEach(() => {
-  /* Close through the drawer, not the island's closer alone; see XaPage.test.tsx. */
+  /* Close through the drawer, not the island's closer alone; see
+     ExtAgentsPage.test.tsx. */
   act(() => {
     detail.close()
     store.setKind('episode')
@@ -229,6 +229,6 @@ describe('memory island', () => {
     )
     await mount()
     await screen.findByText('shipped the island')
-    expect(domSnapshot(document.getElementById('memBody')!)).toMatchSnapshot()
+    expect(domSnapshot(document.getElementById('memoryBody')!)).toMatchSnapshot()
   })
 })

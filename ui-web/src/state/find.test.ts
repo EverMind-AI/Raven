@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { install, onChange, term, toggle } from './find'
-import { mountPageRoot } from '../test/pageRoot'
 import { resetTranslator, setTranslator } from '../i18n/t'
-import * as pageStore from './page'
+import { mountPageRoot } from '../test/pageRoot'
 import * as confirmStore from './confirm'
+import { install, onChange, term, toggle } from './find'
+import * as pageStore from './page'
 
 
 /* The rail's container, as page.html carries it. The four elements this module

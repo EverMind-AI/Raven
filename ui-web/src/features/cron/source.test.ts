@@ -1,19 +1,18 @@
 // @vitest-environment happy-dom
 /* The two mappings a scheduled job crosses: the contract's row into what the
- * page draws, and the page's draft back into what `cron.save` takes. Both were
- * untested while they lived in the legacy layer, and both carry a rule that a
- * reading of the code alone does not make obvious.
+ * page draws, and the page's draft back into what `cron.save` takes. Both
+ * carry a rule that a reading of the code alone does not make obvious.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
 import { cronToRow, fmtEvery, fmtStamp, jobToSave } from './source'
 
-import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as pageStore from '../../state/page'
-import * as confirmStore from '../../state/confirm'
-import type { CronDraft } from './types'
 import type { CronJobWire } from './source'
+import type { CronDraft } from './types'
 
 /* A catalogue that echoes what it was asked for, so an assertion names the key
    and its variables rather than one language's wording. */

@@ -10,7 +10,6 @@
 import { readFileSync } from 'node:fs'
 /* Off cwd, not off `import.meta.url`: under happy-dom that is an http URL. */
 import { resolve } from 'node:path'
-
 import { describe, expect, it } from 'vitest'
 
 const css = readFileSync(resolve(process.cwd(), 'src/styles/page.css'), 'utf8')

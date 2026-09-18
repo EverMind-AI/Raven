@@ -1,24 +1,23 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
+import * as lang from '../../state/lang'
 import { show as menuAt } from '../../state/menu'
 import { show as toast } from '../../state/toast'
+import * as deliveries from './deliveries'
 import {
   RENDERED, appFor, canOpenInApp, copyToClip, extOf, fileURL,
   hostPlatform, mdHtml, openInApp, renderURL, runURL, setAppFor,
 } from './store'
-import * as deliveries from './deliveries'
 import * as store from './store'
 
 import type { MenuItem } from '../../state/menu'
 import type { WsChange, WsFile, WsShared } from './types'
 import type { JSX, PointerEvent as ReactPointerEvent } from 'react'
 
-/* Copies of the icon paths the legacy renderers drew with (ICO in
-   demo/100-workspace.js, ACT_ICO.chev in demo/070-transcript.js): those
-   tables stay in the demo shell for the views that never left it, and the
-   island carries its own strings the same way the cron island carries its
-   FREQ table. */
+/* The icon paths this view draws with. The island carries its own strings the
+   same way the cron island carries its FREQ table, rather than reading a
+   shared table: every one of them is used here and nowhere else. */
 const ICO = {
   diff: 'M4 4h16v16H4zM12 8.5v7M8.5 12h7',
   file: 'M4 7.5c0-1.1.9-2 2-2h3.5l2 2.5H18c1.1 0 2 .9 2 2v7c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2v-9.5Z',
@@ -52,8 +51,11 @@ const ctxRef = (items: () => MenuItem[]) => (el: HTMLElement | null): void => {
   if (el) (el as CtxHost)._ctx = items
 }
 
-export function WsApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+export function WorkspaceApp(): JSX.Element {
+  const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The language the page resolved, so a pick repaints this island: every word
+     below is a t(key) read at render time (state/lang/store.ts). */
+  useSyncExternalStore(lang.subscribe, lang.get)
   const ws = store.shared()
   if (s.route === 'launch') return <Launch />
   if (s.route === 'file') return <FileView ws={ws} />
@@ -83,8 +85,7 @@ function Launch(): JSX.Element {
 
 function Changes({ ws }: { ws: WsShared }): JSX.Element {
   /* The flash class rides one render and the flag drops once painted, so
-     the next arrival can raise it again -- the legacy renderer cleared it
-     while rebuilding the row. */
+     the next arrival can raise it again. */
   useEffect(() => {
     ws.changes.forEach((c) => { c.flash = false })
   })

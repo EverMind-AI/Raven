@@ -12,8 +12,8 @@
 import { describe, expect, it } from 'vitest'
 
 import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
-
 import * as turn from '../../features/composer/turn'
+
 import type { SessRow } from '../../features/rail/types'
 import type { Sources } from '../sources'
 
@@ -49,7 +49,12 @@ async function harness({ rows = [] as Row[] } = {}) {
         splitAtts: (t: string) => ({ text: t, atts: [] }),
         unpitch: () => {},
       },
-      'src/features/rail/store': { markNew: () => {}, draw: () => {} },
+      'src/features/rail/store': {
+        markNew: () => {},
+        draw: () => {},
+        endRename: () => {},
+        reconcileRows: (_cur: SessRow[], next: SessRow[]) => ({ rows: next, currentMissing: false }),
+      },
       'src/state/session/rows': {
         sess: (id: string) => rows.find((r) => r.id === id),
         open: () => {},
@@ -68,12 +73,15 @@ async function harness({ rows = [] as Row[] } = {}) {
         /* The island's own phase machine: "is a turn running" is its answer,
            and the residency rule reads it. */
         turn,
+        liveAnchor: () => 0,
+        setLiveAnchor: () => {},
+        claimDraft: () => {},
       },
       'src/features/composer/approve': {
         openApproval: (_o: unknown, _answer: unknown, owner: string | null) => log.push(['sheet', owner]),
       },
       'src/lib/duration': { formatDuration: (ms: number) => `${ms}ms` },
-      'src/i18n/t': { T: (key: string) => key },
+      'src/i18n/t': { t: (key: string) => key },
       'src/lib/dom': { $: looseQuery() },
       'src/lib/session': {
         current: () => current,
@@ -88,13 +96,9 @@ async function harness({ rows = [] as Row[] } = {}) {
       'src/features/workspace/record': { wsOnHistory: () => {} },
       'src/features/rail/source': { rowPreview: (t: string) => t, touchSession: () => {} },
       'src/features/transcript/source': { renderHistory: () => log.push(['history']) },
-    },
-    islands: {
-      composer: { liveAnchor: () => 0, setLiveAnchor: () => {}, claimDraft: () => {} },
-      transcript: {
+      'src/features/transcript/mount': {
         nudge: () => {},
         stopStream: () => {},
-        down: () => {},
         killStatus: () => {},
         step: () => ({
           seal: () => {},
@@ -104,16 +108,14 @@ async function harness({ rows = [] as Row[] } = {}) {
         }),
         status: () => {},
       },
-      workspace: {
+      'src/features/transcript/tail': { down: () => {} },
+      'src/features/workspace/store': {
         advanceTurn: () => {}, currentTurn: () => 1, loadDeliveries: () => {},
         snapshot: () => ({}), restore: () => {},
       },
-      rail: {
-        endRename: () => {},
-        reconcile: (_cur: SessRow[], next: SessRow[]) => ({ rows: next, currentMissing: false }),
-      },
-      view: { resume: () => {}, refreshDag: () => {} },
-      dag: { forget: () => {} },
+      'src/features/desk/store': { claimDraft: () => {} },
+      'src/state/session/resume': { resume: () => {}, refreshDag: () => {} },
+      'src/features/dag/mount': { forget: () => {} },
     },
   })
   const registry = await import('./registry')
@@ -125,7 +127,7 @@ async function harness({ rows = [] as Row[] } = {}) {
     return Promise.resolve({})
   })
   const { setSources } = await import('../sources')
-  setSources({ composer: { slash: [] }, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+  setSources({ composer: { slash: [] }, rail: {}, transcript: {} } as unknown as Partial<Sources>)
   const wiring = await import('../../app/install')
   const connection = await import('../../app/connection')
   wiring.installActions()

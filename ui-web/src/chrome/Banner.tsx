@@ -13,10 +13,10 @@
 
 import { useSyncExternalStore } from 'react'
 
-import * as banner from '../state/banner'
-import { openPlugins } from '../features/plugins/nav'
+import { openDetail } from '../features/plugins/store'
+import { openPlugins } from '../features/plugins/wire'
 import { t } from '../i18n/t'
-import { islands } from '../features/registry'
+import * as banner from '../state/banner'
 
 import type { JSX } from 'react'
 
@@ -25,7 +25,7 @@ import type { JSX } from 'react'
    hunt for what the notice was talking about. */
 function openWebsearch(): void {
   void openPlugins()
-  islands.plugins.openMarket('websearch')
+  openDetail('market', 'websearch')
 }
 
 export function Banner(): JSX.Element | null {

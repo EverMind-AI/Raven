@@ -1,9 +1,10 @@
 import { t } from '../../i18n/t'
-import { ds } from '../../state/sources'
-import { show as toast } from '../../state/toast'
-import * as detail from '../../state/detail'
-
 import { drawIfOpenOnPlugins } from '../../state/caps'
+import * as detail from '../../state/detail'
+import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
+import { show as toast } from '../../state/toast'
+
 import type {
   DetailEntry,
   InstalledRow,
@@ -13,10 +14,12 @@ import type {
   PluginsSource,
 } from './types'
 
-/* Page state, outside React on purpose: the legacy shell drives this page
- * imperatively (the tab chrome opens it, the search bar feeds it, gateway
- * events advance its installs), so the state lives in a plain store the
- * shims can call, and the component subscribes.
+/* Page state, outside React on purpose: two of the callers that drive this
+ * page are not React. The capabilities page dispatches its draw through its
+ * own hooks (state/caps.ts calls features/plugins/wire.ts) and the live
+ * transport's plug-hub events advance an install as it runs (app/install.ts
+ * registers `onEvent`) -- so the state lives in a plain store those can call,
+ * and the component subscribes.
  */
 
 export interface Drawer {
@@ -26,7 +29,7 @@ export interface Drawer {
 
 /* Install progress: the sheet drives the whole transaction -- write config
    -> connect -> (browser authorization) -> done. Closing the sheet leaves
-   the install running and this state alive; it is released when the story
+   the install running and this get() alive; it is released when the story
    ends (done/fail acknowledged or resolved off-screen, cancel, uninstall). */
 export interface Prog {
   id: string
@@ -54,7 +57,7 @@ export interface PlugState {
   prog: Prog | null
 }
 
-let state: PlugState = {
+const store = makeStore<PlugState>({
   view: 'market',
   items: [],
   cats: [],
@@ -67,22 +70,16 @@ let state: PlugState = {
   form: false,
   confirm: false,
   prog: null,
-}
-const listeners = new Set<() => void>()
+})
 
-export const getState = (): PlugState => state
+export const { get, subscribe, _resetForTests } = store
 
-export function subscribe(l: () => void): () => void {
-  listeners.add(l)
-  return () => listeners.delete(l)
-}
-
-function set(patch: Partial<PlugState>): void {
-  state = { ...state, ...patch }
-  for (const l of listeners) l()
+/** A patch, merged into the page's state. */
+export function set(patch: Partial<PlugState>): void {
+  store.set((prev) => ({ ...prev, ...patch }))
 }
 
-export const source = (): PluginsSource => ds<PluginsSource>('plugins')
+export const source = (): PluginsSource => ds('plugins')
 
 /* Installs whose authentication hasn't been proven yet: while an id is in
    here the entry stays out of every "installed" surface, and the pending
@@ -113,7 +110,7 @@ export const authUrl = (id: string): string | undefined => authWait[id]
 export const authEndsAt = (id: string): number | undefined => authEnd[id]
 export const pendingHas = (id: string): boolean => pending.has(id)
 export const fromMarket = (id: string): boolean => marketIds.has(id)
-export const view = (): string => state.view
+export const view = (): string => get().view
 export const installedCount = (): number =>
   rows().filter((p) => !p.m || !pending.has(p.m.name)).length
 
@@ -152,7 +149,7 @@ export const authLeft = (id: string): string => {
 }
 
 /* Writes the remaining time into whatever is showing it, rather than
-   re-rendering the panel once a second: same discipline as the legacy page. */
+   re-rendering the panel once a second. */
 function authTick(on: boolean): void {
   if (on && !authClock) {
     authClock = setInterval(() => {
@@ -170,9 +167,10 @@ function authTick(on: boolean): void {
   }
 }
 
-/* The chrome resync: re-render locally, then ask the shell to redraw the
-   tab chrome it owns (title, hero, the installed button) when the plugin
-   tab is actually showing -- the legacy pmRedraw guard. */
+/* The chrome resync: re-render locally, then ask the capabilities page to
+   redraw the tab chrome it owns (title, hero, the installed button), which it
+   does only while the plugin tab is showing (state/caps.ts's
+   drawIfOpenOnPlugins). */
 function sync(): void {
   set({})
   drawIfOpenOnPlugins()
@@ -203,14 +201,14 @@ export function searchSoon(): void {
 }
 
 export function searchIfIdle(): void {
-  if (state.marketState === 'idle') void search()
+  if (get().marketState === 'idle') void search()
 }
 
 export async function search(): Promise<void> {
   set({ marketState: 'loading', err: '' })
   drawIfOpenOnPlugins()
   try {
-    const r = await source().search(state.query, state.cat)
+    const r = await source().search(get().query, get().cat)
     r.items.forEach((it) => marketIds.add(it.id))
     set({ items: r.items, cats: r.categories, marketState: 'done' })
   } catch (e) {
@@ -220,7 +218,7 @@ export async function search(): Promise<void> {
 }
 
 export function toggleView(): void {
-  set({ view: state.view === 'installed' ? 'market' : 'installed' })
+  set({ view: get().view === 'installed' ? 'market' : 'installed' })
   drawerClosed()
   drawIfOpenOnPlugins()
 }
@@ -236,7 +234,8 @@ export function backToMarket(): void {
 export function openDetail(kind: Drawer['kind'], id: string, keep?: boolean): void {
   // While this plugin's install is still running, every entry point lands
   // on the progress sheet -- closing it must never strand the install.
-  if (kind !== 'progress' && state.prog && state.prog.id === id && state.prog.state === 'run') {
+  const running = get().prog
+  if (kind !== 'progress' && running && running.id === id && running.state === 'run') {
     kind = 'progress'
   }
   // An installed market plugin opens the full catalog detail; only
@@ -258,15 +257,15 @@ export function openDetail(kind: Drawer['kind'], id: string, keep?: boolean): vo
    panel is what fades otherwise. A running install keeps its prog so the sheet
    can be reentered from the card; a settled one is acknowledged. */
 function dropDrawer(): void {
-  const was = state.drawer
+  const was = get().drawer
   if (!was) return
   detail.dropAfterFade(
     () => {
       const patch: Partial<PlugState> = { drawer: null, form: false, confirm: false }
-      if (state.prog && state.prog.state !== 'run') patch.prog = null
+      if (get().prog?.state !== undefined && get().prog?.state !== 'run') patch.prog = null
       set(patch)
     },
-    () => state.drawer !== was,
+    () => get().drawer !== was,
   )
 }
 detail.onClose('plugins', dropDrawer)
@@ -315,17 +314,17 @@ function progOpen(entry: DetailEntry): void {
 /* The sheet is authoritative while it shows this id: toasts for the same
    outcome would just repeat it. */
 const progShows = (id: string): boolean =>
-  Boolean(state.prog && state.prog.id === id && state.drawer && state.drawer.kind === 'progress')
+  Boolean(get().prog?.id === id && get().drawer?.kind === 'progress')
 
 function progStep(n: number): void {
-  const pg = state.prog
+  const pg = get().prog
   if (pg && pg.state === 'run' && n > pg.step) set({ prog: { ...pg, step: n } })
 }
 
 /* tools === null means "installed, still connecting": the sheet closes the
    story as installed and a later connected event fills the tool count in. */
 function progDone(tools: number | null): void {
-  const pg = state.prog
+  const pg = get().prog
   if (!pg) return
   if (pg.state !== 'run' && !(pg.state === 'done' && pg.tools == null)) return
   const next: Prog = { ...pg, state: 'done', tools }
@@ -335,7 +334,7 @@ function progDone(tools: number | null): void {
 }
 
 function progFail(err: string): void {
-  const pg = state.prog
+  const pg = get().prog
   if (!pg || pg.state !== 'run') return
   const next: Prog = { ...pg, state: 'fail', err: err || '' }
   set({ prog: progShows(pg.id) ? next : null })
@@ -343,7 +342,7 @@ function progFail(err: string): void {
 
 /* ── actions ─────────────────────────────────────────────────────── */
 
-export function install(entry: DetailEntry, form: Record<string, string>): void {
+export function installEntry(entry: DetailEntry, form: Record<string, string>): void {
   // Pending from the first moment: the ledger lands on disk mid-call, and the
   // entry must not read as installed anywhere before its auth is proven.
   set({ busy: entry.id })
@@ -353,7 +352,7 @@ export function install(entry: DetailEntry, form: Record<string, string>): void 
   source()
     .install(entry.id, form || {})
     .then((r) => {
-      const it = state.items.find((x) => x.id === entry.id)
+      const it = get().items.find((x) => x.id === entry.id)
       if (r.pending) {
         // Guard on the pending mark: a cancel mid-call already rolled the
         // install back, and marking it installed here would resurrect it.
@@ -375,7 +374,7 @@ export function install(entry: DetailEntry, form: Record<string, string>): void 
             )
           }
         } else {
-          if (state.prog && state.prog.id === entry.id) progDone(null)
+          if (get().prog?.id === entry.id) progDone(null)
           if (!progShows(entry.id)) toast(t('gui.plug.installed_conn', { name: entry.name }))
         }
       }
@@ -387,7 +386,7 @@ export function install(entry: DetailEntry, form: Record<string, string>): void 
       // the connect window): nothing is installed, clear the pending mark.
       pending.delete(entry.id)
       const err = msg(e)
-      if (state.prog && state.prog.id === entry.id) progFail(err)
+      if (get().prog?.id === entry.id) progFail(err)
       if (!progShows(entry.id)) toast(t('gui.plug.op_failed', { err }))
       return source()
         .reload()
@@ -416,7 +415,7 @@ export function quickInstall(it: MarketItem): void {
         openDetail('market', entry.id, true)
         return
       }
-      install(entry, {})
+      installEntry(entry, {})
     })
     .catch((e: unknown) => {
       set({ busy: null })
@@ -431,11 +430,11 @@ export function pendingFail(name: string, why: string): void {
   if (!pending.has(name)) return
   pending.delete(name)
   delete authWait[name]
-  const it = state.items.find((x) => x.id === name)
+  const it = get().items.find((x) => x.id === name)
   if (it) it.installed = false
   /* The cause travels with the failure: "the authorization window closed"
      tells the reader what to do differently on the retry. */
-  if (state.prog && state.prog.id === name) progFail(why || '')
+  if (get().prog?.id === name) progFail(why || '')
   if (!progShows(name)) toast(t('gui.plug.auth_fail_rm', { name: it ? it.name : name }))
   source()
     .remove(name)
@@ -449,12 +448,12 @@ export function remove(name: string, label: string): void {
   source()
     .remove(name)
     .then(() => {
-      const it = state.items.find((x) => x.id === name)
+      const it = get().items.find((x) => x.id === name)
       if (it) it.installed = false
       pending.delete(name)
       delete authWait[name]
       // Cancel/uninstall ends the install story outright.
-      if (state.prog && state.prog.id === name) set({ prog: null })
+      if (get().prog?.id === name) set({ prog: null })
       toast(t('gui.caps.removed_x', { name: label || name }))
       drawerClosed()
     })
@@ -522,7 +521,7 @@ function seedPulledAuth(): void {
     const m = row.m
     if (!m || !m.auth_url) continue
     /* Only while the row itself still says the park is live. A URL on a row
-       whose state has settled is a stale read, and seeding from it would put
+       whose get() has settled is a stale read, and seeding from it would put
        back a link the user has already finished with. */
     if (m.state !== 'auth_required' && m.state !== 'connecting') continue
     if (!authWait[m.name]) authWait[m.name] = m.auth_url
@@ -538,16 +537,16 @@ export function onEvent(ev: PluginsEvent): void {
   if (ev.kind === 'status') {
     // A settled status for the busy server means nothing is processing any
     // more -- belt-and-braces against a busy flag that outlives its install.
-    const inFlight = state.busy === ev.name
+    const inFlight = get().busy === ev.name
     if (inFlight && ev.state !== 'connecting') set({ busy: null })
-    if (state.prog && state.prog.id === ev.name) {
+    if (get().prog?.id === ev.name) {
       if (ev.state === 'connecting') progStep(1)
       else if (ev.state === 'connected') progDone(ev.tool_count || 0)
     }
     if (pending.has(ev.name)) {
       if (ev.state === 'connected') {
         pending.delete(ev.name)
-        const it = state.items.find((x) => x.id === ev.name)
+        const it = get().items.find((x) => x.id === ev.name)
         if (it) it.installed = true
         // The install RPC reports its own outcome; only a later async
         // connect (the OAuth round-trip) announces from here.
@@ -577,7 +576,7 @@ export function onEvent(ev: PluginsEvent): void {
        distinguishes a flow still worth finishing from one that expired. */
     if (ev.expires_in) authEnd[ev.server] = Date.now() + Number(ev.expires_in) * 1000
     authTick(true)
-    if (state.prog && state.prog.id === ev.server) progStep(2)
+    if (get().prog?.id === ev.server) progStep(2)
     /* A background connect found this server unauthorized; say so where the
        reader can act on it -- the rows grow a "reopen" button off authWait. */
     if (!progShows(ev.server)) {
@@ -594,14 +593,14 @@ export function onEvent(ev: PluginsEvent): void {
   delete authWait[ev.server]
   delete authEnd[ev.server]
   authTick(false)
-  if (ev.ok && state.prog && state.prog.id === ev.server) progStep(3)
+  if (ev.ok && get().prog?.id === ev.server) progStep(3)
   if (!ev.ok) {
     const why = ev.error === 'timeout' ? t('gui.plug.auth_expired') : ev.error || ''
     // A failed authorization on a pending install rolls the install back;
     // on an already-installed server (re-auth) it just reports. While the
     // install RPC is in flight the backend rolls back itself.
     if (pending.has(ev.server)) {
-      if (state.busy !== ev.server) pendingFail(ev.server, why)
+      if (get().busy !== ev.server) pendingFail(ev.server, why)
       return
     }
     toast(why || t('gui.plug.auth_fail', { name: ev.server }))

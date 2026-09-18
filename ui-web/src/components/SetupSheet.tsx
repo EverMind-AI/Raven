@@ -25,7 +25,7 @@ import type { JSX, ReactNode } from 'react'
 /* The overflow button. Anchors the shared context menu (#menu) under itself, which
    is the same menu the session rows use -- one menu on the page, not a popup
    per sheet. */
-export function SheetMenu({ items }: { items: Array<MenuItem | '-'> }): JSX.Element | null {
+function SheetMenu({ items }: { items: Array<MenuItem | '-'> }): JSX.Element | null {
   if (!items.length) return null
   return (
     <button

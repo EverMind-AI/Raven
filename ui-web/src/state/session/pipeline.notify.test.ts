@@ -46,7 +46,10 @@ async function harness({ rows = [] as Row[], current = 'tui:open' as string | nu
         drawMeter: () => {},
         goPaint: () => {},
       },
-      'src/features/rail/store': { draw: () => {} },
+      'src/features/rail/store': {
+        draw: () => {},
+        reconcileRows: (_cur: Row[], next: Row[]) => ({ rows: next, currentMissing: false }),
+      },
       'src/state/session/rows': {
         sess: (id: string) => rows.find((r) => r.id === id),
         replace: () => {},
@@ -64,7 +67,7 @@ async function harness({ rows = [] as Row[], current = 'tui:open' as string | nu
         open: (_prompt: string, yes: () => void, no: () => void, owner: string | null) =>
           seen.sheets.push({ kind: 'confirm', owner, answer: (ok?: unknown) => (ok ? yes() : no()) }),
       },
-      'src/i18n/t': { T: (key: string) => key },
+      'src/i18n/t': { t: (key: string) => key },
       'src/lib/session': { current: () => current },
       'src/state/toast': { show: (text: string) => seen.toasts.push(text) },
       /* The phase event goes to the conversation it names, whether or not that
@@ -74,9 +77,6 @@ async function harness({ rows = [] as Row[], current = 'tui:open' as string | nu
       },
       'src/features/rail/source': { touchSession: (id: string) => seen.touched.push(id) },
       'src/state/session/stages': { dispatch: (ev: unknown) => seen.events.push(ev) },
-    },
-    islands: {
-      rail: { reconcile: (_cur: Row[], next: Row[]) => ({ rows: next, currentMissing: false }) },
     },
   })
   const pipeline = (await import('./pipeline')) as Pipeline
@@ -90,7 +90,7 @@ async function harness({ rows = [] as Row[], current = 'tui:open' as string | nu
     return Promise.resolve({})
   })
   const { setSources } = await import('../sources')
-  setSources({ composer: {}, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+  setSources({ composer: {}, rail: {}, transcript: {} } as unknown as Partial<Sources>)
   pipeline.installPipeline()
   return {
     pipeline,

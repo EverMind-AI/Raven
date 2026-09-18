@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { resetTranslator, setTranslator } from '../i18n/t'
 import { mountPageRoot } from '../test/pageRoot'
 import { open } from './openUrl'
-import { resetTranslator, setTranslator } from '../i18n/t'
 
 /* The notice renders from src/App.tsx into the standing #toasts host. */
 mountPageRoot()

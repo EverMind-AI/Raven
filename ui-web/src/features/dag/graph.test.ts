@@ -1,16 +1,15 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
 import { CARD, GAP_X, GAP_Y, H, PAD, SHEET, W, depths, layout, layers, ordered, shape, summary, took } from './graph'
 
-import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as pageStore from '../../state/page'
-import * as confirmStore from '../../state/confirm'
 import type { DagNode, DagRun } from './types'
 
-/* T returns its key with the vars appended, so a test asserts which catalogue
-   entry was chosen AND what was interpolated into it -- the legacy code did the
-   interpolation by hand with .replace, so that is the part worth pinning. */
+/* The translator returns its key with the vars appended, so a test asserts
+   which catalogue entry was chosen AND what was interpolated into it. */
 beforeEach(() => {
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
   vi.spyOn(pageStore, 'show').mockImplementation(() => {})

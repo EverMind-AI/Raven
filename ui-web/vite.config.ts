@@ -107,6 +107,12 @@ export default defineConfig(({ command, mode }) => {
         name: 'RavenModern',
         formats: ['iife'],
         fileName: () => 'modern.iife.js',
+        /* The domains' own stylesheets, collected into one asset. A
+           features/<domain>/styles.css is imported by that domain's App, so
+           Vite gathers them here and ui-web/build.py inlines this file into the
+           page's single <style> block after src/styles/page.css. Named rather
+           than left to default, which takes the package name. */
+        cssFileName: 'domains',
       },
       outDir: '.modern',
       emptyOutDir: true,

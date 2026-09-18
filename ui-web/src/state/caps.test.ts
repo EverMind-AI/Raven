@@ -3,14 +3,14 @@
  * draw decides, and the order a draw's steps run in.
  *
  * The component that renders what is state here has its own file
- * (src/chrome/CapsPage.test.tsx). What is asserted here is what the legacy
- * chrome used to do by id, in the order it did it: the two tab layers'
- * effects, the container attributes, the hero's position, and the names the
- * other layers still call.
+ * (src/chrome/CapsPage.test.tsx). What is asserted here is what a draw decides
+ * and the order it decides it in: the two tab layers' effects, the container
+ * attributes, the hero's position, and the names the two island stores call.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { T } from '../i18n/t'
+import { plugHost, skillsHost } from '../features/hosts'
+import { t } from '../i18n/t'
 import { mountPageRoot } from '../test/pageRoot'
 
 /* Every case starts from the served page: the tab, the two buttons and the
@@ -31,7 +31,7 @@ beforeEach(async () => {
   unmount()
   document.body.innerHTML = ''
   caps = await import('./caps')
-  caps.wipe()
+  caps._resetForTests()
   unmount = mountPageRoot()
   /* Two cases below are about a tab flip closing a card that is open, and the
      served drawer is shut. */
@@ -42,6 +42,7 @@ afterEach(() => {
   unmount()
   unmount = () => {}
   document.body.innerHTML = ''
+  vi.restoreAllMocks()
 })
 
 describe('the capabilities page state', () => {
@@ -107,7 +108,7 @@ describe('the capabilities page state', () => {
   })
 
   it('writes the three container attributes a draw decides, and keeps the rest as state', () => {
-    caps.chrome({
+    caps.setFrame({
       title: 'Installed skills',
       label: 'Skills',
       search: 'Search the skill market',
@@ -123,7 +124,7 @@ describe('the capabilities page state', () => {
       search: 'Search the skill market',
       pillsHidden: true,
     })
-    caps.chrome({ title: 'Plugins', label: 'Plugins', search: 'Search plugins', pillsHidden: true, advHidden: false, bar: '' })
+    caps.setFrame({ title: 'Plugins', label: 'Plugins', search: 'Search plugins', pillsHidden: true, advHidden: false, bar: '' })
     expect(el('advAdd').hidden).toBe(false)
     expect(bar().style.display).toBe('')
   })
@@ -187,8 +188,8 @@ describe('the capabilities page state', () => {
   /* What the rest of the page reaches this store by: one dispatch, and the two
      tab renderers registering into it rather than decorating each other. */
   it('is what the rest of the page reaches the two tabs through', async () => {
-    const skills = await import('../features/skills/tab')
-    const plugins = await import('../features/plugins/tab')
+    const skills = await import('../features/skills/wire')
+    const plugins = await import('../features/plugins/wire')
     let draws = 0
     caps.onDraw({ skill: () => { draws += 1 } })
     caps.draw()
@@ -200,33 +201,28 @@ describe('the capabilities page state', () => {
   })
 })
 
-/* The chrome half of the two tabs' draws, which used to be six writes by id in
-   each of them (demo/152-skills.js, demo/153-plugins.js). The islands and the
-   sources are stood in for; what is asserted is the chrome each view decides.
-   Last in the file, because standing in for the island bag is module state. */
+/* The chrome half of the two tabs' draws -- the six values each of them
+   decides. The two island stores and the sources are stood in for; what is
+   asserted is the chrome each view decides. The hosts are the real ones
+   (src/features/hosts.ts): a draw appends
+   the node the island's root renders into, and which node that is is the thing
+   a tab must not get wrong. */
 describe('the two draws the dispatch reaches', () => {
-  const skillHost = document.createElement('div')
-  const plugHost = document.createElement('div')
-  const views = { skill: 'market', plugin: 'market' }
+  const views: { skill: 'installed' | 'market'; plugin: string } = { skill: 'market', plugin: 'market' }
 
   beforeEach(async () => {
     views.skill = 'market'
     views.plugin = 'market'
-    const { islands } = await import('../features/registry')
-    Object.assign(islands.skills, {
-      view: () => views.skill,
-      attach: (box: Element) => box.appendChild(skillHost),
-      redraw: () => {},
-      ensureSearch: () => {},
-      subscribe: () => () => {},
-    })
-    Object.assign(islands.plugins, {
-      view: () => views.plugin,
-      host: plugHost,
-      redraw: () => {},
-      installedCount: () => 3,
-      searchIfIdle: () => {},
-    })
+    const skills = await import('../features/skills/store')
+    const plugins = await import('../features/plugins/store')
+    vi.spyOn(skills, 'view').mockImplementation(() => views.skill)
+    vi.spyOn(skills, 'redraw').mockImplementation(() => {})
+    vi.spyOn(skills, 'ensureSearch').mockImplementation(() => {})
+    vi.spyOn(skills, 'subscribe').mockImplementation(() => () => {})
+    vi.spyOn(plugins, 'view').mockImplementation(() => views.plugin)
+    vi.spyOn(plugins, 'redraw').mockImplementation(() => {})
+    vi.spyOn(plugins, 'installedCount').mockImplementation(() => 3)
+    vi.spyOn(plugins, 'searchIfIdle').mockImplementation(() => {})
     const { setSources } = await import('./sources')
     setSources({
       skills: { installed: () => [{}, {}] },
@@ -235,27 +231,27 @@ describe('the two draws the dispatch reaches', () => {
   })
 
   it('gives the skill market its title, its hint, no pills and no manual add', async () => {
-    const { drawSkillTab } = await import('../features/skills/tab')
+    const { drawSkillTab } = await import('../features/skills/wire')
     /* What the other tab left in the box, which a draw clears wholesale. */
     el('capsBody').appendChild(document.createElement('i'))
     drawSkillTab()
-    expect(caps.get().title).toBe(T('gui.tab.skills'))
-    expect(caps.get().search).toBe(T('gui.hub.search_ph'))
+    expect(caps.get().title).toBe(t('gui.tab.skills'))
+    expect(caps.get().search).toBe(t('gui.hub.search_ph'))
     expect(caps.get().pillsHidden).toBe(true)
-    expect(el('capsPage').getAttribute('aria-label')).toBe(T('gui.tab.skills'))
+    expect(el('capsPage').getAttribute('aria-label')).toBe(t('gui.tab.skills'))
     expect(el('advAdd').hidden).toBe(true)
     expect(bar().style.display).toBe('')
     /* The island's host, under a box this cleared first. */
     expect(el('capsBody').children).toHaveLength(1)
-    expect(el('capsBody').firstElementChild).toBe(skillHost)
-    expect(caps.get().skill).toEqual({ hidden: false, label: T('gui.plug.installed_n', { n: 2 }), badge: null })
+    expect(el('capsBody').firstElementChild).toBe(skillsHost)
+    expect(caps.get().skill).toEqual({ hidden: false, label: t('gui.plug.installed_n', { n: 2 }), badge: null })
   })
 
   it('renames the skill tab and takes the bar down on its installed view', async () => {
-    const { drawSkillTab } = await import('../features/skills/tab')
+    const { drawSkillTab } = await import('../features/skills/wire')
     views.skill = 'installed'
     drawSkillTab()
-    expect(caps.get().title).toBe(T('gui.plug.installed_title'))
+    expect(caps.get().title).toBe(t('gui.plug.installed_title'))
     expect(bar().style.display).toBe('none')
     expect(caps.get().pillsHidden).toBe(true)
     expect(el('advAdd').hidden).toBe(true)
@@ -263,26 +259,26 @@ describe('the two draws the dispatch reaches', () => {
   })
 
   it('gives the plugin market the manual add, which only it offers', async () => {
-    const { drawPlugTab } = await import('../features/plugins/tab')
+    const { drawPlugTab } = await import('../features/plugins/wire')
     caps.extSet('plugin')
     drawPlugTab()
-    expect(caps.get().title).toBe(T('gui.tab.plugins'))
-    expect(caps.get().search).toBe(T('gui.plug.search_ph'))
+    expect(caps.get().title).toBe(t('gui.tab.plugins'))
+    expect(caps.get().search).toBe(t('gui.plug.search_ph'))
     expect(caps.get().pillsHidden).toBe(true)
-    expect(el('capsPage').getAttribute('aria-label')).toBe(T('gui.tab.plugins'))
+    expect(el('capsPage').getAttribute('aria-label')).toBe(t('gui.tab.plugins'))
     expect(el('advAdd').hidden).toBe(false)
     expect(bar().style.display).toBe('')
     expect(el('capsBody').firstElementChild).toBe(plugHost)
     /* The badge counts the rows that need the reader, which skills never do. */
-    expect(caps.get().plugin).toEqual({ hidden: false, label: T('gui.plug.installed_n', { n: 3 }), badge: '1' })
+    expect(caps.get().plugin).toEqual({ hidden: false, label: t('gui.plug.installed_n', { n: 3 }), badge: '1' })
   })
 
   it('hides the manual add on the plugin tab installed view', async () => {
-    const { drawPlugTab } = await import('../features/plugins/tab')
+    const { drawPlugTab } = await import('../features/plugins/wire')
     caps.extSet('plugin')
     views.plugin = 'installed'
     drawPlugTab()
-    expect(caps.get().title).toBe(T('gui.plug.installed_title'))
+    expect(caps.get().title).toBe(t('gui.plug.installed_title'))
     expect(el('advAdd').hidden).toBe(true)
     expect(bar().style.display).toBe('none')
     expect(caps.get().plugin?.hidden).toBe(true)
@@ -291,15 +287,15 @@ describe('the two draws the dispatch reaches', () => {
   /* The hero covers both tabs from the plugin layer, and only the markets have
      one: an installed view is a list, not a shop front. */
   it('gives each market a hero and takes it away on the installed views', async () => {
-    const plugins = await import('../features/plugins/tab')
-    const { drawSkillTab } = await import('../features/skills/tab')
+    const plugins = await import('../features/plugins/wire')
+    const { drawSkillTab } = await import('../features/skills/wire')
     caps.onDraw({ skill: drawSkillTab, plugin: plugins.drawPlugTab })
     plugins.install()
     caps.draw()
-    expect(el('pageHero').innerHTML).toBe(`<h3>${T('gui.hub.hero')}</h3>`)
+    expect(el('pageHero').innerHTML).toBe(`<h3>${t('gui.hub.hero')}</h3>`)
     caps.extSet('plugin')
     caps.draw()
-    expect(el('pageHero').innerHTML).toBe(`<h3>${T('gui.plug.hero')}</h3>`)
+    expect(el('pageHero').innerHTML).toBe(`<h3>${t('gui.plug.hero')}</h3>`)
     views.plugin = 'installed'
     caps.draw()
     expect(el('pageHero').hidden).toBe(true)

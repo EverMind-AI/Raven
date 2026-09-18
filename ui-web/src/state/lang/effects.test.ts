@@ -1,21 +1,17 @@
 // @vitest-environment happy-dom
 /* The whole-page redraw a language pick asks for, and the order of it.
  *
- * Nineteen calls in a hand-written `redrawAll` became this, and the order was
- * never pinned by anything inside this directory: the gate on it
- * was a Python test outside ui-web that read the function's source text and
- * checked that every module page's renderer was named in it. That test goes with
- * the layer, so the order is asserted here instead -- as the sequence the calls
- * really run in, against fakes, which is more than the text check could say.
- *
- * One entry of the old list is absent: `drawCapsBadge` was an empty function
- * (the rail's module rows carry no counters), and it went with the draw shells.
+ * Nothing but this file pins that order, and it pins it as the sequence the
+ * calls really run in, against fakes -- which is more than a check on the
+ * source text of state/lang/effects.ts could say.
  */
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 import { loadPart } from '../../../scripts/module-harness.mjs'
 
-/** The nineteen, in redrawAll's order, minus the empty one. */
+/* Every step `repaint` runs, in order. An island that needs no more than a
+   re-render is absent: each `<Domain>App` subscribes to the language store
+   itself (scripts/gates/island-lang.test.mjs). */
 const ORDER = [
   'sessionDraw',
   'drawFoot',
@@ -24,12 +20,6 @@ const ORDER = [
   'drawCtx',
   'settings.redraw',
   'caps.draw',
-  'connections.redraw',
-  'cron.redraw',
-  'xa.redraw',
-  'memory.redraw',
-  'knowledge.redraw',
-  'playbooks.redraw',
   'nav.draw',
   'detail.close',
   'transcript.redraw',
@@ -37,17 +27,13 @@ const ORDER = [
   'sessionOpen',
 ]
 
-/** The eight islands whose `redraw()` is a repaint in place, plus the two verbs. */
-const ISLAND_STEPS: Array<[string, string]> = [
-  ['settings', 'redraw'],
-  ['connections', 'redraw'],
-  ['cron', 'redraw'],
-  ['xa', 'redraw'],
-  ['memory', 'redraw'],
-  ['knowledge', 'redraw'],
-  ['playbooks', 'redraw'],
-  ['nav', 'draw'],
-  ['transcript', 'redraw'],
+/* The three steps that are not a re-render, as the step's name in ORDER above,
+   the module it really lives in, and the export it is called by: the settings
+   dialog's epoch, the flyout's marks, the transcript's per-lane version bump. */
+const ISLAND_STEPS: Array<[string, string, string]> = [
+  ['settings.redraw', 'src/features/settings/store', 'redraw'],
+  ['nav.draw', 'src/state/navfly', 'draw'],
+  ['transcript.redraw', 'src/features/transcript/mount', 'redraw'],
 ]
 
 interface Harness {
@@ -59,11 +45,19 @@ interface Harness {
 /* Every step replaced by a recorder. `current` answers a session and the turn is
    idle, so the guarded reload at the end runs -- the one step of the list that
    can be skipped, and the case below that skips it is what says so. */
-async function harness({ busy = false, draft = false, session = 'cli:one' as string | null } = {}): Promise<Harness> {
+async function harness(
+  { busy = false, draft = false, session = 'cli:one' as string | null, throwing = [] as string[] } = {},
+): Promise<Harness> {
   const order: string[] = []
-  const step = (name: string) => () => { order.push(name) }
+  const step = (name: string) => (): void => {
+    if (throwing.includes(name)) throw new Error('not loaded')
+    order.push(name)
+  }
   const part = await loadPart(() => import('./effects'), {
     fakes: {
+      ...Object.fromEntries(
+        ISLAND_STEPS.map(([name, module, verb]) => [module, { [verb]: step(name) }])
+      ),
       'src/features/rail/store': {
         draw: step('sessionDraw'),
       },
@@ -83,9 +77,6 @@ async function harness({ busy = false, draft = false, session = 'cli:one' as str
       'src/state/detail': { close: step('detail.close') },
       'src/state/session/registry': { isDraft: () => draft },
     },
-    islands: Object.fromEntries(
-      ISLAND_STEPS.map(([name, verb]) => [name, { [verb]: step(`${name}.${verb}`) }])
-    ),
   })
   return { order, repaint: part.repaint, install: part.install }
 }
@@ -97,18 +88,13 @@ describe('the language repaint', () => {
     expect(h.order).toEqual(ORDER)
   })
 
-  /* Each module page, not just the open one: a hidden page keeps its old DOM,
-     so it would still be in the previous language when reopened. An island that
-     has not loaded throws instead, and the redraw carries on. */
+  /* A page whose island has not loaded throws instead of drawing, and the
+     redraw carries on: the capabilities page is the one step still guarded
+     that way, because its two tabs register their renderers on first open. */
   it('carries on past a page whose island has not loaded', async () => {
-    const h = await harness()
-    const { islands } = await import('../../features/registry')
-    for (const name of ['cron', 'memory', 'playbooks'] as const) {
-      vi.spyOn(islands[name], 'redraw').mockImplementation(() => { throw new Error('not loaded') })
-    }
+    const h = await harness({ throwing: ['caps.draw'] })
     h.repaint()
-    expect(h.order).toEqual(ORDER.filter((name) => !/^(cron|memory|playbooks)\./.test(name)))
-    vi.restoreAllMocks()
+    expect(h.order).toEqual(ORDER.filter((name) => name !== 'caps.draw'))
   })
 
   /* The reload rebuilds the conversation from disk, which would cut a streaming
@@ -127,7 +113,6 @@ describe('the language repaint', () => {
     const h = await harness()
     const lang = await import('./store')
     h.install()
-    lang.setQuiet('zh')
     expect(h.order).toEqual([])
     lang.set('en')
     expect(h.order).toEqual(ORDER)

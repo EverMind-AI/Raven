@@ -5,8 +5,8 @@ import { cleanup, fireEvent, render } from '@testing-library/react'
 import { createRef } from 'react'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { KeyInput } from './KeyInput'
 import { resetTranslator, setTranslator } from '../i18n/t'
+import { KeyInput } from './KeyInput'
 
 
 setTranslator((key: string) => key)

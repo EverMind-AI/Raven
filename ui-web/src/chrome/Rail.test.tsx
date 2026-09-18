@@ -8,14 +8,16 @@
  * handed over empty, which row opens what, and that the literals come from the
  * catalogue rather than from a copy in the JSX.
  */
+// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
+import { readFileSync } from 'node:fs'
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
-import { readFileSync } from 'node:fs'
-
-import * as nav from '../features/plugins/nav'
-import { islands } from '../features/registry'
+import * as knowledge from '../features/knowledge/store'
+import * as memory from '../features/memory/store'
+import * as playbooks from '../features/playbooks/store'
+import * as nav from '../features/plugins/wire'
+import * as settings from '../features/settings/store'
 import * as lang from '../state/lang'
 import { mountPageRoot } from '../test/pageRoot'
 
@@ -31,10 +33,10 @@ const note = (name: string) => async () => {
 }
 vi.spyOn(nav, 'openSkills').mockImplementation(note('skills'))
 vi.spyOn(nav, 'openPlugins').mockImplementation(note('plugins'))
-vi.spyOn(islands.playbooks, 'open').mockImplementation(note('playbooks'))
-vi.spyOn(islands.knowledge, 'open').mockImplementation(note('knowledge'))
-vi.spyOn(islands.memory, 'open').mockImplementation(note('memory'))
-vi.spyOn(islands.settings, 'open').mockImplementation(note('settings'))
+vi.spyOn(playbooks, 'openPage').mockImplementation(note('playbooks'))
+vi.spyOn(knowledge, 'open').mockImplementation(note('knowledge'))
+vi.spyOn(memory, 'open').mockImplementation(note('memory'))
+vi.spyOn(settings, 'open').mockImplementation(note('settings'))
 
 /* Nothing: the page root renders the grid, the column and the collapse's twin,
    so a case gets all three by mounting it. */
@@ -80,7 +82,7 @@ describe('the rail', () => {
     render()
     for (const id of [
       'railBtn', 'findBtn',
-      'newBtn', 'skillBtn', 'plugBtn', 'pbBtn', 'kbBtn', 'memBtn', 'moreFly', 'moreBtn',
+      'newBtn', 'skillBtn', 'plugBtn', 'playbooksBtn', 'kbBtn', 'memoryBtn', 'moreFly', 'moreBtn',
       'findBox', 'sfind', 'sclr', 'list',
       'upnote', 'meBtn', 'meSub', 'meKbd', 'railGrip',
     ]) {
@@ -120,14 +122,14 @@ describe('the rail', () => {
     for (const id of ['list', 'moreFly', 'meSub', 'meKbd']) {
       expect(el(id).childNodes, id).toHaveLength(0)
     }
-    for (const id of ['newBtn', 'skillBtn', 'plugBtn', 'pbBtn', 'kbBtn', 'memBtn', 'moreBtn']) {
+    for (const id of ['newBtn', 'skillBtn', 'plugBtn', 'playbooksBtn', 'kbBtn', 'memoryBtn', 'moreBtn']) {
       expect(el(id).getAttribute('aria-current'), id).toBe(null)
     }
   })
 
   it('renders a literal in every element that carried one', () => {
     render()
-    for (const sel of ['#newBtn span', '#skillBtn span', '#plugBtn span', '#pbBtn span', '#kbBtn span', '#memBtn span', '.l-more', '.l-less', '#upnote .t', '#upnote .rl', '.me .who .n']) {
+    for (const sel of ['#newBtn span', '#skillBtn span', '#plugBtn span', '#playbooksBtn span', '#kbBtn span', '#memoryBtn span', '.l-more', '.l-less', '#upnote .t', '#upnote .rl', '.me .who .n']) {
       expect(document.querySelector(sel)?.textContent, sel).not.toBe('')
     }
   })
@@ -150,7 +152,7 @@ describe('the rail', () => {
      all, is invisible to a test that clicks a single one. */
   it('opens the page each row names', () => {
     render()
-    for (const id of ['skillBtn', 'plugBtn', 'pbBtn', 'kbBtn', 'memBtn', 'meBtn']) {
+    for (const id of ['skillBtn', 'plugBtn', 'playbooksBtn', 'kbBtn', 'memoryBtn', 'meBtn']) {
       act(() => {
         el(id).click()
       })
@@ -178,22 +180,21 @@ describe('the rail', () => {
 })
 
 /* Last in the file on purpose: applying a language is module state for
-   everything after it. Same agreement as the two dialogs' -- the pass
-   state/lang/store.ts makes over the document's data-i18n attributes, and the
-   component rendering the same key through lang.text -- so the rail cannot come
-   back in the served language once a flip has moved it. A re-render alone would
-   not show it: React diffs against the props it rendered last, so a literal it
-   never changes is a literal it never writes again, and only a remount asks the
-   component what the text is. */
+   everything after it. Same claim as the two dialogs': every word here is the
+   catalogue's, read at render time, so the rail cannot come back in the
+   language before the flip. A re-render alone would not show it: React diffs
+   against the props it rendered last, so a value it never changes is a value it
+   never writes again, and only a remount asks the component what the text
+   is. */
 describe('the rail once a language is applied', () => {
   it('renders the applied words when the column is mounted again', () => {
-    const KEYED = ['#newBtn span', '#skillBtn span', '#plugBtn span', '#pbBtn span', '#kbBtn span', '#memBtn span', '.l-more', '.l-less', '#upnote .t', '#upnote .rl', '.me .who .n']
+    const KEYED = ['#newBtn span', '#skillBtn span', '#plugBtn span', '#playbooksBtn span', '#kbBtn span', '#memoryBtn span', '.l-more', '.l-less', '#upnote .t', '#upnote .rl', '.me .who .n']
     const words = (): string[] => KEYED.map((sel) => document.querySelector(sel)?.textContent ?? '')
     const hint = (): string => (el('sfind') as HTMLInputElement).placeholder
     render()
     const served = words()
     const servedHint = hint()
-    lang.set('en')
+    lang.set('zh')
     const applied = words()
     expect(applied).not.toEqual(served)
     expect(hint()).not.toBe(servedHint)

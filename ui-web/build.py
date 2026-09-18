@@ -5,7 +5,12 @@ Sources under ``src/``:
 - ``page.html``   -- the document skeleton (markup only), with two markers:
                      ``/*__STYLE__*/`` inside its ``<style>`` tag and
                      ``/*__MODERN__*/`` inside its ``<script>`` tag.
-- ``styles/page.css`` -- the stylesheet, injected at the style marker.
+- ``styles/page.css`` -- the page's own stylesheet, injected at the style marker.
+- ``.modern/domains.css`` -- the domains' own stylesheets, which Vite collects
+                     from every ``features/<domain>/styles.css`` an App imports;
+                     injected into the same ``<style>`` block, after page.css.
+                     Vite closes that asset with a ``/*$vite$:N*/`` marker
+                     comment of its own, which rides along as written.
 - ``.modern/modern.iife.js`` -- the bundle Vite builds from ``src/main.tsx``,
                      injected at the script marker.
 
@@ -67,10 +72,38 @@ _BOOT_SNAPSHOTS = (
 )
 
 
+def _domain_styles() -> str:
+    """The domains' collected stylesheet, held to the domains that declare one.
+
+    A page with exactly one ``<style>`` block is the served contract
+    (``scripts/check-page.mjs``), so this is inlined rather than linked. Checked
+    both ways: a tree with a ``features/<domain>/styles.css`` and no built asset
+    would ship those domains unstyled with no error, and an asset with no source
+    is a stale ``.modern/``.
+    """
+    declared = sorted((ROOT / "src" / "features").glob("*/styles.css"))
+    built = ROOT / ".modern" / "domains.css"
+    if declared and not built.is_file():
+        names = ", ".join(p.parent.name for p in declared)
+        raise SystemExit(
+            f"ui-web/.modern/domains.css not found, but {names} declare a styles.css -- "
+            "run `npm run --prefix ui-web build` before ui-web/build.py"
+        )
+    if built.is_file() and not declared:
+        raise SystemExit(
+            "ui-web/.modern/domains.css exists but no features/<domain>/styles.css does; "
+            "delete ui-web/.modern and rebuild"
+        )
+    if not declared:
+        return ""
+    return "\n" + built.read_text(encoding="utf-8").rstrip("\n")
+
+
 def main() -> None:
     page = (ROOT / "src" / "page.html").read_text(encoding="utf-8")
     style = (ROOT / "src" / "styles" / "page.css").read_text(encoding="utf-8")
     style = style[:-1] if style.endswith("\n") else style
+    style += _domain_styles()
     # The island bundle (React features) is built by Vite, not committed:
     # page assembly now has a node step ahead of this python one. Absence is
     # an error rather than a warning because a page without the bundle ships

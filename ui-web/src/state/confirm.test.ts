@@ -9,8 +9,8 @@
  * be kept in step (src/App.test.tsx says the same).
  */
 import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
+import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { App } from '../App'
@@ -113,20 +113,19 @@ describe('the confirm dialog', () => {
 })
 
 /* Last in the file on purpose: applying a language is module state for
-   everything after it. What this proves is that the label's two writers agree
-   -- the pass state/lang/store.ts makes over the document's data-i18n attributes, and
-   the component rendering the same key through lang.text -- so the sheet cannot
-   come back in the served language once a flip has moved it. A re-render alone
-   would not show it: React diffs against the props it rendered last, so a
-   literal it never changes is a literal it never writes again, and only a
-   remount asks the component what the text is. */
+   everything after it. What this proves is that the label is the catalogue's
+   rather than the markup's -- the component reads t(key) as it renders -- so the
+   sheet cannot come back in the language before the flip. A re-render alone
+   would not show it: React diffs against the props it rendered last, so a value
+   it never changes is a value it never writes again, and only a remount asks
+   the component what the text is. */
 describe('the confirm dialog once a language is applied', () => {
   it('renders the applied label when the sheet is mounted again', () => {
     render()
-    const served = text('cfNo')
-    lang.set('en')
+    const before = text('cfNo')
+    lang.set('zh')
     const applied = text('cfNo')
-    expect(applied).not.toBe(served)
+    expect(applied).not.toBe(before)
     render()
     expect(text('cfNo')).toBe(applied)
     confirm.ask('Delete this?', '', 'Delete', () => {})

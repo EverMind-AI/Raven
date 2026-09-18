@@ -2,11 +2,11 @@ div#onb
 div.app[data-rail=on]
   aside.rail
     div.railtop
-      button#railBtn.ghost-ic.tipdn[data-i18n-aria=gui.collapse_rail][data-i18n-tip=gui.collapse_rail]
+      button#railBtn.ghost-ic.tipdn
         svg
           rect
           path
-      button#findBtn.ghost-ic.tipdn[data-i18n-aria=gui.search_sessions][data-i18n-tip=gui.search_sessions]
+      button#findBtn.ghost-ic.tipdn
         svg
           circle
           path
@@ -14,69 +14,69 @@ div.app[data-rail=on]
       button#newBtn.navi.newrun
         svg
           path
-        span[data-i18n=gui.new_task]
+        span
       button#skillBtn.navi
         svg
           path
-        span[data-i18n=gui.tab.skills]
+        span
       button#plugBtn.navi
         svg
           path
-        span[data-i18n=gui.tab.plugins]
-      button#pbBtn.navi
+        span
+      button#playbooksBtn.navi
         svg
           circle
           circle
           circle
           path
-        span[data-i18n=gui.nav.pb]
+        span
       button#kbBtn.navi
         svg
           path
-        span[data-i18n=gui.nav.kb]
-      button#memBtn.navi
+        span
+      button#memoryBtn.navi
         svg
           path
-        span[data-i18n=gui.nav.mem]
-      div#moreFly.moresub[data-i18n-aria=gui.nav.more][data-open=false]
+        span
+      div#moreFly.moresub[data-open=false]
       button#moreBtn.navi.more
         svg.chev
           path
-        span.l-more[data-i18n=gui.nav.more]
-        span.l-less[data-i18n=gui.nav.less]
+        span.l-more
+        span.l-less
     div#findBox.find
       svg.ic
         circle
         path
-      input#sfind[data-i18n-aria=gui.search_sessions][data-i18n-ph=gui.search_sessions]
-      button#sclr.clr[data-i18n-aria=gui.clear_search]
+      input#sfind
+      button#sclr.clr
     div#list.list
     div.rail-foot
       button#upnote.upnote
         span.pip
-        span.t[data-i18n=gui.update.note]
-        span.rl[data-i18n=gui.update.reload]
-      button#meBtn.me[data-i18n-aria=gui.nav.set]
+        span.t
+        span.rl
+      button#meBtn.me
         span.av.anon
           svg
             circle
             path
         span.who
-          span.n[data-i18n=gui.nav.set]
+          span.n
           span#meSub.s
         span#meKbd.kbd
-    div#railGrip.grip[data-i18n-aria=gui.resize_rail][data-i18n-title=gui.resize_rail]
+    div#railGrip.grip
   div.main
     div#split.split[data-full=false][data-open=false]
       div.chat[data-fresh=1]
         div.top
           h1#title
-          button#renameBtn.ghost-ic.tipdn[data-i18n-aria=gui.rename_session][data-i18n-tip=gui.rename_session]
+          button#renameBtn.ghost-ic.tipdn
             svg
               path
               path
           span.spacer
-          button#wsBtn.ghost-ic.wstog.tipdn[data-i18n-aria=gui.expand_ws][data-i18n-tip=gui.expand_ws][data-tip=Expand workspace]
+          button#wsBtn.ghost-ic.wstog.tipdn[data-tip]
             svg
               rect
               path
@@ -88,7 +88,7 @@ div.app[data-rail=on]
         button#backpill.backpill
           svg
             path
-        div#wsGrip.grip[data-i18n-aria=gui.resize_ws][data-i18n-title=gui.resize_ws]
+        div#wsGrip.grip
         div#brand
           span.mk
           span.wl
@@ -100,9 +100,9 @@ div.app[data-rail=on]
             div#queued.queued
             div#atts.atts
             div.field
-              textarea#ta[data-i18n-ph=gui.composer_ph]
+              textarea#ta
             div.under
-              button#attBtn.tool-btn[data-i18n-aria=gui.attach][data-i18n-tip=gui.attach]
+              button#attBtn.tool-btn
                 svg
                   path
               button#permChip.chip
@@ -126,18 +126,18 @@ div.app[data-rail=on]
                 span#tierName
               button#modelChip.chip
                 span#modelName
-              button#go.go[data-i18n-aria=gui.send]
+              button#go.go
                 svg
                   path
-            div#slashPop.pop.slash[data-i18n-aria=gui.commands][data-open=false]
+            div#slashPop.pop.slash[data-open=false]
               div.hd
-                span.lab[data-i18n=gui.session_commands]
+                span.lab
               div#slashList
-            div#permPop.pop[data-i18n-aria=gui.perm.title][data-open=false]
+            div#permPop.pop[data-open=false]
               div.hd
-                span.lab[data-i18n=gui.perm.title]
+                span.lab
               div#permList
-              div.note[data-i18n=gui.perm.note]
+              div.note
             div#tierPop.pop[data-open=false]
               div.hd
                 span#tierPopLab.lab
@@ -148,44 +148,44 @@ div.app[data-rail=on]
             img.rv.rv-research
             img.rv.rv-coding
             img.rv.rv-data
-      aside#ws.ws[data-i18n-aria=gui.workspace]
+      aside#ws.ws
         div.ws-top
           div#wsTabs.wseg
             button[data-w=diff]
               svg
                 rect
                 path
-              span.lb[data-i18n=gui.ws.changes]
+              span.lb
               span#wsUnseen.bdg
             button[data-w=browser]
               svg
                 circle
                 path
-              span.lb[data-i18n=gui.ws.browser]
+              span.lb
             button[data-w=agents]
               svg
                 rect
                 path
-              span.lb[data-i18n=gui.ws.agents]
+              span.lb
               span#wsAgentRun.rundot
           div.ws-acts
-            button#wsWide.ghost-ic.wsfull.tipdn[data-i18n-aria=gui.ws.expand_panel][data-i18n-tip=gui.ws.expand_panel][data-tip=Expand to full window]
+            button#wsWide.ghost-ic.wsfull.tipdn[data-tip]
               svg.ex
                 path
               svg.in
                 path
-            button#wsClose.ghost-ic.wstog.tipdn[data-i18n-aria=gui.collapse_ws][data-i18n-tip=gui.collapse_ws]
+            button#wsClose.ghost-ic.wstog.tipdn
               svg
                 rect
                 path
         div#wsBody.ws-body
-button#railShow.ghost-ic.tipdn[data-i18n-aria=gui.expand_rail][data-i18n-tip=gui.expand_rail]
+button#railShow.ghost-ic.tipdn
   svg
     rect
     path
 section#capsPage.page[data-open=false]
   header
-    h2#capsTitle[data-i18n=gui.tab.skills]
+    h2#capsTitle
   div.work
     div.wrap
       div#pageHero.pmhero
@@ -195,12 +195,12 @@ section#capsPage.page[data-open=false]
           svg.ic
             circle
             path
-          input#cq[data-i18n-aria=gui.search]
-        div#cKind.pills[data-i18n-aria=gui.filter_status]
-          button.pill[data-i18n=gui.filter.all][data-k=all]
-          button.pill[data-i18n=gui.filter.on][data-k=on]
-          button.pill[data-i18n=gui.filter.todo][data-k=attn]
-          button.pill[data-i18n=gui.filter.add][data-k=add]
+          input#cq
+        div#cKind.pills
+          button.pill[data-k=all]
+          button.pill[data-k=on]
+          button.pill[data-k=attn]
+          button.pill[data-k=add]
         button.pminstbtn
           span
         button.pminstbtn
@@ -208,63 +208,63 @@ section#capsPage.page[data-open=false]
       div#capsBody
         div
       details#advAdd.adv
-        summary[data-i18n=gui.adv_add]
-        p[data-i18n=gui.adv_hint]
+        summary
+        p
         div.row
-          input#mName[data-i18n-ph=gui.adv_name_ph]
-          input#mAddr[data-i18n-ph=gui.adv_addr_ph]
-          button#mAdd.mini[data-i18n=gui.add]
-section#xaPage.page[data-i18n-aria=gui.page.agents][data-open=false]
+          input#mName
+          input#mAddr
+          button#mAdd.mini
+section#extAgentsPage.page[data-open=false]
   header
-    h2[data-i18n=gui.page.agents]
+    h2
   div.work
-    div#xaBody.wrap
-section#connPage.page[data-i18n-aria=gui.page.conn][data-open=false]
+    div#extAgentsBody.wrap
+section#connectionsPage.page[data-open=false]
   header
-    h2[data-i18n=gui.page.conn]
+    h2
   div.work
-    div#connBody.wrap
-section#memPage.page[data-i18n-aria=gui.mem.hero][data-open=false]
+    div#connectionsBody.wrap
+section#memoryPage.page[data-open=false]
   header
-    h2[data-i18n=gui.nav.mem]
+    h2
   div.work
-    div#memBody.wrap
-section#pbPage.page[data-i18n-aria=gui.nav.pb][data-open=false]
+    div#memoryBody.wrap
+section#playbooksPage.page[data-open=false]
   header
-    h2[data-i18n=gui.nav.pb]
+    h2
   div.work
-    div#pbBody.wrap
-section#kbPage.page[data-i18n-aria=gui.nav.kb][data-open=false]
+    div#playbooksBody.wrap
+section#kbPage.page[data-open=false]
   header
-    h2[data-i18n=gui.nav.kb]
+    h2
   div.work
     div#kbBody.wrap
-section#cronPage.page[data-i18n-aria=gui.page.cron][data-open=false]
+section#cronPage.page[data-open=false]
   header
-    h2[data-i18n=gui.page.cron]
+    h2
   div.work
     div#cronBody.wrap
 div#jobVeil.veil[data-open=false]
-aside#detail.detail[data-i18n-aria=gui.cap_detail][data-open=false]
+aside#detail.detail[data-open=false]
   div.dpanel
     header
       b#dTitle
-      button#dClose.dx[data-i18n-aria=gui.close]
+      button#dClose.dx
         svg
           path
     div#dBody.body
 div#setVeil.veil.setveil[data-open=false]
-  div#setModal.smodal[data-i18n-aria=gui.page.set]
+  div#setModal.smodal
     nav#snav.snav
       div.brandrow
-        span.wm[data-i18n=gui.page.set]
+        span.wm
       div#snavList.snavlist
     div.sbody
       header.shd
         div.ttl
           h3#setTitle
           p#setSub.sub
-        button#setClose.icb[data-i18n-aria=gui.close][data-i18n-tip=gui.close]
+        button#setClose.icb
           svg
             path
       div#spanels.spanels
@@ -273,7 +273,7 @@ div#veil.veil[data-open=false]
     header#cfTitle
     div#cfBody.body
     footer
-      button#cfNo.btn[data-i18n=gui.cancel]
+      button#cfNo.btn
       button#cfYes.btn.bad
 div#connVeil.veil[data-open=false]
 div#menu.menu[data-open=false]

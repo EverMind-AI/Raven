@@ -71,10 +71,3 @@ export function elementSnapshot(root: Element): string {
   if (!inner) return head
   return `${head}\n${inner.split('\n').map((line) => `  ${line}`).join('\n')}`
 }
-
-/** `elementSnapshot` of the element carrying `id`, looked up under `root`. */
-export function regionSnapshot(root: Document | Element, id: string): string {
-  const found = 'getElementById' in root ? root.getElementById(id) : root.querySelector(`#${id}`)
-  if (!found) throw new Error(`regionSnapshot: no element with id "${id}"`)
-  return elementSnapshot(found)
-}

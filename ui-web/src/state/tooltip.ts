@@ -16,9 +16,8 @@
  * with the update shade, so its place among the body's children is the whole
  * of which one covers the other.
  */
-import { flushSync } from 'react-dom'
-
 import * as portals from './portals'
+import { makeStore } from './store'
 
 export interface Tip {
   /** The layer the pill is drawn in, once it stands at the body. */
@@ -27,7 +26,7 @@ export interface Tip {
   readonly text: string | null
 }
 
-let state: Tip = { host: null, text: null }
+const store = makeStore<Tip>({ host: null, text: null })
 
 /* The control the pill is currently about. Held rather than derived because
    `pointerover` fires for every descendant of it as well, and a pill that
@@ -35,31 +34,20 @@ let state: Tip = { host: null, text: null }
    one button. */
 let hovered: HTMLElement | null = null
 
-const listeners = new Set<() => void>()
-
-export const get = (): Tip => state
-
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => { listeners.delete(fn) }
-}
+export const { get, set, subscribe } = store
 
 /* Synchronous, because the caller measures what it just wrote: the pill's own
    height decides whether the label goes above or below. */
-function commit(next: Tip): void {
-  state = next
-  flushSync(() => { for (const fn of [...listeners]) fn() })
-}
 
 /** Raises the layer, where the body's declared order files it. */
 export function mount(): void {
-  commit({ host: portals.host('tip'), text: state.text })
+  set({ host: portals.host('tip'), text: get().text })
 }
 
 function place(): void {
   if (!hovered || !hovered.isConnected || !hovered.dataset.tip) { hide(); return }
-  commit({ host: state.host, text: hovered.dataset.tip })
-  const pill = state.host
+  set({ host: get().host, text: hovered.dataset.tip })
+  const pill = get().host
   if (!pill) return
   pill.dataset.on = 'true'
   const vw = document.documentElement.clientWidth
@@ -79,7 +67,8 @@ function place(): void {
    had not changed. */
 export function hide(): void {
   hovered = null
-  if (state.host) state.host.dataset.on = 'false'
+  const pill = get().host
+  if (pill) pill.dataset.on = 'false'
 }
 
 /** The pointer entering anything: the pill follows whatever declares a label. */
@@ -100,5 +89,5 @@ export function watch(): void {
 /** Test seam only: the layer and the pointed-at control outlive a test. */
 export function _resetForTests(): void {
   hovered = null
-  state = { host: null, text: null }
+  store._resetForTests()
 }

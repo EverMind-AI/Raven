@@ -1,10 +1,11 @@
 import { t } from '../../i18n/t'
+import { ask as confirmAsk } from '../../state/confirm'
+import * as page from '../../state/page'
 import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
 
 import type { KbBase, KbDoc, KbHit, KbSettings, KbStatus, KnowledgeSource } from './types'
-import * as page from '../../state/page'
-import { ask as confirmAsk } from '../../state/confirm'
 
 /* What an RPC failure actually said.
  *
@@ -44,7 +45,7 @@ interface State {
   query: string
   hits: KbHit[] | null
   /* What the last search cost, for the line above the results. Null until one
-     has been run, which is a different state from one that found nothing. */
+     has been run, which is a different get() from one that found nothing. */
   cost: { search_ms: number; embed_ms: number } | null
   /* A search is in flight. Its own flag rather than `busy`: that one gates
      every write on the page, and a search changes nothing. */
@@ -63,7 +64,7 @@ interface State {
      open should not leave the panel looking up an id that is gone. */
   viewing: KbDoc | null
   /* Which add-a-source dialog is up, if any. One field rather than a boolean
-     each, because two of them open at once is not a state this page has. */
+     each, because two of them open at once is not a get() this page has. */
   dialog: Dialog | null
   /* How far a multi-file add has got. Null when nothing is being added; a
      folder is uploaded one file at a time, and without this the tab looks
@@ -104,24 +105,16 @@ const EMPTY: State = {
   dragDepth: 0,
 }
 
-let state: State = EMPTY
-const listeners = new Set<() => void>()
+const store = makeStore<State>(EMPTY)
 
-function set(patch: Partial<State>): void {
-  state = { ...state, ...patch }
-  listeners.forEach((fn) => fn())
+export const { get, subscribe } = store
+
+/** A patch, merged into the page's state. */
+export function set(patch: Partial<State>): void {
+  store.set((prev) => ({ ...prev, ...patch }))
 }
 
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => listeners.delete(fn)
-}
-
-export function getState(): State {
-  return state
-}
-
-const source = (): KnowledgeSource => ds<KnowledgeSource>('knowledge')
+const source = (): KnowledgeSource => ds('knowledge')
 
 export async function load(): Promise<void> {
   let src: KnowledgeSource
@@ -143,7 +136,7 @@ export async function load(): Promise<void> {
 
 export async function create(name: string, description = '', embedding = true): Promise<void> {
   const trimmed = name.trim()
-  if (!trimmed || state.busy) return
+  if (!trimmed || get().busy) return
   set({ busy: true })
   try {
     await source().create(trimmed, description, embedding)
@@ -167,14 +160,14 @@ export async function create(name: string, description = '', embedding = true): 
    reported rather than assumed. */
 export async function renameBase(base: KbBase, name: string): Promise<void> {
   const wanted = name.trim()
-  if (state.busy || !wanted || wanted === base.name) {
+  if (get().busy || !wanted || wanted === base.name) {
     set({ dialog: null })
     return
   }
   set({ busy: true })
   try {
     const renamed = await source().rename(base.id, wanted)
-    set({ bases: state.bases.map((b) => (b.id === renamed.id ? renamed : b)), dialog: null })
+    set({ bases: get().bases.map((b) => (b.id === renamed.id ? renamed : b)), dialog: null })
   } catch (e) {
     toast((e as Error)?.message || String(e))
   } finally {
@@ -183,7 +176,7 @@ export async function renameBase(base: KbBase, name: string): Promise<void> {
 }
 
 export function remove(base: KbBase): void {
-  if (state.busy) return
+  if (get().busy) return
   confirmAsk(
     t('gui.kb.delete'),
     t('gui.kb.delete_body', { name: base.name, n: base.documents }),
@@ -194,7 +187,7 @@ export function remove(base: KbBase): void {
         .remove(base.id)
         .then(() => {
           /* The open panel belonged to the base that just went. */
-          if (state.openId === base.id) set({ openId: null, docs: [] })
+          if (get().openId === base.id) set({ openId: null, docs: [] })
           return load()
         })
         .catch((e: unknown) => toast(said(e)))
@@ -212,9 +205,9 @@ export async function open_(id: string): Promise<void> {
     const docs = await source().documents(id)
     /* The reader may have gone back or opened another base while this was in
        flight; answering into the wrong panel is worse than not answering. */
-    if (state.openId === id) set({ docs })
+    if (get().openId === id) set({ docs })
   } catch (e) {
-    if (state.openId === id) toast(said(e))
+    if (get().openId === id) toast(said(e))
   }
 }
 
@@ -238,11 +231,11 @@ export const FOLDER_MAX = 100
    in front of a modal until the embedding finishes. */
 async function takeIn(baseId: string, add: () => Promise<KbDoc>, arrived?: () => void): Promise<void> {
   const doc = await add()
-  if (state.openId === baseId) set({ docs: [...state.docs, doc] })
+  if (get().openId === baseId) set({ docs: [...get().docs, doc] })
   arrived?.()
   const indexed = await source().index(doc.id)
-  if (state.openId === baseId) {
-    set({ docs: state.docs.map((d) => (d.id === indexed.id ? indexed : d)) })
+  if (get().openId === baseId) {
+    set({ docs: get().docs.map((d) => (d.id === indexed.id ? indexed : d)) })
   }
 }
 
@@ -260,21 +253,21 @@ export async function upload(file: File): Promise<void> {
    forty where the third is unreadable should add the other thirty-nine, which
    is also how ragflow reports a partial upload. */
 export async function uploadAll(files: File[]): Promise<void> {
-  const baseId = state.openId
-  if (!baseId || state.busy || !files.length) return
+  const baseId = get().openId
+  if (!baseId || get().busy || !files.length) return
   set({ busy: true, adding: { done: 0, total: files.length } })
   let failed = 0
   let firstError = ''
   try {
     for (const file of files) {
-      if (state.openId !== baseId) break
+      if (get().openId !== baseId) break
       try {
         await takeIn(baseId, () => source().upload(baseId, file))
       } catch (e) {
         failed += 1
         if (!firstError) firstError = (e as Error)?.message || String(e)
       }
-      set({ adding: { done: (state.adding?.done || 0) + 1, total: files.length } })
+      set({ adding: { done: (get().adding?.done || 0) + 1, total: files.length } })
     }
   } finally {
     set({ busy: false, adding: null })
@@ -297,9 +290,9 @@ export async function uploadAll(files: File[]): Promise<void> {
    and to hand to a turn, and filtering by what a parser claims would throw
    away exactly what it is for. */
 export function indexable(files: File[]): File[] {
-  const base = state.bases.find((b) => b.id === state.openId)
+  const base = get().bases.find((b) => b.id === get().openId)
   if (base && !base.embedding_model) return files
-  const allowed = state.status?.extensions
+  const allowed = get().status?.extensions
   if (!allowed || !allowed.length) return files
   return files.filter((f) => allowed.includes(suffix(f.name)))
 }
@@ -313,7 +306,7 @@ function suffix(name: string): string {
 export async function uploadFolder(files: File[]): Promise<void> {
   const supported = indexable(files)
   if (!supported.length) {
-    toast(t('gui.kb.none_supported', { kinds: (state.status?.extensions || []).join(' ') }))
+    toast(t('gui.kb.none_supported', { kinds: (get().status?.extensions || []).join(' ') }))
     return
   }
   if (supported.length > FOLDER_MAX) {
@@ -338,11 +331,11 @@ export function closeDialog(): void {
 /* Counted, not set: dragging over a child fires leave on the parent, and a
    boolean would flicker the highlight off mid-drag. */
 export function dragEnter(): void {
-  set({ dragDepth: state.dragDepth + 1 })
+  set({ dragDepth: get().dragDepth + 1 })
 }
 
 export function dragLeave(): void {
-  set({ dragDepth: Math.max(0, state.dragDepth - 1) })
+  set({ dragDepth: Math.max(0, get().dragDepth - 1) })
 }
 
 export function dragEnd(): void {
@@ -350,8 +343,8 @@ export function dragEnd(): void {
 }
 
 export async function addNote(title: string, text: string): Promise<void> {
-  const baseId = state.openId
-  if (!baseId || state.busy || !text.trim()) return
+  const baseId = get().openId
+  if (!baseId || get().busy || !text.trim()) return
   set({ busy: true })
   try {
     await takeIn(baseId, () => source().addNote(baseId, title, text), () => set({ dialog: null }))
@@ -364,20 +357,20 @@ export async function addNote(title: string, text: string): Promise<void> {
 }
 
 export async function saveNote(doc: KbDoc, title: string, text: string): Promise<void> {
-  const baseId = state.openId
-  if (!baseId || state.busy || !text.trim()) return
+  const baseId = get().openId
+  if (!baseId || get().busy || !text.trim()) return
   set({ busy: true })
   try {
     const written = await source().updateNote(doc.id, title, text)
     /* Replaced in place rather than appended: this is the row the reader
        opened, and a second copy of it is not what editing means. */
-    if (state.openId === baseId) {
-      set({ docs: state.docs.map((d) => (d.id === written.id ? written : d)) })
+    if (get().openId === baseId) {
+      set({ docs: get().docs.map((d) => (d.id === written.id ? written : d)) })
     }
     set({ dialog: null })
     const indexed = await source().index(written.id)
-    if (state.openId === baseId) {
-      set({ docs: state.docs.map((d) => (d.id === indexed.id ? indexed : d)) })
+    if (get().openId === baseId) {
+      set({ docs: get().docs.map((d) => (d.id === indexed.id ? indexed : d)) })
     }
   } catch (e) {
     toast(said(e))
@@ -388,8 +381,8 @@ export async function saveNote(doc: KbDoc, title: string, text: string): Promise
 }
 
 export async function addUrl(url: string): Promise<void> {
-  const baseId = state.openId
-  if (!baseId || state.busy || !url.trim()) return
+  const baseId = get().openId
+  if (!baseId || get().busy || !url.trim()) return
   set({ busy: true })
   try {
     await takeIn(baseId, () => source().addUrl(baseId, url.trim()), () => set({ dialog: null }))
@@ -408,26 +401,22 @@ export async function addUrl(url: string): Promise<void> {
    per-row menu is the same click twenty times. */
 export function togglePick(id: string): void {
   set({
-    picked: state.picked.includes(id)
-      ? state.picked.filter((p) => p !== id)
-      : [...state.picked, id],
+    picked: get().picked.includes(id)
+      ? get().picked.filter((p) => p !== id)
+      : [...get().picked, id],
   })
 }
 
 /* The header tick. On when every row is picked, and pressing it then clears
    rather than re-picking, which is what every list of checkboxes does. */
 export function pickAll(on: boolean): void {
-  set({ picked: on ? state.docs.map((d) => d.id) : [] })
-}
-
-export function clearPicks(): void {
-  set({ picked: [] })
+  set({ picked: on ? get().docs.map((d) => d.id) : [] })
 }
 
 /* The picked rows, in the order the list shows them rather than the order they
    were ticked in: this is what the actions below report progress against. */
 function pickedDocs(): KbDoc[] {
-  return state.docs.filter((d) => state.picked.includes(d.id))
+  return get().docs.filter((d) => get().picked.includes(d.id))
 }
 
 /* Index every picked row again, one at a time.
@@ -437,36 +426,36 @@ function pickedDocs(): KbDoc[] {
    flight against a rate limit nobody raised. One failing is recorded on its
    own row and does not stop the rest. */
 export async function reindexPicked(): Promise<void> {
-  const baseId = state.openId
+  const baseId = get().openId
   const rows = pickedDocs()
-  if (!baseId || state.busy || !rows.length) return
+  if (!baseId || get().busy || !rows.length) return
   set({
     busy: true,
     adding: { done: 0, total: rows.length },
-    docs: state.docs.map((d) =>
-      state.picked.includes(d.id) ? { ...d, status: 'indexing', error: '' } : d,
+    docs: get().docs.map((d) =>
+      get().picked.includes(d.id) ? { ...d, status: 'indexing', error: '' } : d,
     ),
   })
   let failed = 0
   let firstError = ''
   try {
     for (const doc of rows) {
-      if (state.openId !== baseId) break
+      if (get().openId !== baseId) break
       try {
         const indexed = await source().index(doc.id)
-        if (state.openId === baseId) {
-          set({ docs: state.docs.map((d) => (d.id === indexed.id ? indexed : d)) })
+        if (get().openId === baseId) {
+          set({ docs: get().docs.map((d) => (d.id === indexed.id ? indexed : d)) })
         }
       } catch (e) {
         failed += 1
         if (!firstError) firstError = (e as Error)?.message || String(e)
         /* Put the row back the way it was: the optimistic `indexing` above is
            a promise this call just failed to keep. */
-        if (state.openId === baseId) {
-          set({ docs: state.docs.map((d) => (d.id === doc.id ? doc : d)) })
+        if (get().openId === baseId) {
+          set({ docs: get().docs.map((d) => (d.id === doc.id ? doc : d)) })
         }
       }
-      set({ adding: { done: (state.adding?.done || 0) + 1, total: rows.length } })
+      set({ adding: { done: (get().adding?.done || 0) + 1, total: rows.length } })
     }
   } finally {
     set({ busy: false, adding: null })
@@ -481,7 +470,7 @@ export async function reindexPicked(): Promise<void> {
    Once rather than per row: twenty confirmations is a dialog a reader clicks
    through without reading, which is worse than one that names the number. */
 export function removePicked(): void {
-  const baseId = state.openId
+  const baseId = get().openId
   const rows = pickedDocs()
   if (!baseId || !rows.length) return
   confirmAsk(
@@ -493,14 +482,14 @@ export function removePicked(): void {
       /* Off the list first, and un-picked with it: the rows are the thing the
          reader asked to be rid of, and the reload below is what corrects a
          delete that did not land. */
-      set({ docs: state.docs.filter((d) => !gone.has(d.id)), picked: [] })
+      set({ docs: get().docs.filter((d) => !gone.has(d.id)), picked: [] })
       void Promise.allSettled(rows.map((d) => source().removeDoc(d.id)))
         .then((results) => {
           const failed = results.filter((r) => r.status === 'rejected').length
           if (failed) toast(t('gui.kb.some_failed', { count: failed }))
         })
         .finally(() => {
-          if (state.openId === baseId) void reopen(baseId)
+          if (get().openId === baseId) void reopen(baseId)
           void load()
         })
     },
@@ -516,20 +505,20 @@ export function removePicked(): void {
    a gateway restart mid-index is the same shape: nothing else ever picks it up,
    because `index_pending` has no production caller. */
 export async function retry(doc: KbDoc): Promise<void> {
-  const baseId = state.openId
-  if (!baseId || state.busy) return
-  set({ busy: true, docs: state.docs.map((d) => (d.id === doc.id ? { ...d, status: 'indexing', error: '' } : d)) })
+  const baseId = get().openId
+  if (!baseId || get().busy) return
+  set({ busy: true, docs: get().docs.map((d) => (d.id === doc.id ? { ...d, status: 'indexing', error: '' } : d)) })
   try {
     const indexed = await source().index(doc.id)
-    if (state.openId === baseId) {
-      set({ docs: state.docs.map((d) => (d.id === indexed.id ? indexed : d)) })
+    if (get().openId === baseId) {
+      set({ docs: get().docs.map((d) => (d.id === indexed.id ? indexed : d)) })
     }
   } catch (e) {
     toast(said(e))
     /* Put the row back the way it was: the optimistic `indexing` above is a
        promise this call just failed to keep. */
-    if (state.openId === baseId) {
-      set({ docs: state.docs.map((d) => (d.id === doc.id ? doc : d)) })
+    if (get().openId === baseId) {
+      set({ docs: get().docs.map((d) => (d.id === doc.id ? doc : d)) })
     }
   } finally {
     set({ busy: false })
@@ -540,7 +529,7 @@ export async function retry(doc: KbDoc): Promise<void> {
 /* Remove one document. Confirmed, because the blob and its chunks go with it
    and an upload is not always still on the reader's disk. */
 export function removeDoc(doc: KbDoc): void {
-  const baseId = state.openId
+  const baseId = get().openId
   if (!baseId) return
   confirmAsk(
     t('gui.kb.doc_delete'),
@@ -549,12 +538,12 @@ export function removeDoc(doc: KbDoc): void {
     () => {
       /* Off the list first: the row is the thing the reader asked to be rid of,
          and the reload below is what corrects a delete that did not land. */
-      set({ docs: state.docs.filter((d) => d.id !== doc.id) })
+      set({ docs: get().docs.filter((d) => d.id !== doc.id) })
       void source()
         .removeDoc(doc.id)
         .catch((e: unknown) => toast(said(e)))
         .finally(() => {
-          if (state.openId === baseId) void reopen(baseId)
+          if (get().openId === baseId) void reopen(baseId)
           void load()
         })
     },
@@ -568,7 +557,7 @@ async function reopen(baseId: string): Promise<void> {
     /* Ticks that point at rows which are no longer there would keep counting
        towards "N selected" and towards what the two buttons act on. */
     const here = new Set(docs.map((d) => d.id))
-    if (state.openId === baseId) set({ docs, picked: state.picked.filter((p) => here.has(p)) })
+    if (get().openId === baseId) set({ docs, picked: get().picked.filter((p) => here.has(p)) })
   } catch {
     /* The row list stays as the optimistic removal left it; the next open
        corrects it. Toasting twice for one failure helps nobody. */
@@ -626,14 +615,14 @@ export function closeSettings(): void {
 }
 
 export async function saveSettings(values: KbSettings): Promise<void> {
-  const baseId = state.openId
-  if (!baseId || state.busy) return
+  const baseId = get().openId
+  if (!baseId || get().busy) return
   set({ busy: true })
   try {
     const saved = await source().settings(baseId, values)
     /* Replaced from the answer rather than from what was sent: the engine is
        what decides, and a field it refused or adjusted has to show as it is. */
-    set({ bases: state.bases.map((b) => (b.id === saved.id ? saved : b)), settings: false })
+    set({ bases: get().bases.map((b) => (b.id === saved.id ? saved : b)), settings: false })
     toast(t('gui.kb.set_saved'))
   } catch (e) {
     toast((e as Error)?.message || String(e))
@@ -651,21 +640,13 @@ export function closeRecall(): void {
   set({ recall: false, searching: false })
 }
 
-/* Clear what was asked without closing the panel. Null hits rather than an
-   empty list: "asked and found nothing" and "not asked yet" are different
-   states, and only the first one has a count to report. */
-export function clearRecall(): void {
-  cancelSearch()
-  set({ query: '', hits: null, cost: null, searching: false })
-}
-
 export function setQuery(query: string): void {
   set({ query })
 }
 
 /* Run one search, for a reader who has said they are finished typing. */
 export async function searchNow(query: string): Promise<void> {
-  const baseId = state.openId
+  const baseId = get().openId
   const text = query.trim()
   set({ query })
   cancelSearch()
@@ -679,13 +660,13 @@ export async function searchNow(query: string): Promise<void> {
     /* The base's own Top K, so the slider in its settings is visibly the thing
        that decides what comes back. Left to the engine when the base has not
        reported one. */
-    const base = state.bases.find((b) => b.id === baseId)
+    const base = get().bases.find((b) => b.id === baseId)
     const found = await source().search([baseId], text, base?.top_k)
-    if (state.openId !== baseId || mine !== seq) return
+    if (get().openId !== baseId || mine !== seq) return
     set({ hits: found.hits, cost: { search_ms: found.search_ms, embed_ms: found.embed_ms } })
     remember(text)
   } catch (e) {
-    if (state.openId === baseId && mine === seq) toast((e as Error)?.message || String(e))
+    if (get().openId === baseId && mine === seq) toast((e as Error)?.message || String(e))
   } finally {
     if (mine === seq) set({ searching: false })
   }
@@ -744,15 +725,8 @@ export function close(): void {
   page.show(null)
 }
 
-/* A language flip changes nothing in this state, but every visible string
-   comes from t(), so a re-render is the whole redraw. */
-export function redraw(): void {
-  set({})
-}
-
 export function _resetForTests(): void {
-  state = EMPTY
-  listeners.clear()
+  store._resetForTests()
   /* The timer and the token too: a test that types without waiting out the
      debounce would otherwise fire into the next test's source. */
   cancelSearch()
@@ -760,7 +734,7 @@ export function _resetForTests(): void {
 
 /* ── the original file behind a row ───────────────────────────────────
    The gateway serves it by document id, never by path: the blobs live under
-   raven's state directory, which the viewer's own path policy refuses, and an
+   raven's get() directory, which the viewer's own path policy refuses, and an
    id means nothing the page sends names a location. */
 
 /* Formats no browser draws, which the gateway converts to PDF with

@@ -8,7 +8,7 @@
  * honest tier to name, and the bars, the name and the accessible name when
  * there is. The three are read only while it is on, which is what keeps the
  * served literals under a hidden chip instead of a tier this side invented.
- * aria-expanded is the panel's, and so is the click.
+ * aria-expanded is the popover's, and so is the click.
  */
 
 import { useSyncExternalStore } from 'react'

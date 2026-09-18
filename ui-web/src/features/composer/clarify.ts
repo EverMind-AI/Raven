@@ -8,7 +8,7 @@
  * rather than by kind.
  *
  * What is here is the sheet's own element and the answers it can give; the
- * markup inside it is src/chrome/ClarifySheet.tsx. The element belongs to this
+ * markup inside it is features/composer/ClarifySheet.tsx. The element belongs to this
  * module because the rack files it under a conversation and styles it as its
  * flex item -- see that component -- and so do the key handler and the
  * ResizeObserver, which live as long as the question rather than as long as its
@@ -23,13 +23,13 @@
 
 import { createElement } from 'react'
 
-import { ClarifySheet } from '../../chrome/ClarifySheet'
 import { t } from '../../i18n/t'
 import * as drafts from '../../state/sheetDrafts'
 import { add as sheetAdd, dropClass, remove as sheetRemove, session } from '../../state/sheetRack'
+import { ClarifySheet } from './ClarifySheet'
 import { composing, dockLift } from './store'
 
-import type { ClarifyControls } from '../../chrome/ClarifySheet'
+import type { ClarifyControls } from './ClarifySheet'
 
 export interface ClarifyRequest {
   question?: string

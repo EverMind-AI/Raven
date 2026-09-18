@@ -4,10 +4,10 @@
    installs it onto the same name, which swaps the demo fixtures for a real
    engine. */
 
-import type { KnowledgeSource } from './types'
-
 import { refusalBySize as uploadRefusalBySize } from '../../lib/upload'
 import { gateway } from '../../rpc/gateway'
+
+import type { KnowledgeSource } from './types'
 
 export const knowledgeSource: KnowledgeSource = {
   status: () => gateway().call('knowledge.status', {}),

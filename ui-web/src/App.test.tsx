@@ -12,12 +12,12 @@
  * re-render does not undo the flags another store writes.
  */
 import { act } from 'react'
-import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
+import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { App } from './App'
-import { T, setTranslator } from './i18n/t'
+import { t, setTranslator } from './i18n/t'
 import * as confirmStore from './state/confirm'
 import * as detail from './state/detail'
 import * as lang from './state/lang'
@@ -95,8 +95,8 @@ describe('the page root', () => {
       'dTitle', 'dClose', 'dBody',
       'setModal', 'snav', 'snavList', 'setTitle', 'setSub', 'setClose', 'spanels',
       'railShow', 'split', 'jobVeil', 'connVeil', 'menu', 'toasts',
-      'capsPage', 'xaPage', 'connPage', 'memPage', 'pbPage', 'kbPage', 'cronPage',
-      'xaBody', 'connBody', 'memBody', 'pbBody', 'kbBody', 'cronBody',
+      'capsPage', 'extAgentsPage', 'connectionsPage', 'memoryPage', 'playbooksPage', 'kbPage', 'cronPage',
+      'extAgentsBody', 'connectionsBody', 'memoryBody', 'playbooksBody', 'kbBody', 'cronBody',
     ]) {
       expect(document.querySelectorAll(`#${id}`), id).toHaveLength(1)
     }
@@ -111,28 +111,10 @@ describe('the page root', () => {
     render()
     for (const id of [
       'dBody', 'snavList', 'spanels',
-      'xaBody', 'connBody', 'memBody', 'pbBody', 'kbBody', 'cronBody',
+      'extAgentsBody', 'connectionsBody', 'memoryBody', 'playbooksBody', 'kbBody', 'cronBody',
     ]) {
       expect(document.getElementById(id)!.childNodes, id).toHaveLength(0)
     }
-  })
-
-  /* The keys the markup was served with. Inert markers now -- nothing walks
-     them (state/lang/store.ts) -- and kept because they are the record of which
-     phrase each line of chrome speaks, and the region goldens hold them. */
-  it('keeps the language keys on the markup', () => {
-    render()
-    const key = (id: string, attr: string): string | null =>
-      document.getElementById(id)!.getAttribute(attr)
-    expect(key('cfNo', 'data-i18n')).toBe('gui.cancel')
-    expect(key('dClose', 'data-i18n-aria')).toBe('gui.close')
-    expect(key('setClose', 'data-i18n-aria')).toBe('gui.close')
-    expect(key('setClose', 'data-i18n-tip')).toBe('gui.close')
-    expect(key('setModal', 'data-i18n-aria')).toBe('gui.page.set')
-    expect(key('detail', 'data-i18n-aria')).toBe('gui.cap_detail')
-    expect(key('railShow', 'data-i18n-tip')).toBe('gui.expand_rail')
-    expect(key('xaPage', 'data-i18n-aria')).toBe('gui.page.agents')
-    expect(document.querySelector('.wm')!.getAttribute('data-i18n')).toBe('gui.page.set')
   })
 
   /* The two things the region goldens drop: they record tag, id, class and
@@ -167,7 +149,7 @@ describe('the page root', () => {
     for (const id of ['cfTitle', 'cfNo', 'cfYes', 'dTitle', 'setTitle']) {
       expect(document.getElementById(id)!.textContent, id).not.toBe('')
     }
-    for (const sel of ['#xaPage h2', '#connPage h2', '#memPage h2', '#pbPage h2', '#kbPage h2', '#cronPage h2']) {
+    for (const sel of ['#extAgentsPage h2', '#connectionsPage h2', '#memoryPage h2', '#playbooksPage h2', '#kbPage h2', '#cronPage h2']) {
       expect(document.querySelector(sel)!.textContent, sel).not.toBe('')
     }
     expect(document.querySelector('.wm')!.textContent).not.toBe('')
@@ -183,7 +165,7 @@ describe('the page root', () => {
     expect(document.getElementById('detail')!.getAttribute('aria-label')).toBe(null)
     expect(document.getElementById('setModal')!.getAttribute('aria-label')).toBe(null)
     expect(document.getElementById('setClose')!.dataset.tip).toBe(undefined)
-    expect(document.getElementById('xaPage')!.getAttribute('aria-label')).toBe(null)
+    expect(document.getElementById('extAgentsPage')!.getAttribute('aria-label')).toBe(null)
     expect(document.getElementById('wsGrip')!.getAttribute('title')).toBe(null)
   })
 })
@@ -198,15 +180,15 @@ describe('the page root once a language is applied', () => {
     act(() => {
       lang.set('en')
     })
-    expect(document.querySelector('#xaPage h2')!.textContent).toBe(T('gui.page.agents'))
-    expect(document.getElementById('xaPage')!.getAttribute('aria-label')).toBe(T('gui.page.agents'))
-    expect(document.getElementById('railShow')!.dataset.tip).toBe(T('gui.expand_rail'))
-    expect(document.getElementById('railShow')!.getAttribute('aria-label')).toBe(T('gui.expand_rail'))
-    expect(document.getElementById('wsGrip')!.getAttribute('title')).toBe(T('gui.resize_ws'))
-    expect(document.getElementById('detail')!.getAttribute('aria-label')).toBe(T('gui.cap_detail'))
-    expect(document.getElementById('setModal')!.getAttribute('aria-label')).toBe(T('gui.page.set'))
-    expect((document.getElementById('sfind') as HTMLInputElement).placeholder).toBe(T('gui.search_sessions'))
-    expect(document.getElementById('cfNo')!.textContent).toBe(T('gui.cancel'))
+    expect(document.querySelector('#extAgentsPage h2')!.textContent).toBe(t('gui.page.agents'))
+    expect(document.getElementById('extAgentsPage')!.getAttribute('aria-label')).toBe(t('gui.page.agents'))
+    expect(document.getElementById('railShow')!.dataset.tip).toBe(t('gui.expand_rail'))
+    expect(document.getElementById('railShow')!.getAttribute('aria-label')).toBe(t('gui.expand_rail'))
+    expect(document.getElementById('wsGrip')!.getAttribute('title')).toBe(t('gui.resize_ws'))
+    expect(document.getElementById('detail')!.getAttribute('aria-label')).toBe(t('gui.cap_detail'))
+    expect(document.getElementById('setModal')!.getAttribute('aria-label')).toBe(t('gui.page.set'))
+    expect((document.getElementById('sfind') as HTMLInputElement).placeholder).toBe(t('gui.search_sessions'))
+    expect(document.getElementById('cfNo')!.textContent).toBe(t('gui.cancel'))
   })
 
   /* The flags another store writes on a region this root renders. A pick

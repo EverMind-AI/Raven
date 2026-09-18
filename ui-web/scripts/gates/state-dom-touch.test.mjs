@@ -26,7 +26,6 @@
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
-
 import { describe, expect, it } from 'vitest'
 
 const SRC = new URL('../../src/', import.meta.url).pathname
@@ -42,20 +41,20 @@ const PINNED = {
   'state/confirm.ts': 2,
   'state/detail.ts': 3,
   'state/envChip.ts': 2,
+  'state/escapeOrder.ts': 2,
   'state/find.ts': 1,
   'state/globalListeners.ts': 2,
   'state/lightbox.ts': 3,
   'state/menu.ts': 1,
   'state/navfly.ts': 3,
-  'state/overlays.ts': 2,
   'state/page.ts': 3,
   'state/perm.ts': 2,
   'state/portals.ts': 3,
   'state/rail.ts': 2,
   'state/selection.ts': 1,
   'state/session/conversation.ts': 2,
+  'state/session/naming.ts': 1,
   'state/session/residency.ts': 1,
-  'state/session/runtime.ts': 1,
   'state/settings.ts': 2,
   'state/sheetRack.ts': 1,
   'state/tier.ts': 2,

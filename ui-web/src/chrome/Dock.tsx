@@ -11,7 +11,7 @@
  * ResizeObserver and a MutationObserver on it (features/composer/mount.tsx), and
  * a node rebuilt per render would lose both.
  *
- * Literals go through lang.text(key, literal) where the markup carries a key;
+ * Words go through t(key) where the markup carries a key;
  * the four that carry none (#permName, #envName, #tierName, #modelName) carry
  * none because each is the property of whoever fills it. Two of the four are
  * their owner's store now (./PermChip.tsx, ./TierChip.tsx, each falling back to
@@ -20,9 +20,9 @@
  *
  * Four of the children are files of their own, because each renders the whole
  * of a store: the context ring (./CtxChip.tsx) and the two chips with the
- * panels they open (./PermChip.tsx, ./PermPop.tsx, ./TierChip.tsx,
- * ./TierPop.tsx). Their place in the two child lists below is the page's, which
- * is the one thing about them this file still decides.
+ * popovers they open (./PermChip.tsx, ./PermPopover.tsx, ./TierChip.tsx,
+ * ./TierPopover.tsx). Their place in the two child lists below is the page's,
+ * which is the one thing about them this file still decides.
  *
  * What this does NOT own, though it renders the elements:
  *   - textarea#ta. It stays uncontrolled and its four listeners stay native
@@ -46,7 +46,7 @@
  *     #slashPop's data-open.
  *   - where #permPop and #tierPop stand. Both stores move the node to the body
  *     the first time it opens, because the card's entrance animation makes the
- *     card a containing block and re-bases the panel's fixed coordinates. A
+ *     card a containing block and re-bases the popover's fixed coordinates. A
  *     child moved out from under a portal is safe as long as React never
  *     reconciles that child list, which it does not: see above.
  * Each of those is still exactly one writer of the value it writes, and React
@@ -57,12 +57,13 @@
 
 import { useSyncExternalStore } from 'react'
 
+import { t } from '../i18n/t'
+import * as lang from '../state/lang'
 import { CtxChip } from './CtxChip'
 import { PermChip } from './PermChip'
-import { PermPop } from './PermPop'
+import { PermPopover } from './PermPopover'
 import { TierChip } from './TierChip'
-import { TierPop } from './TierPop'
-import * as lang from '../state/lang'
+import { TierPopover } from './TierPopover'
 
 import type { JSX } from 'react'
 
@@ -74,7 +75,7 @@ function DockIn(): JSX.Element {
     <div className="dock-in">
       <div className="queued" id="queued" />
       <div className="field">
-        <textarea id="ta" rows={1} data-i18n-ph="gui.composer_ph" placeholder={lang.text('gui.composer_ph', 'Do anything')} />
+        <textarea id="ta" rows={1} placeholder={t('gui.composer_ph')} />
       </div>
       {/* One bar under a clean writing line: actions and identity on
            the left, session state and the send button on the right --
@@ -85,7 +86,7 @@ function DockIn(): JSX.Element {
             reproduced: it collapses at both line edges either way, but the rule
             that makes it harmless is the line edge, not the parent (.tool-btn,
             src/styles/page.css:2135). */}
-        <button className="tool-btn" id="attBtn" data-i18n-tip="gui.attach" data-i18n-aria="gui.attach" data-tip={lang.attr('gui.attach')} aria-label={lang.attr('gui.attach')}>
+        <button className="tool-btn" id="attBtn" data-tip={lang.attr('gui.attach')} aria-label={lang.attr('gui.attach')}>
           {' '}
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
             <path d="M15 7l-6.2 6.2a2.6 2.6 0 0 0 3.7 3.7L19 10a4.4 4.4 0 0 0-6.2-6.2L6 10.5a6.2 6.2 0 0 0 8.8 8.8l3.4-3.4" />
@@ -98,16 +99,16 @@ function DockIn(): JSX.Element {
         <CtxChip />
         <TierChip />
         <button className="chip" id="modelChip"><span id="modelName">minimax-m3</span></button>
-        <button className="go" id="go" disabled data-i18n-aria="gui.send" aria-label={lang.attr('gui.send')} />
+        <button className="go" id="go" disabled aria-label={lang.attr('gui.send')} />
       </div>
 
-      <div className="pop slash" id="slashPop" data-open="false" role="listbox" data-i18n-aria="gui.commands" aria-label={lang.attr('gui.commands')}>
-        <div className="hd"><span className="lab" data-i18n="gui.session_commands">{lang.text('gui.session_commands', '会话命令')}</span></div>
+      <div className="pop slash" id="slashPop" data-open="false" role="listbox" aria-label={lang.attr('gui.commands')}>
+        <div className="hd"><span className="lab">{t('gui.session_commands')}</span></div>
         <div id="slashList" />
       </div>
 
-      <PermPop />
-      <TierPop />
+      <PermPopover />
+      <TierPopover />
     </div>
   )
 }

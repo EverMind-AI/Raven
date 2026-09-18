@@ -1,10 +1,10 @@
-/* The permission mode: the chip on the composer (#permChip) and the panel it
+/* The permission mode: the chip on the composer (#permChip) and the popover it
  * opens (#permPop).
  *
- * A store rather than a writer: <PermChip/> and <PermPop/> render both from it
- * (src/chrome/PermChip.tsx, src/chrome/PermPop.tsx). What stays here is the
+ * A store rather than a writer: <PermChip/> and <PermPopover/> render both from it
+ * (src/chrome/PermChip.tsx, src/chrome/PermPopover.tsx). What stays here is the
  * state and everything that decides: the three tiers, the mode in force, where
- * a pick is written, the rows a panel shows when it opens, and the chip's own
+ * a pick is written, the rows a popover shows when it opens, and the chip's own
  * four values -- `draw` fills those rather than writing them by id.
  *
  * Three tiers, ordered from the strictest to the one with no brakes, because
@@ -21,9 +21,8 @@
  * nobody listening.
  */
 
-import { flushSync } from 'react-dom'
-
 import { t } from '../i18n/t'
+import { makeStore } from './store'
 
 export interface Tier {
   id: string
@@ -58,7 +57,7 @@ const ICO: Record<string, string> = {
 /** The tick, which wears its stroke on the element rather than on the sheet. */
 export const CHECK = 'M5 12.5l4.5 4.5L19 7'
 
-/** One row of the panel, as the open that built it read the catalogue. */
+/** One row of the popover, as the open that built it read the catalogue. */
 export interface PermRow {
   readonly id: string
   readonly name: string
@@ -81,37 +80,26 @@ export interface PermPaint {
   readonly aria: string
 }
 
-export interface PermPanel {
-  /** Up or down: the panel's data-open and the chip's aria-expanded. */
+export interface PermPopoverState {
+  /** Up or down: the popover's data-open and the chip's aria-expanded. */
   readonly open: boolean
-  /* The rows the last open built, or null while the panel has never been
-     opened. Not cleared when it closes, because closing only hid the panel
+  /* The rows the last open built, or null while the popover has never been
+     opened. Not cleared when it closes, because closing only hid the popover
      before and may not start emptying it -- so what is ticked here is the mode
      as of the last open rather than the mode in force, and the words are the
      catalogue as of the last open rather than the language in force. */
   readonly listed: readonly PermRow[] | null
-  /** Bumped by every open, so a panel opened twice is measured twice. */
+  /** Bumped by every open, so a popover opened twice is measured twice. */
   readonly opened: number
   /** What the chip shows, or null while nothing has drawn it yet. */
   readonly paint: PermPaint | null
 }
 
-const shut: PermPanel = { open: false, listed: null, opened: 0, paint: null }
-let panel: PermPanel = shut
-const listeners = new Set<() => void>()
+const shut: PermPopoverState = { open: false, listed: null, opened: 0, paint: null }
+const store = makeStore<PermPopoverState>(shut)
 
-/** The panel's state, for <PermPop/> and <PermChip/>. */
-export function get(): PermPanel {
-  return panel
-}
-
-/** For useSyncExternalStore: called whenever the panel changes. */
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => {
-    listeners.delete(fn)
-  }
-}
+/** The popover's state, for <PermPopover/> and <PermChip/>. */
+export const { get, subscribe } = store
 
 /* Field by field, not by reference: `draw` builds a fresh paint on every call,
    and comparing the two objects would make each call a change -- while a paint
@@ -124,16 +112,14 @@ const samePaint = (a: PermPaint | null, b: PermPaint | null): boolean => {
 }
 
 /* Committed synchronously, the way the writes by id were: `open` measures the
-   panel it has just filled, and a caller that opens and then reads the DOM --
+   popover it has just filled, and a caller that opens and then reads the DOM --
    the chip's own toggle, the pointerdown that closes it, every case in
    perm.test.ts -- has to see it. */
-function put(next: PermPanel): void {
-  if (next.open === panel.open && next.listed === panel.listed && next.opened === panel.opened
-    && samePaint(next.paint, panel.paint)) return
-  panel = next
-  flushSync(() => {
-    for (const fn of [...listeners]) fn()
-  })
+export function set(next: PermPopoverState): void {
+  const now = get()
+  if (next.open === now.open && next.listed === now.listed && next.opened === now.opened
+    && samePaint(next.paint, now.paint)) return
+  store.set(next)
 }
 
 /* Read once, and validated: a stored id from an older build that no longer
@@ -151,7 +137,7 @@ function read(): string {
   return TIERS.some((p) => p.id === stored) ? stored : 'ask'
 }
 
-function commit(value: string): void {
+function remember(value: string): void {
   mode = value
   /* Private mode throws on write. Losing the paint cache is the whole cost,
      and it is not worth taking the commit down with it. */
@@ -166,7 +152,7 @@ function commit(value: string): void {
 /* The mode the engine actually holds, pushed in once the config has loaded
    (and again whenever another surface changes it). */
 /* How a pick reaches the config, when anything can write one. Registered by
-   src/features/settings/chrome.ts, which owns the settings transport; null on
+   src/features/settings/wire.ts, which owns the settings transport; null on
    the offline shell, where the pick commits locally. */
 let persist: ((mode: string) => Promise<boolean> | boolean) | null = null
 
@@ -176,7 +162,7 @@ export function setPermPersister(fn: (mode: string) => Promise<boolean> | boolea
 
 export function setFromConfig(value: string): void {
   if (!TIERS.some((p) => p.id === value) || value === mode) return
-  commit(value)
+  remember(value)
 }
 
 export const current = (): string => mode
@@ -190,17 +176,17 @@ const el = <T extends HTMLElement>(id: string): T | null => document.getElementB
 
    Nothing here reads the document, so there is nothing to guard: a page whose
    markup has gone still has a React tree to commit into (measured), and the
-   panel's own open is what still needs the two nodes to exist.
+   popover's own open is what still needs the two nodes to exist.
 
    The chip reads its own state, which is why it carries no hover label: the
-   detail of each tier belongs in the panel the click opens. Nothing to remove
-   for that -- the chip is rendered with no data-tip and no data-i18n-tip for
-   the lang store to fill, and the `delete chip.dataset.tip` the draw before
-   this one carried was dead there too. It did not come across. */
+   detail of each tier belongs in the popover the click opens. Nothing to remove
+   for that -- the chip is rendered with no data-tip for the lang store to
+   fill, and the `delete chip.dataset.tip` the draw before this one carried was
+   dead there too. It did not come across. */
 export function draw(): void {
   const cur = TIERS.find((p) => p.id === mode) || TIERS[0]!
-  put({
-    ...panel,
+  set({
+    ...get(),
     paint: {
       label: t(cur.label),
       risk: !!cur.risk,
@@ -225,30 +211,30 @@ export function open(): void {
   const chip = el('permChip')
   if (!pop || !chip) return
   /* Out of the card first, and once only: the card's entrance animation makes
-     it a containing block, which quietly re-bases the panel's position: fixed
+     it a containing block, which quietly re-bases the popover's position: fixed
      against the card instead of the viewport. Moving a node React rendered is
      safe because none of the card's children is conditional, so React never
      reconciles that child list and never puts it back (src/chrome/Dock.tsx).
-     Before the rows and the flag, because the placement <PermPop/> makes in
-     its layout effect measures the panel where it now stands. */
+     Before the rows and the flag, because the placement <PermPopover/> makes in
+     its layout effect measures the popover where it now stands. */
   if (pop.parentElement !== document.body) document.body.appendChild(pop)
-  put({ ...panel, open: true, listed: rows(), opened: panel.opened + 1 })
+  set({ ...get(), open: true, listed: rows(), opened: get().opened + 1 })
 }
 
 export function close(): void {
-  put({ ...panel, open: false })
+  set({ ...get(), open: false })
 }
 
-export const isOpen = (): boolean => panel.open
+export const isOpen = (): boolean => get().open
 
-/* The chip toggles rather than opens: it is the only way back out of the panel
-   with the pointer, since the panel has no close button of its own. */
+/* The chip toggles rather than opens: it is the only way back out of the popover
+   with the pointer, since the popover has no close button of its own. */
 export function toggle(): void {
   if (isOpen()) close()
   else open()
 }
 
-/* A row's click. The panel goes first, whatever the write does next.
+/* A row's click. The popover goes first, whatever the write does next.
 
    Registered by the live layer, which persists to config (the gate reads it
    live); the offline shell registers nothing and the pick commits locally. The
@@ -259,20 +245,20 @@ export function toggle(): void {
 export function pick(id: string): void {
   close()
   if (!persist) {
-    commit(id)
+    remember(id)
     return
   }
   Promise.resolve(persist(id)).then(
-    (ok) => { if (ok) commit(id) },
+    (ok) => { if (ok) remember(id) },
     () => {},
   )
 }
 
-/* Test seam only: the mode, the panel and the registered writer are the
+/* Test seam only: the mode, the popover and the registered writer are the
    module's now, so they outlive a case's DOM. The subscribers are left alone --
    a mounted root owns its own, and React takes them back when it unmounts. */
 export function _resetForTests(): void {
   mode = read()
   persist = null
-  put(shut)
+  set(shut)
 }

@@ -10,22 +10,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   hostIsLocal, liveLinkTargetOf, livePathOf, relToWorkspace, relToWsRoot, setShortener, wsSetRoot,
 } from './source'
-import { islands } from '../registry'
+import * as store from './store'
 
 const local = (hostname: string): void => {
   vi.spyOn(globalThis, 'location', 'get').mockReturnValue({ hostname } as Location)
 }
 
-let changesBefore: typeof islands.workspace.changes
-
 beforeEach(() => {
-  changesBefore = islands.workspace.changes
   wsSetRoot('')
   setShortener((p) => p)
 })
 
 afterEach(() => {
-  islands.workspace.changes = changesBefore
   vi.restoreAllMocks()
 })
 
@@ -101,13 +97,13 @@ describe('a bare path in prose', () => {
   /* The second provable case: Raven touched that file this session, wherever
      it lives. Everything else stays plain text. */
   it('links a file this session changed, and nothing else', () => {
-    islands.workspace.changes = () => [{ key: '/elsewhere/report.md' }] as ReturnType<typeof islands.workspace.changes>
+    vi.spyOn(store, 'changes').mockReturnValue([{ key: '/elsewhere/report.md' }] as ReturnType<typeof store.changes>)
     expect(livePathOf('/elsewhere/report.md')).toBe('/elsewhere/report.md')
     expect(livePathOf('/elsewhere/other.md')).toBe(null)
   })
 
   it('matches a changed file by the short name the panel shows it under', () => {
-    islands.workspace.changes = () => [{ key: '/repo/src/a.ts' }] as ReturnType<typeof islands.workspace.changes>
+    vi.spyOn(store, 'changes').mockReturnValue([{ key: '/repo/src/a.ts' }] as ReturnType<typeof store.changes>)
     setShortener((p) => p.replace('/repo/', ''))
     expect(livePathOf('src/a.ts')).toBe('/repo/src/a.ts')
   })
@@ -172,13 +168,13 @@ interface Shared {
   unseen: number
 }
 
-async function panel() {
+async function pane() {
   const { loadPart } = await import('../../../scripts/module-harness.mjs')
   const shared: Shared = { changes: [], urls: [], file: null, turn: 0, unseen: 0 }
   const part = await loadPart(() => import('./record'), {
     fakes: {
-      'src/state/wsPanel': {
-        panel: () => ({
+      'src/state/wsPane': {
+        pane: () => ({
           view: () => ({ tab: 'diff', open: false, picked: false }),
           bump: () => {},
           draw: () => {},
@@ -189,19 +185,17 @@ async function panel() {
         sources: { workspace: { shortPath: (p: string) => p } },
       },
       'src/i18n/t': {
-        T: (key: string) => key,
+        t: (key: string) => key,
       },
-    },
-    islands: {
+      'src/features/workspace/store': { shared: () => shared },
       /* Three tellable hunks: which builder a replayed call reached for, and
          whether the tool's own diff replaced the guess, are both read off the
          row rather than off a spy -- the record and the replay are one module
          now, so a spy could only stand in for one of them. */
-      workspace: {
-        shared: () => shared,
-        hunkFromEdit: () => ({ add: 1, del: 0, rows: ['guessed'] }),
-        hunkFromWrite: () => ({ add: 2, del: 0, rows: ['whole file'] }),
-        hunkFromUnified: (diff: string) => ({ add: 5, del: 3, rows: [diff] }),
+      'src/features/workspace/hunks': {
+        fromEdit: () => ({ add: 1, del: 0, rows: ['guessed'] }),
+        fromWrite: () => ({ add: 2, del: 0, rows: ['whole file'] }),
+        fromUnified: (diff: string) => ({ add: 5, del: 3, rows: [diff] }),
       },
     },
   })
@@ -213,7 +207,7 @@ describe('rebuilding the panel from a stored conversation', () => {
     /* A live client advances on turn.started; without the same step on replay a
        reloaded session files the delegated reaction's files under its parent's
        turn. An origin-only entry (cron, sentinel) opens no turn either way. */
-    const { part, shared } = await panel()
+    const { part, shared } = await pane()
 
     part.wsOnHistory([
       { role: 'user', text: 'first ask' },
@@ -227,7 +221,7 @@ describe('rebuilding the panel from a stored conversation', () => {
   })
 
   it('replays each stored call with its arguments, and swaps in the stored diff', async () => {
-    const { part, shared } = await panel()
+    const { part, shared } = await pane()
 
     part.wsOnHistory([
       { role: 'assistant', tool_calls: [
@@ -250,7 +244,7 @@ describe('rebuilding the panel from a stored conversation', () => {
 
   it('marks everything it restored as already read', async () => {
     /* Nothing counts as unread: none of it arrived while the reader was away. */
-    const { part, shared } = await panel()
+    const { part, shared } = await pane()
     shared.changes.push({ key: 'a.py', seen: false, turn: 0 })
     shared.urls.push({ url: 'https://example.com', at: 'just now' })
 
@@ -266,7 +260,7 @@ describe('recording a change', () => {
   it('keeps one row per path per turn, adding up its hunks', async () => {
     /* Five edits to one file is one changed file with five hunks, which is how
        a person thinks about it. */
-    const { part, shared } = await panel()
+    const { part, shared } = await pane()
 
     part.wsRecordChange('/w/a.py', 'edit', { add: 2, del: 1 })
     part.wsRecordChange('/w/a.py', 'write', { add: 3, del: 0 })
@@ -285,7 +279,7 @@ describe('recording a change', () => {
     /* The newest change is the one you came here to read, so it arrives
        expanded -- and `auto` marks it as opened by us, so the next arrival
        folds it back without touching a row the reader opened on purpose. */
-    const { part, shared } = await panel()
+    const { part, shared } = await pane()
 
     part.wsRecordChange('/w/a.py', 'edit', { add: 1, del: 0 })
     const first = shared.changes[0] as { open: boolean; auto: boolean }

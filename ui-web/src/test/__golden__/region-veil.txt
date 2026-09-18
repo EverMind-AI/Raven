@@ -3,5 +3,5 @@ div#veil.veil[data-open=false]
     header#cfTitle
     div#cfBody.body
     footer
-      button#cfNo.btn[data-i18n=gui.cancel]
+      button#cfNo.btn
       button#cfYes.btn.bad

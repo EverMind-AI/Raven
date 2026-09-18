@@ -2,43 +2,41 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { markNew as railMarkNew } from '../features/rail/store'
-import { MORE_ROWS, draw, mark, reset, toggle } from './navfly'
-import { resetSources, setSources } from './sources'
-import { mountPageRoot } from '../test/pageRoot'
-
 import { resetTranslator, setTranslator } from '../i18n/t'
+import { mountPageRoot } from '../test/pageRoot'
 import * as confirmStore from './confirm'
-import * as railStore from '../features/rail/store'
+import { MORE_ROWS, _resetForTests, draw, mark, toggle } from './navfly'
 import * as pageStore from './page'
+import { resetSources, setSources } from './sources'
+
 import type { RailSource } from '../features/rail/types'
 
 /* The three openers are direct imports now, so the pages they open are observed
    by standing in for those modules rather than for a shell verb. */
 const opens = vi.hoisted(() => ({ list: [] as string[] }))
-/* Partial, not wholesale: the rail's own marker reaches the page registry, which
-   reaches the island bag, and the bag is assembled from every member each of
-   these modules really has. */
-vi.mock('../features/connections/nav', async (original) => ({
+/* Partial, not wholesale: the page store and the rail call other verbs of each
+   of these modules by name. */
+vi.mock('../features/connections/wire', async (original) => ({
   ...(await original<Record<string, unknown>>()),
-  open: () => opens.list.push('connPage'),
+  open: () => opens.list.push('connectionsPage'),
 }))
 vi.mock('../features/cron/store', async (original) => ({
   ...(await original<Record<string, unknown>>()),
   open: () => opens.list.push('cronPage'),
 }))
-vi.mock('../features/xa/store', async (original) => ({
+vi.mock('../features/extAgents/store', async (original) => ({
   ...(await original<Record<string, unknown>>()),
-  open: () => opens.list.push('xaPage'),
+  open: () => opens.list.push('extAgentsPage'),
 }))
 
 /* NAV_OF, as far as the flyout is concerned: which button a page lights up.
    The three rows all light up the group's own parent. */
 const NAV_OF: Record<string, string> = {
   capsPage: 'skillBtn',
-  xaPage: 'moreBtn',
-  connPage: 'moreBtn',
+  extAgentsPage: 'moreBtn',
+  connectionsPage: 'moreBtn',
   cronPage: 'moreBtn',
-  memPage: 'memBtn',
+  memoryPage: 'memoryBtn',
 }
 
 interface Harness {
@@ -48,17 +46,19 @@ interface Harness {
 
 /* The rail island's own marker is watched rather than stood in for: the
    interplay cases below are about what it and this module write into the same
-   strip, so it has to really run, and the count is what the spy recorded. */
+   strip, so it has to really run. It registers itself on this module when its
+   own module evaluates, so the call a case below triggers passes through no
+   binding a spy could replace; what a case counts instead is the one question
+   every mark asks -- navState(), which markNew() alone calls, once each. */
 function install(): Harness {
   opens.list.length = 0
-  const marker = vi.spyOn(railStore, 'markNew')
-  marker.mockClear()
-  const seen: Harness = { opened: opens.list, get marks() { return marker.mock.calls.length } }
+  const nav = vi.spyOn(pageStore, 'navState').mockImplementation(() => ({ pages: Object.keys(NAV_OF), btnOf: (p) => NAV_OF[p] }))
+  nav.mockClear()
+  const seen: Harness = { opened: opens.list, get marks() { return nav.mock.calls.length } }
   setTranslator((key) => key)
   vi.spyOn(pageStore, 'show').mockImplementation(() => {})
   vi.spyOn(confirmStore, 'ask').mockImplementation((_t, _b, _l, fn) => fn())
-  vi.spyOn(pageStore, 'navState').mockImplementation(() => ({ pages: Object.keys(NAV_OF), btnOf: (p) => NAV_OF[p] }))
-  setSources({ sessions: { snapshot: () => ({ rows: [], cur: 'a', busy: false, query: '' }) } as unknown as RailSource })
+  setSources({ rail: { snapshot: () => ({ rows: [], cur: 'a', busy: false, query: '' }) } as unknown as RailSource })
   return seen
 }
 
@@ -84,7 +84,7 @@ function openPage(id: string | null): void {
 let unmount = (): void => {}
 
 beforeEach(() => {
-  reset()
+  _resetForTests()
   document.body.innerHTML = ''
   unmount = mountPageRoot()
 })
@@ -129,7 +129,7 @@ describe('the nav flyout', () => {
 
   it('marks the row whose page stands open, from the first draw', () => {
     install()
-    openPage('connPage')
+    openPage('connectionsPage')
     draw()
     expect(marked()).toEqual(['false', 'true', 'false'])
   })
@@ -210,7 +210,7 @@ describe('opening and closing the group', () => {
 describe('marking the rows', () => {
   it('answers that the group is shut, and leaves the rows alone', () => {
     install()
-    openPage('connPage')
+    openPage('connectionsPage')
     draw()
     openPage('cronPage')
     expect(mark()).toBe(false)
@@ -233,7 +233,7 @@ describe('marking the rows', () => {
     install()
     draw()
     fly().dataset.open = 'true'
-    openPage('memPage')
+    openPage('memoryPage')
     mark()
     expect(marked()).toEqual(['false', 'false', 'false'])
   })
@@ -264,9 +264,9 @@ describe('together with the rail', () => {
   it('leaves the other nav buttons to the rail', () => {
     install()
     toggle(true)
-    openPage('memPage')
+    openPage('memoryPage')
     railMarkNew()
-    expect(current('memBtn')).toBe('true')
+    expect(current('memoryBtn')).toBe('true')
     expect(current('moreBtn')).toBe('false')
     expect(marked()).toEqual(['false', 'false', 'false'])
   })

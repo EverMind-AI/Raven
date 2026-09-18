@@ -17,12 +17,12 @@
  * against a real serve before.
  */
 
-import type { RpcTransport } from './transport'
-
 import { demoFixtures, deskDemoOverrides, onboardDemoOverrides } from './fixtures'
 import { FixtureTransport } from './fixtureTransport'
 import { OverrideTransport } from './overrideTransport'
 import { WsTransport } from './wsTransport'
+
+import type { RpcTransport } from './transport'
 
 /* Whether this page has a gateway to talk to at all. */
 function liveMode(): boolean {
@@ -65,7 +65,13 @@ function withCanvases(base: RpcTransport): RpcTransport {
     const roster = (): Promise<string[]> => under.call('subagents.list', { probe: false })
       .then((r) => (r.rows || []).filter((row) => row.enabled).map((row) => row.name).filter(Boolean))
       .catch(() => [])
-    transport = new OverrideTransport(transport, deskDemoOverrides(now, later, roster))
+    /* A direct turn's events are pushed, not returned, so the canvas needs the
+       door the page listens at. Late-bound because the group is built before
+       the transport that carries it. */
+    let canvas: OverrideTransport | null = null
+    canvas = new OverrideTransport(transport, deskDemoOverrides(now, later, roster,
+      (method, params) => canvas?.push(method, params)))
+    transport = canvas
   }
   return transport
 }

@@ -2,11 +2,11 @@
 import { cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
 import { TurnClock } from './TurnClock'
 
-import { resetTranslator, setTranslator } from '../../i18n/t'
-import * as pageStore from '../../state/page'
-import * as confirmStore from '../../state/confirm'
 import type { InstanceRow } from './types'
 
 function wire(): void {

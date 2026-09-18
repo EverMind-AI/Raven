@@ -13,7 +13,7 @@ import { createRoot } from 'react-dom/client'
 
 import { t } from '../../i18n/t'
 import { add as sheetAdd, askingIn, remove as sheetRemove, watchAsking } from '../../state/sheetRack'
-import { Sheet } from './DagSheet'
+import { DagSheet } from './DagSheet'
 import { fromSnapshot } from './nodes'
 import * as store from './store'
 
@@ -79,7 +79,7 @@ function host(key: string): void {
        is refused with a warning. */
     setTimeout(() => root.unmount(), 0)
   })
-  root.render(<Sheet sess={key} host={el} onClose={() => drop(key)} />)
+  root.render(<DagSheet sess={key} host={el} onClose={() => drop(key)} />)
 }
 
 /* A graph arrives whole, before any node runs, so this is also the only moment
@@ -147,7 +147,7 @@ interface CompletionWire {
  * already been superseded.
  *
  * Whether this conversation should be asked about at all is the caller's
- * decision, not this function's -- see `resumeDag` in lib/resume.ts, which
+ * decision, not this function's -- see `resumeDag` in state/session/resume.ts, which
  * refuses when it has no run to read. It used to be settled here by requiring a
  * stored note, which is per-tab and only ever as new as the last event that
  * reached this page: a run that started while the reader was elsewhere left no
@@ -274,7 +274,7 @@ export const forget = (key: string): void => drop(key)
 export const run = (key: string): DagRun | null => store.run(key)
 
 /* What this conversation had open before the page was replaced. Read by
-   lib/resume.ts, which turns a sheet back with it or without it: the note
+   state/session/resume.ts, which turns a sheet back with it or without it: the note
    settles which run and whether it was folded, never whether there is one. */
 export const saved = store.saved
 

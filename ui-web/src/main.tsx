@@ -3,45 +3,39 @@ import { flushSync } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 
 import { App } from './App'
-import * as composer from './features/composer/mount'
-import * as sheets from './state/sheetRack'
-import * as dagSheet from './features/dag/mount'
-import { ConnApp } from './features/connections/ConnPage'
-import { installLinkTrap } from './features/browser/store'
-import { CronApp } from './features/cron/CronPage'
-import { ModelPickerApp } from './features/model/ModelPicker'
-import { OnboardApp } from './features/onboard/OnboardPage'
-import { MemoryApp } from './features/memory/MemoryPage'
-import { KnowledgeApp } from './features/knowledge/KnowledgePage'
-import { PlaybooksApp } from './features/playbooks/PlaybooksPage'
-import { PlugApp } from './features/plugins/PluginsPage'
-import { RailApp } from './features/rail/RailPage'
-import * as rail from './features/rail/store'
-import { Skeleton as SkillsSkeleton, SkillsApp } from './features/skills/SkillsPage'
-import { WsApp } from './features/workspace/WorkspacePage'
-import { DeskApp } from './features/workspace/DeskPage'
-import * as desk from './features/workspace/DeskPage'
-import * as workspace from './features/workspace/store'
-import { XaApp } from './features/xa/XaPage'
-import { SettingsApp } from './features/settings/SettingsPage'
-import * as find from './state/find'
-import * as panes from './chrome/behaviour/panes'
-import * as scrollbars from './chrome/behaviour/scrollbars'
-import * as session from './lib/session'
-import { plugHost, skillsHost, skillsSkeletonHost } from './features/registry'
-import * as pluginsTab from './features/plugins/tab'
-import * as settingsChrome from './features/settings/chrome'
-import * as skillsTab from './features/skills/tab'
 import { boot } from './app/boot'
 import { installComposerPalette } from './app/install'
-import * as langEffects from './state/lang/effects'
 import { dropNoJs, markStart } from './app/splash'
-import * as ws from './state/ws'
-import { setWsPanel } from './state/wsPanel'
-import { setGateway } from './rpc/gateway'
-import { installGlobalListeners } from './state/globalListeners'
-import * as portals from './state/portals'
+import * as panes from './chrome/behaviour/panes'
+import * as scrollbars from './chrome/behaviour/scrollbars'
+import { installLinkTrap } from './features/browser/store'
+import * as composer from './features/composer/mount'
+import * as dagSheet from './features/dag/mount'
+import { DeskApp } from './features/desk/DeskApp'
+import * as desk from './features/desk/store'
+import { plugHost, skillsHost, skillsSkeletonHost } from './features/hosts'
+import { MANIFESTS } from './features/manifests'
+import { ModelApp } from './features/model/ModelPicker'
+import { PluginsApp } from './features/plugins/PluginsPage'
+import * as pluginsTab from './features/plugins/wire'
+import * as rail from './features/rail/store'
+import * as settingsChrome from './features/settings/wire'
+import { Skeleton as SkillsSkeleton, SkillsApp } from './features/skills/SkillsPage'
+import * as skillsTab from './features/skills/wire'
+import * as subagents from './features/subagents/store'
+import * as workspace from './features/workspace/store'
+import { WorkspaceApp } from './features/workspace/WorkspacePage'
+import * as session from './lib/session'
 import { chooseTransport } from './rpc/chooseTransport'
+import { setGateway } from './rpc/gateway'
+import * as find from './state/find'
+import { installGlobalListeners } from './state/globalListeners'
+import * as langEffects from './state/lang/effects'
+import { pageOf } from './state/pages'
+import * as portals from './state/portals'
+import * as sheets from './state/sheetRack'
+import * as ws from './state/ws'
+import { setWsPane } from './state/wsPane'
 
 /* The page: the one root that renders it, the roots the islands mount, the
  * chrome that wires itself over what they render, and the one transport.
@@ -77,15 +71,25 @@ installGlobalListeners()
 
 /* The panel the workspace, browser and sub-agent views are drawn inside, handed
    to the islands that ask it something rather than imported by them
-   (state/wsPanel.ts). */
-setWsPanel(ws)
+   (state/wsPane.ts). */
+setWsPane(ws)
+
+/* The desk, handed to the two island stores that open something in it. Handed
+   rather than reached for: features/desk/store imports both of them
+   back and subscribes to one as it evaluates, so an import the other way would
+   run that subscription against a half-built module -- which is also why the
+   panel those stores ask about is handed to them (state/wsPane.ts). Here,
+   before the first frame, because either store may be asked to open a pane
+   from the moment the page is on screen. */
+subagents.setAgentPane({ openAgent: desk.openDeskAgent, openAgentRecord: desk.openDeskAgentRecord })
+workspace.setDeskOpener(desk.openDeskFile)
 
 
 session.onChange(() => {
   sheets.sync()
   dagSheet.sync()
   /* The desk palette is open or shut per conversation, and this is the event
-     that says which one is on screen -- see deskStore.sync. */
+     that says which one is on screen -- see features/desk/store.ts's sync. */
   desk.sync()
   rail.draw()
 })
@@ -120,22 +124,26 @@ find.install()
    standing layers belongs: this one shares its `--z` step with the two composer
    popovers, and being appended before them is the whole of what puts it under
    them. */
-createRoot(portals.host('picker')).render(<ModelPickerApp />)
+createRoot(portals.host('picker')).render(<ModelApp />)
 
-const onboardHost = document.getElementById('onb')
-if (onboardHost) createRoot(onboardHost).render(<OnboardApp />)
+/* Every island whose root goes into a box the page renders, from the one
+   declaration each domain makes (features/manifests.ts): the page's own body
+   for the six that own one, and a named host for the three that do not -- the
+   onboarding shell page.html carries, the rail's row list and the settings
+   dialog's panes.
 
-const host = document.getElementById('cronBody')
-if (host) createRoot(host).render(<CronApp />)
+   It throws on a missing box rather than mounting nothing. Nine copies of
+   `if (host)` stood here, and every one of them could only ever do one thing:
+   leave an island unmounted, silently, on a page that looked built. Each box is
+   committed by the App root above, so an absent one is a bug. */
+for (const domain of MANIFESTS) {
+  if (!domain.root) continue
+  const id = domain.host ?? pageOf(domain.page as string)?.bodyId
+  const box = id ? document.getElementById(id) : null
+  if (!box) throw new Error(`main.tsx: no #${String(id)} to mount the ${domain.domain} island in`)
+  createRoot(box).render(createElement(domain.root))
+}
 
-const memHost = document.getElementById('memBody')
-if (memHost) createRoot(memHost).render(<MemoryApp />)
-const kbHost = document.getElementById('kbBody')
-if (kbHost) createRoot(kbHost).render(<KnowledgeApp />)
-const pbHost = document.getElementById('pbBody')
-if (pbHost) createRoot(pbHost).render(<PlaybooksApp />)
-const connHost = document.getElementById('connBody')
-if (connHost) createRoot(connHost).render(<ConnApp />)
 const deskRoot = createRoot(portals.host('desk'))
 queueMicrotask(() => deskRoot.render(<DeskApp />))
 createRoot(skillsHost).render(<SkillsApp />)
@@ -145,15 +153,9 @@ createRoot(skillsSkeletonHost).render(<>{Array.from({ length: 6 }, (_, i) => <Sk
    and browser tabs draw into it through their own island roots, so the
    workspace root exists only while a workspace view is up (see
    workspace/store.draw). */
-workspace.setRenderer(() => createElement(WsApp))
+workspace.setRenderer(() => createElement(WorkspaceApp))
 
-const listHost = document.getElementById('list')
-if (listHost) createRoot(listHost).render(<RailApp />)
-createRoot(plugHost).render(<PlugApp />)
-const xaHost = document.getElementById('xaBody')
-if (xaHost) createRoot(xaHost).render(<XaApp />)
-const setHost = document.getElementById('spanels')
-if (setHost) createRoot(setHost).render(<SettingsApp />)
+createRoot(plugHost).render(<PluginsApp />)
 
 /* The one data entry point, installed before anything can ask for it. Every
    mode has one now: a page served by a raven gets the socket, and a page opened
@@ -175,7 +177,7 @@ dropNoJs()
 /* The session pointer starts on the offline fixture's first conversation, and
    the boot's own claim clears it again a few lines below: the two writes
    together are what keeps a reload's "come back here" note off fixture noise
-   (app/boot.ts's claimFirstFrame, lib/resume.ts). */
+   (app/boot.ts's claimFirstFrame, state/session/resume.ts). */
 session.setCurrent('a')
 /* The half of the composer's source no transport answers, before the settings
    seam adds its own member to the same object. */

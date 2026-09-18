@@ -4,6 +4,7 @@ import { useSyncExternalStore } from 'react'
 import { ProviderIcon, ravenIconPath } from '../../components/ProviderMark'
 import { t } from '../../i18n/t'
 import { md as mdHtml } from '../../lib/prose'
+import * as lang from '../../state/lang'
 import { open as openSettings, setTab as setSettingsTab } from '../settings/store'
 import * as store from './store'
 
@@ -870,7 +871,7 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
    Its own panel rather than a box over the file list: a recall test is a thing
    a reader does deliberately, reads, and leaves, and the list of files is not
    what they are looking at while they do it. */
-function RecallDialog({ s }: { s: ReturnType<typeof store.getState> }): JSX.Element {
+function RecallDialog({ s }: { s: ReturnType<typeof store.get> }): JSX.Element {
   const [text, setText] = useState(s.query)
   const [past, setPast] = useState(false)
   const field = useRef<HTMLInputElement>(null)
@@ -1067,9 +1068,9 @@ function DocMenu({ doc, busy }: { doc: KbDoc; busy: boolean }): JSX.Element {
    upload; an absolute date is for a column nobody is watching.
 
    The same thresholds and the same keys as the agents roster
-   (features/xa/XaPage.tsx `agoText`), spelled again rather than imported --
-   the two islands share no module, and the ratchet in
-   scripts/count-shared-globals.mjs is there to keep it that way. An
+   (features/extAgents/ExtAgentsPage.tsx `agoText`), spelled again rather than imported --
+   one domain does not import another's component, and
+   scripts/gates/import-direction.test.mjs is what keeps it that way. An
    unparseable stamp is shown as it came: a row dated "Invalid Date" says less
    than one dated with the string the engine actually sent. */
 function ago(iso: string): string {
@@ -1213,7 +1214,7 @@ function DocViewer({ doc }: { doc: KbDoc }): JSX.Element {
   )
 }
 
-function BasePanel({ base, s }: { base: KbBase; s: ReturnType<typeof store.getState> }): JSX.Element {
+function BasePanel({ base, s }: { base: KbBase; s: ReturnType<typeof store.get> }): JSX.Element {
   /* The file takes the whole panel rather than opening beside the table: a
      document is what the reader came to look at, and half a page of it is not
      worth keeping a list they can get back to with one button. */
@@ -1367,7 +1368,10 @@ async function droppedFiles(transfer: DataTransfer): Promise<File[]> {
 }
 
 export function KnowledgeApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The language the page resolved, so a pick repaints this island: every word
+     below is a t(key) read at render time (state/lang/store.ts). */
+  useSyncExternalStore(lang.subscribe, lang.get)
   const [creating, setCreating] = useState(false)
 
   if (s.failed) {
@@ -1383,10 +1387,9 @@ export function KnowledgeApp(): JSX.Element {
   if (s.status && !s.status.configured) {
     /* Naming the state is not enough: the endpoint is set in a section of
        the settings dialog, and a reader told only that one is missing has to
-       go looking. Through the settings store rather than a new shell verb:
-       the island owns both halves already, and the ratchet in
-       ui-web/scripts/count-shared-globals.mjs exists to stop an island asking
-       the legacy layer for what it can reach directly. */
+       go looking. Straight into the settings store, which is one of the
+       cross-domain edges pinned in scripts/gates/import-direction.test.mjs
+       rather than a free one. */
     return (
       <div className="empty-note">
         <div className="ttl">{t('gui.kb.unconfigured')}</div>

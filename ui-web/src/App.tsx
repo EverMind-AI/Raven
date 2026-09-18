@@ -19,13 +19,12 @@
  * during install; state/portals.ts is where that body-level order is declared,
  * because two steps of the `--z` ladder are ties decided by it alone.
  *
- * Language. Each region renders its words through lang.text(key, literal) and
- * its keyed attributes through lang.attr(key), which is applyI18n's five passes
- * read from the other end: the literal the page was served with until a pick
- * lands, the catalogue's text afterwards. The data-i18n* keys stay on the
- * elements -- they are what says which phrase a line of chrome speaks, and the
- * region goldens record them -- but nothing reads them any more (see
- * state/lang/store.ts). The literals with no key (#cfTitle, #cfYes, #setTitle,
+ * Language. Each region renders its words through t(key), which reads the
+ * language the page resolved before its first frame, and its keyed attributes
+ * through lang.attr(key), which is absent until a pick lands -- applyI18n wrote
+ * those and it ran only on a pick, so a page nobody has picked for carries none
+ * of them (state/lang/store.ts). The key a line speaks is the argument to that
+ * call and nothing else. The literals with no key (#cfTitle, #cfYes, #setTitle,
  * #title) have nothing to look up: each is owned by whoever writes it
  * afterwards, and a re-render cannot undo that, because React diffs against the
  * props it rendered last rather than against the document.
@@ -61,20 +60,23 @@ import { SheetRack } from './chrome/SheetRack'
 import { Tooltip } from './chrome/Tooltip'
 import { UpgradeShade } from './chrome/UpgradeShade'
 import { WsPane } from './chrome/WsPane'
+import { t } from './i18n/t'
 import * as confirm from './state/confirm'
 import * as detail from './state/detail'
 import * as lang from './state/lang'
 import * as menu from './state/menu'
+import { PAGES } from './state/pages'
 import * as rail from './state/rail'
 import * as settings from './state/settings'
 import * as toast from './state/toast'
 
+import type { Page as ModulePageRow } from './state/pages'
 import type { JSX } from 'react'
 
 /* A veil's own click, for the three dialogs that close when the reader clicks
    beside them. The veil IS the region, and the panel inside it is a child, so
-   a click on the scrim is a click on the veil itself -- which is the guard the
-   legacy handlers had. A listener rather than an onClick because every handler
+   a click on the scrim is a click on the veil itself, which is the whole
+   guard. A listener rather than an onClick because every handler
    passed in is a module function, so it is registered once and not on every
    render. */
 function useScrim(id: string, close: () => void): void {
@@ -106,7 +108,7 @@ function ConfirmSheet(): JSX.Element {
         <header id="cfTitle">{s.title ?? '确认'}</header>
         <div className="body" id="cfBody">{s.body}</div>
         <footer>
-          <button className="btn" id="cfNo" data-i18n="gui.cancel" onClick={cancel}>{lang.text('gui.cancel', '取消')}</button>
+          <button className="btn" id="cfNo" onClick={cancel}>{t('gui.cancel')}</button>
           <button className="btn bad" id="cfYes" onClick={() => confirm.answer(true)}>{s.label ?? '确认'}</button>
         </footer>
       </div>
@@ -133,13 +135,12 @@ function DetailPanel(): JSX.Element {
       data-open="false"
       role="dialog"
       aria-modal="true"
-      data-i18n-aria="gui.cap_detail"
       aria-label={lang.attr('gui.cap_detail')}
     >
       <div className="dpanel">
         <header>
           <b id="dTitle">{s.title ?? '—'}</b>
-          <button className="dx" id="dClose" data-i18n-aria="gui.close" aria-label={lang.text('gui.close', '关闭')} onClick={() => detail.close()}>
+          <button className="dx" id="dClose" aria-label={t('gui.close')} onClick={() => detail.close()}>
             <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </header>
@@ -165,7 +166,7 @@ function SettingsModal(): JSX.Element {
   useScrim('setVeil', settings.close)
   return (
     <div className="veil setveil" id="setVeil" data-open="false">
-      <div className="smodal" id="setModal" role="dialog" aria-modal="true" data-i18n-aria="gui.page.set" aria-label={lang.attr('gui.page.set')}>
+      <div className="smodal" id="setModal" role="dialog" aria-modal="true" aria-label={lang.attr('gui.page.set')}>
         <nav className="snav" id="snav">
           {/* A block row with one inline child, so the whitespace page.html had
               around it is reproduced: it collapses at both line edges either way,
@@ -173,7 +174,7 @@ function SettingsModal(): JSX.Element {
               grid parent (.snav .brandrow, src/styles/page.css:3667). */}
           <div className="brandrow">
             {' '}
-            <span className="wm" data-i18n="gui.page.set">{lang.text('gui.page.set', '设置')}</span>{' '}
+            <span className="wm">{t('gui.page.set')}</span>{' '}
           </div>
           <div className="snavlist" id="snavList" />
         </nav>
@@ -186,8 +187,6 @@ function SettingsModal(): JSX.Element {
             <button
               className="icb"
               id="setClose"
-              data-i18n-tip="gui.close"
-              data-i18n-aria="gui.close"
               data-tip={lang.attr('gui.close')}
               aria-label={lang.attr('gui.close')}
               onClick={() => settings.close()}
@@ -258,8 +257,6 @@ function RailShow(): JSX.Element {
     <button
       className="ghost-ic tipdn"
       id="railShow"
-      data-i18n-tip="gui.expand_rail"
-      data-i18n-aria="gui.expand_rail"
       hidden
       data-tip={lang.attr('gui.expand_rail')}
       aria-label={lang.attr('gui.expand_rail')}
@@ -281,21 +278,19 @@ function RailShow(): JSX.Element {
    and each page's own hero says the name bigger. It is still the page's
    accessible name through the aria-label above, which is why the two keys can
    differ (the memory page is announced by its hero's phrase). */
-function ModulePage({ id, aria, head, literal, body }: {
-  readonly id: string
-  readonly aria: string
-  readonly head: string
-  readonly literal: string
-  readonly body: string
-}): JSX.Element {
+function ModulePage({ page }: { readonly page: ModulePageRow }): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
+  /* Only the six whose interior is a heading reach this: the seventh declares
+     `own` and is rendered by its own file, so both keys are here. */
+  const aria = page.aria!
+  const head = page.head!
   return (
-    <section className="page" id={id} data-open="false" data-i18n-aria={aria} aria-label={lang.attr(aria)}>
+    <section className="page" id={page.id} data-open="false" aria-label={lang.attr(aria)}>
       <header>
-        <h2 data-i18n={head}>{lang.text(head, literal)}</h2>
+        <h2>{t(head)}</h2>
       </header>
       <div className="work">
-        <div className="wrap" id={body} />
+        <div className="wrap" id={page.bodyId} />
       </div>
     </section>
   )
@@ -330,16 +325,17 @@ export function App(): JSX.Element {
         </div>
       </div>
       <RailShow />
-      <CapsPage />
-      <ModulePage id="xaPage" aria="gui.page.agents" head="gui.page.agents" literal="子智能体" body="xaBody" />
-      {/* NOT a capability. A plugin is "what it can touch"; an entrance is
-          "where you find it". Same brand can be both (Slack plugin vs Slack
-          entrance) and the two point in opposite directions. */}
-      <ModulePage id="connPage" aria="gui.page.conn" head="gui.page.conn" literal="入口" body="connBody" />
-      <ModulePage id="memPage" aria="gui.mem.hero" head="gui.nav.mem" literal="记忆" body="memBody" />
-      <ModulePage id="pbPage" aria="gui.nav.pb" head="gui.nav.pb" literal="剧本" body="pbBody" />
-      <ModulePage id="kbPage" aria="gui.nav.kb" head="gui.nav.kb" literal="知识库" body="kbBody" />
-      <ModulePage id="cronPage" aria="gui.page.cron" head="gui.page.cron" literal="定时" body="cronBody" />
+      {/* The seven module pages, in the order state/pages.ts declares -- which
+          is the order they sit among the body's children, recorded by that
+          module's BOOT_BODY_ORDER and by the region goldens. The capabilities
+          page serves two modules and has a file of its own; the other six are
+          a heading and the empty box their island roots itself in.
+
+          One of them is NOT a capability: a plugin is "what it can touch",
+          while an entrance is "where you find it" -- the same brand can be
+          both (a Slack plugin and a Slack entrance) and the two point in
+          opposite directions. */}
+      {PAGES.map((page) => (page.own ? <CapsPage key={page.id} /> : <ModulePage key={page.id} page={page} />))}
       {/* The new-job sheet renders here from the cron island
           (src/features/cron/CronPage.tsx); only the veil is this file's. */}
       <div className="veil" id="jobVeil" data-open="false" />
@@ -349,7 +345,7 @@ export function App(): JSX.Element {
       {/* One entry's credentials. Its own veil rather than the confirm dialog's:
           disconnecting from inside it raises that one, and a dialog cannot be
           both the thing asking and the thing asked. The sheet renders here from
-          the connections island (src/features/connections/ConnPage.tsx). */}
+          the connections island (src/features/connections/ConnectionsPage.tsx). */}
       <div className="veil" id="connVeil" data-open="false" />
       <div className="menu" id="menu" data-open="false" role="menu" />
       <div className="toasts" id="toasts" aria-live="polite" />

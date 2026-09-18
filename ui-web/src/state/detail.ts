@@ -2,8 +2,8 @@
  * each island renders that card into.
  *
  * Four islands drew into the same #detail dialog by id -- memory, plugins,
- * skills and xa. Each cleared #dBody with innerHTML, blanked #dTitle, wrote
- * data-open for itself, and two of them watched the element with a
+ * skills and extAgents. Each cleared #dBody with innerHTML, blanked #dTitle,
+ * wrote data-open for itself, and two of them watched the element with a
  * MutationObserver to learn that one of the others had closed it. The drawer's
  * state was therefore a reading of the DOM, with four writers and no order.
  *
@@ -15,16 +15,16 @@
  * never reconciles either. What IS React's is the interior App.tsx renders --
  * #dTitle's text and the close button.
  *
- * Close order is a contract rather than an accident. The legacy verb was
- * wrapped by two decorators and the reduce made their effects visible
- * outermost-first: plugins, then skills, then the base flag write, with the two
- * observers following in a microtask after all of it. CLOSE_ORDER is that
- * order, declared -- registration order is module evaluation order, which is
- * not something this contract should rest on.
+ * Close order is a contract rather than an accident: CLOSE_ORDER declares it --
+ * plugins, then skills, then the base flag write, with the two observers
+ * following in a microtask after all of it -- because registration order is
+ * module evaluation order, which is not something this contract should rest on.
  */
 
+import { makeStore } from './store'
+
 /** The four islands that share the drawer. */
-export type DetailOwner = 'memory' | 'plugins' | 'skills' | 'xa'
+export type DetailOwner = 'memory' | 'plugins' | 'skills' | 'extAgents'
 
 export type DetailState = {
   readonly owner: DetailOwner | null
@@ -37,30 +37,19 @@ export type DetailState = {
   readonly gen: number
 }
 
-const CLOSE_ORDER: readonly DetailOwner[] = ['plugins', 'skills', 'memory', 'xa']
+const CLOSE_ORDER: readonly DetailOwner[] = ['plugins', 'skills', 'memory', 'extAgents']
 
 /* Kept in step with `.detail`'s opacity transition in page.css. A little
    longer than the transition, so the drop lands after the last painted frame
    rather than in the middle of it. */
 const FADE_MS = 260
 
-let state: DetailState = { owner: null, open: false, fill: false, title: null, gen: 0 }
-const listeners = new Set<() => void>()
+const store = makeStore<DetailState>({ owner: null, open: false, fill: false, title: null, gen: 0 })
 const closers = new Map<DetailOwner, () => void>()
 const hosts = new Map<DetailOwner, HTMLDivElement>()
 
-/** Which card the drawer holds. */
-export function get(): DetailState {
-  return state
-}
-
-/** For useSyncExternalStore: called after every open, close and drop. */
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => {
-    listeners.delete(fn)
-  }
-}
+/** Which card the drawer holds; `set` is every open, close and drop. */
+export const { get, set, subscribe, _resetForTests } = store
 
 /** What an owner runs when the drawer closes: drop its card, after the fade. */
 export function onClose(owner: DetailOwner, fn: () => void): void {
@@ -92,7 +81,7 @@ export function host(owner: DetailOwner): HTMLDivElement {
   let el = hosts.get(owner)
   if (!el) {
     el = document.createElement('div')
-    if (owner === 'memory' || owner === 'xa') el.style.display = 'contents'
+    if (owner === 'memory' || owner === 'extAgents') el.style.display = 'contents'
     hosts.set(owner, el)
   }
   return el
@@ -105,8 +94,8 @@ export function host(owner: DetailOwner): HTMLDivElement {
 function paint(): void {
   const el = document.getElementById('detail')
   if (!el) return
-  el.dataset.open = String(state.open)
-  if (state.fill) el.dataset.fill = 'true'
+  el.dataset.open = String(get().open)
+  if (get().fill) el.dataset.fill = 'true'
   else delete el.dataset.fill
 }
 
@@ -121,44 +110,38 @@ function adopt(owner: DetailOwner): void {
   body.appendChild(el)
 }
 
-function notify(): void {
-  for (const fn of [...listeners]) fn()
-}
-
 /* A different card in a drawer already open for this owner is not a new open:
    `gen` answers "has the reader opened something since", which is the question
    a pending drop asks, and reopening inside the fade is the case it exists
    for. */
 export function open(owner: DetailOwner, card: { title?: string; fill?: boolean } = {}): void {
-  const reopened = !state.open || state.owner !== owner
-  state = {
+  const was = get()
+  const reopened = !was.open || was.owner !== owner
+  set({
     owner,
     open: true,
     fill: card.fill ?? false,
     title: card.title ?? '',
-    gen: reopened ? state.gen + 1 : state.gen,
-  }
+    gen: reopened ? was.gen + 1 : was.gen,
+  })
   adopt(owner)
   paint()
-  notify()
 }
 
 /** Every close path: the close button, the scrim, Escape, a page switch, a
     language flip, an island's own button. */
 export function close(): void {
   for (const owner of CLOSE_ORDER) closers.get(owner)?.()
-  const had = state.owner
-  state = { ...state, open: false }
+  const had = get().owner
+  set({ ...get(), open: false })
   paint()
-  notify()
   if (!had) return
-  const gen = state.gen
+  const gen = get().gen
   dropAfterFade(
     () => {
-      state = { ...state, owner: null, fill: false }
+      set({ ...get(), owner: null, fill: false })
       paint()
-      notify()
     },
-    () => state.gen !== gen,
+    () => get().gen !== gen,
   )
 }

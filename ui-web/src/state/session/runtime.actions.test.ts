@@ -62,7 +62,7 @@ async function harness({ rows }: { rows: Row[] }) {
       },
       'src/i18n/t': {
         /* Enough of the real thing to see WHICH conversation a message names. */
-        T: (key: string, vars?: unknown) => (vars ? `${key}:${JSON.stringify(vars)}` : key),
+        t: (key: string, vars?: unknown) => (vars ? `${key}:${JSON.stringify(vars)}` : key),
       },
       'src/lib/dom': {
         $: looseQuery(),
@@ -74,9 +74,7 @@ async function harness({ rows }: { rows: Row[] }) {
       'src/features/rail/title': { plainTitle: (t: unknown) => String(t) },
       'src/state/toast': { show: (text: string) => calls.push(['toast', text]) },
       'src/app/updates': { showUpNote: () => {} },
-    },
-    islands: {
-      transcript: {
+      'src/features/transcript/tail': {
         down: () => calls.push(['down']),
       },
     },
@@ -87,7 +85,7 @@ async function harness({ rows }: { rows: Row[] }) {
     return new Promise((res, rej) => { settle = { res, rej } })
   })
   const { setSources } = await import('../sources')
-  setSources({ composer: { slash }, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+  setSources({ composer: { slash }, rail: {}, transcript: {} } as unknown as Partial<Sources>)
   const wiring = await import('../../app/install')
   wiring.installSources()
   wiring.installActions()
@@ -274,8 +272,8 @@ interface Answer {
 /* The rail verbs as the page's wiring and its session source install them.
    The rest of those parts reaches for dozens of collaborators that have
    nothing to do with the decision under test, so those are fakes; the decision
-   is the part's own. `islands.rail.removeRow` is what "the row goes" means --
-   nothing else in leaveDeletedSession is visible from outside it. */
+   is the part's own. The rail store's `removeSessionRow` is what "the row goes"
+   means -- nothing else in leaveDeletedSession is visible from outside it. */
 async function railHarness(
   answer: Answer | Error | ((method: string, params: Record<string, unknown>) => unknown),
   { rows = [] as Row[], current = null as string | null } = {},
@@ -299,6 +297,11 @@ async function railHarness(
       },
       'src/features/rail/store': {
         draw: draws,
+        endRename: () => {},
+        removeSessionRow: (next: Row[], _current: string | null, id: string) => {
+          left(id)
+          return { kind: 'unchanged', rows: next }
+        },
       },
       'src/state/sheetRack': {
         forget: () => {},
@@ -312,22 +315,15 @@ async function railHarness(
         },
       },
       'src/i18n/t': {
-        T: label,
+        t: label,
       },
       'src/lib/dom': {
         $: looseQuery(),
       },
       'src/lib/session': { current: () => current, setCurrent: (id: string | null) => { current = id } },
       'src/state/toast': { show: toast },
-    },
-    islands: {
-      dag: { forget: () => {} },
-      rail: {
-        endRename: () => {},
-        removeRow: (next: Row[], _current: string | null, id: string) => {
-          left(id)
-          return { kind: 'unchanged', rows: next }
-        },
+      'src/features/dag/mount': {
+        forget: () => {},
       },
     },
   })
@@ -339,11 +335,11 @@ async function railHarness(
     return answer
   })
   const { setSources } = await import('../sources')
-  setSources({ composer: { slash: [] }, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+  setSources({ composer: { slash: [] }, rail: {}, transcript: {} } as unknown as Partial<Sources>)
   const wiring = (await import('../../app/install')) as Wiring
-  const { sessionsSource } = await import('../../app/boot')
+  const { sessionsSource } = await import('../../features/rail/source')
   /* The pin is a verb of the session source itself, which the boot installs. */
-  setSources({ sessions: sessionsSource } as unknown as Partial<Sources>)
+  setSources({ rail: sessionsSource } as unknown as Partial<Sources>)
   wiring.installActions()
   const tick = () => new Promise((r) => setTimeout(r, 0))
   return {
@@ -481,7 +477,7 @@ describe('a refused pin or rename', () => {
 async function bulkHarness(answers: Record<string, Answer | Error>) {
   let live = Object.keys(answers).map((id) => ({ id, title: id }))
   await loadPart(async () => {
-    await import('../../features/rail/leave')
+    await import('../../features/rail/wire')
     return import('../../app/boot')
   }, {
     fakes: {
@@ -494,7 +490,7 @@ async function bulkHarness(answers: Record<string, Answer | Error>) {
         dropDraft: () => {},
       },
       'src/i18n/t': {
-        T: label,
+        t: label,
       },
       'src/lib/dom': {
         $: looseQuery(),
@@ -502,9 +498,7 @@ async function bulkHarness(answers: Record<string, Answer | Error>) {
       'src/state/session/registry': { switchToDraft: () => {} },
       'src/lib/session': { current: () => null, setCurrent: () => {} },
       'src/state/toast': { show: () => {} },
-    },
-    islands: {
-      settings: {
+      'src/features/settings/store': {
         redraw: () => {},
       },
     },
@@ -516,8 +510,12 @@ async function bulkHarness(answers: Record<string, Answer | Error>) {
     return a
   })
   const { setSources } = await import('../sources')
-  const { sessionsSource } = await import('../../app/boot')
-  setSources({ sessions: sessionsSource } as unknown as Partial<Sources>)
+  const { sessionsSource } = await import('../../features/rail/source')
+  setSources({ rail: sessionsSource } as unknown as Partial<Sources>)
+  /* The three writes that also move the reader are installed onto the source
+     rather than built into it, the way the page installs them. */
+  const { installSessionActions } = await import('../../features/rail/wire')
+  installSessionActions()
   return { deleteAll: () => runtime.deleteAll(), left: () => live.map((s) => s.id) }
 }
 

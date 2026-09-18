@@ -1,11 +1,11 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
+import * as lightbox from '../../state/lightbox'
 import * as store from './store'
 
 import type { Attachment, SlashCmd } from './types'
 import type { ReactElement } from 'react'
-import * as lightbox from '../../state/lightbox'
 
 /* The dock's four drawn collections. Each is its own root over the container
  * page.html already carries -- #queued, #atts, #slashList, and a host at the
@@ -22,7 +22,7 @@ const PEN = 'M4.5 19.5h4L19 9a2.12 2.12 0 0 0-3-3L5.5 16.5v3ZM15.5 6.5l2 2'
 const CROSS = 'M6.5 6.5l11 11M17.5 6.5l-11 11'
 
 function useComposer(): number {
-  return useSyncExternalStore(store.subscribe, () => store.getState().v)
+  return useSyncExternalStore(store.subscribe, () => store.get().v)
 }
 
 /* An icon-only button whose verb lives in the hover pill ([data-tip]). */
@@ -74,7 +74,7 @@ function QueueEdit({ text, i }: { text: string; i: number }): ReactElement {
 
 export function QueueList(): ReactElement {
   useComposer()
-  const editing = store.getState().editing
+  const editing = store.get().editing
   return (
     <>
       {store.queue().map((text, i) => (
@@ -113,7 +113,7 @@ function AttChip({ a, i }: { a: Attachment; i: number }): ReactElement {
 
 export function AttTray(): ReactElement {
   useComposer()
-  return <>{store.getState().atts.map((a, i) => <AttChip key={i} a={a} i={i} />)}</>
+  return <>{store.get().atts.map((a, i) => <AttChip key={i} a={a} i={i} />)}</>
 }
 
 /* ── the slash palette ────────────────────────────────────────────────── */
@@ -130,7 +130,7 @@ function SlashRow({ x, on }: { x: SlashCmd; on: boolean }): ReactElement {
 
 export function SlashList(): ReactElement {
   useComposer()
-  const s = store.getState()
+  const s = store.get()
   return <>{s.slashRows.map((x, i) => <SlashRow key={x.id} x={x} on={i === s.slashSel} />)}</>
 }
 
@@ -139,7 +139,7 @@ export function SlashList(): ReactElement {
 /* Decorative to a screen reader -- whatever it sits beside carries the meaning
    in words, and three animated bars announced as anything would be noise on a
    row that repaints four times a second. */
-export function WorkGlyph(): ReactElement {
+function WorkGlyph(): ReactElement {
   return <span className="wkg" aria-hidden="true"><i /><i /><i /></span>
 }
 
@@ -150,7 +150,7 @@ export function WorkGlyph(): ReactElement {
    accessible name, where a reader who gets the row as text still needs it. */
 export function TurnLive({ afterPaint }: { afterPaint?: () => void }): ReactElement | null {
   useComposer()
-  const live = store.getState().live
+  const live = store.get().live
   useEffect(() => { if (afterPaint) afterPaint() })
   if (!live) return null
   const clock = store.durText(store.liveMs())

@@ -6,16 +6,17 @@
    writes that can be refused, and the generation ticket that keeps a slow
    answer from repainting a page the reader has left. */
 
-import type { ApiProtocol, ModelSource, Provider } from './types'
-import type { ParamsOf } from '../../rpc/generated'
-import type { TierReply, TierSource } from '../../state/tier'
-
-import { islands } from '../registry'
 import { t } from '../../i18n/t'
 import { current as sessionCurrent } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
 import { generation } from '../../state/session/generation'
 import { staging } from '../../state/session/staging'
+import { open as openSettings, openModels, openProviderModels } from '../settings/store'
+import { setCurrent } from './store'
+
+import type { ParamsOf } from '../../rpc/generated'
+import type { TierReply, TierSource } from '../../state/tier'
+import type { ApiProtocol, ModelSource, Provider } from './types'
 
 /* Providers the page does not offer. Both are the generic "some endpoint of
    your own" row, and the page answers that question twice over without them:
@@ -53,9 +54,9 @@ export function setDefaultPair(model: string, provider: string): void {
   defaultProviderLive = provider
 }
 
-/* The composer's model chip is still legacy chrome (#modelName / #modelChip,
-   redrawn by `redrawAll`), so the page publishes its painter here rather than
-   this module reaching into the DOM. Stage C makes the chip a component. */
+/* The composer's model chip is written by id rather than rendered (#modelName /
+   #modelChip, features/model/chip.ts), so its painter is published here
+   (features/settings/wire.ts) rather than this module reaching into the DOM. */
 let paintChip: () => void = () => {}
 export function setChipPainter(fn: () => void): void {
   paintChip = fn
@@ -63,7 +64,7 @@ export function setChipPainter(fn: () => void): void {
 
 /* The chip the composer shows and the settings default both write. */
 export const showModel = (model: string): void => {
-  islands.model.setCurrent(model)
+  setCurrent(model)
   paintChip()
 }
 
@@ -71,7 +72,7 @@ export function openModelsForMissingProvider(): boolean {
   const connected = providersLive.some((p) => p.on)
   const knownMissing = setupState.providerConfigured === false || providersLive.length > 0
   if (connected || !knownMissing) return false
-  void islands.settings.openModels()
+  void openModels()
   return true
 }
 
@@ -179,8 +180,8 @@ export const modelSource: ModelSource = {
     await gateway().call('model.set_protocol', { model, slug: provider, protocol })
     await loadProviders()
   },
-  openSettings: () => islands.settings.open(),
-  openProviderModels: (provider: string) => islands.settings.openProviderModels(provider),
+  openSettings: () => openSettings(),
+  openProviderModels: (provider: string) => openProviderModels(provider),
 }
 
 /* The tier over the wire. One method serves all three calls, and every reply
@@ -223,4 +224,14 @@ export function stagedTier(): string | null {
   const mode = s.tier
   s.tier = null
   return mode
+}
+
+/* Test seam only: what the gateway last said, and the chip painter the page
+   registered, are both the module's. */
+export function _resetForTests(): void {
+  providersLive = []
+  defaultModelLive = ''
+  defaultProviderLive = ''
+  paintChip = () => {}
+  tierMenu = []
 }

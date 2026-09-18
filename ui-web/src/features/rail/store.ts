@@ -1,13 +1,15 @@
-import { ds } from '../../state/sources'
-import { dropDraft } from '../composer/store'
-import { mark as navMark } from '../../state/navfly'
+import { t } from '../../i18n/t'
 import { setCurrent } from '../../lib/session'
+import { mark as navMark, onMark } from '../../state/navfly'
+import { navState } from '../../state/page'
+import { NAV_BUTTONS } from '../../state/pages'
+import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
+import { dropDraft } from '../composer/store'
 import { plainTitle } from './title'
 
 import type { RailSnapshot, RailSource, SessRow } from './types'
-import { t } from '../../i18n/t'
-import { navState } from '../../state/page'
 
 /* Rail state, outside React on purpose: the page layers redraw the list after
  * mutating the active session source, the live boot holds it on skeletons,
@@ -15,29 +17,23 @@ import { navState } from '../../state/page'
  * instead of keeping a copy that could go stale. */
 
 export interface RailState {
-  /* Null until the first draw: the legacy #list started empty too. */
+  /* Null until the first draw; RailPage renders nothing until then. */
   snap: RailSnapshot | null
   /* True while the live boot holds the rail on skeleton rows. */
   skel: boolean
 }
 
-let state: RailState = { snap: null, skel: false }
+const store = makeStore<RailState>({ snap: null, skel: false })
 let held = false
-const listeners = new Set<() => void>()
 
-export const getState = (): RailState => state
+export const { get, subscribe, _resetForTests } = store
 
-export function subscribe(l: () => void): () => void {
-  listeners.add(l)
-  return () => listeners.delete(l)
+/** A patch, merged into the page's state. */
+export function set(patch: Partial<RailState>): void {
+  store.set((prev) => ({ ...prev, ...patch }))
 }
 
-function set(patch: Partial<RailState>): void {
-  state = { ...state, ...patch }
-  for (const l of listeners) l()
-}
-
-export const source = (): RailSource => ds<RailSource>('sessions')
+export const source = (): RailSource => ds('rail')
 
 export function reconcileRows(
   previous: SessRow[],
@@ -95,8 +91,7 @@ const saveGrpFold = (): void => {
     /* private mode */
   }
 }
-/* Which capped groups stand fully expanded; page-lifetime only, like the
-   legacy listOpen set. */
+/* Which capped groups stand fully expanded; page-lifetime only. */
 const listOpen = new Set<string>()
 
 export const isFolded = (gid: string): boolean => grpFold.has(gid)
@@ -119,7 +114,7 @@ export function flipOpen(gid: string): void {
    on screen rather than blanking the rail. */
 export function draw(): void {
   if (held) {
-    if (!state.skel) set({ skel: true })
+    if (!get().skel) set({ skel: true })
     return
   }
   let snap: RailSnapshot
@@ -157,7 +152,7 @@ export function count(): number {
    selected rows impossible.
 
    The new-task row stands for a draft -- a draft has no session id, so an
-   empty `cur` is its state -- but only while nothing covers it. Imperative
+   empty `cur` is its get() -- but only while nothing covers it. Imperative
    on purpose: every element it marks lives outside the island's root. */
 export function markNew(): void {
   const nav = navState()
@@ -177,16 +172,22 @@ export function markNew(): void {
      are the flyout module's to write -- it is asked, not reached into, and it
      answers whether the group stood open. */
   if (navMark() && top === 'moreBtn') top = null
-  /* Named, not derived: `capsPage` lights skillBtn or plugBtn depending on which
-     tab stands open, so a set built from navState() would leave a stale mark on
-     whichever of the two it could not see. The list is therefore something a new
-     page has to be added to, and rail-nav-registry.test.mjs is what makes
-     forgetting it a failing test rather than a page with no selected state. */
-  for (const id of ['newBtn', 'skillBtn', 'plugBtn', 'pbBtn', 'kbBtn', 'memBtn', 'moreBtn']) {
+  /* Every button a page can light, plus the draft row's, from the one table
+     that declares them (state/pages.ts): the capabilities page lights skillBtn
+     or plugBtn depending on which tab stands open, so the mark has to be
+     cleared on both whichever of the two `navState` can see. Adding a page to
+     that table is what adds it here. */
+  for (const id of NAV_BUTTONS) {
     const b = el(id)
     if (b) b.setAttribute('aria-current', String(id === top))
   }
 }
+
+/* The flyout needs the strip decided again at its own two moments -- a row
+   picked, the group folded either way -- and it cannot call here, because
+   state/ may not import a domain. So the writer registers itself with it,
+   which leaves the mark on one writer and the import on one direction. */
+onMark(markNew)
 
 /* Every session at once, from the settings page's data section. Same guard as
    the pin: no source installed means there is nothing to delete from. */
@@ -252,7 +253,7 @@ export function archive(s: SessRow): void {
 }
 
 /* Deleting a session. A source that can delete one does it -- the live page
-   has a confirmation to ask and a pile of per-session state to forget, none of
+   has a confirmation to ask and a pile of per-session get() to forget, none of
    which belongs to the rail. Without one, this is the whole behaviour: splice
    the source-owned rows in place, and offer it back. */
 let undoBin: { s: SessRow; at: number } | null = null
@@ -309,13 +310,11 @@ export function endRename(): void {
   finishOpen?.(true)
 }
 
-/* Inline rename in the top bar; the list follows. The DOM dance -- swap
-   #title for an input, put an h1#title back -- is the legacy one, though the
-   body no longer matches it line for line: it commits at most once, and it
+/* Inline rename in the top bar; the list follows. The DOM dance is swap #title
+   for an input, then put an h1#title back. It commits at most once, and it
    publishes that commit so a conversation switch can end an editor left
-   standing. What changed first was who persists it: the source is TOLD the new
-   title (see renamed in types.ts), where the live layer used to wrap this
-   function and hang its own blur listener off the input created here. */
+   standing; persisting is not its own -- the source is TOLD the new title (see
+   renamed in types.ts). */
 export function rename(): void {
   const h = document.getElementById('title')
   if (!h) return

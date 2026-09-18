@@ -11,7 +11,7 @@
  * that takes the page away.
  */
 
-import { flushSync } from 'react-dom'
+import { makeStore } from './store'
 
 export interface ToastAction {
   label: string
@@ -30,48 +30,36 @@ export interface Toast {
 export const TOAST_MS = 2600
 export const TOAST_ACTION_MS = 5200
 
-let live: readonly Toast[] = []
+const store = makeStore<readonly Toast[]>([])
+
+/** The notices that are still up, oldest first; `set` raises and drops them. */
+export const { get, set, subscribe } = store
+
 let made = 0
-const listeners = new Set<() => void>()
-
-/** The notices that are still up, oldest first. */
-export function get(): readonly Toast[] {
-  return live
-}
-
-/** For useSyncExternalStore: called on every notice raised and dropped. */
-export function subscribe(fn: () => void): () => void {
-  listeners.add(fn)
-  return () => {
-    listeners.delete(fn)
-  }
-}
-
-function commit(): void {
-  flushSync(() => {
-    for (const fn of [...listeners]) fn()
-  })
-}
 
 export function show(text: string, action?: ToastAction): void {
   const host = document.getElementById('toasts')
   if (!host) return
   const id = ++made
-  live = [...live, { id, text, action, host }]
-  commit()
+  set([...get(), { id, text, action, host }])
   window.setTimeout(() => drop(id), action ? TOAST_ACTION_MS : TOAST_MS)
 }
 
 /** Takes one notice down, by id: a lapsed lifetime, or an action taken. */
 export function drop(id: number): void {
-  if (!live.some((t) => t.id === id)) return
-  live = live.filter((t) => t.id !== id)
-  commit()
+  if (!get().some((t) => t.id === id)) return
+  set(get().filter((t) => t.id !== id))
 }
 
 /* The action, then the notice comes down -- the order the button's own handler
    had, so an action that raises a second notice is not dropping that one. */
 export function run(id: number): void {
-  live.find((t) => t.id === id)?.action?.fn()
+  get().find((t) => t.id === id)?.action?.fn()
   drop(id)
+}
+
+/** Test seam only: the notices and the id counter are the module's. */
+export function _resetForTests(): void {
+  store._resetForTests()
+  made = 0
 }

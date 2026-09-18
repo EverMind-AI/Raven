@@ -11,8 +11,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
-
 import * as turn from '../../features/composer/turn'
+
 import type { Sources } from '../sources'
 
 type Runtime = typeof import('./runtime')
@@ -46,7 +46,11 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
         splitAtts: (t: string) => ({ text: t, atts: [] }),
         unpitch: () => {},
       },
-      'src/features/rail/store': { markNew: () => {}, draw: () => log.push(['sessionDraw']) },
+      'src/features/rail/store': {
+        markNew: () => {},
+        draw: () => log.push(['sessionDraw']),
+        endRename: () => {},
+      },
       'src/state/sheetRack': { forget: () => {} },
       'src/state/session/rows': {
         sess: (id: string) => rows.find((r) => r.id === id),
@@ -67,9 +71,10 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
         /* The island's own phase machine: what `cancellable` and `busy` mean is
            its answer, and the decisions under test read them. */
         turn,
+        claimDraft: () => {},
       },
       'src/lib/duration': { formatDuration: (ms: number) => `${ms}ms` },
-      'src/i18n/t': { T: (key: string) => key },
+      'src/i18n/t': { t: (key: string) => key },
       'src/lib/dom': { $: looseQuery() },
       'src/lib/session': { current: () => 's1', setCurrent: (id: string | null) => log.push(['pointer', id]) },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
@@ -80,23 +85,27 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
       'src/state/tier': { load: () => {} },
       'src/features/workspace/record': { wsOnHistory: () => {} },
       'src/features/rail/source': { rowPreview: (t: string) => t, touchSession: () => {} },
-    },
-    islands: {
-      composer: { claimDraft: () => {} },
-      transcript: {
+      'src/features/transcript/mount': {
         nudge: () => {},
         stopStream: () => {},
         finishTurn: () => log.push(['foldTurn']),
         artifacts: () => log.push(['artifacts']),
         turnKept: () => turnKept,
-        down: () => {},
         killStatus: () => log.push(['killStatus']),
         step: () => ({ seal: () => {}, sayDelta: () => {}, thinkAppend: () => {} }),
         status: () => {},
       },
-      workspace: { currentTurn: () => 1, loadDeliveries: () => {} },
-      rail: { endRename: () => {} },
-      view: { resume: () => {}, refreshDag: () => {} },
+      'src/features/transcript/tail': {
+        down: () => {},
+      },
+      'src/features/workspace/store': {
+        currentTurn: () => 1,
+        loadDeliveries: () => {},
+      },
+      'src/state/session/resume': {
+        resume: () => {},
+        refreshDag: () => {},
+      },
     },
   })
   const runtime = (await import('./runtime')) as Runtime
@@ -110,7 +119,7 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
     return Promise.resolve({})
   })
   const { setSources } = await import('../sources')
-  setSources({ composer: { slash: [] }, sessions: {}, transcript: {} } as unknown as Partial<Sources>)
+  setSources({ composer: { slash: [] }, rail: {}, transcript: {} } as unknown as Partial<Sources>)
   const part = await import('../../app/install')
   part.installActions()
   /* A turn is running on the open conversation, which is what a send records:

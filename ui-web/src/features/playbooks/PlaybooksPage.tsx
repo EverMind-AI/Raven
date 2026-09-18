@@ -15,6 +15,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
+import * as lang from '../../state/lang'
 import { layout } from '../dag/graph'
 import { cardPlan, edge } from './shape'
 import * as store from './store'
@@ -160,7 +161,7 @@ function Card({ row }: { row: PlaybookRow }): JSX.Element {
 }
 
 function Library(): JSX.Element {
-  const s = store.getState()
+  const s = store.get()
   const rows = store.visible()
   if (s.rows === null) {
     return (
@@ -495,7 +496,7 @@ function Board({ detail, picked }: { detail: PlaybookDetail; picked: string | nu
 
   /* Measured on every render, plus a frame-by-frame retry while there is nothing
      to measure, and NOT on a notification alone.
-     The island mounts into `#pbBody` at boot, while the page is still
+     The island mounts into `#playbooksBody` at boot, while the page is still
      `display: none` -- so the first measurement is always zero-width, and a
      design that settled for 1:1 there would frame every graph wrongly until
      something happened to resize the box. A ResizeObserver rescues that in a
@@ -846,7 +847,7 @@ function CarriedServers({ servers }: { servers: NonNullable<PlaybookDetail['mcp_
 }
 
 function Detail({ detail }: { detail: PlaybookDetail }): JSX.Element {
-  const s = store.getState()
+  const s = store.get()
   const node = detail.nodes.find((n) => n.id === s.pickedNode) || null
   const onGraph = s.tab === 'graph'
   const onCreds = s.tab === 'credentials'
@@ -1073,7 +1074,10 @@ function OauthRow({
 }
 
 export function PlaybooksApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The language the page resolved, so a pick repaints this island: every word
+     below is a t(key) read at render time (state/lang/store.ts). */
+  useSyncExternalStore(lang.subscribe, lang.get)
   /* Arrow keys walk the graph once a step is picked: a canvas a reader has to
      aim at with a mouse is a canvas they stop exploring. */
   useEffect(() => {
