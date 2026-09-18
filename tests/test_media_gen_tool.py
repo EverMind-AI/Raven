@@ -262,6 +262,12 @@ def _chat_reply(*, count: int = 1) -> dict:
     return {"choices": [{"message": {"images": [{"image_url": {"url": "data:image/png;base64," + _B64}}] * count}}]}
 
 
+async def _refuse_every_fetch(_client, _url, *, what="") -> None:
+    """Stand in for ``guarded_fetch`` judging a target private: it answers None,
+    which is the branch that names the refused address."""
+    return None
+
+
 def _prompt_of(request: httpx.Request) -> str:
     content = json.loads(request.content)["messages"][0]["content"]
     return content if isinstance(content, str) else content[0]["text"]
@@ -1106,3 +1112,57 @@ async def test_every_media_tool_reads_one_dead_network_as_one_class(build, call)
     assert all(is_hard_tool_failure(raw) for raw in answers)
     assert len({failure_class(raw) for raw in answers}) == 1
     assert "alpha.example" in json.loads(answers[0])["detail"]
+
+
+async def test_a_batched_403_names_the_proxy_the_single_call_names(monkeypatch, tmp_path) -> None:
+    """``error`` carrying only the class is what the streak needs; it is not a
+    reason to tell a batched picture less than a single one. The way out of a 403
+    lives in ``hint`` now, so the reducer that folds eight answers into one has to
+    carry it, or asking for eight backdrops hides the proxy setting that asking for
+    one would have named."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if _prompt_of(request) == "chapter one":
+            return httpx.Response(403, text="denied")
+        return httpx.Response(200, json=_chat_reply())
+
+    tool = _image_tool(monkeypatch, handler, model="google/gemini-2.5-flash-image", workspace=tmp_path / "ws")
+
+    out = json.loads(await tool.execute(prompts=[{"prompt": "cover"}, {"prompt": "chapter one"}]))
+
+    failed = out["results"][1]
+    assert out["failed"] == 1 and failed["error"] == "HTTP 403"
+    assert "tools.media.proxy" in failed["hint"]
+    assert failed["detail"] == "denied"
+
+
+async def test_a_batched_picture_is_told_which_reference_was_refused(monkeypatch, tmp_path) -> None:
+    """The other key ``error`` was split into: the address a guarded fetch refused
+    moved to ``url``, and a picture is one of several that could have carried a bad
+    reference, so dropping it in the fold leaves the model with a refusal it cannot
+    act on."""
+    monkeypatch.setattr(media_gen, "guarded_fetch", _refuse_every_fetch)
+
+    def handler(_r: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="openai/gpt-image-2",
+        workspace=tmp_path / "ws",
+        api_base="https://api.mycorp.example/v1",
+    )
+
+    out = json.loads(
+        await tool.execute(
+            prompts=[
+                {"prompt": "cover"},
+                {"prompt": "chapter one", "images": ["https://10.0.0.1/logo.png"]},
+            ]
+        )
+    )
+
+    failed = out["results"][1]
+    assert out["failed"] == 1 and failed["error"] == "input image refused: not a fetchable public target"
+    assert failed["url"] == "https://10.0.0.1/logo.png"

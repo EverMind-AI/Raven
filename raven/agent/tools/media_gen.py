@@ -604,9 +604,12 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                 paths.extend(reply["paths"])
             else:
                 item["error"] = reply.get("error") or "no image returned"
-                # ``detail`` travels with ``error``: the reason a picture failed is
-                # there now rather than in ``error``, which carries only the class.
-                for key in ("detail", "note", "finish_reason", "retryable"):
+                # Every key ``error`` was split into travels with it: the reason a
+                # picture failed, the proxy a 403 can be routed through, the
+                # reference that was refused. ``error`` carries only the class now,
+                # so a key left behind here is a batched picture told strictly less
+                # than the single call is.
+                for key in ("detail", "hint", "url", "note", "finish_reason", "retryable"):
                     if reply.get(key) is not None:
                         item[key] = reply[key]
             if reply.get("model"):
