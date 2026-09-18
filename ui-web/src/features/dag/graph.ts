@@ -93,33 +93,52 @@ export function depths(nodes: Placed[]): Map<string, number> {
   return depth
 }
 
-/* Column x, row y, and the sizes that follow from them. Each column is centred
-   on the graph's own midline rather than stacked from the top: a fan-out into
-   three and a fan-in back to one then reads as the diamond it is, instead of a
-   staircase whose single nodes sit against the ceiling with their edges cutting
-   diagonally down. */
-export function layout(nodes: Placed[], dims: Dims = SHEET): DagLayout {
+/* Which way the run reads. The composer sheet and the transcript card lay a
+   graph out left to right, which is the shape a wide strip above a conversation
+   has room for. A task's board runs top to bottom instead: it is read in a
+   docked pane whose height is the dimension it has to spare, and a fan-out laid
+   sideways there is a graph zoomed to a third of life size before the reader
+   has done anything.
+   One layout either way. The two differ only in which axis the depth counts
+   along, and a second implementation of depth-by-longest-path is how two
+   surfaces start disagreeing about what a diamond looks like. */
+export type Flow = 'across' | 'down'
+
+/* Layer along the flow, spread across it, and the sizes that follow. Each layer
+   is centred on the graph's own midline rather than stacked from the edge: a
+   fan-out into three and a fan-in back to one then reads as the diamond it is,
+   instead of a staircase whose single nodes sit against the wall with their
+   edges cutting diagonally across. */
+export function layout(nodes: Placed[], dims: Dims = SHEET, flow: Flow = 'across'): DagLayout {
   const { W, H, GAP_X, GAP_Y, PAD } = dims
+  const down = flow === 'down'
   const depth = depths(nodes)
-  const cols = new Map<number, Placed[]>()
+  const layers = new Map<number, Placed[]>()
   nodes.forEach((n) => {
-    const c = depth.get(n.id) || 0
-    const col = cols.get(c)
-    if (col) col.push(n)
-    else cols.set(c, [n])
+    const d = depth.get(n.id) || 0
+    const layer = layers.get(d)
+    if (layer) layer.push(n)
+    else layers.set(d, [n])
   })
-  const tallest = Math.max(...[...cols.values()].map((c) => c.length), 1)
-  const height = PAD * 2 + tallest * H + (tallest - 1) * (GAP_Y - H)
-  const width = PAD * 2 + (cols.size - 1) * GAP_X + W
+  /* `step` separates one layer from the next, `spread` one member of a layer
+     from its sibling, and `box` is the node's size on the axis it spreads on. */
+  const step = down ? GAP_Y : GAP_X
+  const spread = down ? GAP_X : GAP_Y
+  const box = down ? W : H
+  const widest = Math.max(...[...layers.values()].map((l) => l.length), 1)
+  const across = PAD * 2 + widest * box + (widest - 1) * (spread - box)
+  const along = PAD * 2 + (layers.size - 1) * step + (down ? H : W)
   const at = new Map<string, { x: number; y: number }>()
-  cols.forEach((column, c) => {
-    const span = column.length * H + (column.length - 1) * (GAP_Y - H)
-    const top = (height - span) / 2
-    column.forEach((n, i) => {
-      at.set(n.id, { x: PAD + c * GAP_X, y: top + i * GAP_Y })
+  layers.forEach((layer, d) => {
+    const span = layer.length * box + (layer.length - 1) * (spread - box)
+    const head = (across - span) / 2
+    layer.forEach((n, i) => {
+      const onFlow = PAD + d * step
+      const onLayer = head + i * spread
+      at.set(n.id, down ? { x: onLayer, y: onFlow } : { x: onFlow, y: onLayer })
     })
   })
-  return { at, width, height }
+  return { at, width: down ? across : along, height: down ? along : across }
 }
 
 /* The one mark a node wears, as geometry rather than as a drawn element: the

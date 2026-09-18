@@ -57,6 +57,7 @@
 
 import { useSyncExternalStore } from 'react'
 
+import { TaskRuns } from '../features/tasks/TasksPage'
 import { t } from '../i18n/t'
 import * as lang from '../state/lang'
 import { CtxChip } from './CtxChip'
@@ -138,6 +139,13 @@ export function Dock(): JSX.Element {
            each is its own floating glass card over the transcript, not a
            strip embedded in the box the user types in. */}
       <div className="sheets" id="sheetRack" />
+      {/* What is running while you type. Above the card and outside it: these
+          are not part of the reader's draft, they are the work already under
+          way, and a chip here is the same door the tasks tab's row is. A
+          component rather than the mount point page.html carried, because the
+          strip renders nothing at all while nothing is running -- and it says
+          in its own attributes which of its ends have more beyond them. */}
+      <TaskRuns />
       <DockIn />
       {/* In front of the composer: these four stand on or beside it. */}
       <div className="crew crew-front" aria-hidden="true">

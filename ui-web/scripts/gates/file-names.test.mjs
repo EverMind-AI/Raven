@@ -19,11 +19,13 @@
  */
 
 import { readdirSync, statSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const SRC = new URL('../../src/', import.meta.url).pathname
-const GATES = new URL('.', import.meta.url).pathname
+import { relPath, root } from './paths.mjs'
+
+const SRC = root(new URL('../../src/', import.meta.url))
+const GATES = root(new URL('.', import.meta.url))
 
 /* A .tsx that renders nothing, so its name is a module's and not a
    component's. The way off this list is the file's own name. */
@@ -59,7 +61,7 @@ function* files(dir) {
 }
 
 /** Every file under src/, by its path from src/. */
-const tree = [...files(SRC)].map((path) => relative(SRC, path)).sort()
+const tree = [...files(SRC)].map((path) => relPath(SRC, path)).sort()
 const beside = (rel) => new Set(tree.filter((other) => other.replace(/[^/]+$/, '') === rel.replace(/[^/]+$/, '')))
 
 const isTest = (rel) => /\.test\.tsx?$/.test(rel)

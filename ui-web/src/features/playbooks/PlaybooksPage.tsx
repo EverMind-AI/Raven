@@ -12,10 +12,11 @@
  * field names, and the prose is the author's.
  */
 
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
+import { Board } from '../dag/Board'
 import { layout } from '../dag/graph'
 import { cardPlan, edge } from './shape'
 import * as store from './store'
@@ -460,236 +461,23 @@ function NodePanel({ node, carried }: { node: PlaybookNode | null; carried?: str
   )
 }
 
-/* The viewport the graph is read in: the reader pans and zooms it, so nothing
-   here decides on their behalf how much of the graph they should be looking at.
-   The opening view frames the whole graph, and after that the view is theirs. */
-const ZOOM_MIN = 0.3
-const ZOOM_MAX = 2
-const ZOOM_STEP = 1.15
-/* Two devices, one event. A trackpad sends a stream of small deltas per flick,
-   so those zoom in proportion to how far it actually moved and glide. A mouse
-   sends one large notch, which is a discrete press and gets a discrete step --
-   the same one the button gives, so the two controls agree. Treating a notch as
-   a proportional delta is what makes a mouse wheel either crawl or bolt. */
-const WHEEL_GAIN = 0.008
-const MOUSE_NOTCH = 50
-/* A pointer that moved less than this between down and up was a click on
-   whatever is under it, not a drag of the canvas. */
-const DRAG_SLOP = 4
-/* Breathing room between the graph and the viewport edge when the graph is too
-   big to centre. */
-const EDGE = 14
-
-interface View {
-  x: number
-  y: number
-  z: number
-}
-
-const clampZoom = (z: number): number => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z))
-
-function Board({ detail, picked }: { detail: PlaybookDetail; picked: string | null }): JSX.Element {
-  const box = useRef<HTMLDivElement>(null)
-  const [port, setPort] = useState({ w: 0, h: 0 })
-  const [view, setView] = useState<View | null>(null)
+/* The stored graph, in the viewport the reader pans and zooms. That viewport is
+   the dag island's, shared with the task view: the same picture is read the same
+   way wherever it is shown, and a second copy of the pan-and-zoom arithmetic is
+   how two boards start disagreeing about what a flick is worth. */
+function Graph({ detail, picked }: { detail: PlaybookDetail; picked: string | null }): JSX.Element {
   const size = layout(detail.nodes, ROOMY)
-
-  /* Measured on every render, plus a frame-by-frame retry while there is nothing
-     to measure, and NOT on a notification alone.
-     The island mounts into `#playbooksBody` at boot, while the page is still
-     `display: none` -- so the first measurement is always zero-width, and a
-     design that settled for 1:1 there would frame every graph wrongly until
-     something happened to resize the box. A ResizeObserver rescues that in a
-     browser; it is silent in the embedded pane this was verified in, and
-     `window.resize` never fired there either. Both are kept as the cheap path,
-     but correctness does not depend on either. */
-  useLayoutEffect(() => {
-    const el = box.current
-    if (!el) return
-    let frame = 0
-    let slow = 0
-    let tries = 0
-    const measure = (): void => {
-      const w = el.clientWidth
-      const h = el.clientHeight
-      if (w <= 0 || h <= 0) {
-        /* A burst of frames covers the usual case -- the page is being shown
-           right now and the box has a size one frame from here. Past that it is
-           hidden for as long as the reader is elsewhere, so the watch drops to a
-           slow poll rather than stopping: stopping is what leaves the graph
-           framed against a size it no longer has. */
-        if (tries++ < 60) frame = requestAnimationFrame(measure)
-        else if (!slow) slow = window.setInterval(measure, 500)
-        return
-      }
-      tries = 0
-      if (slow) {
-        window.clearInterval(slow)
-        slow = 0
-      }
-      setPort((prev) => (prev.w === w && prev.h === h ? prev : { w, h }))
-    }
-    measure()
-    window.addEventListener('resize', measure)
-    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
-    if (ro) ro.observe(el)
-    return () => {
-      if (frame) cancelAnimationFrame(frame)
-      if (slow) window.clearInterval(slow)
-      window.removeEventListener('resize', measure)
-      if (ro) ro.disconnect()
-    }
-  })
-
-  /* Centred at some zoom, never enlarged past life size: a three-step playbook
-     blown up to fill the viewport would read as a bigger playbook. */
-  const centred = (z: number): View => ({
-    x: (port.w - size.width * z) / 2,
-    y: (port.h - size.height * z) / 2,
-    z
-  })
-  const fitZoom = (): number =>
-    port.w && port.h ? clampZoom(Math.min(1, port.w / size.width, port.h / size.height)) : 1
-  /* The whole graph at once -- what the zoom readout goes back to. */
-  const framed = (): View => (port.w ? centred(fitZoom()) : { x: 0, y: 0, z: 1 })
-  /* The whole graph is the opening view: a box carries an id and an agent name,
-     which stay readable much further out than a paragraph would.
-     Below the zoom floor it still overflows, and then it opens at its start
-     rather than centred -- the flow reads left to right, and centring a graph
-     too big to fit cuts off the first step and the last one at once, which looks
-     like damage rather than like a big graph. */
-  const opening = (): View => {
-    if (!port.w) return { x: 0, y: 0, z: 1 }
-    const z = fitZoom()
-    const mid = centred(z)
-    /* max, not min: a graph that fits keeps its centred offset, and one that
-       overflows gets a positive margin at the start instead of the negative
-       offset centring would give it. */
-    return { x: Math.max(mid.x, EDGE), y: Math.max(mid.y, EDGE), z }
-  }
-
-  /* Reframed when the playbook changes or the viewport first has a size, and
-     never again -- a reader who has panned somewhere keeps their view. */
-  const fitKey = `${detail.name}:${port.w}x${port.h}`
-  const lastFit = useRef('')
-  if (port.w > 0 && lastFit.current !== fitKey) {
-    lastFit.current = fitKey
-    if (view === null) setView(opening())
-  }
-  const at = view ?? { x: 0, y: 0, z: 1 }
-
-  /* Composed off the previous view, not off this render's copy of it: a wheel
-     gesture delivers several events before React re-renders, and reading the
-     zoom from the closure makes all of them compute the same result -- the
-     flick lands as one step and the canvas feels stuck. */
-  const zoomBy = (factor: number, about?: { x: number; y: number }): void => {
-    setView((prev) => {
-      const cur = prev ?? { x: 0, y: 0, z: 1 }
-      const z = clampZoom(cur.z * factor)
-      /* Zoom about a point: the graph coordinate under it has to stay under it,
-         or the canvas swims away from wherever the reader was looking. */
-      const cx = about ? about.x : port.w / 2
-      const cy = about ? about.y : port.h / 2
-      return { x: cx - ((cx - cur.x) / cur.z) * z, y: cy - ((cy - cur.y) / cur.z) * z, z }
-    })
-  }
-
-  const drag = useRef<{ id: number; x: number; y: number; ox: number; oy: number; moved: boolean } | null>(null)
-  const onDown = (e: React.PointerEvent<HTMLDivElement>): void => {
-    /* A node is a button and handles its own press; the canvas takes the rest. */
-    if ((e.target as HTMLElement).closest('.pbnode')) return
-    drag.current = { id: e.pointerId, x: e.clientX, y: e.clientY, ox: at.x, oy: at.y, moved: false }
-    e.currentTarget.setPointerCapture(e.pointerId)
-  }
-  const onMove = (e: React.PointerEvent<HTMLDivElement>): void => {
-    const d = drag.current
-    if (!d || d.id !== e.pointerId) return
-    const dx = e.clientX - d.x
-    const dy = e.clientY - d.y
-    if (!d.moved && Math.abs(dx) + Math.abs(dy) < DRAG_SLOP) return
-    d.moved = true
-    setView((prev) => ({ x: d.ox + dx, y: d.oy + dy, z: prev?.z ?? 1 }))
-  }
-  const onUp = (e: React.PointerEvent<HTMLDivElement>): void => {
-    const d = drag.current
-    if (d && d.id === e.pointerId) drag.current = null
-  }
-  /* Attached by hand, non-passive, because React registers `wheel` as a passive
-     listener -- and in a passive listener `preventDefault` is a no-op. Through
-     the `onWheel` prop the ctrl+wheel reached the browser as its own page-zoom
-     gesture: the whole page grew while this canvas zoomed the other way. */
-  useEffect(() => {
-    const el = box.current
-    if (!el) return
-    const onWheel = (e: WheelEvent): void => {
-      /* Plain wheel belongs to the page: this panel sits in a scrolling column,
-         and stealing it would trap the reader inside the canvas. */
-      if (!e.ctrlKey && !e.metaKey) return
-      e.preventDefault()
-      const r = el.getBoundingClientRect()
-      /* deltaY is in lines or pages on some mice; normalise before reading it. */
-      const raw = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * (port.h || 1) : e.deltaY
-      const factor =
-        Math.abs(raw) >= MOUSE_NOTCH ? (raw < 0 ? ZOOM_STEP : 1 / ZOOM_STEP) : Math.exp(-raw * WHEEL_GAIN)
-      zoomBy(factor, { x: e.clientX - r.left, y: e.clientY - r.top })
-    }
-    el.addEventListener('wheel', onWheel, { passive: false })
-    return () => el.removeEventListener('wheel', onWheel)
-  })
-
-  const onKey = (e: React.KeyboardEvent<HTMLDivElement>): void => {
-    const pan = e.shiftKey ? 120 : 40
-    const step: Record<string, () => void> = {
-      '+': () => zoomBy(ZOOM_STEP),
-      '=': () => zoomBy(ZOOM_STEP),
-      '-': () => zoomBy(1 / ZOOM_STEP),
-      '0': () => setView(framed()),
-      ArrowUp: () => setView((prev) => ({ ...(prev ?? at), y: (prev ?? at).y + pan })),
-      ArrowDown: () => setView((prev) => ({ ...(prev ?? at), y: (prev ?? at).y - pan })),
-      ArrowLeft: () => setView((prev) => ({ ...(prev ?? at), x: (prev ?? at).x + pan })),
-      ArrowRight: () => setView((prev) => ({ ...(prev ?? at), x: (prev ?? at).x - pan }))
-    }
-    /* Arrow keys walk the steps while a step is picked (see PlaybooksApp); they
-       pan the canvas only when the canvas itself has focus and nothing is. */
-    if (/^Arrow/.test(e.key) && picked) return
-    const run = step[e.key]
-    if (!run) return
-    e.preventDefault()
-    run()
-  }
-
   return (
-    <div className="pbboard">
-      <div
-        className="pbstage"
-        ref={box}
-        tabIndex={0}
-        role="application"
-        aria-label={t('gui.pb.canvas')}
-        onPointerDown={onDown}
-        onPointerMove={onMove}
-        onPointerUp={onUp}
-        onPointerCancel={onUp}
-        onKeyDown={onKey}
-      >
-        <div className="pbview" style={{ transform: `translate(${at.x}px, ${at.y}px) scale(${at.z})` }}>
-          <Canvas detail={detail} picked={picked} dims={ROOMY} />
-        </div>
-      </div>
-      <div className="pbzoom">
-        <button className="pbzb" aria-label={t('gui.pb.zoom_out')} onClick={() => zoomBy(1 / ZOOM_STEP)}>
-          &minus;
-        </button>
-        {/* The percentage is the control that puts the whole graph back in view,
-            not a note about what the page decided to do. */}
-        <button className="pbzpct" onClick={() => setView(framed())} title={t('gui.pb.zoom_fit')}>
-          {Math.round(at.z * 100)}%
-        </button>
-        <button className="pbzb" aria-label={t('gui.pb.zoom_in')} onClick={() => zoomBy(ZOOM_STEP)}>
-          +
-        </button>
-      </div>
-    </div>
+    <Board
+      width={size.width}
+      height={size.height}
+      fitKey={detail.name}
+      label={t('gui.pb.canvas')}
+      owns=".pbnode"
+      arrowsTaken={!!picked}
+    >
+      <Canvas detail={detail} picked={picked} dims={ROOMY} />
+    </Board>
   )
 }
 
@@ -910,14 +698,14 @@ function Detail({ detail }: { detail: PlaybookDetail }): JSX.Element {
       <div className={'pbwork' + (detail.mode === 'dag' ? '' : ' solo') + (onGraph ? '' : ' gone')}>
         {detail.mode === 'dag' ? (
           <>
-            <Board detail={detail} picked={s.pickedNode} />
+            <Graph detail={detail} picked={s.pickedNode} />
             <NodePanel node={node} carried={Object.keys(detail.mcp_servers || {})} />
           </>
         ) : (
           /* One column, because there is no second thing: a panel beside this
              saying the graph is composed per run was a note about the absence
              of a panel. */
-          <div className="pbstage prose">
+          <div className="pbprose">
             <span className="cap">prompts</span>
             <Prompt text={detail.prompts} />
           </div>

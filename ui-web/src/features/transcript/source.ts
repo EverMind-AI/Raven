@@ -141,7 +141,7 @@ export function openSpawn(agent: string, label: string): void {
        registry spells differently lands here, and the reader is left with a
        list they can search by hand. Only on this branch: the palette beside
        a window the reader did get is the thing this whole change removes. */
-      openDeskTab('agents')
+      openDeskTab('tasks')
       return
     }
     subagents.refresh(true)

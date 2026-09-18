@@ -10,11 +10,13 @@ import * as pageStore from '../../state/page'
 import { resetSources, setSources } from '../../state/sources'
 import { installWsPane } from '../../test/wsPaneHarness'
 import * as agents from '../subagents/store'
+import * as tasksStore from '../tasks/store'
 import * as deliveries from '../workspace/deliveries'
 import * as workspace from '../workspace/store'
 import * as desk from './store'
 
 import type { InstanceRow } from '../subagents/types'
+import type { TaskRow } from '../tasks/types'
 
 /* Recorded rather than ignored: the pane the desk lives in is page chrome
    (state/ws.ts), so telling it to open and to shut is the desk's only way to
@@ -23,13 +25,21 @@ const panelCalls: boolean[] = []
 
 /* What `subagents.instances()` answers, which is what the agents tab counts. */
 let agentRows: InstanceRow[] = []
+let taskRows: TaskRow[] = []
+
+const taskRow = (id: string): TaskRow => ({
+  id, name: id, source: 'spawn', agent: 'raven', state: 'run', nodes: [],
+})
 
 function wire(): void {
   panelCalls.length = 0
   agentRows = []
+  taskRows = []
+  tasksStore.reset()
   setSources({
     workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: true, openPath: () => {} },
     subagents: { list: async () => [], instances: async () => agentRows },
+    tasks: { list: async () => taskRows },
   })
   setTranslator((key) => key)
   vi.spyOn(pageStore, 'show').mockImplementation(() => {})
@@ -466,22 +476,21 @@ describe('what a reload finds on the desk', () => {
       expect(desk.get().paletteOpen).toBe(false)
     })
 
-    it('comes up for a delegated row too, which arrives on its own timer', async () => {
+    it('comes up for a task too, which arrives on its own timer', async () => {
       /* The three tabs are three sources and only two of them send news. File
-         changes and deliveries reach `notifyDesk` through the workspace; agent
-         rows are polled by the desk itself (`DeskApp`, every few seconds) and
-         land in the subagents store, which re-renders the palette without ever
-         telling this one. A background playbook that spawns an instance and
-         writes nothing is a conversation whose only desk content arrives that
-         way. */
+         changes and deliveries reach `notifyDesk` through the workspace; tasks
+         are fetched by the palette itself and land in the tasks store, which
+         re-renders without ever telling this one. A background playbook that
+         starts work and writes nothing is a conversation whose only desk
+         content arrives that way. */
       setCurrent('s-empty')
       desk.sync()
       expect(desk.get().paletteOpen).toBe(false)
 
-      agentRows = [{ sessionKey: 's-empty', agent: 'Raven', handle: 'h1', kind: 'cli' }]
-      await agents.refreshInstances(true)
+      taskRows = [taskRow('t1')]
+      await tasksStore.refresh()
 
-      expect(agents.instances()).toHaveLength(1)
+      expect(tasksStore.rows()).toHaveLength(1)
       expect(desk.get().paletteOpen).toBe(true)
     })
 
@@ -955,24 +964,24 @@ describe('choosing a tab on the way up', () => {
     expect(desk.pickTab()).toBe('diff')
   })
 
-  it('opens on the delegated work when the shelf is read and a run is new', async () => {
+  it('opens on the delegated work when the shelf is read and a task is new', async () => {
     deliver('/w/a.md')
     desk.set({ paletteOpen: true, tab: 'deliverables' })
     desk.seeTab('deliverables')
     desk.set({ paletteOpen: false })
     changed('/w/b.ts')
-    agentRows = [{ sessionKey: 's1', agent: 'hermes', handle: 'h1', kind: 'cli' } as InstanceRow]
-    await agents.refreshInstances(true)
-    expect(open()).toBe('agents')
+    taskRows = [taskRow('t1')]
+    await tasksStore.refresh()
+    expect(open()).toBe('tasks')
   })
 
   /* Rung two is "unseen", not "exists", so a run the reader already looked at
      stops holding the desk against a change that just landed. */
-  it('lets a change past a run that has already been seen', async () => {
-    agentRows = [{ sessionKey: 's1', agent: 'hermes', handle: 'h1', kind: 'cli' } as InstanceRow]
-    await agents.refreshInstances(true)
-    desk.set({ paletteOpen: true, tab: 'agents' })
-    desk.seeTab('agents')
+  it('lets a change past a task that has already been seen', async () => {
+    taskRows = [taskRow('t1')]
+    await tasksStore.refresh()
+    desk.set({ paletteOpen: true, tab: 'tasks' })
+    desk.seeTab('tasks')
     desk.set({ paletteOpen: false })
     changed('/w/b.ts')
     expect(open()).toBe('diff')

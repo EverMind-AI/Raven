@@ -16,7 +16,9 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const FEATURES = new URL('../../src/features/', import.meta.url).pathname
+import { root } from './paths.mjs'
+
+const FEATURES = root(new URL('../../src/features/', import.meta.url))
 
 /** The files a domain declares itself with. */
 const REQUIRED = ['types.ts', 'source.ts', 'store.ts', 'manifest.ts']

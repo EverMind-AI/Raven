@@ -237,6 +237,17 @@ describe('a different session', () => {
     expect(ws.picked).toBe(false)
     expect(resets).toEqual(['workspace', 'desk', 'subagents'])
   })
+
+  /* A domain this layer may not import hands its reset in instead, and the
+     switch spends it with the three above (src/app/install.ts registers the
+     tasks panel's). Registered by domain, so a module evaluated twice leaves
+     one reset rather than two. */
+  it('spends what a domain registered, once per domain', () => {
+    ws.onReset('tasks', () => { resets.push('tasks') })
+    ws.onReset('tasks', () => { resets.push('tasks') })
+    ws.reset()
+    expect(resets).toEqual(['workspace', 'desk', 'subagents', 'tasks'])
+  })
 })
 
 describe('whether a tool event is worth a redraw', () => {

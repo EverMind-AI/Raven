@@ -35,10 +35,12 @@
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { dirname, join, relative } from 'node:path'
+import { join, posix } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const SRC = new URL('../../src/', import.meta.url).pathname
+import { relPath, root } from './paths.mjs'
+
+const SRC = root(new URL('../../src/', import.meta.url))
 
 /* One rank per directory, lowest first: an import may point at its own rank or
    at a higher number, never back.
@@ -183,8 +185,8 @@ const CROSS = [
   'features/dag/open.ts -> features/subagents/store.ts',
   'features/desk/DeskApp.tsx -> features/subagents/store.ts',
   'features/desk/DeskApp.tsx -> features/workspace/store.ts',
-  'features/desk/DeskPalette.tsx -> features/subagents/SubagentsPage.tsx',
-  'features/desk/DeskPalette.tsx -> features/subagents/store.ts',
+  'features/desk/DeskPalette.tsx -> features/tasks/TasksPage.tsx',
+  'features/desk/DeskPalette.tsx -> features/tasks/store.ts',
   'features/desk/DeskPalette.tsx -> features/workspace/deliveries.ts',
   'features/desk/DeskPalette.tsx -> features/workspace/store.ts',
   'features/desk/DeskSurface.tsx -> features/subagents/InstanceMode.tsx',
@@ -192,18 +194,26 @@ const CROSS = [
   'features/desk/DeskSurface.tsx -> features/subagents/SubagentsPage.tsx',
   'features/desk/DeskSurface.tsx -> features/subagents/TurnClock.tsx',
   'features/desk/DeskSurface.tsx -> features/subagents/store.ts',
+  'features/desk/DeskSurface.tsx -> features/tasks/TasksPage.tsx',
   'features/desk/DeskSurface.tsx -> features/workspace/WorkspacePage.tsx',
   'features/desk/DeskSurface.tsx -> features/workspace/deliveries.ts',
   'features/desk/DeskSurface.tsx -> features/workspace/store.ts',
   'features/desk/store.ts -> features/subagents/history.ts',
   'features/desk/store.ts -> features/subagents/store.ts',
+  'features/desk/store.ts -> features/tasks/store.ts',
   'features/desk/store.ts -> features/workspace/deliveries.ts',
   'features/desk/store.ts -> features/workspace/store.ts',
   'features/installed/source.ts -> features/plugins/store.ts',
   'features/knowledge/KnowledgePage.tsx -> features/settings/store.ts',
   'features/model/source.ts -> features/settings/store.ts',
+  'features/playbooks/PlaybooksPage.tsx -> features/dag/Board.tsx',
   'features/playbooks/PlaybooksPage.tsx -> features/dag/graph.ts',
   'features/playbooks/shape.ts -> features/dag/graph.ts',
+  'features/tasks/TasksPage.tsx -> features/dag/Board.tsx',
+  'features/tasks/TasksPage.tsx -> features/dag/DagGraph.tsx',
+  'features/tasks/TasksPage.tsx -> features/dag/graph.ts',
+  'features/tasks/TasksPage.tsx -> features/desk/store.ts',
+  'features/tasks/TasksPage.tsx -> features/workspace/store.ts',
   'features/plugins/PluginsPage.tsx -> features/composer/startTaskWith.ts',
   'features/plugins/wire.ts -> features/skills/wire.ts',
   'features/rail/RailPage.tsx -> features/cron/store.ts',
@@ -286,7 +296,7 @@ function* sources(dir) {
 }
 
 /** Every non-test module, by its path from src/. */
-const modules = [...sources(SRC)].map((path) => relative(SRC, path)).filter((rel) => !TEST(rel)).sort()
+const modules = [...sources(SRC)].map((path) => relPath(SRC, path)).filter((rel) => !TEST(rel)).sort()
 const known = new Set(modules)
 
 /* The bucket a module belongs to, which is what carries the rank. */
@@ -308,8 +318,8 @@ const rankOf = (name) => (name in RANK ? RANK[name] : RANK.features)
    the file itself, a .ts/.tsx extension, or a directory's index. */
 function target(from, spec) {
   if (!spec.startsWith('.')) return null
-  const base = join(dirname(from), spec)
-  for (const candidate of [base, `${base}.ts`, `${base}.tsx`, join(base, 'index.ts'), join(base, 'index.tsx')]) {
+  const base = posix.join(posix.dirname(from), spec)
+  for (const candidate of [base, `${base}.ts`, `${base}.tsx`, posix.join(base, 'index.ts'), posix.join(base, 'index.tsx')]) {
     const rel = candidate.replace(/^\.\//, '')
     if (known.has(rel)) return rel
   }

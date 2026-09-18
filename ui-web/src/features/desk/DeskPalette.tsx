@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
-import * as agents from '../subagents/store'
-import { AgentList } from '../subagents/SubagentsPage'
+import * as tasksStore from '../tasks/store'
+import { TasksApp } from '../tasks/TasksPage'
 import * as deliveries from '../workspace/deliveries'
 import { fileKind } from '../workspace/store'
 import * as workspace from '../workspace/store'
@@ -35,9 +35,9 @@ import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent } from 'reac
 function DeskTabs({ value, onChange }: { value: DeskTab; onChange: (tab: DeskTab) => void }): JSX.Element {
   return (
     <div className="desk-tabs" role="tablist">
-      {(['deliverables', 'agents', 'diff'] as DeskTab[]).map((tab) => {
+      {(['deliverables', 'diff', 'tasks'] as DeskTab[]).map((tab) => {
         const label = tab === 'diff' ? 'Diff'
-          : tab === 'deliverables' ? t('gui.ws.deliverables') : t('gui.ws.agents')
+          : tab === 'deliverables' ? t('gui.ws.deliverables') : t('gui.ws.tasks')
         const fresh = desk.unseen(tab)
         /* The count goes in the button's OWN name. An explicit `aria-label`
            replaces the whole subtree as the accessible name, so a label on the
@@ -211,25 +211,23 @@ function DeliverablesNav(): JSX.Element {
   return <div className="desk-list">{out}</div>
 }
 
-function AgentsNav(): JSX.Element {
-  const state = useSyncExternalStore(agents.subscribe, agents.get)
-  useEffect(() => {
-    agents.refreshInstances()
-    agents.refreshRoster()
-  }, [])
-  /* Answered here rather than left to the shared list: `AgentList` is the
-     standalone page's list as well, and its own note belongs to that page. In
-     the desk, one nothing looks like the other two. */
-  if (!state.instances.length && !state.roster.length) {
-    return (
-      <DeskEmpty
-        kind="agents"
-        title={t('gui.ws.agents_none')}
-        hint={t(agents.absent() ? 'gui.ws.agents_absent' : 'gui.ws.agents_none_sub')}
-      />
-    )
+/* What this conversation set going, whichever way it was set going. Replaces
+   the agents list, which answered a narrower question: it drew the instances a
+   session had spawned, so a graph and a playbook run -- the two a reader is
+   most likely to be waiting on -- appeared nowhere in the palette.
+
+   The roster half of the old list is not lost with it. `AgentList` is also the
+   standalone subagents page's list, and starting an instance and opening a
+   direct chat still live there. */
+function TasksNav(): JSX.Element {
+  const state = useSyncExternalStore(tasksStore.subscribe, tasksStore.get)
+  useEffect(() => { void tasksStore.refresh() }, [])
+  /* Answered here rather than inside the view: in the desk, one nothing has to
+     look like the other two, and TasksApp's own note belongs to the panel. */
+  if (!state.rows.length) {
+    return <DeskEmpty kind="tasks" title={t('gui.ws.tasks_none')} hint={t('gui.ws.tasks_none_sub')} />
   }
-  return <AgentList s={state} onOpen={desk.openDeskAgent} compact />
+  return <TasksApp />
 }
 
 /* Long enough to read as a movement, short enough that a reader who wanted the
@@ -293,7 +291,7 @@ export function DeskPalette(): JSX.Element | null {
      -- something landing while the reader is on another tab. (The workspace's
      own changes arrive through `DeskApp`, which subscribes to that store.) */
   useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
-  useSyncExternalStore(agents.subscribe, agents.get)
+  useSyncExternalStore(tasksStore.subscribe, tasksStore.get)
   /* Looking at a tab is what makes its contents no longer new -- including what
      lands while the reader is sitting on it, which is why this runs on every
      render rather than only on a switch. */
@@ -494,7 +492,7 @@ export function DeskPalette(): JSX.Element | null {
         <DeskTabs value={state.tab} onChange={(tab) => desk.set({ tab })} />
       </div>
       <div className="desk-body">
-        {state.tab === 'diff' ? <DiffNav /> : state.tab === 'deliverables' ? <DeliverablesNav /> : <AgentsNav />}
+        {state.tab === 'diff' ? <DiffNav /> : state.tab === 'deliverables' ? <DeliverablesNav /> : <TasksNav />}
       </div>
       <div className="desk-resize" onPointerDown={resize} />
     </div>

@@ -97,16 +97,23 @@ describe('asking for the instance list', () => {
   beforeEach(() => { vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers() })
 
-  it('keeps the count live while the reader is on another tab', async () => {
+  /* The badge this used to assert is gone with the tab that carried it: the
+     palette counts tasks now, and an instance is not one. What the poll is
+     still for is the launcher's running glyph and the panes a delegated run
+     opens, so that is what is asserted -- the list goes on being refreshed
+     while the reader is somewhere else. */
+  it('keeps asking for the list while the reader is on another tab', async () => {
     render(<DeskApp />)
     await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
     await tick(0)
-    expect(desk.unseen('agents')).toBe(0)
+    const before = asked.length
+    expect(desk.working()).toBe(false)
 
-    agentRows = [inst('h1')]
+    agentRows = [inst('h1', 'running')]
     await tick()
 
-    expect(desk.unseen('agents')).toBe(1)
+    expect(asked.length).toBeGreaterThan(before)
+    expect(desk.working()).toBe(true)
   })
 
   it('keeps asking with the desk shut while a turn is running', async () => {
@@ -121,9 +128,10 @@ describe('asking for the instance list', () => {
 
     expect(asked.length).toBeGreaterThan(before)
     /* And the launcher has something to say about it, which is the whole
-       point of asking while nothing is on screen. */
+       point of asking while nothing is on screen. The count beside it is no
+       longer part of that answer: `unseenAll` sums the tabs, and no tab counts
+       instances since the agents one became tasks. */
     expect(desk.working()).toBe(true)
-    expect(desk.unseenAll()).toBe(1)
   })
 
   /* The glyph's way back to off.
@@ -181,9 +189,9 @@ describe('asking for the instance list', () => {
      on the belief that
      "the panel refreshes its own" therefore froze the list at whatever it held
      when the tab was opened. */
-  it('keeps asking while the desk sits on the agents tab', async () => {
+  it('keeps asking while the desk sits on the tasks tab', async () => {
     render(<DeskApp />)
-    await act(async () => { desk.set({ paletteOpen: true, tab: 'agents' }) })
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'tasks' }) })
     agentRows = [inst('h1', 'running')]
     await tick()
     expect(desk.working()).toBe(true)
@@ -217,7 +225,7 @@ describe('asking for the instance list', () => {
   it('asks nothing at all until a conversation is open', async () => {
     setCurrent(null)
     render(<DeskApp />)
-    await act(async () => { desk.set({ paletteOpen: true, tab: 'agents' }) })
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'tasks' }) })
     await tick(30000)
 
     expect(asked.length).toBe(0)
@@ -236,7 +244,7 @@ describe('asking for the instance list', () => {
 
   it('keeps its rendered shape', async () => {
     const view = render(<DeskApp />)
-    await act(async () => { desk.set({ paletteOpen: true, tab: 'agents' }) })
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'tasks' }) })
     agentRows = [inst('h1', 'running')]
     await tick()
     expect(domSnapshot(view.container)).toMatchSnapshot()

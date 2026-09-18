@@ -8,7 +8,7 @@ import { t } from '../../i18n/t'
 import { MARKS, depths, layout, took } from './graph'
 import { trimShared } from './labels'
 
-import type { Dims } from './graph'
+import type { Dims, Flow } from './graph'
 import type { DagNode, NodeStatus } from './types'
 import type { JSX } from 'react'
 
@@ -22,6 +22,9 @@ interface DagGraphProps {
   selectedId?: string | null
   stopPropagation?: boolean
   surface: DagSurface
+  /* Left to right unless the surface says otherwise. The task board reads top
+     to bottom; see `Flow` in ./graph. */
+  flow?: Flow
 }
 
 const CARD_LAYERS = 5
@@ -62,10 +65,41 @@ function Mark({ status, x, y }: { status: NodeStatus | string; x: number; y: num
   return <circle cx={x} cy={y} r={3.6} className="mk wait" />
 }
 
-function Edges({ dims, nodes, at }: {
+/* One edge, drawn along whichever way the graph runs: out of the downstream
+   face of the upstream box and into the upstream face of the next one, with the
+   curve's control points on the same axis so a fan-out leaves as a fan rather
+   than as a sheaf of diagonals. */
+function edgePath(from: { x: number; y: number }, to: { x: number; y: number }, dims: Dims, down: boolean): {
+  d: string
+  tip: string
+} {
+  if (down) {
+    const x1 = from.x + dims.W / 2
+    const y1 = from.y + dims.H
+    const x2 = to.x + dims.W / 2
+    const y2 = to.y - 5
+    const mid = (y1 + y2) / 2
+    return {
+      d: `M${x1} ${y1} C${x1} ${mid} ${x2} ${mid} ${x2} ${y2}`,
+      tip: `M${x2 - 3} ${y2 - 3.5}L${x2} ${y2 + 1}l3 -4.5`,
+    }
+  }
+  const x1 = from.x + dims.W
+  const y1 = from.y + dims.H / 2
+  const x2 = to.x - 5
+  const y2 = to.y + dims.H / 2
+  const mid = (x1 + x2) / 2
+  return {
+    d: `M${x1} ${y1} C${mid} ${y1} ${mid} ${y2} ${x2} ${y2}`,
+    tip: `M${x2 - 3.5} ${y2 - 3}L${x2 + 1} ${y2}l-4.5 3`,
+  }
+}
+
+function Edges({ dims, nodes, at, down }: {
   dims: Dims
   nodes: DagNode[]
   at: Map<string, { x: number; y: number }>
+  down: boolean
 }): JSX.Element {
   const done = new Set(nodes.filter((n) => n.status === 'completed').map((n) => n.id))
   const out: JSX.Element[] = []
@@ -74,20 +108,10 @@ function Edges({ dims, nodes, at }: {
       const a = at.get(pid)
       const b = at.get(n.id)
       if (!a || !b) return
-      const x1 = a.x + dims.W
-      const y1 = a.y + dims.H / 2
-      const x2 = b.x - 5
-      const y2 = b.y + dims.H / 2
-      const mid = (x1 + x2) / 2
+      const { d, tip } = edgePath(a, b, dims, down)
       const flowed = done.has(pid) ? ' flowed' : ''
-      out.push(
-        <path key={`e${pid}-${n.id}`} d={`M${x1} ${y1} C${mid} ${y1} ${mid} ${y2} ${x2} ${y2}`}
-          data-from={pid} className={'edge' + flowed} />,
-      )
-      out.push(
-        <path key={`t${pid}-${n.id}`} d={`M${x2 - 3.5} ${y2 - 3}L${x2 + 1} ${y2}l-4.5 3`}
-          data-from={pid} className={'tip' + flowed} />,
-      )
+      out.push(<path key={`e${pid}-${n.id}`} d={d} data-from={pid} className={'edge' + flowed} />)
+      out.push(<path key={`t${pid}-${n.id}`} d={tip} data-from={pid} className={'tip' + flowed} />)
     })
   })
   return <>{out}</>
@@ -101,10 +125,11 @@ export function DagGraph({
   selectedId = null,
   stopPropagation = false,
   surface,
+  flow = 'across',
 }: DagGraphProps): JSX.Element {
   const visible = surface === 'card' ? visibleLayers(nodes) : { hiddenLayers: 0, nodes }
   const shown = visible.nodes
-  const { at, width, height } = layout(shown, dims)
+  const { at, width, height } = layout(shown, dims, flow)
   const card = surface === 'card'
   const markX = card ? 16 : 17
   const labelX = card ? 29 : 31
@@ -120,12 +145,12 @@ export function DagGraph({
   nodes.forEach((n) => { if (n.instance) held.set(n.instance, (held.get(n.instance) || 0) + 1) })
 
   return (
-    <div className="canvas daggraph" data-surface={surface} data-hidden-layers={visible.hiddenLayers || undefined}>
+    <div className="canvas daggraph" data-flow={flow} data-surface={surface} data-hidden-layers={visible.hiddenLayers || undefined}>
       {visible.hiddenLayers
         ? <div className="dagcap">{t('gui.dag.more_layers', { n: visible.hiddenLayers })}</div>
         : null}
       <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
-        <Edges dims={dims} nodes={shown} at={at} />
+        <Edges dims={dims} nodes={shown} at={at} down={flow === 'down'} />
         {shown.map((n, i) => {
           const p = at.get(n.id)
           if (!p) return null

@@ -29,7 +29,9 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const SRC = new URL('../../src/', import.meta.url)
+import { relPath, root } from './paths.mjs'
+
+const SRC = root(new URL('../../src/', import.meta.url))
 const CATALOGUE = new URL('../../../i18n/messages.json', import.meta.url)
 
 // Absent from the catalogue today; tracked as a copy fix, not fixed here
@@ -161,9 +163,8 @@ function domainOf(rel) {
 function referenced() {
   const keys = new Set()
   const byNamespace = new Map()
-  const root = SRC.pathname
-  for (const file of sources(root)) {
-    const rel = file.slice(root.length)
+  for (const file of sources(SRC)) {
+    const rel = relPath(SRC, file)
     const domain = domainOf(rel)
     for (const m of readFileSync(file, 'utf8').matchAll(KEYED)) {
       keys.add(m[1])

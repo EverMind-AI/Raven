@@ -17,33 +17,17 @@ exports[`asking for the instance list > keeps its rendered shape 1`] = `
       button
         svg
           rect
+          rect
           path
         span.lb
   div.desk-body
-    div.salist.agent-roster
-      section.agent-group
-        div.agent-headrow
-          button.agent-head
-            span.agent-fold[data-empty=false][data-open=true]
-              svg
-                path
-            span.agent-mark
-              svg
-                rect
-                path
-            b
-            span.agent-kind
-        div.agent-instances
-          div.sarow.inst
-            span.desk-status
-              span.wkg.sw
-                i
-                i
-                i
-            span.nm
-            button.inst-retire
-              svg
-                path
+    div.desk-empty
+      svg
+        rect
+        rect
+        path
+      b
+      span
   div.desk-resize
 button.ghost-ic.desk-follow-toggle[data-working=true]
   svg

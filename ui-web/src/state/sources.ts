@@ -29,6 +29,7 @@ import type { RailSource } from '../features/rail/types'
 import type { SettingsSource } from '../features/settings/types'
 import type { SkillsSource } from '../features/skills/types'
 import type { SubagentsSource } from '../features/subagents/types'
+import type { TasksSource } from '../features/tasks/types'
 import type { ArtifactsSource, TranscriptSource } from '../features/transcript/types'
 import type { WorkspaceSource } from '../features/workspace/types'
 import type { ProseSource } from '../lib/prose'
@@ -64,6 +65,7 @@ export interface Sources {
   settings: SettingsSource
   skills: SkillsSource
   subagents: SubagentsSource
+  tasks: TasksSource
   tier: TierSource
   transcript: TranscriptSource
   workspace: WorkspaceSource

@@ -449,7 +449,7 @@ describe('the playbook library', () => {
   }
 
   const zoomOf = (): number => {
-    const m = /scale\(([\d.]+)\)/.exec((document.querySelector('.pbview') as HTMLElement).style.transform)
+    const m = /scale\(([\d.]+)\)/.exec((document.querySelector('.gview') as HTMLElement).style.transform)
     return m ? Number(m[1]) : NaN
   }
 
@@ -490,7 +490,7 @@ describe('the playbook library', () => {
          off the first step and the last one at once, which reads as damage. */
       await openGraph(chain(20))
       expect(zoomOf()).toBe(0.3)
-      const pan = /translate\((-?[\d.]+)px,/.exec((document.querySelector('.pbview') as HTMLElement).style.transform)
+      const pan = /translate\((-?[\d.]+)px,/.exec((document.querySelector('.gview') as HTMLElement).style.transform)
       expect(Number(pan?.[1])).toBe(14)
     } finally {
       restore()
@@ -502,7 +502,7 @@ describe('the playbook library', () => {
     try {
       await openGraph(chain(2))
       expect(zoomOf()).toBe(1)
-      expect(document.querySelector('.pbview')?.classList.contains('lean')).toBe(false)
+      expect(document.querySelector('.gview')?.classList.contains('lean')).toBe(false)
     } finally {
       restore()
     }
@@ -512,17 +512,17 @@ describe('the playbook library', () => {
     const restore = withPort(1400, 600)
     try {
       await openGraph(chain(2))
-      const inBtn = screen.getByLabelText('gui.pb.zoom_in')
-      const outBtn = screen.getByLabelText('gui.pb.zoom_out')
+      const inBtn = screen.getByLabelText('gui.dag.zoom_in')
+      const outBtn = screen.getByLabelText('gui.dag.zoom_out')
       fireEvent.click(inBtn)
       expect(zoomOf()).toBeCloseTo(1.15, 5)
       /* The readout is the control that puts the whole graph back. */
-      expect(document.querySelector('.pbzpct')?.textContent).toBe('115%')
+      expect(document.querySelector('.gzpct')?.textContent).toBe('115%')
       for (let i = 0; i < 12; i++) fireEvent.click(inBtn)
       expect(zoomOf()).toBe(2)
       for (let i = 0; i < 30; i++) fireEvent.click(outBtn)
       expect(zoomOf()).toBeCloseTo(0.3, 5)
-      fireEvent.click(document.querySelector('.pbzpct') as Element)
+      fireEvent.click(document.querySelector('.gzpct') as Element)
       expect(zoomOf()).toBe(1)
     } finally {
       restore()
@@ -533,8 +533,8 @@ describe('the playbook library', () => {
     const restore = withPort(1400, 600)
     try {
       await openGraph(chain(2))
-      const stage = document.querySelector('.pbstage') as HTMLElement
-      const fit = (): void => void fireEvent.click(document.querySelector('.pbzpct') as Element)
+      const stage = document.querySelector('.gstage') as HTMLElement
+      const fit = (): void => void fireEvent.click(document.querySelector('.gzpct') as Element)
 
       /* ctrl+wheel is the browser's own page-zoom gesture. It has to be
          cancelled, or the whole page grows while this canvas zooms the other
@@ -584,11 +584,11 @@ describe('the playbook library', () => {
     const restore = withPort(1400, 600)
     try {
       await openGraph(chain(3))
-      const stage = document.querySelector('.pbstage') as HTMLElement
+      const stage = document.querySelector('.gstage') as HTMLElement
       stage.setPointerCapture = () => {}
       const panOf = (): [number, number] => {
         const m = /translate\((-?[\d.]+)px, (-?[\d.]+)px\)/.exec(
-          (document.querySelector('.pbview') as HTMLElement).style.transform
+          (document.querySelector('.gview') as HTMLElement).style.transform
         )
         return m ? [Number(m[1]), Number(m[2])] : [NaN, NaN]
       }
@@ -631,7 +631,7 @@ describe('the playbook library', () => {
     const restore = withPort(700, 400)
     try {
       await openGraph(chain(6))
-      const text = (document.querySelector('.pbboard') as HTMLElement).textContent || ''
+      const text = (document.querySelector('.gboard') as HTMLElement).textContent || ''
       /* The board carries a zoom control, not a sentence explaining itself. */
       expect(text).not.toMatch(/gui\.pb\.(compact|fit)/)
       expect(document.querySelector('.pbpanel')?.textContent).not.toMatch(/gui\.pb\.blank_summary/)

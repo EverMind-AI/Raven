@@ -31,6 +31,8 @@ import { installSessionActions } from '../features/rail/wire'
 import { bannerSource, settingsSource } from '../features/settings/source'
 import { skillsSource } from '../features/skills/source'
 import { agentsSource, startAgentHeartbeat } from '../features/subagents/source'
+import { fixtureTasksSource, tasksSource } from '../features/tasks/source'
+import { refresh as refreshTasks, reset as resetTasks } from '../features/tasks/store'
 import {
   branch, cleanPreview, dagRun, okOf, openDagNode, openDagRun, openSpawn, spawnList, spawnRecord,
 } from '../features/transcript/source'
@@ -44,6 +46,7 @@ import { $ } from '../lib/dom'
 import { hostPlatform } from '../lib/platform'
 import { current as sessionCurrent } from '../lib/session'
 import { refusal as uploadRefusal } from '../lib/upload'
+import { liveMode } from '../rpc/chooseTransport'
 import { gateway } from '../rpc/gateway'
 import { setFault as setMemFault } from '../state/banner'
 import * as caps from '../state/caps'
@@ -53,6 +56,7 @@ import { reconnect, switchToDraft } from '../state/session/registry'
 import { installComposerActions, installSlashActions } from '../state/session/runtime'
 import { ds, sources } from '../state/sources'
 import { show as toast } from '../state/toast'
+import { onReset as onWsReset } from '../state/ws'
 import { installConnectionUI, onReconnect, surface } from './connection'
 import { showUpNote } from './updates'
 
@@ -150,6 +154,10 @@ export function installSources(): void {
   sources.onboard = onboardSource
   sources.browser = browserSource
   sources.subagents = agentsSource
+  /* The one seam no transport answers: there is no `tasks.*` method yet, so a
+     served page gets the empty list and an offline one gets the stand-in rows
+     the panel can be reviewed against (features/tasks/source.ts). */
+  sources.tasks = liveMode() ? tasksSource : fixtureTasksSource
   sources.extAgents = extAgentsSource
 
   /* The workspace panel's chrome is still the page's, so the two things its
@@ -270,6 +278,10 @@ export function installPushes(): void {
   /* A delegated run in flight has to move on screen without being reopened, and
      there is no push for it -- so the subagents source polls. */
   startAgentHeartbeat()
+  /* The tasks panel's first read, now that its seam is on. The strip that shows
+     the running rows is rendered in the first frame, before any of this, so the
+     ask it makes for itself finds no source and is not the one that lands. */
+  void refreshTasks()
 }
 
 /* ── the actions: controls whose answer belongs to the session ────────────── */
@@ -310,6 +322,12 @@ export function installActions(): void {
   page.onShow('markNav', markNew)
   page.onShow('closeConnDialog', closeConnDialog)
   page.onShow('closeCronSheet', closeCronSheet)
+  /* A different conversation is a different set of tasks: carrying them across
+     would attribute one conversation's background work to another, and the
+     strip above the composer outlives the switch, so nothing would ask for the
+     rows the new conversation has. Registered here for the same reason the
+     three slots above are: state/ws.ts does not import features/. */
+  onWsReset('tasks', resetTasks)
 
   $('#newBtn')!.onclick = () => {
     if (openModelsForMissingProvider()) return

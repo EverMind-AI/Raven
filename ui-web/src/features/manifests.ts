@@ -45,6 +45,7 @@ import { manifest as rail } from './rail/manifest'
 import { manifest as settings } from './settings/manifest'
 import { manifest as skills } from './skills/manifest'
 import { manifest as subagents } from './subagents/manifest'
+import { manifest as tasks } from './tasks/manifest'
 import { manifest as transcript } from './transcript/manifest'
 import { manifest as workspace } from './workspace/manifest'
 
@@ -95,6 +96,7 @@ export const MANIFESTS: readonly DomainManifest[] = [
   settings,
   skills,
   subagents,
+  tasks,
   transcript,
   workspace,
 ]
