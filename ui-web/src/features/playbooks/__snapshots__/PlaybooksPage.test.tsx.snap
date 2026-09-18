@@ -21,9 +21,9 @@ div.pbtabs
   button.pbtab
   button.pbtab
 div.pbwork
-  div.pbboard
-    div.pbstage
-      div.pbview
+  div.gboard
+    div.gstage
+      div.gview
         div.pbcanvas
           svg.pbedges
             g
@@ -37,10 +37,10 @@ div.pbwork
             span.l1
             span.l2
               span.ag
-    div.pbzoom
-      button.pbzb
-      button.pbzpct
-      button.pbzb
+    div.gzoom
+      button.gzb
+      button.gzpct
+      button.gzb
   div.pbpanel
     div.pbphead
       b

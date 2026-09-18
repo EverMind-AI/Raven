@@ -149,6 +149,46 @@ describe('dag layout', () => {
     expect(width).toBeTypeOf('number')
     expect(height).toBeTypeOf('number')
   })
+
+  /* The task board reads top to bottom, because a pane docked beside a
+     conversation has height to spend and not width. Same depths, same
+     centring -- only the axis they count along differs. */
+  describe('running downward', () => {
+    it('puts a dependent below its upstream and siblings side by side', () => {
+      const nodes = [node('a'), node('b', ['a']), node('c', ['a'])]
+      const { at } = layout(nodes, SHEET, 'down')
+      expect(at.get('b')!.y - at.get('a')!.y).toBe(GAP_Y)
+      expect(at.get('b')!.y).toBe(at.get('c')!.y)
+      expect(at.get('c')!.x - at.get('b')!.x).toBe(GAP_X)
+    })
+
+    it('centres each layer on the midline, so a fan-out still reads as a diamond', () => {
+      const nodes = [node('a'), node('b', ['a']), node('c', ['a']), node('m', ['b', 'c'])]
+      const { at, width } = layout(nodes, SHEET, 'down')
+      expect(at.get('a')!.x).toBe(at.get('m')!.x)
+      expect(at.get('a')!.x).toBe((width - W) / 2)
+      expect(at.get('b')!.x).toBeLessThan(at.get('a')!.x)
+      expect(at.get('c')!.x).toBeGreaterThan(at.get('a')!.x)
+    })
+
+    /* A chain is the case the docked pane actually shows, and the one the
+       sideways layout got wrong there: five steps across is a graph the board
+       has to shrink to a third of life size before the reader sees it. */
+    it('sizes a chain as one box wide and as deep as the chain', () => {
+      const chain = [node('a'), node('b', ['a']), node('c', ['b'])]
+      const down = layout(chain, SHEET, 'down')
+      const across = layout(chain, SHEET)
+      expect(down.width).toBe(PAD * 2 + W)
+      expect(down.height).toBe(PAD * 2 + 2 * GAP_Y + H)
+      expect(down.width).toBeLessThan(across.width)
+      expect(down.height).toBeGreaterThan(across.height)
+    })
+
+    it('leaves the default sideways, which is what every other surface draws', () => {
+      const nodes = [node('a'), node('b', ['a'])]
+      expect(layout(nodes, SHEET, 'across')).toEqual(layout(nodes, SHEET))
+    })
+  })
 })
 
 describe('dag sentences', () => {

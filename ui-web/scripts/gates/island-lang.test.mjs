@@ -18,7 +18,9 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const FEATURES = new URL('../../src/features/', import.meta.url).pathname
+import { root } from './paths.mjs'
+
+const FEATURES = root(new URL('../../src/features/', import.meta.url))
 
 /* Either spelling of the subscription: the store as a namespace, or the two
    named imports the memory page and the settings dialog read it through. */

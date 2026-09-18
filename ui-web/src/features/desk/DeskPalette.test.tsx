@@ -10,6 +10,7 @@ import { resetSources, setSources, sources } from '../../state/sources'
 import { installDeskHandoff } from '../../test/deskHandoff'
 import { installWsPane } from '../../test/wsPaneHarness'
 import * as agents from '../subagents/store'
+import * as tasksStore from '../tasks/store'
 import * as deliveries from '../workspace/deliveries'
 import * as workspace from '../workspace/store'
 import { DeskPalette } from './DeskPalette'
@@ -20,7 +21,8 @@ import {
 import * as seen from './seen'
 import * as desk from './store'
 
-import type { InstanceRow, SubagentsSource } from '../subagents/types'
+import type { InstanceRow } from '../subagents/types'
+import type { TaskRow } from '../tasks/types'
 import type { WorkspaceSource, WsChange } from '../workspace/types'
 
 /* The wiring src/main.tsx does: the desk's file opener is handed to the
@@ -32,20 +34,25 @@ installDeskHandoff()
 const opens: string[] = []
 const asked: string[] = []
 let agentRows: InstanceRow[] = []
+let taskRows: TaskRow[] = []
+
+const task = (id: string): TaskRow => ({
+  id, name: id, source: 'spawn', agent: 'raven', state: 'run', nodes: [],
+})
 
 /* Which tab's bubble, by the tab's own label -- the strip is three buttons and
    an index would silently follow a reordering. */
-const tabButton = (tab: 'diff' | 'deliverables' | 'agents'): HTMLElement | undefined => {
-  const label = tab === 'diff' ? 'Diff' : tab === 'deliverables' ? 'gui.ws.deliverables' : 'gui.ws.agents'
+const tabButton = (tab: 'diff' | 'deliverables' | 'tasks'): HTMLElement | undefined => {
+  const label = tab === 'diff' ? 'Diff' : tab === 'deliverables' ? 'gui.ws.deliverables' : 'gui.ws.tasks'
   return [...document.querySelectorAll<HTMLElement>('.desk-tabs button')]
     .find((b) => (b.querySelector('.lb')?.textContent || '') === label)
 }
 
-const bubble = (tab: 'diff' | 'deliverables' | 'agents'): string | null =>
+const bubble = (tab: 'diff' | 'deliverables' | 'tasks'): string | null =>
   tabButton(tab)?.querySelector('.desk-count')?.textContent ?? null
 
 /* What a screen reader is handed for that tab. */
-const spoken = (tab: 'diff' | 'deliverables' | 'agents'): string | null =>
+const spoken = (tab: 'diff' | 'deliverables' | 'tasks'): string | null =>
   tabButton(tab)?.getAttribute('aria-label') ?? null
 
 const change = (key: string): WsChange => ({
@@ -65,18 +72,22 @@ function wire(): void {
     openPath: (p) => opens.push(p),
   }
   agentRows = []
+  taskRows = []
   asked.length = 0
   /* The agents store files its lists under the open conversation and drops an
      answer for any other, so the harness has to be in one. */
   setCurrent('s1')
   setSources({
     workspace: source,
-    /* The agents tab counts the instances this session started, so the harness
-       answers for them the way the live source does. */
+    /* Instances are still asked for -- the launcher's running glyph and the
+       panes a delegated run opens both read them -- they are just not what a
+       tab counts any more. */
     subagents: {
       list: async () => [],
       instances: async (key: string) => { asked.push(key); return agentRows },
     },
+    /* What the tasks tab counts. */
+    tasks: { list: async () => taskRows },
   })
   localStorage.clear()
   document.body.innerHTML = '<div id="split" data-open="true"></div>'
@@ -229,19 +240,23 @@ describe('a tab with nothing in it', () => {
     await act(async () => { desk.set({ tab: 'deliverables' }) })
     expect(emptyOf()).toEqual({ title: 'gui.ws.dlv_none', hint: 'gui.ws.dlv_none_sub', icon: true })
 
-    await act(async () => { desk.set({ tab: 'agents' }) })
-    expect(emptyOf()).toEqual({ title: 'gui.ws.agents_none', hint: 'gui.ws.agents_none_sub', icon: true })
+    await act(async () => { desk.set({ tab: 'tasks' }) })
+    expect(emptyOf()).toEqual({ title: 'gui.ws.tasks_none', hint: 'gui.ws.tasks_none_sub', icon: true })
     /* And one class, so there is one stylesheet rule to keep them aligned. */
     expect(document.querySelector('.desk-dlv-empty')).toBeNull()
   })
 
-  it('says so in the same shape when the server does not report the work', async () => {
-    setSources({ subagents: { list: async () => [], instances: async () => [], absent: () => true } as unknown as SubagentsSource })
+  /* A tasks source that is absent and one that answers empty are the same
+     state while there is no `tasks.*` method to install one, so the panel says
+     the one thing either way -- unlike the agents tab it replaces, which could
+     tell "this server does not report it" from "there is none yet". */
+  it('says the same nothing whether the source is empty or absent', async () => {
+    delete sources.tasks
     render(<DeskPalette />)
-    await act(async () => { desk.set({ paletteOpen: true, tab: 'agents' }) })
-    await act(async () => { await agents.refreshInstances(true) })
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'tasks' }) })
 
-    expect(emptyOf()).toEqual({ title: 'gui.ws.agents_none', hint: 'gui.ws.agents_absent', icon: true })
+
+    expect(emptyOf()).toEqual({ title: 'gui.ws.tasks_none', hint: 'gui.ws.tasks_none_sub', icon: true })
   })
 })
 
@@ -384,7 +399,7 @@ describe('the desk shelf', () => {
        aria-label replaces the subtree: a label on the bubble is never read. */
     expect(spoken('deliverables')).toBe('gui.ws.deliverables, gui.ws.unseen_tab {"n":"1"}')
     expect(document.querySelector('.desk-count')?.getAttribute('aria-hidden')).toBe('true')
-    expect(spoken('agents')).toBe('gui.ws.agents')
+    expect(spoken('tasks')).toBe('gui.ws.tasks')
     expect(document.querySelector('.desk-dlv-row')).toBeNull()
   })
 
@@ -401,28 +416,24 @@ describe('the desk shelf', () => {
         { path: '/w/a.md', name: 'a.md' },
         { path: '/w/b.md', name: 'b.md' },
       ]))
-      agentRows = [
-        { sessionKey: 's1', agent: 'hermes', handle: 'h1', kind: 'cli', resumable: true },
-        { sessionKey: 's1', agent: 'hermes', handle: 'h2', kind: 'cli', resumable: true },
-        { sessionKey: 's1', agent: 'hermes', handle: 'h3', kind: 'cli', resumable: true },
-      ]
-      await agents.refreshInstances(true)
+      taskRows = [task('t1'), task('t2'), task('t3')]
+      await tasksStore.refresh()
     })
 
     expect(bubble('deliverables')).toBe('2')
-    expect(bubble('agents')).toBe('3')
+    expect(bubble('tasks')).toBe('3')
     /* The label is what the stylesheet hides on a collapsed tab, and it hides
        it by this class -- the bubble being a sibling is what broke the
        positional rule it used to use. */
     expect([...document.querySelectorAll('.desk-tabs button .lb')].map((n) => n.textContent))
-      .toEqual(['gui.ws.deliverables', 'gui.ws.agents', 'Diff'])
+      .toEqual(['gui.ws.deliverables', 'Diff', 'gui.ws.tasks'])
 
     await act(async () => {
       desk.set({ tab: 'deliverables' })
     })
     expect(bubble('deliverables')).toBeNull()
     /* Only the tab that was looked at. */
-    expect(bubble('agents')).toBe('3')
+    expect(bubble('tasks')).toBe('3')
   })
 
   it('counts a change written while the reader is on another tab', async () => {

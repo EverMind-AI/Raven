@@ -151,7 +151,7 @@ describe('opening a graph node from the transcript source', () => {
     expect(calls).toEqual([['openRow', 'qc']])
   })
 
-  it('falls back to the agents list when no row ever turns up', async () => {
+  it('falls back to the tasks list when no row ever turns up', async () => {
     /* A click that opens nothing reads as broken, and `refresh` keeps the drawn
        list on a failed read rather than emptying it -- so a gateway hiccup or a
        label the registry spells differently lands here. The list is somewhere
@@ -166,7 +166,7 @@ describe('opening a graph node from the transcript source', () => {
     await vi.advanceTimersByTimeAsync(700 * 5)
 
     expect(calls.filter(([verb]) => verb === 'openRow')).toEqual([])
-    expect(calls[calls.length - 1]).toEqual(['openDeskTab', 'agents'])
+    expect(calls[calls.length - 1]).toEqual(['openDeskTab', 'tasks'])
   })
 
   it('keeps the panel view for a spawn record without the desk', async () => {

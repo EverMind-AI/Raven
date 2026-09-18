@@ -8,18 +8,25 @@ import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
 import { resetSources, setSources } from '../../state/sources'
 import * as agents from '../subagents/store'
+import * as tasksStore from '../tasks/store'
 import * as deliveries from '../workspace/deliveries'
 import * as workspace from '../workspace/store'
 import { DeskFollowToggle, DeskSurface } from './DeskSurface'
 import * as desk from './store';
 
 import type { InstanceRow } from '../subagents/types'
+import type { TaskRow } from '../tasks/types'
 import type { WorkspaceSource } from '../workspace/types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 /* What `subagents.instances()` answers, which is what the launcher reads. */
 let agentRows: InstanceRow[] = []
+let taskRows: TaskRow[] = []
+
+const taskRow = (id: string): TaskRow => ({
+  id, name: id, source: 'spawn', agent: 'raven', state: 'run', nodes: [],
+})
 
 function wire(): void {
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
@@ -374,11 +381,14 @@ describe('the collapsed launcher', () => {
 
   beforeEach(() => {
     agentRows = []
+    taskRows = []
+    tasksStore.reset()
     /* The agents store files its lists under the open conversation and drops an
        answer for any other, so the harness has to be in one. */
     setCurrent('s1')
     setSources({
       subagents: { list: async () => [], instances: async () => agentRows },
+      tasks: { list: async () => taskRows },
     })
   })
 
@@ -451,7 +461,7 @@ describe('the collapsed launcher', () => {
       /* Down because the reader put it down. An unstated down with content
          on the desk is what the open fallback lifts, and the launcher only
          exists while the desk is down. */
-      desk.set({ paletteOpen: true, tab: 'agents' })
+      desk.set({ paletteOpen: true, tab: 'tasks' })
       desk.toggleDesk()
     })
 
@@ -481,10 +491,14 @@ describe('the collapsed launcher', () => {
 
     agentRows = [{ sessionKey: 's1', agent: 'hermes', handle: 'h1', kind: 'cli', status: 'running' }]
     await act(async () => { await agents.refreshInstances(true) })
+    taskRows = [taskRow('t1')]
+    await act(async () => { await tasksStore.refresh() })
     await deliver('/w/a.md')
 
     expect(btn().hasAttribute('data-working')).toBe(true)
-    /* The delivery and the run itself: one unread thing on each of two tabs. */
+    /* The delivery and the task: one unread thing on each of two tabs. The
+       running instance is the other signal, and it carries no number -- it is
+       what `data-working` says. */
     expect(count()).toBe('2')
     const name = btn().getAttribute('aria-label') || ''
     expect(name).toContain('gui.ws.unseen_tab')
@@ -499,6 +513,8 @@ describe('the collapsed launcher', () => {
     await deliver('/w/a.md')
     agentRows = [{ sessionKey: 's1', agent: 'hermes', handle: 'h1', kind: 'cli', status: 'running' }]
     await act(async () => { await agents.refreshInstances(true) })
+    taskRows = [taskRow('t1')]
+    await act(async () => { await tasksStore.refresh() })
 
     expect(count()).toBeNull()
     /* Nothing in the strip reports a run still going, so this one stays. */
@@ -531,9 +547,12 @@ describe('the collapsed launcher', () => {
 describe('a pane headed by an instance', () => {
   beforeEach(() => {
     agentRows = []
+    taskRows = []
+    tasksStore.reset()
     setCurrent('s1')
     setSources({
       subagents: { list: async () => [], instances: async () => agentRows },
+      tasks: { list: async () => taskRows },
     })
   })
 
@@ -572,6 +591,8 @@ describe('a pane headed by an instance', () => {
     expect(document.querySelector('.desk-pane header b')?.textContent).toBe('做一版 PPT')
 
     agentRows = []
+    taskRows = []
+    tasksStore.reset()
     await act(async () => { await agents.refreshInstances(true) })
 
     expect(document.querySelector('.desk-pane header b')?.textContent).toBe('做一版 PPT')
