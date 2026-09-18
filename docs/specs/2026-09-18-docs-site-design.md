@@ -98,8 +98,24 @@ These resolve from the repository root and will not resolve from
 The last two are the same files whose own prose points back at the Repo layout
 section, so the move has to fix both directions of that pair.
 
-This class of breakage is silent: the site builds, the link renders, and only a
-click reveals the 404. A guard covers it rather than review attention.
+Half of this breakage is silent and half is not, measured by building the site
+with each link planted and reading `mkdocs build --strict`'s exit code:
+
+| Planted link | `--strict` |
+|---|---|
+| `docker/README.md` | exit 1, warning naming the file and the link |
+| `AGENTS.md` | exit 1, same |
+| `docker/.env` | exit 0, clean, no warning |
+
+MkDocs resolves a relative link whose target ends in `.md` against the documents
+it knows, so the four `.md` targets among the eight abort the build. It says
+nothing about the four that do not end in `.md` -- those render and 404 only on a
+click.
+
+A guard covers all eight anyway, for two reasons neither of which is "the build
+would miss them": it fails with the offending file and link named rather than as
+a build abort, and it runs in the ordinary test suite, which does not install the
+`docs` dependency group that `mkdocs` lives in.
 
 ## What the READMEs become
 
