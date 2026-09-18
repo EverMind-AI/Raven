@@ -966,7 +966,9 @@ class TaskNode(_Strict):
     started_at: int | None = None
     ended_at: int | None = None
     error: str | None = Field(default=None, description="Why it failed, capped at 500 characters.")
-    tokens_in: int | None = Field(default=None, description="Null when the lane cannot report usage -- never zero for that.")
+    tokens_in: int | None = Field(
+        default=None, description="Null when the lane cannot report usage -- never zero for that."
+    )
     tokens_out: int | None = None
     tool_call_count: int | None = None
     tool_failure_count: int | None = None
