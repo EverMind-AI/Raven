@@ -6,8 +6,8 @@
  * the subagents island it replaces.
  */
 
-import { makeStore } from '../../state/store'
 import { sources } from '../../state/sources'
+import { makeStore } from '../../state/store'
 
 import type { TaskRow, TaskState, TasksSource } from './types'
 

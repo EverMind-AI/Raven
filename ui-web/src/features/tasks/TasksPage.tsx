@@ -26,12 +26,11 @@ import * as workspace from '../workspace/store'
 import * as store from './store'
 import { toDagNodes } from './types'
 
-import './styles.css'
-
 import type { Dims } from '../dag/graph'
 import type { WsChange } from '../workspace/types'
 import type { NodeRecord, RecordStep, TaskArtifact, TaskDiff, TaskNode, TaskRow } from './types'
 import type { JSX } from 'react'
+import './styles.css'
 
 const SOURCE_KEY: Record<string, string> = {
   spawn: 'gui.tasks.src_spawn',
