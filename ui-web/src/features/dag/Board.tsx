@@ -242,15 +242,15 @@ export function Board({ width, height, fitKey, label, owns, arrowsTaken, childre
         </div>
       </div>
       <div className="gzoom">
-        <button className="gzb" aria-label={t('gui.graph.zoom_out')} onClick={() => zoomBy(1 / ZOOM_STEP)}>
+        <button className="gzb" aria-label={t('gui.dag.zoom_out')} onClick={() => zoomBy(1 / ZOOM_STEP)}>
           &minus;
         </button>
         {/* The percentage is the control that puts the whole graph back in view,
             not a note about what the page decided to do. */}
-        <button className="gzpct" onClick={() => setView(framed())} title={t('gui.graph.zoom_fit')}>
+        <button className="gzpct" onClick={() => setView(framed())} title={t('gui.dag.zoom_fit')}>
           {Math.round(at.z * 100)}%
         </button>
-        <button className="gzb" aria-label={t('gui.graph.zoom_in')} onClick={() => zoomBy(ZOOM_STEP)}>
+        <button className="gzb" aria-label={t('gui.dag.zoom_in')} onClick={() => zoomBy(ZOOM_STEP)}>
           +
         </button>
       </div>

@@ -7171,15 +7171,15 @@
       "en": "Save",
       "zh": "保存"
     },
-    "gui.graph.zoom_in": {
+    "gui.dag.zoom_in": {
       "en": "Zoom in",
       "zh": "放大"
     },
-    "gui.graph.zoom_out": {
+    "gui.dag.zoom_out": {
       "en": "Zoom out",
       "zh": "缩小"
     },
-    "gui.graph.zoom_fit": {
+    "gui.dag.zoom_fit": {
       "en": "Fit the whole graph",
       "zh": "缩放到完整流程"
     },
@@ -7207,11 +7207,15 @@
       "en": "step {i}/{n}",
       "zh": "第 {i}/{n} 步"
     },
-    "gui.tasks.none_title": {
+    "gui.ws.tasks_none": {
       "en": "No tasks yet",
       "zh": "还没有任务"
     },
     "gui.tasks.none": {
+      "en": "No tasks yet. Delegating in the conversation, running a dag or running a playbook all line up here.",
+      "zh": "还没有任务。对话里派活、run dag 或跑 playbook，都会在这里排成一条。"
+    },
+    "gui.ws.tasks_none_sub": {
       "en": "No tasks yet. Delegating in the conversation, running a dag or running a playbook all line up here.",
       "zh": "还没有任务。对话里派活、run dag 或跑 playbook，都会在这里排成一条。"
     },

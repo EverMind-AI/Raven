@@ -225,7 +225,7 @@ function TasksNav(): JSX.Element {
   /* Answered here rather than inside the view: in the desk, one nothing has to
      look like the other two, and TasksApp's own note belongs to the panel. */
   if (!state.rows.length) {
-    return <DeskEmpty kind="tasks" title={t('gui.tasks.none_title')} hint={t('gui.tasks.none')} />
+    return <DeskEmpty kind="tasks" title={t('gui.ws.tasks_none')} hint={t('gui.ws.tasks_none_sub')} />
   }
   return <TasksApp />
 }

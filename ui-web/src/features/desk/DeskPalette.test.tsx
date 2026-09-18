@@ -241,7 +241,7 @@ describe('a tab with nothing in it', () => {
     expect(emptyOf()).toEqual({ title: 'gui.ws.dlv_none', hint: 'gui.ws.dlv_none_sub', icon: true })
 
     await act(async () => { desk.set({ tab: 'tasks' }) })
-    expect(emptyOf()).toEqual({ title: 'gui.tasks.none_title', hint: 'gui.tasks.none', icon: true })
+    expect(emptyOf()).toEqual({ title: 'gui.ws.tasks_none', hint: 'gui.ws.tasks_none_sub', icon: true })
     /* And one class, so there is one stylesheet rule to keep them aligned. */
     expect(document.querySelector('.desk-dlv-empty')).toBeNull()
   })
@@ -256,7 +256,7 @@ describe('a tab with nothing in it', () => {
     await act(async () => { desk.set({ paletteOpen: true, tab: 'tasks' }) })
 
 
-    expect(emptyOf()).toEqual({ title: 'gui.tasks.none_title', hint: 'gui.tasks.none', icon: true })
+    expect(emptyOf()).toEqual({ title: 'gui.ws.tasks_none', hint: 'gui.ws.tasks_none_sub', icon: true })
   })
 })
 

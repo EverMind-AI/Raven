@@ -512,8 +512,8 @@ describe('the playbook library', () => {
     const restore = withPort(1400, 600)
     try {
       await openGraph(chain(2))
-      const inBtn = screen.getByLabelText('gui.graph.zoom_in')
-      const outBtn = screen.getByLabelText('gui.graph.zoom_out')
+      const inBtn = screen.getByLabelText('gui.dag.zoom_in')
+      const outBtn = screen.getByLabelText('gui.dag.zoom_out')
       fireEvent.click(inBtn)
       expect(zoomOf()).toBeCloseTo(1.15, 5)
       /* The readout is the control that puts the whole graph back. */
