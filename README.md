@@ -90,7 +90,7 @@ Raven's modular architecture is designed for harness self-evolving and subagent 
 **Raven-Oncall** enables **unattended workflow automation** for experimentation, optimization, and continuous monitoring. It autonomously manages workflows from start to completion, sustaining progress over hours or overnight, delivering results, and involving users only when human judgment is needed.
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/8e2b9721-421c-485c-b1dc-1acf901bcb2c"><img src="https://github.com/user-attachments/assets/8e2b9721-421c-485c-b1dc-1acf901bcb2c" alt="AI4AI (Nanochat 50M Pretraining): Bits Per Byte (BPB), Runtime, Tokens, and Cost" width="100%"></a>
+  <a href="https://github.com/user-attachments/assets/bffd0fa2-e750-4f09-b74a-09452765a99d"><img src="https://github.com/user-attachments/assets/bffd0fa2-e750-4f09-b74a-09452765a99d" alt="AI4AI (Nanochat 50M Pretraining): Bits Per Byte (BPB), Runtime, Tokens, and Cost" width="100%"></a>
 </p>
 
 <p align="center"><em>Raven-Oncall vs. Claude Code on AI4AI (Nanochat 50M Pretraining) benchmark</em></p>
