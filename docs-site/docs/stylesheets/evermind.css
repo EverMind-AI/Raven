@@ -4,11 +4,13 @@
  * The repository forbids committing HTML (AGENTS.md section 7, machine-checked
  * by scripts/check_large_files.py), so the theme cannot be customised through
  * Material's usual overrides/*.html partials. Everything here is therefore done
- * by remapping Material's own CSS custom properties onto the EverMind token set
- * in .claude/skills/evermind-web-design/references/tokens.css, then correcting
- * the handful of places where Material hardcodes a value instead of reading a
- * variable -- chiefly its rounded corners, which are the one thing that most
- * breaks the brand's square geometry.
+ * by remapping Material's own CSS custom properties onto the EverMind brand
+ * tokens declared below, then correcting the handful of places where Material
+ * hardcodes a value instead of reading a variable -- chiefly its rounded
+ * corners, which are the one thing that most breaks the brand's square
+ * geometry. The Presentation section of
+ * docs/specs/2026-09-18-docs-site-design.md carries the constraint and the
+ * rationale.
  */
 
 @import url("https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@1,500;1,600&family=Brygada+1918:ital,wght@0,400;0,500&display=swap");
