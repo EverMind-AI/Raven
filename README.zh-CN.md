@@ -18,7 +18,7 @@
 # Raven 是什么
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/4ae8ac91-2f0c-4c81-aa7c-c15526bd77af"><img src="https://github.com/user-attachments/assets/4ae8ac91-2f0c-4c81-aa7c-c15526bd77af" alt="Raven one surface, all agents workflow" width="100%"></a>
+  <a href="https://github.com/user-attachments/assets/ef64cd3b-a48f-4516-9a30-47fe47a750be"><img src="https://github.com/user-attachments/assets/ef64cd3b-a48f-4516-9a30-47fe47a750be" alt="Raven unified surface and agent workflow" width="100%"></a>
 </p>
 
 <p align="center"><em>统一入口，协同所有 Agent：Raven 连接研究、编程、设计和无人值守工作流。</em></p>
