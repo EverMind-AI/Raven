@@ -329,14 +329,6 @@ through `lang.onApplied`, so it runs after the rendered half has committed. The
 order is pinned by `src/state/lang/effects.test.ts`; the reload is last because
 it rebuilds the conversation from disk.
 
-**Inert marker**:
-A `data-i18n`, `data-i18n-ph`, `data-i18n-tip`, `data-i18n-aria` or
-`data-i18n-title` attribute on rendered markup. Nothing reads them any more --
-each element's own `t(key)` (or `lang.attr(key)` for the attributes the served
-markup did not carry) is what fills it -- and they stay because the CSS
-namespace gate and the region goldens record them, and because they say which
-phrase belongs to which key at the point a reader edits the JSX.
-
 **Sheet rack**:
 `src/state/sheetRack.ts` plus `src/chrome/SheetRack.tsx` -- what docks above the
 composer (a clarify question, an approval request, a dag graph), filed under the

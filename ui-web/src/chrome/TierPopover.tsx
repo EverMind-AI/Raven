@@ -6,11 +6,11 @@
  * purpose.
  *
  * What differs is the wording. The heading and the note come from the store's
- * `head`, which the open chooses from the catalogue that answered, and neither
- * carries a data-i18n key: the built-in ladder is a Session Tier and reaches
+ * `head`, which the open chooses from the catalogue that answered, rather than
+ * from a key of its own: the built-in ladder is a Session Tier and reaches
  * sub-agents, a deployment's own catalogue is a Session Mode and does not, so a
- * language flip walking the document's keys would paint the tier wording back
- * over a mode catalogue's. Both stand empty until the first open, which is how
+ * key fixed at the callsite would paint the tier wording back over a mode
+ * catalogue's. Both stand empty until the first open, which is how
  * the page is served with them.
  */
 

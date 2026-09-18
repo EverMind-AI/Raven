@@ -15,9 +15,9 @@
  * Words go through t(key), which reads the language the page resolved before
  * its first frame, and keyed attributes through lang.attr(key), which stays
  * absent until a pick lands. That pair is what applyI18n's passes over the
- * document used to do, read from the other end -- the data-i18n* keys stay on
- * the elements as the record of which phrase each line speaks, and nothing
- * walks them any more (state/lang/store.ts).
+ * document used to do, read from the other end: the key each line speaks is the
+ * argument beside its words, and nothing walks the document for it any more
+ * (state/lang/store.ts).
  *
  * What this does NOT own, though it renders the elements:
  *   - #newBtn's click. Its action belongs to the session rather than to the
@@ -71,8 +71,6 @@ function RailTop(): JSX.Element {
         className="ghost-ic tipdn"
         id="railBtn"
         aria-expanded="true"
-        data-i18n-tip="gui.collapse_rail"
-        data-i18n-aria="gui.collapse_rail"
         data-tip={lang.attr('gui.collapse_rail')}
         aria-label={lang.attr('gui.collapse_rail')}
         onClick={() => rail.set(false)}
@@ -84,8 +82,6 @@ function RailTop(): JSX.Element {
       <button
         className="ghost-ic tipdn"
         id="findBtn"
-        data-i18n-tip="gui.search_sessions"
-        data-i18n-aria="gui.search_sessions"
         aria-expanded={s.open}
         data-tip={lang.attr('gui.search_sessions')}
         aria-label={lang.attr('gui.search_sessions')}
@@ -162,14 +158,14 @@ function RailNav(): JSX.Element {
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true">
           <path d="M12 5v14M5 12h14" />
         </svg>
-        <span data-i18n="gui.new_task">{t('gui.new_task')}</span>
+        <span>{t('gui.new_task')}</span>
       </button>
       {NAV_ROWS.map((row) => (
         <button className="navi" id={row.button} key={row.button} onClick={row.open}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
             {row.icon}
           </svg>
-          <span data-i18n={row.key}>{t(row.key)}</span>
+          <span>{t(row.key)}</span>
         </button>
       ))}
       {/* Sub-agents / entrances / schedules live one level in: they are
@@ -196,8 +192,8 @@ function RailNav(): JSX.Element {
         <svg className="chev" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <path d="M7 9.8l5 5.4 5-5.4" />
         </svg>
-        <span className="l-more" data-i18n="gui.nav.more">{t('gui.nav.more')}</span>
-        <span className="l-less" data-i18n="gui.nav.less">{t('gui.nav.less')}</span>
+        <span className="l-more">{t('gui.nav.more')}</span>
+        <span className="l-less">{t('gui.nav.less')}</span>
       </button>
     </nav>
   )
@@ -224,13 +220,11 @@ function FindRow(): JSX.Element {
       {' '}
       <input
         id="sfind"
-        data-i18n-ph="gui.search_sessions"
-        data-i18n-aria="gui.search_sessions"
         placeholder={t('gui.search_sessions')}
         aria-label={lang.attr('gui.search_sessions')}
       />
       {' '}
-      <button className="clr" id="sclr" hidden={!s.query} data-i18n-aria="gui.clear_search" aria-label={lang.attr('gui.clear_search')} onClick={() => find.clear()}>&#10005;</button>
+      <button className="clr" id="sclr" hidden={!s.query} aria-label={lang.attr('gui.clear_search')} onClick={() => find.clear()}>&#10005;</button>
       {' '}
     </div>
   )
@@ -248,19 +242,19 @@ function RailFoot(): JSX.Element {
     <div className="rail-foot">
       <button className="upnote" id="upnote" hidden>
         <span className="pip" />
-        <span className="t" data-i18n="gui.update.note">{t('gui.update.note')}</span>
-        <span className="rl" data-i18n="gui.update.reload">{t('gui.update.reload')}</span>
+        <span className="t">{t('gui.update.note')}</span>
+        <span className="rl">{t('gui.update.reload')}</span>
       </button>
       {/* The foot is the door to settings, and only that: accounts are not a
            thing this product has, so nothing down here pretends to be one.
            The version under the label is state/foot.ts's. */}
-      <button className="me" id="meBtn" data-i18n-aria="gui.nav.set" aria-label={lang.attr('gui.nav.set')} onClick={() => void openSettings()}>
+      <button className="me" id="meBtn" aria-label={lang.attr('gui.nav.set')} onClick={() => void openSettings()}>
         <span className="av anon">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" />
             <path d="M12 3v2.2M12 18.8V21M4.6 7.8l1.9 1.1M17.5 15.1l1.9 1.1M4.6 16.2l1.9-1.1M17.5 8.9l1.9-1.1M3 12h2.2M18.8 12H21" /></svg>
         </span>
         <span className="who">
-          <span className="n" data-i18n="gui.nav.set">{t('gui.nav.set')}</span>
+          <span className="n">{t('gui.nav.set')}</span>
           <span className="s" id="meSub">{f.sub || null}</span>
         </span>
         <span className="kbd" id="meKbd">{f.kbd || null}</span>
@@ -286,8 +280,6 @@ export function Rail(): JSX.Element {
         id="railGrip"
         role="separator"
         aria-orientation="vertical"
-        data-i18n-title="gui.resize_rail"
-        data-i18n-aria="gui.resize_rail"
         title={lang.attr('gui.resize_rail')}
         aria-label={lang.attr('gui.resize_rail')}
       />

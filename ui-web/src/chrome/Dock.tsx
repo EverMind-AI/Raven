@@ -75,7 +75,7 @@ function DockIn(): JSX.Element {
     <div className="dock-in">
       <div className="queued" id="queued" />
       <div className="field">
-        <textarea id="ta" rows={1} data-i18n-ph="gui.composer_ph" placeholder={t('gui.composer_ph')} />
+        <textarea id="ta" rows={1} placeholder={t('gui.composer_ph')} />
       </div>
       {/* One bar under a clean writing line: actions and identity on
            the left, session state and the send button on the right --
@@ -86,7 +86,7 @@ function DockIn(): JSX.Element {
             reproduced: it collapses at both line edges either way, but the rule
             that makes it harmless is the line edge, not the parent (.tool-btn,
             src/styles/page.css:2135). */}
-        <button className="tool-btn" id="attBtn" data-i18n-tip="gui.attach" data-i18n-aria="gui.attach" data-tip={lang.attr('gui.attach')} aria-label={lang.attr('gui.attach')}>
+        <button className="tool-btn" id="attBtn" data-tip={lang.attr('gui.attach')} aria-label={lang.attr('gui.attach')}>
           {' '}
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
             <path d="M15 7l-6.2 6.2a2.6 2.6 0 0 0 3.7 3.7L19 10a4.4 4.4 0 0 0-6.2-6.2L6 10.5a6.2 6.2 0 0 0 8.8 8.8l3.4-3.4" />
@@ -99,11 +99,11 @@ function DockIn(): JSX.Element {
         <CtxChip />
         <TierChip />
         <button className="chip" id="modelChip"><span id="modelName">minimax-m3</span></button>
-        <button className="go" id="go" disabled data-i18n-aria="gui.send" aria-label={lang.attr('gui.send')} />
+        <button className="go" id="go" disabled aria-label={lang.attr('gui.send')} />
       </div>
 
-      <div className="pop slash" id="slashPop" data-open="false" role="listbox" data-i18n-aria="gui.commands" aria-label={lang.attr('gui.commands')}>
-        <div className="hd"><span className="lab" data-i18n="gui.session_commands">{t('gui.session_commands')}</span></div>
+      <div className="pop slash" id="slashPop" data-open="false" role="listbox" aria-label={lang.attr('gui.commands')}>
+        <div className="hd"><span className="lab">{t('gui.session_commands')}</span></div>
         <div id="slashList" />
       </div>
 

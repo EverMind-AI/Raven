@@ -61,11 +61,10 @@ export function PermPopover(): JSX.Element {
       id="permPop"
       data-open={s.open ? 'true' : 'false'}
       role="dialog"
-      data-i18n-aria="gui.perm.title"
       aria-label={lang.attr('gui.perm.title')}
       ref={box}
     >
-      <div className="hd"><span className="lab" data-i18n="gui.perm.title">{t('gui.perm.title')}</span></div>
+      <div className="hd"><span className="lab">{t('gui.perm.title')}</span></div>
       <div id="permList" />
       {s.listed && list
         ? createPortal(
@@ -91,7 +90,7 @@ export function PermPopover(): JSX.Element {
           list
         )
         : null}
-      <div className="note" data-i18n="gui.perm.note">{t('gui.perm.note')}</div>
+      <div className="note">{t('gui.perm.note')}</div>
     </div>
   )
 }

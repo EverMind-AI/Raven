@@ -54,8 +54,6 @@ function Header(): JSX.Element {
       <button
         className="ghost-ic tipdn"
         id="renameBtn"
-        data-i18n-tip="gui.rename_session"
-        data-i18n-aria="gui.rename_session"
         data-tip={lang.attr('gui.rename_session')}
         aria-label={lang.attr('gui.rename_session')}
         onClick={() => renameSession()}
@@ -69,8 +67,6 @@ function Header(): JSX.Element {
         className="ghost-ic wstog tipdn"
         id="wsBtn"
         aria-expanded="false"
-        data-i18n-tip="gui.expand_ws"
-        data-i18n-aria="gui.expand_ws"
         data-tip={lang.attr('gui.expand_ws')}
         aria-label={lang.attr('gui.expand_ws')}
       >
@@ -121,8 +117,6 @@ export function ChatTop(): JSX.Element {
         id="wsGrip"
         role="separator"
         aria-orientation="vertical"
-        data-i18n-title="gui.resize_ws"
-        data-i18n-aria="gui.resize_ws"
         title={lang.attr('gui.resize_ws')}
         aria-label={lang.attr('gui.resize_ws')}
       />

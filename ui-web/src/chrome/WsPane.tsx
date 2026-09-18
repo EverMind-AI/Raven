@@ -12,8 +12,8 @@
  * children of #split.
  *
  * Words go through t(key), which reads the language the page resolved before
- * its first frame (state/lang/store.ts); the data-i18n* keys beside them say
- * which phrase each line speaks and nothing reads them.
+ * its first frame (state/lang/store.ts); the key each line speaks is the
+ * argument to that call.
  *
  * What this does NOT own, though it renders the elements:
  *   - #wsBody's children. It is shared ground for three islands: the workspace
@@ -90,20 +90,20 @@ function WsTabs(): JSX.Element {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <rect x="4" y="4" width="16" height="16" rx="3" /><path d="M12 8.5v7M8.5 12h7" />
         </svg>
-        <span className="lb" data-i18n="gui.ws.changes">{t('gui.ws.changes')}</span>
+        <span className="lb">{t('gui.ws.changes')}</span>
         <span className="bdg" id="wsUnseen" hidden />
       </button>
       <button role="tab" data-w="browser" aria-selected="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <circle cx="12" cy="12" r="8" /><path d="M4.5 12h15M12 4.5c-4.5 4.5-4.5 10.5 0 15M12 4.5c4.5 4.5 4.5 10.5 0 15" />
         </svg>
-        <span className="lb" data-i18n="gui.ws.browser">{t('gui.ws.browser')}</span>
+        <span className="lb">{t('gui.ws.browser')}</span>
       </button>
       <button role="tab" data-w="agents" aria-selected="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <rect x="4" y="8" width="16" height="11" rx="3" /><path d="M12 4.5V8M8.5 13h.01M15.5 13h.01" />
         </svg>
-        <span className="lb" data-i18n="gui.ws.agents">{t('gui.ws.agents')}</span>
+        <span className="lb">{t('gui.ws.agents')}</span>
         <span className="rundot" id="wsAgentRun" hidden />
       </button>
     </div>
@@ -123,8 +123,6 @@ function WsActs(): JSX.Element {
         className="ghost-ic wsfull tipdn"
         id="wsWide"
         aria-pressed="false"
-        data-i18n-tip="gui.ws.expand_panel"
-        data-i18n-aria="gui.ws.expand_panel"
         data-tip={lang.attr('gui.ws.expand_panel')}
         aria-label={lang.attr('gui.ws.expand_panel')}
         onClick={() => ws.setFull(!ws.wide)}
@@ -147,8 +145,6 @@ function WsActs(): JSX.Element {
         className="ghost-ic wstog tipdn"
         id="wsClose"
         aria-expanded="true"
-        data-i18n-tip="gui.collapse_ws"
-        data-i18n-aria="gui.collapse_ws"
         data-tip={lang.attr('gui.collapse_ws')}
         aria-label={lang.attr('gui.collapse_ws')}
         onClick={() => ws.setOpen(false)}
@@ -167,7 +163,7 @@ export function WsPane(): JSX.Element {
   useOutsideControls()
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
-    <aside className="ws" id="ws" data-i18n-aria="gui.workspace" aria-label={lang.attr('gui.workspace')}>
+    <aside className="ws" id="ws" aria-label={lang.attr('gui.workspace')}>
       <div className="ws-top">
         <WsTabs />
         <WsActs />

@@ -1,5 +1,5 @@
-section#kbPage.page[data-i18n-aria=gui.nav.kb][data-open=false]
+section#kbPage.page[data-open=false]
   header
-    h2[data-i18n=gui.nav.kb]
+    h2
   div.work
     div#kbBody.wrap

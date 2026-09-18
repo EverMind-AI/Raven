@@ -48,7 +48,7 @@ export function MoreFly(): JSX.Element {
   const s = useSyncExternalStore(navfly.subscribe, navfly.get)
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
-    <div className="moresub" id="moreFly" data-open="false" role="group" data-i18n-aria="gui.nav.more" aria-label={lang.attr('gui.nav.more')}>
+    <div className="moresub" id="moreFly" data-open="false" role="group" aria-label={lang.attr('gui.nav.more')}>
       {s.rows.map((row) => (
         <button key={row.page} className="navi" onClick={() => navfly.pick(row)}>
           <svg viewBox="0 0 24 24" aria-hidden="true">{GLYPH[row.page]}</svg>

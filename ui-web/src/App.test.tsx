@@ -117,24 +117,6 @@ describe('the page root', () => {
     }
   })
 
-  /* The keys the markup was served with. Inert markers now -- nothing walks
-     them (state/lang/store.ts) -- and kept because they are the record of which
-     phrase each line of chrome speaks, and the region goldens hold them. */
-  it('keeps the language keys on the markup', () => {
-    render()
-    const key = (id: string, attr: string): string | null =>
-      document.getElementById(id)!.getAttribute(attr)
-    expect(key('cfNo', 'data-i18n')).toBe('gui.cancel')
-    expect(key('dClose', 'data-i18n-aria')).toBe('gui.close')
-    expect(key('setClose', 'data-i18n-aria')).toBe('gui.close')
-    expect(key('setClose', 'data-i18n-tip')).toBe('gui.close')
-    expect(key('setModal', 'data-i18n-aria')).toBe('gui.page.set')
-    expect(key('detail', 'data-i18n-aria')).toBe('gui.cap_detail')
-    expect(key('railShow', 'data-i18n-tip')).toBe('gui.expand_rail')
-    expect(key('extAgentsPage', 'data-i18n-aria')).toBe('gui.page.agents')
-    expect(document.querySelector('.wm')!.getAttribute('data-i18n')).toBe('gui.page.set')
-  })
-
   /* The two things the region goldens drop: they record tag, id, class and
      data-*, so a deleted role, a deleted aria-label or a blanked literal all
      pass them. The exact literals are proven once per step by the boot dump

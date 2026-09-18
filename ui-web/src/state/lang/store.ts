@@ -26,9 +26,7 @@
  * and rewrote data-i18n / -ph / -title / -aria / -tip wherever it found them,
  * because the markup was static and nothing else could reach it; the markup is
  * a React tree now and every one of those keys is rendered beside the value it
- * decides. The keys stay on the elements -- the region goldens record them, and
- * they say which phrase a line of chrome speaks -- but nothing reads them any
- * more.
+ * decides, so the markers it looked for went with the pass that read them.
  *
  * This module is the only writer of <html lang>, and it writes it only for a
  * language the document does not already declare.

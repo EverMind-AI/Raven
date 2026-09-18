@@ -1,5 +1,5 @@
-section#playbooksPage.page[data-i18n-aria=gui.nav.pb][data-open=false]
+section#playbooksPage.page[data-open=false]
   header
-    h2[data-i18n=gui.nav.pb]
+    h2
   div.work
     div#playbooksBody.wrap

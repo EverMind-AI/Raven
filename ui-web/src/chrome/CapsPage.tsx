@@ -60,7 +60,7 @@ const PILLS = [
 function Title(): JSX.Element {
   const s = useSyncExternalStore(caps.subscribe, caps.get)
   useSyncExternalStore(lang.subscribe, lang.get)
-  return <h2 id="capsTitle" data-i18n="gui.tab.skills">{s.title ?? t('gui.tab.skills')}</h2>
+  return <h2 id="capsTitle">{s.title ?? t('gui.tab.skills')}</h2>
 }
 
 /* The search field. The placeholder is the only word on this page with no key
@@ -112,7 +112,7 @@ function Search(): JSX.Element {
         <circle cx="11" cy="11" r="7" /><path d="M20 20l-4.3-4.3" />
       </svg>
       {' '}
-      <input id="cq" placeholder={s.search ?? '搜索'} data-i18n-aria="gui.search" aria-label={lang.attr('gui.search')} ref={field} />
+      <input id="cq" placeholder={s.search ?? '搜索'} aria-label={lang.attr('gui.search')} ref={field} />
       {' '}
     </div>
   )
@@ -142,14 +142,13 @@ function FilterBar(): JSX.Element {
   return (
     <>
       <Search />
-      <div className="pills" id="cKind" role="group" data-i18n-aria="gui.filter_status" aria-label={lang.attr('gui.filter_status')} hidden={s.pillsHidden}>
+      <div className="pills" id="cKind" role="group" aria-label={lang.attr('gui.filter_status')} hidden={s.pillsHidden}>
         {PILLS.map((pill) => (
           <button
             key={pill.k}
             className="pill"
             data-k={pill.k}
             aria-pressed={s.kind === pill.k ? 'true' : 'false'}
-            data-i18n={pill.key}
             onClick={() => caps.pick(pill.k)}
           >
             {t(pill.key)}
@@ -169,14 +168,14 @@ function ManualAdd(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
     <>
-      <summary data-i18n="gui.adv_add">{t('gui.adv_add')}</summary>
-      <p style={{ color: 'var(--muted)', fontSize: '12.5px', margin: '10px 0 0' }} data-i18n="gui.adv_hint">
+      <summary>{t('gui.adv_add')}</summary>
+      <p style={{ color: 'var(--muted)', fontSize: '12.5px', margin: '10px 0 0' }}>
         {t('gui.adv_hint')}
       </p>
       <div className="row">
-        <input id="mName" data-i18n-ph="gui.adv_name_ph" placeholder={t('gui.adv_name_ph')} />
-        <input id="mAddr" data-i18n-ph="gui.adv_addr_ph" placeholder={t('gui.adv_addr_ph')} />
-        <button className="mini" id="mAdd" data-i18n="gui.add" onClick={() => void caps.manualAdd()}>{t('gui.add')}</button>
+        <input id="mName" placeholder={t('gui.adv_name_ph')} />
+        <input id="mAddr" placeholder={t('gui.adv_addr_ph')} />
+        <button className="mini" id="mAdd" onClick={() => void caps.manualAdd()}>{t('gui.add')}</button>
       </div>
     </>
   )

@@ -180,9 +180,9 @@ const el = <T extends HTMLElement>(id: string): T | null => document.getElementB
 
    The chip reads its own state, which is why it carries no hover label: the
    detail of each tier belongs in the popover the click opens. Nothing to remove
-   for that -- the chip is rendered with no data-tip and no data-i18n-tip for
-   the lang store to fill, and the `delete chip.dataset.tip` the draw before
-   this one carried was dead there too. It did not come across. */
+   for that -- the chip is rendered with no data-tip for the lang store to
+   fill, and the `delete chip.dataset.tip` the draw before this one carried was
+   dead there too. It did not come across. */
 export function draw(): void {
   const cur = TIERS.find((p) => p.id === mode) || TIERS[0]!
   set({
