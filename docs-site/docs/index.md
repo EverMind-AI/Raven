@@ -15,7 +15,7 @@
     Clone the repository and run the installer. Quick Start lives in the README
     rather than here, so that a first install needs nothing but the repo page.
 
-    [:octicons-arrow-right-24: README Quick Start](https://github.com/EverMind-AI/Raven#-quick-start)
+    [README Quick Start](https://github.com/EverMind-AI/Raven#-quick-start)
 
 -   __Self-host it__
 
@@ -23,7 +23,7 @@
 
     Docker Compose, configuration, and running from a source checkout.
 
-    [:octicons-arrow-right-24: Self-Hosting](self-hosting.md)
+    [Self-Hosting](self-hosting.md)
 
 -   __Open the WebUI__
 
@@ -31,7 +31,7 @@
 
     Starting and stopping the local page.
 
-    [:octicons-arrow-right-24: Launch WebUI](webui.md)
+    [Launch WebUI](webui.md)
 
 </div>
 
@@ -45,7 +45,7 @@
 
     Docker Compose, configuration, and running from a source checkout.
 
-    [:octicons-arrow-right-24: Read](self-hosting.md)
+    [Read](self-hosting.md)
 
 -   __Launch WebUI__
 
@@ -53,7 +53,7 @@
 
     Starting and stopping the local page.
 
-    [:octicons-arrow-right-24: Read](webui.md)
+    [Read](webui.md)
 
 -   __Command Reference__
 
@@ -61,7 +61,7 @@
 
     The CLI surface.
 
-    [:octicons-arrow-right-24: Read](commands.md)
+    [Read](commands.md)
 
 -   __Repo Layout__
 
@@ -70,6 +70,6 @@
     The packages under `raven/` and the top-level trees, which are also the
     canonical commit scopes.
 
-    [:octicons-arrow-right-24: Read](repo-layout.md)
+    [Read](repo-layout.md)
 
 </div>
