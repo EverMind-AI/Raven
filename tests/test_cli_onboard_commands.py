@@ -6312,12 +6312,22 @@ def test_readme_quickstart_matches_the_installer() -> None:
     longer close with a first-run hint and the READMEs no longer carry that
     section, so the two have no shared command left to agree on; the clone
     install is what they must not drift on now.
+
+    The section is located by its heading text rather than by the decorative
+    prefix in front of it. Pinning that prefix meant a purely cosmetic heading
+    restyle failed here with a bare StopIteration that named neither the file
+    nor what it had been looking for. Each README carries its own heading word
+    because the two are written in different languages.
     """
     root = Path(__file__).resolve().parents[1]
-    assert "RAVEN_LOCAL_SRC" in (root / "install.sh").read_text()
-    for name in ("README.md", "README.zh-CN.md"):
-        text = (root / name).read_text()
-        quickstart = next(b for b in re.split(r"^## ", text, flags=re.MULTILINE) if b.startswith("\U0001f680 "))
+    assert "RAVEN_LOCAL_SRC" in (root / "install.sh").read_text(encoding="utf-8")
+    for name, heading in (("README.md", "Quick Start"), ("README.zh-CN.md", "快速开始")):
+        text = (root / name).read_text(encoding="utf-8")
+        sections = [
+            b for b in re.split(r"^## ", text, flags=re.MULTILINE) if b.partition("\n")[0].rstrip().endswith(heading)
+        ]
+        assert len(sections) == 1, f"{name}: expected one '## ...{heading}' section, found {len(sections)}"
+        quickstart = sections[0]
         assert "git clone" in quickstart, name
         assert "./install.sh" in quickstart, name
         assert "RAVEN_LOCAL_SRC" in quickstart, name
