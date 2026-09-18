@@ -586,15 +586,19 @@ class TestTheCronTimezoneControl:
     a missing conversion here is a save that raises instead of writing.
     """
 
-    async def test_the_timezone_reaches_the_config_the_scheduler_reads(self, cfg):
+    async def test_the_timezone_round_trips_through_the_writer_and_the_loader(self, cfg):
         from raven.config.loader import load_config
 
         r = await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": "Asia/Tokyo"})
 
         assert r["applied"] is True
         assert _read(cfg)["cron"]["defaultTimezone"] == "Asia/Tokyo"
-        # Landing in the file is half of it -- what decides whether the box did
-        # anything is the value the cron scheduler goes on to read.
+        # Landing in the file is half of it: the writer spells the key one way
+        # and the loader has to read that same spelling back. Deliberately not a
+        # claim about scheduling -- ``CronConfig.default_timezone`` has exactly
+        # one consumer today, the ``raven cron config get`` display path, and
+        # ``_compute_next_run`` falls back to the machine's local zone rather
+        # than to this field.
         assert load_config(cfg).cron.default_timezone == "Asia/Tokyo"
 
     async def test_the_previous_timezone_comes_back(self, cfg):
