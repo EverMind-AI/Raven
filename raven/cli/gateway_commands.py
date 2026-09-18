@@ -1102,6 +1102,16 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 await close_pool()
                 await agent.close_mcp()
                 agent.stop()
+                # The context builder's skill watcher is a daemon thread parked
+                # inside watchfiles' Rust watch(). Daemon status does not make
+                # process exit safe while it sits in native code: Py_FinalizeEx
+                # tears the interpreter down under that call and the process
+                # dies of SIGSEGV once this whole chain has already succeeded,
+                # so a systemd or docker stop records a crash instead of the
+                # clean stop it was. Stopped here rather than in AgentLoop.stop,
+                # whose other caller is the generation swap -- that one keeps
+                # the process running and must keep auto-refresh with it.
+                agent.context.skills.stop_file_watcher()
                 await channels.stop_all()
                 # Stop the memory-backend plugin last so any
                 # in-flight backend.store / backend.feedback calls

@@ -516,6 +516,31 @@ def test_stop_dispatch_cancels_both_scheduler_and_subagents() -> None:
     assert "stopped +=" in stop_branch
 
 
+def test_shutdown_stops_the_skill_file_watcher() -> None:
+    """The teardown chain must stop the skill watcher before the process exits.
+
+    ``LocalSkillCatalog`` auto-starts ``SkillFileWatcher``, a daemon thread that
+    parks inside ``watchfiles``' Rust ``watch()``. Daemon status does not make
+    process exit safe here: CPython runs ``Py_FinalizeEx`` while that native
+    call is still live and the process dies of SIGSEGV (-11, or 139 in a shell)
+    *after* every Python shutdown step has already succeeded. A systemd or
+    docker stop then records a crash rather than the clean stop it was.
+
+    ``raven/trajectory/replay.py`` stops the same watcher for the same reason;
+    the teardown chain here is the other long-lived owner.
+
+    The chain is a closure inside the serve command with no import seam, so this
+    pins the call in the command source the way the ``/stop`` test above does.
+    """
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    teardown = src.split("cron.stop()", 1)[1]
+    assert "stop_file_watcher()" in teardown
+
+
 def test_cron_config_notify_missed_defaults_on() -> None:
     from raven.config.schema import CronConfig
 
