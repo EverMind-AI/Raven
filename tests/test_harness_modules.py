@@ -16,10 +16,12 @@ import pytest
 
 from raven.agent.harness import default_harness_modules
 from raven.agent.harness.action import DefaultAction
+from raven.agent.harness.action import bind as bind_action
 from raven.agent.harness.capability import DefaultCapability
 from raven.agent.harness.memory import DefaultMemory
 from raven.agent.harness.memory import bind as bind_memory
 from raven.agent.harness.planning import DefaultPlanning
+from raven.agent.window import shrink as shrink_module
 from raven.contracts.harness import (
     ActionModule,
     ActionRequest,
@@ -29,6 +31,9 @@ from raven.contracts.harness import (
     MemoryModule,
     PlanningModule,
     PlanningRequest,
+    ShrinkResult,
+    WindowPressure,
+    WindowState,
 )
 
 
@@ -67,6 +72,8 @@ def _modules(engine=None, registry=None, **over):
         model=lambda: "some/model",
         context_window_tokens=lambda: 200_000,
         system_prompt=lambda skills: "SYSTEM",
+        compaction=lambda: SimpleNamespace(enabled=False),
+        output_ceiling=lambda model=None: 4096,
     )
     kwargs.update(over)
     return default_harness_modules(engine, lambda: registry, **kwargs)
@@ -326,5 +333,166 @@ def test_a_memory_built_by_hand_is_the_same_role_the_loop_binds():
         context_window_tokens=lambda: 1_000,
         tool_definitions=lambda: [],
         system_prompt=lambda skills: "S",
+        compaction=lambda: SimpleNamespace(enabled=False),
+        output_ceiling=lambda model=None: 4096,
     )
     assert isinstance(bind_memory(memory), MemoryModule)
+
+
+def _window_memory(*, compaction=None):
+    return DefaultMemory(
+        _Engine(),
+        provider=lambda: SimpleNamespace(generation=None),
+        model=lambda: "m",
+        context_window_tokens=lambda: 1_000,
+        tool_definitions=lambda: [],
+        system_prompt=lambda skills: "S",
+        compaction=lambda: compaction or SimpleNamespace(enabled=False),
+        output_ceiling=lambda model=None: 256,
+    )
+
+
+def test_the_window_role_answers_every_pressure_the_loop_asks_under():
+    """The five recoveries the loop used to run inline are one method now, so
+    each one is asked for by name and answers with the list to go on with."""
+    memory = _window_memory()
+    asked = []
+
+    for pressure in WindowPressure:
+        messages = [{"role": "user", "content": "q"}]
+        state = WindowState(image_window=2)
+        result = asyncio.run(memory.shrink(list(messages), pressure=pressure, state=state, model="m"))
+        assert isinstance(result, ShrinkResult), pressure
+        assert result.messages == messages, f"{pressure} left a transcript with nothing to give up alone"
+        asked.append(pressure)
+
+    assert asked == list(WindowPressure), "every pressure the paper names is answered"
+    with pytest.raises(ValueError):
+        asyncio.run(memory.shrink([], pressure="sideways", state=WindowState(image_window=1), model=None))
+
+
+def test_the_standing_pass_withdraws_the_pictures_outside_the_window():
+    """The standing pass is the one that touches no retry budget: it runs every
+    iteration and only decides which pictures the window still holds."""
+    memory = _window_memory()
+    picture = {
+        "role": "tool",
+        "content": [
+            {"type": "text", "text": "look"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64," + "A" * 4000}},
+        ],
+    }
+    state = WindowState(image_window=1, image_budget=10)
+    shown = [dict(picture, content=list(picture["content"])) for _ in range(3)]
+    result = asyncio.run(memory.shrink(shown, pressure=WindowPressure.STANDING, state=state, model="m"))
+    assert result.changed, "the pictures outside the window are withdrawn"
+    assert "image_url" not in str(result.messages[0]), "the withdrawal leaves a note, not the bytes"
+    assert result.messages is shown, "the standing pass hands back the list it was given"
+
+
+def test_an_action_role_missing_judge_is_refused_at_assembly():
+    """The registry answers with no opinion when a role raises, so a role that
+    cannot judge would let every call a playbook refuses through. Naming it
+    here is the difference between a loud assembly and a silent turn."""
+
+    class DecideOnly:
+        async def decide(self, request): ...
+
+    with pytest.raises(TypeError, match="decide and judge"):
+        bind_action(DecideOnly())
+    assert bind_action(DefaultAction()) is not None
+
+
+def test_a_refusal_closes_the_window_a_notch_and_spends_the_turns_budget():
+    """The pressures that carry a retry budget advance the state the shell holds,
+    which is the only thing that stops a refusal retrying forever. Asserted on
+    the counters, not on the transcript: delete the increments and the moves
+    still shrink, but the loop never stops paying for them."""
+    memory = _window_memory()
+    picture = {
+        "role": "tool",
+        "content": [
+            {"type": "text", "text": "look"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64," + "A" * 4000}},
+        ],
+    }
+
+    state = WindowState(image_window=2, image_budget=10)
+    shown = [dict(picture, content=list(picture["content"])) for _ in range(3)]
+    first = asyncio.run(memory.shrink(shown, pressure=WindowPressure.IMAGES_TOO_LARGE, state=state, model="m"))
+    assert first.changed and state.image_strip_retries == 1, "the first refusal is paid for"
+    assert state.image_budget is None and state.image_window == 1, "the window closed a notch"
+
+    state.image_strip_retries = shrink_module.MAX_IMAGE_STRIP_RETRIES
+    spent = asyncio.run(
+        memory.shrink(
+            [dict(picture, content=list(picture["content"]))],
+            pressure=WindowPressure.IMAGES_TOO_LARGE,
+            state=state,
+            model="m",
+        )
+    )
+    assert not spent.changed, "a turn out of budget stops retrying"
+
+    demote_state = WindowState(image_window=2)
+    demoted = asyncio.run(
+        memory.shrink(
+            [dict(picture, content=list(picture["content"]))],
+            pressure=WindowPressure.TOOL_IMAGES_REFUSED,
+            state=demote_state,
+            model="m",
+        )
+    )
+    assert demoted.changed and demote_state.image_demote_retries == 1
+    again = asyncio.run(
+        memory.shrink(
+            [dict(picture, content=list(picture["content"]))],
+            pressure=WindowPressure.TOOL_IMAGES_REFUSED,
+            state=demote_state,
+            model="m",
+        )
+    )
+    assert not again.changed, "demotion is once per turn, and the counter is what says so"
+
+
+def test_the_engine_is_handed_a_turn_memory_briefed_from_the_charter():
+    """The join, not the two halves. A charter is bound, a real assemble runs,
+    and what the engine receives carries the brief -- which it can only do if
+    Memory filled the turn before handing it over. Without this, deleting the
+    ``_briefed`` call leaves every other test in this file green."""
+    from raven.agent.subagent.charter import Charter, charter_scope
+    from raven.contracts.assembled import TokenBudget
+    from raven.contracts.context import TurnContext
+
+    seen: dict[str, object] = {}
+
+    class _Recording:
+        owns_compaction = False
+
+        async def assemble(self, session_key, session_messages, budget, *, turn):
+            seen["brief"] = turn.task_brief
+            seen["done_when"] = turn.task_done_when
+            return object()
+
+        async def after_turn(self, session_key, outcome): ...
+
+    memory = DefaultMemory(
+        _Recording(),
+        provider=lambda: SimpleNamespace(generation=None),
+        model=lambda: "m",
+        context_window_tokens=lambda: 1_000,
+        tool_definitions=lambda: [],
+        system_prompt=lambda skills: "S",
+        compaction=lambda: SimpleNamespace(enabled=False),
+        output_ceiling=lambda model=None: 256,
+    )
+    budget = TokenBudget(
+        context_length=8000, reserved_output=1000, reserved_tools=0, reserved_system=0, available_history=7000
+    )
+
+    with charter_scope(Charter(prompt="Only look at A.", stop_when="both tables land")):
+        asyncio.run(memory.assemble("s1", [], budget, turn=TurnContext(current_message="hi")))
+
+    assert seen == {"brief": "Only look at A.", "done_when": "both tables land"}, (
+        "the engine was handed a turn Memory never briefed"
+    )

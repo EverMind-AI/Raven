@@ -19,6 +19,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from raven.agent.harness.action import DefaultAction
+from raven.agent.harness.action import bind as bind_action
 from raven.agent.harness.capability import DefaultCapability
 from raven.agent.harness.memory import DefaultMemory
 from raven.agent.harness.memory import bind as bind_memory
@@ -38,6 +39,8 @@ def default_harness_modules(
     model: Callable[[], str],
     context_window_tokens: Callable[[], int],
     system_prompt: Callable[[list[Any] | None], str],
+    compaction: Callable[[], Any],
+    output_ceiling: Callable[[str | None], int],
 ) -> HarnessModules:
     """Assemble the default four around this generation's own organs."""
     memory = DefaultMemory(
@@ -47,12 +50,14 @@ def default_harness_modules(
         context_window_tokens=context_window_tokens,
         tool_definitions=lambda: registry_provider().get_definitions(),
         system_prompt=system_prompt,
+        compaction=compaction,
+        output_ceiling=output_ceiling,
     )
     return HarnessModules(
         memory=bind_memory(memory),
         planning=DefaultPlanning(),
         capability=DefaultCapability(registry_provider),
-        action=DefaultAction(),
+        action=bind_action(DefaultAction()),
     )
 
 
