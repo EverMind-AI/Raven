@@ -1,9 +1,12 @@
 // @vitest-environment happy-dom
-import { act, cleanup, fireEvent, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { createElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import * as settingsDialog from '../../state/settings'
 import { resetSources, setSources } from '../../state/sources'
-import { install, mount, source as settingsSource } from '../../test/settingsHarness'
+import { install, mount, settle, snap, source as settingsSource } from '../../test/settingsHarness'
+import { SettingsApp } from './SettingsApp'
 import * as store from './store'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -23,6 +26,28 @@ afterEach(() => {
 })
 
 describe('settings root', () => {
+  it('goes up before the values are in, and says so until they land', async () => {
+    /* The catalogue behind `model.options` is seconds of work on a home with
+       many providers, and the dialog used to await the whole load before
+       lifting the veil -- a click with nothing on screen for that long. The
+       veil is what the person is waiting for, so it goes first. */
+    let land: (() => void) | null = null
+    const data = snap()
+    install(data, { load: () => new Promise((resolve) => { land = () => resolve(data) }) })
+    settingsDialog.settingsTab.id = 'general'
+    render(createElement(SettingsApp), { container: document.getElementById('spanels')! })
+
+    const opening = store.open()
+    await settle()
+    expect(settingsDialog.open).toHaveBeenCalled()
+    expect(document.querySelector('.settings-soonbox')!.textContent).toBe('gui.settings.loading')
+
+    land!()
+    await act(async () => { await opening })
+    expect(document.querySelector('.settings-soonbox')).toBeNull()
+    expect(document.querySelectorAll('.settings-row').length).toBeGreaterThan(0)
+  })
+
   it('portals eight nav entries into the shell and titles the header with the open section', async () => {
     install()
     await mount('general')

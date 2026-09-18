@@ -160,14 +160,27 @@ export function refreshSoon(): void {
   refreshTimer = setTimeout(() => { refreshTimer = null; void refresh() }, REFRESH_SOON_MS)
 }
 
+/* One load at a time: the dialog opens before its values are in, so the open
+   and the deferred first draw can both ask, and `model.options` is seconds of
+   work on a home with many providers. */
+let loading: Promise<void> | null = null
+
 export async function refresh(): Promise<void> {
-  set({ loaded: true })
-  try {
-    const snap = await source().load()
-    set({ snap, epoch: get().epoch + 1 })
-  } catch (e) {
-    toast(t('gui.op.load_failed', { detail: (e as Error).message || String(e) }))
-  }
+  if (loading) return loading
+  loading = (async () => {
+    try {
+      const snap = await source().load()
+      set({ snap, loaded: true, epoch: get().epoch + 1 })
+    } catch (e) {
+      /* Loaded stays what it was: a failed load leaves the pages on the last
+         values rather than on a shell that says nothing. */
+      set({ epoch: get().epoch + 1 })
+      toast(t('gui.op.load_failed', { detail: (e as Error).message || String(e) }))
+    } finally {
+      loading = null
+    }
+  })()
+  return loading
 }
 
 /* Where the boot's own draw step and the language repaint land (app/boot.ts,
@@ -184,12 +197,16 @@ export function redraw(): void {
   }
 }
 
-/* Load, draw, then lift the veil, in that order, so the dialog never greets
-   with stale rows. */
+/* The veil first, the values after: `settings.get` is quick but the model
+   catalogue is not -- on a home with many providers `model.options` spends
+   seconds, and awaiting it here left the click with nothing on screen for that
+   whole time. The dialog goes up on the section it opens, showing the loading
+   line until the snapshot lands (SettingsApp reads `loaded` for that), and a
+   reopen shows the values it already has while the reload runs. */
 export async function open(): Promise<void> {
-  await refresh()
   redraw()
   settingsDialog.open()
+  await refresh()
 }
 
 export async function openModels(): Promise<void> {
