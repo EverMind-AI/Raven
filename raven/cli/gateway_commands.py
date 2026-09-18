@@ -819,14 +819,6 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 # already gone would record as a failure rather than a stop.
                 # dispose() cancels again, which is an idempotent no-op.
                 await agent.subagents.cancel_all()
-                # ``agent`` is still the outgoing loop here; the caller rebinds
-                # it after this returns. Its skill watcher has to go with the
-                # generation: the next one mints its own, and a watcher left
-                # behind is a daemon thread parked in native code that
-                # Py_FinalizeEx will still tear the interpreter down under --
-                # so a reloaded gateway segfaults on stop even though the
-                # teardown chain stops the live generation's.
-                agent.context.skills.stop_file_watcher()
                 if page_mount is not None:
                     await page_mount.teardown()
                     page_mount = None
@@ -1110,6 +1102,19 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 await close_pool()
                 await agent.close_mcp()
                 agent.stop()
+                # A reload can stage a generation that this shutdown reaches
+                # before the serving loop consumes it. It was built, so it owns
+                # a skill watcher, and no unbind will ever retire it. take()'s
+                # swapping flag is inert here: only release() reads it, and this
+                # process is not going to reach one.
+                staged = swaps.take()
+                if staged is not None:
+                    # Not through discard(): that method is contract-bound to
+                    # stay call-free, because a call there would mean an organ
+                    # was started before FREEZE. The watcher is exactly such an
+                    # organ -- the context builder starts it in __init__ -- so
+                    # it is retired here rather than pretending otherwise.
+                    staged.runtime.loop.context.skills.stop_file_watcher()
                 # The context builder's skill watcher is a daemon thread parked
                 # inside watchfiles' Rust watch(). Daemon status does not make
                 # process exit safe while it sits in native code: Py_FinalizeEx

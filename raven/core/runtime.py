@@ -93,6 +93,11 @@ class RavenRuntime:
         await self.loop.subagents.cancel_all()
         await self.loop.close_mcp()
         self.loop.stop()
+        # The context builder started a skill watcher in __init__, so it goes
+        # with the generation that owns it. Left running it is a daemon thread
+        # parked in native code, and Py_FinalizeEx tears the interpreter down
+        # under that call whenever the process later exits.
+        self.loop.context.skills.stop_file_watcher()
         if self.backend is not None:
             await self.loop.drain_backend_stores()
             try:
@@ -106,11 +111,19 @@ class RavenRuntime:
     def discard(self) -> None:
         """Drop a candidate that never served.
 
-        A built-but-never-started generation holds no started resources --
-        no backend.start(), no MCP connections, no running loop -- so there is
-        nothing to stop; dispose()'s sequence assumes a generation that ran.
-        The method exists so a superseded candidate is dropped on purpose,
-        not by falling out of scope.
+        A built-but-never-started generation holds none of the resources
+        dispose()'s sequence retires -- no backend.start(), no MCP
+        connections, no running loop -- so that sequence, which assumes a
+        generation that ran, does not apply here.
+
+        One resource does exist from construction rather than from starting:
+        the context builder starts its skill watcher in __init__, so even a
+        candidate nothing ever served owns a daemon thread parked in native
+        code. Retiring it here would put a call in this method, which the
+        phase ordering forbids -- starting an organ before FREEZE is the thing
+        that emptiness is asserting against. The gateway's shutdown stops that
+        watcher directly instead, and the watcher not being construction-time
+        work in the first place is a separate change.
         """
         return None
 

@@ -458,8 +458,16 @@ async def test_a_backend_whose_stop_raises_does_not_break_the_generation_swap():
         async def cancel_all(self):
             order.append("cancel_all")
 
+    class _Skills:
+        def stop_file_watcher(self) -> None:
+            order.append("stop_file_watcher")
+
+    class _Context:
+        skills = _Skills()
+
     class _Loop:
         subagents = _Subagents()
+        context = _Context()
 
         async def stop_plugin_services(self):
             order.append("stop_plugin_services")
@@ -484,3 +492,54 @@ async def test_a_backend_whose_stop_raises_does_not_break_the_generation_swap():
     await rt.dispose()
 
     assert order.index("drain_backend_stores") < order.index("stop")
+
+
+def _runtime_with_watcher(stopped: list[str]):
+    """A runtime whose loop carries the one collaborator retirement must reach."""
+    from raven.core.runtime import RavenRuntime
+
+    class _Skills:
+        def stop_file_watcher(self) -> None:
+            stopped.append("watcher")
+
+    class _Context:
+        skills = _Skills()
+
+    class _Subagents:
+        async def cancel_all(self):
+            pass
+
+    class _Loop:
+        subagents = _Subagents()
+        context = _Context()
+
+        async def stop_plugin_services(self):
+            pass
+
+        async def close_mcp(self):
+            pass
+
+        def stop(self):
+            pass
+
+    return RavenRuntime(
+        loop=_Loop(),
+        plugin_registry=None,
+        backend=None,
+        strategies=None,
+        deliverables=None,
+    )
+
+
+async def test_disposing_a_generation_stops_its_skill_watcher():
+    """Retirement owns the watcher, because the generation's loop started it.
+
+    ``ContextBuilder`` starts ``SkillFileWatcher`` in ``__init__``, so every
+    built generation owns a daemon thread parked in the Rust ``watch()`` of
+    watchfiles. Left running it is what ``Py_FinalizeEx`` tears the interpreter
+    down under, so the thread has to go with the generation rather than with
+    any one caller's teardown.
+    """
+    stopped: list[str] = []
+    await _runtime_with_watcher(stopped).dispose()
+    assert stopped == ["watcher"]

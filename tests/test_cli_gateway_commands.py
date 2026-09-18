@@ -541,27 +541,46 @@ def test_shutdown_stops_the_skill_file_watcher() -> None:
     assert "stop_file_watcher()" in teardown
 
 
-def test_unbinding_a_generation_stops_its_skill_watcher() -> None:
-    """A generation swap must stop the outgoing loop's skill watcher.
+def test_unbinding_a_generation_retires_it_through_dispose() -> None:
+    """A generation swap must retire the outgoing generation, watcher included.
 
     ``build_runtime`` mints a fresh ``AgentLoop`` per generation, so each swap
-    starts a new ``SkillFileWatcher`` and abandons the previous one. Stopping
-    only the live generation's watcher at process exit is not enough: a watcher
-    left by an earlier generation is still parked in ``watchfiles``' Rust
-    ``watch()`` when ``Py_FinalizeEx`` runs. Measured 2026-09-18 on this tree --
-    boot, one SIGHUP, then SIGTERM -- the gateway still exited -11 with the
-    teardown-chain stop in place, and exits 0 once the unbind stops it too.
+    starts a new ``SkillFileWatcher`` and abandons the previous one. Measured
+    2026-09-18 on this tree -- boot, one SIGHUP, then SIGTERM -- the gateway
+    exited -11 with only the teardown chain stopping the live generation's
+    watcher, and exits 0 once the unbind retires the outgoing one too.
 
-    ``_unbind_generation`` is a closure inside the serve command with no import
-    seam, so this pins the call in the command source.
+    Retirement is ``RavenRuntime.dispose``'s job rather than this closure's, so
+    what this pins is that the unbind reaches it; that dispose stops the watcher
+    is pinned in ``test_core_runtime_swap.py``.
     """
     import inspect
 
     from raven.cli import gateway_commands
 
     src = inspect.getsource(gateway_commands.register)
-    unbind = src.split("async def _unbind_generation", 1)[1].split("cron.allowed_channels.discard", 1)[0]
-    assert "stop_file_watcher()" in unbind
+    unbind = src.split("async def _unbind_generation", 1)[1].split("async def _request_swap", 1)[0]
+    assert "runtime.dispose()" in unbind
+
+
+def test_shutdown_retires_a_staged_but_unconsumed_generation() -> None:
+    """A candidate the serving loop never consumed still has to be retired.
+
+    ``_request_swap`` builds the next generation -- which starts its watcher --
+    stages it, and stops the serving loop. A shutdown landing before the loop
+    calls ``take`` leaves that generation in the coordinator: it is not the
+    bound ``agent``, so the teardown chain's own stop does not reach it, and no
+    unbind will ever run for it. Left there its watcher is still parked in
+    native code when the interpreter finalizes.
+    """
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    teardown = src.split("cron.stop()", 1)[1]
+    assert "swaps.take()" in teardown
+    assert "staged.runtime.loop.context.skills.stop_file_watcher()" in teardown
 
 
 def test_cron_config_notify_missed_defaults_on() -> None:
