@@ -1,0 +1,315 @@
+/*
+ * EverMind brand skin for Material for MkDocs.
+ *
+ * The repository forbids committing HTML (AGENTS.md section 7, machine-checked
+ * by scripts/check_large_files.py), so the theme cannot be customised through
+ * Material's usual overrides/*.html partials. Everything here is therefore done
+ * by remapping Material's own CSS custom properties onto the EverMind token set
+ * in .claude/skills/evermind-web-design/references/tokens.css, then correcting
+ * the handful of places where Material hardcodes a value instead of reading a
+ * variable -- chiefly its rounded corners, which are the one thing that most
+ * breaks the brand's square geometry.
+ */
+
+@import url("https://fonts.googleapis.com/css2?family=Bungee+Shade&family=Cormorant+Garamond:ital,wght@1,500;1,600&family=Brygada+1918:ital,wght@0,400;0,500&display=swap");
+
+:root {
+  --em-canvas: #fcfcf5;
+  --em-panel: #f2f1e9;
+  --em-panel-warm: #ebe8dd;
+  --em-ink: #1c1b1b;
+  --em-text: #1c1b1b;
+  --em-text-serif: #423924;
+  --em-text-muted: #70695a;
+  --em-text-faint: #8f887b;
+  --em-text-on-dark: #f2f1e9;
+  --em-gold: #d99400;
+  --em-gold-light: #f7cb72;
+  --em-gold-olive: #9c7c1e;
+  --em-hairline: rgba(49, 48, 46, 0.08);
+
+  --em-font-serif: "Cormorant Garamond", serif;
+  --em-font-label: "Brygada 1918", serif;
+  --em-font-display: "Bungee Shade", sans-serif;
+}
+
+/* ------------------------------------------------- Material remapping --- */
+
+[data-md-color-scheme="default"] {
+  --md-default-bg-color: var(--em-canvas);
+  --md-default-fg-color: var(--em-text);
+  --md-default-fg-color--light: var(--em-text-muted);
+  --md-default-fg-color--lighter: var(--em-text-faint);
+  --md-default-fg-color--lightest: var(--em-hairline);
+
+  --md-primary-fg-color: var(--em-ink);
+  --md-primary-fg-color--light: #2b2a29;
+  --md-primary-fg-color--dark: #050505;
+  --md-primary-bg-color: var(--em-text-on-dark);
+  --md-primary-bg-color--light: var(--em-text-faint);
+
+  --md-accent-fg-color: var(--em-gold);
+  --md-accent-fg-color--transparent: rgba(217, 148, 0, 0.1);
+
+  --md-typeset-color: var(--em-text);
+  --md-typeset-a-color: var(--em-gold-olive);
+
+  --md-code-bg-color: var(--em-panel);
+  --md-code-fg-color: var(--em-text);
+
+  --md-footer-bg-color: var(--em-ink);
+  --md-footer-bg-color--dark: #050505;
+  --md-footer-fg-color: var(--em-text-on-dark);
+}
+
+/* ------------------------------------------------------- Square first --- */
+/*
+ * Material rounds buttons, code blocks, tables, admonitions, search and tabs.
+ * Square corners are the brand's strongest identity cue, so they are reset
+ * globally and re-granted only to the two shapes the brand keeps round:
+ * cards and pills.
+ */
+
+.md-typeset pre > code,
+.md-typeset .highlight,
+.md-typeset table:not([class]),
+.md-typeset .admonition,
+.md-typeset details,
+.md-typeset code,
+.md-search__form,
+.md-search__output,
+.md-nav__link,
+.md-tabs__link,
+.md-button {
+  border-radius: 0;
+}
+
+/* --------------------------------------------------------- Typography --- */
+
+.md-typeset h1 {
+  font-weight: 500;
+  font-size: clamp(2.1rem, 4.4vw, 2.9rem);
+  line-height: 1.04;
+  letter-spacing: -0.045em;
+  color: var(--em-ink);
+  margin-bottom: 0.4em;
+}
+
+.md-typeset h2 {
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--em-ink);
+  margin-top: 2.4em;
+  border-top: 1px solid var(--em-hairline);
+  padding-top: 1.4em;
+}
+
+.md-typeset h3 {
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--em-text-serif);
+}
+
+.md-typeset p,
+.md-typeset li {
+  color: var(--em-text-muted);
+}
+
+.md-typeset a {
+  text-decoration: none;
+}
+
+.md-typeset a:hover {
+  color: var(--em-gold);
+}
+
+/* The one italic serif accent word permitted inside a headline. */
+.md-typeset .em-accent {
+  font-family: var(--em-font-serif);
+  font-style: italic;
+  font-weight: 600;
+  color: var(--em-gold-olive);
+  letter-spacing: 0;
+}
+
+/* Gold kicker above the page title, words joined by a middot. */
+.md-typeset .em-eyebrow {
+  color: var(--em-gold);
+  font-weight: 500;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  margin-bottom: 0.9rem;
+}
+
+/* One-sentence standfirst under an h1, in the secondary serif. */
+.md-typeset .em-standfirst {
+  font-family: var(--em-font-label);
+  font-size: 0.95rem;
+  line-height: 1.55;
+  letter-spacing: -0.01em;
+  color: var(--em-text-serif);
+  margin-top: -0.3em;
+  margin-bottom: 2.2em;
+}
+
+/* ------------------------------------------------------------- Header --- */
+
+.md-header {
+  background-color: var(--em-ink);
+  box-shadow: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.md-header__title {
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+.md-tabs {
+  background-color: var(--em-ink);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.md-tabs__link {
+  font-size: 0.72rem;
+  font-weight: 500;
+  opacity: 0.62;
+}
+
+.md-tabs__link:hover,
+.md-tabs__link--active {
+  opacity: 1;
+}
+
+/* Gold underline marks the active section, the only accent in the bar. */
+.md-tabs__item--active {
+  box-shadow: inset 0 -2px 0 var(--em-gold);
+}
+
+.md-search__form {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.md-search__form:hover {
+  background-color: rgba(255, 255, 255, 0.14);
+}
+
+/* --------------------------------------------------------- Navigation --- */
+/*
+ * Sidebar group labels are set as gold kickers so the sidebar reads as
+ * sections rather than a flat list.
+ */
+
+.md-nav__title {
+  color: var(--em-text-faint);
+  font-weight: 500;
+}
+
+.md-nav--secondary .md-nav__title,
+.md-nav__item--section > .md-nav__link {
+  color: var(--em-gold);
+  font-weight: 500;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.md-nav__link {
+  color: var(--em-text-muted);
+}
+
+.md-nav__link--active,
+.md-nav__link:hover {
+  color: var(--em-ink);
+}
+
+.md-nav__link--active {
+  font-weight: 500;
+}
+
+/* ------------------------------------------------------------- Content --- */
+
+.md-typeset pre > code,
+.md-typeset .highlight {
+  border: 1px solid var(--em-hairline);
+}
+
+.md-typeset table:not([class]) {
+  border: 1px solid var(--em-hairline);
+  box-shadow: none;
+}
+
+.md-typeset table:not([class]) th {
+  background-color: var(--em-panel);
+  color: var(--em-ink);
+  font-weight: 500;
+}
+
+.md-typeset hr {
+  border-bottom: 1px solid var(--em-hairline);
+}
+
+/* --------------------------------------------------------- Card grids --- */
+/*
+ * The landing page is a directory of linked tiles rather than prose. Cards are
+ * one of the two shapes the brand keeps rounded; they stay flat, with a
+ * hairline border and a gold rule that appears on hover.
+ */
+
+.md-typeset .grid.cards > ul > li,
+.md-typeset .grid > .card {
+  background-color: var(--em-panel);
+  border: 1px solid var(--em-hairline);
+  border-radius: 12px;
+  box-shadow: none;
+  padding: 1.4rem 1.5rem;
+  transition: border-color 120ms, box-shadow 120ms;
+}
+
+.md-typeset .grid.cards > ul > li:hover,
+.md-typeset .grid > .card:hover {
+  border-color: var(--em-gold-light);
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.07);
+}
+
+.md-typeset .grid.cards > ul > li > hr {
+  margin: 0.7em 0;
+  border-bottom: 1px solid var(--em-hairline);
+}
+
+.md-typeset .grid.cards > ul > li > p:first-child strong {
+  color: var(--em-ink);
+  font-size: 1.05rem;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+/* A leading numeral turns a card grid into a sequence, as on the index page. */
+.md-typeset .em-step > ul > li > p:first-child::before {
+  counter-increment: em-step;
+  content: counter(em-step);
+  display: block;
+  font-family: var(--em-font-label);
+  font-size: 1.6rem;
+  line-height: 1;
+  color: var(--em-gold);
+  margin-bottom: 0.45rem;
+}
+
+.md-typeset .em-step {
+  counter-reset: em-step;
+}
+
+/* ------------------------------------------------------------- Footer --- */
+
+.md-footer-meta {
+  background-color: #050505;
+}
+
+.md-footer__link {
+  opacity: 0.8;
+}
+
+.md-footer__link:hover {
+  opacity: 1;
+}

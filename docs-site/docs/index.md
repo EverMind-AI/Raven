@@ -1,14 +1,75 @@
-# Raven documentation
+<p class="em-eyebrow">Install · Self-Host · Operate</p>
 
-Installation, self-hosting, and the command reference for
-[Raven](https://github.com/EverMind-AI/Raven).
+# Raven <span class="em-accent">documentation</span>
 
-To install Raven for the first time, follow Quick Start in the
-[README](https://github.com/EverMind-AI/Raven#-quick-start).
+<p class="em-standfirst">Installation, self-hosting, and the command reference for Raven.</p>
 
-- [Self-Hosting](self-hosting.md) - Docker Compose, configuration, and running
-  from a source checkout.
-- [Launch WebUI](webui.md) - starting and stopping the local page.
-- [Command Reference](commands.md) - the CLI surface.
-- [Repo Layout](repo-layout.md) - the packages under `raven/` and the top-level
-  trees, which are also the canonical commit scopes.
+## Start here
+
+<div class="grid cards em-step" markdown>
+
+-   __Install Raven__
+
+    ---
+
+    Clone the repository and run the installer. Quick Start lives in the README
+    rather than here, so that a first install needs nothing but the repo page.
+
+    [:octicons-arrow-right-24: README Quick Start](https://github.com/EverMind-AI/Raven#-quick-start)
+
+-   __Self-host it__
+
+    ---
+
+    Docker Compose, configuration, and running from a source checkout.
+
+    [:octicons-arrow-right-24: Self-Hosting](self-hosting.md)
+
+-   __Open the WebUI__
+
+    ---
+
+    Starting and stopping the local page.
+
+    [:octicons-arrow-right-24: Launch WebUI](webui.md)
+
+</div>
+
+## Explore the documentation
+
+<div class="grid cards" markdown>
+
+-   __Self-Hosting__
+
+    ---
+
+    Docker Compose, configuration, and running from a source checkout.
+
+    [:octicons-arrow-right-24: Read](self-hosting.md)
+
+-   __Launch WebUI__
+
+    ---
+
+    Starting and stopping the local page.
+
+    [:octicons-arrow-right-24: Read](webui.md)
+
+-   __Command Reference__
+
+    ---
+
+    The CLI surface.
+
+    [:octicons-arrow-right-24: Read](commands.md)
+
+-   __Repo Layout__
+
+    ---
+
+    The packages under `raven/` and the top-level trees, which are also the
+    canonical commit scopes.
+
+    [:octicons-arrow-right-24: Read](repo-layout.md)
+
+</div>
