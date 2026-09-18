@@ -1410,11 +1410,14 @@ function ChunkRow({
   view,
   picked,
   busy,
+  at,
 }: {
   chunk: KbChunk
   view: 'full' | 'ellipse'
   picked: boolean
   busy: boolean
+  /* Whether the preview is currently showing this chunk's page. */
+  at: boolean
 }): JSX.Element {
   const path = chunk.heading_path ?? []
   const id = chunk.chunk_id || ''
@@ -1429,8 +1432,21 @@ function ChunkRow({
   const last = typeof chunk.page_end === 'number' ? chunk.page_end : null
   const spread = page !== null && last !== null && last > page
   const origins = [...new Set(parts.map((part) => part.section_ordinal).filter((n) => typeof n === 'number'))]
+
+  /* Clicking the piece shows the page it was cut from -- except when the click
+     was a reader selecting words out of it, which is what a click on prose
+     usually is and what the editor being on double-click already protects.
+     A click that produced a selection is that; it moves nothing. */
+  const show = (event: React.MouseEvent): void => {
+    if (page === null) return
+    const target = event.target as HTMLElement
+    if (target.closest('input, label, button')) return
+    if ((window.getSelection()?.toString() ?? '').trim()) return
+    store.focusPage(page, id)
+  }
+
   return (
-    <div className={`kbchunk${on ? '' : ' off'}`}>
+    <div className={`kbchunk${on ? '' : ' off'}${at ? ' at' : ''}`} onClick={show}>
       <div className="kbchunkhd">
         <input
           type="checkbox"
@@ -1441,10 +1457,19 @@ function ChunkRow({
         />
         <span className="kbchunkix">#{chunk.chunk_index + 1}</span>
         {chunk.layout_type && <span className="kbchunkty">{chunk.layout_type}</span>}
+        {/* The badge is the affordance, because it is the thing that names the
+            page: the row as a whole answers to a click too, but a reader
+            looking for "show me this slide" looks here. */}
         {page !== null && (
-          <span className="kbchunkpg" title={spread ? t('gui.kb.chunk_show_first_page', { n: page }) : undefined}>
-            {spread ? t('gui.kb.chunks_pages', { from: page, to: last }) : t('gui.kb.chunks_page', { n: page })}
-          </span>
+          <button
+            className="kbchunkpg"
+            title={t(spread ? 'gui.kb.chunk_show_first_page' : 'gui.kb.chunk_show_page', { n: page })}
+            onClick={() => store.focusPage(page, id)}
+          >
+            {spread
+              ? t('gui.kb.chunks_pages', { from: page, to: last })
+              : t('gui.kb.chunks_page', { n: page })}
+          </button>
         )}
         {/* What the flattened fields cannot say. Hovering names every piece:
             which section it came from, what page, and under which heading --
@@ -1689,6 +1714,7 @@ function ChunkList({ s }: { s: ReturnType<typeof store.getState> }): JSX.Element
               view={s.chunkView}
               picked={s.chunkPicked.includes(chunk.chunk_id || '')}
               busy={s.chunkBusy}
+              at={!!chunk.chunk_id && chunk.chunk_id === s.previewChunk}
             />
           ))}
         </div>
@@ -1773,8 +1799,7 @@ function ChunkDialog({ chunk, busy }: { chunk?: KbChunk; busy: boolean }): JSX.E
   )
 }
 
-function DocViewer({ doc }: { doc: KbDoc }): JSX.Element {
-
+function DocViewer({ doc, page }: { doc: KbDoc; page: number | null }): JSX.Element {
   const kind = store.previewKind(doc)
   return (
     <>
@@ -1806,7 +1831,18 @@ function DocViewer({ doc }: { doc: KbDoc }): JSX.Element {
             </a>
           </div>
         ) : (
-          <iframe className="kbframe" src={store.previewUrl(doc)} title={doc.source} />
+          /* Keyed on the page so a new one re-navigates the frame. Nothing
+             else can move it: the response is sandboxed to an opaque origin,
+             so `contentWindow` is out of reach and only the src is ours to
+             set. The cost is a reload, which the gateway answers from its
+             render cache -- a re-click is a file read, not another
+             LibreOffice run. */
+          <iframe
+            key={page ?? 0}
+            className="kbframe"
+            src={store.previewUrl(doc, page)}
+            title={doc.source}
+          />
         )}
       </div>
     </>
@@ -2028,7 +2064,7 @@ export function KnowledgeApp(): JSX.Element {
     return (
       <>
         <div className="kbview">
-          <DocViewer doc={s.viewing} />
+          <DocViewer doc={s.viewing} page={s.previewPage} />
           <ChunkList s={s} />
         </div>
         {/* The overlays belong to the page, not to the panel under them: the

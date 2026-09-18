@@ -5443,6 +5443,15 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    rather than the whole of it, so it carries the cursor that invites the
    hover that names every part. */
 .kbchunkspan { cursor: help; border-style: dashed; }
+/* The page badge is a control on a file the viewer can scroll: it takes the
+   preview to that page. A plain badge everywhere else, so the two read the
+   same until the cursor says otherwise. */
+.kbchunkpg { background: none; cursor: pointer; font-family: inherit; }
+.kbchunkpg:hover { color: var(--amber); border-color: var(--amber); }
+/* Which piece the preview beside the list is answering to. The whole row, not
+   a mark on it: the reader is looking back and forth between two panels and
+   needs to find their place in the list at a glance. */
+.kbchunk.at { border-color: var(--amber); }
 .kbwritten { color: var(--gold); border-color: var(--gold); }
 .kbchunkpath {
   font-size: 10.5px; color: var(--muted); min-width: 0;

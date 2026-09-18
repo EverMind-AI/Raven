@@ -1656,6 +1656,92 @@ describe('viewing the original file', () => {
     )
   })
 
+  it('takes the preview to the page a chunk came from', async () => {
+    /* What a deck's chunk list can do that a document's cannot: a slide is a
+       page, the preview is that deck rendered to PDF, and the two agree page
+       for page -- so a piece can put the slide it was cut from in front of the
+       reader rather than describing it. */
+    await openBase([doc({ id: 'd9', source: 'deck.pptx', status: 'ready', chunk_count: 3 })])
+    source({
+      bases: async () => [base({ id: 'b1', name: 'handbook' })],
+      documents: async () => [doc({ id: 'd9', source: 'deck.pptx', status: 'ready', chunk_count: 3 })],
+      chunks: async () => ({
+        chunks: [
+          { chunk_index: 0, total_chunks: 2, text: 'Opening', chunk_id: 'c1', page_number: 1 },
+          { chunk_index: 1, total_chunks: 2, text: 'Closing', chunk_id: 'c2', page_number: 7 },
+        ],
+        total: 2,
+      }),
+    })
+    await clickName('deck.pptx')
+
+    const frame = () => document.querySelector('.kbframe') as HTMLIFrameElement
+    expect(frame().getAttribute('src')).toBe('/knowledge/file?document=d9&render=pdf')
+
+    await act(async () => {
+      ;(document.querySelectorAll('.kbchunk')[1] as HTMLElement).click()
+    })
+
+    /* `#page=` is the PDF fragment every built-in viewer reads, and the only
+       way to move this frame: the response is sandboxed to an opaque origin,
+       so the page cannot reach in and scroll it. */
+    expect(frame().getAttribute('src')).toBe('/knowledge/file?document=d9&render=pdf#page=7')
+    /* And the list says which piece the preview is answering to. */
+    expect(document.querySelectorAll('.kbchunk')[1]?.classList.contains('at')).toBe(true)
+    expect(document.querySelectorAll('.kbchunk')[0]?.classList.contains('at')).toBe(false)
+  })
+
+  it('does not move the preview when the click was a reader selecting words', async () => {
+    /* A single click on prose is how a word gets selected, which is why the
+       editor is on double-click. Taking that away would make the panel
+       unreadable. */
+    await openBase([doc({ id: 'd9', source: 'deck.pptx', status: 'ready', chunk_count: 1 })])
+    source({
+      bases: async () => [base({ id: 'b1', name: 'handbook' })],
+      documents: async () => [doc({ id: 'd9', source: 'deck.pptx', status: 'ready', chunk_count: 1 })],
+      chunks: async () => ({
+        chunks: [{ chunk_index: 0, total_chunks: 1, text: 'Opening', chunk_id: 'c1', page_number: 4 }],
+        total: 1,
+      }),
+    })
+    await clickName('deck.pptx')
+    const selection = { toString: () => '  some selected words  ' } as Selection
+    const spy = vi.spyOn(window, 'getSelection').mockReturnValue(selection)
+
+    await act(async () => {
+      ;(document.querySelector('.kbchunk') as HTMLElement).click()
+    })
+
+    expect((document.querySelector('.kbframe') as HTMLIFrameElement).getAttribute('src')).toBe(
+      '/knowledge/file?document=d9&render=pdf',
+    )
+    spy.mockRestore()
+  })
+
+  it('leaves the preview alone for a chunk that names no page', async () => {
+    /* A text file has no pages. Scrolling somewhere arbitrary would be worse
+       than doing nothing. */
+    await openBase([doc({ id: 'd8', source: 'notes.txt', status: 'ready', chunk_count: 1 })])
+    source({
+      bases: async () => [base({ id: 'b1', name: 'handbook' })],
+      documents: async () => [doc({ id: 'd8', source: 'notes.txt', status: 'ready', chunk_count: 1 })],
+      chunks: async () => ({
+        chunks: [{ chunk_index: 0, total_chunks: 1, text: 'Just text', chunk_id: 'c1' }],
+        total: 1,
+      }),
+    })
+    await clickName('notes.txt')
+
+    await act(async () => {
+      ;(document.querySelector('.kbchunk') as HTMLElement).click()
+    })
+
+    expect((document.querySelector('.kbframe') as HTMLIFrameElement).getAttribute('src')).toBe(
+      '/knowledge/file?document=d8',
+    )
+    expect(document.querySelector('.kbchunk')?.classList.contains('at')).toBe(false)
+  })
+
   it('offers a download rather than framing what cannot be drawn', async () => {
     await openBase([doc({ id: 'd3', source: 'archive.zip', status: 'ready' })])
 

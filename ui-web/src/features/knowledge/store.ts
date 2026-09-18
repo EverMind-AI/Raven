@@ -61,6 +61,13 @@ interface State {
   /* A search is in flight. Its own flag rather than `busy`: that one gates
      every write on the page, and a search changes nothing. */
   searching: boolean
+  /* Which page of the open file the preview is showing, when a chunk sent it
+     there. Null is the file as it opens, at page one, which is not the same
+     state: it is what says nothing has been asked for yet. */
+  previewPage: number | null
+  /* The chunk that asked for it, so the list can show which one the preview
+     answers to. A chunk id, or null. */
+  previewChunk: string | null
   /* The recall panel is up. */
   recall: boolean
   /* The settings panel is up. */
@@ -144,6 +151,8 @@ const EMPTY: State = {
   hits: null,
   byKeyword: [],
   cost: null,
+  previewPage: null,
+  previewChunk: null,
   searching: false,
   recall: false,
   settings: false,
@@ -984,9 +993,15 @@ export async function readText(doc: KbDoc): Promise<string> {
   return res.text()
 }
 
-export function previewUrl(doc: KbDoc): string {
+export function previewUrl(doc: KbDoc, page?: number | null): string {
   const base = `/knowledge/file?document=${encodeURIComponent(doc.id)}`
-  return previewKind(doc) === 'converted' ? `${base}&render=pdf` : base
+  const url = previewKind(doc) === 'converted' ? `${base}&render=pdf` : base
+  /* `#page=N` is the PDF fragment every built-in viewer reads, and the only
+     way to move this frame: the response arrives under a CSP sandbox with an
+     opaque origin, so the page cannot reach into it and scroll it itself.
+     Only for a PDF -- on anything else the fragment would be an anchor name
+     that does not exist. */
+  return typeof page === 'number' && page > 1 && previewKind(doc) === 'converted' ? `${url}#page=${page}` : url
 }
 
 /* How many pieces a page holds. Twenty is what a reader scans without the page
@@ -1000,6 +1015,8 @@ export function openDoc(doc: KbDoc): void {
      not a fact about the file they just opened. */
   set({
     viewing: doc,
+    previewPage: null,
+    previewChunk: null,
     chunks: null,
     chunksFailed: null,
     chunksTotal: 0,
@@ -1010,6 +1027,21 @@ export function openDoc(doc: KbDoc): void {
     chunkPicked: [],
   })
   void loadChunks(doc)
+}
+
+/* Take the preview to the page a chunk came from.
+
+   The one thing a deck's chunk list can do that a document's cannot: a slide
+   is a page, the preview is that deck rendered to PDF, and the two agree page
+   for page -- so a chunk can put the slide it was cut from in front of the
+   reader instead of describing it.
+
+   Called with nothing for a chunk that names no page (a text file, a
+   spreadsheet row), where the right answer is to do nothing at all rather than
+   to scroll somewhere arbitrary. */
+export function focusPage(page: number | null | undefined, chunkId = ''): void {
+  if (typeof page !== 'number' || page < 1) return
+  set({ previewPage: page, previewChunk: chunkId || null })
 }
 
 export function closeDoc(): void {

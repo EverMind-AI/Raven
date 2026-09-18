@@ -3171,6 +3171,10 @@
       "en": "section {section}, page {page} -- {path}",
       "zh": "第 {section} 个小节，第 {page} 页 -- {path}"
     },
+    "gui.kb.chunk_show_page": {
+      "en": "Show page {n} of the file beside this",
+      "zh": "在左侧显示文件的第 {n} 页"
+    },
     "gui.kb.download": {
       "en": "Download",
       "zh": "下载"
