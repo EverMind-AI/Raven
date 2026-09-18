@@ -101,6 +101,38 @@ def _build_gateway_channels(config) -> set[str]:
     return config.channels.enabled_channel_names()
 
 
+def _wire_channel_intake(channels, dispatch) -> None:
+    """Hand ``dispatch`` to every channel the manager holds, and to every one it starts later.
+
+    The launch loop used to be the only place a channel got its spine dispatch,
+    and a channel can be born after it: the page enables an entrance by writing
+    config, and the manager builds and starts the adapter on the spot. Such a
+    channel had no ``intake._submit``, logged "no spine dispatch wired" once per
+    message and dropped every one of them -- while the page drew it connected
+    and the adapter's own login had succeeded (2026-09-14, weixin).
+
+    The outlet half of the same hazard was already covered: ``on_started``
+    registers an outlet so a hot-started channel can be replied to. The intake
+    is composed onto that same hook here, after whatever it already did, so
+    neither half can be wired without the other.
+    """
+
+    def wire(ch) -> None:
+        ch.intake.set_submit(dispatch)
+
+    for ch in channels.channels.values():
+        wire(ch)
+
+    outlet_hook = channels.on_started
+
+    def on_started(ch) -> None:
+        if outlet_hook is not None:
+            outlet_hook(ch)
+        wire(ch)
+
+    channels.on_started = on_started
+
+
 def _format_question_body(params: dict) -> str:
     """Render one ``clarify.request`` as chat text.
 
@@ -760,8 +792,12 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     else:
                         gw_scheduler.submit(req)  # fire-and-forget (no readback)
 
-                for _ch in channels.channels.values():
-                    _ch.intake.set_submit(_inbound_dispatch)
+                # Both halves of a channel's wiring outlive this generation's
+                # launch, because a channel can be born after it (see
+                # `_wire_channel_intake`). Composed here rather than beside the
+                # outlet hook above, because `_inbound_dispatch` is born in
+                # this generation and the outlet hook is not.
+                _wire_channel_intake(channels, _inbound_dispatch)
 
             from raven.core.runtime import SwapCandidate, SwapCoordinator
 
