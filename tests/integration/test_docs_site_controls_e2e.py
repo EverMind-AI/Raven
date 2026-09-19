@@ -159,7 +159,10 @@ HEADING_TEXT = """() => {
   const h = document.querySelector('h1').cloneNode(true);
   const anchor = h.querySelector('.headerlink');
   if (anchor) anchor.remove();
-  return h.textContent.trim();
+  // the Chinese build marks its word boundaries with a zero-width space, and
+  // a query carrying them matches the stored token exactly -- which is a
+  // thing no reader can type, so the test would prove nothing
+  return h.textContent.replace(/\u200b/g, '').trim();
 }"""
 
 
@@ -331,6 +334,39 @@ def test_the_search_box_does_not_animate_between_its_two_states(page: Page, site
         assert len(set(widths)) == 1, f"{state} search runs a width animation: {sorted(set(widths))[:6]}"
         timed = page.evaluate(TIMED_PARTS, checked)
         assert not timed, f"{state} search still animates: " + "; ".join(timed)
+
+
+CHINESE_WORD = """async () => {
+  const response = await fetch('search/search_index.json');
+  const index = await response.json();
+  for (const entry of index.docs) {
+    const words = (entry.title || '').split('\u200b').filter(Boolean);
+    // a word from the middle of a title: typing it can only find the page if
+    // the run was indexed as words, not kept whole
+    if (words.length > 2) return {word: words[1], location: entry.location};
+  }
+  return null;
+}"""
+
+
+def test_a_chinese_reader_finds_a_page_by_typing_one_word(page: Page, site: str) -> None:
+    """Chinese runs no spaces. The build segments it and marks each boundary,
+    and the theme's separator breaks on that mark; miss either and the whole
+    run is one token, which only answers a reader who types the run entire.
+    The word searched here is taken from the middle of a title, so it is a
+    word the segmenter found rather than anything written into this file."""
+    _open(page, site, "zh/")
+    found = page.evaluate(CHINESE_WORD)
+    assert found, "no Chinese title carries word boundaries: the build is not segmenting"
+
+    page.click(".md-search__input")
+    page.fill(".md-search__input", found["word"])
+    _await_results(page, found["word"])
+    hrefs = page.evaluate(SEARCH_RESULTS)
+    assert hrefs, f"a word from the middle of {found['location']!r} finds nothing"
+    assert any(found["location"] in href for href in hrefs), (
+        f"the page the word came from is not among its own results: {hrefs[:3]}"
+    )
 
 
 TOC_FOLLOW = """() => {

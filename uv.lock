@@ -3982,6 +3982,7 @@ dev = [
     { name = "ty" },
 ]
 docs = [
+    { name = "jieba" },
     { name = "mkdocs-git-revision-date-localized-plugin" },
     { name = "mkdocs-material" },
     { name = "mkdocs-static-i18n" },
@@ -4082,6 +4083,7 @@ dev = [
     { name = "ty", specifier = "==0.0.80" },
 ]
 docs = [
+    { name = "jieba", specifier = ">=0.42.1" },
     { name = "mkdocs-git-revision-date-localized-plugin", specifier = ">=1.6.0" },
     { name = "mkdocs-material", specifier = ">=9.5" },
     { name = "mkdocs-static-i18n", specifier = ">=1.0" },

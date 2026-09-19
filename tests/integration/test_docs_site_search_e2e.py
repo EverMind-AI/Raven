@@ -15,6 +15,7 @@ served, because passing one says nothing about the other.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import socket
 import subprocess
@@ -28,6 +29,9 @@ import pytest
 
 DOCS = Path(__file__).resolve().parents[2] / "docs-site"
 ZH = "zh/"
+#: What the segmenter puts between two Chinese words: a zero-width space,
+#: the only word boundary the text has.
+BOUNDARY = "\u200b"
 READY_TIMEOUT = 120.0
 
 
@@ -125,6 +129,7 @@ def test_a_built_site_gives_each_language_its_own_index(built: Path) -> None:
     )
 
 
+@pytest.mark.production_timing  # the wait is a real server starting, not a delay the suite can shorten
 def test_the_preview_server_gives_each_language_its_own_index(preview: str) -> None:
     english_status, english = _fetch(preview + "search/search_index.json")
     assert english_status == 200, f"the English index is not served: HTTP {english_status}"
@@ -133,3 +138,26 @@ def test_the_preview_server_gives_each_language_its_own_index(preview: str) -> N
         f"the preview serves no Chinese index (HTTP {chinese_status}), so Chinese pages read the English one"
     )
     _assert_split(_locations(english), _locations(chinese))
+
+
+def _searchable(payload: bytes) -> tuple[int, str]:
+    index = json.loads(payload)
+    marked = sum(1 for e in index["docs"] if BOUNDARY in (e.get("title", "") + e.get("text", "")))
+    return marked, index["config"]["separator"]
+
+
+def test_the_chinese_pages_are_searchable_by_word(built: Path) -> None:
+    """Chinese runs no spaces, so nothing in the text says where one word ends.
+    Two things have to line up for a reader to find anything: the build has to
+    segment the text and mark the boundaries, and the theme's separator has to
+    treat that mark as a break. Either one alone leaves the whole run as a
+    single token, which only matches a reader who types the entire run."""
+    payload = (built / ZH / "search" / "search_index.json").read_bytes()
+    marked, separator = _searchable(payload)
+    total = len(json.loads(payload)["docs"])
+    assert marked == total, (
+        f"only {marked} of {total} Chinese entries carry word boundaries; the build is not segmenting the text"
+    )
+    assert re.search(separator, BOUNDARY), (
+        f"the separator {separator!r} does not break on the word boundary, so every Chinese run stays one token"
+    )
