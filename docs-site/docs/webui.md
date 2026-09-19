@@ -1,15 +1,16 @@
 # Launch WebUI
 
-Raven's WebUI brings conversations, multi-agent collaboration, and workspace management into your browser. Chat with agents, follow task progress, inspect files and outputs, and browse memory and skills in one place.
+Use Raven's WebUI to chat with agents, coordinate tasks, and manage your
+workspace in the browser. Follow task progress, inspect files and outputs,
+and browse memory and skills from the same interface.
 
 ```bash
 raven web
 ```
 
-The command opens the WebUI in your browser and keeps Raven running in the background. Use `raven web --stop` to stop the background service.
+This command opens the WebUI in your browser and starts Raven in the
+background. Raven keeps running after you close the browser. To stop the
+service, run `raven web --stop`.
 
-> **Screenshot placeholder 1:** Conversations and workspace.
-
-> **Screenshot placeholder 2:** Agent collaboration and task graph.
-
-> **Screenshot placeholder 3:** Memory and skill management.
+For installation and provider setup, see [Quick Start](quick-start.md).
+For Docker or source deployments, see [Self-Hosting](self-hosting.md).

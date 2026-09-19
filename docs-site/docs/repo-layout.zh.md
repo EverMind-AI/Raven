@@ -1,6 +1,6 @@
 # 仓库布局
 
-共享的 Python 运行时位于 `raven/`，Agent 定义、插件发行包、前端和开发工具与其并列存放。
+共享的 Python 运行时位于 `raven/`。仓库中还包含 Agent 定义、插件发行包、前端和开发工具。
 
 主要目录：
 
@@ -18,10 +18,12 @@ benchmarks/            # 基准适配器与评估集成
 docker/                # 容器部署与 Compose 配置
 tests/                 # 单元测试、集成测试和架构契约测试
 scripts/               # 构建、打包、代码生成与仓库检查
-docs/                  # 安装、开发与设计文档
+docs/                  # 工程参考与设计规范
+docs-site/             # 双语用户文档与站点配置
 ```
 
-下列运行时包和模块构成 `raven/` 下的标准提交 scope。修改 `raven/` 之外的内容时，使用 [`commitlint.config.cjs`](https://github.com/EverMind-AI/Raven/blob/main/commitlint.config.cjs) 中对应的目录或发行包 scope；提交规则见 [`AGENTS.md`](https://github.com/EverMind-AI/Raven/blob/main/AGENTS.md)。
+下表列出运行时包和模块，以及修改 `raven/` 下代码时对应的提交范围（scope）。修改其他目录时，
+请使用 `commitlint.config.cjs` 中定义的目录或发行包 scope。仓库的提交规范由 `AGENTS.md` 定义。
 
 | 包或模块 | 职责 |
 |---|---|
@@ -32,11 +34,11 @@ docs/                  # 安装、开发与设计文档
 | `browser` | 浏览器自动化、会话管理与导航检查 |
 | `channels` | 消息适配器及其共享渠道契约 |
 | `cli` | 命令行入口、配置向导与服务启动器 |
-| `config` | 配置 schema、加载、迁移、准入校验与受控更新 |
+| `config` | 配置结构定义、加载、迁移、准入校验与受控更新 |
 | `contracts` | 契约定义（Paper）：运行时组件共享的接口与数据结构 |
 | `context_engine` | 上下文组装、token 预算与会话压缩 |
 | `core` | 装配根（Assembly Root）：运行时世代及其组件组装 |
-| `eval_engine` | 任务完成判断、迭代反馈与工具审计的评估 hook |
+| `eval_engine` | 用于任务完成判断、迭代反馈和工具审计的评估钩子 |
 | `gateway` | 渠道生命周期、运行时世代切换、事件投递与进程协调 |
 | `home` | 统一解析 `RAVEN_HOME` 和配置路径（`home.py`） |
 | `i18n` | 语言目录、翻译与提示词本地化 |
@@ -53,7 +55,7 @@ docs/                  # 安装、开发与设计文档
 | `proactive_engine` | Sentinel 事件处理、cron 调度、心跳与主动决策 |
 | `providers` | LLM 适配器、服务商池与模型到服务商的绑定 |
 | `routing` | 任务分类，以及根据质量和成本选择模型 |
-| `rpc` | 共享的类型化 RPC 方法、流式事件与网关控制接口 |
+| `rpc` | 共享的带类型定义的 RPC 方法、流式事件与网关控制接口 |
 | `sandbox` | 隔离执行、虚拟机生命周期与调试工具 |
 | `security` | 出站地址策略与提示词注入防护 |
 | `session` | 会话存储、会话解析、标题与对话记录导出 |

@@ -1,8 +1,12 @@
-<p class="em-eyebrow">Install · Self-Host · Operate</p>
+<p class="em-eyebrow">Documentation</p>
 
 # Raven <span class="em-accent">documentation</span>
 
-<p class="em-standfirst">Installation, self-hosting, and the command reference for Raven.</p>
+<p class="em-standfirst">Install and configure Raven, choose a deployment method, and explore its commands.</p>
+
+Start with installation, deploy Raven with Docker or from source, and use the
+WebUI for everyday work. The reference guides cover commands, runtime
+architecture, and repository structure.
 
 ## Start here
 
@@ -12,16 +16,16 @@
 
     ---
 
-    Clone the repository and run the installer. Quick Start lives in the README
-    rather than here, so that a first install needs nothing but the repo page.
+    Install Raven on your platform, configure a model provider, and start
+    using the WebUI.
 
-    [README Quick Start](https://github.com/EverMind-AI/Raven#-quick-start)
+    [Quick Start](quick-start.md)
 
--   __Self-host it__
+-   __Self-host Raven__
 
     ---
 
-    Docker Compose, configuration, and running from a source checkout.
+    Deploy Raven on your own machine and configure its services.
 
     [Self-Hosting](self-hosting.md)
 
@@ -29,37 +33,79 @@
 
     ---
 
-    Starting and stopping the local page.
+    Open the browser interface and manage the background service.
 
     [Launch WebUI](webui.md)
 
 </div>
 
+## Choose how to run it
+
+<div class="grid cards em-run" markdown>
+
+-   __Docker Compose__
+
+    ---
+
+    Build and start the gateway and WebUI together in a container.
+
+    [Start with Compose](self-hosting.md#compose)
+
+-   __Run from source__
+
+    ---
+
+    Build and run Raven from a local clone to develop features or try
+    unreleased changes.
+
+    [Start from source](self-hosting.md#from-source)
+
+</div>
+
+See [Self-Hosting](self-hosting.md) for both deployment methods, configuration,
+and Docker image builds.
+
 ## Explore the documentation
 
-<div class="grid cards" markdown>
+<div class="grid cards em-docs" markdown>
 
 -   __Self-Hosting__
 
     ---
 
-    Docker Compose, configuration, and running from a source checkout.
+    Deploy with Docker Compose or from source, and manage configuration.
 
     [Read](self-hosting.md)
+
+-   __Docker Deployment__
+
+    ---
+
+    Understand container services, sign-in, model providers, and data storage.
+
+    [Read](docker.md)
 
 -   __Launch WebUI__
 
     ---
 
-    Starting and stopping the local page.
+    Open the browser interface and start or stop the background service.
 
     [Read](webui.md)
+
+-   __Architecture__
+
+    ---
+
+    Understand the Assembly Root, runtime layers, and core systems.
+
+    [Read](architecture.md)
 
 -   __Command Reference__
 
     ---
 
-    The CLI surface.
+    Find Raven commands and learn what each one does.
 
     [Read](commands.md)
 
@@ -67,9 +113,10 @@
 
     ---
 
-    The packages under `raven/` and the top-level trees, which are also the
-    canonical commit scopes.
+    Explore the top-level directories, runtime packages, and commit scopes.
 
     [Read](repo-layout.md)
 
 </div>
+
+Raven is developed in the open by EverMind.

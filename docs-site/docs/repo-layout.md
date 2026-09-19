@@ -1,6 +1,7 @@
 # Repo Layout
 
-The shared Python runtime lives in `raven/`. Agent definitions, plugin distributions, frontends, and development tools live alongside it.
+The shared Python runtime is in `raven/`. The repository also contains agent
+definitions, plugin distributions, frontends, and development tools.
 
 Key directories:
 
@@ -18,14 +19,18 @@ benchmarks/            # Benchmark adapters and evaluation integrations
 docker/                # Container deployment and Compose configuration
 tests/                 # Unit, integration, and architecture contract tests
 scripts/               # Build, packaging, code generation, and repository checks
-docs/                  # Setup, development, and design documentation
+docs/                  # Engineering references and design specifications
+docs-site/             # Bilingual user documentation and site configuration
 ```
 
-The following runtime packages and modules form the canonical commit scopes under `raven/`. Changes outside `raven/` use the relevant tree or distribution scope from [`commitlint.config.cjs`](https://github.com/EverMind-AI/Raven/blob/main/commitlint.config.cjs); see [`AGENTS.md`](https://github.com/EverMind-AI/Raven/blob/main/AGENTS.md) for commit rules.
+The runtime packages and modules below define the canonical commit scopes for
+changes under `raven/`. For changes elsewhere, use the relevant directory or
+distribution scope defined in `commitlint.config.cjs`. `AGENTS.md` defines the
+repository's commit conventions.
 
-| Package | What it is |
+| Package or module | Responsibility |
 |---|---|
-| `acp` | ACP server surface: exposes Raven to external agent hosts |
+| `acp` | ACP server interface for exposing Raven to external agent hosts |
 | `acp_client` | ACP client, capability negotiation, and adapters for third-party agent events |
 | `agent` | Agent Loop, Harness Modules, tool execution, and subagent orchestration |
 | `auth` | Authentication and authorization primitives |
@@ -35,7 +40,7 @@ The following runtime packages and modules form the canonical commit scopes unde
 | `config` | Configuration schemas, loading, migrations, admission, and controlled updates |
 | `contracts` | Papers: declared interfaces and data shapes shared across runtime components |
 | `context_engine` | Context assembly, token budgets, and conversation compaction |
-| `core` | Assembly Root: runtime generations and the builders that wire their components |
+| `core` | Assembly Root: runtime Generations and component assembly |
 | `eval_engine` | Evaluation hooks for task completion, iteration feedback, and tool auditing |
 | `gateway` | Channel lifecycle, runtime generation swaps, event delivery, and process coordination |
 | `home` | Shared `RAVEN_HOME` and configuration-path resolution (`home.py`) |
@@ -47,13 +52,13 @@ The following runtime packages and modules form the canonical commit scopes unde
 | `memory_engine` | Memory recall and consolidation, local skills, and SkillForge retrieval |
 | `observability` | Span semantics, attribute extraction, and usage attribution |
 | `ops` | Local and remote machine registry and execution transports |
-| `permissions` | Tool-call decisions: allow, ask for approval, or refuse |
+| `permissions` | Tool-call decisions: allow, request approval, or deny |
 | `playbook` | Reusable workflow library, validation, generation, and execution |
 | `plugins` | Plugin manifests, discovery, contribution registry, and bundled plugins |
 | `proactive_engine` | Sentinel event processing, cron scheduling, heartbeat, and proactive decisions |
 | `providers` | LLM adapters, provider pool, and model-to-provider binding |
 | `routing` | Task classification and model selection by quality and cost |
-| `rpc` | Shared typed RPC methods, streaming events, and gateway control surface |
+| `rpc` | Shared typed RPC methods, streaming events, and the gateway control interface |
 | `sandbox` | Isolated execution, VM lifecycle, and debugging tools |
 | `security` | Outbound address policy and prompt-injection fences |
 | `session` | Conversation storage, session resolution, titles, and transcript export |
