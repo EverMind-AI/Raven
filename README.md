@@ -39,7 +39,7 @@ Built on EverMind’s self-evolving harness engine and powered by [EverOS](https
 
 ## ❯❯ Built-in Agents
 
-Raven's modular architecture is designed for harness self-evolving and subagent creation. Powered by the **Raven Evolver** engine, its four built-in agents deliver **state-of-the-art (SOTA) performance in their respective domains**, combining reusable harness components with domain-specific tools, skills, and agent loops. Raven can delegate a focused task to a single agent or orchestrate multiple agents within a shared workflow.
+Raven's modular architecture is designed for harness self-evolution and subagent creation. Its four built-in agents deliver **state-of-the-art (SOTA) performance in their respective domains**, combining reusable harness components with domain-specific tools, skills, and agent loops. Raven can delegate a focused task to a single agent or orchestrate multiple agents within a shared workflow. The harness they share is refined by the **Raven Evolver**, a separate tool that consumes Raven as a library and evaluates candidate harness changes against benchmarks; it develops the agents rather than running inside them.
 
 > All four agents are built in and ready for orchestration out of the box.
 

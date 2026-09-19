@@ -39,7 +39,7 @@ Raven 是 **The Harness of Harnesses**——一个持续自我演进的多 Agent
 
 ## ❯❯ 内置 Agent
 
-Raven 的模块化架构面向 harness 自我演进和子 Agent 创建。借助 **Raven Evolver** 引擎，四个内置 Agent 在各自领域提供**先进水平（SOTA）的性能**，结合可复用的 harness 组件、领域专用工具、技能和 Agent 循环。Raven 可以将聚焦任务委派给单个 Agent，也可以在共享工作流中编排多个 Agent。
+Raven 的模块化架构面向 harness 自进化和子 Agent 创建。四个内置 Agent 在各自领域提供**先进水平（SOTA）的性能**，结合可复用的 harness 组件、领域专用工具、技能和 Agent 循环。Raven 可以将聚焦任务委派给单个 Agent，也可以在共享工作流中编排多个 Agent。它们共享的 harness 由 **Raven Evolver** 持续改进，这是一个独立工具，将 Raven 作为库调用，并基于基准测试评估候选的 harness 变更；它用于开发这些 Agent，而不是运行在它们内部。
 
 > 四个 Agent 均已内置，开箱即可进行编排。
 
