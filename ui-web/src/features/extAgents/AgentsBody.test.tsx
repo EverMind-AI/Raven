@@ -175,6 +175,39 @@ describe('the onboarding wizard\'s agents pane', () => {
     expect(acts).toEqual([['toggle', 'off_one', { enabled: true }]])
   })
 
+  it('connects a stale row through act(migrate), the settings page\'s own write for it', async () => {
+    /* A flag would have left `upgrade_to` standing and the old command line
+       in place -- the migration the card offered and never did. */
+    const { acts } = install([row({ name: 'pi', configured: true, enabled: false, upgrade_to: 'acp' })])
+    render(<AgentsStepBody />)
+    await act(async () => {
+      await store.load(true)
+    })
+
+    await act(async () => {
+      actBtn('pi').click()
+    })
+
+    expect(acts).toEqual([['migrate', 'pi', {}]])
+  })
+
+  it('offers a shipped agent switched off, and switches it back on', async () => {
+    const { acts } = install([row({ name: 'raven_coder', vendored: true, configured: false, enabled: false })])
+    render(<AgentsStepBody />)
+    await act(async () => {
+      await store.load(true)
+    })
+    expect(rowNamed('raven_coder').closest('.sugrp')!.querySelector('.hd b')!.textContent).toBe('gui.agent.setup_available')
+    expect(store.stepDone()).toBe(false)
+
+    await act(async () => {
+      actBtn('raven_coder').click()
+    })
+
+    expect(acts).toEqual([['toggle', 'raven_coder', { enabled: true }]])
+    expect(rowNamed('raven_coder').closest('.sugrp')!.querySelector('.hd b')!.textContent).toBe('gui.agent.setup_connected')
+  })
+
   it('disables the row and shows the connecting state while the write is in flight', async () => {
     let settle = (): void => {}
     const { acts } = install([row({ name: 'preset_a', configured: false, enabled: false })], {

@@ -242,12 +242,16 @@ describe('the wizard step buckets', () => {
     ['the built-in agent', { builtin: true, probe_status: 'unknown' }, false, false, false],
     ['a vendored agent switched on', { vendored: true, enabled: true, probe_status: 'ready' }, false, true, false],
     [
+      /* Never found -- the step does not count Raven's own -- but offered
+         back: the connected bucket switches it off, so the available one has
+         to be where it comes back from. */
       'a vendored agent switched off, unverified',
       { vendored: true, enabled: false, probe_status: 'attention' },
       false,
       false,
-      false,
+      true,
     ],
+    ['a vendored agent whose folder was never built', { vendored: true, enabled: false, probe_status: 'missing' }, false, false, false],
     [
       'a preset this machine has, unverified',
       { configured: false, enabled: false, probe_status: 'attention' },
@@ -258,6 +262,13 @@ describe('the wizard step buckets', () => {
     ['a preset this machine has never had', { configured: false, enabled: false, probe_status: 'missing' }, false, false, false],
     ['a configured agent switched on', { configured: true, enabled: true, probe_status: 'ready' }, true, true, false],
     ['a configured agent switched off', { configured: true, enabled: false, probe_status: 'ready' }, true, false, true],
+    [
+      'a configured agent off with its preset moved to another transport',
+      { configured: true, enabled: false, probe_status: 'ready', upgrade_to: 'acp' },
+      true,
+      false,
+      true,
+    ],
     [
       /* Found on every other measure -- proves the exclusion is its own
          branch in `isAvailable`, not a side effect of `isFound`'s probe
