@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
+import { toUnified } from '../../lib/hunks'
 import * as lang from '../../state/lang'
 import { show as menuAt } from '../../state/menu'
 import { show as toast } from '../../state/toast'
@@ -177,7 +178,12 @@ function DLine({ numbered, kind, text, oldNo, newNo }: {
   )
 }
 
-export function ChgDiff({ c }: { c: WsChange }): JSX.Element {
+export function ChgDiff({ c, patch }: { c: WsChange; patch?: boolean }): JSX.Element {
+  /* The desk pane draws the raw patch text the prototype's diffBody does; this
+     row's own inline expand keeps its structured, foldable view either way --
+     `patch` is what tells the two apart, so a caller that never passes it (the
+     row) renders exactly as it always has. */
+  if (patch) return <PatchDiff c={c} />
   /* One gutter decision per file, not per hunk: a mixed card must not
      zigzag its left edge between the two layouts. */
   const numbered = c.hunks.some((h) => h.rows.some((r) => r.length > 2))
@@ -214,6 +220,40 @@ export function ChgDiff({ c }: { c: WsChange }): JSX.Element {
     })
   })
   return <div className="diff">{out}</div>
+}
+
+/* The desk pane's look for a change: the same path bar and numbered code
+   block FileView draws for a file, fed the raw unified text instead of a
+   file's own bytes -- one fbar/fpane/fbody/fview shape for both, rather than
+   a second one for a patch. */
+function PatchDiff({ c }: { c: WsChange }): JSX.Element {
+  const path = c.dir + c.name
+  return (
+    <div className="fwrap">
+      <div className="fbar">
+        <span className="nm" title={path}>
+          {c.dir ? <i>{c.dir}</i> : null}
+          <b>{c.name}</b>
+        </span>
+        <button
+          className="ghost-ic fcopy tipdn"
+          data-tip={t('gui.ws.copy_path_do')}
+          aria-label={t('gui.ws.copy_path_do')}
+          onClick={() => copyToClip(path, t('gui.ws.copy_path'))}
+        >
+          <Ico d={ICO.doc} />
+        </button>
+        <span className="fsp" />
+      </div>
+      <div className="fpane">
+        <div className="fbody">
+          <div className="fview">
+            <CodeLines text={toUnified(path, c.hunks)} kind="diff" />
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 /* ── the file view ─────────────────────────────────────────────────── */

@@ -15,7 +15,7 @@ import { DeskFollowToggle, DeskSurface } from './DeskSurface'
 import * as desk from './store';
 
 import type { InstanceRow } from '../subagents/types'
-import type { TaskRow } from '../tasks/types'
+import type { TaskRow, TasksSource } from '../tasks/types'
 import type { WorkspaceSource } from '../workspace/types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -25,7 +25,18 @@ let agentRows: InstanceRow[] = []
 let taskRows: TaskRow[] = []
 
 const taskRow = (id: string): TaskRow => ({
-  id, name: id, source: 'spawn', agent: 'raven', state: 'run', nodes: [],
+  id, kind: 'spawn', task_summary: id, status: 'running', agent: 'raven', handle: id,
+  counts: {
+    total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0,
+    interrupted: 0, exception: 0,
+  },
+  nodes: [],
+})
+
+const stubTasks = (): TasksSource => ({
+  list: async () => taskRows, one: async () => null, stop: async () => false,
+  node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false }),
+  roster: async () => [],
 })
 
 function wire(): void {
@@ -388,7 +399,7 @@ describe('the collapsed launcher', () => {
     setCurrent('s1')
     setSources({
       subagents: { list: async () => [], instances: async () => agentRows },
-      tasks: { list: async () => taskRows },
+      tasks: stubTasks(),
     })
   })
 
@@ -552,7 +563,7 @@ describe('a pane headed by an instance', () => {
     setCurrent('s1')
     setSources({
       subagents: { list: async () => [], instances: async () => agentRows },
-      tasks: { list: async () => taskRows },
+      tasks: stubTasks(),
     })
   })
 
@@ -596,5 +607,30 @@ describe('a pane headed by an instance', () => {
     await act(async () => { await agents.refreshInstances(true) })
 
     expect(document.querySelector('.desk-pane header b')?.textContent).toBe('做一版 PPT')
+  })
+})
+
+describe("a task pane's header icon", () => {
+  beforeEach(() => {
+    taskRows = []
+    tasksStore.reset()
+    setCurrent('s1')
+    setSources({ tasks: stubTasks() })
+  })
+
+  afterEach(() => { setCurrent(null) })
+
+  /* The robot mark, not the two-box graph mark the tab wears: a task pane is
+     a delegated run, the same as a live agent conversation's pane, and the
+     header should say so rather than repeat the tab it opened from. */
+  it('wears the agent glyph, not the tab\'s own graph glyph', async () => {
+    const row = taskRow('t1')
+    taskRows = [row]
+    render(<DeskSurface />)
+    await act(async () => { desk.openDeskTask(row) })
+
+    const icon = document.querySelector('.desk-pane header svg')
+    expect(icon?.innerHTML).toContain('M9 12h.01M15 12h.01M12 7V4M9 18v2M15 18v2')
+    expect(icon?.innerHTML).not.toContain('M7 11.5v4a2 2 0 0 0 2 2h4.5')
   })
 })

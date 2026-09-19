@@ -61,7 +61,7 @@ state -/-> features      (at runtime; a type import erases, and a call the
 **Enforced by `import-direction`**, which reads the source text the way Vite
 resolves it and holds four things: the ranking above, every upward edge the
 tree has today (`PINNED`, 89 rows), every cross-domain edge into something that
-is not a sibling's public surface (`CROSS`, 59 rows), and the runtime cycles
+is not a sibling's public surface (`CROSS`, 64 rows), and the runtime cycles
 (`CYCLES`, two components; `IN_CYCLES`, 17 files inside one). All four are
 ratchets: they may shrink, never grow. A new upward edge fails, and the fix is
 to invert the call -- a registered callback (`state/page.ts`'s `onShow`) or the
@@ -571,7 +571,7 @@ shrink-only: the way off a list is the fix.
 | 205 optional contract fields the fixtures never send | Most are one state this canvas is deliberately in; the header names the few a page really draws and this library has never exercised | `fixture-shape`'s `UNSENT` |
 | 18 methods with no offline answer | Each entry says why the offline page has nothing to answer with | `offline-coverage`'s `EXEMPT` |
 | 17 files inside a runtime cycle, in two components | The session knot is the large one; `state/session/naming.ts` is in it because it was carved out of `runtime.ts`, which already was. Inverting `runtime.ts`'s two calls into it is the way back to 16 | `import-direction`'s `CYCLES` and `IN_CYCLES` |
-| 59 cross-domain edges, eight of them the desk's | Splitting the desk out of `features/workspace/` turned eight intra-domain edges into cross-domain ones. Same imports, same runtime edges, two domains | `import-direction`'s `CROSS` |
+| 64 cross-domain edges, eight of them the desk's | Splitting the desk out of `features/workspace/` turned eight intra-domain edges into cross-domain ones. Same imports, same runtime edges, two domains | `import-direction`'s `CROSS` |
 | `src/app/boot.ts` assigns one seam key of its own, exactly once | The first frame's claim installs the session source because the `holdRail()` on the next line reads it, and the installer runs later in the boot sequence. The row pins the count, so a second write of `sources.rail` -- spelled as an assignment, a destructuring target, or through a name the file bound to the seam -- is not covered by that reason. Inverting the two is what takes the row off | `seam-assignment`'s `EXCEPTIONS` |
 | 38 non-English runs in 14 files | A run is an unbroken stretch of CJK, the nearest thing to a word in a script written without spaces. Six are the served first frame, which has no catalogue to read; sixteen words and two separators a reader sees before a language is picked, and the boot and region goldens are taken from that frame; thirteen spell out three patterns matched against text and one is a comparison with a served title | `first-frame-literals`'s `PINNED` |
 | `curly` is off | 2,063 one-line guards | `eslint.config.js` |

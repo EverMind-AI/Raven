@@ -393,7 +393,7 @@ export interface HistoryMessage {
   /* Present on a USER entry the runtime wrote: a delegated run's result coming
      back. The model reads `text`, a reader must not -- see the note on the
      delivery branch in history(). */
-  delegated?: { kind?: string; label?: string; status?: string; run_id?: string }
+  delegated?: { kind?: string; label?: string; status?: string; run_id?: string; node_id?: string }
 }
 
 /* What the artifact bar reads, and all it reads: the workspace record's rows
@@ -432,9 +432,17 @@ export interface TranscriptSource {
      it, and the id is a slug from the plan. Optional, so a caller that has only
      an id still opens the node. */
   openDagNode?: (runId: string, nodeId: string, summary?: string | null) => void
-  openSpawn?: (agent: string, label: string) => void
+  /* `nodeId` is the tasks store's own id for the spawn (present on the wire's
+     `delegated` payload once the run is live). When it names a row there,
+     the caller opens that task directly rather than guessing by label. */
+  openSpawn?: (agent: string, label: string, nodeId?: string) => void
   /* Open the delegated GRAPH a delivery came from. One verb rather than the
      live event handler doing it inline, because the replayed row has to open
      the same thing the live row does. */
   openDagRun?: (runId: string) => void
+  /* One-line label for a tool call, derived from its arguments -- the same
+     table a call's own row in this island reads, so a sibling that draws its
+     own tool rows (features/tasks) shows the same words for the same tool
+     rather than a second guess at them. */
+  actLabel?: (name: string, args: Record<string, unknown>, display?: string | null) => string
 }

@@ -1,6 +1,6 @@
 /* What Escape takes back, and in which order.
  *
- * Fourteen layers can be on screen at once, and one key closes one of them.
+ * Fifteen layers can be on screen at once, and one key closes one of them.
  * Which one was a fourteen-branch if chain in the page's chrome: a list of
  * selectors read top to bottom, each branch returning so the ones below it
  * never ran.
@@ -89,16 +89,45 @@ const ABOVE: readonly EscapeLayer[] = [
   { id: '#jobVeil', isOpen: flagged('jobVeil'), close: cancels('jobNo') },
 ]
 
+/* The desk's own retreat -- fullscreen, then the picked node, then the open
+   pane, then the desk itself -- filled at `features/desk/store.ts`'s own
+   module evaluation rather than imported here: `state/` may not reach into
+   `features/` at runtime, the same reason `state/navfly.ts`'s `onMark` is a
+   slot rather than an import of `features/rail/store.ts`. Absent (a test
+   that never loads the desk) answers closed, like every other unfilled slot
+   in this table. */
+let deskLayer: EscapeLayer | null = null
+
+/** Registers the desk's own layer. features/desk/store.ts calls this at its
+    own module evaluation. */
+export function onDeskEscape(layer: EscapeLayer): void {
+  deskLayer = layer
+}
+
+/* Back to the value this module starts at, before anything has registered.
+   Nothing calls it today -- a test wanting the desk's own layer back would
+   have to re-trigger features/desk/store.ts's module evaluation, which
+   nothing here can force -- so this is the reset seam for a module holding
+   one, the way every other module-level `let` on this page carries one. */
+export function _resetForTests(): void {
+  deskLayer = null
+}
+
 /* And the two beneath every page: the settings dialog, which is a flag rather
    than an element, and the running turn. */
 const BELOW: readonly EscapeLayer[] = [
   { id: 'setIsOpen()', isOpen: settingsDialog.isOpen, close: settingsDialog.close },
+  {
+    id: 'desk.escapeOpen()',
+    isOpen: () => deskLayer?.isOpen() ?? false,
+    close: () => deskLayer?.close(),
+  },
   /* The last resort: with nothing on screen to take back, Escape interrupts
      the running turn. */
   { id: 'turn.busy()', isOpen: turnBusy, close: () => ds('composer').stop() },
 ]
 
-/** The fourteen, in the order Escape reaches them. */
+/** The fifteen, in the order Escape reaches them. */
 export const ESCAPE_ORDER: readonly EscapeLayer[] = [
   ...ABOVE,
   ...byEscape().map((page) => ({

@@ -1978,7 +1978,12 @@ Result:
 Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not report the task as done merely because this message arrived. Anything the sub-agent stated it could not do -- a missing input, an unmet precondition, a refusal, a gap it flagged -- is part of the outcome: pass it on in full, outside that length budget. Keep technical details like the instance handle and task ids out of what you say to the user -- they stay available for your own later calls.{hoard_note}"""
 
         assert self._submit is not None
-        mark = {"kind": "spawn", "label": task_summary, "status": status}
+        mark: dict[str, Any] = {"kind": "spawn", "label": task_summary, "status": status}
+        # Only when present -- the dag mark's `run_id` is unconditional because a
+        # dag run always has one, but an origin built outside `spawn()` may carry
+        # none, and the field is a bare optional string on the wire (no null).
+        if origin.get("node_id"):
+            mark["node_id"] = origin["node_id"]
         # The delivered marker draws the seam where a result re-entered its
         # conversation; a refused inject re-entered nothing, so there is none.
         if not self._inject(announce_content, origin, mark):
