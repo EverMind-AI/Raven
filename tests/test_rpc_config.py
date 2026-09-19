@@ -1140,3 +1140,42 @@ async def test_a_conversation_mode_on_a_saved_session_is_persisted_at_once(tmp_p
     )
 
     assert SessionManager(tmp_path).peek("s-1").metadata["permissions_mode"] == "smart"
+
+
+async def test_config_set_model_default_scope_persists_when_no_loop_can_be_built(fake_home: Path) -> None:
+    """A gateway that started on an empty config has no loop and a latched build
+    error; the first-run wizard's first default still has to land on disk."""
+    from raven.rpc.errors import InternalError
+
+    (fake_home / ".raven").mkdir()
+    (fake_home / ".raven" / "config.json").write_text(json.dumps({"providers": {"deepseek": {"apiKey": "sk-x"}}}))
+
+    def _no_loop():
+        raise InternalError("no provider is configured yet", data={"reason": "missing_credentials"})
+
+    out = await config_set(
+        {"key": "model", "value": "deepseek-chat", "provider": "deepseek", "scope": "default"},
+        agent_loop_factory=_no_loop,
+    )
+
+    assert out["applied"] is True
+    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert cfg["agents"]["defaults"]["model"] == "deepseek/deepseek-chat"
+    assert cfg["agents"]["defaults"]["provider"] == "deepseek"
+
+
+async def test_config_set_model_session_scope_switches_nothing_when_no_loop_can_be_built(fake_home: Path) -> None:
+    from raven.rpc.errors import InternalError
+
+    (fake_home / ".raven").mkdir()
+    (fake_home / ".raven" / "config.json").write_text(json.dumps({}))
+
+    def _no_loop():
+        raise InternalError("no provider is configured yet", data={"reason": "missing_credentials"})
+
+    out = await config_set(
+        {"key": "model", "value": "deepseek-chat", "provider": "deepseek", "session_id": "tui:default"},
+        agent_loop_factory=_no_loop,
+    )
+
+    assert out == {"applied": False, "previous": None, "value": "deepseek/deepseek-chat", "scope": "session"}

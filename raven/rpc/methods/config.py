@@ -37,6 +37,7 @@ from raven.rpc.errors import (
     ConfigValidationError,
     InternalError,
     ModelNotAvailableError,
+    RpcError,
 )
 from raven.utils.atomic_io import atomic_replace
 
