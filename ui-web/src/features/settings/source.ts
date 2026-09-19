@@ -24,7 +24,7 @@ import { extMcpRows, extSkillRows, extTools, loadExt } from '../installed/source
 import {
   defaultModel,
   defaultProvider,
-  loadProviders,
+  loadDefaultProviders,
   persistModel,
   providers,
   setDefaultPair,
@@ -119,7 +119,7 @@ export async function loadSettings(): Promise<void> {
   // model -- and badge the session's provider -- as the default.
   setDefaultPair(defaults.model || '', defaults.provider || '')
   if (defaults.model) showModel(defaults.model)
-  try { await loadProviders() } catch { /* model options unavailable: keep the rows already shown */ }
+  try { await loadDefaultProviders() } catch { /* model options unavailable: keep the rows already shown */ }
 }
 
 export const settingsSnapshot = (): SettingsSnapshot => ({
