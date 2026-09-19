@@ -7,6 +7,7 @@ import { KeyInput } from '../../../components/KeyInput'
 import { t } from '../../../i18n/t'
 import { Card, Chip, KeyLink, Row, Rov, Switch, Xrow } from '../Fields'
 import { ROLES, RolePill, disabledTools, roleValue } from '../providers/Roles'
+import { FETCH_KEYLESS, WEB_VENDOR, WEB_VENDOR_LABEL, WEB_VENDOR_URL, keySet, legacyKey, str, vendorKey, webVendor } from '../source'
 import * as store from '../store'
 import GROUPS from '../toolGroups.json'
 
@@ -22,70 +23,6 @@ const GROUP_LABEL: Record<string, string> = {
   file: 'gui.settings.tools.grp_file', run: 'gui.settings.tools.grp_run', net: 'gui.settings.tools.grp_net',
   generate: 'gui.settings.tools.grp_generate', collab: 'gui.settings.tools.grp_collab', skills: 'gui.settings.tools.grp_skills',
   memory: 'gui.settings.tools.grp_memory', search: 'gui.settings.tools.grp_search',
-}
-
-/* The vendors the two web tools can run on, in the schema's order, with the
-   default each falls back to. tests/test_agent_tools_web_providers.py parses
-   this table from the source and holds it to the schema literals. */
-interface WebVendorPick {
-  path: string
-  vendors: string[]
-  fallback: string
-}
-const WEB_VENDOR: Record<string, WebVendorPick> = {
-  web_search: {
-    path: 'tools.web.search.provider',
-    vendors: ['serper', 'anysearch', 'serpapi', 'tavily', 'exa', 'brave', 'firecrawl', 'serply'],
-    fallback: 'serper',
-  },
-  web_fetch: {
-    path: 'tools.web.fetch.provider',
-    vendors: ['jina', 'anysearch', 'tavily', 'exa', 'firecrawl'],
-    fallback: 'jina',
-  },
-}
-const WEB_VENDOR_LABEL: Record<string, string> = {
-  serper: 'Serper',
-  anysearch: 'AnySearch',
-  serpapi: 'SerpApi',
-  jina: 'Jina Reader',
-  tavily: 'Tavily',
-  exa: 'Exa',
-  brave: 'Brave Search',
-  firecrawl: 'Firecrawl',
-  serply: 'Serply',
-}
-/* Where each vendor hands out keys. */
-const WEB_VENDOR_URL: Record<string, string> = {
-  serper: 'https://serper.dev', anysearch: 'https://anysearch.com', serpapi: 'https://serpapi.com',
-  jina: 'https://jina.ai/reader', tavily: 'https://tavily.com', exa: 'https://exa.ai',
-  brave: 'https://brave.com/search/api', firecrawl: 'https://firecrawl.dev', serply: 'https://serply.io',
-}
-/* Jina reads without a key; every other reader needs one. */
-const FETCH_KEYLESS = new Set(['jina'])
-
-const dig = (raw: Record<string, unknown>, path: string): unknown =>
-  path.split('.').reduce<unknown>((o, k) => (o && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined), raw)
-const str = (raw: Record<string, unknown>, path: string): string => {
-  const v = dig(raw, path)
-  return typeof v === 'string' ? v : ''
-}
-
-/* The vendor a web tool runs on, from the config or the default. */
-export const webVendor = (tool: string, raw: Record<string, unknown>): string => {
-  const pick = WEB_VENDOR[tool]!
-  return str(raw, pick.path) || pick.fallback
-}
-/* The slot the tools read a vendor's key from, and the pre-vendor leaf a key
-   may still sit in: the tools read that too, so the row counts it as set and
-   a clear retires both. */
-export const vendorKey = (vendor: string): string => `tools.web.providers.${vendor}.apiKey`
-export const legacyKey = (tool: string, vendor: string): string | null =>
-  (tool === 'web_search' && vendor === 'serper') ? 'tools.web.search.apiKey'
-    : (tool === 'web_fetch' && vendor === 'jina') ? 'tools.web.jinaApiKey' : null
-const keySet = (tool: string, vendor: string, raw: Record<string, unknown>): boolean => {
-  const legacy = legacyKey(tool, vendor)
-  return !!str(raw, vendorKey(vendor)) || (!!legacy && !!str(raw, legacy))
 }
 
 const ROLE_OF: Record<string, string> = {
@@ -111,7 +48,7 @@ export function blocker(id: string, raw: Record<string, unknown>): string {
   return ''
 }
 
-function KeyRow({ label, keyName, legacy, url, raw }: {
+export function KeyRow({ label, keyName, legacy, url, raw }: {
   label: string
   keyName: string
   /* The pre-vendor leaf the same key may still sit in; a clear empties it too. */
@@ -143,7 +80,7 @@ function KeyRow({ label, keyName, legacy, url, raw }: {
   )
 }
 
-function VendorSelect({ keyName, value, opts }: { keyName: string; value: string; opts: Array<[string, string]> }): JSX.Element {
+export function VendorSelect({ keyName, value, opts }: { keyName: string; value: string; opts: Array<[string, string]> }): JSX.Element {
   return (
     <span className="settings-selw">
       <select className="settings-sel" value={value} aria-label={t('gui.settings.tools.vendor')} onChange={(e) => void store.write(keyName, e.currentTarget.value)}>

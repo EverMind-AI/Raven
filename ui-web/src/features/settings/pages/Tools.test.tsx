@@ -4,8 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetSources, setSources } from '../../../state/sources'
 import { install, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
+import { legacyKey, vendorKey, webVendor } from '../source'
 import * as store from '../store'
-import { META_GROUP, TOOL_GROUPS, blocker, legacyKey, vendorKey, webVendor } from './Tools'
+import { META_GROUP, TOOL_GROUPS, blocker } from './Tools'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 

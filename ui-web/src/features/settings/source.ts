@@ -253,6 +253,83 @@ export const settingsSource: SettingsSource = {
   setLang: (v) => chrome.setLang(v),
 }
 
+/* -- the web tools' vendor tables ---------------------------------------
+   The vendors the two web tools can run on, in the schema's order, with the
+   default each falls back to. tests/test_agent_tools_web_providers.py parses
+   this table from here and holds it to the schema literals. Exported so the
+   Tools page and the onboarding wizard's webStepDone read the one copy. */
+interface WebVendorPick {
+  path: string
+  vendors: string[]
+  fallback: string
+}
+export const WEB_VENDOR: Record<string, WebVendorPick> = {
+  web_search: {
+    path: 'tools.web.search.provider',
+    vendors: ['serper', 'anysearch', 'serpapi', 'tavily', 'exa', 'brave', 'firecrawl', 'serply'],
+    fallback: 'serper',
+  },
+  web_fetch: {
+    path: 'tools.web.fetch.provider',
+    vendors: ['jina', 'anysearch', 'tavily', 'exa', 'firecrawl'],
+    fallback: 'jina',
+  },
+}
+export const WEB_VENDOR_LABEL: Record<string, string> = {
+  serper: 'Serper',
+  anysearch: 'AnySearch',
+  serpapi: 'SerpApi',
+  jina: 'Jina Reader',
+  tavily: 'Tavily',
+  exa: 'Exa',
+  brave: 'Brave Search',
+  firecrawl: 'Firecrawl',
+  serply: 'Serply',
+}
+/* Where each vendor hands out keys. */
+export const WEB_VENDOR_URL: Record<string, string> = {
+  serper: 'https://serper.dev', anysearch: 'https://anysearch.com', serpapi: 'https://serpapi.com',
+  jina: 'https://jina.ai/reader', tavily: 'https://tavily.com', exa: 'https://exa.ai',
+  brave: 'https://brave.com/search/api', firecrawl: 'https://firecrawl.dev', serply: 'https://serply.io',
+}
+/* Jina reads without a key; every other reader needs one. */
+export const FETCH_KEYLESS = new Set(['jina'])
+
+const dig = (raw: Record<string, unknown>, path: string): unknown =>
+  path.split('.').reduce<unknown>((o, k) => (o && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined), raw)
+export const str = (raw: Record<string, unknown>, path: string): string => {
+  const v = dig(raw, path)
+  return typeof v === 'string' ? v : ''
+}
+
+/* The vendor a web tool runs on, from the config or the default. */
+export const webVendor = (tool: string, raw: Record<string, unknown>): string => {
+  const pick = WEB_VENDOR[tool]!
+  return str(raw, pick.path) || pick.fallback
+}
+/* The slot the tools read a vendor's key from, and the pre-vendor leaf a key
+   may still sit in: the tools read that too, so the row counts it as set and
+   a clear retires both. */
+export const vendorKey = (vendor: string): string => `tools.web.providers.${vendor}.apiKey`
+export const legacyKey = (tool: string, vendor: string): string | null =>
+  (tool === 'web_search' && vendor === 'serper') ? 'tools.web.search.apiKey'
+    : (tool === 'web_fetch' && vendor === 'jina') ? 'tools.web.jinaApiKey' : null
+export const keySet = (tool: string, vendor: string, raw: Record<string, unknown>): boolean => {
+  const legacy = legacyKey(tool, vendor)
+  return !!str(raw, vendorKey(vendor)) || (!!legacy && !!str(raw, legacy))
+}
+
+/* The onboarding wizard's two step-done predicates: whether its model step
+   already has a connected provider and a chat model, and whether its web
+   step already has a key on file for either web tool's vendor. */
+export function modelStepDone(): boolean {
+  return providers().some((p) => p.on) && !!defaultModel()
+}
+
+export function webStepDone(): boolean {
+  return keySet('web_search', webVendor('web_search', RAW), RAW) || keySet('web_fetch', webVendor('web_fetch', RAW), RAW)
+}
+
 /* The manager's word on a server, pushed as it changes; the plugins page
    redraws its chips from it. Returns the unsubscribe. */
 export const watchMcp = (onStatus: () => void): (() => void) => gateway().on('mcp.status', onStatus)
