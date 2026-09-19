@@ -129,7 +129,7 @@ copy, or let that column be a card.
 
 | The page | Shape |
 | --- | --- |
-| Cover, section opener, closing | S6 or S11, with a generated background |
+| Cover, section opener, closing | S6 or S11, with a photograph found for it or a generated background |
 | One statement, one quote | S11 |
 | Three or four pillars, features, a 2x2 matrix | S4, each cell with an icon |
 | Two things compared, before and after | S3 |
@@ -145,8 +145,8 @@ copy, or let that column be a card.
 - A connector lands on a box at both ends. A line into empty space is a node you did not
   draw, and nothing checks for it.
 - Align to one grid. Four different left edges on a page read as four pages.
-- 2-3 colours plus neutrals. The accent marks one thing per page; two accents and neither
-  is the answer.
+- several colours plus neutrals. The accent marks the thing the page says, everywhere that page
+  says it -- the word in the title, the figure, the row or the node that carries it.
 - No one shape on more than 60% of the pages, and at least 40% of them place something
   off-centre. Both are measured off the built file.
 - Cover and closing are statements, not summaries: a strong picture and few words.

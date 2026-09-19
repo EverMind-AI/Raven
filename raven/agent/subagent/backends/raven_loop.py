@@ -31,7 +31,7 @@ from raven.agent.tools.registry import ToolRegistry, call_failed
 from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.web import ImageSearchTool, WebFetchTool, WebSearchTool, image_search_vendor, resolve_vendor_key
 from raven.config.live import LiveConfig, exec_extra_deny_patterns
-from raven.config.schema import ExecToolConfig
+from raven.config.schema import LLM_ERROR_RETRY_DELAYS_DEFAULT, ExecToolConfig
 from raven.contracts.llm_provider import LLMProvider
 from raven.contracts.subagent_backend import SubagentActionAbortedError, SubagentNoAnswerError
 from raven.contracts.tool import SKIPPED_AFTER_BLOCKED_CALL, Continuation
@@ -43,6 +43,10 @@ from raven.spine.message import Media
 from raven.utils.messages import build_assistant_message
 
 _LIVE_CONFIG = LiveConfig()
+#: The ladder a spawn waits out when its caller passed none. Only a rig that
+#: builds a backend by hand lands here; every product path carries the
+#: deployment's own ``agents.defaults.llmErrorRetryDelays``.
+_STREAM_RETRY_DELAYS = LLM_ERROR_RETRY_DELAYS_DEFAULT
 
 
 def _live_exec_extra_deny() -> list[str] | None:
@@ -152,6 +156,8 @@ class RavenLoopBackend:
         tools_allow: Collection[str] | None = None,
         skills_allow: Collection[str] | None = None,
         mcp_allow: Collection[str] | None = None,
+        retry_delays: "Sequence[float] | None" = None,
+        retry_after_output: bool = False,
     ) -> None:
         self.provider = provider
         self.model = model
@@ -174,6 +180,11 @@ class RavenLoopBackend:
         self.tools_allow = set(tools_allow) if tools_allow is not None else None
         self.skills_allow = skills_allow
         self.mcp_allow = list(mcp_allow) if mcp_allow is not None else None
+        # The loop's own ladder, so a spawn waits what the deployment configured
+        # rather than a constant -- an empty list there means no waits, and reading
+        # it as "unset" put 105 seconds back on a deployment that turned them off.
+        self.retry_delays = _STREAM_RETRY_DELAYS if retry_delays is None else tuple(retry_delays)
+        self.retry_after_output = retry_after_output
         self.mcp_source: McpSource | None = None
 
     def _web_key(self, vendor: str) -> str | None:
@@ -419,6 +430,9 @@ class RavenLoopBackend:
                 # A spawned run keeps the retry ladder; only a caller that asked
                 # to watch the reply form gives it up (a stream that already
                 # rendered deltas cannot be retried without duplicating them).
+                # The ladder has to be handed over for that to be true: left to
+                # the signature's defaults this call reconnected once and waited
+                # never, so one dropped stream ended a run with an hour behind it.
                 # The generation settings are passed on so this run answers under
                 # the same budget as the same instance's spawns -- chat_stream's
                 # signature would otherwise cap it at its own literal 4096.
@@ -428,6 +442,8 @@ class RavenLoopBackend:
                     tools=tools.get_definitions(),
                     model=model,
                     on_token_delta=on_delta,
+                    retry_delays=self.retry_delays,
+                    retry_after_output=self.retry_after_output,
                     **generation_kwargs(provider),
                 )
                 if response.finish_reason == "error" and not response.has_tool_calls:
