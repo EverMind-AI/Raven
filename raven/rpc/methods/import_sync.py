@@ -155,7 +155,7 @@ async def import_run(params: dict) -> dict:
             detail = "; ".join(hints) or "memory service is not ready"
             return {"started": False, "total": 0, "detail": detail}
 
-        state.set_total(len(items))
+        state.set_total(len(items), keys=[f"{r.platform.value}:{r.source_key}" for _, r in items])
 
         async def _run(backend: "MemoryBackend") -> None:
             global _TASK
@@ -177,22 +177,30 @@ async def import_run(params: dict) -> dict:
 
 
 async def import_status(params: dict) -> dict:
-    """``import.status`` -- this process's own knowledge plus the state file's counts."""
+    """``import.status`` -- this process's own knowledge plus the state file's counts.
+
+    Counted over one scope: the keys the last ``import.run`` recorded, so a
+    subset run is not measured against every source an earlier run left in
+    the file. A run the CLI started records no keys, and then every entry is
+    in scope, the way ``raven import status`` counts.
+    """
     del params
     running = _busy()
     progress = _state().get_progress()
     entries = {k: v for k, v in progress.get("entries", {}).items() if ":" in k}
     meta = progress.get("meta", {})
-    total = meta.get("total", len(entries))
+    keys = meta.get("keys")
+    scope = list(keys) if keys is not None else list(entries)
+    total = len(scope) if keys is not None else meta.get("total", len(entries))
 
     submitted = 0
     failed = 0
     by_platform: dict[str, dict[str, int]] = {}
-    for key, entry in entries.items():
+    for key in scope:
         platform = key.split(":", 1)[0]
         bucket = by_platform.setdefault(platform, {"total": 0, "submitted": 0, "failed": 0})
         bucket["total"] += 1
-        status = entry.get("status")
+        status = entries.get(key, {}).get("status")
         if status == "submitted":
             submitted += 1
             bucket["submitted"] += 1

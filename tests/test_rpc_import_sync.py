@@ -446,6 +446,50 @@ async def test_status_before_during_and_after_a_run(state: ImportState, monkeypa
     assert out["total"] == 2
 
 
+async def test_status_counts_only_the_run_import_run_started(cfg: Path, state: ImportState, monkeypatch) -> None:
+    """A subset run after a wider one: the entries the wider run left stay in
+    the file (they are what lets this run skip a source), but they are not
+    this run's, and a total measured against them contradicted itself."""
+    state.mark_submitted("claude_code", "c1")
+    state.mark_submitted("hermes", "h1")
+    state.mark_failed("hermes", "h2", "boom")
+    results = [_scan_result("c1", Platform.CLAUDE_CODE), _scan_result("c2", Platform.CLAUDE_CODE)]
+    monkeypatch.setattr(import_sync, "scan_all", AsyncMock(return_value=results))
+    monkeypatch.setattr(import_sync, "build_scanners", lambda: [_FakeScanner(Platform.CLAUDE_CODE)])
+    backend = _FakeBackend()
+    monkeypatch.setattr(import_sync, "maybe_build_memory_backend", lambda *a, **k: backend)
+
+    out = await import_sync.import_run({"platforms": ["claude_code"], "tier": "full"})
+    assert out["total"] == 2
+    task = import_sync._TASK
+    assert task is not None
+    await task
+
+    status = await import_sync.import_status({})
+    assert status == {
+        "running": False,
+        "total": 2,
+        "submitted": 2,
+        "failed": 0,
+        "by_platform": {"claude_code": {"total": 2, "submitted": 2, "failed": 0}},
+    }
+    # The wider run's entries are still there for the next run to skip on.
+    assert state.is_submitted("hermes", "h1")
+
+
+async def test_status_counts_every_entry_when_the_cli_started_the_run(state: ImportState) -> None:
+    """``raven import run`` records a total and no keys; then the file's every
+    entry is the scope, as ``raven import status`` has always counted it."""
+    state.mark_submitted("claude_code", "c1")
+    state.mark_submitted("hermes", "h1")
+    state.set_total(3)
+
+    out = await import_sync.import_status({})
+    assert out["total"] == 3
+    assert out["submitted"] == 2
+    assert sorted(out["by_platform"]) == ["claude_code", "hermes"]
+
+
 # ---------------------------------------------------------------------------
 # import.stop
 # ---------------------------------------------------------------------------
