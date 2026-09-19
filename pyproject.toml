@@ -541,6 +541,7 @@ dev = [
     "json-repair>=0.59.5",
     "jsonschema>=4.23.0",
     "lxml-stubs>=0.5.1",
+    "markdown>=3.10",
     "packaging>=26.1",
     "pexpect>=4.9",
     "pip-audit>=2.10.0",
@@ -552,6 +553,11 @@ dev = [
     "pytest-xdist>=3.8.0",
     "ruff==0.15.12",
     "ty==0.0.80",
+]
+docs = [
+    "mkdocs-git-revision-date-localized-plugin>=1.6.0",
+    "mkdocs-material>=9.5",
+    "mkdocs-static-i18n>=1.0",
 ]
 
 [tool.importlinter]

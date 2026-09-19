@@ -1,0 +1,96 @@
+site_name: Raven
+site_url: https://evermind-ai.github.io/Raven/
+repo_url: https://github.com/EverMind-AI/Raven
+docs_dir: docs
+
+theme:
+  name: material
+  font:
+    text: Atkinson Hyperlegible Next
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - toc.follow
+  palette:
+    - scheme: default
+      primary: custom
+      accent: custom
+
+extra:
+  generator: false
+
+extra_css:
+  - stylesheets/evermind.css
+
+extra_javascript:
+  - javascripts/toc-progress.js
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.highlight
+
+plugins:
+  - search
+  - i18n:
+      docs_structure: suffix
+      fallback_to_default: true
+      reconfigure_material: true
+      reconfigure_search: true
+      languages:
+        - locale: en
+          default: true
+          name: English
+          build: true
+        - locale: zh
+          name: 简体中文
+          build: true
+          nav_translations:
+            Guide: 指南
+            Overview: 总览
+            Quick Start: 快速开始
+            Self-Hosting: 自托管
+            Docker Deployment: Docker 部署
+            Launch WebUI: 启动 WebUI
+            Sandbox: 沙箱
+            Reference: 参考
+            Architecture: 架构
+            Command Reference: 命令参考
+            Repo Layout: 仓库布局
+            Developers: 开发者
+            Development: 开发
+            Proactivity Design: 主动性设计
+            Proactivity Reference: 主动性参考
+            Self-Evolution Map: 自进化映射
+            Tracing API: 追踪 API
+
+  - git-revision-date-localized:
+      type: date
+      enable_creation_date: false
+      fallback_to_build_date: false
+
+nav:
+  - Guide:
+      - Overview: index.md
+      - Quick Start: quick-start.md
+      - Self-Hosting: self-hosting.md
+      - Docker Deployment: docker.md
+      - Launch WebUI: webui.md
+      - Sandbox: sandbox.md
+  - Reference:
+      - Architecture: architecture.md
+      - Command Reference: commands.md
+      - Repo Layout: repo-layout.md
+  - Developers:
+      - Development: development.md
+      - Proactivity Design: proactivity-design.md
+      - Proactivity Reference: proactivity.md
+      - Self-Evolution Map: self-evolution-map.md
+      - Tracing API: tracing-api.md

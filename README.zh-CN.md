@@ -9,7 +9,7 @@
   <a href="https://github.com/EverMind-AI/EverOS/discussions/67"><img src="https://img.shields.io/badge/WeCom-EverMind_Community-07C160?labelColor=gray&style=for-the-badge&logo=wechat&logoColor=white" alt="WeCom"></a>
 </p>
 
-[官网](https://raven.evermind.ai) · [English](README.md)
+[官网](https://raven.evermind.ai) · [文档](https://evermind-ai.github.io/Raven/zh/) · [English](README.md)
 
 </div>
 
@@ -274,6 +274,12 @@ raven web
 运行 `raven --help` 或 `raven <command> --help` 查看完整命令说明。
 
 ## ❯❯ 文档
+
+**[Raven 文档站](https://evermind-ai.github.io/Raven/zh/)** 提供快速开始、自托管、
+Docker 部署、WebUI、命令参考、运行时架构与仓库布局，中英文双语。
+
+以下文件是与代码放在一起的工程记录。其中若干是带日期的设计笔记，描述的是其**撰写当时**
+的代码树，而非当前状态。
 
 - [文档索引](docs/README.md)
 - [开发工作流](docs/dev.md)

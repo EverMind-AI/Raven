@@ -142,3 +142,7 @@ demos/oncall_heat2d/.raven-demo-home/
 # is the agent's own folder; a dispatched run writes under the state root.
 agents/raven-ppt/deck/
 agents/raven-ppt/materials/
+
+# MkDocs build output. The site is published from CI; HTML is never committed
+# (AGENTS.md section 7).
+docs-site/site/
