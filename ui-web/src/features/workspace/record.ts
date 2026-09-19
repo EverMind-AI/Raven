@@ -13,8 +13,8 @@
  */
 
 import { t } from '../../i18n/t'
+import * as hunks from '../../lib/hunks'
 import { pane } from '../../state/wsPane'
-import * as hunks from './hunks'
 import { shortPath } from './source'
 import { shared as workspaceShared } from './store'
 

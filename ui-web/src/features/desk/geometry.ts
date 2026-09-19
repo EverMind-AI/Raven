@@ -175,7 +175,11 @@ export function workspaceTransitionWidth({
 }): number {
   let desired = previousWidth
   if (previousColumns === 0) {
-    desired = firstPane?.kind === 'agent' || firstPane?.kind === 'agent-record'
+    /* A task pane's own board is sized like the agent conversation's, not
+       like a file: 440 is the width the board's own card grid was laid out
+       against (two 196px columns plus their gap and padding), and opening
+       one at 720 would spend that extra width on nothing the graph uses. */
+    desired = firstPane?.kind === 'agent' || firstPane?.kind === 'agent-record' || firstPane?.kind === 'task'
       ? AGENT_PANE_INITIAL_WIDTH
       : FILE_PANE_INITIAL_WIDTH
   }

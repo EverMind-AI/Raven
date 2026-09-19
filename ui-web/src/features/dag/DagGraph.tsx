@@ -14,6 +14,13 @@ import type { JSX } from 'react'
 
 export type DagSurface = 'card' | 'sheet'
 
+/* A caller's own box for a node, in place of the default one below. Given the
+   node and the same clock the default box's own duration reads, and laid out
+   inside a `foreignObject` sized to the node's box -- edges, layout,
+   selection and click/keyboard handling all stay DagGraph's; only what a node
+   looks like changes. */
+export type CardRenderer = (node: DagNode, now: number) => JSX.Element
+
 interface DagGraphProps {
   dims: Dims
   nodes: DagNode[]
@@ -25,6 +32,9 @@ interface DagGraphProps {
   /* Left to right unless the surface says otherwise. The task board reads top
      to bottom; see `Flow` in ./graph. */
   flow?: Flow
+  /* Unset on every caller but the tasks board: default is today's SVG box
+     (rect, mark, two-line label, tooltip), byte-for-byte. */
+  renderNode?: CardRenderer
 }
 
 const CARD_LAYERS = 5
@@ -126,6 +136,7 @@ export function DagGraph({
   stopPropagation = false,
   surface,
   flow = 'across',
+  renderNode,
 }: DagGraphProps): JSX.Element {
   const visible = surface === 'card' ? visibleLayers(nodes) : { hiddenLayers: 0, nodes }
   const shown = visible.nodes
@@ -167,29 +178,40 @@ export function DagGraph({
                 if (stopPropagation) e.stopPropagation()
                 pick()
               }}>
-              <rect width={dims.W} height={dims.H} rx={9} />
-              <Mark status={n.status} x={markX} y={dims.H / 2} />
-              {/* Laid out as HTML inside the box rather than as SVG text beside
-                  it: a line that is longer than its node then ends where the
-                  node ends, at whatever width the box is and whenever the font
-                  finally arrives, instead of at a length something measured
-                  once and wrote down. */}
-              <foreignObject x={labelX} y={0} width={room} height={dims.H}>
-                <div className="lbl">
-                  <div className="ln">
-                    <span className={n.node_summary ? 'id prose' : 'id'}>{labels[i]}</span>
-                    {card ? null : <span className="tm">{took(n, now)}</span>}
-                  </div>
-                  <div className="ln">
-                    <span className="ag">{n.subagent + handle}</span>
-                    {card ? <span className="tm">{n.status === 'running' ? '' : took(n, now)}</span> : null}
-                  </div>
-                </div>
-              </foreignObject>
-              {/* Both, because the box shows one of them truncated: the summary is
-                  what the step is for, the id is what everything else keys on. */}
-              <title>{[n.node_summary, n.id, n.subagent + (n.instance ? ' @' + n.instance : '')]
-                .filter(Boolean).join(' \u00b7 ')}</title>
+              {renderNode
+                ? (
+                  <foreignObject x={0} y={0} width={dims.W} height={dims.H}>
+                    {renderNode(n, now)}
+                  </foreignObject>
+                )
+                : (
+                  <>
+                    <rect width={dims.W} height={dims.H} rx={9} />
+                    <Mark status={n.status} x={markX} y={dims.H / 2} />
+                    {/* Laid out as HTML inside the box rather than as SVG text
+                        beside it: a line that is longer than its node then ends
+                        where the node ends, at whatever width the box is and
+                        whenever the font finally arrives, instead of at a
+                        length something measured once and wrote down. */}
+                    <foreignObject x={labelX} y={0} width={room} height={dims.H}>
+                      <div className="lbl">
+                        <div className="ln">
+                          <span className={n.node_summary ? 'id prose' : 'id'}>{labels[i]}</span>
+                          {card ? null : <span className="tm">{took(n, now)}</span>}
+                        </div>
+                        <div className="ln">
+                          <span className="ag">{n.subagent + handle}</span>
+                          {card ? <span className="tm">{n.status === 'running' ? '' : took(n, now)}</span> : null}
+                        </div>
+                      </div>
+                    </foreignObject>
+                    {/* Both, because the box shows one of them truncated: the
+                        summary is what the step is for, the id is what
+                        everything else keys on. */}
+                    <title>{[n.node_summary, n.id, n.subagent + (n.instance ? ' @' + n.instance : '')]
+                      .filter(Boolean).join(' \u00b7 ')}</title>
+                  </>
+                )}
             </g>
           )
         })}

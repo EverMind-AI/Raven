@@ -16,6 +16,7 @@ import { gateway } from '../../rpc/gateway'
 import { unpitch } from '../../state/session/conversation'
 import { open as sessionOpen, rows as sessionRows } from '../../state/session/rows'
 import { session as sheetSession } from '../../state/sheetRack'
+import { ds } from '../../state/sources'
 import { show as toast } from '../../state/toast'
 import { pane } from '../../state/wsPane'
 import { run as dagRunOf } from '../dag/mount'
@@ -25,6 +26,7 @@ import { draw as sessionDraw } from '../rail/store'
 import { plainTitle } from '../rail/title'
 import * as subagents from '../subagents/store'
 import { history as drawHistory } from './mount'
+import { actLabel as storeActLabel } from './store'
 
 import type { SessRow } from '../rail/types'
 import type { HistoryMessage } from './types'
@@ -54,6 +56,12 @@ export function okOf(name: string, preview: string): boolean {
   if (name === 'understand_media' && preview.includes('[could not understand:')) return false
   return true
 }
+
+/* The same one-line-label table this island's own tool rows read, exposed so
+   a sibling domain that draws its own tool calls (features/tasks) can ask for
+   it through the seam rather than importing this island's private store. */
+export const actLabel = (name: string, args: Record<string, unknown>, display?: string | null): string =>
+  storeActLabel(name, args, display)
 
 export function renderHistory(messages: HistoryMessage[]): void {
   /* Opening a stored conversation IS content: the new-task flag comes down
@@ -123,7 +131,11 @@ export function spawnList() {
 /* "View in workspace" on a spawn row: open the panel on the run's own record,
    not just on the list. The list may not have caught the new run yet, so a
    couple of short retries cover the gap between the call and its row. */
-export function openSpawn(agent: string, label: string): void {
+export function openSpawn(agent: string, label: string, nodeId?: string): void {
+  /* The tasks source's own row, when the wire named one: opening it directly
+     is exact, where the label match below is a guess. The seam answers
+     whether it opened, so there is nothing to fall back to once it does. */
+  if (nodeId && ds('tasks').openByNode?.(nodeId)) return
   /* Same rule as dagOpenNode: `openRow` below raises the window, and in desk
    mode that is the whole answer. The panel's agents view is only needed where
    there are no windows. */

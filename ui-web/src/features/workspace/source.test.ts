@@ -192,7 +192,7 @@ async function pane() {
          whether the tool's own diff replaced the guess, are both read off the
          row rather than off a spy -- the record and the replay are one module
          now, so a spy could only stand in for one of them. */
-      'src/features/workspace/hunks': {
+      'src/lib/hunks': {
         fromEdit: () => ({ add: 1, del: 0, rows: ['guessed'] }),
         fromWrite: () => ({ add: 2, del: 0, rows: ['whole file'] }),
         fromUnified: (diff: string) => ({ add: 5, del: 3, rows: [diff] }),

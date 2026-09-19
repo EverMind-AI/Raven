@@ -1278,6 +1278,46 @@ async def test_announcement_omits_the_handle_line_for_a_stateless_call() -> None
     assert "Instance handle" not in submitted[0].text
 
 
+async def test_announce_result_carries_the_records_node_id() -> None:
+    """G7: the delegated mark names the record id so the transcript's receipt
+    row can open the task -- the dag mark already carries ``run_id``, this is
+    the matching field for a spawn.
+
+    Asserted against the mark the manager actually emits, validated by the two
+    strict models a client draws on, the way ``announce_dag_exception``'s own
+    mark is checked above.
+    """
+    from raven.rpc.models import SubagentDeliveredPayload, TranscriptDelegated
+
+    mgr = _make_manager(max_concurrent=1)
+    mgr.set_submit(lambda _req: None)
+    delivered: list[dict] = []
+    mgr._emit_delivered = lambda _origin, mark: delivered.append(mark)
+
+    origin = {**_spawn_origin("claude_code", None), "node_id": "audit_checkout"}
+    await mgr._announce_result("abcd1234", "Audit", "do it", "done", origin, "ok")
+
+    assert len(delivered) == 1
+    mark = dict(delivered[0])
+    assert mark["node_id"] == "audit_checkout"
+    content = mark.pop("content")
+    assert SubagentDeliveredPayload(**mark, content=content).node_id == "audit_checkout"
+    assert TranscriptDelegated(**mark).node_id == "audit_checkout"
+
+
+async def test_announce_result_omits_node_id_when_the_origin_carries_none() -> None:
+    """The field is a bare optional string on the wire, not a nullable one, so
+    a mark with nothing to say must leave the key out rather than send null."""
+    mgr = _make_manager(max_concurrent=1)
+    mgr.set_submit(lambda _req: None)
+    delivered: list[dict] = []
+    mgr._emit_delivered = lambda _origin, mark: delivered.append(mark)
+
+    await mgr._announce_result("abcd1234", "One shot", "do it", "done", _spawn_origin("oneshot", None), "ok")
+
+    assert "node_id" not in delivered[0]
+
+
 async def test_announcement_no_longer_tells_the_model_to_drop_technical_detail() -> None:
     """The old wording made the handle a forbidden 'technical detail', which
     would have had the model discard the thing it was just handed."""
@@ -2321,6 +2361,210 @@ async def test_a_resumed_builtin_run_records_only_its_own_turns(tmp_path) -> Non
     contents = [str(m.get("content")) for m in did.transcript]
     assert contents, "the run still did something worth recording"
     assert not [c for c in contents if "earlier node" in c], "history is not this node's account"
+
+
+class _WriteFileProvider(LLMProvider):
+    """One ``write_file`` call, then a final answer."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        from raven.providers.base import ToolCallRequest
+
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="c1", name="write_file", arguments={"path": "notes.md", "content": "line one\nline two\n"}
+                    )
+                ],
+            )
+        return LLMResponse(content="done", finish_reason="stop")
+
+
+async def test_a_write_file_call_records_the_file_it_wrote(tmp_path) -> None:
+    """G1: a node's own account of what it wrote, for the tasks panel's file
+    and diff chips. Only the in-process lane sees the tool's own
+    ``diff`` / ``file_change``, so this is the one place it is captured."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    backend = RavenLoopBackend(provider=_WriteFileProvider(), model="stub", agent_home=tmp_path)
+
+    with activity.collecting() as did:
+        await backend.run("write it", task_id="n4", workspace=tmp_path, executor=None)
+
+    assert len(did.files) == 1
+    recorded = did.files[0]
+    assert recorded["path"].endswith("notes.md")
+    assert recorded["op"] == "write"
+    assert recorded["add"] == 2
+    assert recorded["del"] == 0
+    assert recorded["size"] == len("line one\nline two\n".encode("utf-8"))
+    assert did.as_meta()["files"] == did.files
+
+
+class _WriteThenEditProvider(LLMProvider):
+    """A ``write_file`` call, then an ``edit_file`` call, then a final answer."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        from raven.providers.base import ToolCallRequest
+
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="c1", name="write_file", arguments={"path": "notes.md", "content": "old line\nkeep\n"}
+                    )
+                ],
+            )
+        if self.calls == 2:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="c2",
+                        name="edit_file",
+                        arguments={"path": "notes.md", "old_text": "old line", "new_text": "new line\nextra"},
+                    )
+                ],
+            )
+        return LLMResponse(content="done", finish_reason="stop")
+
+
+class _WriteTwiceProvider(LLMProvider):
+    """Two ``write_file`` calls on the same path, then a final answer."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        from raven.providers.base import ToolCallRequest
+
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCallRequest(id="c1", name="write_file", arguments={"path": "notes.md", "content": "a\nb\nc\n"})
+                ],
+            )
+        if self.calls == 2:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCallRequest(id="c2", name="write_file", arguments={"path": "notes.md", "content": "a\nz\n"})
+                ],
+            )
+        return LLMResponse(content="done", finish_reason="stop")
+
+
+async def test_two_writes_of_one_path_are_one_file(tmp_path) -> None:
+    """Two writes of the same path fold into the file's final state: the
+    counts sum and the op is the tool's (``write``), not two entries for one
+    file the panel would draw as two products."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    backend = RavenLoopBackend(provider=_WriteTwiceProvider(), model="stub", agent_home=tmp_path)
+
+    with activity.collecting() as did:
+        await backend.run("write twice", task_id="n6", workspace=tmp_path, executor=None)
+
+    assert [f["path"] for f in did.files] == ["notes.md"]
+    only = did.files[0]
+    assert only["op"] == "write"
+    assert only["add"] == 4
+    assert only["del"] == 2
+    assert only["size"] == len(b"a\nz\n")
+
+
+async def test_a_write_then_edit_of_one_path_is_a_single_write_entry(tmp_path) -> None:
+    """``op`` prefers ``write`` even when the later touch is an edit: the node
+    produced the file's whole current content at some point, and that is a
+    true view of it in a way a patch against the pre-node baseline is not."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    backend = RavenLoopBackend(provider=_WriteThenEditProvider(), model="stub", agent_home=tmp_path)
+
+    with activity.collecting() as did:
+        await backend.run("edit it", task_id="n5", workspace=tmp_path, executor=None)
+
+    assert [f["path"] for f in did.files] == ["notes.md"]
+    only = did.files[0]
+    assert only["op"] == "write"
+    assert only["add"] == 4
+    assert only["del"] == 1
+
+
+class _EditExistingFileProvider(LLMProvider):
+    """One ``edit_file`` call against a file the node did not create."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        from raven.providers.base import ToolCallRequest
+
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="c1",
+                        name="edit_file",
+                        arguments={"path": "notes.md", "old_text": "old line", "new_text": "new line\nextra"},
+                    )
+                ],
+            )
+        return LLMResponse(content="done", finish_reason="stop")
+
+
+async def test_a_node_editing_a_file_it_did_not_create_records_an_edit_entry(tmp_path) -> None:
+    """A path the node only ever edited (never wrote) stays an ``edit`` entry:
+    unlike the write-then-edit case, there is no whole-content touch to prefer."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    (tmp_path / "notes.md").write_text("old line\nkeep\n", encoding="utf-8")
+    backend = RavenLoopBackend(provider=_EditExistingFileProvider(), model="stub", agent_home=tmp_path)
+
+    with activity.collecting() as did:
+        await backend.run("edit existing", task_id="n7", workspace=tmp_path, executor=None)
+
+    assert did.files == [{"path": "notes.md", "op": "edit", "add": 2, "del": 1, "size": 20}]
 
 
 async def test_the_account_is_published_while_the_run_is_still_going(tmp_path) -> None:
@@ -4384,3 +4628,16 @@ async def test_announce_result_names_the_working_directory(monkeypatch):
 
     assert "Working directory: /work/here" in submitted[0].text
     assert "[Subagent 'label' returned]" in submitted[0].text
+
+
+def test_file_change_counts_fall_back_to_the_contents_when_the_tool_kept_no_diff() -> None:
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.backends.raven_loop import _file_change_counts
+
+    fresh = SimpleNamespace(path="a.md", before=None, after="one\ntwo\n")
+    assert _file_change_counts(fresh, None) == (2, 0)
+    rewritten = SimpleNamespace(path="a.md", before="one\ntwo\nthree\n", after="one\n2\n")
+    assert _file_change_counts(rewritten, None) == (1, 2)
+    with_diff = SimpleNamespace(path="a.md", before="x", after="y")
+    assert _file_change_counts(with_diff, "--- a\n+++ b\n@@\n-x\n+y\n") == (1, 1)

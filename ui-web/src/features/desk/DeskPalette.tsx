@@ -19,14 +19,17 @@ import {
 } from './geometry'
 import * as desk from './store'
 
+import type { TaskFile, TaskNode, TaskRow } from '../tasks/types'
 import type { DeliveryRow } from '../workspace/types'
 import type { DeskGeometry, DeskTab } from './types'
 import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent } from 'react'
 
-/* The three tabs, each carrying what is new in it. The bubble is the same thing
-   on all three -- changes written, files delivered, background work started --
-   because a reader who is on one tab has exactly one question about the other
-   two, and it is the same question.
+/* The three tabs, in the prototype's own order (deliverables, tasks, diff), each
+   carrying its own badge. Two of the three carry what is new in them, because
+   a reader who is on one tab has exactly one question about the other two.
+   The tasks tab carries something else: how many are running right now,
+   which is what a reader who has already opened every task still wants to
+   know -- "new" would go quiet on it the moment they had looked once.
 
    The label is marked with a class rather than left to `span:last-child`: the
    bubble is a sibling, and the moment one existed the positional selector
@@ -35,21 +38,19 @@ import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent } from 'reac
 function DeskTabs({ value, onChange }: { value: DeskTab; onChange: (tab: DeskTab) => void }): JSX.Element {
   return (
     <div className="desk-tabs" role="tablist">
-      {(['deliverables', 'diff', 'tasks'] as DeskTab[]).map((tab) => {
-        const label = tab === 'diff' ? 'Diff'
+      {(['deliverables', 'tasks', 'diff'] as DeskTab[]).map((tab) => {
+        const label = tab === 'diff' ? 'diff'
           : tab === 'deliverables' ? t('gui.ws.deliverables') : t('gui.ws.tasks')
-        const fresh = desk.unseen(tab)
-        /* The count goes in the button's OWN name. An explicit `aria-label`
-           replaces the whole subtree as the accessible name, so a label on the
-           bubble inside it is never announced -- and `<i>` maps to a generic
-           role, where `aria-label` does not apply at all. Hidden from the tree
-           afterwards so the number is not read twice. */
-        const name = fresh ? `${label}, ${t('gui.ws.unseen_tab', { n: String(fresh) })}` : label
+        const fresh = tab === 'tasks' ? desk.runningTaskCount() : desk.unseen(tab)
+        /* Shown only on a tab the reader is not already looking at, the way
+           the prototype's own count reads: a selected tab's badge would be
+           telling the reader about the screen already in front of them. */
+        const showBubble = fresh > 0 && value !== tab
         return (
-          <button key={tab} role="tab" aria-label={name} aria-selected={value === tab} onClick={() => onChange(tab)}>
+          <button key={tab} role="tab" aria-label={label} title={label} aria-selected={value === tab} onClick={() => onChange(tab)}>
             <DeskIcon kind={tab} />
             <span className="lb">{label}</span>
-            {fresh ? <i className="desk-count" aria-hidden="true">{fresh}</i> : null}
+            {showBubble ? <i className="desk-count">{fresh}</i> : null}
           </button>
         )
       })}
@@ -64,14 +65,19 @@ function DeskTabs({ value, onChange }: { value: DeskTab; onChange: (tab: DeskTab
 function DeskEmpty({ kind, title, hint, sends }: {
   kind: DeskTab
   title: string
-  hint: string
+  /* Optional: the prototype's own empty state is icon + one bold line and
+     nothing else -- state the fact, don't sell the reader on where to go
+     next. A hint is for a tab whose nothing needs a second sentence to be
+     legible against its sibling tab's own nothing (deliverables and diff,
+     which count against each other). */
+  hint?: string
   sends?: { label: string; to: DeskTab }
 }): JSX.Element {
   return (
     <div className="desk-empty">
       <DeskIcon kind={kind} />
       <b>{title}</b>
-      <span>{hint}</span>
+      {hint ? <span>{hint}</span> : null}
       {sends ? (
         <button type="button" className="desk-empty-to" onClick={() => desk.set({ tab: sends.to })}>
           {sends.label}
@@ -100,9 +106,24 @@ function DeskEmpty({ kind, title, hint, sends }: {
 const counted = (key: string, n: number): string =>
   (n === 1 ? t(key) : t(key.replace('gui.ws.', 'gui.ws.n.'), { n: String(n) }))
 
+/* What a task's nodes wrote or changed, across every task -- beside the
+   session's own rows rather than instead of them: a sub-agent's writes never
+   reach the session's own change list. */
+interface TaskFileEntry { row: TaskRow; node: TaskNode; file: TaskFile }
+
+function taskFileEntries(op: 'write' | 'edit'): TaskFileEntry[] {
+  const out: TaskFileEntry[] = []
+  tasksStore.rows().forEach((row) => row.nodes.forEach((node) => node.files.forEach((file) => {
+    if (file.op === op) out.push({ row, node, file })
+  })))
+  return out
+}
+
 function DiffNav(): JSX.Element {
+  useSyncExternalStore(tasksStore.subscribe, tasksStore.get)
   const changes = workspace.shared().changes
-  if (!changes.length) {
+  const taskDiffs = taskFileEntries('edit')
+  if (!changes.length && !taskDiffs.length) {
     /* The shelf's own count, so an empty Diff can say what the other bubble is
        counting. The palette's root already subscribes to the deliveries store,
        which is why reading it here needs nothing of its own. */
@@ -120,7 +141,7 @@ function DiffNav(): JSX.Element {
     <div className="desk-list">
       {changes.map((change) => (
         <button key={`${change.key}:${change.turn}`} className="desk-row desk-diff-row" onClick={() => desk.openDeskDiff(change)}>
-          <i className={`chgc ${change.kind}`}>{t(`gui.ws.chip.${change.kind}`)}</i>
+          <i className={`chgc ${change.kind}`}>{change.kind === 'add' ? '+' : 'M'}</i>
           <span className="desk-name" title={change.key}>{change.dir}<b>{change.name}</b></span>
           <span className="chgs">
             {change.add ? <i className="a">+{change.add}</i> : null}
@@ -128,6 +149,28 @@ function DiffNav(): JSX.Element {
           </span>
         </button>
       ))}
+      {taskDiffs.length ? (
+        <>
+          <div className="desk-grp">{t('gui.ws.task_output')}</div>
+          {taskDiffs.map(({ row, node, file }) => {
+            const kind = file.del ? 'edit' : 'add'
+            return (
+              <button
+                key={`${row.kind}:${row.id}:${node.node_id}:${file.path}`}
+                className="desk-row desk-diff-row"
+                onClick={() => { void tasksStore.fileDiffChange(row, node, file).then(desk.openDeskDiff) }}
+              >
+                <i className={`chgc ${kind}`}>{file.del ? 'M' : '+'}</i>
+                <span className="desk-name" title={file.path}>{file.path}</span>
+                <span className="chgs">
+                  <i className="a">+{file.add}</i>
+                  <i className="d">−{file.del}</i>
+                </span>
+              </button>
+            )
+          })}
+        </>
+      ) : null}
     </div>
   )
 }
@@ -172,8 +215,10 @@ function DeliverableRow({ row, here }: { row: DeliveryRow; here: boolean }): JSX
    difference between what Raven wrote and what it gave you. */
 function DeliverablesNav(): JSX.Element {
   useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
+  useSyncExternalStore(tasksStore.subscribe, tasksStore.get)
   const rows = deliveries.list()
-  if (!rows.length) {
+  const taskFiles = taskFileEntries('write')
+  if (!rows.length && !taskFiles.length) {
     /* The changed-file count is the fact the reader is holding against this
        one. Not the unseen count the bubble shows: what they will find on the
        other tab is everything there, read or not. */
@@ -208,6 +253,27 @@ function DeliverablesNav(): JSX.Element {
     out.push(<div key={`grp:${key}`} className="desk-grp">{t(key)}</div>)
     group.forEach((row) => out.push(<DeliverableRow key={row.path} row={row} here={here(row)} />))
   })
+  if (taskFiles.length) {
+    out.push(<div key="grp:task" className="desk-grp">{t('gui.ws.task_output')}</div>)
+    taskFiles.forEach(({ row, node, file }) => {
+      const name = file.path.split('/').pop() || file.path
+      const ext = (name.split('.').pop() || '').toUpperCase()
+      out.push(
+        <button
+          key={`${row.kind}:${row.id}:${node.node_id}:${file.path}`}
+          className="desk-row desk-dlv-row"
+          title={file.path}
+          onClick={() => desk.openDeskFile(file.path)}
+        >
+          <span className="dlv-kind" data-kind={fileKind(name)}>{ext ? ext.slice(0, 4) : t('gui.arts.file')}</span>
+          <span className="desk-name">
+            <b>{name.replace(/\.[^.]+$/, '')}</b>
+            <s>{[name, file.size != null ? deliveries.humanSize(file.size) : ''].filter(Boolean).join(' · ')}</s>
+          </span>
+        </button>,
+      )
+    })
+  }
   return <div className="desk-list">{out}</div>
 }
 
@@ -225,7 +291,7 @@ function TasksNav(): JSX.Element {
   /* Answered here rather than inside the view: in the desk, one nothing has to
      look like the other two, and TasksApp's own note belongs to the panel. */
   if (!state.rows.length) {
-    return <DeskEmpty kind="tasks" title={t('gui.ws.tasks_none')} hint={t('gui.ws.tasks_none_sub')} />
+    return <DeskEmpty kind="tasks" title={t('gui.ws.tasks_none')} />
   }
   return <TasksApp />
 }
@@ -439,7 +505,11 @@ export function DeskPalette(): JSX.Element | null {
       if (e.pointerId !== pointerId) return
       setGeom((now) => clampGeometry({
         ...now,
-        w: start.w + e.clientX - start.pointerX,
+        /* Anchored, the right edge is pinned (styles/page.css's `right: calc(...)`
+           on `[data-anchored="true"]`), so the only way to grow is leftward --
+           a rightward drag has to shrink it instead. Detached has no pinned
+           edge, so the hand's own direction is the width's. */
+        w: start.w + (start.detached ? 1 : -1) * (e.clientX - start.pointerX),
         h: start.h + e.clientY - start.pointerY,
       }))
     }
@@ -460,6 +530,8 @@ export function DeskPalette(): JSX.Element | null {
   return (
     <div
       className="desk-palette"
+      role="dialog"
+      aria-label={t('gui.workspace')}
       data-anchored={!geom.detached}
       /* Which way it is moving, for the stylesheet -- and genuinely inert
          while it leaves. A tab clicked on the way out would act on a desk the
@@ -494,7 +566,7 @@ export function DeskPalette(): JSX.Element | null {
       <div className="desk-body">
         {state.tab === 'diff' ? <DiffNav /> : state.tab === 'deliverables' ? <DeliverablesNav /> : <TasksNav />}
       </div>
-      <div className="desk-resize" onPointerDown={resize} />
+      <div className="desk-resize" aria-hidden="true" onPointerDown={resize} />
     </div>
   )
 }

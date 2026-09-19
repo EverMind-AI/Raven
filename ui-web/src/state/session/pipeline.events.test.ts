@@ -494,6 +494,62 @@ describe('dag.run_replanned', () => {
   })
 })
 
+/* The tasks store no longer sits behind an import here (import-direction's
+   PINNED list) -- these five frames reach it, if at all, through the seam
+   `app/install.ts` grows `sources.tasks` with. */
+describe('the tasks seam behind the five task-shaped events', () => {
+  const statusPayload = { instance: 'w1', agent: 'raven', label: 'qc', status: 'running' }
+  const startedPayload = { run_id: 'r1', nodes: [] }
+  const updatedPayload = { run_id: 'r1', node_id: 'first', status: 'done' }
+  const completedPayload = { run_id: 'r1', summary: 'all done' }
+  const replannedPayload = { run_id: 'r1' }
+
+  it('fans each arm out to an installed tasks source, with the payload it received', async () => {
+    const h = await harness()
+    const { setSources } = await import('../sources')
+    const seen: Record<string, unknown> = {}
+    setSources({
+      tasks: {
+        onSubagentStatus: (p: unknown) => { seen.onSubagentStatus = p },
+        onRunStarted: (p: unknown) => { seen.onRunStarted = p },
+        onNodeUpdated: (p: unknown) => { seen.onNodeUpdated = p },
+        onRunCompleted: (p: unknown) => { seen.onRunCompleted = p },
+        onRunReplanned: (p: unknown) => { seen.onRunReplanned = p },
+      },
+    } as unknown as Partial<Sources>)
+
+    h.dispatch({ type: 'subagent.status', payload: statusPayload })
+    h.dispatch({ type: 'dag.run_started', payload: startedPayload })
+    h.dispatch({ type: 'dag.node_updated', payload: updatedPayload })
+    h.dispatch({ type: 'dag.run_completed', payload: completedPayload })
+    h.dispatch({ type: 'dag.run_replanned', payload: replannedPayload })
+
+    expect(seen).toEqual({
+      onSubagentStatus: statusPayload,
+      onRunStarted: startedPayload,
+      onNodeUpdated: updatedPayload,
+      onRunCompleted: completedPayload,
+      onRunReplanned: replannedPayload,
+    })
+  })
+
+  /* The regression the `sources.tasks?.` guard exists for: these suites drive
+     the hot turn path without installing a tasks source (`harness()` above
+     never sets one), and `ds('tasks')` would throw where the optional read
+     does not. */
+  it('drops all five silently with no tasks source installed', async () => {
+    const h = await harness()
+
+    expect(() => {
+      h.dispatch({ type: 'subagent.status', payload: statusPayload })
+      h.dispatch({ type: 'dag.run_started', payload: startedPayload })
+      h.dispatch({ type: 'dag.node_updated', payload: updatedPayload })
+      h.dispatch({ type: 'dag.run_completed', payload: completedPayload })
+      h.dispatch({ type: 'dag.run_replanned', payload: replannedPayload })
+    }).not.toThrow()
+  })
+})
+
 /* The three contract members with no arm at all. */
 describe('a frame no arm names', () => {
   it('is dropped without a sound', async () => {

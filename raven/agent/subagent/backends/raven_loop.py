@@ -7,6 +7,7 @@ and ``_build_subagent_prompt``, extracted verbatim so a spawned sub-agent's
 
 from __future__ import annotations
 
+import difflib
 import json
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from pathlib import Path
@@ -26,6 +27,7 @@ from raven.agent.subagent.mcp_grant import (
     raven_loop_target,
     resolve_grant,
 )
+from raven.agent.subagent.tool_vocabulary import RAVEN_NAME
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry, call_failed
 from raven.agent.tools.shell import ExecTool
@@ -97,6 +99,44 @@ def _withheld_here(tools: ToolRegistry, mcp_source: "McpSource | None") -> froze
         if not offered:
             withheld.add(name)
     return frozenset(withheld)
+
+
+def _file_change_counts(file_change: Any, diff: str | None) -> tuple[int, int]:
+    """Added/removed line counts for one file change, preferring the tool's own diff.
+
+    A unified diff, when the tool produced one, is counted directly. A rewrite
+    the tool dropped for being too large to render (or a write with no prior
+    content to diff against) has no ``diff``, so the two contents are compared
+    directly: a new file (``before is None``) counts every line of ``after`` as
+    added, and an existing file is compared line-by-line with ``difflib``.
+    """
+    if diff:
+        lines = diff.splitlines()
+        add = sum(1 for line in lines if line.startswith("+") and not line.startswith("+++"))
+        delete = sum(1 for line in lines if line.startswith("-") and not line.startswith("---"))
+        return add, delete
+    after_lines = file_change.after.splitlines()
+    if file_change.before is None:
+        return len(after_lines), 0
+    before_lines = file_change.before.splitlines()
+    add = delete = 0
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, before_lines, after_lines).get_opcodes():
+        if tag in ("insert", "replace"):
+            add += j2 - j1
+        if tag in ("delete", "replace"):
+            delete += i2 - i1
+    return add, delete
+
+
+def _workspace_relative(path: str, workspace: Path) -> str:
+    """The path a file record carries: relative to the run's workspace when the
+    file is under it (the file endpoint anchors relative paths there, and the
+    panel reads ``work/notes.md`` where an absolute path says nothing), absolute
+    otherwise."""
+    try:
+        return str(Path(path).resolve().relative_to(Path(workspace).resolve()))
+    except (ValueError, OSError):
+        return path
 
 
 def build_subagent_prompt(
@@ -598,6 +638,18 @@ class RavenLoopBackend:
                     activity.note_tool_call(tool_call.name)
                     set_current_tool_call_id(tool_call.id)
                     result = await tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
+                    if (file_change := getattr(result, "file_change", None)) is not None:
+                        # The op is the tool's, not the file's: a write over an
+                        # existing file is still a write, and `before` only
+                        # decides how many lines it replaced.
+                        add, delete = _file_change_counts(file_change, getattr(result, "diff", None))
+                        activity.note_file_change(
+                            _workspace_relative(file_change.path, workspace),
+                            "edit" if "edit" in RAVEN_NAME.get(tool_call.name, tool_call.name) else "write",
+                            add,
+                            delete,
+                            len(file_change.after.encode("utf-8")),
+                        )
                     # Recorded beside the call, so the run's account says how
                     # its calls went and not only that it made them. Through the
                     # registry's own predicate: a call refused before dispatch
