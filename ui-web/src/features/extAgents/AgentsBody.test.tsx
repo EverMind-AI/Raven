@@ -80,7 +80,7 @@ afterEach(() => {
   cleanup()
   resetSources()
   store._resetForTests()
-  vi.restoreAllMocks()
+  confirmStore._resetForTests()
 })
 
 describe('the onboarding wizard\'s agents pane', () => {
@@ -177,16 +177,12 @@ describe('the onboarding wizard\'s agents pane', () => {
     expect(acts).toEqual([['toggle', 'off_one', { enabled: true }]])
   })
 
-  it('connects a stale row through act(migrate) after the same confirm the settings page asks', async () => {
+  it('connects a stale row through act(migrate) only after the confirm the settings page asks is answered', async () => {
     /* A flag would have left `upgrade_to` standing and the old command line
        in place -- the migration the card offered and never did. The remove
        plus add drops the handles of runs in flight, hence the confirm; the
-       tag beside the kind says where the row moves to. */
-    const confirms: string[] = []
-    vi.spyOn(confirmStore, 'ask').mockImplementation((title, _body, _label, fn) => {
-      confirms.push(title)
-      fn()
-    })
+       tag beside the kind says where the row moves to. The real confirm
+       store answers here, so the write is seen to wait for the answer. */
     const { acts } = install([row({ name: 'pi', configured: true, enabled: false, upgrade_to: 'acp' })])
     render(<AgentsStepBody />)
     await act(async () => {
@@ -197,8 +193,15 @@ describe('the onboarding wizard\'s agents pane', () => {
     await act(async () => {
       actBtn('pi').click()
     })
+    expect(confirmStore.get().open).toBe(true)
+    expect(confirmStore.get().title).toBe('gui.agent.migrate_do')
+    expect(acts).toEqual([])
 
-    expect(confirms).toEqual(['gui.agent.migrate_do'])
+    await act(async () => {
+      confirmStore.answer(true)
+    })
+
+    expect(confirmStore.get().open).toBe(false)
     expect(acts).toEqual([['migrate', 'pi', {}]])
   })
 
