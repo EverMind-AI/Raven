@@ -31,6 +31,7 @@ ZH = "zh/"
 #: appears elsewhere in the markup, so only that block is rewritten.
 CONFIG_BLOCK = re.compile(r'(<script id="__config" type="application/json">)(.*?)(</script>)', re.S)
 
+
 def _shallower(base: str) -> str:
     """One directory up, expressed the way the theme writes it."""
     return base[3:] if base.startswith("../") else "."
