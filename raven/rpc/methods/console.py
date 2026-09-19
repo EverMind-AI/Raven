@@ -221,6 +221,17 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
                 mcp.append(row)
         except Exception:
             logger.exception("ext.list: config mcp merge failed")
+        # Which tools carry no switch is the registry's fact, not the page's,
+        # and it is the union `tool_search.py` already applies: a schema-hidden
+        # tool is reached only through `tool_call`, and the two meta tools are
+        # the doorway itself -- `tool_call` is in the schema by necessity and
+        # is no more switchable for it. A switch on any of them would write a
+        # preference nothing reads. The page used to infer this from which card
+        # a tool sat in, which tied the grouping to the answer and kept the DAG
+        # controls in the meta-tool card rather than beside `run_subagent_dag`.
+        from raven.agent.tools.tool_search import META_TOOL_NAMES
+
+        fixed = META_TOOL_NAMES | loop.tools.schema_hidden_names()
         for name in loop.tools.tool_names:
             tool = loop.tools.get(name)
             # Asked, not inferred from membership: a tool the operator switched
@@ -237,6 +248,7 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
                     "enabled": offered,
                     "mcp_server": tool_owner.get(name),
                     "needs": None if offered else _needs_of(name),
+                    "builtin": name in fixed,
                 }
             )
         tools.extend(_gated_tools({t["name"] for t in tools}, getattr(loop, "web_search_provider", "serper")))
@@ -311,6 +323,9 @@ def _gated_tools(registered: set[str], search_provider: str = "serper") -> list[
                 "enabled": False,
                 "mcp_server": None,
                 "needs": {"setting": setting, "env": env},
+                # A key away from being offered: the switch is exactly what
+                # this row exists to carry.
+                "builtin": False,
             }
         )
     return rows
