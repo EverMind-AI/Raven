@@ -278,6 +278,10 @@ async def test_config_set_model_completes_a_first_run(fake_home: Path) -> None:
     )
 
     assert result["applied"] is True
+    # The write landed in a process that has no loop, and a turn needs one that
+    # is wired at stack build -- so the reply says the process has to come back
+    # rather than leaving the caller to find out on its next send.
+    assert result["needs_restart"] is True
     written = json.loads((cfg / "config.json").read_text())
     assert written["agents"]["defaults"]["model"] == "deepseek/deepseek-chat"
     assert written["agents"]["defaults"]["provider"] == "deepseek"
@@ -301,6 +305,98 @@ async def test_config_set_model_on_a_first_run_still_needs_the_key(fake_home: Pa
         )
 
     assert "agents" not in json.loads((cfg / "config.json").read_text())
+
+
+async def test_config_set_model_on_a_first_run_takes_an_oauth_login(fake_home: Path, monkeypatch) -> None:
+    """A provider logged in through OAuth writes no section, and still counts.
+
+    Its credential is a token file, which is what `include_external` asks
+    about. Reading the config first and giving up when the section is missing
+    would refuse exactly the first runs that never write one.
+    """
+    cfg = fake_home / ".raven"
+    cfg.mkdir(exist_ok=True)
+    (cfg / "config.json").write_text(json.dumps({"providers": {}}), encoding="utf-8")
+
+    from raven.providers import auth as auth_module
+
+    seen: dict[str, object] = {}
+
+    def _status(name, section, *, spec=None, include_external=False):
+        seen["name"], seen["external"] = name, include_external
+        return SimpleNamespace(ok=True)
+
+    monkeypatch.setattr(auth_module, "credential_status", _status)
+
+    result = await config_set(
+        {"key": "model", "value": "gpt-5-codex", "provider": "openai_codex"},
+        agent_loop_factory=_first_run_factory,
+    )
+
+    assert result["applied"] is True
+    assert seen == {"name": "openai_codex", "external": True}
+    written = json.loads((cfg / "config.json").read_text())
+    assert written["agents"]["defaults"]["provider"] == "openai_codex"
+
+
+async def test_config_set_model_reraises_an_unrelated_startup_failure(fake_home: Path) -> None:
+    """Only the credential refusal means "no loop yet"; anything else is real."""
+    _pin(fake_home, "anthropic", {"anthropic": {"apiKey": "sk-ant"}})
+
+    def _broken():
+        raise InternalError("engine init crash", data={"reason": "init_crash"})
+
+    with pytest.raises(InternalError):
+        await config_set(
+            {"key": "model", "value": "claude-opus-4-8", "provider": "anthropic"},
+            agent_loop_factory=_broken,
+        )
+
+
+@pytest.mark.parametrize(
+    "providers",
+    [
+        pytest.param(["not", "a", "mapping"], id="not-a-mapping"),
+        pytest.param({"deepseek": "a string where a section belongs"}, id="section-the-schema-refuses"),
+    ],
+)
+async def test_config_set_model_on_a_first_run_survives_an_unreadable_providers_block(
+    fake_home: Path, providers: object
+) -> None:
+    """A providers block nothing can read is no credential, and no crash.
+
+    Both shapes reach the gate: one is not a mapping at all, the other is a
+    mapping whose section the schema refuses. Neither may be taken for a
+    credential, and neither may escape as something other than the refusal
+    this call is about.
+    """
+    cfg = fake_home / ".raven"
+    cfg.mkdir(exist_ok=True)
+    (cfg / "config.json").write_text(json.dumps({"providers": providers}), encoding="utf-8")
+
+    with pytest.raises(ModelNotAvailableError):
+        await config_set(
+            {"key": "model", "value": "deepseek-chat", "provider": "deepseek"},
+            agent_loop_factory=_first_run_factory,
+        )
+
+
+async def test_config_set_model_without_a_factory_persists(fake_home: Path) -> None:
+    """A stack that hands over no factory validates nothing and says nothing.
+
+    The embedded stacks mount an engine somebody else owns; there is no loop
+    to ask and no process of ours to restart, so the reply carries neither a
+    refusal nor the restart note.
+    """
+    _pin(fake_home, "anthropic", {"anthropic": {"apiKey": "sk-ant"}})
+
+    result = await config_set(
+        {"key": "model", "value": "claude-opus-4-8", "provider": "anthropic"},
+        agent_loop_factory=None,
+    )
+
+    assert result["applied"] is True
+    assert "needs_restart" not in result
 
 
 async def test_config_set_model_is_scoped_to_the_session_that_asked(fake_home: Path, monkeypatch) -> None:

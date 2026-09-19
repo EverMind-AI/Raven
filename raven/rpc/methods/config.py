@@ -468,16 +468,17 @@ def _provider_has_credentials(provider: str) -> bool:
     from raven.providers.auth import credential_status
 
     providers = _load_config().get("providers")
-    if not isinstance(providers, dict):
-        return False
-    try:
-        sections = ProvidersConfig.model_validate(providers)
-    except Exception:
-        return False
-    section = sections.get(provider)
-    if section is None:
-        return False
-    return credential_status(provider, section, include_external=True).ok
+    section: Any = None
+    if isinstance(providers, dict):
+        try:
+            section = ProvidersConfig.model_validate(providers).get(provider)
+        except Exception:
+            section = None
+    # Asked even with nothing on file: a provider logged in through OAuth keeps
+    # its credential in a token file and writes no section at all, and
+    # `include_external` is the half of the question that sees it. Returning
+    # early on the missing section would refuse exactly those first runs.
+    return credential_status(provider, section if section is not None else {}, include_external=True).ok
 
 
 def _loop_or_none_on_first_run(
@@ -633,13 +634,23 @@ def _set_model(
         # outside a turn, and this is what re-points them.
         loop.set_default_binding(binding)
 
-    return {
+    out = {
         "applied": True,
         "previous": previous,
         "value": raw_value,
         "scope": "default",
         "applies_to_session": follows_default,
     }
+    if loop is None and agent_loop_factory is not None:
+        # The write landed; the process serving it did not gain a loop. This
+        # gateway built without one -- that is why nothing validated the pair --
+        # and the wiring a turn needs (the scheduler above all) is put together
+        # once, at stack build. So the config is right and this process still
+        # cannot run a turn on it. Said in the reply rather than left for the
+        # caller to discover on the next send, which is where a first run used
+        # to end up without a word.
+        out["needs_restart"] = True
+    return out
 
 
 def _remember_session_model(loop: Any, session_key: str, model: str, provider_name: str | None) -> None:
