@@ -551,6 +551,29 @@ async def test_everos_clear_optional_only(everos_toml):
         await rpc_console.settings_everos_set({"section": "llm", "clear": True})
 
 
+async def test_everos_set_llm_records_the_shipped_backend_when_none_is_set(everos_toml, tmp_path):
+    """A model saved from the page has no onboard step of its own to record
+    CONFIGURED, so the write itself has to set memory.backend or the model
+    change leaves memory off."""
+    cfg = tmp_path / "config.json"
+    cfg.write_text("{}", encoding="utf-8")
+    raven_home.set_config_path(cfg)
+
+    await rpc_console.settings_everos_set({"section": "llm", "fields": {"model": "gpt-4o"}})
+
+    assert json.loads(cfg.read_text(encoding="utf-8"))["memory"]["backend"] == "everos"
+
+
+async def test_everos_set_llm_leaves_an_existing_backend_choice_alone(everos_toml, tmp_path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"memory": {"backend": "mem0"}}), encoding="utf-8")
+    raven_home.set_config_path(cfg)
+
+    await rpc_console.settings_everos_set({"section": "llm", "fields": {"model": "gpt-4o"}})
+
+    assert json.loads(cfg.read_text(encoding="utf-8"))["memory"]["backend"] == "mem0"
+
+
 async def test_secret_key_writes_string(cfg):
     r = await rpc_console.settings_set({"key": "tools.web.search.apiKey", "value": "sk-x"})
     assert r["applied"] is True
