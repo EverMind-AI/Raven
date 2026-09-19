@@ -8515,6 +8515,200 @@
         }
       },
       "errors": []
+    },
+    {
+      "name": "import.scan",
+      "summary": "Scan the other AI tools on this machine for importable memory files and conversations, per platform, and say whether an import can run at all.",
+      "description": "Runs the cold-start scanners (raven.importer.scanners.scan_all) and aggregates the ScanResult counts per platform. Every platform the importer knows is listed; `scannable` is false for one that ships no scanner yet. `ready` is false when no memory backend is configured for the import to feed -- the same gate the CLI wizard's import step applies -- and `reason` then says why.",
+      "params": [],
+      "result": {
+        "name": "ImportScanResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ready",
+            "reason",
+            "platforms"
+          ],
+          "properties": {
+            "ready": {
+              "type": "boolean"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "platforms": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "platform",
+                  "scannable",
+                  "memory_files",
+                  "conversations",
+                  "estimated_size"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "string"
+                  },
+                  "scannable": {
+                    "type": "boolean"
+                  },
+                  "memory_files": {
+                    "type": "integer"
+                  },
+                  "conversations": {
+                    "type": "integer"
+                  },
+                  "estimated_size": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "import.run",
+      "summary": "Start a cold-start import of the chosen platforms in the background and return at once.",
+      "description": "One import runs at a time inside the gateway process. `started` is false when one is already running or when no memory backend is configured and healthy, and `detail` says which. Progress is read through import.status; the run is cancelled through import.stop.",
+      "params": [
+        {
+          "name": "platforms",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "name": "tier",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "memory_files",
+              "full"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "ImportRunResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "started",
+            "total",
+            "detail"
+          ],
+          "properties": {
+            "started": {
+              "type": "boolean"
+            },
+            "total": {
+              "type": "integer"
+            },
+            "detail": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
+    },
+    {
+      "name": "import.status",
+      "summary": "Progress of the cold-start import: whether one is running in this gateway, and the counts recorded on disk.",
+      "description": "The counts come from the importer's state file (the one `raven import status` reads); `running` is this process's own knowledge of a task import.run started.",
+      "params": [],
+      "result": {
+        "name": "ImportStatusResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "running",
+            "total",
+            "submitted",
+            "failed",
+            "by_platform"
+          ],
+          "properties": {
+            "running": {
+              "type": "boolean"
+            },
+            "total": {
+              "type": "integer"
+            },
+            "submitted": {
+              "type": "integer"
+            },
+            "failed": {
+              "type": "integer"
+            },
+            "by_platform": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "total",
+                  "submitted",
+                  "failed"
+                ],
+                "properties": {
+                  "total": {
+                    "type": "integer"
+                  },
+                  "submitted": {
+                    "type": "integer"
+                  },
+                  "failed": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
+      "name": "import.stop",
+      "summary": "Ask the running import to stop after the current item.",
+      "description": "Touches the importer's cancel file, which run_import checks before every item -- what `raven import stop` does. `stopped` is false when nothing was running.",
+      "params": [],
+      "result": {
+        "name": "ImportStopResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "stopped"
+          ],
+          "properties": {
+            "stopped": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      "errors": []
     }
   ],
   "components": {
