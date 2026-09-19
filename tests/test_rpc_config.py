@@ -21,6 +21,7 @@ import raven.home as raven_home_module
 from raven.rpc.errors import (
     ConfigFieldReadonlyError,
     ConfigValidationError,
+    InternalError,
     ModelNotAvailableError,
 )
 from raven.rpc.methods.config import (
@@ -244,6 +245,62 @@ async def test_config_set_model_with_a_provider_writes_the_pair(fake_home: Path)
     cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
     assert cfg["agents"]["defaults"]["provider"] == "anthropic"
     assert cfg["agents"]["defaults"]["model"] == "anthropic/claude-opus-4-8"
+
+
+def _first_run_factory():
+    """The factory as a brand-new install answers it.
+
+    ``build_agent_loop`` builds from the config on disk, so before a model is
+    chosen it has no provider to resolve and refuses -- which is the state the
+    call being made is about to end.
+    """
+    raise InternalError(
+        "no provider is configured yet -- run `raven onboard` for guided setup",
+        data={"reason": "missing_credentials", "provider": "", "remedy": "raven provider set <name> --api-key <key>"},
+    )
+
+
+async def test_config_set_model_completes_a_first_run(fake_home: Path) -> None:
+    """The first model choice lands even though no loop can be built yet.
+
+    Onboarding and the settings page both write a key and then ask for a model.
+    While the loop is what validates the pair, asking it first made the two
+    requirements circular: the model could not be set because no model was set,
+    so a new install could not be finished from either surface.
+    """
+    cfg = fake_home / ".raven"
+    cfg.mkdir(exist_ok=True)
+    (cfg / "config.json").write_text(json.dumps({"providers": {"deepseek": {"apiKey": "sk-deep"}}}), encoding="utf-8")
+
+    result = await config_set(
+        {"key": "model", "value": "deepseek-chat", "provider": "deepseek"},
+        agent_loop_factory=_first_run_factory,
+    )
+
+    assert result["applied"] is True
+    written = json.loads((cfg / "config.json").read_text())
+    assert written["agents"]["defaults"]["model"] == "deepseek/deepseek-chat"
+    assert written["agents"]["defaults"]["provider"] == "deepseek"
+
+
+async def test_config_set_model_on_a_first_run_still_needs_the_key(fake_home: Path) -> None:
+    """The loop not being there is not a reason to take a provider on trust.
+
+    Nothing validates the pair when there is no loop, so the credential gate
+    every other surface uses is asked directly -- otherwise the fix above would
+    let a keyless provider be written as the default of a fresh install.
+    """
+    cfg = fake_home / ".raven"
+    cfg.mkdir(exist_ok=True)
+    (cfg / "config.json").write_text(json.dumps({"providers": {"deepseek": {}}}), encoding="utf-8")
+
+    with pytest.raises(ModelNotAvailableError):
+        await config_set(
+            {"key": "model", "value": "deepseek-chat", "provider": "deepseek"},
+            agent_loop_factory=_first_run_factory,
+        )
+
+    assert "agents" not in json.loads((cfg / "config.json").read_text())
 
 
 async def test_config_set_model_is_scoped_to_the_session_that_asked(fake_home: Path, monkeypatch) -> None:

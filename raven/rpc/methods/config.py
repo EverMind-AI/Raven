@@ -35,6 +35,7 @@ from raven.providers.wire import stored_model_id
 from raven.rpc.errors import (
     ConfigFieldReadonlyError,
     ConfigValidationError,
+    InternalError,
     ModelNotAvailableError,
 )
 from raven.utils.atomic_io import atomic_replace
@@ -454,6 +455,67 @@ async def config_unset(params: dict) -> dict:
     return {"removed": previous is not None, "previous": previous, "default": _DEFAULTS[key]}
 
 
+def _provider_has_credentials(provider: str) -> bool:
+    """Whether this provider can be reached, asked the way every gate asks it.
+
+    Through ``ProvidersConfig`` rather than off the raw payload: the file holds
+    camelCase (``apiKey``), a section can carry its credential in more than one
+    shape (Gemini's ``apiKeyList``), and a key alone is not always enough
+    (Azure needs an address too). ``setup.py`` learned all three the hard way
+    and says so; this is the same question, so it is the same call.
+    """
+    from raven.config.schema import ProvidersConfig
+    from raven.providers.auth import credential_status
+
+    providers = _load_config().get("providers")
+    if not isinstance(providers, dict):
+        return False
+    try:
+        sections = ProvidersConfig.model_validate(providers)
+    except Exception:
+        return False
+    section = sections.get(provider)
+    if section is None:
+        return False
+    return credential_status(provider, section, include_external=True).ok
+
+
+def _loop_or_none_on_first_run(
+    agent_loop_factory: "AgentLoopFactory | None",
+    model: str,
+    provider: str,
+) -> Any:
+    """The live loop, or None when there is not one to build yet.
+
+    The loop is what validates the pair and what gets re-pointed, and it is
+    built from the config on disk. On a fresh install that config names no
+    model, so the factory refuses for want of a provider -- and the call it
+    refuses is the one that would have supplied it. Onboarding and the settings
+    page both end there, silently: the key is written, the model choice does
+    nothing, and the install cannot be finished from either surface.
+
+    So a refusal for missing credentials is read as "no loop yet" rather than
+    as an answer about this request. Nothing is validated in that case, which
+    is why the provider named here is put to the credential gate every other
+    surface asks (``providers.auth``) before the caller is allowed to persist
+    it -- the loop's refusal is about the config's current state, not about
+    whether this provider holds a key.
+    """
+    if agent_loop_factory is None:
+        return None
+    try:
+        return agent_loop_factory()
+    except InternalError as exc:
+        if (getattr(exc, "data", None) or {}).get("reason") != "missing_credentials":
+            raise
+        if not _provider_has_credentials(provider):
+            raise ModelNotAvailableError(
+                f"cannot build provider for model {model!r}",
+                data={"model": model, "provider": provider, "remedy": getattr(exc, "data", {}).get("remedy")},
+            ) from exc
+        return None
+
+
 def _set_model(
     params: dict,
     raw_value: Any,
@@ -507,7 +569,7 @@ def _set_model(
     session_id, session_scoped = _session_scope(params, "model")
     has_session = session_id is not None
 
-    loop = agent_loop_factory() if agent_loop_factory is not None else None
+    loop = _loop_or_none_on_first_run(agent_loop_factory, raw_value, new_provider)
     binding = None
     if loop is not None:
         runtime = load_runtime_config(None, None)
