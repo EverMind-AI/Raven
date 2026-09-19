@@ -30,6 +30,9 @@ export interface OnboardOptions {
 export interface OnboardSource {
   options(): Promise<OnboardOptions>
   saveKey(slug: string, apiKey: string, apiBase: string): Promise<{ provider?: OnboardProvider }>
-  setModel(model: string, provider: string): Promise<unknown>
+  /* `needs_restart` when the pair landed in a process with no agent loop --
+     a first run, where the gateway started before there was a model to build
+     one from. The write is good; this process cannot serve it. */
+  setModel(model: string, provider: string): Promise<{ needs_restart?: boolean } | unknown>
   recheck(): Promise<boolean>
 }

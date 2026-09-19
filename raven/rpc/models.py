@@ -1699,6 +1699,11 @@ class ConfigSetResult(_Strict):
     # moves the sessions that never chose one, so scope alone cannot answer it
     # and a client that guesses shows a model the conversation is not on.
     applies_to_session: bool | None = None
+    # The write landed in a process that has no agent loop -- a first run, where
+    # the config this call completes is the one a loop is built from. The wiring
+    # a turn needs is assembled once, at stack build, so the pair is on disk and
+    # this process still cannot run on it. Absent on every other answer.
+    needs_restart: bool | None = None
 
 
 # ---------------------------------------------------------------------------

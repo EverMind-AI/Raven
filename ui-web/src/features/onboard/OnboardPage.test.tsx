@@ -314,6 +314,25 @@ describe('the onboarding island', () => {
     expect((document.getElementById('onb') as HTMLElement).hidden).toBe(true)
   })
 
+  it('asks for a restart instead of finishing when the process cannot serve the pair', async () => {
+    /* A gateway started on an empty home has no agent loop, and the wiring a
+       turn needs is assembled once at stack build. The write is good and this
+       process still cannot run on it, so the step that would say "done" says
+       what is left to do. */
+    install([connected], { setModel: async () => ({ needs_restart: true }) })
+    mount()
+    await act(async () => { void store.open() })
+    await start()
+    fireEvent.click(row('Anthropic'))
+    fireEvent.click(row('claude-opus-5'))
+    await act(async () => {
+      fireEvent.click(button('gui.onb.finish'))
+    })
+
+    expect(document.querySelector('.ob-err')?.textContent).toBe('gui.onb.restart')
+    expect(document.querySelector('.ob-t')?.textContent).not.toBe('gui.onb.done_t')
+  })
+
   it('keeps source failures in the current step', async () => {
     install([], { options: async () => Promise.reject({ data: { detail: 'offline' } }) })
     mount()

@@ -2005,6 +2005,7 @@ export interface ConfigSetResult {
   scope?: 'session' | 'default';
   session_id?: string;
   applies_to_session?: boolean;
+  needs_restart?: boolean;
 }
 export interface ConfigUnsetParams {
   key: string;

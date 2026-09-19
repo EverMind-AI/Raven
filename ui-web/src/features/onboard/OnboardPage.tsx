@@ -353,9 +353,16 @@ function Flow({ source }: { source: OnboardSource }): JSX.Element {
             void run(async () => {
               setError('')
               try {
-                await source.setModel(model as string, selected.slug)
-                if (await source.recheck()) finish()
-                else fail('provider not configured')
+                const set = (await source.setModel(model as string, selected.slug)) as
+                  { needs_restart?: boolean } | null
+                if (!(await source.recheck())) { fail('provider not configured'); return }
+                /* The config is complete and this process still cannot run on
+                   it: it started without a model, and the wiring a turn needs
+                   is assembled once. Saying so here is the difference between
+                   a finished setup and a chat that answers with the startup
+                   error. */
+                if (set && set.needs_restart) { setError(t('gui.onb.restart')); return }
+                finish()
               } catch (e) {
                 fail(e)
               }

@@ -1641,6 +1641,9 @@
             },
             "applies_to_session": {
               "type": "boolean"
+            },
+            "needs_restart": {
+              "type": "boolean"
             }
           }
         }
