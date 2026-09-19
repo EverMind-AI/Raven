@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+from loguru import logger
 
 from raven import home as raven_home
 from raven.contracts.memory import BackendHealth, HealthCheck
@@ -24,6 +25,7 @@ pytestmark = pytest.mark.asyncio
 def _reset_task_slot(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every test starts, and ends, with no import in flight in this module."""
     monkeypatch.setattr(import_sync, "_TASK", None)
+    monkeypatch.setattr(import_sync, "_STARTING", False)
 
 
 @pytest.fixture()
@@ -305,6 +307,61 @@ async def test_run_starts_and_completes_in_the_background(cfg: Path, state: Impo
     assert backend.started is True
     assert backend.stopped is True
     assert import_sync._TASK is None
+
+
+async def test_run_dispatched_twice_at_once_starts_one_import(cfg: Path, state: ImportState, monkeypatch) -> None:
+    """The rpc server dispatches frames concurrently and the handler awaits a
+    scan and a backend start before it has a task to hold. Two frames in the
+    same tick used to both pass the guard and submit every source twice --
+    duplicates EverOS has no endpoint to delete."""
+    result = _scan_result("k1", Platform.CLAUDE_CODE)
+    monkeypatch.setattr(import_sync, "scan_all", AsyncMock(return_value=[result]))
+    monkeypatch.setattr(import_sync, "build_scanners", lambda: [_FakeScanner(Platform.CLAUDE_CODE)])
+    backends: list[_FakeBackend] = []
+
+    def _build(*a, **k):
+        backends.append(_FakeBackend())
+        return backends[-1]
+
+    monkeypatch.setattr(import_sync, "maybe_build_memory_backend", _build)
+    params = {"platforms": ["claude_code"], "tier": "full"}
+
+    first, second = await asyncio.gather(import_sync.import_run(params), import_sync.import_run(params))
+
+    assert sorted([first["started"], second["started"]]) == [False, True]
+    refused = first if not first["started"] else second
+    assert refused["detail"] == "an import is already running"
+    task = import_sync._TASK
+    if task is not None:
+        await task
+    assert [b.started for b in backends] == [True]
+    assert [len(b.stored) for b in backends] == [1]
+
+
+async def test_run_records_a_background_failure_and_frees_the_slot(cfg: Path, state: ImportState, monkeypatch) -> None:
+    """Nothing awaits the background task, so a crash inside it has to be
+    logged by the task itself or it is only ever seen at garbage collection."""
+    result = _scan_result("k1", Platform.CLAUDE_CODE)
+    monkeypatch.setattr(import_sync, "scan_all", AsyncMock(return_value=[result]))
+    monkeypatch.setattr(import_sync, "build_scanners", lambda: [_FakeScanner(Platform.CLAUDE_CODE)])
+    backend = _FakeBackend()
+    monkeypatch.setattr(import_sync, "maybe_build_memory_backend", lambda *a, **k: backend)
+    monkeypatch.setattr(import_sync, "run_import", AsyncMock(side_effect=OSError("state file unwritable")))
+    lines: list[str] = []
+    sink = logger.add(lambda m: lines.append(str(m)), level="ERROR")
+    try:
+        out = await import_sync.import_run({"platforms": ["claude_code"], "tier": "full"})
+        assert out["started"] is True
+        task = import_sync._TASK
+        assert task is not None
+        await task
+    finally:
+        logger.remove(sink)
+
+    assert backend.stopped is True
+    assert import_sync._TASK is None
+    assert (await import_sync.import_status({}))["running"] is False
+    assert any("background import failed" in line and "state file unwritable" in line for line in lines)
 
 
 async def test_run_clears_a_stale_cancel_file_on_a_fresh_start(cfg: Path, state: ImportState, monkeypatch) -> None:

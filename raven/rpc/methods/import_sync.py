@@ -5,9 +5,9 @@ keyword. These four handlers are a thin RPC skin over the same cold-start
 importer ``raven import`` already drives (``raven.importer.*``): the web
 wizard's sync step scans, starts, polls and cancels the identical pipeline the
 CLI's ``raven import`` command wraps in questionary prompts and a Rich
-progress bar. Only one import runs at a time inside this process -- a single
-module-level task slot enforces that, mirroring the single-flight registry
-``raven.rpc.methods.subagents`` keeps for ``subagents.test``.
+progress bar. Only one import runs at a time inside this process: the slot is
+claimed before ``import.run`` awaits anything, so two frames dispatched together
+cannot both pass the guard and submit the same source twice.
 
 Unlike the CLI's ``run`` command, ``import.run`` never lands the Hermes
 ``user.md`` mirror or installs Hermes skills: those are CLI-only extras
@@ -42,10 +42,17 @@ if TYPE_CHECKING:
     from raven.contracts.memory import MemoryBackend
     from raven.rpc.dispatcher import Dispatcher
 
-# One import at a time inside this gateway process, tracked the way
-# ``subagents._RUNNING`` tracks its own single-flight calls: a live task means
-# a run is in progress, cleared in the task's own ``finally``.
+# One import at a time inside this gateway process. The rpc server dispatches
+# frames concurrently, and ``import.run`` awaits a scan and a backend start
+# before it has a task to hold, so the claim is a flag set with no await between
+# the guard and it; the task takes over once it exists and clears the slot in
+# its own ``finally``.
 _TASK: asyncio.Task | None = None
+_STARTING = False
+
+
+def _busy() -> bool:
+    return _STARTING or (_TASK is not None and not _TASK.done())
 
 
 def _state() -> ImportState:
@@ -102,7 +109,7 @@ async def import_scan(params: dict) -> dict:
 
 async def import_run(params: dict) -> dict:
     """``import.run`` -- start a background import, or say why it did not."""
-    global _TASK
+    global _TASK, _STARTING
 
     try:
         tier = Tier(params["tier"])
@@ -113,56 +120,63 @@ async def import_run(params: dict) -> dict:
     except ValueError as exc:
         raise ConfigValidationError(f"unknown platform in {params.get('platforms')!r}") from exc
 
-    if _TASK is not None and not _TASK.done():
+    if _busy():
         return {"started": False, "total": 0, "detail": "an import is already running"}
-
-    workspace, ec_config = _load_workspace_and_config()
-    from raven.core.plugin_stack import build_plugin_registry
-
-    registry = build_plugin_registry(ec_config)
-    backend = maybe_build_memory_backend(workspace, ec_config, registry=registry)
-    if backend is None:
-        return {"started": False, "total": 0, "detail": _no_backend_reason(ec_config)}
-
-    all_results = await scan_all()
-    filtered = [r for r in all_results if r.platform in requested]
-    tiered = filter_by_tier(filtered, tier)
-    scanner_map = {s.platform: s for s in build_scanners()}
-    items: list[tuple[Scanner, ScanResult]] = [
-        (scanner_map[r.platform], r) for r in tiered if r.platform in scanner_map
-    ]
-    if not items:
-        return {"started": False, "total": 0, "detail": "nothing to import"}
-
-    await backend.start()
-    health = await backend.health()
-    if health is not None and not health.ready:
-        await backend.stop()
-        hints = [f"{c.label}: {c.hint or c.status}" for c in health.checks if c.status != "ok" or c.hint]
-        detail = "; ".join(hints) or "memory service is not ready"
-        return {"started": False, "total": 0, "detail": detail}
-
-    state = _state()
-    if state.cancel_path.exists():
+    _STARTING = True
+    try:
+        state = _state()
+        # Cleared here, under the claim: a stop that lands while this run is
+        # still starting is then seen by the run's first poll rather than lost.
         state.cancel_path.unlink(missing_ok=True)
-    state.set_total(len(items))
 
-    async def _run(backend: "MemoryBackend") -> None:
-        global _TASK
-        try:
-            await run_import(items, backend, state, cancel_path=state.cancel_path)
-        finally:
+        workspace, ec_config = _load_workspace_and_config()
+        from raven.core.plugin_stack import build_plugin_registry
+
+        registry = build_plugin_registry(ec_config)
+        backend = maybe_build_memory_backend(workspace, ec_config, registry=registry)
+        if backend is None:
+            return {"started": False, "total": 0, "detail": _no_backend_reason(ec_config)}
+
+        all_results = await scan_all()
+        filtered = [r for r in all_results if r.platform in requested]
+        tiered = filter_by_tier(filtered, tier)
+        scanner_map = {s.platform: s for s in build_scanners()}
+        items: list[tuple[Scanner, ScanResult]] = [
+            (scanner_map[r.platform], r) for r in tiered if r.platform in scanner_map
+        ]
+        if not items:
+            return {"started": False, "total": 0, "detail": "nothing to import"}
+
+        await backend.start()
+        health = await backend.health()
+        if health is not None and not health.ready:
             await backend.stop()
-            _TASK = None
+            hints = [f"{c.label}: {c.hint or c.status}" for c in health.checks if c.status != "ok" or c.hint]
+            detail = "; ".join(hints) or "memory service is not ready"
+            return {"started": False, "total": 0, "detail": detail}
 
-    _TASK = asyncio.create_task(_run(backend))
-    return {"started": True, "total": len(items), "detail": ""}
+        state.set_total(len(items))
+
+        async def _run(backend: "MemoryBackend") -> None:
+            global _TASK
+            try:
+                await run_import(items, backend, state, cancel_path=state.cancel_path)
+            except Exception:
+                logger.exception("import.run: the background import failed")
+            finally:
+                await backend.stop()
+                _TASK = None
+
+        _TASK = asyncio.create_task(_run(backend))
+        return {"started": True, "total": len(items), "detail": ""}
+    finally:
+        _STARTING = False
 
 
 async def import_status(params: dict) -> dict:
     """``import.status`` -- this process's own knowledge plus the state file's counts."""
     del params
-    running = _TASK is not None and not _TASK.done()
+    running = _busy()
     progress = _state().get_progress()
     entries = {k: v for k, v in progress.get("entries", {}).items() if ":" in k}
     meta = progress.get("meta", {})
@@ -195,8 +209,7 @@ async def import_status(params: dict) -> dict:
 async def import_stop(params: dict) -> dict:
     """``import.stop`` -- touch the cancel file the running import polls for."""
     del params
-    running = _TASK is not None and not _TASK.done()
-    if not running:
+    if not _busy():
         return {"stopped": False}
     _state().cancel_path.touch()
     return {"stopped": True}
