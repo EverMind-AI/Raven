@@ -7,7 +7,7 @@ import { setGateway } from '../../rpc/gateway'
 import { resetSources, setSources } from '../../state/sources'
 import { install, mount, snap, source as settingsSource } from '../../test/settingsHarness'
 import { _resetForTests as resetModelSource, setDefaultPair } from '../model/source'
-import { ModelPane, WebPane } from './SetupPanes'
+import { ModelStepBody, WebStepBody } from './SetupBodies'
 import { _resetForTests as resetSettingsSource, loadSettings, modelStepDone, webStepDone } from './source'
 import * as store from './store'
 
@@ -33,7 +33,7 @@ afterEach(() => {
 /* Both panes render straight into the test container -- neither portals
    anywhere -- so a plain render plus the wizard's own refresh() is the whole
    setup, the same call the real wizard makes on its own. */
-async function openPane(Pane: () => JSX.Element): Promise<void> {
+async function openBody(Pane: () => JSX.Element): Promise<void> {
   render(createElement(Pane))
   await act(async () => { await store.refresh() })
 }
@@ -45,10 +45,10 @@ function noneConnected(): SettingsSnapshot {
   return data
 }
 
-describe('ModelPane', () => {
+describe('ModelStepBody', () => {
   it('shows the loading line until the store has loaded, then the model cards', async () => {
     install()
-    render(createElement(ModelPane))
+    render(createElement(ModelStepBody))
     expect(document.querySelector('.settings-panel.settings-setup')!.getAttribute('data-section')).toBe('model')
     expect(document.querySelector('.settings-soonbox')!.textContent).toBe('gui.settings.loading')
     await act(async () => { await store.refresh() })
@@ -59,7 +59,7 @@ describe('ModelPane', () => {
 
   it('a connected row\'s trailing button disconnects it, calling the provider op directly', async () => {
     const { calls } = install()
-    await openPane(ModelPane)
+    await openBody(ModelStepBody)
     const row = [...document.querySelectorAll('.settings-prow2')].find((r) => r.textContent?.includes('anthropic'))!
     expect(row.querySelector('button')!.textContent).toBe('gui.settings.providers.disconnect')
     await act(async () => { fireEvent.click(row.querySelector('button')!) })
@@ -68,7 +68,7 @@ describe('ModelPane', () => {
 
   it('opens the add block on its own on an empty machine, with no Cancel button', async () => {
     install(noneConnected())
-    await openPane(ModelPane)
+    await openBody(ModelStepBody)
     expect(document.querySelector('.settings-padd')).toBeTruthy()
     expect(screen.queryByText('gui.cancel')).toBeNull()
     expect(screen.queryByText('gui.settings.providers.add')).toBeNull()
@@ -76,16 +76,16 @@ describe('ModelPane', () => {
 
   it('the Cancel button is back once a provider is connected', async () => {
     install()
-    await openPane(ModelPane)
+    await openBody(ModelStepBody)
     await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add')) })
     expect(screen.getByText('gui.cancel')).toBeTruthy()
   })
 })
 
-describe('WebPane', () => {
+describe('WebStepBody', () => {
   it('draws the search and fetch cards with their vendor selects and ready/unset chips', async () => {
     install()
-    await openPane(WebPane)
+    await openBody(WebStepBody)
     expect(document.querySelector('.settings-panel.settings-setup')!.getAttribute('data-section')).toBe('tools')
     expect(document.querySelectorAll('.settings-card')).toHaveLength(2)
     expect(screen.getByText('gui.settings.setup.web_search')).toBeTruthy()
@@ -100,7 +100,7 @@ describe('WebPane', () => {
     const data = snap()
     ;(data.raw.tools as Record<string, unknown>).web = { search: { provider: 'serper' }, providers: { serper: { apiKey: '****set****' } } }
     install(data)
-    await openPane(WebPane)
+    await openBody(WebStepBody)
     // Both cards read ready now: the search vendor has its key, and the fetch
     // card is drawn ready regardless of its own vendor's key.
     expect(screen.getAllByText('gui.settings.setup.ready')).toHaveLength(2)
@@ -109,7 +109,7 @@ describe('WebPane', () => {
 
   it('the keyless fetch vendor (jina) carries an optional tag and the keyless hint', async () => {
     install()
-    await openPane(WebPane)
+    await openBody(WebStepBody)
     expect(screen.getByLabelText('gui.settings.tools.vendor_key {"name":"Jina Reader"} · gui.settings.roles.optional')).toBeTruthy()
     expect(screen.getByText('gui.settings.setup.keyless_hint')).toBeTruthy()
   })
@@ -118,7 +118,7 @@ describe('WebPane', () => {
     const data = snap()
     ;(data.raw.tools as Record<string, unknown>).web = { fetch: { provider: 'tavily' } }
     install(data)
-    await openPane(WebPane)
+    await openBody(WebStepBody)
     expect(screen.getByLabelText('gui.settings.tools.vendor_key {"name":"Tavily"}')).toBeTruthy()
     expect(screen.queryByText('gui.settings.setup.keyless_hint')).toBeNull()
   })

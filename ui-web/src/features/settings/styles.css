@@ -10,7 +10,7 @@
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .settings-panel { --stage: #181818; } }
 :root[data-theme="dark"] .settings-panel { --stage: #181818; }
 
-/* The onboarding wizard renders ModelPane/WebPane (SetupPanes.tsx) as its own
+/* The onboarding wizard renders ModelStepBody/WebStepBody (SetupBodies.tsx) as its own
    step bodies, in a scroll pane the wizard owns rather than the dialog's
    #spanels -- this neutralises any height and scroll rule .settings-panel
    carries so the two panes stack as a plain column, and sets no width of its
