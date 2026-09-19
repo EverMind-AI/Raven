@@ -238,6 +238,30 @@ describe('the onboarding wizard', () => {
     expect(host().dataset.off).toBe('1')
   })
 
+  it('re-reads the importer when the primary is pressed on the agents step, and moves to the step it adds', async () => {
+    /* On the answer from opening the agents step is the last one, so the
+       footer offers Start chatting; a reader who connected an agent presses
+       that, not Skip -- and by then the model step may have made the import
+       possible. */
+    const h = install({ ready: false, reason: 'no memory backend', platforms: [] })
+    h.agents.agents = [{ id: 'claude_code', name: 'Claude Code' }]
+    mount()
+    await open()
+    expect(steps().length).toBe(3)
+    await act(async () => { h.model.setDone(true); h.search.setDone(true); h.agents.setDone(true) })
+    await click(button('gui.onb.next'))
+    await click(button('gui.onb.next'))
+    expect(button('gui.onb.enter')).toBeDefined()
+
+    h.source.scan = async () => SCAN_CLAUDE
+    await click(button('gui.onb.enter'))
+
+    expect(steps()[3]).toBe('4gui.onb.step_sync:current')
+    expect(button('gui.onb.start_sync')).toBeDefined()
+    expect(store.isOpen()).toBe(true)
+    expect(host().dataset.off).toBeUndefined()
+  })
+
   it('stays open and says why when the import does not start', async () => {
     const h = install(SCAN_CLAUDE)
     h.agents.agents = [{ id: 'claude_code', name: 'Claude Code' }]

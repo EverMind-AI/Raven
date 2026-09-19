@@ -97,6 +97,56 @@ describe('the wizard store', () => {
     expect(store.get().step).toBe('sync')
   })
 
+  it('finish on the agents step asks again and moves on when the answer adds a step', async () => {
+    /* The footer picks finish when the agents step reads as the last one on
+       the answer from opening; a reader who connected an agent presses it. */
+    let answer: ImportScan = { ...READY, ready: false, reason: 'no memory backend' }
+    setSources({ onboard: { ...source(READY), scan: async () => answer } })
+    store.setBodies({
+      model: body(true) as StepBody,
+      search: body(true) as StepBody,
+      agents: body(true, [{ id: 'hermes', name: 'Hermes' }]),
+    })
+    store.open()
+    await Promise.resolve()
+    await Promise.resolve()
+    await store.next()
+    await store.next()
+    expect(store.isLast('agents')).toBe(true)
+
+    answer = READY
+    await store.finish()
+
+    expect(store.isOpen()).toBe(true)
+    expect(store.get().closing).toBe(false)
+    expect(store.get().step).toBe('sync')
+  })
+
+  it('ignores an earlier read that lands after a later one', async () => {
+    let release: (scan: ImportScan) => void = () => {}
+    const first = new Promise<ImportScan>((resolve) => { release = resolve })
+    let calls = 0
+    setSources({ onboard: { ...source(READY), scan: () => (calls++ === 0 ? first : Promise.resolve(READY)) } })
+    store.setBodies({
+      model: body(true) as StepBody,
+      search: body(true) as StepBody,
+      agents: body(true, [{ id: 'hermes', name: 'Hermes' }]),
+    })
+    store.open()
+    await store.next()
+    await store.next()
+    await store.next()
+    expect(store.get().step).toBe('sync')
+
+    release({ ...READY, ready: false, reason: 'stale' })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(store.get().scan?.ready).toBe(true)
+    expect(store.visibleSteps()).toEqual(['model', 'search', 'agents', 'sync'])
+    expect(store.get().step).toBe('sync')
+  })
+
   it('asks again on a skip from the agents step too, instead of closing on the stale answer', async () => {
     /* A first run with nothing to connect leaves by Skip, not Next; the
        agents step read as the last one until the importer was asked again. */
