@@ -517,6 +517,29 @@ async def test_borrowing_keeps_the_section_url_when_the_lender_has_none(everos_t
     assert data["rerank"]["base_url"]
 
 
+async def test_the_borrowed_address_replaces_the_lenders_predecessor(everos_toml, lender):
+    """The incident, end to end: a role moved from an OpenRouter model to a
+    DeepSeek one kept DeepSeek's key at OpenRouter's address, which the far end
+    refuses. What the section must end up with is DeepSeek's own address -- not
+    the one it was reached at before, and not nothing, which the reader refuses
+    just as flatly."""
+    everos_toml.write_text(
+        '[llm]\nmodel = "openrouter/anthropic/claude-3.5-sonnet"\n'
+        'api_key = "sk-openrouter"\nbase_url = "https://openrouter.ai/api/v1"\n',
+        encoding="utf-8",
+    )
+    lender({"apiKey": "sk-deepseek"}, name="deepseek")
+    await rpc_console.settings_everos_set(
+        {"section": "llm", "fields": {"model": "deepseek/deepseek-chat"}, "borrow_from": "deepseek"}
+    )
+    data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
+    assert data["llm"] == {
+        "model": "deepseek/deepseek-chat",
+        "api_key": "sk-deepseek",
+        "base_url": "https://api.deepseek.com/v1",
+    }
+
+
 async def test_borrowing_finds_a_provider_stored_under_another_spelling(everos_toml, lender):
     """`ProvidersConfig.get` is spelling-insensitive and attribute access is not.
     A provider raven carries no spec for is stored under whatever key its writer

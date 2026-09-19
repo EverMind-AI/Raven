@@ -1871,10 +1871,23 @@ def lend_provider_credentials(provider: str) -> dict[str, str]:
     # this provider, and what its `base_url` holds belongs to whoever it pointed
     # at before -- leaving the field out keeps that one. An EverOS role moved
     # from an OpenRouter model to a DeepSeek one ended up with DeepSeek's key at
-    # OpenRouter's address, which the far end refuses; the vendors LiteLLM
-    # routes carry no `default_api_base`, so that is the ordinary case rather
-    # than the corner. An empty value reads the same way an unset one does.
-    base_url = str(lent.api_base or "") or str(getattr(spec, "default_api_base", "") or "")
+    # OpenRouter's address, which the far end refuses.
+    #
+    # The same three steps `resolve_provider_credentials` reads, for the same
+    # reason: a registry entry naming no address is not a vendor without one,
+    # and the section this feeds is read by a bare client that has no built-in
+    # default to fall back on. Answering "" for DeepSeek would trade a stale
+    # address for a missing one, which EverOS refuses just as flatly.
+    #
+    # "" is left only for a vendor no table here knows an address for, and it
+    # deletes the field rather than leaving it: what stands there was reached
+    # with somebody else's key, so a loud "no base_url configured" beats
+    # sending this key to that address.
+    base_url = (
+        str(lent.api_base or "")
+        or str(getattr(spec, "default_api_base", "") or "")
+        or _PROVIDER_BASE_URL_FALLBACK.get(canonical_provider_name(provider), "")
+    )
     return {"api_key": lent.api_key, "base_url": base_url}
 
 
