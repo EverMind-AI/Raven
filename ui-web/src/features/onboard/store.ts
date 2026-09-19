@@ -141,16 +141,20 @@ const move = (delta: number): void => {
   set({ step: steps[to] as StepId, error: '' })
 }
 
-/* Forward from the agents step asks the importer again before deciding what
-   the step after it is: whether an import can run turns on the memory model,
+/* Leaving the agents step forward asks the importer again before deciding
+   what comes after it: whether an import can run turns on the memory model,
    which the first step may have saved after the answer from opening came in.
-   A wizard that read it once would decide the last step before the reader had
-   done the one thing that makes it appear. */
+   A wizard that read it once decided the last step before the reader had done
+   the one thing that makes it appear -- and a skip on a first run, where no
+   agent connected, closed the wizard on that stale answer. */
+async function settleAfterAgents(): Promise<void> {
+  if (get().step !== 'agents') return
+  set({ busy: true })
+  try { await scan() } finally { set({ busy: false }) }
+}
+
 export async function next(): Promise<void> {
-  if (get().step === 'agents') {
-    set({ busy: true })
-    try { await scan() } finally { set({ busy: false }) }
-  }
+  await settleAfterAgents()
   move(1)
 }
 
@@ -161,8 +165,9 @@ export function back(): void {
 export async function skip(): Promise<void> {
   const id = get().step
   set({ skipped: { ...get().skipped, [id]: true } })
+  await settleAfterAgents()
   if (isLast(id)) await close()
-  else await next()
+  else move(1)
 }
 
 export function toggleSync(platform: string): void {

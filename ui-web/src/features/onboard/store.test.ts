@@ -97,6 +97,32 @@ describe('the wizard store', () => {
     expect(store.get().step).toBe('sync')
   })
 
+  it('asks again on a skip from the agents step too, instead of closing on the stale answer', async () => {
+    /* A first run with nothing to connect leaves by Skip, not Next; the
+       agents step read as the last one until the importer was asked again. */
+    let answer: ImportScan = { ...READY, ready: false, reason: 'no memory backend' }
+    setSources({ onboard: { ...source(READY), scan: async () => answer } })
+    store.setBodies({
+      model: body(true) as StepBody,
+      search: body(true) as StepBody,
+      agents: body(false, [{ id: 'hermes', name: 'Hermes' }]),
+    })
+    store.open()
+    await Promise.resolve()
+    await Promise.resolve()
+    await store.next()
+    await store.next()
+    expect(store.isLast('agents')).toBe(true)
+
+    answer = READY
+    await store.skip()
+
+    expect(store.isOpen()).toBe(true)
+    expect(store.get().closing).toBe(false)
+    expect(store.get().step).toBe('sync')
+    expect(store.get().skipped.agents).toBe(true)
+  })
+
   it('reads each step\'s verdict from its body, and the sync step from the picks', async () => {
     await opened(READY, [{ id: 'hermes', name: 'Hermes' }], true)
     expect(store.stepDone('model')).toBe(true)
