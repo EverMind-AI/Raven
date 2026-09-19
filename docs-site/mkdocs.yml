@@ -46,7 +46,12 @@ markdown_extensions:
   - pymdownx.highlight
 
 plugins:
-  - search
+  # Chinese runs no spaces, so jieba segments it at build time and marks
+  # each boundary with a zero-width space. The separator has to break on
+  # that mark: JavaScript's \s stops at \u200a and would leave every run
+  # as a single token.
+  - search:
+      separator: '[\s\u200b\-]+'
   - i18n:
       docs_structure: suffix
       fallback_to_default: true
