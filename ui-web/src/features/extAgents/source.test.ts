@@ -282,7 +282,16 @@ describe('the wizard step buckets', () => {
       'an openai row with a key, switched on',
       { kind: 'openai', configured: true, enabled: true, has_api_key: true, probe_status: 'ready' },
       false,
+      false,
+      false,
+    ],
+    [
+      /* An older server's build-in-flight flag: the settings page draws a
+         disabled Installing button for it, so the wizard offers nothing. */
+      'a preset mid-build on an older server',
+      { configured: false, enabled: false, building: true, probe_status: 'ready' },
       true,
+      false,
       false,
     ],
   ]
