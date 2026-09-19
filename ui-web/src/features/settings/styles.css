@@ -10,6 +10,13 @@
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .settings-panel { --stage: #181818; } }
 :root[data-theme="dark"] .settings-panel { --stage: #181818; }
 
+/* The onboarding wizard renders ModelPane/WebPane (SetupPanes.tsx) as its own
+   step bodies, in a scroll pane the wizard owns rather than the dialog's
+   #spanels -- this neutralises any height and scroll rule .settings-panel
+   carries so the two panes stack as a plain column, and sets no width of its
+   own: the wizard owns that. */
+.settings-setup { max-height: none; overflow: visible; }
+
 h1,h2,h3,h4 {font-family:var(--disp); margin:0; text-wrap:balance}
 code,.settings-mono {font-family:var(--mono); font-size:.85em}
 .settings-wrap {max-width:1180px; margin:0 auto; padding:34px 22px 40px}

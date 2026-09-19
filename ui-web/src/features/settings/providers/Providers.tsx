@@ -1,6 +1,6 @@
 /* The provider list and the inline "add a provider" block. Connected
    providers only; adding one picks a vendor and connects it in one card. */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { KeyInput } from '../../../components/KeyInput'
 import { t } from '../../../i18n/t'
@@ -40,7 +40,7 @@ export function OauthNote({ slug }: { slug: string }): JSX.Element | null {
   )
 }
 
-function AddBlock({ slug }: { slug: string }): JSX.Element {
+function AddBlock({ slug, hideCancel }: { slug: string; hideCancel?: boolean }): JSX.Element {
   const s = store.get()
   const rows = s.snap.providers.filter((p) => !p.on)
   const p = rows.find((x) => x.id === slug) || rows[0]
@@ -121,7 +121,7 @@ function AddBlock({ slug }: { slug: string }): JSX.Element {
       )}
       <Row>
         <span className="settings-taglist">
-          <button type="button" className="mini ghost" onClick={close}>{t('gui.cancel')}</button>
+          {!hideCancel && <button type="button" className="mini ghost" onClick={close}>{t('gui.cancel')}</button>}
           {kindOf(p) !== 'oauth' && (
             <button type="button" className="mini" disabled={store.isBusy(`connect:${p.id}`)} onClick={connect}>
               {t('gui.settings.providers.connect')}
@@ -133,11 +133,18 @@ function AddBlock({ slug }: { slug: string }): JSX.Element {
   )
 }
 
-export function Providers(): JSX.Element {
+/* `setup` is the onboarding wizard's step body: no detail page to fall into
+   (the manage button becomes disconnect), and with nothing connected yet the
+   add form opens on its own rather than waiting for a click on a button that
+   would otherwise be the whole page's content. */
+export function Providers({ setup }: { setup?: boolean }): JSX.Element {
   const s = store.get()
   const on = s.snap.providers.filter((p) => p.on)
   const off = s.snap.providers.filter((p) => !p.on)
   const openAdd = (): void => store.set({ provAdd: off[0] ? off[0].id : '' })
+  useEffect(() => {
+    if (setup && !on.length && s.provAdd === null && off[0]) store.set({ provAdd: off[0].id })
+  }, [setup])
   return (
     <Card
       title={t('gui.settings.providers.title', { n: on.length })}
@@ -146,7 +153,7 @@ export function Providers(): JSX.Element {
         <button type="button" className="mini ghost" onClick={openAdd}>{t('gui.settings.providers.add')}</button>
       ) : undefined}
     >
-      {s.provAdd !== null && <AddBlock slug={s.provAdd} />}
+      {s.provAdd !== null && <AddBlock slug={s.provAdd} hideCancel={setup && !on.length} />}
       {!on.length && s.provAdd === null && <div className="settings-rows"><Row><Rov>{t('gui.settings.providers.none')}</Rov></Row></div>}
       {on.map((p) => (
         <div key={p.id} className="settings-prow2">
@@ -155,7 +162,14 @@ export function Providers(): JSX.Element {
           {kindOf(p) === 'oauth' && <Tag>{t('gui.settings.providers.subscription')}</Tag>}
           {(p.configured || []).length > 0 && <span className="settings-kk">{t('gui.settings.providers.n_models', { n: (p.configured || []).length })}</span>}
           <span style={{ flex: 1 }} />
-          <button type="button" className="mini ghost" onClick={() => store.set({ provider: p.id, err: '' })}>{t('gui.settings.providers.manage')}</button>
+          {setup ? (
+            <button type="button" className="mini ghost" disabled={store.isBusy(`disconnect:${p.id}`)}
+              onClick={() => void store.run(`disconnect:${p.id}`, () => store.source().provider('disconnect', { slug: p.id }))}>
+              {t('gui.settings.providers.disconnect')}
+            </button>
+          ) : (
+            <button type="button" className="mini ghost" onClick={() => store.set({ provider: p.id, err: '' })}>{t('gui.settings.providers.manage')}</button>
+          )}
         </div>
       ))}
     </Card>

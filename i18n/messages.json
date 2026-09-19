@@ -6911,6 +6911,26 @@
       "en": "Tool search",
       "zh": "工具检索"
     },
+    "gui.settings.setup.web_search": {
+      "en": "Web search",
+      "zh": "联网搜索"
+    },
+    "gui.settings.setup.web_fetch": {
+      "en": "Page reading",
+      "zh": "网页抓取"
+    },
+    "gui.settings.setup.ready": {
+      "en": "On",
+      "zh": "已开启"
+    },
+    "gui.settings.setup.unset": {
+      "en": "Not set up",
+      "zh": "待配置"
+    },
+    "gui.settings.setup.keyless_hint": {
+      "en": "Works without one; a key raises the rate limit",
+      "zh": "不配也能用，配了速率限制更宽松"
+    },
     "gui.settings.plugins.counter": {
       "en": "Connected {on} / {total}",
       "zh": "已连接 {on} / 共 {total}"
