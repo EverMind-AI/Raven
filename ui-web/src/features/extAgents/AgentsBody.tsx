@@ -74,7 +74,7 @@ function ConnectedRow({ row }: { row: ExtAgentRow }): JSX.Element {
   )
 }
 
-export function AgentsPane(): JSX.Element {
+export function AgentsStepBody(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   /* Every word below is a t(key) read at render time, same as every other
      island (state/lang/store.ts). */

@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { setTranslator } from '../../i18n/t'
 import { resetSources, setSources } from '../../state/sources'
-import { AgentsPane } from './AgentsPane'
+import { AgentsStepBody } from './AgentsBody'
 import * as store from './store'
 
 import type { ExtAgentActArgs, ExtAgentRow, ExtAgentsSource } from './types'
@@ -85,7 +85,7 @@ describe('the onboarding wizard\'s agents pane', () => {
   it('shows a scanning placeholder before the first answer lands', async () => {
     let resolveLoad: (rows: ExtAgentRow[]) => void = () => {}
     install([], { load: () => new Promise((res) => (resolveLoad = res)) })
-    render(<AgentsPane />)
+    render(<AgentsStepBody />)
     await act(async () => {
       void store.load(true)
     })
@@ -104,7 +104,7 @@ describe('the onboarding wizard\'s agents pane', () => {
       row({ name: 'shipped', preset: undefined, vendored: true, configured: false, enabled: true }),
       row({ name: 'switched_on', configured: true, enabled: true }),
     ])
-    render(<AgentsPane />)
+    render(<AgentsStepBody />)
     await act(async () => {
       await store.load(true)
     })
@@ -127,7 +127,7 @@ describe('the onboarding wizard\'s agents pane', () => {
       row({ name: 'raven', kind: 'builtin', builtin: true }),
       row({ name: 'not_here', probe_status: 'missing' }),
     ])
-    render(<AgentsPane />)
+    render(<AgentsStepBody />)
     await act(async () => {
       await store.load(true)
     })
@@ -139,7 +139,7 @@ describe('the onboarding wizard\'s agents pane', () => {
 
   it('leaves an openai row out of the available bucket', async () => {
     install([row({ name: 'miro', kind: 'openai', configured: false, enabled: false, has_api_key: false })])
-    render(<AgentsPane />)
+    render(<AgentsStepBody />)
     await act(async () => {
       await store.load(true)
     })
@@ -149,7 +149,7 @@ describe('the onboarding wizard\'s agents pane', () => {
 
   it('connects a preset through act(connect)', async () => {
     const { acts } = install([row({ name: 'preset_a', configured: false, enabled: false })])
-    render(<AgentsPane />)
+    render(<AgentsStepBody />)
     await act(async () => {
       await store.load(true)
     })
@@ -163,7 +163,7 @@ describe('the onboarding wizard\'s agents pane', () => {
 
   it('connects a disabled configured row through act(toggle, {enabled: true})', async () => {
     const { acts } = install([row({ name: 'off_one', configured: true, enabled: false })])
-    render(<AgentsPane />)
+    render(<AgentsStepBody />)
     await act(async () => {
       await store.load(true)
     })
@@ -184,7 +184,7 @@ describe('the onboarding wizard\'s agents pane', () => {
         return [r]
       },
     })
-    render(<AgentsPane />)
+    render(<AgentsStepBody />)
     await act(async () => {
       await store.load(true)
     })
@@ -206,7 +206,7 @@ describe('the onboarding wizard\'s agents pane', () => {
 
   it('disconnects a connected row through act(toggle, {enabled: false})', async () => {
     const { acts } = install([row({ name: 'switched_on', configured: true, enabled: true })])
-    render(<AgentsPane />)
+    render(<AgentsStepBody />)
     await act(async () => {
       await store.load(true)
     })

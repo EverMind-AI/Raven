@@ -17,7 +17,7 @@ import * as store from './store'
 
 import type { JSX } from 'react'
 
-export function ModelPane(): JSX.Element {
+export function ModelStepBody(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
@@ -35,7 +35,7 @@ export function ModelPane(): JSX.Element {
   )
 }
 
-export function WebPane(): JSX.Element {
+export function WebStepBody(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   useSyncExternalStore(lang.subscribe, lang.get)
   const raw = s.snap.raw
