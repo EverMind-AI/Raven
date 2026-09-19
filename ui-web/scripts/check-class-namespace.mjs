@@ -169,7 +169,7 @@ const LEGACY_SHARED = {
   'ghost-ic': 3, h: 3, hd: 5, hubcard: 2, hubgrid: 2, hubpage: 2, ic: 5, k: 3, kd: 3, key: 5, l1: 5, l2: 5, lb: 3, mk: 2, n: 7, none: 2, okpill: 2, one: 2, perr: 2, ph: 2, pill: 2, pmback: 3, pmcard: 2,
   pmchips: 2, pmcnt: 2, pmdesc: 3, pmdhead: 4, pmdmeta: 4, pmhead: 2, pmhero: 5,
   pmid: 2, pmnm: 2, pmpub: 2, pmsec: 4, pmsign: 2, pnote: 3,
-  'provider-choice-action': 2, rm: 2, row: 3, sheet: 2, shot: 3, sk: 4, skel: 4, step: 2, sulist: 3, sustate: 2, swi: 2, sz: 2, t: 2, tag: 2,
+  rm: 2, row: 3, sheet: 2, shot: 3, sk: 4, skel: 4, step: 2, sulist: 3, sustate: 2, swi: 2, sz: 2, t: 2, tag: 2,
   tipdn: 3, tm: 2, top: 2, v: 3, val: 2, w: 3, warn: 2, wkg: 3, wsnote: 2, wt: 2,
 }
 
@@ -208,7 +208,7 @@ const LEGACY_LOCAL = {
   knowledge: 0,
   memory: 6,
   model: 6,
-  onboard: 1,
+  onboard: 0,
   playbooks: 13,
   plugins: 3,
   rail: 11,
@@ -243,8 +243,8 @@ const LEGACY_EXPR = {
   installed: 0,
   knowledge: 0,
   memory: 1,
-  model: 3,
-  onboard: 1,
+  model: 2,
+  onboard: 0,
   playbooks: 7,
   plugins: 2,
   rail: 2,
