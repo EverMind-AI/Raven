@@ -164,7 +164,10 @@ async def import_run(params: dict) -> dict:
             except Exception:
                 logger.exception("import.run: the background import failed")
             finally:
-                await backend.stop()
+                try:
+                    await backend.stop()
+                except Exception:
+                    logger.exception("import.run: the memory backend did not stop cleanly")
                 _TASK = None
 
         _TASK = asyncio.create_task(_run(backend))
