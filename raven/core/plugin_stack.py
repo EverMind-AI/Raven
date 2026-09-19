@@ -413,6 +413,27 @@ def build_onboard_steps(
     return steps
 
 
+def memory_enabled(workspace: Path, config: "RavenConfig") -> bool:
+    """Whether the memory backend recorded on disk says it is configured.
+
+    The wire-side twin of ``raven.cli.onboard_commands._memory_enabled``: same
+    two-step check (a raw-config read for the recorded name, then that
+    backend's own onboard screen for whether it says it works), kept as a
+    separate copy here because the CLI's version is reached by tests that
+    monkeypatch it and its neighbours directly.
+    """
+    from raven.config.loader import get_config_path, read_raw_or_raise
+
+    raw = read_raw_or_raise(get_config_path())
+    selected = (raw.get("memory") or {}).get("backend") or None
+    if not selected:
+        return False
+    steps = [step for name, step in build_onboard_steps(workspace, config) if name == selected]
+    if not steps:
+        return True
+    return any(step.configured() for step in steps)
+
+
 def build_plugin_hooks(
     workspace: Path,
     config: "RavenConfig",
