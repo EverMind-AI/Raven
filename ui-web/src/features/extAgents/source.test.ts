@@ -270,13 +270,19 @@ describe('the wizard step buckets', () => {
       true,
     ],
     [
-      /* Found on every other measure -- proves the exclusion is its own
-         branch in `isAvailable`, not a side effect of `isFound`'s probe
-         check. */
+      /* An endpoint, not a command on the machine: the wizard neither offers
+         it nor lists it under the sync step, whatever its probe says. */
       'an openai row with no key',
       { kind: 'openai', configured: false, enabled: false, has_api_key: false, probe_status: 'ready' },
-      true,
       false,
+      false,
+      false,
+    ],
+    [
+      'an openai row with a key, switched on',
+      { kind: 'openai', configured: true, enabled: true, has_api_key: true, probe_status: 'ready' },
+      false,
+      true,
       false,
     ],
   ]

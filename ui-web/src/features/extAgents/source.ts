@@ -145,13 +145,15 @@ export const costOf = (row: ExtAgentRow): number => {
    row the wizard gets from the same `subagents.list` this page lists from, and
    the step counts itself done against a third read, FOUND.
  *
- * A row is FOUND when it is neither one of Raven's own (`builtin`, `vendored`
- * -- both already usable with no connect step) nor a probe that answered
- * nothing (`missing`: not on the machine; `unknown`: never probed). An acp
- * preset that only proved its binary exists still counts -- `attention` is a
- * row worth connecting and then testing, not one worth hiding. */
+ * A row is FOUND when it is a command this machine has: neither one of
+ * Raven's own (`builtin`, `vendored` -- both already usable with no connect
+ * step), nor an openai row (an endpoint, which no scan finds and the wizard
+ * does not offer), nor a probe that answered nothing (`missing`: not on the
+ * machine; `unknown`: never probed). An acp preset that only proved its
+ * binary exists still counts -- `attention` is a row worth connecting and then
+ * testing, not one worth hiding. */
 export function isFound(row: ExtAgentRow): boolean {
-  if (row.builtin || row.vendored) return false
+  if (row.builtin || row.vendored || row.kind === 'openai') return false
   return row.probe_status !== 'missing' && row.probe_status !== 'unknown'
 }
 
@@ -167,10 +169,8 @@ export function isConnected(row: ExtAgentRow): boolean {
    or one of Raven's own shipped agents switched off with its folder built
    (`off`, not `install`) -- never FOUND, so the step does not count it, but the
    connected bucket offers to switch it off and it needs somewhere to come back
-   from. Not an openai row: an openai agent needs a key to connect, and this
-   pane has no field to type one into. */
+   from. */
 export function isAvailable(row: ExtAgentRow): boolean {
-  if (row.kind === 'openai') return false
   if (row.vendored) return stageOf(row) === 'off'
   return isFound(row) && !row.enabled
 }
