@@ -984,3 +984,95 @@ def test_sigterm_cancels_the_main_task_instead_of_raising_ki() -> None:
     assert "main_task = asyncio.current_task()" in src
     assert "raise KeyboardInterrupt" not in src, "the signal-frame KI shortcut must stay gone"
     assert "if term_signalled:" in src, "the cancelled branch owns the SIGTERM case"
+
+
+async def test_the_control_plane_keeps_the_historical_port_when_the_span_is_free(monkeypatch) -> None:
+    """The fallback below must not move the port on a host that has one free."""
+    from raven.cli.gateway_commands import _CONTROL_PORT_DEFAULT, _control_plane_port
+    from raven.rpc.transports import ws
+
+    async def _free(preferred: int, **_kwargs) -> int:
+        return preferred + 1
+
+    monkeypatch.setattr(ws, "pick_port", _free)
+    assert await _control_plane_port() == _CONTROL_PORT_DEFAULT + 1
+
+
+async def test_the_control_plane_falls_back_to_an_os_assigned_port(monkeypatch) -> None:
+    """Every port in the probe span can be refused at once, and then the gateway
+    must still come up. Windows reserves whole hundred-port blocks (winnat), a
+    host whose dynamic range starts low gets them over 8765..8784, and a bind
+    inside one fails while netstat shows the port unused. The raise reached no
+    handler, so `raven web` died on a port nobody had asked for."""
+    from raven.cli.gateway_commands import _control_plane_port
+    from raven.rpc.transports import ws
+
+    async def _none_free(preferred: int, **_kwargs) -> int:
+        raise OSError(f"no free port in {preferred}..{preferred + 20}")
+
+    monkeypatch.setattr(ws, "pick_port", _none_free)
+    assert await _control_plane_port() == 0
+
+
+async def test_pick_port_raises_the_class_the_fallback_catches() -> None:
+    """The fallback catches one exception class, decided in another module.
+
+    Both cases above replace ``pick_port`` with a stub that raises ``OSError``
+    itself, so they pin the helper's reaction to a raise they authored and would
+    not notice ``pick_port`` starting to raise something else -- which turns the
+    fallback into dead code and brings back the bring-up crash this change
+    exists to remove. This case reaches the real function instead.
+    """
+    import socket
+
+    from raven.rpc.transports.ws import _PORT_PROBE_SPAN, pick_port
+
+    def _hold(base: int) -> list[socket.socket] | None:
+        """The whole span held here, or None if any port was already taken.
+
+        Occupied the way ``_port_is_free`` probes for it: that probe sets
+        SO_REUSEADDR, so a socket merely bound does not keep it out and only a
+        live listener does. Holding every port here rather than counting a
+        stranger's as one of them is what stops this racing them releasing it.
+        """
+        held: list[socket.socket] = []
+        for port in range(base, base + _PORT_PROBE_SPAN):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(("127.0.0.1", port))
+                sock.listen(1)
+            except OSError:
+                sock.close()
+                for other in held:
+                    other.close()
+                return None
+            held.append(sock)
+        return held
+
+    for base in range(41000, 41000 + 10 * _PORT_PROBE_SPAN, _PORT_PROBE_SPAN):
+        held = _hold(base)
+        if held is not None:
+            break
+    else:
+        pytest.fail("no span of free ports to exhaust; the contract went unchecked")
+
+    try:
+        with pytest.raises(OSError):
+            await pick_port(base)
+    finally:
+        for sock in held:
+            sock.close()
+
+
+def test_the_gateway_takes_its_control_port_from_the_fallback() -> None:
+    """The two tests above only bind the helper; this pins the caller to it.
+    Both passed while the command still probed inline, which is the state that
+    shipped the failure."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    assert "ControlPlaneServer(await _control_plane_port()" in src
+    assert "pick_port(8765)" not in src, "an inline probe has no fallback to fall back to"
