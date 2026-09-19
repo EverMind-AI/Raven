@@ -541,6 +541,7 @@ dev = [
     "json-repair>=0.59.5",
     "jsonschema>=4.23.0",
     "lxml-stubs>=0.5.1",
+    "markdown>=3.10",
     "packaging>=26.1",
     "pexpect>=4.9",
     "pip-audit>=2.10.0",
