@@ -22,7 +22,7 @@ import * as seen from './seen'
 import * as desk from './store'
 
 import type { InstanceRow } from '../subagents/types'
-import type { TaskRow } from '../tasks/types'
+import type { TaskFile, TaskRow } from '../tasks/types'
 import type { WorkspaceSource, WsChange } from '../workspace/types'
 
 /* The wiring src/main.tsx does: the desk's file opener is handed to the
@@ -233,6 +233,23 @@ describe('opening and shutting the desk', () => {
     /* And the moment the pane gives the screen back, it counts as seen. */
     await act(async () => { desk.toggleSolo('file:/w/a.md') })
     expect([...seen.of_('deliverables')]).toEqual(['/w/b.md'])
+  })
+})
+
+describe('what the panel says to assistive tech', () => {
+  it('announces itself as a dialog named for the workspace', async () => {
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true }) })
+
+    expect(palette()?.getAttribute('role')).toBe('dialog')
+    expect(palette()?.getAttribute('aria-label')).toBe('gui.workspace')
+  })
+
+  it('hides the resize grab, which carries no name of its own', async () => {
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true }) })
+
+    expect(document.querySelector('.desk-resize')?.getAttribute('aria-hidden')).toBe('true')
   })
 })
 
@@ -625,6 +642,75 @@ describe('the desk shelf', () => {
   })
 })
 
+describe('a task\'s own files, on the shelf and in the diff tab', () => {
+  const taskWithFile = (id: string, file: TaskFile): TaskRow => ({
+    ...task(id),
+    nodes: [{ node_id: 'n1', agent: 'raven', status: 'completed', depends_on: [], files: [file] }],
+  })
+
+  it('prints the file\'s own extension on the shelf, not the constant "FILE" chip', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/out.md', op: 'write', add: 5, del: 0, size: 120 })]
+    await shelf()
+    await act(async () => { await tasksStore.refresh() })
+
+    const row = document.querySelector('.desk-dlv-row') as HTMLElement
+    expect(row.querySelector('.dlv-kind')?.textContent).toBe('MD')
+    expect(row.querySelector('.desk-name b')?.textContent).toBe('out')
+    expect(row.querySelector('.desk-name s')?.textContent).toBe('out.md · 120 B')
+  })
+
+  it('opens a task-written file as the file itself, not the owning task', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/out.md', op: 'write', add: 5, del: 0 })]
+    await shelf()
+    await act(async () => { await tasksStore.refresh() })
+
+    await act(async () => {
+      (document.querySelector('.desk-dlv-row') as HTMLElement).click()
+    })
+
+    expect(desk.get().panes.map((p) => p.id)).toEqual(['file:/w/out.md'])
+  })
+
+  it('leads a task diff row with the M/+ chip and names the full path, not the basename', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/deep/mod.py', op: 'edit', add: 2, del: 1 })]
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
+    await act(async () => { await tasksStore.refresh() })
+
+    const row = document.querySelector('.desk-diff-row') as HTMLElement
+    expect(row.querySelector('.chgc')?.textContent).toBe('M')
+    expect(row.querySelector('.desk-name')?.textContent).toBe('/w/deep/mod.py')
+  })
+
+  /* The prototype's own check (`d.diff.del ? "M" : "+"`): a pure insertion,
+     nothing deleted, reads as an addition rather than a modification even
+     though the file's op is still 'edit'. */
+  it('chips a deletion-free edit with + rather than M', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/new.py', op: 'edit', add: 4, del: 0 })]
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
+    await act(async () => { await tasksStore.refresh() })
+
+    expect(document.querySelector('.desk-diff-row .chgc')?.textContent).toBe('+')
+  })
+
+  it('opens a task diff through the tasks source, the way the pane\'s own chip does', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/deep/mod.py', op: 'edit', add: 2, del: 1 })]
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
+    await act(async () => { await tasksStore.refresh() })
+
+    await act(async () => {
+      (document.querySelector('.desk-diff-row') as HTMLElement).click()
+    })
+
+    const panes = desk.get().panes
+    expect(panes).toHaveLength(1)
+    expect(panes[0]?.kind).toBe('diff')
+    expect(panes[0]?.id).toBe('diff:task:spawn:t1:n1:/w/deep/mod.py:0')
+  })
+})
+
 describe('the size the desk comes up at', () => {
   it('opens at the default rather than the minimum', async () => {
     await shelf()
@@ -954,5 +1040,83 @@ describe('the panel drags by its handle', () => {
     await press(handle(), 500, 500)
 
     expect(seen).toEqual([])
+  })
+})
+
+/* The corner grab, which resizes rather than moves -- and, anchored, resizes
+ * against a pinned edge (styles/page.css's `right: calc(...)` on
+ * `[data-anchored="true"]`), the way the prototype's own comment puts it,
+ * translated: "anchored, the right edge is pinned, so it can only grow
+ * leftward" (proto.js:4433). Detached has no such edge, so the hand's own
+ * direction is the width's there.
+ */
+describe('resizing by the corner grab', () => {
+  const grab = (): HTMLElement => document.querySelector('.desk-resize') as HTMLElement
+
+  it('shrinks on a rightward drag while anchored, since the right edge is pinned', async () => {
+    await shelf()
+    grab().setPointerCapture = () => {}
+
+    await act(async () => {
+      grab().dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, cancelable: true, pointerId: 1, clientX: 500, clientY: 500,
+      }))
+    })
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true, pointerId: 1, clientX: 520, clientY: 500,
+      }))
+    })
+
+    expect(palette()?.style.width).toBe(`${DESK_DEFAULT_WIDTH - 20}px`)
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: 520, clientY: 500 }))
+    })
+  })
+
+  it('grows on a rightward drag once detached, since no edge is pinned', async () => {
+    localStorage.setItem(
+      DESK_GEOMETRY_KEY,
+      JSON.stringify({ x: 40, y: 40, w: DESK_DEFAULT_WIDTH, h: DESK_DEFAULT_HEIGHT, detached: true }),
+    )
+    await shelf()
+    grab().setPointerCapture = () => {}
+
+    await act(async () => {
+      grab().dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, cancelable: true, pointerId: 1, clientX: 500, clientY: 500,
+      }))
+    })
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true, pointerId: 1, clientX: 520, clientY: 500,
+      }))
+    })
+
+    expect(palette()?.style.width).toBe(`${DESK_DEFAULT_WIDTH + 20}px`)
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: 520, clientY: 500 }))
+    })
+  })
+
+  it('always grows straight down, since only the top is ever pinned', async () => {
+    await shelf()
+    grab().setPointerCapture = () => {}
+
+    await act(async () => {
+      grab().dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, cancelable: true, pointerId: 1, clientX: 500, clientY: 500,
+      }))
+    })
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true, pointerId: 1, clientX: 500, clientY: 520,
+      }))
+    })
+
+    expect(palette()?.style.height).toBe(`${DESK_DEFAULT_HEIGHT + 20}px`)
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: 500, clientY: 520 }))
+    })
   })
 })

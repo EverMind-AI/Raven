@@ -4,7 +4,7 @@ import { setCurrent } from '../../lib/session'
 import { resetSources, setSources } from '../../state/sources'
 import * as store from './store'
 
-import type { NodeRecord, TaskRow, TasksSource } from './types'
+import type { NodeRecord, TaskFile, TaskNode, TaskRow, TasksSource } from './types'
 
 const emptyRecord: NodeRecord = { dispatch: null, steps: [], answer: null, outputTruncated: false }
 
@@ -152,10 +152,76 @@ describe('stop', () => {
   })
 })
 
+describe('fileDiffChange', () => {
+  const node = (over: Partial<TaskNode> & Pick<TaskNode, 'node_id'>): TaskNode => ({
+    agent: 'raven', status: 'completed', depends_on: [], files: [], ...over,
+  })
+
+  /* The pane's own `openNodeDiff` (TasksPage.tsx) builds this same shape from
+     the same inputs; this is the verb the desk's diff tab shares with it
+     rather than re-fetching the record on its own. */
+  it('reads the patch body from the node record, keyed to the task/node/path', async () => {
+    source.node = async () => ({
+      dispatch: null,
+      steps: [{
+        kind: 'tool', id: 't1', name: 'edit_file',
+        args: JSON.stringify({ path: '/w/a.py', old_text: 'a', new_text: 'ab' }),
+        result: null, ok: true,
+      }],
+      answer: null, outputTruncated: false,
+    })
+    const taskRow = row({ id: 'r1', kind: 'dag', status: 'completed' })
+    const file: TaskFile = { path: '/w/a.py', op: 'edit', add: 1, del: 0 }
+    const change = await store.fileDiffChange(taskRow, node({ node_id: 'n1' }), file)
+
+    expect(change.key).toBe('task:dag:r1:n1:/w/a.py')
+    expect(change.name).toBe('a.py')
+    expect(change.kind).toBe('edit')
+    expect(change.add).toBe(1)
+    expect(change.del).toBe(0)
+    expect(change.hunks).toHaveLength(1)
+  })
+
+  it('answers with no hunks rather than throwing when there is no source', async () => {
+    resetSources()
+    const taskRow = row({ id: 'r1', kind: 'dag', status: 'completed' })
+    const file: TaskFile = { path: '/w/a.py', op: 'write', add: 3, del: 0 }
+    const change = await store.fileDiffChange(taskRow, node({ node_id: 'n1' }), file)
+    expect(change.hunks).toEqual([])
+  })
+})
+
+describe('node fold memory', () => {
+  it('is undefined until the reader touches a fold, then remembers per node', () => {
+    expect(store.foldOf('dag:r1:n1', 'proc')).toBeUndefined()
+    store.setFold('dag:r1:n1', 'proc', false)
+    expect(store.foldOf('dag:r1:n1', 'proc')).toBe(false)
+    /* A different node's own fold of the same name is untouched. */
+    expect(store.foldOf('dag:r1:n2', 'proc')).toBeUndefined()
+  })
+
+  it('keeps two folds on the same node independent', () => {
+    store.setFold('dag:r1:n1', 'wide', true)
+    store.setFold('dag:r1:n1', 'think:0', false)
+    expect(store.foldOf('dag:r1:n1', 'wide')).toBe(true)
+    expect(store.foldOf('dag:r1:n1', 'think:0')).toBe(false)
+  })
+})
+
 describe('live event consumers', () => {
   it('onRunStarted inserts a new row', () => {
     store.onRunStarted({ run_id: '20260717T031500123456Z-1a2b3c4d', nodes: [{ id: 'a', subagent: 'raven', depends_on: [] }] })
     expect(store.byKey('dag', '20260717T031500123456Z-1a2b3c4d')).not.toBeNull()
+  })
+
+  it('onNodeUpdated bumps that node\'s own version, once per event', () => {
+    expect(store.nodeVersion('dag', 'r1', 'n1')).toBe(0)
+    store.onNodeUpdated({ run_id: 'r1', node: 'n1', status: 'running' })
+    expect(store.nodeVersion('dag', 'r1', 'n1')).toBe(1)
+    store.onNodeUpdated({ run_id: 'r1', node: 'n1', status: 'running', tool_call_id: 'c2' })
+    expect(store.nodeVersion('dag', 'r1', 'n1')).toBe(2)
+    /* A different node's version is untouched by another node's event. */
+    expect(store.nodeVersion('dag', 'r1', 'n2')).toBe(0)
   })
 
   it('a terminal frame triggers a reconcile through one(kind, id)', async () => {

@@ -3,6 +3,7 @@
 import { t } from '../../i18n/t'
 import { slot } from '../../lib/persist'
 import { current as currentSession } from '../../lib/session'
+import { onDeskEscape } from '../../state/escapeOrder'
 import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
 import { pane } from '../../state/wsPane'
@@ -184,7 +185,12 @@ const deskUp = (key: string | null): boolean =>
 
 function initialState(): DeskState {
   return {
-    tab: 'deliverables',
+    /* The prototype's own resting tab: its `DESK` state starts on "tasks" and
+       carries no ladder at all. `pickTab` below is this page's own addition
+       for the reader's explicit toggle and keeps its own tested rungs (a
+       settled shelf outranks a still-running task); this is only what a
+       conversation that has never had the desk toggled once opens showing. */
+    tab: 'tasks',
     paletteOpen: deskUp(currentSession()),
     panes: [],
     solo: null,
@@ -647,6 +653,37 @@ export function notifyDesk(): void {
  * counts, and the subagents store is what the launcher's running glyph reads. */
 agents.subscribe(weighTheDesk)
 tasks.subscribe(weighTheDesk)
+
+/* The pane Escape would act on: the active one, or the last one opened when
+   nothing is active -- the same fallback the prototype's own chain reads
+   (`paneById(DESK.active) || DESK.panes[DESK.panes.length - 1]`). */
+function escapePane(): DeskPane | null {
+  const state = get()
+  return state.panes.find((candidate) => candidate.id === state.active) ?? state.panes[state.panes.length - 1] ?? null
+}
+
+/* Escape's own retreat through the desk, one layer at a time: fullscreen ->
+   the picked node -> the open pane -> the desk itself -- the prototype's own
+   chain (proto.js:5499-5510), translated from its own comment there.
+   Registered into `state/escapeOrder.ts`'s table below, at this module's own
+   evaluation --
+   `state/` may not reach into `features/` at runtime, so the reach runs the
+   other way, the same shape `features/rail/store.ts` fills
+   `state/navfly.ts`'s `onMark` with. */
+function escapeOpen(): boolean {
+  return get().paletteOpen || get().panes.length > 0
+}
+
+function escapeClose(): void {
+  const solo = get().solo
+  if (solo) { toggleSolo(solo); return }
+  const at = escapePane()
+  if (at?.kind === 'task' && tasks.nodeOf(at.id)) { tasks.pickNode(at.id, null); return }
+  if (at) { closePane(at.id); return }
+  toggleDesk()
+}
+
+onDeskEscape({ id: 'desk.escapeOpen()', isOpen: escapeOpen, close: escapeClose })
 
 export function reset(): void {
   /* The palette is NOT shut here, and that is the point: a reset runs on the way

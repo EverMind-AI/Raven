@@ -46,6 +46,71 @@ export function fromWrite(content: string): WsHunk {
   return { rows, add: all.length, del: 0 }
 }
 
+/* One hunk's rows, back into unified-diff lines: a `@@ ... @@` header per run
+   the rows carry, then a prefixed line per row. A 'gap' row is dropped -- it
+   marks lines the builder chose not to number (fromEdit's context beyond
+   CTX_KEEP, fromWrite's rows past its cap), so there is nothing to restore
+   there either, the same as a real diff taken at that width would show. A
+   'hunk' row (only fromUnified emits one) carries the header text verbatim,
+   read off the source diff rather than recomputed; a run with none -- every
+   fromEdit or fromWrite hunk -- gets one synthesised from what it kept. */
+function unifiedHunk(rows: DiffRow[]): string[] {
+  const out: string[] = []
+  let run: DiffRow[] = []
+  let header: string | null = null
+  const flush = (): void => {
+    if (header == null && !run.length) return
+    out.push(header ?? syntheticHeader(run))
+    run.forEach((row) => out.push(bodyLine(row)))
+    run = []
+    header = null
+  }
+  rows.forEach((row) => {
+    if (row[0] === 'gap') return
+    if (row[0] === 'hunk') {
+      flush()
+      header = String(row[1])
+      return
+    }
+    run.push(row)
+  })
+  flush()
+  return out
+}
+
+function bodyLine(row: DiffRow): string {
+  const text = String(row[1])
+  if (row[0] === 'add') return `+${text}`
+  if (row[0] === 'del') return `-${text}`
+  return ` ${text}`
+}
+
+/* Without a stored header, the true old/new line numbers are known only
+   where a row happens to carry one (fromWrite's rows do, fromEdit's never
+   do): the run's first numbered row anchors the start, and a run with no
+   numbers at all anchors at 1 -- or at 0 when that side has no lines, the
+   same convention a brand-new file's diff uses. */
+function syntheticHeader(run: DiffRow[]): string {
+  const oldCount = run.filter((row) => row[0] === 'ctx' || row[0] === 'del').length
+  const newCount = run.filter((row) => row[0] === 'ctx' || row[0] === 'add').length
+  const firstOld = run.find((row) => typeof row[2] === 'number')
+  const firstNew = run.find((row) => typeof row[3] === 'number')
+  const oldStart = firstOld ? (firstOld[2] as number) : (oldCount ? 1 : 0)
+  const newStart = firstNew ? (firstNew[3] as number) : (newCount ? 1 : 0)
+  return `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`
+}
+
+/* The inverse of fromUnified/fromEdit/fromWrite: a change's hunks, rendered
+   back into the raw patch text a real tool call would have produced. The
+   desk's diff pane draws this text directly, the way the prototype's
+   diffBody feeds codeBlock the tool's own patch rather than these structured
+   rows. */
+export function toUnified(path: string, hunkList: WsHunk[]): string {
+  const lines = [`diff --git a/${path} b/${path}`]
+  hunkList.forEach((hunk) => lines.push(...unifiedHunk(hunk.rows)))
+  return lines.join('\n')
+}
+
 export function fromUnified(lines: string | string[]): WsHunk {
   const rows: DiffRow[] = []
   let add = 0

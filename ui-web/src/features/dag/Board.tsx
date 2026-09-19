@@ -30,8 +30,9 @@ const MOUSE_NOTCH = 50
    whatever is under it, not a drag of the canvas. */
 const DRAG_SLOP = 4
 /* Breathing room between the graph and the viewport edge when the graph is too
-   big to centre. */
-const EDGE = 14
+   big to centre. Exported so a test can assert a margin without repeating the
+   number by hand. */
+export const EDGE = 14
 
 interface View {
   x: number
@@ -130,7 +131,15 @@ export function Board({ width, height, fitKey, label, owns, arrowsTaken, onBlank
     y: (port.h - height * z) / 2,
     z
   })
-  const fitZoom = (): number => (port.w && port.h ? clampZoom(Math.min(1, port.w / width, port.h / height)) : 1)
+  /* The margin comes off both port dimensions before the ratio, not just off
+     the offset afterward: the fitted zoom itself has to leave EDGE of ground
+     on the axis that binds it, or a box that pokes above its own node --
+     the task board's lane label does, by 9px -- pokes out past the stage's
+     own clipped edge whenever that axis is the tight one. */
+  const fitZoom = (): number => {
+    const margin = EDGE * 2
+    return port.w && port.h ? clampZoom(Math.min(1, (port.w - margin) / width, (port.h - margin) / height)) : 1
+  }
   /* The whole graph is the opening view: a box carries a name and an agent,
      which stay readable much further out than a paragraph would.
      Below the zoom floor it still overflows, and then it opens at its start

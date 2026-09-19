@@ -34,6 +34,30 @@ describe('stepsOf', () => {
     expect(stepsOf(msgs)[0]?.kind === 'tool' && stepsOf(msgs)[0]).toMatchObject({ ok: false })
   })
 
+  it('reads a result as not ok when a traceback shows up after clean-looking output', () => {
+    const msgs: TranscriptMessage[] = [
+      { role: 'assistant', text: '', tool_calls: [{ id: 'c1', name: 'exec', arguments: '{}' }] },
+      { role: 'tool', text: 'starting up\nTraceback (most recent call last):\n  File "x.py"', tool_call_id: 'c1' },
+    ]
+    expect(stepsOf(msgs)[0]).toMatchObject({ ok: false })
+  })
+
+  it('reads a result as not ok when it opens with an HTTP 429 body rather than the word error', () => {
+    const msgs: TranscriptMessage[] = [
+      { role: 'assistant', text: '', tool_calls: [{ id: 'c1', name: 'web_fetch', arguments: '{}' }] },
+      { role: 'tool', text: '429 Too Many Requests', tool_call_id: 'c1' },
+    ]
+    expect(stepsOf(msgs)[0]).toMatchObject({ ok: false })
+  })
+
+  it('does not flag an ordinary result with none of the failure words or codes', () => {
+    const msgs: TranscriptMessage[] = [
+      { role: 'assistant', text: '', tool_calls: [{ id: 'c1', name: 'exec', arguments: '{}' }] },
+      { role: 'tool', text: 'processed 4290 records\nExit code: 0', tool_call_id: 'c1' },
+    ]
+    expect(stepsOf(msgs)[0]).toMatchObject({ ok: true })
+  })
+
   it('has no result yet for a tool call still in flight', () => {
     const msgs: TranscriptMessage[] = [
       { role: 'assistant', text: '', tool_calls: [{ id: 'c1', name: 'exec', arguments: '{}' }] },

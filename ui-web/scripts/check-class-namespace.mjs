@@ -147,6 +147,11 @@ const SHARED = new Set([
   // as `.sarow .bd`, beside `.nm` and `.st` which are shared already; `wsempty`
   // is that panel's one empty state, which DeskEmpty draws for every tab.
   'salist', 'sarow', 'wsgrp', 'bd', 'wsempty',
+  // The composer's own round send button, one rule in page.css: `SendGlyph`
+  // (components/Ico.tsx) says outright that a sub-agent's own composer wears
+  // the same glyph so the two cannot drift apart, and a reply dock reading a
+  // running node's own conversation is the same shape of thing again.
+  'go',
 ])
 
 // Every class two or more domains name, with the number of domains that name
@@ -209,7 +214,7 @@ const LEGACY_LOCAL = {
   rail: 11,
   settings: 0,
   skills: 4,
-  subagents: 39,
+  subagents: 38,
   /* Down from 8: the node panel's inline "still running" line -- a plain
      `className="dot run"`, the one attribute-form use of `.dot` this domain
      had -- is gone with the line it lived on (the head already says a
@@ -264,7 +269,7 @@ const LEGACY_CHROME = {
      the old settings page shared with the frame, and this branch deletes that
      page. Nothing new is written -- the four move off the borrowed list and on
      to this one. */
-  chrome: 107,
+  chrome: 106,
   components: 33,
 }
 

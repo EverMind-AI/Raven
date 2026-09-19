@@ -33,6 +33,17 @@ function parseArgs(raw: string): FileToolArgs {
 const isWrite = (name: string): boolean => /write/i.test(name)
 const isEdit = (name: string): boolean => /edit/i.test(name)
 
+/* The record stores a path relative to the run's workspace while the tool
+   call may have named it absolutely (or the other way round for records
+   written before the runtime relativised them), so the two match when one
+   ends with the other at a segment boundary. */
+function samePath(a: string | undefined, b: string): boolean {
+  if (a === undefined) return false
+  if (a === b) return true
+  const [long, short] = a.length >= b.length ? [a, b] : [b, a]
+  return long.endsWith(`/${short}`)
+}
+
 /* Every tool call the node made against `path`, in the order it made them.
    A `TaskFile` folds a node's touches of one path into one item whose counts
    are the sum of every touch, so the patch a reader opens from it shows every
@@ -43,7 +54,7 @@ export function hunksForFile(steps: readonly NodeStep[], path: string): WsHunk[]
   steps.forEach((step) => {
     if (step.kind !== 'tool' || (!isWrite(step.name) && !isEdit(step.name))) return
     const args = parseArgs(step.args)
-    if (args.path !== path) return
+    if (!samePath(args.path, path)) return
     if (isEdit(step.name) && args.old_text !== undefined && args.new_text !== undefined) {
       out.push(fromEdit(args.old_text, args.new_text))
     } else if (args.content !== undefined) {

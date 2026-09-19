@@ -96,6 +96,19 @@ describe('workspace geometry', () => {
       availableWidth: 970,
     })).toBe(970)
   })
+
+  /* A task pane's board is sized like the agent conversation's -- 440, not
+     the file pane's 720 -- because that is the width its own card grid was
+     laid out against. */
+  it('opens a task pane at the agent width, not the file width', () => {
+    expect(workspaceTransitionWidth({
+      previousWidth: 0,
+      previousColumns: 0,
+      nextColumns: 1,
+      availableWidth: 1200,
+      firstPane: { id: 'p1', kind: 'task', row: {} as never },
+    })).toBe(440)
+  })
 })
 
 /* What the chat gives up so the anchored panel is not sitting on the transcript.

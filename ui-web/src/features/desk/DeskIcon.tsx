@@ -9,14 +9,12 @@ import type { JSX } from 'react'
    is now only ever a pane: the tab it used to name became `tasks`, and a
    delegated run still opens as a pane from the transcript's graph card. */
 export function DeskIcon({ kind }: { kind: DeskTab | 'file' | 'agents' }): JSX.Element {
-  if (kind === 'tasks') return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-      <rect x="3.5" y="4.5" width="7" height="7" rx="2" />
-      <rect x="13.5" y="12.5" width="7" height="7" rx="2" />
-      <path d="M7 11.5v4a2 2 0 0 0 2 2h4.5" />
-    </svg>
-  )
-  if (kind === 'agents') return (
+  /* The prototype's own `ICONS.bot`, on both: `agents` is the pane header for
+     delegated work and `tasks` is the tab that opens it, the same glyph the
+     prototype keeps on its tab AND its empty state (proto.js:4355, :4478) --
+     not the "graph of steps" shape (`ICONS.task`) the prototype never puts
+     on this tab. */
+  if (kind === 'tasks' || kind === 'agents') return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
       <rect x="5" y="7" width="14" height="11" rx="3" />
       <path d="M9 12h.01M15 12h.01M12 7V4M9 18v2M15 18v2" />

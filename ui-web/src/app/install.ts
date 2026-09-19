@@ -176,6 +176,12 @@ export function installSources(): void {
       openDeskTask(row)
       return true
     },
+    openRun: (runId) => {
+      const row = taskByKey('dag', runId)
+      if (!row) return false
+      openDeskTask(row)
+      return true
+    },
     onRunStarted, onNodeUpdated, onRunCompleted, onRunReplanned, onSubagentStatus,
   }
   sources.extAgents = extAgentsSource

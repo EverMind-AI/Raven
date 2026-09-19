@@ -119,15 +119,6 @@ function taskFileEntries(op: 'write' | 'edit'): TaskFileEntry[] {
   return out
 }
 
-/* Every one of these opens the owning task rather than the bare file or diff:
-   the full picture -- the task's status, why it ended the way it did, the
-   node's own record -- is the task pane's, and a reader who clicked a file
-   this task wrote is a reader who wants that task open. */
-function openTaskNode(row: TaskRow, node: TaskNode): void {
-  desk.openDeskTask(row)
-  tasksStore.pickNode(`task:${row.kind}:${row.id}`, node.node_id)
-}
-
 function DiffNav(): JSX.Element {
   useSyncExternalStore(tasksStore.subscribe, tasksStore.get)
   const changes = workspace.shared().changes
@@ -150,7 +141,7 @@ function DiffNav(): JSX.Element {
     <div className="desk-list">
       {changes.map((change) => (
         <button key={`${change.key}:${change.turn}`} className="desk-row desk-diff-row" onClick={() => desk.openDeskDiff(change)}>
-          <i className={`chgc ${change.kind}`}>{t(`gui.ws.chip.${change.kind}`)}</i>
+          <i className={`chgc ${change.kind}`}>{change.kind === 'add' ? '+' : 'M'}</i>
           <span className="desk-name" title={change.key}>{change.dir}<b>{change.name}</b></span>
           <span className="chgs">
             {change.add ? <i className="a">+{change.add}</i> : null}
@@ -161,19 +152,23 @@ function DiffNav(): JSX.Element {
       {taskDiffs.length ? (
         <>
           <div className="desk-grp">{t('gui.ws.task_output')}</div>
-          {taskDiffs.map(({ row, node, file }) => (
-            <button
-              key={`${row.kind}:${row.id}:${node.node_id}:${file.path}`}
-              className="desk-row desk-diff-row"
-              onClick={() => openTaskNode(row, node)}
-            >
-              <span className="desk-name" title={file.path}>{file.path.split('/').pop() || file.path}</span>
-              <span className="chgs">
-                <i className="a">+{file.add}</i>
-                <i className="d">−{file.del}</i>
-              </span>
-            </button>
-          ))}
+          {taskDiffs.map(({ row, node, file }) => {
+            const kind = file.del ? 'edit' : 'add'
+            return (
+              <button
+                key={`${row.kind}:${row.id}:${node.node_id}:${file.path}`}
+                className="desk-row desk-diff-row"
+                onClick={() => { void tasksStore.fileDiffChange(row, node, file).then(desk.openDeskDiff) }}
+              >
+                <i className={`chgc ${kind}`}>{file.del ? 'M' : '+'}</i>
+                <span className="desk-name" title={file.path}>{file.path}</span>
+                <span className="chgs">
+                  <i className="a">+{file.add}</i>
+                  <i className="d">−{file.del}</i>
+                </span>
+              </button>
+            )
+          })}
         </>
       ) : null}
     </div>
@@ -262,17 +257,18 @@ function DeliverablesNav(): JSX.Element {
     out.push(<div key="grp:task" className="desk-grp">{t('gui.ws.task_output')}</div>)
     taskFiles.forEach(({ row, node, file }) => {
       const name = file.path.split('/').pop() || file.path
+      const ext = (name.split('.').pop() || '').toUpperCase()
       out.push(
         <button
           key={`${row.kind}:${row.id}:${node.node_id}:${file.path}`}
           className="desk-row desk-dlv-row"
           title={file.path}
-          onClick={() => openTaskNode(row, node)}
+          onClick={() => desk.openDeskFile(file.path)}
         >
-          <span className="dlv-kind" data-kind={fileKind(name)}>{t('gui.arts.file')}</span>
+          <span className="dlv-kind" data-kind={fileKind(name)}>{ext ? ext.slice(0, 4) : t('gui.arts.file')}</span>
           <span className="desk-name">
-            <b>{name}</b>
-            <s>{[file.path, file.size != null ? deliveries.humanSize(file.size) : ''].filter(Boolean).join(' · ')}</s>
+            <b>{name.replace(/\.[^.]+$/, '')}</b>
+            <s>{[name, file.size != null ? deliveries.humanSize(file.size) : ''].filter(Boolean).join(' · ')}</s>
           </span>
         </button>,
       )
@@ -509,7 +505,11 @@ export function DeskPalette(): JSX.Element | null {
       if (e.pointerId !== pointerId) return
       setGeom((now) => clampGeometry({
         ...now,
-        w: start.w + e.clientX - start.pointerX,
+        /* Anchored, the right edge is pinned (styles/page.css's `right: calc(...)`
+           on `[data-anchored="true"]`), so the only way to grow is leftward --
+           a rightward drag has to shrink it instead. Detached has no pinned
+           edge, so the hand's own direction is the width's. */
+        w: start.w + (start.detached ? 1 : -1) * (e.clientX - start.pointerX),
         h: start.h + e.clientY - start.pointerY,
       }))
     }
@@ -530,6 +530,8 @@ export function DeskPalette(): JSX.Element | null {
   return (
     <div
       className="desk-palette"
+      role="dialog"
+      aria-label={t('gui.workspace')}
       data-anchored={!geom.detached}
       /* Which way it is moving, for the stylesheet -- and genuinely inert
          while it leaves. A tab clicked on the way out would act on a desk the
@@ -564,7 +566,7 @@ export function DeskPalette(): JSX.Element | null {
       <div className="desk-body">
         {state.tab === 'diff' ? <DiffNav /> : state.tab === 'deliverables' ? <DeliverablesNav /> : <TasksNav />}
       </div>
-      <div className="desk-resize" onPointerDown={resize} />
+      <div className="desk-resize" aria-hidden="true" onPointerDown={resize} />
     </div>
   )
 }

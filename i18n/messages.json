@@ -6067,10 +6067,6 @@
       "en": "Graph - drag to pan, ctrl and scroll to zoom",
       "zh": "流程图 - 拖动平移，按住 ctrl 滚动缩放"
     },
-    "gui.tasks.pick_node": {
-      "en": "Pick a node to see how it went this time.",
-      "zh": "点一个节点，看它这次跑成了什么样。"
-    },
     "gui.tasks.tab_order": {
       "en": "Work order",
       "zh": "任务单"
@@ -7211,6 +7207,10 @@
       "en": "This step has not been dispatched yet, and has no instruction.",
       "zh": "这一步还没派出去，也还没有指令。"
     },
+    "gui.tasks.instruction_loading": {
+      "en": "Reading what this step was dispatched with...",
+      "zh": "正在读取这一步派发的指令…"
+    },
     "gui.tasks.instruction_note": {
       "en": "Not dispatched yet: the {{...}} spots wait on upstream output to fill in, and are only final at the moment of dispatch.",
       "zh": "还没派出去：{{…}} 那几处等上游的产出填进来，派发的那一刻才定稿。"
@@ -7251,6 +7251,10 @@
       "en": "Stop the whole graph",
       "zh": "停止整张图的运行"
     },
+    "gui.tasks.stop_requested": {
+      "en": "Stop requested; the step now running will get a cancellation.",
+      "zh": "已请求停止；正在跑的那一步会收到取消。"
+    },
     "gui.tasks.ctx_why_interrupted": {
       "en": "It had not finished when the gateway exited; the record stops here.",
       "zh": "网关退出时还没跑完，记录停在这里。"
@@ -7258,6 +7262,14 @@
     "gui.tasks.ctx_failed": {
       "en": "Execution failed",
       "zh": "执行失败"
+    },
+    "gui.tasks.ctx_loading": {
+      "en": "Reading this node's record...",
+      "zh": "正在读取这个节点的记录…"
+    },
+    "gui.tasks.ctx_load_failed": {
+      "en": "Could not read this node's record.",
+      "zh": "没能读到这个节点的记录。"
     },
     "gui.tasks.rec_process_aria": {
       "en": "Show what happened before this answer",

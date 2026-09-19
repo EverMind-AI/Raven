@@ -9,9 +9,12 @@
  * "am I open" when Escape arrives, so "the last one opened closes first" never
  * happens, which is what the chain did too.
  *
- * The array below is that expectation, unchanged. What is asserted against it
- * is now the table, every entry's own predicate and action against a fixture
- * page, and all ninety-one pairs of layers. The three capture-phase handlers
+ * The array below is that expectation, plus the desk's own layer added after
+ * C11 (features/desk/store.ts's registered `desk.escapeOpen()`, for its own
+ * fullscreen -> node -> pane -> collapse retreat). What is asserted against
+ * it is now the table, every entry's own predicate and action against a
+ * fixture page, and all hundred and five pairs of layers. The three
+ * capture-phase handlers
  * each open sheet registers run *before* the table and two of them act on
  * Escape without stopping propagation, so one Escape can both deny an approval
  * and interrupt the running turn: that is pinned here with the real sheet.
@@ -24,6 +27,7 @@ import { openApproval } from '../features/composer/approve'
 import * as turn from '../features/composer/turn'
 import * as connections from '../features/connections/store'
 import * as cron from '../features/cron/store'
+import * as desk from '../features/desk/store'
 import * as extAgents from '../features/extAgents/store'
 import * as knowledge from '../features/knowledge/store'
 import * as memory from '../features/memory/store'
@@ -39,9 +43,9 @@ import { resetSources, sources } from './sources'
 
 import type { ComposerSource } from '../features/composer/types'
 
-/* The fourteen, in the order Escape reaches them. Each item is the text the
+/* The fifteen, in the order Escape reaches them. Each item is the text the
    chain tests to decide whether that layer is on screen -- a selector for the
-   twelve elements, the predicate's own name for the last two, which have no
+   twelve elements, the predicate's own name for the last three, which have no
    element of their own to look at. */
 const LAYER_IDS = [
   '.lightbox',
@@ -57,6 +61,7 @@ const LAYER_IDS = [
   '#extAgentsPage',
   '#connectionsPage',
   'setIsOpen()',
+  'desk.escapeOpen()',
   'turn.busy()',
 ] as const
 
@@ -137,6 +142,14 @@ const LAYERS: Record<string, { up: () => void; taken: () => boolean }> = {
   '#extAgentsPage': { up: flag('extAgentsPage'), taken: called(spies.extAgentsClose) },
   '#connectionsPage': { up: flag('connectionsPage'), taken: called(spies.connClose) },
   'setIsOpen()': { up: () => settingsDialog.open(), taken: () => !settingsDialog.isOpen() },
+  /* Its four-rung retreat (fullscreen -> node -> pane -> collapse) is
+     store.test.ts's to prove; this fixture only needs one rung on screen and
+     gone -- the emptiest one, the palette itself, since it takes no pane to
+     raise. */
+  'desk.escapeOpen()': {
+    up: () => desk.set({ paletteOpen: true }),
+    taken: () => !desk.get().paletteOpen,
+  },
   'turn.busy()': { up: () => turn.dispatch({ type: 'send' }), taken: called(spies.stop) },
 }
 
@@ -172,6 +185,7 @@ beforeEach(() => {
   sessionReset()
   setCurrent('a')
   sheets._resetForTests()
+  desk._resetForTests()
 })
 
 afterEach(() => {
@@ -179,6 +193,7 @@ afterEach(() => {
   resetSources()
   resetTranslator()
   sessionReset()
+  desk._resetForTests()
   document.body.innerHTML = ''
 })
 
@@ -193,11 +208,11 @@ const key = (k: string, over: Partial<KeyboardEventInit> = {}): KeyboardEvent =>
 }
 
 describe('the Escape priority order', () => {
-  it('is the order the table reaches the fourteen layers in', () => {
+  it('is the order the table reaches the fifteen layers in', () => {
     expect(escapeOrder.ESCAPE_ORDER.map((layer) => layer.id)).toEqual([...LAYER_IDS])
   })
 
-  it('has no fifteenth entry, and every entry is in the fixture', () => {
+  it('has no sixteenth entry, and every entry is in the fixture', () => {
     expect(escapeOrder.ESCAPE_ORDER).toHaveLength(LAYER_IDS.length)
     expect(Object.keys(LAYERS)).toEqual([...LAYER_IDS])
   })
@@ -220,8 +235,8 @@ describe('the Escape priority order', () => {
   const pairs = LAYER_IDS.flatMap((first, i) =>
     LAYER_IDS.slice(i + 1).map((second) => ({ first, second })))
 
-  it('has ninety-one pairs to answer for', () => {
-    expect(pairs).toHaveLength(91)
+  it('has a hundred and five pairs to answer for', () => {
+    expect(pairs).toHaveLength(105)
   })
 
   it.each(pairs)('takes back $first and leaves $second alone', ({ first, second }) => {

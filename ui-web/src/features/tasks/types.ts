@@ -78,6 +78,9 @@ export interface TasksSource {
      one; answers whether it did. The seam a sibling domain reaches this
      store through, rather than importing it (CONTRIBUTING 2.2). */
   openByNode?: (nodeId: string) => boolean
+  /* The dag equivalent of `openByNode`: opens the task a `run_subagent_dag` /
+     `load_playbook` call's own receipt named, when the list holds that run. */
+  openRun?: (runId: string) => boolean
   /* The five turn-event consumers `state/session/stages.ts` drives (contract
      §5.1), reached the same way: optional so a suite that assembles the
      session pipeline without a tasks source does not throw. */

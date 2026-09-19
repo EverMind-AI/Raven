@@ -101,7 +101,11 @@ export function stepsOf(messages: TranscriptMessage[]): NodeStep[] {
         name: call.name,
         args: call.arguments,
         result: res ? (res.text ?? '') : null,
-        ok: res ? !/^(error|failed?)\b/i.test((res.text || '').trimStart()) : null,
+        /* Anchored at the start for the plain error words, but not for the
+           infra codes: a call whose output starts clean and ends in a
+           traceback, or opens with an HTTP 429 body, is still a failure the
+           reader should see marked, wherever in the text it shows up. */
+        ok: res ? !/^\s*(error|failed?)\b|\b(429|ENOENT|Traceback)\b/i.test(res.text || '') : null,
       })
     }
   })

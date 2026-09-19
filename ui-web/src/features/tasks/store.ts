@@ -10,9 +10,11 @@
 import { current as sessionCurrent } from '../../lib/session'
 import { sources } from '../../state/sources'
 import { makeStore } from '../../state/store'
+import { hunksForFile } from './diffs'
 import * as live from './live'
 
-import type { TaskKind, TaskRow, TasksSource } from './types'
+import type { WsChange } from '../workspace/types'
+import type { TaskFile, TaskKind, TaskNode, TaskRow, TasksSource } from './types'
 
 export interface TasksState {
   rows: TaskRow[]
@@ -31,10 +33,26 @@ export interface TasksState {
      per node until it is (context for one that has run, the work order for
      one that has not). */
   tabByPane: Record<string, 'context' | 'order'>
+  /* Bumped once per live event that names one node, keyed by that node's own
+     (kind, id, node_id) -- what `TasksPage.tsx`'s `useNodeRecord` reads to
+     refetch a running node's record. `dag.node_updated` fires once per tool
+     call while a node runs (its payload carries `tool_call_id`), not only on
+     a status transition, so a value that only changed on transitions would
+     miss every step in between. */
+  nodeVersions: Record<string, number>
+  /* Every fold inside a node's own record -- the dispatch's "show all", the
+     process fold, a thought, a step's calls, one call's own card -- keyed by
+     the node (never the pane), so switching tabs and back, or switching to a
+     different node and back, neither resets a fold nor carries one node's
+     open folds onto another's (contract's own module state does the same:
+     DESK.wide / DESK.proc / DESK.think / DESK.wk / DESK.call, all keyed by
+     node id). A fold absent here has not been touched: the caller's own
+     default still applies until the reader picks one. */
+  folds: Record<string, Record<string, boolean>>
 }
 
 const initial: TasksState = {
-  rows: [], loaded: false, nodes: {}, hover: null, tabByPane: {},
+  rows: [], loaded: false, nodes: {}, hover: null, tabByPane: {}, nodeVersions: {}, folds: {},
 }
 
 const store = makeStore<TasksState>(initial)
@@ -103,6 +121,28 @@ export function pickTab(paneId: string, tab: 'context' | 'order'): void {
 
 export const hover = (id: string | null): void => patch({ hover: id })
 
+const nodeKeyOf = (kind: TaskKind, id: string, nodeId: string): string => `${kind}:${id}:${nodeId}`
+
+/** How many live events have named this node so far -- what `useNodeRecord`
+    keys its refetch on, so a running node's steps and answer keep arriving
+    without the reader closing and reopening it. */
+export const nodeVersion = (kind: TaskKind, id: string, nodeId: string): number =>
+  store.get().nodeVersions[nodeKeyOf(kind, id, nodeId)] ?? 0
+
+function bumpNodeVersion(kind: TaskKind, id: string, nodeId: string): void {
+  const key = nodeKeyOf(kind, id, nodeId)
+  patch({ nodeVersions: { ...store.get().nodeVersions, [key]: (store.get().nodeVersions[key] ?? 0) + 1 } })
+}
+
+/** Whether a fold inside a node's own record is open -- `undefined` when the
+    reader has not touched it yet, so the caller's own default still applies. */
+export const foldOf = (nodeKey: string, fold: string): boolean | undefined => store.get().folds[nodeKey]?.[fold]
+
+/** Records that the reader touched one fold, keyed by the node it belongs to. */
+export function setFold(nodeKey: string, fold: string, open: boolean): void {
+  patch({ folds: { ...store.get().folds, [nodeKey]: { ...store.get().folds[nodeKey], [fold]: open } } })
+}
+
 /* The server's own read for one row, folded back over whatever a live event
    already guessed. Used after every terminal live event and after a stop: a
    frame carries no tokens, no files and no final error text, and a stop's own
@@ -134,6 +174,7 @@ export function onRunStarted(p: live.RunStartedPayload): void {
 }
 export function onNodeUpdated(p: live.NodeUpdatedPayload): void {
   patch({ rows: live.applyNodeUpdated(store.get().rows, p) })
+  bumpNodeVersion('dag', p.run_id, p.node)
 }
 export function onRunCompleted(p: live.RunCompletedPayload): void {
   apply(live.applyRunCompleted(store.get().rows, p))
@@ -143,6 +184,22 @@ export function onRunReplanned(p: live.RunReplannedPayload): void {
 }
 export function onSubagentStatus(p: live.SubagentStatusPayload): void {
   apply(live.applySubagentStatus(store.get().rows, p))
+}
+
+/* A write/edit chip's diff pane, read from the node's own tool calls
+   (diffs.ts) since the wire carries only the counts (`add` / `del` / `size`),
+   never a patch body. Shared by every door that opens one of a task's
+   files as a diff -- the pane's own file chips and the desk's diff tab --
+   so the same click reads the same patch wherever it is made. */
+export async function fileDiffChange(row: TaskRow, node: TaskNode, file: TaskFile): Promise<WsChange> {
+  const src = source()
+  const rec = src ? await src.node(row, node).catch(() => null) : null
+  return {
+    key: `task:${row.kind}:${row.id}:${node.node_id}:${file.path}`,
+    dir: file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/') + 1) : '',
+    name: file.path.split('/').pop() || file.path, kind: 'edit',
+    add: file.add, del: file.del, hunks: rec ? hunksForFile(rec.steps, file.path) : [], turn: 0, open: false,
+  }
 }
 
 /** Stop a running task -- `subagent.interrupt` for a dag, `subagent.cancel_instance`

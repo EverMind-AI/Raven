@@ -142,6 +142,19 @@
 .tkfork {
   overflow: visible;
 }
+/* The prototype's own wire and arrow-tip contrast (proto.css:1480-1484): the
+   head reads a quarter darker than the line it tips, and both a touch
+   heavier than the shared dag default -- scoped to this surface since the
+   tip's geometry (its shape, and the gap before the box it points at) is
+   shared with two other surfaces and stays theirs. */
+.tkfork .daggraph .edge {
+  stroke: color-mix(in oklab, var(--faint) 60%, transparent);
+  stroke-width: 1.4;
+}
+.tkfork .daggraph .tip {
+  stroke: color-mix(in oklab, var(--faint) 75%, transparent);
+  stroke-width: 1.4;
+}
 /* No brightened edge out of a finished node -- the prototype's own board
    draws every edge in one colour, and the shared `DagGraph` component's
    `.flowed` treatment (built for the transcript's own card) is not this
@@ -234,6 +247,18 @@
   border-radius: 9px;
   padding: 9px 11px;
 }
+/* A failed record fetch's own way past it, beside the error line. */
+.tkretry {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--clay);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.tkretry:hover {
+  color: var(--text);
+}
 .tktrunc {
   margin-top: 2px;
   font-family: var(--mono);
@@ -241,7 +266,7 @@
   color: var(--faint);
 }
 /* The reply dock: an input riding in a pill of its own, the way the
-   composer's own field does, with the send action as a small dark pill. */
+   composer's own field does. */
 .tkdock {
   display: flex;
   align-items: center;
@@ -262,20 +287,13 @@
 .tkdock input::placeholder {
   color: var(--faint);
 }
-.tkdock button {
+/* The send action is the page-wide round `.go` button (the same glyph,
+   attribute for attribute, as the main composer's), sized down to the
+   dock's own scale rather than a dark word-width pill. */
+.tkdock .go {
   flex: none;
+  width: 26px;
   height: 26px;
-  padding: 0 10px;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--ink);
-  background: var(--text);
-  cursor: pointer;
-}
-.tkdock button:disabled {
-  opacity: .35;
-  cursor: default;
 }
 
 /* The work-order tab: one row per field, the missing-agent warning, and the
@@ -593,6 +611,15 @@
   color: var(--text);
   min-width: 0;
 }
+/* A task row that names the run it dispatched: the whole value cell is the
+   control that opens it, the way the prototype's own `kv(..., gov)` cell is. */
+.tkdgv.tkgov {
+  cursor: pointer;
+}
+.tkdgv.tkgov:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
 .tkstt {
   display: inline-flex;
   align-items: center;
@@ -640,6 +667,14 @@
   .tkrun { transition: none; }
   .tkfork .nd:hover .tkrun, .tkfork .nd[data-sel="1"] .tkrun { transform: none; }
 }
+/* The page-wide `.daggraph .nd:focus-visible rect` ring has no `rect` to
+   land on here -- this domain's `renderNode` swaps it for this `foreignObject`
+   box -- so the tabbing ring is redrawn on the box that is actually here. */
+.tkfork .nd:focus-visible .tkrun {
+  border-color: var(--amber);
+  outline: 1px solid var(--amber);
+  outline-offset: 2px;
+}
 /* The prototype's own two per-status box treatments (proto.css:1088-1093);
    every other status -- completed, failed, cancelled, interrupted, exception
    -- draws the plain box above and differs only in `.tkrunrt`, below. */
@@ -649,6 +684,17 @@
 }
 .tkfork .nd[data-st="pending"] .tkrun { opacity: .62; border-style: dashed; }
 .tkfork .nd[data-st="skipped"] .tkrun { opacity: .45; border-style: dashed; }
+/* The shared dag domain also dims the outer node group itself for cancelled,
+   skipped and interrupted (page.css); layered on top of the two treatments
+   just above that would multiply into a card far fainter than either rule
+   alone intends (a skipped card at .55 x .45, near invisible). Only the box
+   drawn here carries this surface's dimming -- the group it sits in stays at
+   full opacity, whatever the shared rule says. */
+.tkfork .nd[data-st="cancelled"],
+.tkfork .nd[data-st="skipped"],
+.tkfork .nd[data-st="interrupted"] {
+  opacity: 1;
+}
 
 /* The title (`.l1`, proto.css:1503-1506): two lines, clamped, with the right
    margin the status cluster needs (proto.css:1082). */
@@ -711,3 +757,20 @@
 .tkfork .nd[data-st="completed"] .tkrunrt { color: var(--moss); }
 .tkfork .nd[data-st="failed"] .tkrunrt { color: var(--clay); }
 .tkfork .nd[data-st="running"] .tkrunrt { color: var(--amber-dp); }
+
+/* The prototype's own streaming caret (proto.css's `.caret`), tk-prefixed
+   since the page-wide name is not this domain's to borrow (CONTRIBUTING 7):
+   trails a running node's own answer while it may still grow (NodeRecord.tsx's
+   `Answer`). */
+.tkcaret {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  background: var(--amber);
+  vertical-align: -2px;
+  animation: tkblink 1.1s steps(2, end) infinite;
+}
+@keyframes tkblink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .tkcaret { animation: none; }
+}

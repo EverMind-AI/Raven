@@ -27,6 +27,17 @@ describe('hunksForFile', () => {
     expect(hunksForFile([tool('write_file', { path: '/w/other.md', content: 'x' })], '/w/a.md')).toEqual([])
   })
 
+  it('matches a workspace-relative record against an absolute tool path, and the reverse', () => {
+    const write = tool('write_file', { path: '/w/work/a.md', content: 'one\n' })
+    expect(hunksForFile([write], 'work/a.md')).toHaveLength(1)
+    expect(hunksForFile([tool('write_file', { path: 'work/a.md', content: 'one\n' })], '/w/work/a.md')).toHaveLength(1)
+  })
+
+  it('does not let a bare basename match a different directory', () => {
+    expect(hunksForFile([tool('write_file', { path: '/w/other/a.md', content: 'x' })], 'work/a.md')).toEqual([])
+    expect(hunksForFile([tool('write_file', { path: '/w/xwork/a.md', content: 'x' })], 'work/a.md')).toEqual([])
+  })
+
   it('keeps every touch of the path in call order, so the counts sum to the folded chip', () => {
     const hunks = hunksForFile([
       tool('edit_file', { path: '/w/a.py', old_text: 'a\nb\n', new_text: 'a\nB\n' }),

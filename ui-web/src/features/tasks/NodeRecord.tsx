@@ -11,17 +11,21 @@
  * shorten a path -- a store dependency this module does not carry.
  */
 
-import { Fragment, useState } from 'react'
+import { Fragment, useSyncExternalStore } from 'react'
 
 import { Glyph } from '../../components/Ico'
 import { t } from '../../i18n/t'
-import { firstErrLine, phraseOf, splitMcp, verbIngOf, verbOf } from '../../lib/actVerbs'
+import { argPath, firstErrLine, phraseOf, splitMcp, verbIngOf, verbOf } from '../../lib/actVerbs'
 import { copy } from '../../lib/clipboard'
+import { formatDuration } from '../../lib/duration'
 import { fromEdit, fromWrite } from '../../lib/hunks'
 import { md } from '../../lib/prose'
+import { useTick } from '../../lib/tick'
 import { ds } from '../../state/sources'
+import { parseDagReceipt, parseSpawnReceipt } from './nestedRun'
+import * as store from './store'
 
-import type { NodeStep } from './types'
+import type { NodeStep, TaskRow } from './types'
 import type { ReactNode } from 'react'
 import type { JSX } from 'react'
 
@@ -56,7 +60,7 @@ const ACT_ICO: Record<string, string> = {
 
 function actIco(name: string): string {
   switch (name) {
-    case 'read_file': case 'read_skill': case 'understand_media': return ACT_ICO.doc as string
+    case 'read_file': case 'read_skill': case 'understand_media': case 'deliver_files': return ACT_ICO.doc as string
     case 'write_file': case 'edit_file': return ACT_ICO.pen as string
     case 'list_dir': return ACT_ICO.folder as string
     case 'grep': case 'find': case 'tool_search': return ACT_ICO.find as string
@@ -139,14 +143,27 @@ export function groupSteps(steps: NodeStep[]): GroupOrConsole[] {
    sheet's `SHARED`): a node's answer is a document like any other, and this
    is one rule rather than a fourth copy of it. */
 
-function Prose({ text, cls }: { text: string; cls: string }): JSX.Element {
-  return <div className={cls + ' prose'} dangerouslySetInnerHTML={{ __html: md(text) }} />
+/* Trails a running node's own still-open answer with the prototype's own
+   streaming caret (proto.css's `.caret`, tk-prefixed here since the
+   page-wide name is not this domain's to borrow -- CONTRIBUTING 7): the same
+   plain string-append `TranscriptPage.tsx`'s own `AnswerView` uses for the
+   main chat's streaming reply, rather than an imperative DOM write. */
+const withCaret = (html: string): string => `${html}<span class="tkcaret" aria-hidden="true"></span>`
+
+function Prose({ text, cls, caret = false }: { text: string; cls: string; caret?: boolean }): JSX.Element {
+  const html = md(text)
+  return <div className={cls + ' prose'} dangerouslySetInnerHTML={{ __html: caret ? withCaret(html) : html }} />
 }
 
-export function Answer({ text, at }: { text: string; at: number | null }): JSX.Element {
+/* `running`: this node has no token stream of its own, but `useNodeRecord`
+   re-reads the record on every live `node_updated` event, so a trailing
+   answer that arrives while the node is still `running` is not necessarily
+   the final one -- the caret says so the way the main chat's does, rather
+   than a second "in progress" sentence. */
+export function Answer({ text, at, running = false }: { text: string; at: number | null; running?: boolean }): JSX.Element {
   return (
-    <>
-      <Prose text={text} cls="tkans" />
+    <div className="tkanswer">
+      <Prose text={text} cls="tkans" caret={running} />
       <div className="tkansfoot">
         <button
           className="tkfootcopy" aria-label={t('gui.tasks.copy')}
@@ -156,7 +173,7 @@ export function Answer({ text, at }: { text: string; at: number | null }): JSX.E
         </button>
         {at != null ? <span className="tkturnmeta">{hhmm(at)}</span> : null}
       </div>
-    </>
+    </div>
   )
 }
 
@@ -167,12 +184,15 @@ function hhmm(ms: number): string {
 
 /* ── the thought ───────────────────────────────────────────────────────── */
 
-function ThinkBlock({ text, live }: { text: string; live: boolean }): JSX.Element {
-  const [open, setOpen] = useState(true)
+function ThinkBlock({ text, live, nodeKey, foldKey }: {
+  text: string; live: boolean; nodeKey: string; foldKey: string
+}): JSX.Element {
+  const touched = useSyncExternalStore(store.subscribe, () => store.foldOf(nodeKey, foldKey))
+  const open = touched ?? true
   return (
-    <div className="tkthink">
-      <button className="tkthh" aria-expanded={open} onClick={() => setOpen(!open)}>
-        {t(live ? 'gui.tasks.rec_thinking' : 'gui.tasks.rec_thought')}
+    <div className={'tkthink' + (live ? ' live' : '')}>
+      <button className="tkthh" aria-expanded={open} onClick={() => store.setFold(nodeKey, foldKey, !open)}>
+        <span className="tkthlb">{t(live ? 'gui.tasks.rec_thinking' : 'gui.tasks.rec_thought')}</span>
       </button>
       {open ? <blockquote>{text}</blockquote> : null}
     </div>
@@ -214,7 +234,9 @@ function PlainDtl({ call, bare, args, label }: {
   const body: JSX.Element[] = []
   if (bare === 'write_file' || bare === 'edit_file') {
     head = label || t('gui.dtl.plain')
-    copyText = label
+    /* The head is elided (`label` is `shortPath`'s own truncation); a reader
+       who copies a path wants the whole thing, not a leading ellipsis. */
+    copyText = argPath(args) || label
     if (text.trim()) body.push(<pre key="o">{text.replace(/\s+$/, '')}</pre>)
   } else if (bare === 'exec') {
     const cmd = String(args.command || '')
@@ -251,32 +273,79 @@ function PlainDtl({ call, bare, args, label }: {
   )
 }
 
-/* The delegated call's own key/value grid -- proto.js's `delegDtl`. The task,
-   target-agent, scale and state rows (`d_task` / `d_agent` / `d_scale` /
-   `d_state`) are producible from the call's own arguments and result; the
-   elapsed time, the run id and the "open this run" link are not -- a node's
-   own transcript carries no nested-run facts (contract: the desk tasks RPC
-   design doc, section 2.6), so those three stay a data gap rather than a
-   guess. */
-function DelegDtl({ call, kind, label, done, bad }: {
-  call: ToolCall; kind: 'deleg' | 'dag'; label: string; done: boolean; bad: boolean
+/* The three-way state a nested run settles into -- the same colours
+   TasksPage.tsx's own `tdotState` reads off a `TaskRow`: moss while
+   running, clay only for a failure or an interruption, faint for
+   everything else settled (completed and cancelled alike). */
+function rowState(status: TaskRow['status']): 'run' | 'ok' | 'bad' {
+  return status === 'running' ? 'run' : (status === 'failed' || status === 'interrupted') ? 'bad' : 'ok'
+}
+
+/* Node count, agent count, then the agent names themselves -- proto.js's own
+   three-part join, built from the run's real nodes rather than guessed at. */
+function dagScale(row: TaskRow): string {
+  const agents = [...new Set(row.nodes.map((n) => n.agent).filter(Boolean))]
+  const meta = t('gui.deleg.dag_meta', { n: row.nodes.length, m: agents.length })
+  return agents.length ? `${meta} · ${agents.join(' · ')}` : meta
+}
+
+/* The delegated call's own key/value grid -- proto.js's `delegDtl`. The
+   receipt a spawn / dag call's own result returns the instant its dispatch
+   is accepted names the run (`nestedRun.ts`'s two parsers); state, elapsed
+   time and scale resolve against that run's own row in the tasks store,
+   which carries the facts the receipt cannot -- how it is actually going,
+   not just that it was accepted. A run outside this conversation's list
+   (nothing here has read it, or it belongs to another session entirely)
+   falls back to what the receipt text alone gives: an id, and no control to
+   open it. */
+function DelegDtl({ call, kind, name, label, done, bad }: {
+  call: ToolCall; kind: 'deleg' | 'dag'; name: string; label: string; done: boolean; bad: boolean
 }): JSX.Element {
+  useSyncExternalStore(store.subscribe, store.get)
   const args = parseArgs(call.args)
-  const rows: Array<{ k: string; v: ReactNode }> = []
+  const result = call.result ?? ''
+  const spawnReceipt = kind === 'deleg' && done ? parseSpawnReceipt(result) : null
+  const dagReceipt = kind === 'dag' && done ? parseDagReceipt(result) : null
+  /* The spawn tool requires the model to name the run's own record id
+     (`node_id`); the receipt's own "(id: ...)" is the manager's internal
+     handle instead and only doubles as the record id when the model left
+     `node_id` out (`manager.py`'s own `node_id or task_id` fallback). */
+  const nodeId = (typeof args.node_id === 'string' && args.node_id) || spawnReceipt?.taskId || ''
+  const runId = dagReceipt?.runId || ''
+  const row: TaskRow | null = kind === 'deleg'
+    ? (nodeId ? store.byKey('spawn', nodeId) : null)
+    : (runId ? store.byKey('dag', runId) : null)
+  const running = row?.status === 'running'
+  const elapsed = useTick(running, row?.started_at ?? 0)
+  const cost = row
+    ? row.status === 'running'
+      ? (row.started_at != null ? formatDuration(elapsed) : '')
+      : (row.started_at != null && row.ended_at != null ? formatDuration(row.ended_at - row.started_at) : '')
+    : ''
+
+  const rows: Array<{ k: string; v: ReactNode; onOpen?: () => void }> = []
   if (kind === 'deleg') {
-    rows.push({ k: t('gui.deleg.d_task'), v: label })
+    /* `openByNode` is the same seam the transcript's own spawn row already
+       opens a run through; gated on the store holding the row, not merely
+       on the id, so a run outside this conversation's list reads as plain
+       text rather than a link that silently does nothing on click. */
+    rows.push({
+      k: t('gui.deleg.d_task'), v: label,
+      onOpen: row ? () => { ds('tasks').openByNode?.(nodeId) } : undefined,
+    })
     rows.push({ k: t('gui.deleg.d_agent'), v: String(args.agent || '') || t('gui.deleg.self') })
   } else {
-    /* No task row here: the prototype only shows one when the card has its
-       own `runTitle` (the graph's dispatched-for line, read from `dag.get`),
-       and a node's own transcript carries no such read (data gap) -- `label`
-       is `actLabel`'s own guess at the call's arguments, which is what the
-       scale row falls back to instead. */
-    rows.push({ k: t('gui.deleg.d_scale'), v: label || t('gui.tasks.deleg_a_graph') })
+    const runTitle = row?.task_summary || null
+    if (runTitle) {
+      rows.push({ k: t('gui.deleg.d_task'), v: runTitle, onOpen: () => { ds('tasks').openRun?.(runId) } })
+    }
+    rows.push({ k: t('gui.deleg.d_scale'), v: row ? dagScale(row) : (label || t('gui.tasks.deleg_a_graph')) })
+    if (name === 'load_playbook' && label && label !== runTitle) rows.push({ k: t('gui.dag.playbook'), v: label })
   }
-  const state = !done ? 'run' : bad ? 'bad' : 'ok'
+  const state = row ? rowState(row.status) : (!done ? 'run' : bad ? 'bad' : 'ok')
   const stateWord = state === 'run' ? t('gui.deleg.st_run') : state === 'ok' ? t('gui.deleg.st_ok') : t('gui.deleg.st_bad')
-  const err = state === 'bad' ? firstErrLine(call.result) : ''
+  const errSrc = row ? row.nodes.find((n) => n.error)?.error ?? null : call.result
+  const err = state === 'bad' ? firstErrLine(errSrc) : ''
   rows.push({
     k: t('gui.deleg.d_state'),
     v: (
@@ -286,6 +355,8 @@ function DelegDtl({ call, kind, label, done, bad }: {
       </span>
     ),
   })
+  if (cost) rows.push({ k: t('gui.deleg.d_cost'), v: cost })
+  if (kind === 'dag' && runId) rows.push({ k: t('gui.dag.run_id'), v: runId })
   return (
     <div className="tkdtl tkdlg">
       <div className="tkdtlbd">
@@ -293,7 +364,17 @@ function DelegDtl({ call, kind, label, done, bad }: {
           {rows.map((r, i) => (
             <Fragment key={i}>
               <div className="tkdgk">{r.k}</div>
-              <div className="tkdgv">{r.v}</div>
+              {r.onOpen
+                ? (
+                  <div
+                    className="tkdgv tkgov" role="button" tabIndex={0} title={t('gui.deleg.open_hint')}
+                    onClick={r.onOpen}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); r.onOpen!() } }}
+                  >
+                    {r.v}
+                  </div>
+                )
+                : <div className="tkdgv">{r.v}</div>}
             </Fragment>
           ))}
         </div>
@@ -304,7 +385,7 @@ function DelegDtl({ call, kind, label, done, bad }: {
 
 /* ── one call's own row ───────────────────────────────────────────────── */
 
-function CallRow({ call }: { call: ToolCall }): JSX.Element {
+function CallRow({ call, nodeKey, foldKey }: { call: ToolCall; nodeKey: string; foldKey: string }): JSX.Element {
   const { srv, bare } = splitMcp(call.name)
   const done = call.result != null
   const bad = call.ok === false
@@ -313,7 +394,8 @@ function CallRow({ call }: { call: ToolCall }): JSX.Element {
     : (bare === 'run_subagent_dag' || bare === 'load_playbook') ? 'dag' : 'plain'
   const args = parseArgs(call.args)
   const label = ds('transcript').actLabel?.(bare, args) ?? bare.split('_').join(' ')
-  const [open, setOpen] = useState(false)
+  const touched = useSyncExternalStore(store.subscribe, () => store.foldOf(nodeKey, foldKey))
+  const open = touched ?? false
   const hunk = kind === 'plain' ? hunkOfCall(bare, args) : null
   const withDtl = kind !== 'plain' || done
   const inner = (
@@ -324,7 +406,11 @@ function CallRow({ call }: { call: ToolCall }): JSX.Element {
         {done ? verbOf(bare) : verbIngOf(bare)}
       </span>
       {kind !== 'plain' ? <span className="tkar">{label}</span> : null}
-      {kind === 'plain' && hunk && (hunk.add || hunk.del)
+      {/* Only once the call has returned: the counts come off its own
+         arguments (hunkOfCall), which exist the moment it is issued, so an
+         in-flight write would otherwise advertise a result it has not
+         produced yet beside a still-breathing icon. */}
+      {kind === 'plain' && done && hunk && (hunk.add || hunk.del)
         ? (
           <span className="tkdstat">
             <b className="add">{`+${hunk.add}`}</b> <b className="del">{`\u2212${hunk.del}`}</b>
@@ -338,12 +424,12 @@ function CallRow({ call }: { call: ToolCall }): JSX.Element {
   return (
     <div className={'tkwrow' + (!done ? ' tkrun' : '') + (bad ? ' tkbad' : '') + (withDtl ? ' tktog' : '') + (withDtl && open ? ' tkopen' : '')}>
       {withDtl
-        ? <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}>{inner}</button>
+        ? <button type="button" aria-expanded={open} onClick={() => store.setFold(nodeKey, foldKey, !open)}>{inner}</button>
         : <div>{inner}</div>}
       {withDtl && open
         ? (kind === 'plain'
           ? <PlainDtl call={call} bare={bare} args={args} label={label} />
-          : <DelegDtl call={call} kind={kind} label={label} done={done} bad={bad} />)
+          : <DelegDtl call={call} kind={kind} name={bare} label={label} done={done} bad={bad} />)
         : null}
     </div>
   )
@@ -354,10 +440,15 @@ function CallRow({ call }: { call: ToolCall }): JSX.Element {
    the kind of work and how many failed; a single call is just its own row,
    always open. */
 
-function CallsBlock({ calls }: { calls: ToolCall[] }): JSX.Element {
+function CallsBlock({ calls, nodeKey, foldKey }: { calls: ToolCall[]; nodeKey: string; foldKey: string }): JSX.Element {
   const many = calls.length > 1
-  const [open, setOpen] = useState(false)
+  const touched = useSyncExternalStore(store.subscribe, () => store.foldOf(nodeKey, foldKey))
+  const open = touched ?? false
   const bad = calls.filter((c) => c.ok === false).length
+  /* Any call in the fold still out -- the same reason a single un-returned
+     call's own row breathes, carried onto the summary that stands in for
+     every row folded behind it. */
+  const flying = calls.some((c) => c.result == null)
   const bareNames = calls.map((c) => splitMcp(c.name).bare)
   const oneKind = new Set(bareNames).size === 1
   return (
@@ -365,8 +456,8 @@ function CallsBlock({ calls }: { calls: ToolCall[] }): JSX.Element {
       {many
         ? (
           <button
-            type="button" className={'tkwrow tktog tksum' + (open ? ' tkopen' : '')}
-            aria-expanded={open} onClick={() => setOpen(!open)}
+            type="button" className={'tkwrow tktog tksum' + (flying ? ' tkrun' : '') + (open ? ' tkopen' : '')}
+            aria-expanded={open} onClick={() => store.setFold(nodeKey, foldKey, !open)}
           >
             <Glyph d={oneKind ? actIco(bareNames[0] as string) : ACT_ICO.dot as string} cls="tkic" />
             <span className="tkar">{phraseOf(bareNames.map((name) => ({ name })))}</span>
@@ -376,7 +467,9 @@ function CallsBlock({ calls }: { calls: ToolCall[] }): JSX.Element {
         )
         : null}
       <div className="tkwkin" hidden={many && !open}>
-        {calls.map((c, i) => <CallRow call={c} key={c.id || i} />)}
+        {calls.map((c, i) => (
+          <CallRow call={c} key={c.id || i} nodeKey={nodeKey} foldKey={`${foldKey}:${i}`} />
+        ))}
       </div>
     </div>
   )
@@ -384,12 +477,21 @@ function CallsBlock({ calls }: { calls: ToolCall[] }): JSX.Element {
 
 /* ── one whole step ────────────────────────────────────────────────────── */
 
-function StepGroupView({ group, live }: { group: Group; live: boolean }): JSX.Element {
+function StepGroupView({ group, live, nodeKey }: { group: Group; live: boolean; nodeKey: string }): JSX.Element {
   return (
     <div className="tkstep">
-      {group.think ? <ThinkBlock text={group.think} live={live && !group.calls.length && !group.say} /> : null}
+      {group.think
+        ? (
+          <ThinkBlock
+            text={group.think} live={live && !group.calls.length && !group.say}
+            nodeKey={nodeKey} foldKey={`think:${group.key}`}
+          />
+        )
+        : null}
       {group.say ? <Prose text={group.say} cls="tkans" /> : null}
-      {group.calls.length ? <CallsBlock calls={group.calls} /> : null}
+      {group.calls.length
+        ? <CallsBlock calls={group.calls} nodeKey={nodeKey} foldKey={`wk:${group.key}`} />
+        : null}
     </div>
   )
 }
@@ -397,12 +499,14 @@ function StepGroupView({ group, live }: { group: Group; live: boolean }): JSX.El
 /* The process fold's own body: every step, grouped, plus the cli channel's
    synthetic stand-in rendered on its own (it carries no thought and no
    calls, just the one fixed sentence). */
-export function StepList({ steps, running }: { steps: NodeStep[]; running: boolean }): JSX.Element {
+export function StepList({ steps, running, nodeKey = '' }: {
+  steps: NodeStep[]; running: boolean; nodeKey?: string
+}): JSX.Element {
   return (
     <>
       {groupSteps(steps).map((g) => (g.kind === 'console'
         ? <div className="tkconsole" key={g.key}>{t('gui.tasks.ctx_console')}</div>
-        : <StepGroupView group={g} live={running} key={g.key} />))}
+        : <StepGroupView group={g} live={running} nodeKey={nodeKey} key={g.key} />))}
     </>
   )
 }

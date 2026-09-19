@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
 import * as confirmStore from '../../state/confirm'
+import * as escapeOrder from '../../state/escapeOrder'
 import * as pageStore from '../../state/page'
 import { resetSources, setSources } from '../../state/sources'
 import { installWsPane } from '../../test/wsPaneHarness'
@@ -1165,5 +1166,59 @@ describe('when storage refuses the reader answer', () => {
       desk.sync()
       expect(desk.get().paletteOpen).toBe(false)
     })
+  })
+})
+
+/* Registered into `state/escapeOrder.ts`'s table at this module's own
+   evaluation (store.ts's `onDeskEscape` call) -- exercised here through the
+   real dispatcher rather than a private export, the same way every other
+   layer in that table is proved. */
+describe('Escape retreats through the desk one layer at a time', () => {
+  const withOneNode = (id: string): TaskRow => ({
+    ...taskRow(id),
+    nodes: [{ node_id: 'n1', agent: 'raven', status: 'completed', depends_on: [], files: [] }],
+  })
+
+  it('peels fullscreen, then the picked node, then the pane, in that order', () => {
+    const paneId = 'task:spawn:t1'
+    desk.openDeskTask(withOneNode('t1'))
+    /* A graph of one node picks itself on open (openDeskTask's own rule), so
+       the picked-node rung is already loaded without a second click. */
+    expect(tasksStore.nodeOf(paneId)).toBe('n1')
+    desk.toggleSolo(paneId)
+    expect(desk.get().solo).toBe(paneId)
+
+    expect(escapeOrder.dispatch()).toBe(true)
+    expect(desk.get().solo).toBeNull()
+    expect(desk.get().panes.map((p) => p.id)).toEqual([paneId])
+    expect(tasksStore.nodeOf(paneId)).toBe('n1')
+
+    expect(escapeOrder.dispatch()).toBe(true)
+    expect(tasksStore.nodeOf(paneId)).toBeNull()
+    expect(desk.get().panes.map((p) => p.id)).toEqual([paneId])
+
+    expect(escapeOrder.dispatch()).toBe(true)
+    expect(desk.get().panes).toEqual([])
+  })
+
+  it('skips the node rung for a pane with no node picked', () => {
+    const paneId = 'task:spawn:t1'
+    desk.openDeskTask({ ...withOneNode('t1'), nodes: [] })
+    expect(tasksStore.nodeOf(paneId)).toBeNull()
+
+    expect(escapeOrder.dispatch()).toBe(true)
+    expect(desk.get().panes).toEqual([])
+  })
+
+  it('collapses the desk itself once nothing is open on it', () => {
+    desk.set({ paletteOpen: true })
+    expect(escapeOrder.dispatch()).toBe(true)
+    expect(desk.get().paletteOpen).toBe(false)
+  })
+
+  it('does nothing, and leaves Escape to fall through, with the desk untouched', () => {
+    expect(desk.get().paletteOpen).toBe(false)
+    expect(desk.get().panes).toEqual([])
+    expect(escapeOrder.dispatch()).toBe(false)
   })
 })

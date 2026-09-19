@@ -12,7 +12,6 @@ exports[`asking for the instance list > keeps its rendered shape 1`] = `
       button
         svg
           rect
-          rect
           path
         span.lb
       button
@@ -24,7 +23,6 @@ exports[`asking for the instance list > keeps its rendered shape 1`] = `
   div.desk-body
     div.desk-empty
       svg
-        rect
         rect
         path
       b

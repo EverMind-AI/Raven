@@ -609,3 +609,28 @@ describe('a pane headed by an instance', () => {
     expect(document.querySelector('.desk-pane header b')?.textContent).toBe('做一版 PPT')
   })
 })
+
+describe("a task pane's header icon", () => {
+  beforeEach(() => {
+    taskRows = []
+    tasksStore.reset()
+    setCurrent('s1')
+    setSources({ tasks: stubTasks() })
+  })
+
+  afterEach(() => { setCurrent(null) })
+
+  /* The robot mark, not the two-box graph mark the tab wears: a task pane is
+     a delegated run, the same as a live agent conversation's pane, and the
+     header should say so rather than repeat the tab it opened from. */
+  it('wears the agent glyph, not the tab\'s own graph glyph', async () => {
+    const row = taskRow('t1')
+    taskRows = [row]
+    render(<DeskSurface />)
+    await act(async () => { desk.openDeskTask(row) })
+
+    const icon = document.querySelector('.desk-pane header svg')
+    expect(icon?.innerHTML).toContain('M9 12h.01M15 12h.01M12 7V4M9 18v2M15 18v2')
+    expect(icon?.innerHTML).not.toContain('M7 11.5v4a2 2 0 0 0 2 2h4.5')
+  })
+})

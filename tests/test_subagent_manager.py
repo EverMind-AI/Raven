@@ -2237,7 +2237,7 @@ async def test_two_writes_of_one_path_are_one_file(tmp_path) -> None:
     with activity.collecting() as did:
         await backend.run("write twice", task_id="n6", workspace=tmp_path, executor=None)
 
-    assert [f["path"] for f in did.files] == [str(tmp_path / "notes.md")]
+    assert [f["path"] for f in did.files] == ["notes.md"]
     only = did.files[0]
     assert only["op"] == "write"
     assert only["add"] == 4
@@ -2257,7 +2257,7 @@ async def test_a_write_then_edit_of_one_path_is_a_single_write_entry(tmp_path) -
     with activity.collecting() as did:
         await backend.run("edit it", task_id="n5", workspace=tmp_path, executor=None)
 
-    assert [f["path"] for f in did.files] == [str(tmp_path / "notes.md")]
+    assert [f["path"] for f in did.files] == ["notes.md"]
     only = did.files[0]
     assert only["op"] == "write"
     assert only["add"] == 4
@@ -2305,7 +2305,7 @@ async def test_a_node_editing_a_file_it_did_not_create_records_an_edit_entry(tmp
     with activity.collecting() as did:
         await backend.run("edit existing", task_id="n7", workspace=tmp_path, executor=None)
 
-    assert did.files == [{"path": str(tmp_path / "notes.md"), "op": "edit", "add": 2, "del": 1, "size": 20}]
+    assert did.files == [{"path": "notes.md", "op": "edit", "add": 2, "del": 1, "size": 20}]
 
 
 async def test_the_account_is_published_while_the_run_is_still_going(tmp_path) -> None:

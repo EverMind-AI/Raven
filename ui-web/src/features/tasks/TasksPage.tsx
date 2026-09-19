@@ -11,25 +11,25 @@
 
 import { useEffect, useState, useSyncExternalStore } from 'react'
 
+import { Glyph, SendGlyph } from '../../components/Ico'
 import { t } from '../../i18n/t'
 import { copy } from '../../lib/clipboard'
 import { formatDuration } from '../../lib/duration'
 import * as lang from '../../state/lang'
 import { show as showPage } from '../../state/page'
 import { ds } from '../../state/sources'
+import { show as toast } from '../../state/toast'
 import { Board } from '../dag/Board'
 import { DagGraph } from '../dag/DagGraph'
 import { layout } from '../dag/graph'
 import * as desk from '../desk/store'
 import * as workspace from '../workspace/store'
 import { BoardCard } from './BoardCard'
-import { hunksForFile } from './diffs'
 import { Answer, StepList } from './NodeRecord'
 import * as store from './store'
 
 import type { Dims } from '../dag/graph'
 import type { DagNode } from '../dag/types'
-import type { WsChange } from '../workspace/types'
 import type { NodeRecord, NodeStep, SubagentRow, TaskFile, TaskNode, TaskRow } from './types'
 import type { JSX } from 'react'
 import './styles.css'
@@ -154,7 +154,7 @@ function Row({ row, now, hl, open, onOpen }: {
         </div>
         <s className="st">{line}</s>
       </div>
-      {row.status === 'failed' ? <ErrorTag /> : null}
+      {row.status === 'failed' || row.status === 'interrupted' ? <ErrorTag /> : null}
     </button>
   )
 }
@@ -335,29 +335,44 @@ interface RecordLoad {
   loading: boolean
   record: NodeRecord | null
   failed: boolean
+  /** Asks for the record again -- the reader's own way past a failed fetch;
+      no key in the effect's own deps array names "try again" on its own. */
+  retry: () => void
 }
 
 /* Fetched once per (row, node) and shared by both tabs: the order tab's
    "instruction" is the same rendered prompt the context tab's dispatch is,
    and asking for it twice would be asking the gateway the same question
    twice for one screen. Never fetched for a step that has not been
-   dispatched -- there is nothing yet to read. */
+   dispatched -- there is nothing yet to read.
+
+   Refetched on every live event that names this node (`store.nodeVersion`),
+   on top of the (row, node) identity: `dag.node_updated` fires once per tool
+   call while a node runs, not only on a status transition, so a node opened
+   mid-run keeps reading its own steps and its answer as they arrive rather
+   than freezing at the first read. A stale record is kept on screen through
+   a refetch rather than cleared back to `null` -- the reader is watching a
+   node run, not watching it flicker blank once a second. */
 function useNodeRecord(row: TaskRow, node: TaskNode): RecordLoad {
   const dispatched = node.status !== 'pending' && node.status !== 'skipped'
-  const [state, setState] = useState<RecordLoad>({ loading: dispatched, record: null, failed: false })
+  const version = useSyncExternalStore(store.subscribe, () => store.nodeVersion(row.kind, row.id, node.node_id))
+  const [nonce, setNonce] = useState(0)
+  const [state, setState] = useState<{ loading: boolean; record: NodeRecord | null; failed: boolean }>(
+    { loading: dispatched, record: null, failed: false },
+  )
   useEffect(() => {
     if (!dispatched) { setState({ loading: false, record: null, failed: false }); return }
-    setState({ loading: true, record: null, failed: false })
+    setState((prev) => ({ loading: true, record: prev.record, failed: false }))
     let alive = true
     const src = store.source()
-    if (!src) { setState({ loading: false, record: null, failed: true }); return }
+    if (!src) { setState((prev) => ({ loading: false, record: prev.record, failed: true })); return }
     src.node(row, node)
       .then((r) => { if (alive) setState({ loading: false, record: r, failed: false }) })
-      .catch(() => { if (alive) setState({ loading: false, record: null, failed: true }) })
+      .catch(() => { if (alive) setState((prev) => ({ loading: false, record: prev.record, failed: true })) })
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [row.kind, row.id, node.node_id, dispatched])
-  return state
+  }, [row.kind, row.id, node.node_id, dispatched, version, nonce])
+  return { ...state, retry: () => setNonce((n) => n + 1) }
 }
 
 function tokensText(node: TaskNode): string {
@@ -419,27 +434,32 @@ function hhmm(ms: number): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-const UNTRUSTED = /(\[BEGIN UNTRUSTED[^\]]*\][\s\S]*?\[END UNTRUSTED[^\]]*\])/g
-const IS_UNTRUSTED = /^\[BEGIN UNTRUSTED/
+/* The marker tokens alone, not the whole BEGIN..END span: the injected body
+   between them stays ordinary prose, and a truncated prompt carrying only a
+   BEGIN marker (its matching END never arrived) still gets that one line
+   marked rather than none of it. */
+const UNTRUSTED_MARKER = /(\[(?:BEGIN|END) UNTRUSTED[^\]]*\])/g
+const IS_UNTRUSTED_MARKER = /^\[(?:BEGIN|END) UNTRUSTED/
 /* A character count, not a line count -- the prototype folds on length so a
    long one-line prompt still clamps and a short eight-line one does not. */
 const CLAMP_CHARS = 260
 
-function Dispatch({ text, at }: { text: string; at: number | null }): JSX.Element {
-  const [open, setOpen] = useState(false)
+function Dispatch({ text, at, nodeKey }: { text: string; at: number | null; nodeKey: string }): JSX.Element {
+  const touched = useSyncExternalStore(store.subscribe, () => store.foldOf(nodeKey, 'wide'))
+  const open = touched ?? false
   const long = text.length >= CLAMP_CHARS
   return (
     <div className="tkdisp">
       <div className={'tkdispb' + (long && !open ? ' tkclamp' : '')}>
-        {text.split(UNTRUSTED).map((part, i) => (
-          IS_UNTRUSTED.test(part)
+        {text.split(UNTRUSTED_MARKER).map((part, i) => (
+          IS_UNTRUSTED_MARKER.test(part)
             ? <span className="tkuntrusted" key={i}>{part}</span>
             : <span key={i}>{part}</span>
         ))}
       </div>
       {long
         ? (
-          <button className="tkmore" aria-expanded={open} onClick={() => setOpen(!open)}>
+          <button className="tkmore" aria-expanded={open} onClick={() => store.setFold(nodeKey, 'wide', !open)}>
             {t(open ? 'gui.tasks.rec_less' : 'gui.tasks.rec_more')}
           </button>
         )
@@ -465,21 +485,27 @@ function Dispatch({ text, at }: { text: string; at: number | null }): JSX.Elemen
    the thought, what it said, the calls it led to and their detail cards --
    is NodeRecord.tsx's `StepList` (proto.js's `stepView` / `callRow` /
    `plainDtl` / `delegDtl`). */
-function Process({ steps, node }: { steps: NodeStep[]; node: TaskNode }): JSX.Element | null {
-  const [open, setOpen] = useState(node.status === 'running')
+function Process({ steps, node, nodeKey }: { steps: NodeStep[]; node: TaskNode; nodeKey: string }): JSX.Element | null {
+  /* `undefined` (never touched) recomputes the default every render rather
+     than freezing it at mount: open while the node is the only thing moving,
+     closed the moment there is a conclusion to read instead -- a node
+     watched from running to completed folds itself, and one the reader
+     already opened or closed stays that way regardless of status. */
+  const touched = useSyncExternalStore(store.subscribe, () => store.foldOf(nodeKey, 'proc'))
   if (!steps.length) return null
+  const open = touched ?? node.status === 'running'
   const dur = node.ended_at && node.started_at ? formatDuration(node.ended_at - node.started_at) : ''
   return (
-    <div className={'tkproc' + (open ? ' open' : '')}>
+    <div className="tkproc">
       <button
         className="tkprock" aria-expanded={open} aria-label={t('gui.tasks.rec_process_aria')}
-        onClick={() => setOpen(!open)}
+        onClick={() => store.setFold(nodeKey, 'proc', !open)}
       >
-        {t(node.status === 'running' ? 'gui.tasks.rec_process' : 'gui.tasks.st_completed')}
-        <span className="tkprocn">{dur}</span>
-        <span className="tkchev">{open ? '⌃' : '⌄'}</span>
+        <span>{t(node.status === 'running' ? 'gui.tasks.rec_process' : 'gui.tasks.st_completed')}</span>
+        {dur ? <span className="tkprocn">{dur}</span> : null}
+        <Glyph d="M9.5 6.5 15 12l-5.5 5.5" cls="tkchev" />
       </button>
-      {open ? <div className="tkprocb"><StepList steps={steps} running={node.status === 'running'} /></div> : null}
+      {open ? <div className="tkprocb"><StepList steps={steps} running={node.status === 'running'} nodeKey={nodeKey} /></div> : null}
     </div>
   )
 }
@@ -509,24 +535,38 @@ function ChatDock({ node, roster }: { node: TaskNode; roster: SubagentRow[] }): 
         placeholder={t('gui.tasks.continue_with', { name: node.agent })}
         onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) send() }}
       />
-      <button aria-label={t('gui.send')} disabled={!text.trim() || busy} onClick={send}>{t('gui.send')}</button>
+      <button className="go" aria-label={t('gui.send')} disabled={!text.trim() || busy} onClick={send}>
+        <SendGlyph />
+      </button>
     </div>
   )
 }
 
-function ContextTab({ row, node, rec, roster }: {
-  row: TaskRow; node: TaskNode; rec: RecordLoad; roster: SubagentRow[]
+function ContextTab({ row, node, rec }: {
+  row: TaskRow; node: TaskNode; rec: RecordLoad
 }): JSX.Element | null {
   if (node.status === 'pending' || node.status === 'skipped') {
     return <p className="tkempty">{nodeWhyText(node, row) || t('gui.tasks.ctx_none')}</p>
   }
-  /* Nothing rendered while the fetch is in flight (the head already says
-     the node's own state) or once it has failed -- the prototype's own
-     transcript is local and never has a fetch to fail, so it has no
-     sentence for either, and inventing one is not this page's call to
-     make. */
-  if (rec.loading) return null
-  if (rec.failed || !rec.record) return null
+  /* Something on screen for the whole of the fetch, and on a failed one too:
+     the prototype's own transcript is local data with no fetch to wait on or
+     fail, so it never has either case to say -- but it also never shows
+     nothing, which a silently blank card leaves the reader unable to tell
+     apart from a node that truly has no record. A record already on screen
+     from an earlier read (a live event refetching it) stays up rather than
+     being cleared back to either state. */
+  if (!rec.record) {
+    if (rec.loading) return <p className="tkempty">{t('gui.tasks.ctx_loading')}</p>
+    if (rec.failed) {
+      return (
+        <div className="tkerrb">
+          {t('gui.tasks.ctx_load_failed')}
+          <button type="button" className="tkretry" onClick={rec.retry}>{t('gui.retry')}</button>
+        </div>
+      )
+    }
+    return <p className="tkempty">{nodeWhyText(node, row) || t('gui.tasks.ctx_none')}</p>
+  }
   const record = rec.record
   /* Keyed on the absence of a dispatched prompt, like the prototype's own
      `!n.prompt` gate -- a node whose record has not been read yet reads the
@@ -534,19 +574,26 @@ function ContextTab({ row, node, rec, roster }: {
   if (!record.dispatch) {
     return <p className="tkempty">{nodeWhyText(node, row) || t('gui.tasks.ctx_none')}</p>
   }
+  const nodeKey = store.rowKey(row) + ':' + node.node_id
   return (
     <div className="tkctx">
-      <Dispatch text={record.dispatch} at={node.started_at ?? null} />
-      <Process steps={record.steps} node={node} />
-      {record.answer ? <Answer text={record.answer} at={node.ended_at ?? null} /> : null}
+      <Dispatch text={record.dispatch} at={node.started_at ?? null} nodeKey={nodeKey} />
+      <Process steps={record.steps} node={node} nodeKey={nodeKey} />
+      {record.answer ? <Answer text={record.answer} at={node.ended_at ?? null} running={node.status === 'running'} /> : null}
       {!record.answer && node.status === 'failed'
-        ? <div className="tkerrb">{node.error || t('gui.tasks.ctx_failed')}</div>
+        ? (
+          <div className="tkerrb">
+            {/* This node's own error, or -- when it failed without leaving
+               one of its own -- the run-level reason a sibling node already
+               carries, rather than the bare fallback sentence. */}
+            {node.error || row.nodes.find((n) => n.error)?.error || t('gui.tasks.ctx_failed')}
+          </div>
+        )
         : null}
       {!record.answer && node.status === 'interrupted'
         ? <div className="tkerrb">{t('gui.tasks.ctx_interrupted')}</div>
         : null}
       {record.outputTruncated ? <div className="tktrunc">{t('gui.tasks.ctx_truncated')}</div> : null}
-      <ChatDock node={node} roster={roster} />
     </div>
   )
 }
@@ -620,7 +667,14 @@ function OrderTab({ row, node, roster, rec }: {
   const known = !node.agent || roster.some((r) => r.name === node.agent)
   const dispatched = node.status !== 'pending' && node.status !== 'skipped'
   const rendered = dispatched ? rec.record?.dispatch ?? null : null
-  const text = rendered ?? node.prompt_template ?? null
+  /* A dispatched node's record still in flight (and never yet read) is not
+     "waiting on upstream to fill in" -- it already went out. Showing the raw
+     template plus that note during the fetch would state something false
+     about a run that has already happened, so this shows a neutral "reading
+     it" placeholder instead until the rendered prompt lands or the fetch
+     gives up. */
+  const pendingFetch = dispatched && rec.loading && rendered == null
+  const text = rendered ?? (pendingFetch ? null : node.prompt_template ?? null)
   const inputs = node.inputs ? Object.entries(node.inputs) : []
   const external = externalDeps(node, row)
   return (
@@ -673,10 +727,12 @@ function OrderTab({ row, node, roster, rec }: {
         : (
           <div className="tkfield">
             <div className="tkfk">{t('gui.tasks.instruction')}</div>
-            <div className="tkfv">{t('gui.tasks.instruction_pending')}</div>
+            <div className="tkfv">
+              {pendingFetch ? t('gui.tasks.instruction_loading') : t('gui.tasks.instruction_pending')}
+            </div>
           </div>
         )}
-      {!rendered && node.prompt_template ? <p className="tknote">{t('gui.tasks.instruction_note')}</p> : null}
+      {!rendered && !pendingFetch && node.prompt_template ? <p className="tknote">{t('gui.tasks.instruction_note')}</p> : null}
       <div className="tkspecid">
         <span>{row.kind === 'spawn' ? t('gui.tasks.call_label') : t('gui.tasks.run_label')}</span>
         <b>{row.id}</b>
@@ -721,9 +777,17 @@ function NodePanel({ row, node, paneId, onClose, roster }: {
           ))}
         </div>
       </div>
-      {tab === 'context'
-        ? <ContextTab row={row} node={node} rec={rec} roster={roster} />
-        : <OrderTab row={row} node={node} roster={roster} rec={rec} />}
+      {/* The one scrolling child: the header above stays put and, on the
+         context tab, the reply dock below stays pinned at the bottom --
+         neither rides off the top or the end of a long record. */}
+      <div className="tkbody">
+        {tab === 'context'
+          ? <ContextTab row={row} node={node} rec={rec} />
+          : <OrderTab row={row} node={node} roster={roster} rec={rec} />}
+      </div>
+      {tab === 'context' && node.status !== 'pending' && node.status !== 'skipped'
+        ? <ChatDock node={node} roster={roster} />
+        : null}
     </div>
   )
 }
@@ -737,7 +801,15 @@ function StopButton({ row }: { row: TaskRow }): JSX.Element {
       className="tkbaract"
       disabled={busy}
       title={t('gui.tasks.stop_title')}
-      onClick={() => { setBusy(true); void store.stop(row).finally(() => setBusy(false)) }}
+      onClick={() => {
+        /* Said the moment the request goes out, not once the reconciled row
+           lands: the button greying out is not itself an answer to "did that
+           work", and the gap between the click and the next status word is
+           exactly where the prototype's own toast fires. */
+        toast(t('gui.tasks.stop_requested'))
+        setBusy(true)
+        void store.stop(row).finally(() => setBusy(false))
+      }}
     >
       <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7.5 7.5h9v9h-9z" /></svg>
       {t('gui.tasks.stop')}
@@ -745,10 +817,10 @@ function StopButton({ row }: { row: TaskRow }): JSX.Element {
   )
 }
 
-/* "挂在：" + the name in its own `<b>`, the way the prototype's `.at` span
-   sets the node name apart from the rest of the sentence. The name sits at
-   the end of the sentence in both languages, so the catalogue entry is the
-   prefix alone -- no interpolation to split back apart. */
+/* "stuck at: " + the name in its own `<b>`, the way the prototype's `.at`
+   span sets the node name apart from the rest of the sentence. The name
+   sits at the end of the sentence in both languages, so the catalogue entry
+   is the prefix alone -- no interpolation to split back apart. */
 function AtLine({ name }: { name: string }): JSX.Element {
   return <span className="tkwhyat">{t('gui.tasks.why_at')}<b>{name}</b></span>
 }
@@ -819,14 +891,7 @@ function StatusBar({ row, now }: { row: TaskRow; now: number }): JSX.Element {
    node's own tool calls, every one that touched the path, in order
    (`diffs.ts`), which is what the folded chip's counts add up. */
 async function openNodeDiff(row: TaskRow, node: TaskNode, file: TaskFile): Promise<void> {
-  const src = store.source()
-  const rec = src ? await src.node(row, node).catch(() => null) : null
-  const change: WsChange = {
-    key: `task:${row.kind}:${row.id}:${node.node_id}:${file.path}`,
-    dir: '', name: file.path.split('/').pop() || file.path, kind: 'edit',
-    add: file.add, del: file.del, hunks: rec ? hunksForFile(rec.steps, file.path) : [], turn: 0, open: false,
-  }
-  desk.openDeskDiff(change)
+  desk.openDeskDiff(await store.fileDiffChange(row, node, file))
 }
 
 const DocGlyph = (): JSX.Element => (
@@ -905,18 +970,25 @@ export function TaskPane({ task, full = false }: { task: TaskRow; full?: boolean
       <StatusBar row={row} now={now} />
       <WhyBanner row={row} onPick={pick} />
       <Chips row={row} />
+      {/* The board stays mounted either way, and CSS -- not this ternary --
+          decides whether it or the node panel is what shows: the prototype
+          hides its own board with a display rule rather than tearing it
+          down, so the reader's pan and zoom are still there when a docked
+          pane's picked node closes. Unmounting `Fork` here snapped the graph
+          back to its opening frame on every pick/back round trip. */}
       {full
         ? (
           <div className="tkwork">
             <Fork row={row} paneId={paneId} />
-            {node
-              ? <NodePanel row={row} node={node} paneId={paneId} onClose={() => pick(null)} roster={roster} />
-              : <div className="tkpick">{t('gui.tasks.pick_node')}</div>}
+            {node ? <NodePanel row={row} node={node} paneId={paneId} onClose={() => pick(null)} roster={roster} /> : null}
           </div>
         )
-        : node
-          ? <NodePanel row={row} node={node} paneId={paneId} onClose={() => pick(null)} roster={roster} />
-          : <Fork row={row} paneId={paneId} />}
+        : (
+          <>
+            <Fork row={row} paneId={paneId} />
+            {node ? <NodePanel row={row} node={node} paneId={paneId} onClose={() => pick(null)} roster={roster} /> : null}
+          </>
+        )}
     </div>
   )
 }

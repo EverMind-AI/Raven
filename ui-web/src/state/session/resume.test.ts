@@ -347,18 +347,20 @@ describe('what a replay may not erase', () => {
     /* A desk of its own, so the guard cannot pass by the second conversation
        happening to have nothing on screen. */
     openDeskFile('/workspace/s2.ts')
-    expect(deskState().tab).toBe('deliverables')
+    expect(deskState().tab).toBe('tasks')
 
     openGate()
     await pending
 
-    expect(deskState().tab).toBe('deliverables')
+    /* The second desk keeps its own fresh default (the tasks tab, as the
+       prototype opens); the first conversation's 'deliverables' must not land. */
+    expect(deskState().tab).toBe('tasks')
     expect(deskState().splits.column).toBe(50)
     expect(paneIds()).toEqual(['file:/workspace/s2.ts'])
     /* The damage was never the flicker: the next thing this conversation's
        reader does files the other one's frame as its own. */
     expect(deskSaved('s2')).toEqual({
-      tab: 'deliverables',
+      tab: 'tasks',
       duo: 'rows',
       open: [{ k: 'file', path: '/workspace/s2.ts' }],
       solo: null,

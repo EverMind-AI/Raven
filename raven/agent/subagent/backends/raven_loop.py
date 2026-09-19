@@ -84,6 +84,17 @@ def _file_change_counts(file_change: Any, diff: str | None) -> tuple[int, int]:
     return add, delete
 
 
+def _workspace_relative(path: str, workspace: Path) -> str:
+    """The path a file record carries: relative to the run's workspace when the
+    file is under it (the file endpoint anchors relative paths there, and the
+    panel reads ``work/notes.md`` where an absolute path says nothing), absolute
+    otherwise."""
+    try:
+        return str(Path(path).resolve().relative_to(Path(workspace).resolve()))
+    except (ValueError, OSError):
+        return path
+
+
 def build_subagent_prompt(
     agent_home: Path,
     work_dir: Path,
@@ -518,7 +529,7 @@ class RavenLoopBackend:
                         # decides how many lines it replaced.
                         add, delete = _file_change_counts(file_change, getattr(result, "diff", None))
                         activity.note_file_change(
-                            file_change.path,
+                            _workspace_relative(file_change.path, workspace),
                             "edit" if "edit" in RAVEN_NAME.get(tool_call.name, tool_call.name) else "write",
                             add,
                             delete,
