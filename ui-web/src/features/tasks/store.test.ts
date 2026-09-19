@@ -30,6 +30,11 @@ beforeEach(() => {
   rows = []
   stopped = []
   store._resetForTests()
+  /* Reset every test to the default answers: a case that pends and later
+     resolves `list`/`one` itself (the session-switch guards below) must not
+     leak its stand-in into the next one. */
+  source.list = async (key) => (key ? rows : [])
+  source.one = async (kind, id) => rows.find((r) => r.kind === kind && r.id === id) || null
   setSources({ tasks: source })
   setCurrent('s1')
 })
@@ -51,6 +56,24 @@ describe('refresh', () => {
     rows = [row({ id: 'a', kind: 'dag', status: 'running' })]
     await store.refresh()
     expect(store.rows()).toEqual([])
+  })
+
+  /* Asked for one conversation, answered into whichever is open now: the
+     reader can click another session while this is in flight. The same guard
+     the agents lists, the deliveries shelf and the desk replay use. */
+  it('drops an answer for a conversation the reader has already left', async () => {
+    let release: (r: TaskRow[]) => void = () => {}
+    source.list = () => new Promise((res) => { release = res })
+
+    const pending = store.refresh()
+    setCurrent('s2')
+    release([row({ id: 'a', kind: 'dag', status: 'running' })])
+    await pending
+
+    expect(store.rows()).toEqual([])
+    /* Not just empty rows: `loaded` must stay false too, or nothing ever asks
+       again for s2 -- the panel would read as "read, and empty" forever. */
+    expect(store.get().loaded).toBe(false)
   })
 })
 
@@ -103,6 +126,30 @@ describe('stop', () => {
     expect(stopped).toEqual([running])
     expect(store.byKey('dag', 'r1')?.status).toBe('cancelled')
   })
+
+  /* stop() reconciles through the same function refresh does, so it inherits
+     the same guard: a stop button pressed on a row the reader has since left
+     must not write that conversation's answer into the one they switched to. */
+  it('does not apply a reconcile that lands after the reader switched conversations', async () => {
+    const running = row({ id: 'r1', kind: 'dag', status: 'running' })
+    store.set((prev) => ({ ...prev, rows: [running], loaded: true }))
+    let releaseStop: (ok: boolean) => void = () => {}
+    let releaseOne: (r: TaskRow | null) => void = () => {}
+    source.stop = () => new Promise((res) => { releaseStop = res })
+    source.one = () => new Promise((res) => { releaseOne = res })
+
+    const pending = store.stop(running)
+    releaseStop(true)
+    /* One microtask tick resumes stop() past `await src.stop`, into
+       reconcile() far enough to capture the session key and call src.one --
+       synchronously, before reconcile suspends on that call. */
+    await Promise.resolve()
+    setCurrent('s2')
+    releaseOne({ ...running, status: 'cancelled' })
+    await pending
+
+    expect(store.byKey('dag', 'r1')?.status).toBe('running')
+  })
 })
 
 describe('live event consumers', () => {
@@ -119,5 +166,22 @@ describe('live event consumers', () => {
     await Promise.resolve()
     await Promise.resolve()
     expect(store.byKey('dag', 'r1')?.task_summary).toBe('reconciled')
+  })
+
+  /* Independent of any React or effect timing: a terminal event schedules
+     reconcile, the reader switches conversations before it answers, and the
+     answer must not prepend or overwrite a row into the session now open. */
+  it("a terminal frame's reconcile does not land in the next conversation", async () => {
+    store.set((prev) => ({ ...prev, rows: [row({ id: 'r1', kind: 'dag', status: 'running' })], loaded: true }))
+    let release: (r: TaskRow | null) => void = () => {}
+    source.one = () => new Promise((res) => { release = res })
+
+    store.onRunCompleted({ run_id: 'r1', dir: '/d', summary: {}, files: [{ node: 'a', status: 'completed' }] })
+    setCurrent('s2')
+    release(row({ id: 'r1', kind: 'dag', status: 'completed', task_summary: 'reconciled' }))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(store.byKey('dag', 'r1')?.task_summary).not.toBe('reconciled')
   })
 })

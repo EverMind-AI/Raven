@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { fromEdit, fromUnified, fromWrite } from './hunks'
 
-describe('workspace hunk builders', () => {
+describe('diff hunk builders', () => {
   it('folds distant unchanged edit context around the changed lines', () => {
     const hunk = fromEdit(
       'a\nb\nc\nd\nold\ne\nf\ng\nh',

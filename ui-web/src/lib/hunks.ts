@@ -1,8 +1,21 @@
-/* Builds the diff rows shared by workspace records and transcript call cards. */
-
-import type { DiffRow, WsHunk } from './types'
+/* Builds the diff rows shared by workspace records and transcript call cards.
+ * A pure leaf, with no store and no page of its own -- see the domain the
+ * two callers pull it into. */
 
 const CTX_KEEP = 3
+
+/* One diff row: a tuple of [kind, text, oldLineNo, newLineNo], where a 'gap'
+   row carries the folded lines as its second slot and an `open` expando the
+   reader toggles in place. */
+export type DiffRow = [string, string | string[], (number | null)?, (number | null)?] & {
+  open?: boolean
+}
+
+export interface WsHunk {
+  rows: DiffRow[]
+  add: number
+  del: number
+}
 
 export function fromEdit(oldText: string, newText: string): WsHunk {
   const removed = String(oldText || '').split('\n')

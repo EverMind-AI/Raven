@@ -22,7 +22,7 @@ import { DagGraph } from '../dag/DagGraph'
 import { layout } from '../dag/graph'
 import * as desk from '../desk/store'
 import * as workspace from '../workspace/store'
-import { hunkForFile } from './diffs'
+import { hunksForFile } from './diffs'
 import * as store from './store'
 
 import type { Dims } from '../dag/graph'
@@ -716,17 +716,16 @@ function StatusBar({ row, now }: { row: TaskRow; now: number }): JSX.Element {
 }
 
 /* The pane's own resolution of a node's write / edit file into something to
-   open. A diff's actual patch body is not on the wire: it
-   is read from this node's own tool calls, the last one that touched the
-   path (`diffs.ts`). */
+   open. A diff's actual patch body is not on the wire: it is read from this
+   node's own tool calls, every one that touched the path, in order
+   (`diffs.ts`), which is what the folded chip's counts add up. */
 async function openNodeDiff(row: TaskRow, node: TaskNode, file: TaskFile): Promise<void> {
   const src = store.source()
   const rec = src ? await src.node(row, node).catch(() => null) : null
-  const hunk = rec ? hunkForFile(rec.steps, file.path) : null
   const change: WsChange = {
     key: `task:${row.kind}:${row.id}:${node.node_id}:${file.path}`,
     dir: '', name: file.path.split('/').pop() || file.path, kind: 'edit',
-    add: file.add, del: file.del, hunks: hunk ? [hunk] : [], turn: 0, open: false,
+    add: file.add, del: file.del, hunks: rec ? hunksForFile(rec.steps, file.path) : [], turn: 0, open: false,
   }
   desk.openDeskDiff(change)
 }

@@ -1,12 +1,12 @@
 import { t } from '../../i18n/t'
 import { I18N } from '../../i18n/t'
 import { formatDuration } from '../../lib/duration'
+import * as hunks from '../../lib/hunks'
 import { md } from '../../lib/prose'
 import { ds } from '../../state/sources'
 import { pane } from '../../state/wsPane'
 import * as dagNodes from '../dag/nodes'
 import * as deliveries from '../workspace/deliveries'
-import * as hunks from '../workspace/hunks'
 
 import type { DeliveryRow, WsChange } from '../workspace/types'
 import type {

@@ -22,7 +22,6 @@ import { fromStarted } from '../../features/dag/nodes'
 import { touchSession } from '../../features/rail/source'
 import { draw as sessionDraw } from '../../features/rail/store'
 import { directEvent } from '../../features/subagents/store'
-import * as tasks from '../../features/tasks/store'
 import * as transcript from '../../features/transcript/mount'
 import { cleanPreview, okOf } from '../../features/transcript/source'
 import { wsOnTool, wsOnToolDone } from '../../features/workspace/record'
@@ -31,7 +30,7 @@ import { t } from '../../i18n/t'
 import { current as sessionCurrent } from '../../lib/session'
 import { hasToolOk } from '../../rpc/capabilities'
 import { session as sheetSession } from '../sheetRack'
-import { ds } from '../sources'
+import { ds, sources } from '../sources'
 import { show as toast } from '../toast'
 import { ask, noteRow } from './conversation'
 import { namingEnded, settleNaming } from './naming'
@@ -228,7 +227,7 @@ export const STAGES: readonly Stage[] = [
      card is one definition, next to the model it moves. */
   arm('subagent.status', (_rt, p) => {
     transcript.spawnFeed(p)
-    tasks.onSubagentStatus(p)
+    sources.tasks?.onSubagentStatus?.(p)
   }),
 
   /* A result was submitted, not yet visible: the turn it opens is still queued
@@ -258,7 +257,7 @@ export const STAGES: readonly Stage[] = [
       summary: null, done: false, folded: false,
       task_summary: p.task_summary || null,
     })
-    tasks.onRunStarted(p)
+    sources.tasks?.onRunStarted?.(p)
   }),
 
   arm('dag.node_updated', (_rt, p) => {
@@ -267,13 +266,13 @@ export const STAGES: readonly Stage[] = [
        report means to a node is one definition, next to the model it moves, and
        the copy that lived here had drifted into inventing a clock. */
     dagSheet.advance(sheetSession(), p)
-    tasks.onNodeUpdated(p)
+    sources.tasks?.onNodeUpdated?.(p)
   }),
 
   arm('dag.run_completed', (_rt, p) => {
     transcript.dagFeed('dag.run_completed', p)
     dagSheet.settle(sheetSession(), p)
-    tasks.onRunCompleted(p)
+    sources.tasks?.onRunCompleted?.(p)
   }),
 
   /* The trail card alone: the sheet shows one run at a time by design, so a
@@ -283,7 +282,7 @@ export const STAGES: readonly Stage[] = [
      the superseded run cancelled itself. */
   arm('dag.run_replanned', (_rt, p) => {
     transcript.dagFeed('dag.run_replanned', p)
-    tasks.onRunReplanned(p)
+    sources.tasks?.onRunReplanned?.(p)
   }),
 
   /* Declared by the contract and drawn by nothing. Named rather than left to

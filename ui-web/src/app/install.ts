@@ -17,6 +17,7 @@ import { connSource } from '../features/connections/source'
 import { closeDialog as closeConnDialog } from '../features/connections/store'
 import { cronSource } from '../features/cron/source'
 import { closeSheet as closeCronSheet } from '../features/cron/store'
+import { openDeskTask } from '../features/desk/store'
 import { extAgentsSource } from '../features/extAgents/source'
 import { capabilitiesSource, extPlugins, loadExt } from '../features/installed/source'
 import { knowledgeSource } from '../features/knowledge/source'
@@ -32,7 +33,10 @@ import { bannerSource, settingsSource } from '../features/settings/source'
 import { skillsSource } from '../features/skills/source'
 import { agentsSource, startAgentHeartbeat } from '../features/subagents/source'
 import { tasksSource } from '../features/tasks/source'
-import { refresh as refreshTasks, reset as resetTasks } from '../features/tasks/store'
+import {
+  byKey as taskByKey, onNodeUpdated, onRunCompleted, onRunReplanned, onRunStarted, onSubagentStatus,
+  refresh as refreshTasks, reset as resetTasks,
+} from '../features/tasks/store'
 import {
   branch, cleanPreview, dagRun, okOf, openDagNode, openDagRun, openSpawn, spawnList, spawnRecord,
 } from '../features/transcript/source'
@@ -44,7 +48,7 @@ import { slashHelp, slashName } from '../i18n/t'
 import { t } from '../i18n/t'
 import { $ } from '../lib/dom'
 import { hostPlatform } from '../lib/platform'
-import { current as sessionCurrent } from '../lib/session'
+import { current as sessionCurrent, onChange as onSessionChange } from '../lib/session'
 import { refusal as uploadRefusal } from '../lib/upload'
 import { gateway } from '../rpc/gateway'
 import { setFault as setMemFault } from '../state/banner'
@@ -155,8 +159,21 @@ export function installSources(): void {
   sources.subagents = agentsSource
   /* One source either way: `tasks.list` is a real gateway method now, so the
      offline page reads it through the fixture transport the same way every
-     other domain does, rather than through a stand-in library of its own. */
-  sources.tasks = tasksSource
+     other domain does, rather than through a stand-in library of its own.
+     Grown with the store's own verbs (openByNode, the five live consumers)
+     rather than replaced, so a sibling domain and the session pipeline reach
+     this one through the seam instead of importing its store directly
+     (CONTRIBUTING 2.2; import-direction's CROSS and PINNED lists). */
+  sources.tasks = {
+    ...tasksSource,
+    openByNode: (nodeId) => {
+      const row = taskByKey('spawn', nodeId)
+      if (!row) return false
+      openDeskTask(row)
+      return true
+    },
+    onRunStarted, onNodeUpdated, onRunCompleted, onRunReplanned, onSubagentStatus,
+  }
   sources.extAgents = extAgentsSource
 
   /* The workspace panel's chrome is still the page's, so the two things its
@@ -327,6 +344,12 @@ export function installActions(): void {
      rows the new conversation has. Registered here for the same reason the
      three slots above are: state/ws.ts does not import features/. */
   onWsReset('tasks', resetTasks)
+  /* And the read for the conversation arrived at: the reset above runs before
+     the pointer moves (state/session/registry.ts's switchTo), so the panel's
+     own "not loaded yet" effect would otherwise fire under the session being
+     left. Ownership changing is what should trigger the re-read, not `loaded`
+     happening to be false. */
+  onSessionChange(() => { void refreshTasks() })
 
   $('#newBtn')!.onclick = () => {
     if (openModelsForMissingProvider()) return

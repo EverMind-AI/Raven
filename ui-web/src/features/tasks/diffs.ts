@@ -9,9 +9,9 @@
  * `write_file` as; an edit is the real before/after slice.
  */
 
-import { fromEdit, fromWrite } from '../workspace/hunks'
+import { fromEdit, fromWrite } from '../../lib/hunks'
 
-import type { WsHunk } from '../workspace/types'
+import type { WsHunk } from '../../lib/hunks'
 import type { NodeStep } from './types'
 
 interface FileToolArgs {
@@ -33,20 +33,22 @@ function parseArgs(raw: string): FileToolArgs {
 const isWrite = (name: string): boolean => /write/i.test(name)
 const isEdit = (name: string): boolean => /edit/i.test(name)
 
-/* The node's last tool call against `path`: a file rewritten twice in one
-   node reads as its final shape, the same rule the session's own change list
-   already applies (features/workspace/record.ts). */
-export function hunkForFile(steps: readonly NodeStep[], path: string): WsHunk | null {
-  const calls = steps.filter((s): s is Extract<NodeStep, { kind: 'tool' }> => s.kind === 'tool')
-  for (let i = calls.length - 1; i >= 0; i -= 1) {
-    const step = calls[i]!
-    if (!isWrite(step.name) && !isEdit(step.name)) continue
+/* Every tool call the node made against `path`, in the order it made them.
+   A `TaskFile` folds a node's touches of one path into one item whose counts
+   are the sum of every touch, so the patch a reader opens from it shows every
+   touch too: a write is the whole content as added, an edit the before/after
+   slice. Summing these hunks' counts gives the chip's own numbers back. */
+export function hunksForFile(steps: readonly NodeStep[], path: string): WsHunk[] {
+  const out: WsHunk[] = []
+  steps.forEach((step) => {
+    if (step.kind !== 'tool' || (!isWrite(step.name) && !isEdit(step.name))) return
     const args = parseArgs(step.args)
-    if (args.path !== path) continue
+    if (args.path !== path) return
     if (isEdit(step.name) && args.old_text !== undefined && args.new_text !== undefined) {
-      return fromEdit(args.old_text, args.new_text)
+      out.push(fromEdit(args.old_text, args.new_text))
+    } else if (args.content !== undefined) {
+      out.push(fromWrite(args.content))
     }
-    if (args.content !== undefined) return fromWrite(args.content)
-  }
-  return null
+  })
+  return out
 }

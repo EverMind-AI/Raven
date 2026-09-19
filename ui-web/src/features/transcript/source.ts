@@ -16,15 +16,15 @@ import { gateway } from '../../rpc/gateway'
 import { unpitch } from '../../state/session/conversation'
 import { open as sessionOpen, rows as sessionRows } from '../../state/session/rows'
 import { session as sheetSession } from '../../state/sheetRack'
+import { ds } from '../../state/sources'
 import { show as toast } from '../../state/toast'
 import { pane } from '../../state/wsPane'
 import { run as dagRunOf } from '../dag/mount'
 import { dagOpenNode } from '../dag/open'
-import { openDeskTab, openDeskTask } from '../desk/store'
+import { openDeskTab } from '../desk/store'
 import { draw as sessionDraw } from '../rail/store'
 import { plainTitle } from '../rail/title'
 import * as subagents from '../subagents/store'
-import * as tasksStore from '../tasks/store'
 import { history as drawHistory } from './mount'
 
 import type { SessRow } from '../rail/types'
@@ -125,14 +125,10 @@ export function spawnList() {
    not just on the list. The list may not have caught the new run yet, so a
    couple of short retries cover the gap between the call and its row. */
 export function openSpawn(agent: string, label: string, nodeId?: string): void {
-  /* The tasks store's own row, when the wire named one: opening it directly
-     is exact, where the label match below is a guess. `desk.openDeskTask`
-     raises the desk itself, so there is nothing to fall back to once this
-     hits. */
-  if (nodeId) {
-    const row = tasksStore.byKey('spawn', nodeId)
-    if (row) { openDeskTask(row); return }
-  }
+  /* The tasks source's own row, when the wire named one: opening it directly
+     is exact, where the label match below is a guess. The seam answers
+     whether it opened, so there is nothing to fall back to once it does. */
+  if (nodeId && ds('tasks').openByNode?.(nodeId)) return
   /* Same rule as dagOpenNode: `openRow` below raises the window, and in desk
    mode that is the whole answer. The panel's agents view is only needed where
    there are no windows. */

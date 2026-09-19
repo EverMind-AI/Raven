@@ -8,7 +8,12 @@
  */
 
 import type {
+  DagNodeUpdatedEvent,
+  DagRunCompletedEvent,
+  DagRunReplannedEvent,
+  DagRunStartedEvent,
   SubagentRow,
+  SubagentStatusEvent,
   TaskCounts,
   TaskFile,
   TaskKind,
@@ -66,4 +71,16 @@ export interface TasksSource {
   stop(row: TaskRow): Promise<boolean>
   node(row: TaskRow, node: TaskNode): Promise<NodeRecord>
   roster(): Promise<SubagentRow[]>
+  /* Opens the task the spawn record `nodeId` belongs to, when the list holds
+     one; answers whether it did. The seam a sibling domain reaches this
+     store through, rather than importing it (CONTRIBUTING 2.2). */
+  openByNode?: (nodeId: string) => boolean
+  /* The five turn-event consumers `state/session/stages.ts` drives (contract
+     §5.1), reached the same way: optional so a suite that assembles the
+     session pipeline without a tasks source does not throw. */
+  onRunStarted?: (p: DagRunStartedEvent['payload']) => void
+  onNodeUpdated?: (p: DagNodeUpdatedEvent['payload']) => void
+  onRunCompleted?: (p: DagRunCompletedEvent['payload']) => void
+  onRunReplanned?: (p: DagRunReplannedEvent['payload']) => void
+  onSubagentStatus?: (p: SubagentStatusEvent['payload']) => void
 }

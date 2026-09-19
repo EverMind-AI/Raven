@@ -62,6 +62,10 @@ export async function refresh(): Promise<void> {
      and a draft has no session for a task to be filed under. */
   if (!src || !key) { patch({ rows: [], loaded: true }); return }
   const got = await src.list(key)
+  /* Asked for one conversation, answered into whichever is open now: the
+     reader can switch sessions while this is in flight. The same guard the
+     agents lists, the deliveries shelf and the desk replay use. */
+  if (key !== sessionCurrent()) return
   patch({ rows: Array.isArray(got) ? got : [], loaded: true })
 }
 
@@ -95,8 +99,12 @@ export const hover = (id: string | null): void => patch({ hover: id })
 async function reconcile(kind: TaskKind, id: string): Promise<void> {
   const src = source()
   if (!src) return
+  const key = sessionCurrent()
   const row = await src.one(kind, id).catch(() => null)
-  if (!row) return
+  /* Same guard as refresh: a row read for the conversation the reader has
+     since left does not belong in the one they are looking at now, and a
+     stop reconciled after the switch must not re-insert it either. */
+  if (!row || key !== sessionCurrent()) return
   const now = store.get().rows
   const at = now.findIndex((r) => r.kind === kind && r.id === id)
   patch({ rows: at >= 0 ? now.map((r, i) => (i === at ? row : r)) : [row, ...now] })
