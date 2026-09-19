@@ -1104,10 +1104,18 @@ _HTTP_STATUS_MAP: dict[int, str] = {
 # Fallback OpenAI-compatible base URLs for providers whose registry
 # ``default_api_base`` is empty (they rely on the SDK's built-in default, which
 # a bare OpenAI client doesn't know). A bare client needs an explicit base_url.
+# groq and zai are here for the same reason and from the same place: the
+# registry already states each address as ``shown_api_base`` (registry.py), and
+# this copies it into the table this file reads. Not ``display_api_base`` --
+# that one is the settings pane's value, and ``usable_default_api_base`` is
+# empty for both on purpose, so that neither sends its own base to the router.
+# The question here is the other one: what a bare OpenAI client must be told.
 _PROVIDER_BASE_URL_FALLBACK = {
     "openai": "https://api.openai.com/v1",
     "deepseek": "https://api.deepseek.com/v1",
     "openrouter": "https://openrouter.ai/api/v1",
+    "groq": "https://api.groq.com/openai/v1",
+    "zai": "https://api.z.ai/api/paas/v4",
 }
 
 
@@ -1881,8 +1889,12 @@ def lend_provider_credentials(provider: str) -> dict[str, str]:
     #
     # "" is left only for a vendor no table here knows an address for, and it
     # deletes the field rather than leaving it: what stands there was reached
-    # with somebody else's key, so a loud "no base_url configured" beats
-    # sending this key to that address.
+    # with somebody else's key. That is the lesser of two wrongs, not a good
+    # outcome -- the section's own readers (`role_configured_in`, and the LED
+    # beside it) ask `model and api_key` and cannot tell a section with no
+    # address from a working one, so nothing reports the gap until something
+    # calls the role. Any vendor that turns up here wants an entry in the
+    # table above rather than this branch.
     base_url = (
         str(lent.api_base or "")
         or str(getattr(spec, "default_api_base", "") or "")

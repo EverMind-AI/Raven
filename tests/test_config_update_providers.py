@@ -1834,16 +1834,21 @@ def test_borrow_answers_with_the_address_raven_knows_for_the_lender(monkeypatch:
 
 
 def test_borrow_hands_back_an_empty_address_for_a_vendor_no_table_knows(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ "" is left only where no table here holds an address, and it means delete.
+    """ "" is left where no table can hold an address, not where one is missing.
 
-    What stands in the section was reached with somebody else's key, so the
-    reader's loud "no base_url configured" beats sending this key there.
+    What remains after the fallback table covers the keyed OpenAI-protocol
+    vendors is two kinds, and neither is an oversight: a vendor on another
+    protocol, and a deployment whose address only its operator knows.
+    `gpustack` is the second kind. The delete that follows is the lesser of
+    two wrongs rather than a good outcome -- the section's readers ask
+    `model and api_key`, so nothing reports the gap until the role is called
+    -- so a vendor turning up here wants a table entry, not this branch.
     """
     import raven.config
 
-    monkeypatch.setattr(raven.config, "load_config", lambda: _config_with_provider("groq", "gsk-lend"))
+    monkeypatch.setattr(raven.config, "load_config", lambda: _config_with_provider("gpustack", "gs-lend"))
 
-    assert lend_provider_credentials("groq") == {"api_key": "gsk-lend", "base_url": ""}
+    assert lend_provider_credentials("gpustack") == {"api_key": "gs-lend", "base_url": ""}
 
 
 class TestWhatABorrowedCredentialMustCarry:
