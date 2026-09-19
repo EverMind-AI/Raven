@@ -554,6 +554,7 @@ dev = [
     "ty==0.0.80",
 ]
 docs = [
+    "mkdocs-git-revision-date-localized-plugin>=1.6.0",
     "mkdocs-material>=9.5",
     "mkdocs-static-i18n>=1.0",
 ]
