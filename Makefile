@@ -75,9 +75,11 @@ lint-imports:
 # behind each one that is off, are in [tool.ty] in pyproject.toml. The target
 # roster is read from PYTHON_LINT_TARGETS so it cannot drift from ruff's; tests
 # are filtered out there because they are executed, and the gate is for code
-# that is not.
+# that is not. docs-site is filtered out for a different reason: its build
+# hooks import mkdocs, which install-deps does not install, so ty would read
+# a resolvable import as a missing module. ruff still covers that tree.
 lint-types:
-	uv run --frozen --python $(PYTHON_VERSION) --all-extras ty check $(filter-out tests,$(PYTHON_LINT_TARGETS))
+	uv run --frozen --python $(PYTHON_VERSION) --all-extras ty check $(filter-out tests docs-site,$(PYTHON_LINT_TARGETS))
 
 lint-ui:
 	npm run gen:check --prefix ui-web
