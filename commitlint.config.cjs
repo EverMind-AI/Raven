@@ -14,7 +14,8 @@ const TYPES = [
   "test",
 ];
 
-// The canonical scope set mirrors README.md's repo-layout table: every
+// The canonical scope set mirrors the documentation site's repo-layout
+// table (docs-site/docs/repo-layout.md): every
 // top-level package under raven/ (plus the home.py module), computed from
 // the tree at config-load time so the enum cannot rot behind a refactor.
 function ravenPackages() {
@@ -30,7 +31,7 @@ function ravenPackages() {
 }
 
 // A change living wholly in a top-level tree outside raven/ uses that tree
-// as its scope (see README.md's repo-layout preamble).
+// as its scope (see that page's preamble).
 const TOP_LEVEL_TREES = [
   "agents",
   "benchmarks",

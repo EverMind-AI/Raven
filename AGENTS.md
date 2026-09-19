@@ -172,7 +172,7 @@ self.logger = logger.bind(channel=self.name)
 | `chore` | Other misc |
 | `revert` | Revert a prior commit |
 
-**scope** — a top-level subpackage of `raven/`. See the `Repo layout` section of `README.md` for the canonical list. Spanning multiple scopes → omit the scope, or use `(*)`.
+**scope** — a top-level subpackage of `raven/`. See the repo-layout page of the documentation site (`docs-site/docs/repo-layout.md`) for the canonical list. Spanning multiple scopes → omit the scope, or use `(*)`.
 
 **subject** — lowercase start; no trailing period; English. The whole header (`<type>(<scope>): <subject>`) must be ≤ 100 chars — the single length rule, enforced by commitlint `header-max-length`.
 
