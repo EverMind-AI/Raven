@@ -140,12 +140,12 @@ Runs that end in something other than a deck.
 <td width="50%" valign="top">
 <p align="center"><b>Six orchestration frameworks, compared</b></p>
 <a href="https://github.com/user-attachments/assets/92ff2c83-3b0f-49eb-9995-c1ad4c298452"><img src="https://github.com/user-attachments/assets/92ff2c83-3b0f-49eb-9995-c1ad4c298452" alt="Task graph: two Raven-Research nodes running in parallel into one Raven-Design node" width="100%"></a>
-<a href="https://github.com/user-attachments/assets/1a17eb72-485c-4b52-afcf-0bd7e73387a4"><img src="https://github.com/user-attachments/assets/1a17eb72-485c-4b52-afcf-0bd7e73387a4" alt="Comparison board: six orchestration frameworks against four dimensions" width="100%"></a>
+<a href="https://github.com/user-attachments/assets/75beba36-a112-46f2-949d-015856dae588"><img src="https://github.com/user-attachments/assets/75beba36-a112-46f2-949d-015856dae588" alt="Comparison board: six orchestration frameworks against four dimensions, colour-coded for explicit-graph versus code-or-model orchestration" width="100%"></a>
 </td>
 <td width="50%" valign="top">
 <p align="center"><b>A parameter sweep, written, run and plotted</b></p>
 <a href="https://github.com/user-attachments/assets/e842677a-8b71-4f1b-ae02-0162a440a1e8"><img src="https://github.com/user-attachments/assets/e842677a-8b71-4f1b-ae02-0162a440a1e8" alt="Task graph: Raven-Code into Raven-Oncall into Raven-Design, run in sequence" width="100%"></a>
-<a href="https://github.com/user-attachments/assets/8a27261f-b90f-4e4b-9f11-53d880070501"><img src="https://github.com/user-attachments/assets/8a27261f-b90f-4e4b-9f11-53d880070501" alt="Recall and latency plotted against chunk size, one line per top_k" width="100%"></a>
+<a href="https://github.com/user-attachments/assets/04c1e3fb-e327-4496-ac5e-ce95147a3290"><img src="https://github.com/user-attachments/assets/04c1e3fb-e327-4496-ac5e-ce95147a3290" alt="Recall and latency plotted against chunk size, one line per top_k" width="100%"></a>
 </td>
 </tr>
 </table>
