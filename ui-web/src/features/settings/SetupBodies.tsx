@@ -45,6 +45,7 @@ export function WebStepBody(): JSX.Element {
   const fetchVendor = webVendor('web_fetch', raw)
   const searchReady = keySet('web_search', searchVendor, raw)
   const fetchOptional = FETCH_KEYLESS.has(fetchVendor)
+  const fetchReady = fetchOptional || keySet('web_fetch', fetchVendor, raw)
   const fetchLabel = fetchOptional
     ? `${t('gui.settings.tools.vendor_key', { name: WEB_VENDOR_LABEL[fetchVendor] || fetchVendor })} · ${t('gui.settings.roles.optional')}`
     : t('gui.settings.tools.vendor_key', { name: WEB_VENDOR_LABEL[fetchVendor] || fetchVendor })
@@ -66,7 +67,11 @@ export function WebStepBody(): JSX.Element {
             />
           </Card>
           <Card title={t('gui.settings.setup.web_fetch')}>
-            <Row label={<>{t('gui.settings.tools.fetch_vendor')} <Chip state="on">{t('gui.settings.setup.ready')}</Chip></>}>
+            <Row label={<>
+              {t('gui.settings.tools.fetch_vendor')}{' '}
+              <Chip state={fetchReady ? 'on' : 'off'}>{fetchReady ? t('gui.settings.setup.ready') : t('gui.settings.setup.unset')}</Chip>
+            </>}
+            >
               <VendorSelect keyName={fetchPick.path} value={fetchVendor} opts={fetchPick.vendors.map((v) => [v, WEB_VENDOR_LABEL[v] || v])} />
             </Row>
             <KeyRow label={fetchLabel} keyName={vendorKey(fetchVendor)} legacy={legacyKey('web_fetch', fetchVendor)} url={WEB_VENDOR_URL[fetchVendor]} raw={raw} />

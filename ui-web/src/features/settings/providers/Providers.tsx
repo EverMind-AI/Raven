@@ -142,9 +142,10 @@ export function Providers({ setup }: { setup?: boolean }): JSX.Element {
   const on = s.snap.providers.filter((p) => p.on)
   const off = s.snap.providers.filter((p) => !p.on)
   const openAdd = (): void => store.set({ provAdd: off[0] ? off[0].id : '' })
+  const firstOff = off[0] ? off[0].id : ''
   useEffect(() => {
-    if (setup && !on.length && s.provAdd === null && off[0]) store.set({ provAdd: off[0].id })
-  }, [setup])
+    if (setup && !on.length && s.provAdd === null && firstOff) store.set({ provAdd: firstOff })
+  }, [setup, on.length, s.provAdd, firstOff])
   return (
     <Card
       title={t('gui.settings.providers.title', { n: on.length })}

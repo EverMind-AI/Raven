@@ -144,10 +144,9 @@ async function sequence(): Promise<void> {
       const setup = await gateway().call('setup.status', {})
       const firstRun = setup.provider_configured === false
       setupState.providerConfigured = !firstRun
-      /* ?onboard=demo asked for the canned flow, which the demo shell has
-         already put on screen. Both write into #onb, so opening this one would
-         replace it -- and the reader who asked for the version that writes
-         nothing would get the version that writes. */
+      /* ?onboard=demo opens the same wizard from onLoad() over the canned
+         transport, whose setup.status answers "first run" until a model is
+         picked; opening it here as well would open it twice. */
       const cannedInstead = /[?&]onboard=demo/.test(location.search)
       if (!cannedInstead && (firstRun || /[?&]onboard=1/.test(location.search))) {
         openOnboard()

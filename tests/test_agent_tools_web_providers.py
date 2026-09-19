@@ -441,7 +441,7 @@ async def test_an_anysearch_envelope_failure_is_read_as_one(monkeypatch: pytest.
 
 
 # The table lives in source.ts rather than the Tools page itself, so the
-# onboarding wizard's web-search step (features/settings/SetupPanes.tsx) can
+# onboarding wizard's web-search step (features/settings/SetupBodies.tsx) can
 # read the same copy through webStepDone rather than a second one.
 _SETTINGS_PAGE = Path(__file__).resolve().parents[1] / "ui-web/src/features/settings/source.ts"
 
