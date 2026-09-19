@@ -9,7 +9,7 @@
   <a href="https://github.com/EverMind-AI/EverOS/discussions/67"><img src="https://img.shields.io/badge/WeCom-EverMind_Community-07C160?labelColor=gray&style=for-the-badge&logo=wechat&logoColor=white" alt="WeCom"></a>
 </p>
 
-[Website](https://raven.evermind.ai) · [中文](README.zh-CN.md)
+[Website](https://raven.evermind.ai) · [Documentation](https://evermind-ai.github.io/Raven/) · [中文](README.zh-CN.md)
 
 </div>
 
@@ -310,6 +310,14 @@ The command opens the WebUI in your browser and keeps Raven running in the backg
 Run `raven --help` or `raven <command> --help` for the complete CLI surface.
 
 ## ❯❯ Documentation
+
+**[Raven documentation](https://evermind-ai.github.io/Raven/)** covers the quick
+start, self-hosting, Docker deployment, the WebUI, the command reference, the
+runtime architecture, and the repository layout, in English and Chinese.
+
+The files below are engineering records kept in the repository beside the code
+they describe. Several are dated design notes that describe the tree as of their
+date rather than as it stands today.
 
 - [Documentation index](docs/README.md)
 - [Developer workflow](docs/dev.md)
