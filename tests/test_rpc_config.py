@@ -981,6 +981,27 @@ async def test_config_set_model_default_scope_persists_when_no_loop_can_be_built
     assert cfg["agents"]["defaults"]["provider"] == "deepseek"
 
 
+async def test_config_set_model_surfaces_a_build_crash_instead_of_persisting(fake_home: Path) -> None:
+    """The factory raises the one build error the gateway latched at start. Only
+    the unfinished-install kind means "nothing to validate against"; an engine
+    crash reported as saved would hide the crash behind a green save."""
+    from raven.rpc.errors import InternalError
+
+    (fake_home / ".raven").mkdir()
+    (fake_home / ".raven" / "config.json").write_text(json.dumps({"providers": {"deepseek": {"apiKey": "sk-x"}}}))
+
+    def _crashed():
+        raise InternalError("plugin init failed", data={"reason": "uncaught", "exception_type": "TypeError"})
+
+    with pytest.raises(InternalError, match="plugin init failed"):
+        await config_set(
+            {"key": "model", "value": "deepseek-chat", "provider": "deepseek", "scope": "default"},
+            agent_loop_factory=_crashed,
+        )
+    cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert "model" not in cfg.get("agents", {}).get("defaults", {})
+
+
 async def test_config_set_model_session_scope_switches_nothing_when_no_loop_can_be_built(fake_home: Path) -> None:
     from raven.rpc.errors import InternalError
 
