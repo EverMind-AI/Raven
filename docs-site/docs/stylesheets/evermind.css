@@ -976,7 +976,24 @@
 
   /* The search box carries the shortcut that actually works: Material binds
      f, s and slash, so printing the reference's Command-K would name a key
-     this site does not listen for. */
+     this site does not listen for. It belongs to the field at rest: a reader
+     already inside the dialog has nothing to press it for, and the theme
+     puts its clear button in that same corner. */
+  [data-md-toggle="search"]:checked ~ .md-header .md-search__form::after {
+    content: none;
+  }
+
+  /* The theme seats the clear button a fixed distance from the form's top,
+     which centres it only in a form of the theme's own height. This dialog's
+     is taller, so the button is centred against the box instead and follows
+     whatever height the form takes. */
+  [data-md-toggle="search"]:checked ~ .md-header .md-search__options {
+    top: 50%;
+    display: flex;
+    align-items: center;
+    transform: translateY(-50%);
+  }
+
   .md-header .md-search__form::after {
     content: "/";
     position: absolute;
