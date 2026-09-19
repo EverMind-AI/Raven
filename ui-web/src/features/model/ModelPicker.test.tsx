@@ -80,7 +80,7 @@ const pick = (): HTMLElement | null => document.querySelector('.mpick')
 const rows = (col: string): HTMLElement[] => [...document.querySelectorAll<HTMLElement>(`.mpick .${col} .row`)]
 const field = (): HTMLInputElement => document.querySelector('.mpick .find input')!
 const providerSelected = (index: number): string | null | undefined =>
-  rows('provs')[index]?.querySelector('.provider-choice-action')?.getAttribute('aria-selected')
+  rows('provs')[index]?.querySelector('.model-provider-action')?.getAttribute('aria-selected')
 
 const openIt = (anchor?: HTMLElement | null, after?: () => void) =>
   act(() => {
