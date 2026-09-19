@@ -315,7 +315,14 @@ async def test_run_dispatched_twice_at_once_starts_one_import(cfg: Path, state: 
     same tick used to both pass the guard and submit every source twice --
     duplicates EverOS has no endpoint to delete."""
     result = _scan_result("k1", Platform.CLAUDE_CODE)
-    monkeypatch.setattr(import_sync, "scan_all", AsyncMock(return_value=[result]))
+
+    async def _scan_that_yields(*a, **k):
+        # A real suspension point: an AsyncMock returns without yielding, and
+        # the two calls would then run one after the other, never overlapping.
+        await asyncio.sleep(0)
+        return [result]
+
+    monkeypatch.setattr(import_sync, "scan_all", _scan_that_yields)
     monkeypatch.setattr(import_sync, "build_scanners", lambda: [_FakeScanner(Platform.CLAUDE_CODE)])
     backends: list[_FakeBackend] = []
 
@@ -362,6 +369,33 @@ async def test_run_records_a_background_failure_and_frees_the_slot(cfg: Path, st
     assert import_sync._TASK is None
     assert (await import_sync.import_status({}))["running"] is False
     assert any("background import failed" in line and "state file unwritable" in line for line in lines)
+
+
+async def test_run_frees_the_slot_when_the_backend_will_not_stop(cfg: Path, state: ImportState, monkeypatch) -> None:
+    result = _scan_result("k1", Platform.CLAUDE_CODE)
+    monkeypatch.setattr(import_sync, "scan_all", AsyncMock(return_value=[result]))
+    monkeypatch.setattr(import_sync, "build_scanners", lambda: [_FakeScanner(Platform.CLAUDE_CODE)])
+
+    class _Stuck(_FakeBackend):
+        async def stop(self) -> None:
+            raise RuntimeError("service hung on shutdown")
+
+    backend = _Stuck()
+    monkeypatch.setattr(import_sync, "maybe_build_memory_backend", lambda *a, **k: backend)
+    lines: list[str] = []
+    sink = logger.add(lambda m: lines.append(str(m)), level="ERROR")
+    try:
+        out = await import_sync.import_run({"platforms": ["claude_code"], "tier": "full"})
+        assert out["started"] is True
+        task = import_sync._TASK
+        assert task is not None
+        await task
+    finally:
+        logger.remove(sink)
+
+    assert state.is_submitted("claude_code", "k1")
+    assert import_sync._TASK is None
+    assert any("did not stop cleanly" in line and "service hung" in line for line in lines)
 
 
 async def test_run_clears_a_stale_cancel_file_on_a_fresh_start(cfg: Path, state: ImportState, monkeypatch) -> None:
