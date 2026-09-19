@@ -10,36 +10,36 @@ import { setupState } from '../model/source'
 import { OnboardApp } from './OnboardPage'
 import * as store from './store'
 
-import type { AgentsPane, FoundAgent, ImportScan, OnboardSource } from './types'
+import type { AgentsBody, FoundAgent, ImportScan, OnboardSource } from './types'
 import type { JSX } from 'react'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 /* A step body under the test's control: what it says it is, whether it has
    loaded, whether it is done, and a way to change either and notify. */
-interface FakePane extends AgentsPane {
+interface FakeBody extends AgentsBody {
   setDone(v: boolean): void
   setLoaded(v: boolean): void
   agents: FoundAgent[]
 }
 
-function fakePane(name: string): FakePane {
+function fakeBody(name: string): FakeBody {
   const listeners = new Set<() => void>()
   let loaded = false
   let done = false
   const notify = (): void => { for (const fn of [...listeners]) fn() }
-  const pane: FakePane = {
-    Pane: (): JSX.Element => <div className={`fake-${name}`} />,
+  const body: FakeBody = {
+    Body: (): JSX.Element => <div className={`fake-${name}`} />,
     load: vi.fn(async () => {}),
     subscribe: (fn) => { listeners.add(fn); return () => { listeners.delete(fn) } },
     loaded: () => loaded,
     done: () => done,
-    found: () => pane.agents,
+    found: () => body.agents,
     agents: [],
     setDone: (v) => { done = v; notify() },
     setLoaded: (v) => { loaded = v; notify() },
   }
-  return pane
+  return body
 }
 
 const SCAN_NONE: ImportScan = { ready: true, reason: '', platforms: [] }
@@ -53,9 +53,9 @@ const SCAN_CLAUDE: ImportScan = {
 }
 
 interface Harness {
-  model: FakePane
-  search: FakePane
-  agents: FakePane
+  model: FakeBody
+  search: FakeBody
+  agents: FakeBody
   source: OnboardSource
   runs: Array<[string[], string]>
   configured: boolean
@@ -64,9 +64,9 @@ interface Harness {
 
 function install(scan: ImportScan = SCAN_NONE): Harness {
   const h: Harness = {
-    model: fakePane('model'),
-    search: fakePane('search'),
-    agents: fakePane('agents'),
+    model: fakeBody('model'),
+    search: fakeBody('search'),
+    agents: fakeBody('agents'),
     runs: [],
     configured: true,
     started: true,
@@ -82,7 +82,7 @@ function install(scan: ImportScan = SCAN_NONE): Harness {
   }
   setTranslator((key, vars) => (vars ? `${key}:${JSON.stringify(vars)}` : key))
   setSources({ onboard: h.source })
-  store.setPanes({ model: h.model, search: h.search, agents: h.agents })
+  store.setBodies({ model: h.model, search: h.search, agents: h.agents })
   document.body.innerHTML = '<div id="onb" hidden></div>'
   return h
 }
@@ -152,7 +152,7 @@ describe('the onboarding wizard', () => {
     expect(button('gui.onb.next').disabled).toBe(false)
   })
 
-  it('shows the loading line until the pane has loaded, then the pane', async () => {
+  it('shows the loading line until the step body has loaded, then the body', async () => {
     const h = install()
     mount()
     await open()

@@ -40,9 +40,9 @@ export interface OnboardSource {
    domain's own component over its own store, so the wizard draws the settings
    dialog's model page and the sub-agents roster rather than copies of them.
    The wizard subscribes to the store through `subscribe`, asks `loaded` before
-   drawing the pane and `done` for the step's forward button. */
-export interface WizardPane {
-  Pane: () => JSX.Element
+   drawing the body and `done` for the step's forward button. */
+export interface StepBody {
+  Body: () => JSX.Element
   load(): Promise<void>
   subscribe(listener: () => void): () => void
   loaded(): boolean
@@ -55,12 +55,12 @@ export interface FoundAgent {
   name: string
 }
 
-export interface AgentsPane extends WizardPane {
+export interface AgentsBody extends StepBody {
   found(): FoundAgent[]
 }
 
-export interface WizardPanes {
-  model: WizardPane
-  search: WizardPane
-  agents: AgentsPane
+export interface StepBodies {
+  model: StepBody
+  search: StepBody
+  agents: AgentsBody
 }

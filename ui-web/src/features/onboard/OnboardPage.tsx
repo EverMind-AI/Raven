@@ -1,6 +1,6 @@
-/* The first-run wizard: a full-window frame -- step strip, scroll pane,
+/* The first-run wizard: a full-window frame -- step strip, scrolling column,
    footer, closing fade -- around step bodies the owning domains hand it. The
-   model and search steps are the settings dialog's own panes, the agents step
+   model and search steps are the settings dialog's own bodies, the agents step
    the sub-agents roster's; only the data-sync step is drawn here. */
 
 import { useEffect, useRef, useSyncExternalStore } from 'react'
@@ -9,7 +9,7 @@ import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
 import * as store from './store'
 
-import type { StepId, WizardPane } from './types'
+import type { StepId, StepBody } from './types'
 import type { JSX } from 'react'
 import './styles.css'
 
@@ -26,25 +26,25 @@ export function OnboardApp(): JSX.Element | null {
   /* The language the page resolved, so a pick repaints this island: every word
      below is a t(key) read at render time (state/lang/store.ts). */
   useSyncExternalStore(lang.subscribe, lang.get)
-  if (!s.open || !s.panes) return null
+  if (!s.open || !s.bodies) return null
   return <Wizard key={s.epoch} />
 }
 
-/* A pane's two facts as one snapshot, so a change in either re-renders the
+/* A step body's two facts as one snapshot, so a change in either re-renders the
    frame that draws the forward button from them. */
-function usePane(pane: WizardPane): void {
-  useSyncExternalStore(pane.subscribe, () => `${pane.loaded() ? 1 : 0}:${pane.done() ? 1 : 0}`)
+function useBody(body: StepBody): void {
+  useSyncExternalStore(body.subscribe, () => `${body.loaded() ? 1 : 0}:${body.done() ? 1 : 0}`)
 }
 
-function PaneBody({ pane }: { pane: WizardPane }): JSX.Element {
-  if (!pane.loaded()) return <div className="ob-loading">{t('gui.onb.loading')}</div>
-  const Pane = pane.Pane
-  return <Pane />
+function Body({ body }: { body: StepBody }): JSX.Element {
+  if (!body.loaded()) return <div className="ob-loading">{t('gui.onb.loading')}</div>
+  const Draw = body.Body
+  return <Draw />
 }
 
 /* One row per agent the machine has: what the importer found for it and a
    switch, or the chip that says the importer cannot read that agent yet. */
-function SyncPane(): JSX.Element {
+function SyncBody(): JSX.Element {
   const s = store.get()
   return (
     <div className="ob-card">
@@ -82,10 +82,10 @@ function SyncPane(): JSX.Element {
 function Wizard(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   const cur = useSyncExternalStore(lang.subscribe, lang.get).lang
-  const panes = s.panes as NonNullable<typeof s.panes>
-  usePane(panes.model)
-  usePane(panes.search)
-  usePane(panes.agents)
+  const bodies = s.bodies as NonNullable<typeof s.bodies>
+  useBody(bodies.model)
+  useBody(bodies.search)
+  useBody(bodies.agents)
   const scroll = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -139,7 +139,7 @@ function Wizard(): JSX.Element {
       </header>
       <div className="ob-main" ref={scroll}>
         <div className="ob-col" data-step={s.step}>
-          {s.step === 'sync' ? <SyncPane /> : <PaneBody pane={panes[s.step]} />}
+          {s.step === 'sync' ? <SyncBody /> : <Body body={bodies[s.step]} />}
         </div>
       </div>
       <footer className="ob-foot">
