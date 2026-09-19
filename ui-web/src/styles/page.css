@@ -4868,6 +4868,9 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
   transition: opacity .45s ease;
 }
 #onb[data-off] { opacity: 0; pointer-events: none; }
+/* The confirm veil stacks under the page's layers (40); a question the wizard
+   asks -- a stale agent's migrate -- has to stand above the wizard instead. */
+body:has(#onb:not([hidden])) #veil { z-index: calc(var(--z-onboarding) + 1); }
 
 /* Floating workspace desk and the four-pane surface. */
 .desk-ready .ws > .ws-top,
