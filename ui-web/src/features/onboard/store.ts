@@ -82,13 +82,15 @@ export function open(): void {
   void scan()
 }
 
-/* One importer read, its answer kept on the state; the promise is held while
-   it is out so a step change can wait on it. */
+/* One importer read. The latest one issued is the only one whose answer
+   lands: the read from opening and the re-read on leaving the agents step go
+   to the same call, and a slower earlier read arriving after a later one would
+   otherwise put the reader on a step the strip no longer shows. */
 function scan(): Promise<void> {
   const p: Promise<void> = source()
     .scan()
-    .then((res) => set({ scan: res }))
-    .catch((e: unknown) => set({ scan: { ready: false, reason: failure(e), platforms: [] } }))
+    .then((res) => { if (scanning === p) set({ scan: res }) })
+    .catch((e: unknown) => { if (scanning === p) set({ scan: { ready: false, reason: failure(e), platforms: [] } }) })
     .finally(() => { if (scanning === p) scanning = null })
   scanning = p
   return p
@@ -145,8 +147,9 @@ const move = (delta: number): void => {
    what comes after it: whether an import can run turns on the memory model,
    which the first step may have saved after the answer from opening came in.
    A wizard that read it once decided the last step before the reader had done
-   the one thing that makes it appear -- and a skip on a first run, where no
-   agent connected, closed the wizard on that stale answer. */
+   the one thing that makes it appear. Every forward verb goes through here --
+   next, skip and the footer's finish, which the page picks on the stale answer
+   and which is therefore not allowed to close on it. */
 async function settleAfterAgents(): Promise<void> {
   if (get().step !== 'agents') return
   set({ busy: true })
@@ -177,8 +180,12 @@ export function toggleSync(platform: string): void {
 }
 
 /* The last step's primary: starts the import from the sync step, otherwise
-   just hands the window to the chat page behind. */
+   just hands the window to the chat page behind. On the agents step the page
+   chose this verb on the answer it had; the fresh one may add a step, and then
+   this is a move rather than an exit. */
 export async function finish(): Promise<void> {
+  await settleAfterAgents()
+  if (!isLast(get().step)) { move(1); return }
   if (get().step === 'sync') {
     const platforms = Object.entries(get().syncPick).filter(([, on]) => on).map(([id]) => id)
     set({ busy: true, error: '' })
