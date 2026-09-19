@@ -90,9 +90,9 @@ describe('WebStepBody', () => {
     expect(document.querySelectorAll('.settings-card')).toHaveLength(2)
     expect(screen.getByText('gui.settings.setup.web_search')).toBeTruthy()
     expect(screen.getByText('gui.settings.setup.web_fetch')).toBeTruthy()
-    // The fixture's default vendor (serper) carries no key yet.
+    // The fixture's default search vendor (serper) carries no key yet; its
+    // default fetch vendor (jina) needs none, so that card reads ready.
     expect(screen.getByText('gui.settings.setup.unset')).toBeTruthy()
-    // The fetch card is always drawn ready, regardless of its vendor's key.
     expect(screen.getByText('gui.settings.setup.ready')).toBeTruthy()
   })
 
@@ -102,7 +102,7 @@ describe('WebStepBody', () => {
     install(data)
     await openBody(WebStepBody)
     // Both cards read ready now: the search vendor has its key, and the fetch
-    // card is drawn ready regardless of its own vendor's key.
+    // vendor is the keyless jina.
     expect(screen.getAllByText('gui.settings.setup.ready')).toHaveLength(2)
     expect(screen.queryByText('gui.settings.setup.unset')).toBeNull()
   })
@@ -121,6 +121,9 @@ describe('WebStepBody', () => {
     await openBody(WebStepBody)
     expect(screen.getByLabelText('gui.settings.tools.vendor_key {"name":"Tavily"}')).toBeTruthy()
     expect(screen.queryByText('gui.settings.setup.keyless_hint')).toBeNull()
+    // Neither vendor has a key, so neither card reads ready.
+    expect(screen.getAllByText('gui.settings.setup.unset')).toHaveLength(2)
+    expect(screen.queryByText('gui.settings.setup.ready')).toBeNull()
   })
 })
 
