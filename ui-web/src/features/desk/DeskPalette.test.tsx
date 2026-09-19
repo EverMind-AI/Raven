@@ -22,7 +22,7 @@ import * as seen from './seen'
 import * as desk from './store'
 
 import type { InstanceRow } from '../subagents/types'
-import type { TaskRow } from '../tasks/types'
+import type { TaskFile, TaskRow } from '../tasks/types'
 import type { WorkspaceSource, WsChange } from '../workspace/types'
 
 /* The wiring src/main.tsx does: the desk's file opener is handed to the
@@ -37,13 +37,18 @@ let agentRows: InstanceRow[] = []
 let taskRows: TaskRow[] = []
 
 const task = (id: string): TaskRow => ({
-  id, name: id, source: 'spawn', agent: 'raven', state: 'run', nodes: [],
+  id, kind: 'spawn', task_summary: id, status: 'running', agent: 'raven', handle: id,
+  counts: {
+    total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0,
+    interrupted: 0, exception: 0,
+  },
+  nodes: [],
 })
 
 /* Which tab's bubble, by the tab's own label -- the strip is three buttons and
    an index would silently follow a reordering. */
 const tabButton = (tab: 'diff' | 'deliverables' | 'tasks'): HTMLElement | undefined => {
-  const label = tab === 'diff' ? 'Diff' : tab === 'deliverables' ? 'gui.ws.deliverables' : 'gui.ws.tasks'
+  const label = tab === 'diff' ? 'diff' : tab === 'deliverables' ? 'gui.ws.deliverables' : 'gui.ws.tasks'
   return [...document.querySelectorAll<HTMLElement>('.desk-tabs button')]
     .find((b) => (b.querySelector('.lb')?.textContent || '') === label)
 }
@@ -87,7 +92,11 @@ function wire(): void {
       instances: async (key: string) => { asked.push(key); return agentRows },
     },
     /* What the tasks tab counts. */
-    tasks: { list: async () => taskRows },
+    tasks: {
+      list: async () => taskRows, one: async () => null, stop: async () => false,
+      node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false }),
+      roster: async () => [],
+    },
   })
   localStorage.clear()
   document.body.innerHTML = '<div id="split" data-open="true"></div>'
@@ -227,6 +236,23 @@ describe('opening and shutting the desk', () => {
   })
 })
 
+describe('what the panel says to assistive tech', () => {
+  it('announces itself as a dialog named for the workspace', async () => {
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true }) })
+
+    expect(palette()?.getAttribute('role')).toBe('dialog')
+    expect(palette()?.getAttribute('aria-label')).toBe('gui.workspace')
+  })
+
+  it('hides the resize grab, which carries no name of its own', async () => {
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true }) })
+
+    expect(document.querySelector('.desk-resize')?.getAttribute('aria-hidden')).toBe('true')
+  })
+})
+
 describe('a tab with nothing in it', () => {
   /* One design for all three, which is what was asked for: an icon, what is
      not here, and where it would come from. Diff was a line of grey text and
@@ -241,7 +267,9 @@ describe('a tab with nothing in it', () => {
     expect(emptyOf()).toEqual({ title: 'gui.ws.dlv_none', hint: 'gui.ws.dlv_none_sub', icon: true })
 
     await act(async () => { desk.set({ tab: 'tasks' }) })
-    expect(emptyOf()).toEqual({ title: 'gui.ws.tasks_none', hint: 'gui.ws.tasks_none_sub', icon: true })
+    /* The tasks tab's own nothing has no hint -- icon and one bold line, the
+       prototype's own rule for an empty state: state the fact, don't sell. */
+    expect(emptyOf()).toEqual({ title: 'gui.ws.tasks_none', hint: '', icon: true })
     /* And one class, so there is one stylesheet rule to keep them aligned. */
     expect(document.querySelector('.desk-dlv-empty')).toBeNull()
   })
@@ -256,7 +284,7 @@ describe('a tab with nothing in it', () => {
     await act(async () => { desk.set({ paletteOpen: true, tab: 'tasks' }) })
 
 
-    expect(emptyOf()).toEqual({ title: 'gui.ws.tasks_none', hint: 'gui.ws.tasks_none_sub', icon: true })
+    expect(emptyOf()).toEqual({ title: 'gui.ws.tasks_none', hint: '', icon: true })
   })
 })
 
@@ -395,10 +423,11 @@ describe('the desk shelf', () => {
     })
 
     expect(bubble('deliverables')).toBe('1')
-    /* And it is in the name the button already had, because an explicit
-       aria-label replaces the subtree: a label on the bubble is never read. */
-    expect(spoken('deliverables')).toBe('gui.ws.deliverables, gui.ws.unseen_tab {"n":"1"}')
-    expect(document.querySelector('.desk-count')?.getAttribute('aria-hidden')).toBe('true')
+    /* The tab's own label is its whole accessible name, the way the
+       prototype's plain button is -- no composed count phrase, and nothing
+       hidden from the tree to make room for one. */
+    expect(spoken('deliverables')).toBe('gui.ws.deliverables')
+    expect(document.querySelector('.desk-count')?.getAttribute('aria-hidden')).toBeNull()
     expect(spoken('tasks')).toBe('gui.ws.tasks')
     expect(document.querySelector('.desk-dlv-row')).toBeNull()
   })
@@ -426,7 +455,7 @@ describe('the desk shelf', () => {
        it by this class -- the bubble being a sibling is what broke the
        positional rule it used to use. */
     expect([...document.querySelectorAll('.desk-tabs button .lb')].map((n) => n.textContent))
-      .toEqual(['gui.ws.deliverables', 'Diff', 'gui.ws.tasks'])
+      .toEqual(['gui.ws.deliverables', 'gui.ws.tasks', 'diff'])
 
     await act(async () => {
       desk.set({ tab: 'deliverables' })
@@ -610,6 +639,75 @@ describe('the desk shelf', () => {
 
     expect(desk.get().tab).toBe('deliverables')
     expect(rowNames()).toEqual(['Comparison'])
+  })
+})
+
+describe('a task\'s own files, on the shelf and in the diff tab', () => {
+  const taskWithFile = (id: string, file: TaskFile): TaskRow => ({
+    ...task(id),
+    nodes: [{ node_id: 'n1', agent: 'raven', status: 'completed', depends_on: [], files: [file] }],
+  })
+
+  it('prints the file\'s own extension on the shelf, not the constant "FILE" chip', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/out.md', op: 'write', add: 5, del: 0, size: 120 })]
+    await shelf()
+    await act(async () => { await tasksStore.refresh() })
+
+    const row = document.querySelector('.desk-dlv-row') as HTMLElement
+    expect(row.querySelector('.dlv-kind')?.textContent).toBe('MD')
+    expect(row.querySelector('.desk-name b')?.textContent).toBe('out')
+    expect(row.querySelector('.desk-name s')?.textContent).toBe('out.md · 120 B')
+  })
+
+  it('opens a task-written file as the file itself, not the owning task', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/out.md', op: 'write', add: 5, del: 0 })]
+    await shelf()
+    await act(async () => { await tasksStore.refresh() })
+
+    await act(async () => {
+      (document.querySelector('.desk-dlv-row') as HTMLElement).click()
+    })
+
+    expect(desk.get().panes.map((p) => p.id)).toEqual(['file:/w/out.md'])
+  })
+
+  it('leads a task diff row with the M/+ chip and names the full path, not the basename', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/deep/mod.py', op: 'edit', add: 2, del: 1 })]
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
+    await act(async () => { await tasksStore.refresh() })
+
+    const row = document.querySelector('.desk-diff-row') as HTMLElement
+    expect(row.querySelector('.chgc')?.textContent).toBe('M')
+    expect(row.querySelector('.desk-name')?.textContent).toBe('/w/deep/mod.py')
+  })
+
+  /* The prototype's own check (`d.diff.del ? "M" : "+"`): a pure insertion,
+     nothing deleted, reads as an addition rather than a modification even
+     though the file's op is still 'edit'. */
+  it('chips a deletion-free edit with + rather than M', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/new.py', op: 'edit', add: 4, del: 0 })]
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
+    await act(async () => { await tasksStore.refresh() })
+
+    expect(document.querySelector('.desk-diff-row .chgc')?.textContent).toBe('+')
+  })
+
+  it('opens a task diff through the tasks source, the way the pane\'s own chip does', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/deep/mod.py', op: 'edit', add: 2, del: 1 })]
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
+    await act(async () => { await tasksStore.refresh() })
+
+    await act(async () => {
+      (document.querySelector('.desk-diff-row') as HTMLElement).click()
+    })
+
+    const panes = desk.get().panes
+    expect(panes).toHaveLength(1)
+    expect(panes[0]?.kind).toBe('diff')
+    expect(panes[0]?.id).toBe('diff:task:spawn:t1:n1:/w/deep/mod.py:0')
   })
 })
 
@@ -852,7 +950,7 @@ describe('the panel drags by its handle', () => {
     render(<DeskPalette />)
     await act(async () => { desk.set({ paletteOpen: true }) })
 
-    await press(tab('Diff'), 500, 500)
+    await press(tab('diff'), 500, 500)
     await to(500 + DESK_DRAG_THRESHOLD + 20, 520)
     await release(520 + DESK_DRAG_THRESHOLD, 520)
 
@@ -873,12 +971,12 @@ describe('the panel drags by its handle', () => {
     render(<DeskPalette />)
     await act(async () => { desk.set({ paletteOpen: true, tab: 'deliverables' }) })
 
-    await press(tab('Diff'), 500, 500)
+    await press(tab('diff'), 500, 500)
     await release(500, 501)
 
     expect(captured).toBe(false)
     await act(async () => {
-      tab('Diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      tab('diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
     expect(desk.get().tab).toBe('diff')
   })
@@ -890,13 +988,13 @@ describe('the panel drags by its handle', () => {
     render(<DeskPalette />)
     await act(async () => { desk.set({ paletteOpen: true, tab: 'deliverables' }) })
 
-    await press(tab('Diff'), 500, 500)
+    await press(tab('diff'), 500, 500)
     await to(501, 501)
     await release(501, 501)
 
     expect(captured).toBe(false)
     await act(async () => {
-      tab('Diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      tab('diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
     expect(desk.get().tab).toBe('diff')
     expect(panel().dataset.anchored).toBe('true')
@@ -908,7 +1006,7 @@ describe('the panel drags by its handle', () => {
     render(<DeskPalette />)
     await act(async () => { desk.set({ paletteOpen: true, tab: 'deliverables' }) })
 
-    await press(tab('Diff'), 500, 500)
+    await press(tab('diff'), 500, 500)
     /* A drag DOES capture, which is what keeps the pointer with the handle
        while the hand moves -- checked here, because the release gives it
        straight back. */
@@ -918,7 +1016,7 @@ describe('the panel drags by its handle', () => {
     await release(600, 600)
 
     await act(async () => {
-      tab('Diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      tab('diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
     expect(desk.get().tab).toBe('deliverables')
   })
@@ -942,5 +1040,83 @@ describe('the panel drags by its handle', () => {
     await press(handle(), 500, 500)
 
     expect(seen).toEqual([])
+  })
+})
+
+/* The corner grab, which resizes rather than moves -- and, anchored, resizes
+ * against a pinned edge (styles/page.css's `right: calc(...)` on
+ * `[data-anchored="true"]`), the way the prototype's own comment puts it,
+ * translated: "anchored, the right edge is pinned, so it can only grow
+ * leftward" (proto.js:4433). Detached has no such edge, so the hand's own
+ * direction is the width's there.
+ */
+describe('resizing by the corner grab', () => {
+  const grab = (): HTMLElement => document.querySelector('.desk-resize') as HTMLElement
+
+  it('shrinks on a rightward drag while anchored, since the right edge is pinned', async () => {
+    await shelf()
+    grab().setPointerCapture = () => {}
+
+    await act(async () => {
+      grab().dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, cancelable: true, pointerId: 1, clientX: 500, clientY: 500,
+      }))
+    })
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true, pointerId: 1, clientX: 520, clientY: 500,
+      }))
+    })
+
+    expect(palette()?.style.width).toBe(`${DESK_DEFAULT_WIDTH - 20}px`)
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: 520, clientY: 500 }))
+    })
+  })
+
+  it('grows on a rightward drag once detached, since no edge is pinned', async () => {
+    localStorage.setItem(
+      DESK_GEOMETRY_KEY,
+      JSON.stringify({ x: 40, y: 40, w: DESK_DEFAULT_WIDTH, h: DESK_DEFAULT_HEIGHT, detached: true }),
+    )
+    await shelf()
+    grab().setPointerCapture = () => {}
+
+    await act(async () => {
+      grab().dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, cancelable: true, pointerId: 1, clientX: 500, clientY: 500,
+      }))
+    })
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true, pointerId: 1, clientX: 520, clientY: 500,
+      }))
+    })
+
+    expect(palette()?.style.width).toBe(`${DESK_DEFAULT_WIDTH + 20}px`)
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: 520, clientY: 500 }))
+    })
+  })
+
+  it('always grows straight down, since only the top is ever pinned', async () => {
+    await shelf()
+    grab().setPointerCapture = () => {}
+
+    await act(async () => {
+      grab().dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, cancelable: true, pointerId: 1, clientX: 500, clientY: 500,
+      }))
+    })
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointermove', {
+        bubbles: true, pointerId: 1, clientX: 500, clientY: 520,
+      }))
+    })
+
+    expect(palette()?.style.height).toBe(`${DESK_DEFAULT_HEIGHT + 20}px`)
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: 500, clientY: 520 }))
+    })
   })
 })

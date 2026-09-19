@@ -653,7 +653,7 @@ describe('transcript island, history', () => {
        answer lands -- while implying the TASK had finished, which a
        backgrounded graph outliving its turn makes false. */
     expect(fold?.querySelector('.tfh .lb')?.textContent).toBe('en:gui.fold.steps')
-    expect(fold?.querySelector('.tfh .tm')?.textContent).toBe('3.0s')
+    expect(fold?.querySelector('.tfh .tm')?.textContent).toBe('3s')
     const step = fold?.querySelector('.tfb .step')
     expect(step).toBeTruthy()
     expect((step?.querySelector('.think') as HTMLElement).hidden).toBe(false)
@@ -2904,7 +2904,7 @@ describe('transcript island, delegated calls', () => {
 
   it('times the run, not the dispatch', async () => {
     /* The spawn tool returns the moment the work is handed off, so the call's own
-       `ms` is near zero on every card. Reading it printed `0.0s` over a run that
+       `ms` is near zero on every card. Reading it printed `0s` over a run that
        had taken eight seconds -- the same tool-row-versus-run confusion that made
        a live run look finished. */
     listed = [{
@@ -2924,8 +2924,10 @@ describe('transcript island, delegated calls', () => {
     })
     await settle()
     const grid = $('.dlg .dgr')?.textContent || ''
-    expect(grid).toContain('8.3s')
-    expect(grid).not.toContain('0.0s')
+    expect(grid).toContain('8s')
+    /* Not the near-zero dispatch time, as a whole reading rather than a
+       digit that happens to occur inside the correct one. */
+    expect(grid).not.toMatch(/(?<!\d)0s\b/)
   })
 
   it('reads the roster once for the whole conversation', async () => {
@@ -3527,7 +3529,10 @@ describe('transcript island, delegated calls', () => {
 
     const shown = card.querySelector('.dgr')!.textContent as string
     expect(shown).toContain(store.durText(180_000))
-    expect(shown).not.toContain(store.durText(5))
+    /* Not the near-zero call time, as a whole reading rather than a digit
+       that happens to occur inside the correct one ("3m00s" ends in the
+       same two characters `durText(5)` would print on its own). */
+    expect(shown).not.toMatch(/(?<!\d)0s\b/)
   })
 
   /* The value beside a named key in the field grid, which is a flat run of

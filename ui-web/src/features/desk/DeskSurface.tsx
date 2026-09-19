@@ -71,7 +71,7 @@ function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
          pane was headed by its id whatever the run knew about it. */
       ? pane.row.label || pane.row.node || pane.row.id || t('gui.ws.agents')
       : pane.kind === 'file' ? pane.file.path.split('/').pop() || pane.file.path
-        : pane.kind === 'task' ? pane.row.name : pane.change.name
+        : pane.kind === 'task' ? pane.row.task_summary || pane.row.id : pane.change.name
   return (
     <section
       ref={(el) => refPane(pane.id, el)}
@@ -80,9 +80,11 @@ function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
       onPointerDown={() => desk.setActive(pane.id)}
     >
       <header onPointerDown={(event) => onGrab(pane.id, event)}>
+        {/* The robot glyph says "an agent ran this", which a task pane is as
+            much as a live conversation is -- the two-box graph mark stays on
+            the palette's own tab, where it names the tab rather than a run. */}
         <DeskIcon kind={
-          pane.kind === 'agent' || pane.kind === 'agent-record' ? 'agents'
-            : pane.kind === 'task' ? 'tasks' : pane.kind
+          pane.kind === 'agent' || pane.kind === 'agent-record' || pane.kind === 'task' ? 'agents' : pane.kind
         } />
         <b title={title}>{title}</b>
         {pane.kind === 'agent' || pane.kind === 'agent-record'
@@ -91,7 +93,9 @@ function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
               {[pane.kind === 'agent' ? pane.row.runTitle : null, pane.row.agent].filter(Boolean).join(' \u00b7 ')}
             </span>
           )
-          : null}
+          : pane.kind === 'diff'
+            ? <span className="pane-meta">{`+${pane.change.add} \u2212${pane.change.del}`}</span>
+            : null}
         <span className="pane-spacer" />
         {/* Live instances only. A record is a run that already happened, and the
             model and mode it ran under are not things a reader can still
@@ -111,7 +115,7 @@ function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
         <button onClick={() => desk.closePane(pane.id)} aria-label={t('gui.close')}>×</button>
       </header>
       <div className="desk-pane-body">
-        {pane.kind === 'diff' ? <ChgDiff c={pane.change} /> : null}
+        {pane.kind === 'diff' ? <ChgDiff c={pane.change} patch /> : null}
         {pane.kind === 'file' ? <FileView ws={workspace.shared()} file={pane.file} /> : null}
         {pane.kind === 'agent' ? <InstanceConversation row={pane.row} /> : null}
         {pane.kind === 'agent-record' ? <AgentRecordConversation row={pane.row} /> : null}

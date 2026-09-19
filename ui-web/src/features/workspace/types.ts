@@ -1,16 +1,9 @@
-/* One diff row, in the shape features/workspace/hunks.ts produces: a tuple of
-   [kind, text, oldLineNo, newLineNo], where a 'gap' row
-   carries the folded lines as its second slot and an `open` expando the
-   reader toggles in place. */
-export type DiffRow = [string, string | string[], (number | null)?, (number | null)?] & {
-  open?: boolean
-}
+/* The diff-row and hunk shapes live with their builders now (src/lib/hunks.ts,
+   a pure leaf two domains share); re-exported here for this domain's own
+   readers. */
+import type { DiffRow, WsHunk } from '../../lib/hunks'
 
-export interface WsHunk {
-  rows: DiffRow[]
-  add: number
-  del: number
-}
+export type { DiffRow, WsHunk }
 
 export interface WsChange {
   key: string

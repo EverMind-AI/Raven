@@ -30,7 +30,7 @@ import { t } from '../../i18n/t'
 import { current as sessionCurrent } from '../../lib/session'
 import { hasToolOk } from '../../rpc/capabilities'
 import { session as sheetSession } from '../sheetRack'
-import { ds } from '../sources'
+import { ds, sources } from '../sources'
 import { show as toast } from '../toast'
 import { ask, noteRow } from './conversation'
 import { namingEnded, settleNaming } from './naming'
@@ -99,7 +99,7 @@ export const STAGES: readonly Stage[] = [
         body: d.content || '',
         open: () => {
           if (isDag) { ds('transcript').openDagRun!(d.run_id || d.label || ''); return }
-          ds('transcript').openSpawn!('', d.label || '')
+          ds('transcript').openSpawn!('', d.label || '', d.node_id)
         },
       })
     }
@@ -225,7 +225,10 @@ export const STAGES: readonly Stage[] = [
      from `running`, the record id its stream is read by. Through the island
      for the same reason the dag events go through it: what a frame means to a
      card is one definition, next to the model it moves. */
-  arm('subagent.status', (_rt, p) => { transcript.spawnFeed(p) }),
+  arm('subagent.status', (_rt, p) => {
+    transcript.spawnFeed(p)
+    sources.tasks?.onSubagentStatus?.(p)
+  }),
 
   /* A result was submitted, not yet visible: the turn it opens is still queued
      behind its parent, so the row does NOT belong here. It arrives with the
@@ -254,6 +257,7 @@ export const STAGES: readonly Stage[] = [
       summary: null, done: false, folded: false,
       task_summary: p.task_summary || null,
     })
+    sources.tasks?.onRunStarted?.(p)
   }),
 
   arm('dag.node_updated', (_rt, p) => {
@@ -262,17 +266,24 @@ export const STAGES: readonly Stage[] = [
        report means to a node is one definition, next to the model it moves, and
        the copy that lived here had drifted into inventing a clock. */
     dagSheet.advance(sheetSession(), p)
+    sources.tasks?.onNodeUpdated?.(p)
   }),
 
   arm('dag.run_completed', (_rt, p) => {
     transcript.dagFeed('dag.run_completed', p)
     dagSheet.settle(sheetSession(), p)
+    sources.tasks?.onRunCompleted?.(p)
   }),
 
   /* The trail card alone: the sheet shows one run at a time by design, so a
      replanned run's sheet just keeps showing the old graph until the new run's
-     own dag.run_started arrives and replaces it wholesale. */
-  arm('dag.run_replanned', (_rt, p) => { transcript.dagFeed('dag.run_replanned', p) }),
+     own dag.run_started arrives and replaces it wholesale. The tasks panel's
+     own row is not so lucky -- there is no second card to swap, so it marks
+     the superseded run cancelled itself. */
+  arm('dag.run_replanned', (_rt, p) => {
+    transcript.dagFeed('dag.run_replanned', p)
+    sources.tasks?.onRunReplanned?.(p)
+  }),
 
   /* Declared by the contract and drawn by nothing. Named rather than left to
      fall off the end, so that "the page does not render this" is a decision

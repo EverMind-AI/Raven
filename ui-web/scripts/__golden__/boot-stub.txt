@@ -96,20 +96,6 @@ div.app[data-rail=on]
           div.crew.crew-back
             img.rv.rv-content
           div#sheetRack.sheets
-          div.runs
-            div.runrail
-              button.trun
-                span.dot.run
-                span.nm
-                span.st
-              button.trun
-                span.dot.run
-                span.nm
-                span.st
-              button.trun
-                span.dot.run
-                span.nm
-                span.st
           div.dock-in
             div#queued.queued
             div#atts.atts

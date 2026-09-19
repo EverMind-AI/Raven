@@ -9,6 +9,7 @@ import * as pageStore from '../../state/page'
 import { resetSources, setSources } from '../../state/sources'
 import { domSnapshot } from '../../test/domSnapshot'
 import { mountPageRoot } from '../../test/pageRoot'
+import { EDGE } from '../dag/Board'
 import { PlaybooksApp } from './PlaybooksPage'
 import * as store from './store'
 
@@ -477,7 +478,10 @@ describe('the playbook library', () => {
       expect(z).toBeLessThan(1)
       /* ROOMY: five gaps of GAP_X, one box of W, and PAD on both sides. */
       const width = 5 * 256 + 200 + 32
-      expect(z).toBeCloseTo(700 / width, 2)
+      /* The fitted zoom itself leaves EDGE of ground on the binding axis, not
+         only the offset once zoom is decided -- so the ratio comes off a
+         port narrowed by twice the margin. */
+      expect(z).toBeCloseTo((700 - EDGE * 2) / width, 2)
     } finally {
       restore()
     }

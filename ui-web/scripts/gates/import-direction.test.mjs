@@ -239,7 +239,6 @@ const CROSS = [
   'features/transcript/source.ts -> features/desk/store.ts',
   'features/transcript/store.ts -> features/dag/nodes.ts',
   'features/transcript/store.ts -> features/workspace/deliveries.ts',
-  'features/transcript/store.ts -> features/workspace/hunks.ts',
   'features/workspace/store.ts -> features/browser/mount.tsx',
   'features/workspace/store.ts -> features/subagents/mount.tsx',
 ]

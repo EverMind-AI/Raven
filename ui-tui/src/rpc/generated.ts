@@ -70,6 +70,20 @@ export type TurnEvent =
   | MediaEvent
   | SessionTitledEvent
   | SessionNamingEndedEvent;
+/**
+ * Which delegation path made a task: a spawn call, or a run_subagent_dag run (a playbook run is one).
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TaskKind".
+ */
+export type TaskKind = 'spawn' | 'dag';
+/**
+ * A task's state, derived from its nodes' recorded states, first rule that matches: a run superseded by a replan that started is cancelled (one that did not start is failed); any failed node -> failed; any interrupted -> interrupted; any pending/running/exception -> running; any cancelled or skipped -> cancelled; else completed. A spawn is its one node's state.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TaskStatus".
+ */
+export type TaskStatus = 'running' | 'completed' | 'failed' | 'interrupted' | 'cancelled';
 
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -2058,6 +2072,176 @@ export interface PlaybookCredentialServer {
  */
 export interface OkResult {
   ok: boolean;
+}
+/**
+ * How many of the task's nodes sit in each state. Counted from graph.json, so skipped nodes are counted too.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TaskCounts".
+ */
+export interface TaskCounts {
+  total: number;
+  pending: number;
+  running: number;
+  completed: number;
+  failed: number;
+  skipped: number;
+  cancelled: number;
+  interrupted: number;
+  /**
+   * Nodes suspended on a verdict, waiting for resolve_dag_node. A running row with one of these is waiting on a decision, not working.
+   */
+  exception: number;
+}
+/**
+ * Present only on a run a replan superseded, read from graph.json's top-level replan entry. started=false means the successor never began; error says why.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TaskReplan".
+ */
+export interface TaskReplan {
+  /**
+   * The successor run.
+   */
+  run_id: string;
+  from_node?: string | null;
+  reason?: string | null;
+  started: boolean;
+  error?: string | null;
+}
+/**
+ * One file a node wrote, as the lane that ran it recorded the tool result. The in-process lane records these; the acp and cli lanes record none yet. The diff body is not here: a client builds it from the node's messages.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TaskFile".
+ */
+export interface TaskFile {
+  path: string;
+  op: 'write' | 'edit';
+  add: number;
+  del: number;
+  /**
+   * Bytes after the write, when the lane could measure it.
+   */
+  size?: number | null;
+}
+/**
+ * One step of a task: a graph node, or a spawn's single node.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TaskNode".
+ */
+export interface TaskNode {
+  /**
+   * The model's own id for the step, unique across the session.
+   */
+  node_id: string;
+  /**
+   * The step's one-line title. Null on a run written before the field existed.
+   */
+  node_summary?: string | null;
+  /**
+   * The roster name of the agent that runs it.
+   */
+  agent: string;
+  /**
+   * The stateful handle, named or minted. Null for a node of an agent that keeps no session.
+   */
+  instance?: string | null;
+  status: DagSnapshotNodeStatus;
+  /**
+   * May name a node outside this task: node ids are the session's, and a later graph may depend on an earlier run's completed node.
+   */
+  depends_on: string[];
+  /**
+   * Epoch milliseconds.
+   */
+  started_at?: number | null;
+  /**
+   * Epoch milliseconds; null while running, and for an interrupted node nothing recorded an end for.
+   */
+  ended_at?: number | null;
+  /**
+   * Why it failed, capped at 500 characters.
+   */
+  error?: string | null;
+  /**
+   * Null when the lane cannot report usage -- never zero for that.
+   */
+  tokens_in?: number | null;
+  tokens_out?: number | null;
+  /**
+   * Null means zero calls or an unreporting lane; the record cannot tell the two apart.
+   */
+  tool_call_count?: number | null;
+  /**
+   * How many of those calls reported failure. A completed node with all its calls failed is not a clean run.
+   */
+  tool_failure_count?: number | null;
+  /**
+   * Whether the node wrote an output at all. A completed node without one is why a downstream reference of it fails.
+   */
+  has_output?: boolean | null;
+  /**
+   * The template as dispatched, placeholders unexpanded. Null for a spawn.
+   */
+  prompt_template?: string | null;
+  /**
+   * The node's declared inputs, per key: a literal, {file: path} or {node: id}.
+   */
+  inputs?: {
+    [k: string]: JsonValue;
+  };
+  /**
+   * Absent means the agent's own menu; an empty list means none.
+   */
+  skills?: string[];
+  /**
+   * Same three-valued reading as skills.
+   */
+  mcps?: string[];
+  files: TaskFile[];
+}
+/**
+ * One unit of delegated work a conversation started, with its nodes inline.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TaskRow".
+ */
+export interface TaskRow {
+  /**
+   * The run id for a dag; the record (node) id for a spawn.
+   */
+  id: string;
+  kind: TaskKind;
+  /**
+   * What the whole task was dispatched for. Null on a run written before the field existed.
+   */
+  task_summary?: string | null;
+  status: TaskStatus;
+  replan?: TaskReplan;
+  /**
+   * The library name of the playbook that dispatched this run, derived from the node-id prefix the executor writes; null when none matches.
+   */
+  playbook?: string | null;
+  /**
+   * Epoch milliseconds; the earliest node start.
+   */
+  started_at?: number | null;
+  /**
+   * Epoch milliseconds; the latest node end, null while running.
+   */
+  ended_at?: number | null;
+  /**
+   * A spawn's agent. Null for a dag, whose nodes name their own.
+   */
+  agent?: string | null;
+  /**
+   * A spawn's instance handle -- what subagent.cancel_instance takes. Null for a dag; a dag is stopped through subagent.interrupt on its run id.
+   */
+  handle?: string | null;
+  counts: TaskCounts;
+  nodes: TaskNode[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -5681,6 +5865,25 @@ export interface SubagentCancelInstanceResult {
   session_key: string;
   agent: string;
   handle: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksListParams".
+ */
+export interface TasksListParams {
+  /**
+   * Whose tasks to list. An empty or unknown key answers with an empty list, not an error.
+   */
+  session_key: string;
+  kind?: TaskKind;
+  id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksListResult".
+ */
+export interface TasksListResult {
+  tasks: TaskRow[];
 }
 
 // ---- Schema-name aliases for structurally-deduplicated types ----

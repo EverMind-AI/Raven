@@ -234,12 +234,12 @@ describe('dag clock', () => {
   })
 
   it('measures a running node against now, and a finished one against its end', () => {
-    expect(took(node('a', [], { started_at: 1000, status: 'running' }), 6000)).toBe('5.0s')
-    expect(took(node('a', [], { started_at: 1000, ended_at: 3000 }), 999_999)).toBe('2.0s')
+    expect(took(node('a', [], { started_at: 1000, status: 'running' }), 6000)).toBe('5s')
+    expect(took(node('a', [], { started_at: 1000, ended_at: 3000 }), 999_999)).toBe('2s')
   })
 
   it('floors at one second, so a node inside a single tick does not read as zero', () => {
-    expect(took(node('a', [], { started_at: 1000, ended_at: 1001 }), 1001)).toBe('1.0s')
+    expect(took(node('a', [], { started_at: 1000, ended_at: 1001 }), 1001)).toBe('1s')
   })
 })
 

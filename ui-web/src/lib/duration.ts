@@ -1,11 +1,12 @@
-/* The one compact elapsed-time spelling shared by page rows and graphs. */
+/* The one compact elapsed-time spelling shared by page rows and graphs.
+   Two shapes only, matching the prototype's own `fmtDur` exactly: whole
+   seconds under a minute, minutes and zero-padded seconds past it -- no
+   sub-second decimal and no hour tier, so every surface that shows a
+   duration (a list row, a status bar, a graph card) reads the same number
+   the prototype would have written. */
 
 export function formatDuration(ms: number): string {
   const seconds = Math.max(0, Math.round(ms / 1000))
-  const pad = (n: number): string => String(n).padStart(2, '0')
-  if (seconds >= 3600) {
-    return `${Math.floor(seconds / 3600)}h${pad(Math.floor(seconds % 3600 / 60))}m${pad(seconds % 60)}s`
-  }
-  if (seconds >= 60) return `${Math.floor(seconds / 60)}m${pad(seconds % 60)}s`
-  return ms < 10000 ? `${(ms / 1000).toFixed(1)}s` : `${seconds}s`
+  if (seconds < 60) return `${seconds}s`
+  return `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, '0')}s`
 }

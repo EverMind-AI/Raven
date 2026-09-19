@@ -72,7 +72,12 @@ function deskReady(on: boolean) {
 
 interface SpawnRow { kind: string; agent: string; label: string }
 
-async function nodeHarness({ rows = [{ kind: 'spawn', agent: 'raven', label: 'qc' }] as SpawnRow[] } = {}) {
+interface TaskRowLike { kind: string; id: string }
+
+async function nodeHarness({
+  rows = [{ kind: 'spawn', agent: 'raven', label: 'qc' }] as SpawnRow[],
+  taskRow = null as TaskRowLike | null,
+} = {}) {
   const calls: unknown[][] = []
   const wiring = await loadPart(async () => {
     await import('./source')
@@ -95,8 +100,12 @@ async function nodeHarness({ rows = [{ kind: 'spawn', agent: 'raven', label: 'qc
         openRow: (row: SpawnRow) => calls.push(['openRow', row.label]),
         refresh: () => calls.push(['refresh']),
       },
+      'src/features/tasks/store': {
+        byKey: (kind: string, id: string) => (taskRow && taskRow.kind === kind && taskRow.id === id ? taskRow : null),
+      },
       'src/features/desk/store': {
         openDeskTab: (tab: string) => calls.push(['openDeskTab', tab]),
+        openDeskTask: (row: TaskRowLike) => calls.push(['openDeskTask', row.id]),
       },
     },
   })
@@ -176,5 +185,25 @@ describe('opening a graph node from the transcript source', () => {
     sources.transcript!.openSpawn!('raven', 'qc')
 
     expect(calls).toEqual([['setWs', true, 'agents'], ['openRow', 'qc']])
+  })
+
+  it('opens the task pane directly when the node id resolves in the tasks store', async () => {
+    deskReady(true)
+    const { sources, calls } = await nodeHarness({ taskRow: { kind: 'spawn', id: 'node-9' } })
+
+    sources.transcript!.openSpawn!('raven', 'qc', 'node-9')
+
+    /* Exact, so the fuzzy label match below never runs -- no fallback pane,
+       no retry ladder. */
+    expect(calls).toEqual([['openDeskTask', 'node-9']])
+  })
+
+  it('falls back to the fuzzy match when the node id names no row in the tasks store', async () => {
+    deskReady(true)
+    const { sources, calls } = await nodeHarness()
+
+    sources.transcript!.openSpawn!('raven', 'qc', 'no-such-node')
+
+    expect(calls).toEqual([['openRow', 'qc']])
   })
 })
