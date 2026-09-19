@@ -2225,10 +2225,10 @@ class _WriteTwiceProvider(LLMProvider):
         return LLMResponse(content="done", finish_reason="stop")
 
 
-async def test_a_write_over_an_existing_file_is_still_a_write_with_removed_lines(tmp_path) -> None:
-    """The op is the tool's: a rewrite of an existing file is ``write`` (the
-    panel draws a file chip, not a diff chip), and ``before`` only decides how
-    many lines the rewrite replaced."""
+async def test_two_writes_of_one_path_are_one_file(tmp_path) -> None:
+    """Two writes of the same path fold into the file's final state: the
+    counts sum and the op is the tool's (``write``), not two entries for one
+    file the panel would draw as two products."""
     from raven.agent.subagent import activity
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 
@@ -2237,16 +2237,18 @@ async def test_a_write_over_an_existing_file_is_still_a_write_with_removed_lines
     with activity.collecting() as did:
         await backend.run("write twice", task_id="n6", workspace=tmp_path, executor=None)
 
-    assert [f["op"] for f in did.files] == ["write", "write"]
-    second = did.files[1]
-    assert second["add"] == 1
-    assert second["del"] == 2
-    assert second["size"] == len(b"a\nz\n")
+    assert [f["path"] for f in did.files] == [str(tmp_path / "notes.md")]
+    only = did.files[0]
+    assert only["op"] == "write"
+    assert only["add"] == 4
+    assert only["del"] == 2
+    assert only["size"] == len(b"a\nz\n")
 
 
-async def test_an_edit_file_call_records_add_and_delete_counts(tmp_path) -> None:
-    """An edit's ``op`` is ``edit`` (unlike a first write's ``write``) and its
-    ``del`` count is non-zero, because it has a real ``before`` to diff against."""
+async def test_a_write_then_edit_of_one_path_is_a_single_write_entry(tmp_path) -> None:
+    """``op`` prefers ``write`` even when the later touch is an edit: the node
+    produced the file's whole current content at some point, and that is a
+    true view of it in a way a patch against the pre-node baseline is not."""
     from raven.agent.subagent import activity
     from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 
@@ -2255,10 +2257,55 @@ async def test_an_edit_file_call_records_add_and_delete_counts(tmp_path) -> None
     with activity.collecting() as did:
         await backend.run("edit it", task_id="n5", workspace=tmp_path, executor=None)
 
-    assert [f["op"] for f in did.files] == ["write", "edit"]
-    edit = did.files[1]
-    assert edit["add"] == 2
-    assert edit["del"] == 1
+    assert [f["path"] for f in did.files] == [str(tmp_path / "notes.md")]
+    only = did.files[0]
+    assert only["op"] == "write"
+    assert only["add"] == 4
+    assert only["del"] == 1
+
+
+class _EditExistingFileProvider(LLMProvider):
+    """One ``edit_file`` call against a file the node did not create."""
+
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        from raven.providers.base import ToolCallRequest
+
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content="",
+                finish_reason="tool_calls",
+                tool_calls=[
+                    ToolCallRequest(
+                        id="c1",
+                        name="edit_file",
+                        arguments={"path": "notes.md", "old_text": "old line", "new_text": "new line\nextra"},
+                    )
+                ],
+            )
+        return LLMResponse(content="done", finish_reason="stop")
+
+
+async def test_a_node_editing_a_file_it_did_not_create_records_an_edit_entry(tmp_path) -> None:
+    """A path the node only ever edited (never wrote) stays an ``edit`` entry:
+    unlike the write-then-edit case, there is no whole-content touch to prefer."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    (tmp_path / "notes.md").write_text("old line\nkeep\n", encoding="utf-8")
+    backend = RavenLoopBackend(provider=_EditExistingFileProvider(), model="stub", agent_home=tmp_path)
+
+    with activity.collecting() as did:
+        await backend.run("edit existing", task_id="n7", workspace=tmp_path, executor=None)
+
+    assert did.files == [{"path": str(tmp_path / "notes.md"), "op": "edit", "add": 2, "del": 1, "size": 20}]
 
 
 async def test_the_account_is_published_while_the_run_is_still_going(tmp_path) -> None:
@@ -4087,3 +4134,16 @@ def test_an_agent_with_no_menu_offers_no_model(monkeypatch) -> None:
     assert mgr.agent_model_choices("Researcher") == ()
     with pytest.raises(ValueError):
         mgr.set_instance_model("s1", "Researcher", "h1", "anything")
+
+
+def test_file_change_counts_fall_back_to_the_contents_when_the_tool_kept_no_diff() -> None:
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.backends.raven_loop import _file_change_counts
+
+    fresh = SimpleNamespace(path="a.md", before=None, after="one\ntwo\n")
+    assert _file_change_counts(fresh, None) == (2, 0)
+    rewritten = SimpleNamespace(path="a.md", before="one\ntwo\nthree\n", after="one\n2\n")
+    assert _file_change_counts(rewritten, None) == (1, 2)
+    with_diff = SimpleNamespace(path="a.md", before="x", after="y")
+    assert _file_change_counts(with_diff, "--- a\n+++ b\n@@\n-x\n+y\n") == (1, 1)

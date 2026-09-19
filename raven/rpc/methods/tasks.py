@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from raven.agent.subagent.activity import merge_file_change
 from raven.agent.subagent.dag_store import REGISTRY_FILENAME, RUNNING, UNRECORDED
 from raven.agent.subagent.history import dag_root, nodes_root, session_history_root
 from raven.agent.subagent.instances import get_registry
@@ -96,8 +97,21 @@ def _tool_counts(source: dict[str, Any]) -> tuple[int | None, int | None]:
 
 
 def _files_of(source: dict[str, Any]) -> list[dict[str, Any]]:
-    files = source.get("files")
-    return files if isinstance(files, list) else []
+    """One entry per path, folding a pre-fold record's duplicate entries.
+
+    A record written before ``merge_file_change`` landed in the recorder
+    (raven/agent/subagent/activity.py) still holds one entry per call; folding
+    here as well as there means every ``meta.json`` on disk reads the same way
+    regardless of which era wrote it.
+    """
+    raw = source.get("files")
+    if not isinstance(raw, list):
+        return []
+    folded: list[dict[str, Any]] = []
+    for entry in raw:
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+            merge_file_change(folded, dict(entry))
+    return folded
 
 
 def _counts(statuses: list[str]) -> dict[str, int]:

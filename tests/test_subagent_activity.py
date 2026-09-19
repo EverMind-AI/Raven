@@ -78,3 +78,75 @@ def test_as_meta_omits_files_when_nothing_was_written():
         pass
 
     assert "files" not in run.as_meta()
+
+
+def test_two_writes_of_one_path_fold_into_one_entry() -> None:
+    """The record is one entry per path a writing tool touched, not one per
+    call: two writes of the same file are the file's final state, once."""
+    with activity.collecting() as run:
+        activity.note_file_change("a.py", "write", 3, 0, 42)
+        activity.note_file_change("a.py", "write", 1, 2, 20)
+
+    assert run.files == [{"path": "a.py", "op": "write", "add": 4, "del": 2, "size": 20}]
+
+
+def test_write_then_edit_of_one_path_folds_to_a_write() -> None:
+    with activity.collecting() as run:
+        activity.note_file_change("a.py", "write", 3, 0, 42)
+        activity.note_file_change("a.py", "edit", 1, 2, 20)
+
+    assert run.files == [{"path": "a.py", "op": "write", "add": 4, "del": 2, "size": 20}]
+
+
+def test_edit_then_write_of_one_path_also_folds_to_a_write() -> None:
+    """Write wins over edit regardless of which touch came first: a node that
+    ever rewrote the path whole produced the file's true current content,
+    while a patch against the pre-node baseline is not reconstructible."""
+    with activity.collecting() as run:
+        activity.note_file_change("a.py", "edit", 1, 1, 10)
+        activity.note_file_change("a.py", "write", 3, 0, 42)
+
+    assert run.files == [{"path": "a.py", "op": "write", "add": 4, "del": 1, "size": 42}]
+
+
+def test_a_path_only_ever_edited_stays_an_edit() -> None:
+    with activity.collecting() as run:
+        activity.note_file_change("a.py", "edit", 1, 1, 10)
+        activity.note_file_change("a.py", "edit", 2, 0, 15)
+
+    assert run.files == [{"path": "a.py", "op": "edit", "add": 3, "del": 1, "size": 15}]
+
+
+def test_interleaved_paths_keep_first_touch_order() -> None:
+    with activity.collecting() as run:
+        activity.note_file_change("a.py", "write", 1, 0, 5)
+        activity.note_file_change("b.py", "write", 2, 0, 6)
+        activity.note_file_change("a.py", "edit", 1, 1, 7)
+
+    assert [f["path"] for f in run.files] == ["a.py", "b.py"]
+    assert run.files[0] == {"path": "a.py", "op": "write", "add": 2, "del": 1, "size": 7}
+
+
+def test_the_cap_gates_new_paths_not_a_repeat_touch_of_one_already_kept() -> None:
+    """The cap now bounds distinct paths, not calls: a node that keeps
+    touching a path already in the record is never refused for it, and a
+    further new path past the cap still is."""
+    with activity.collecting() as run:
+        for i in range(activity._MAX_TOOL_CALLS):
+            activity.note_file_change(f"f{i}.py", "write", 1, 0, 1)
+        activity.note_file_change("f0.py", "edit", 1, 1, 2)
+        activity.note_file_change("one_too_many.py", "write", 1, 0, 1)
+
+    assert len(run.files) == activity._MAX_TOOL_CALLS
+    assert run.files[0] == {"path": "f0.py", "op": "write", "add": 2, "del": 1, "size": 2}
+    assert not any(f["path"] == "one_too_many.py" for f in run.files)
+
+
+def test_note_file_change_needs_a_collector_and_a_path() -> None:
+    from raven.agent.subagent import activity
+
+    activity.note_file_change("stray.md", "write", 1, 0, 6)
+    with activity.collecting() as did:
+        activity.note_file_change("", "write", 1, 0, 0)
+        activity.note_file_change("kept.md", "edit", 2, 1, 9)
+    assert did.files == [{"path": "kept.md", "op": "edit", "add": 2, "del": 1, "size": 9}]

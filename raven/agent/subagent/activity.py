@@ -64,10 +64,12 @@ class RunActivity:
     # failed and which then said nothing new left a record indistinguishable from
     # a run that worked, and the caller reading it announced success.
     tool_failures: list[str] = field(default_factory=list)
-    # One entry per file a writing tool touched, in the order it happened:
-    # ``{path, op: write|edit, add, del, size}``. Only the in-process lane fills
-    # this (see ``backends/raven_loop.py``) -- the acp and cli lanes see no tool
-    # result to record one from.
+    # One entry per path a writing tool touched, in the order it was first
+    # touched: ``{path, op: write|edit, add, del, size}``, folded across repeat
+    # touches of one path by ``merge_file_change`` -- ``add``/``del`` sum,
+    # ``op`` prefers ``write``, ``size`` is the last touch's. Only the
+    # in-process lane fills this (see ``backends/raven_loop.py``) -- the acp
+    # and cli lanes see no tool result to record one from.
     files: list[dict[str, Any]] = field(default_factory=list)
     tokens_in: int | None = None
     tokens_out: int | None = None
@@ -343,14 +345,41 @@ def note_tool_call(name: str) -> None:
         activity.tool_calls.append(name)
 
 
+def merge_file_change(entries: list[dict[str, Any]], change: dict[str, Any]) -> None:
+    """Fold one file change into a list holding one entry per path.
+
+    One entry per path, not per call: a node that edits a file twice changed
+    one file, and the readers of this list count it (``tasks.list``'s
+    ``files``, drawn as "N products") and key rows by it. ``add``/``del``
+    accumulate because the diff a reader opens is every hunk against the
+    path; ``op`` prefers ``write`` because a node that ever rewrote the path
+    whole produced the file's true current content, which a patch against
+    the pre-node baseline cannot reconstruct; ``size`` is the last touch's,
+    which is the file as it stands.
+    """
+    for entry in entries:
+        if entry["path"] == change["path"]:
+            entry["add"] += change["add"]
+            entry["del"] += change["del"]
+            entry["size"] = change["size"]
+            if change["op"] == "write":
+                entry["op"] = "write"
+            return
+    if len(entries) < _MAX_TOOL_CALLS:
+        entries.append(change)
+
+
 def note_file_change(path: str, op: str, add: int, delete: int, size: int) -> None:
-    """Record one file a tool wrote or edited, in the order it happened."""
+    """Record one file a tool wrote or edited, folded by path.
+
+    See :func:`merge_file_change` for how a repeat touch of a path already
+    recorded combines with what is there.
+    """
     activity = _current.get()
     if activity is None or not isinstance(path, str) or not path:
         return
     _touch(activity)
-    if len(activity.files) < _MAX_TOOL_CALLS:
-        activity.files.append({"path": path, "op": op, "add": add, "del": delete, "size": size})
+    merge_file_change(activity.files, {"path": path, "op": op, "add": add, "del": delete, "size": size})
 
 
 def note_tool_failure(name: str) -> None:
@@ -569,6 +598,7 @@ __all__ = [
     "set_transcript",
     "live",
     "live_instance",
+    "merge_file_change",
     "note_alive",
     "note_closing",
     "note_console",

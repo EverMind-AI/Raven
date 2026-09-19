@@ -109,9 +109,15 @@ async def _real_spawn(workspace: Path, task: str = "count the files", label: str
             # loop) is exercised directly in `tests/test_subagent_manager.py`;
             # this stand-in calls the same `RunActivity` writer it calls, so
             # this file can test what `tasks.list` does with the result without
-            # re-driving a whole fake model conversation.
+            # re-driving a whole fake model conversation. `note.md` is touched
+            # twice so the row proves the wire folds a path to one entry, not
+            # just that it passes a single one through.
             (workspace / "note.md").write_text("hello\n", encoding="utf-8")
             activity_mod.note_file_change("note.md", "write", 1, 0, len(b"hello\n"))
+            (workspace / "note.md").write_text("hello\nworld\n", encoding="utf-8")
+            activity_mod.note_file_change("note.md", "write", 1, 0, len(b"hello\nworld\n"))
+            (workspace / "other.md").write_text("hi\n", encoding="utf-8")
+            activity_mod.note_file_change("other.md", "write", 1, 0, len(b"hi\n"))
             return f"answer to {task}"
 
     mgr = SubagentManager(provider=_Provider(), workspace=workspace)
@@ -148,7 +154,10 @@ async def test_a_real_spawn_is_one_completed_task(workspace: Path) -> None:
     node = row["nodes"][0]
     assert node["agent"]
     assert node["has_output"] is True
-    assert node["files"] == [{"path": "note.md", "op": "write", "add": 1, "del": 0, "size": len(b"hello\n")}]
+    assert node["files"] == [
+        {"path": "note.md", "op": "write", "add": 2, "del": 0, "size": len(b"hello\nworld\n")},
+        {"path": "other.md", "op": "write", "add": 1, "del": 0, "size": len(b"hi\n")},
+    ]
 
 
 async def test_no_session_and_an_unknown_session_are_both_empty(workspace: Path) -> None:
@@ -682,6 +691,27 @@ async def test_a_nodes_files_pass_through_from_the_manifest(workspace: Path) -> 
     assert row["nodes"][0]["files"] == files
 
 
+async def test_a_legacy_records_duplicate_file_entries_fold_on_read(workspace: Path) -> None:
+    """A record written before ``merge_file_change`` landed in the recorder
+    still has one entry per call on disk; ``tasks.list`` folds it exactly as
+    a freshly-recorded run would."""
+    session_dir = _session_dir(workspace)
+    store = await _make_run(session_dir, RUN_ID, _GRAPH, ["n1", "n2"])
+    legacy_files = [
+        {"path": "a.py", "op": "write", "add": 3, "del": 0, "size": 42},
+        {"path": "a.py", "op": "write", "add": 1, "del": 2, "size": 20},
+    ]
+    await store.write_manifest(
+        {
+            "n1": _manifest_entry(status="completed", files=legacy_files),
+            "n2": _manifest_entry(status="completed", depends_on=["n1"]),
+        }
+    )
+
+    row = (await tasks_list({"session_key": SESSION}))["tasks"][0]
+    assert row["nodes"][0]["files"] == [{"path": "a.py", "op": "write", "add": 4, "del": 2, "size": 20}]
+
+
 async def test_kind_and_id_narrow_to_one_dag_run(workspace: Path) -> None:
     session_dir = _session_dir(workspace)
     other_run = "20260918T000000000000Z-bbbbbbbb"
@@ -750,3 +780,145 @@ async def test_newest_first_across_both_kinds(workspace: Path) -> None:
 
     result = await tasks_list({"session_key": SESSION})
     assert [t["kind"] for t in result["tasks"]] == ["spawn", "dag"]
+
+
+# ---------------------------------------------------------------------------
+# the small readers and their refusals
+# ---------------------------------------------------------------------------
+
+
+def test_head_is_none_for_a_missing_file_and_for_one_that_cannot_be_opened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert tasks_mod._head(tmp_path / "absent.md", 10) is None
+    present = tmp_path / "present.md"
+    present.write_text("0123456789abcdef", encoding="utf-8")
+    assert tasks_mod._head(present, 10) == "0123456789"
+
+    def _refuse(self: Path, *args: Any, **kwargs: Any) -> Any:
+        raise OSError("locked")
+
+    monkeypatch.setattr(Path, "open", _refuse)
+    assert tasks_mod._head(present, 10) is None
+
+
+def test_tool_counts_three_ways() -> None:
+    assert tasks_mod._tool_counts({}) == (None, None)
+    assert tasks_mod._tool_counts({"tool_calls": ["a", "b"]}) == (2, 0)
+    assert tasks_mod._tool_counts({"tool_calls": ["a", "b"], "tool_failures": ["b"]}) == (2, 1)
+
+
+def test_clip_only_clips_strings() -> None:
+    assert tasks_mod._clip(None) is None
+    assert tasks_mod._clip(12) is None
+    assert tasks_mod._clip("x" * 600) == "x" * 500
+
+
+def test_run_id_epoch_ms_reads_the_utc_prefix_and_refuses_the_rest() -> None:
+    assert tasks_mod._run_id_epoch_ms("20260918T000000000000Z-aaaaaaaa") == 1789689600000
+    assert tasks_mod._run_id_epoch_ms("20260918T000000500000Z-aaaaaaaa") == 1789689600500
+    assert tasks_mod._run_id_epoch_ms("e2e_spawn_ok") is None
+    assert tasks_mod._run_id_epoch_ms("20261399T000000000000Z-aaaaaaaa") is None
+
+
+def test_derive_playbook_needs_a_first_node_and_the_six_hex_tag() -> None:
+    names = ["daily-scan", "daily-scan-report"]
+    assert tasks_mod._derive_playbook(None, names) is None
+    assert tasks_mod._derive_playbook("daily-scan-notahex-collect", names) is None
+    assert tasks_mod._derive_playbook("daily-scan-a1b2c3-collect", names) == "daily-scan"
+    assert tasks_mod._derive_playbook("daily-scan-report-a1b2c3-collect", names) == "daily-scan-report"
+
+
+def test_playbook_names_is_empty_when_the_library_cannot_be_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven.rpc.methods import playbooks as playbooks_mod
+
+    def _broken() -> Any:
+        raise RuntimeError("no library")
+
+    monkeypatch.setattr(playbooks_mod, "_store", _broken)
+    assert tasks_mod._playbook_names() == []
+
+
+def test_liveness_is_advisory_when_the_manager_refuses(workspace: Path) -> None:
+    class _Manager:
+        def live_handles(self, _session_key: str) -> set[tuple[str, str]]:
+            raise RuntimeError("no such session")
+
+    class _Loop:
+        subagents = _Manager()
+
+    assert tasks_mod._live_spawn_handles(_factory(_Loop()), SESSION) == set()
+    assert tasks_mod._manager_of(None) is None
+
+
+async def test_a_graph_node_without_an_id_is_skipped_and_skills_pass_through(workspace: Path) -> None:
+    graph = {
+        "task_summary": "one odd node",
+        "nodes": [
+            {"subagent": "Raven"},
+            {
+                "id": "n1",
+                "subagent": "Raven",
+                "node_summary": "s1",
+                "depends_on": [],
+                "instance": None,
+                "skills": ["quote"],
+                "mcps": ["fs"],
+                "inputs": {"topic": "gold"},
+            },
+        ],
+    }
+    session_dir = _session_dir(workspace)
+    store = await _make_run(session_dir, RUN_ID, graph, ["n1"])
+    await store.write_manifest({"n1": _manifest_entry(status="completed")})
+    async with index_guard(store.registry_root):
+        await store.record_outcome({"n1": "completed"}, summary="ok")
+
+    row = (await tasks_list({"session_key": SESSION}))["tasks"][0]
+    TasksListResult.model_validate({"tasks": [row]})
+    assert [n["node_id"] for n in row["nodes"]] == ["n1"]
+    assert row["nodes"][0]["skills"] == ["quote"]
+    assert row["nodes"][0]["mcps"] == ["fs"]
+    assert row["nodes"][0]["inputs"] == {"topic": "gold"}
+
+
+async def test_a_session_with_no_run_dir_has_no_dag_rows(workspace: Path) -> None:
+    session_dir = _session_dir(workspace)
+    nodes_root(session_dir).mkdir(parents=True, exist_ok=True)
+    assert (await tasks_list({"session_key": SESSION}))["tasks"] == []
+
+
+async def test_an_unreadable_instance_registry_is_an_empty_overlay(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.agent.subagent import instances as instances_mod
+
+    session_dir = _session_dir(workspace)
+    await _make_run(session_dir, RUN_ID, _GRAPH, ["n1", "n2"])
+
+    def _broken(self: Any, _session_key: str) -> Any:
+        raise RuntimeError("registry offline")
+
+    monkeypatch.setattr(instances_mod.InstanceRegistry, "list_instances", _broken)
+    row = (await tasks_list({"session_key": SESSION}))["tasks"][0]
+    assert [n["status"] for n in row["nodes"]] == ["interrupted", "interrupted"]
+
+
+async def test_a_session_dir_that_cannot_be_resolved_is_an_empty_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _broken(_key: str, _factory: Any) -> Path:
+        raise OSError("no home")
+
+    monkeypatch.setattr(tasks_mod, "_session_dir", _broken)
+    assert await tasks_list({"session_key": SESSION}) == {"tasks": []}
+
+
+async def test_register_binds_the_method_name_to_the_reader(monkeypatch: pytest.MonkeyPatch) -> None:
+    handlers: dict[str, Any] = {}
+
+    class _Dispatcher:
+        def register(self, name: str, handler: Any) -> None:
+            handlers[name] = handler
+
+    tasks_mod.register_tasks_methods(_Dispatcher(), agent_loop_factory=None)  # type: ignore[arg-type]
+    assert set(handlers) == {"tasks.list"}
+    assert await handlers["tasks.list"]({"session_key": ""}) == {"tasks": []}
