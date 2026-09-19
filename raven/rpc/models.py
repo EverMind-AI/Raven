@@ -1971,6 +1971,67 @@ class ReloadMcpResult(_Strict):
 
 
 # ---------------------------------------------------------------------------
+# import.* -- the onboarding wizard's data-sync step, over the cold-start
+# importer raven.importer already runs for the CLI.
+# ---------------------------------------------------------------------------
+
+
+class ImportScanParams(_Strict):
+    pass
+
+
+class ImportPlatformScan(_Strict):
+    platform: str
+    scannable: bool
+    memory_files: int
+    conversations: int
+    estimated_size: int
+
+
+class ImportScanResult(_Strict):
+    ready: bool
+    reason: str
+    platforms: list[ImportPlatformScan]
+
+
+class ImportRunParams(_Strict):
+    platforms: list[str]
+    tier: Literal["memory_files", "full"]
+
+
+class ImportRunResult(_Strict):
+    started: bool
+    total: int
+    detail: str
+
+
+class ImportStatusParams(_Strict):
+    pass
+
+
+class ImportPlatformCounts(_Strict):
+    total: int
+    submitted: int
+    failed: int
+
+
+class ImportStatusResult(_Strict):
+    running: bool
+    total: int
+    submitted: int
+    failed: int
+    by_platform: dict[str, ImportPlatformCounts]
+
+
+class ImportStopParams(_Strict):
+    pass
+
+
+class ImportStopResult(_Strict):
+    stopped: bool
+
+
+# ---------------------------------------------------------------------------
 # commands.catalog (dynamic Typer-reflection slash catalog)
 # ---------------------------------------------------------------------------
 
@@ -4711,6 +4772,11 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "setup.status": (SetupStatusParams, SetupStatusResult),
     "reload.mcp": (ReloadMcpParams, ReloadMcpResult),
     "commands.catalog": (CommandsCatalogParams, CommandsCatalogResponse),
+    # import.* -- the onboarding wizard's data-sync step
+    "import.scan": (ImportScanParams, ImportScanResult),
+    "import.run": (ImportRunParams, ImportRunResult),
+    "import.status": (ImportStatusParams, ImportStatusResult),
+    "import.stop": (ImportStopParams, ImportStopResult),
     # hermes-only stubs
     "voice.toggle": (VoiceToggleParams, StubResult),
     "browser.manage": (BrowserManageParams, StubResult),
