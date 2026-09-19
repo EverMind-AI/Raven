@@ -1391,6 +1391,16 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
         warning = embedding_model_change(previous, pin)
         return {"applied": True, "warning": warning} if warning else {"applied": True}
     set_everos_section(section, clean)
+    if section == "llm":
+        # The CLI wizard records the backend name on a CONFIGURED outcome from
+        # its own onboard step; a web save has no such step, so record it here.
+        from raven.config.loader import get_config_path, read_raw_or_raise
+        from raven.config.update import set_memory_backend
+        from raven.core.plugin_stack import SHIPPED_DEFAULT_BACKEND
+
+        raw = read_raw_or_raise(get_config_path())
+        if not (raw.get("memory") or {}).get("backend"):
+            set_memory_backend(SHIPPED_DEFAULT_BACKEND)
     return {"applied": True}
 
 
