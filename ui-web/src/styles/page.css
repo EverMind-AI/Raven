@@ -4458,50 +4458,33 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
 #taskRuns { display: contents; }
 .runs { position: relative; max-width: var(--col); margin: 0 auto 8px; pointer-events: auto; }
 .chat[data-fresh] .runs { max-width: 640px; }
-/* One line, scrolled sideways. Wrapping is what a list does, and six running
-   tasks wrapped took three rows of the conversation with them. */
-.runrail {
-  display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto; overflow-y: hidden;
-  scrollbar-width: none;
-  /* Grabbable, and saying so. The bar is hidden, so the rail has to look like
-     something a hand can move; over a chip the cursor is the chip's again. */
-  cursor: grab; user-select: none;
-  /* Touch pans it natively and with momentum; the island leaves that alone and
-     only drives the mouse. */
-  touch-action: pan-x;
-  /* The chips fade out where they scroll past the edge, rather than being cut
-     off at it. The ramp is on the rail, not a band over it: there is nothing
-     opaque between a chip and the page, so what a reader sees is the chip
-     going, not a lid coming down over it.
-     Faded at whichever end has more beyond it, and only there: the ends are
-     measured by the island and written back as data-l / data-r, because a ramp
-     over an end that is already the end dims a chip for no reason -- and two
-     chips that fit is the usual case. Both offsets are 0 until then, which
-     makes the ramp a no-op rather than a second rule. */
-  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 var(--fade-l, 0px),
-    #000 calc(100% - var(--fade-r, 0px)), transparent 100%);
-  mask-image: linear-gradient(90deg, transparent 0, #000 var(--fade-l, 0px),
-    #000 calc(100% - var(--fade-r, 0px)), transparent 100%);
-}
-/* No bar under the chips: the strip is 30px tall and a scrollbar inside it is
-   half a chip of furniture. The fades are what say there is more, and the wheel
-   and the grab are how a plain mouse gets there. */
-.runrail::-webkit-scrollbar { display: none; }
-.runrail:active { cursor: grabbing; }
-.runs[data-l] .runrail { --fade-l: 28px; }
-.runs[data-r] .runrail { --fade-r: 28px; }
 .trun {
   flex: none; display: inline-flex; align-items: center; gap: 7px;
-  max-width: 280px; padding: 5px 10px; border-radius: 999px; cursor: pointer;
-  border: 1px solid var(--line); background: var(--ink); box-shadow: var(--elev);
+  max-width: 200px; padding: 5px 10px; border-radius: 9px; cursor: pointer;
+  border: 1px solid var(--line-soft); background: var(--surface); box-shadow: var(--elev);
   font-size: 12px; color: var(--text);
 }
 /* Lit from either side: the pointer may be on this chip or on the same task's
    row in the panel, and both light the pair. */
-.trun:hover, .trun.hl { border-color: var(--muted); }
+.trun:hover, .trun.hl { border-color: var(--muted); background: var(--raised); }
+.trun[aria-current="true"] { border-color: var(--amber); }
 .trun:focus-visible { outline: 1.5px solid var(--amber); outline-offset: 2px; }
 .trun .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.trun .st { flex: none; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+/* The strip's chip carries the same three-state dot as the task list row --
+   moss running, clay only for a failure or an interruption, faint otherwise
+   -- via `data-st` rather than a new class, so the page-wide `.dot` rule
+   other domains read stays untouched. */
+.trun[data-st="run"] .dot {
+  background: var(--moss);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--moss) 18%, transparent);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+.trun[data-st="error"] .dot {
+  background: var(--clay);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--clay) 15%, transparent);
+  animation: none;
+}
+.trun[data-st="ok"] .dot { background: var(--faint); box-shadow: none; animation: none; }
 
 .csheet {
   border-radius: 12px; padding: 12px 14px;
@@ -6127,6 +6110,43 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .sarow.task { align-items: flex-start; }
 .sarow.task > .dot { margin-top: 5px; }
 .sarow.task.hl { background: var(--surface); }
+/* A two-line row with a hairline under it and a hint of which one has its
+   pane open already -- the row geometry the prototype's task list uses. */
+.sarow.task {
+  min-height: 44px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  /* A button now, and a button centres and restyles its text unless told
+     not to; the row reads like the div it replaced. */
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.sarow.task > .bd { flex: 1; min-width: 0; }
+.sarow.task[aria-current="true"] { background: var(--surface); }
+.sarow.task .nm { font-size: 12px; }
+.sarow.task .st {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  display: block;
+  text-decoration: none;
+}
+.sarow.task > .tkerr { margin-top: 3px; }
+/* The same three-state dot as the composer strip's chip: moss running, clay
+   only for a failure or an interruption, faint grey for everything else
+   settled -- carried by `data-st` rather than a new class. */
+.sarow.task[data-st="run"] .dot {
+  background: var(--moss);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--moss) 18%, transparent);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+.sarow.task[data-st="error"] .dot {
+  background: var(--clay);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--clay) 15%, transparent);
+  animation: none;
+}
+.sarow.task[data-st="ok"] .dot { background: var(--faint); box-shadow: none; animation: none; }
 .tline { display: flex; align-items: baseline; gap: 8px; }
 .tline .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Which way this task was started. Quiet and monospaced: it is a category, not
@@ -6142,9 +6162,35 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    for one node -- never both, because a pane this wide has room for one. */
 .tkview { padding: 12px 14px 18px; display: flex; flex-direction: column; gap: 8px;
   min-height: 100%; }
-.tkhead { display: flex; align-items: center; gap: 8px; }
-.tkhead b { font-size: 13.5px; color: var(--text); min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Picking a node in a DOCKED pane hides the bar, the why banner and the
+   chips, the way the prototype's `data-detail` does -- a docked pane has no
+   room for both the run's own header and a node's, so the node's takes over
+   until the reader backs out. Full screen keeps all of it, since there the
+   node sits beside the board rather than over it. */
+.tkview:not(.full)[data-detail="true"] > .tkbar,
+.tkview:not(.full)[data-detail="true"] > .tkwhy,
+.tkview:not(.full)[data-detail="true"] > .tkchips {
+  display: none;
+}
+/* Inside a DOCKED task pane the board loses its frame and shrinks its zoom
+   cluster, the way the prototype narrows both inside its task window; full
+   screen (`.tkview.full`) keeps the board's ordinary frame. */
+.tkview:not(.full) .gboard { min-height: 220px; }
+.tkview:not(.full) .gstage {
+  border-radius: 0;
+  border: 0;
+  border-right: 1px solid var(--line-soft);
+  background-size: 22px 22px;
+}
+.tkview:not(.full) .gzoom {
+  right: 8px;
+  bottom: 8px;
+  box-shadow: none;
+  border-color: var(--line-soft);
+  padding: 1px;
+}
+.tkview:not(.full) .gzb { width: 20px; height: 20px; font-size: 12px; }
+.tkview:not(.full) .gzpct { min-width: 36px; height: 20px; font-size: 10px; }
 .tkline { font-size: 11.5px; color: var(--faint); }
 .tkview > .tkchips { margin: 2px 0 4px; }
 .tkchips .add { color: var(--moss); font-style: normal; }
@@ -6171,13 +6217,12 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .tkcs { font-size: 12.5px; color: var(--muted); margin-top: -6px; }
 .tkkv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 2px 0 0; }
 .tkkv dt { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
-.tkkv dd { margin: 0; font-family: var(--mono); font-size: 11.5px; color: var(--text); }
+.tkkv dd { margin: 0; }
 
-/* The whole task text, as it was written, placeholders unexpanded. Wrapped
-   rather than scrolled: a template is read, not scanned. */
-.tkprompt { background: var(--surface); border-radius: 9px; padding: 10px 12px; }
-.tkpk { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-bottom: 6px; }
-.tkpv { margin: 0; font-size: 12px; line-height: 1.75; color: var(--text);
+/* The whole task text, as it was written, placeholders unexpanded, sitting in
+   the same field frame as every other row of the work order. Wrapped rather
+   than scrolled: a template is read, not scanned. */
+.tkpv { margin: 0; width: 100%; font-size: inherit; line-height: 1.75; color: inherit;
   white-space: pre-wrap; word-break: break-word; font-family: inherit; }
 /* Which parts are filled in from somewhere else, and from where. The whole
    question a reader brings to a template. */
@@ -6219,7 +6264,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .tkdisp { background: var(--surface); border-radius: 9px; padding: 10px 12px; }
 .tkdispb { font-size: 12px; line-height: 1.75; color: var(--text); white-space: pre-wrap;
   word-break: break-word; }
-.tkdispb.clamp { display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical;
+.tkdispb.tkclamp { display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical;
   overflow: hidden; }
 /* The fence another agent's words arrived in, left visible. Monospaced and set
    back, so the boundary reads as machinery rather than as prose. */
@@ -6229,6 +6274,14 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .tkmore { margin-top: 6px; background: none; border: 0; padding: 0;
   font-size: 11.5px; color: var(--muted); cursor: pointer; }
 .tkmore:hover { color: var(--text); }
+/* A dispatch's or an answer's footer: a small icon-only copy action and the
+   timestamp it went out or came back at. */
+.tkansfoot { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.tkfootcopy { display: grid; place-items: center; width: 22px; height: 22px;
+  border-radius: 6px; color: var(--faint); }
+.tkfootcopy:hover { color: var(--text); background: var(--surface); }
+.tkfootcopy svg { width: 13px; height: 13px; }
+.tkturnmeta { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
 
 .tkproc { border: 1px solid var(--line); border-radius: 9px; }
 .tkprock { display: flex; align-items: center; gap: 10px; width: 100%;
@@ -6243,16 +6296,6 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .tkthink blockquote { margin: 5px 0 0; padding-left: 10px;
   border-left: 2px solid var(--line); font-size: 12px; line-height: 1.7;
   color: var(--muted); }
-.tktool .tkth { display: flex; align-items: center; gap: 9px; width: 100%;
-  background: none; border: 0; padding: 3px 0; cursor: pointer; text-align: left; }
-.tktool .tkth b { font-size: 11.5px; color: var(--text); flex: none; }
-.tkta { flex: 1; min-width: 0; font-size: 11.5px; color: var(--muted);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tktr { flex: none; font-size: 11px; color: var(--faint); }
-.tktd { margin: 4px 0 2px; background: var(--surface); border-radius: 6px;
-  padding: 8px 10px; font-size: 11px; line-height: 1.6; color: var(--muted);
-  white-space: pre-wrap; word-break: break-word; }
-
 .tkans { font-size: 12.5px; line-height: 1.8; color: var(--text); white-space: pre-wrap; }
 /* Where the answer would be, when the run stopped instead of answering. */
 .tkstop { font-size: 12px; line-height: 1.7; color: var(--clay);
@@ -6262,16 +6305,15 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 /* The two tabs of a node card: one small segmented control, the same shape
    the workspace switcher's `.wseg` already wears, rather than an underline --
    440px of card is not the width an underline tab strip reads well at. */
-.tktabs { display: flex; gap: 2px; width: fit-content; margin: -2px 0 2px;
-  padding: 2px; border-radius: 8px; background: var(--surface); }
+.tktabs { display: flex; gap: 2px; flex: none; width: fit-content; margin-left: auto;
+  padding: 2px; border-radius: 8px; background: var(--surface); align-self: flex-start; }
 .tktabs button { font-size: 12px; color: var(--muted); background: none; border: 0;
   border-radius: 6px; padding: 5px 10px; cursor: pointer; }
 .tktabs button[aria-selected="true"] { background: var(--raised); color: var(--text); font-weight: 600; }
 /* The same token the runtime uses for the same condition, carried by colour.
    Beside the name, never instead of it. */
 .tkerr { flex: none; font-family: var(--mono); font-size: 10px; color: var(--clay);
-  background: var(--surface); border-radius: 5px; padding: 2px 6px; }
-.tkch .tkerr { margin-right: 2px; }
+  background: color-mix(in oklab, var(--clay) 10%, var(--paper)); border-radius: 5px; padding: 1px 6px; }
 
 
 
@@ -6291,5 +6333,8 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   padding: 4px 10px; cursor: pointer; }
 .wchip:hover { background: var(--raised); }
 .wchip:focus-visible { outline: 1.5px solid var(--amber); outline-offset: 1px; }
+/* Every output chip leads with a small faint glyph, the way the prototype's
+   `.wchip svg` does -- a written file's document icon, a change's diff icon. */
+.wchip svg { flex: none; width: 13px; height: 13px; color: var(--faint); }
 .tkout { margin-top: 9px; font-size: 12px; line-height: 1.7; color: var(--muted);
   background: var(--surface); border-radius: 8px; padding: 9px 10px; }

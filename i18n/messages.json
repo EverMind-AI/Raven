@@ -6027,21 +6027,9 @@
       "en": "No tasks yet",
       "zh": "还没有任务"
     },
-    "gui.tasks.none": {
-      "en": "No tasks yet. Delegating in the conversation, running a dag or running a playbook all line up here.",
-      "zh": "还没有任务。对话里派活、run dag 或跑 playbook，都会在这里排成一条。"
-    },
-    "gui.ws.tasks_none_sub": {
-      "en": "No tasks yet. Delegating in the conversation, running a dag or running a playbook all line up here.",
-      "zh": "还没有任务。对话里派活、run dag 或跑 playbook，都会在这里排成一条。"
-    },
     "gui.tasks.artifacts_1": {
       "en": "1 product",
       "zh": "1 个产物"
-    },
-    "gui.tasks.record_tools": {
-      "en": "{n} tool calls",
-      "zh": "{n} 次工具调用"
     },
     "gui.tasks.rec_more": {
       "en": "Show all",
@@ -6059,17 +6047,29 @@
       "en": "Thought",
       "zh": "已思考"
     },
-    "gui.tasks.rec_unread": {
-      "en": "No record read for this step yet",
-      "zh": "尚未读取这一步的过程记录"
+    "gui.tasks.rec_thinking": {
+      "en": "Thinking",
+      "zh": "思考中"
+    },
+    "gui.tasks.call_failed_n": {
+      "en": "{n} failed",
+      "zh": "{n} 失败"
+    },
+    "gui.tasks.deleg_a_graph": {
+      "en": "a graph",
+      "zh": "一张图"
+    },
+    "gui.tasks.exit_code": {
+      "en": "exit code {n}",
+      "zh": "退出码 {n}"
     },
     "gui.tasks.canvas": {
-      "en": "Task graph - drag to pan, ctrl and scroll to zoom",
-      "zh": "任务流程图 · 拖动平移，按住 ctrl 滚动缩放"
+      "en": "Graph - drag to pan, ctrl and scroll to zoom",
+      "zh": "流程图 - 拖动平移，按住 ctrl 滚动缩放"
     },
     "gui.tasks.pick_node": {
-      "en": "Pick a step to read it",
-      "zh": "选中一个步骤查看"
+      "en": "Pick a node to see how it went this time.",
+      "zh": "点一个节点，看它这次跑成了什么样。"
     },
     "gui.tasks.tab_order": {
       "en": "Work order",
@@ -7108,8 +7108,8 @@
       "zh": "停止"
     },
     "gui.tasks.why_at": {
-      "en": "stuck at: {name}",
-      "zh": "挂在：{name}"
+      "en": "stuck at: ",
+      "zh": "挂在："
     },
     "gui.tasks.why_interrupted": {
       "en": "This run did not finish, and nobody is still running it. Nothing after the step it stopped at was dispatched.",
@@ -7126,10 +7126,6 @@
     "gui.tasks.replan_at": {
       "en": "continues as: {id}",
       "zh": "转到：{id}"
-    },
-    "gui.tasks.step_awaiting": {
-      "en": "{n} steps awaiting a decision",
-      "zh": "{n} 步待裁决"
     },
     "gui.tasks.depends_on_pre": {
       "en": "depends on",
@@ -7154,10 +7150,6 @@
     "gui.tasks.ctx_interrupted": {
       "en": "The gateway went away partway through this step; the record stops here.",
       "zh": "网关在这一步跑到一半没了，记录停在这里。"
-    },
-    "gui.tasks.loading": {
-      "en": "Loading...",
-      "zh": "读取中…"
     },
     "gui.tasks.skip_why_named": {
       "en": "Upstream step \"{name}\" reached no conclusion, so this one was never dispatched.",
@@ -7220,8 +7212,8 @@
       "zh": "这一步还没派出去，也还没有指令。"
     },
     "gui.tasks.instruction_note": {
-      "en": "Not dispatched yet: the template's placeholders wait on upstream output, and are only final at dispatch.",
-      "zh": "还没派出去：模板里的占位符等上游产出填入，派发那一刻才定稿。"
+      "en": "Not dispatched yet: the {{...}} spots wait on upstream output to fill in, and are only final at the moment of dispatch.",
+      "zh": "还没派出去：{{…}} 那几处等上游的产出填进来，派发的那一刻才定稿。"
     },
     "gui.tasks.call_label": {
       "en": "Call",
@@ -7254,6 +7246,30 @@
     "gui.ws.tasks_running_tab": {
       "en": "{n} running",
       "zh": "{n} 个进行中"
+    },
+    "gui.tasks.stop_title": {
+      "en": "Stop the whole graph",
+      "zh": "停止整张图的运行"
+    },
+    "gui.tasks.ctx_why_interrupted": {
+      "en": "It had not finished when the gateway exited; the record stops here.",
+      "zh": "网关退出时还没跑完，记录停在这里。"
+    },
+    "gui.tasks.ctx_failed": {
+      "en": "Execution failed",
+      "zh": "执行失败"
+    },
+    "gui.tasks.rec_process_aria": {
+      "en": "Show what happened before this answer",
+      "zh": "展开这次回答之前的过程"
+    },
+    "gui.tasks.copied_dispatch": {
+      "en": "Dispatch prompt copied",
+      "zh": "已复制派单提示词"
+    },
+    "gui.tasks.copied_answer": {
+      "en": "Answer copied",
+      "zh": "已复制这次的回答"
     }
   }
 }

@@ -75,7 +75,7 @@ describe('the tasks list', () => {
     await act(async () => { await store.refresh() })
   }
 
-  it('groups running and settled, each with its count', async () => {
+  it('groups running and settled under a bare heading, with no count on it', async () => {
     rows = [
       task({ id: 'a', kind: 'dag', status: 'running' }),
       task({ id: 'b', kind: 'spawn', status: 'running' }),
@@ -83,7 +83,7 @@ describe('the tasks list', () => {
     ]
     await draw()
     expect([...document.querySelectorAll('.wsgrp')].map((g) => g.textContent))
-      .toEqual(['gui.tasks.running 2', 'gui.tasks.settled 1'])
+      .toEqual(['gui.tasks.running', 'gui.tasks.settled'])
   })
 
   it('shows the summary, or the id when there is none, and the error tag on a failure', async () => {
@@ -111,9 +111,9 @@ describe('the tasks list', () => {
     expect(document.querySelector('.sarow.task .st')?.textContent).toContain('gui.tasks.artifacts_n {"n":2}')
   })
 
-  it('says the panel is empty rather than drawing an empty list', async () => {
+  it('renders no rows and does not crash when the store holds none', async () => {
     await draw()
-    expect(document.querySelector('.wsempty')?.textContent).toBe('gui.tasks.none')
+    expect(document.querySelectorAll('.sarow.task')).toHaveLength(0)
   })
 
   it('opens a row as a desk pane keyed by (kind, id)', async () => {
@@ -189,7 +189,12 @@ describe('a task pane', () => {
     const failed = task({ id: 'a', kind: 'dag', status: 'failed', nodes: [bad] })
     render(<TaskPane task={failed} full />)
     expect(document.querySelector('.tkwhy p')?.textContent).toBe('HTTP 429')
-    expect(document.querySelector('.tkwhyat')?.textContent).toBe('gui.tasks.why_at {"name":"Fetch the futures quote"}')
+    /* The name sits in its own `<b>`, set apart from the "挂在：" prefix
+       rather than folded into one interpolated sentence. */
+    expect(document.querySelector('.tkwhyat b')?.textContent).toBe('Fetch the futures quote')
+    expect(document.querySelector('.tkwhyat')?.textContent).toBe('gui.tasks.why_atFetch the futures quote')
+    /* The whole banner is the control now, not just the name inside it. */
+    expect(document.querySelector('.tkwhy')?.getAttribute('role')).toBe('button')
 
     await act(async () => { (document.querySelector('.tkwhyat') as HTMLElement).click() })
     expect(document.querySelector('.tktt b')?.textContent).toBe('Fetch the futures quote')
@@ -266,28 +271,6 @@ describe('a task pane', () => {
     })
   })
 
-  describe('awaiting a decision', () => {
-    it('flags a running row stuck on a suspended node', () => {
-      const stuck = task({
-        id: 'a', kind: 'dag', status: 'running',
-        counts: counts({ total: 2, completed: 1, exception: 1 }),
-        nodes: [node({ node_id: 'n1', status: 'completed' }), node({ node_id: 'n2', status: 'exception' })],
-      })
-      render(<TaskPane task={stuck} />)
-      expect(document.querySelector('.tkbar')?.textContent).toContain('gui.tasks.step_awaiting {"n":1}')
-    })
-
-    it('says so even for a single-node run with no other step to report', () => {
-      const stuck = task({
-        id: 'a', kind: 'dag', status: 'running',
-        counts: counts({ total: 1, exception: 1 }),
-        nodes: [node({ node_id: 'n1', status: 'exception' })],
-      })
-      render(<TaskPane task={stuck} />)
-      expect(document.querySelector('.tkbar')?.textContent).toContain('gui.tasks.step_awaiting {"n":1}')
-    })
-  })
-
   describe('output chips', () => {
     beforeEach(() => { workspace.reset() })
 
@@ -330,6 +313,26 @@ describe('a task pane', () => {
       render(<TaskPane task={task({ id: 'a', kind: 'dag', status: 'completed' })} />)
       expect(document.querySelector('.tkchips')).toBeNull()
     })
+  })
+})
+
+describe('the board', () => {
+  it('draws the prototype\'s own runtime card, not the shared SVG box', () => {
+    const withNode = task({
+      id: 'a', kind: 'dag', status: 'running',
+      nodes: [node({
+        node_id: 'n1', status: 'running', node_summary: 'scan the feed',
+        started_at: Date.now() - 4000, tool_call_count: 3,
+      })],
+    })
+    render(<TaskPane task={withNode} full />)
+    expect(document.querySelector('.daggraph .nd .tkrunl1')?.textContent).toBe('scan the feed')
+    expect(document.querySelector('.daggraph .nd .tkrunag')?.textContent).toBe('raven')
+    expect(document.querySelector('.daggraph .nd .tkrunchip')?.textContent).toBe('gui.tasks.tools_n {"n":3}')
+    /* Only this board's own card is drawn -- never the shared SVG box it
+       replaces (DagGraph.tsx's `renderNode` branch). */
+    expect(document.querySelector('.daggraph .nd rect')).toBeNull()
+    expect(document.querySelector('.daggraph .nd title')).toBeNull()
   })
 })
 
@@ -434,13 +437,22 @@ describe('the node panel', () => {
     expect(document.querySelector('.tkspecid b')?.textContent).toBe('run-123')
   })
 
-  it('shows a dash rather than nothing when the lane never reported a tool count', () => {
+  it('says nothing about tools rather than a dash when the lane never reported a count', () => {
     const done = task({
       id: 'a', kind: 'dag', status: 'completed',
       nodes: [node({ node_id: 'n1', status: 'completed', started_at: 1000, ended_at: 2000, tool_call_count: null })],
     })
     pick(done)
-    expect(document.querySelector('.tksub')?.textContent).toContain('—')
+    expect(document.querySelector('.tksub')?.textContent).not.toContain('—')
+  })
+
+  it('sets the agent apart from the rest of the subtitle in its own <b>', () => {
+    const done = task({
+      id: 'a', kind: 'dag', status: 'completed',
+      nodes: [node({ node_id: 'n1', status: 'completed', agent: 'coder', instance: 'x1' })],
+    })
+    pick(done)
+    expect(document.querySelector('.tksub b')?.textContent).toBe('coder @x1')
   })
 
   describe('a cross-run dependency', () => {

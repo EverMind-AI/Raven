@@ -22,7 +22,9 @@ import { DagGraph } from '../dag/DagGraph'
 import { layout } from '../dag/graph'
 import * as desk from '../desk/store'
 import * as workspace from '../workspace/store'
+import { BoardCard } from './BoardCard'
 import { hunksForFile } from './diffs'
+import { Answer, StepList } from './NodeRecord'
 import * as store from './store'
 
 import type { Dims } from '../dag/graph'
@@ -42,6 +44,15 @@ export const paneIdOf = (row: TaskRow): string => `task:${row.kind}:${row.id}`
    node panel both print -- is what carries the fifth and sixth states. */
 const dotOf = (status: TaskRow['status'] | TaskNode['status']): string =>
   (status === 'running' ? 'run' : status === 'completed' ? 'ok' : 'bad')
+
+/* The prototype's own three-state dot: moss while running, clay only for a
+   failure or an interruption, faint grey for everything else settled
+   (completed and cancelled alike). Carried as a `data-st` attribute rather
+   than a new class, so the page-wide `.dot` rule every other domain reads is
+   left alone -- only the task surfaces below add a colour under this
+   attribute. */
+const tdotState = (status: TaskRow['status']): 'run' | 'ok' | 'error' =>
+  (status === 'running' ? 'run' : (status === 'failed' || status === 'interrupted') ? 'error' : 'ok')
 
 function taskStatusWord(status: TaskRow['status']): string {
   switch (status) {
@@ -82,15 +93,8 @@ function taskDuration(row: TaskRow, now: number): number | null {
    not. */
 function stepLine(row: TaskRow): string {
   const c = row.counts
-  /* A running row stuck on a suspended node is not merely "in progress": the
-     main agent has to answer resolve_dag_node before it moves again, which
-     reads differently from ordinary progress in the list, the pane and
-     anywhere else this line is drawn. */
-  const awaiting = row.status === 'running' && c.exception ? t('gui.tasks.step_awaiting', { n: c.exception }) : ''
-  if (c.total <= 1) return awaiting
-  if (row.status === 'running') {
-    return [t('gui.tasks.step', { i: c.completed + 1, n: c.total }), awaiting].filter(Boolean).join(' · ')
-  }
+  if (c.total <= 1) return ''
+  if (row.status === 'running') return t('gui.tasks.step', { i: c.completed + 1, n: c.total })
   if (row.status === 'completed') return t('gui.tasks.step_all_done', { n: c.total })
   if (row.status === 'interrupted') return t('gui.tasks.step_stopped', { d: c.completed, k: c.completed + 1 })
   const parts: string[] = []
@@ -120,45 +124,54 @@ const ErrorTag = (): JSX.Element => <span className="tkerr">error</span>
 
 /* ── the list ─────────────────────────────────────────────────────────── */
 
-function Row({ row, now, hl, onOpen }: {
-  row: TaskRow; now: number; hl: boolean; onOpen: (r: TaskRow) => void
+function Row({ row, now, hl, open, onOpen }: {
+  row: TaskRow; now: number; hl: boolean; open: boolean; onOpen: (r: TaskRow) => void
 }): JSX.Element {
   const key = store.rowKey(row)
   const dur = taskDuration(row, now)
-  const line = [dur != null ? formatDuration(dur) : '', stepLine(row), productText(productsOf(row))]
+  /* The step fragment only while the task is running -- a settled row's
+     ending is already said by the group it sits in and by the products
+     count; repeating the full "all steps done" sentence on every finished
+     row is not what the prototype's list draws. */
+  const step = row.status === 'running' ? stepLine(row) : ''
+  const line = [dur != null ? formatDuration(dur) : '', step, productText(productsOf(row))]
     .filter(Boolean).join(' · ')
   return (
-    <div
+    <button
+      type="button"
       className={'sarow task' + (hl ? ' hl' : '')}
-      role="button"
-      tabIndex={0}
+      data-st={tdotState(row.status)}
+      aria-current={open || undefined}
       onClick={() => onOpen(row)}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(row) } }}
       onMouseEnter={() => store.hover(key)}
       onMouseLeave={() => store.hover(null)}
     >
       <span className={'dot ' + dotOf(row.status)} />
       <div className="bd">
         <div className="tline">
-          <span className="nm" title={row.task_summary || row.id}>{row.task_summary || row.id}</span>
-          {row.status === 'failed' ? <ErrorTag /> : null}
+          <span className="nm">{row.task_summary || row.id}</span>
           {row.playbook ? <span className="tksrc">{row.playbook}</span> : null}
         </div>
-        <div className="st">{line}</div>
+        <s className="st">{line}</s>
       </div>
-    </div>
+      {row.status === 'failed' ? <ErrorTag /> : null}
+    </button>
   )
 }
 
-function Group({ label, list, now, hover, onOpen }: {
-  label: string; list: TaskRow[]; now: number; hover: string | null; onOpen: (r: TaskRow) => void
+function Group({ label, list, now, hover, openIds, onOpen }: {
+  label: string; list: TaskRow[]; now: number; hover: string | null; openIds: Set<string>
+  onOpen: (r: TaskRow) => void
 }): JSX.Element | null {
   if (!list.length) return null
   return (
     <>
-      <div className="wsgrp">{label} {list.length}</div>
+      <div className="wsgrp">{label}</div>
       {list.map((r) => (
-        <Row key={store.rowKey(r)} row={r} now={now} hl={hover === store.rowKey(r)} onOpen={onOpen} />
+        <Row
+          key={store.rowKey(r)} row={r} now={now} hl={hover === store.rowKey(r)}
+          open={openIds.has(paneIdOf(r))} onOpen={onOpen}
+        />
       ))}
     </>
   )
@@ -166,17 +179,24 @@ function Group({ label, list, now, hover, onOpen }: {
 
 function List(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
+  const deskState = useSyncExternalStore(desk.subscribe, desk.get)
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
     if (!store.running(s.rows).length) return
     const id = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(id)
   }, [s.rows])
-  if (!s.rows.length) return <div className="wsempty">{t('gui.tasks.none')}</div>
+  const openIds = new Set(deskState.panes.filter((p) => p.kind === 'task').map((p) => p.id))
   return (
     <div className="salist tasks">
-      <Group label={t('gui.tasks.running')} list={store.running(s.rows)} now={now} hover={s.hover} onOpen={desk.openDeskTask} />
-      <Group label={t('gui.tasks.settled')} list={store.settled(s.rows)} now={now} hover={s.hover} onOpen={desk.openDeskTask} />
+      <Group
+        label={t('gui.tasks.running')} list={store.running(s.rows)} now={now} hover={s.hover}
+        openIds={openIds} onOpen={desk.openDeskTask}
+      />
+      <Group
+        label={t('gui.tasks.settled')} list={store.settled(s.rows)} now={now} hover={s.hover}
+        openIds={openIds} onOpen={desk.openDeskTask}
+      />
     </div>
   )
 }
@@ -197,52 +217,57 @@ export function TasksApp(): JSX.Element {
    step count. */
 export function TaskRuns(): JSX.Element | null {
   const s = useSyncExternalStore(store.subscribe, store.get)
+  const deskState = useSyncExternalStore(desk.subscribe, desk.get)
   useEffect(() => { if (!s.loaded) void store.refresh() }, [s.loaded])
   const live = store.running(s.rows)
   if (!live.length) return null
   const shown = live.slice(0, 3)
   const overflow = live.length - 3
+  const openIds = new Set(deskState.panes.filter((p) => p.kind === 'task').map((p) => p.id))
   return (
-    <div className="runs" role="group" aria-label={t('gui.tasks.running')}>
-      {shown.map((r) => {
-        const key = store.rowKey(r)
-        return (
-          <button
-            key={key}
-            className={'trun' + (s.hover === key ? ' hl' : '')}
-            title={r.task_summary || r.id}
-            onClick={() => desk.openDeskTask(r)}
-            onMouseEnter={() => store.hover(key)}
-            onMouseLeave={() => store.hover(null)}
-          >
-            <span className={'dot ' + dotOf(r.status)} />
-            <span className="nm">{r.task_summary || r.id}</span>
+    <div className="runs">
+      <div className="tkrail">
+        {shown.map((r) => {
+          const key = store.rowKey(r)
+          return (
+            <button
+              key={key}
+              className={'trun' + (s.hover === key ? ' hl' : '')}
+              title={r.task_summary || r.id}
+              data-st={tdotState(r.status)}
+              aria-current={openIds.has(paneIdOf(r)) || undefined}
+              onClick={() => desk.openDeskTask(r)}
+              onMouseEnter={() => store.hover(key)}
+              onMouseLeave={() => store.hover(null)}
+            >
+              <span className={'dot ' + dotOf(r.status)} />
+              <span className="nm">{r.task_summary || r.id}</span>
+            </button>
+          )
+        })}
+        {overflow > 0 ? (
+          <button className="trun" data-more="true" onClick={() => desk.openDeskTab('tasks')}>
+            {t('gui.tasks.overflow_more', { n: overflow })}
           </button>
-        )
-      })}
-      {overflow > 0 ? (
-        <button className="trun" data-more="true" onClick={() => desk.openDeskTab('tasks')}>
-          {t('gui.tasks.overflow_more', { n: overflow })}
-        </button>
-      ) : null}
+        ) : null}
+      </div>
     </div>
   )
 }
 
 /* ── the board ─────────────────────────────────────────────────────────── */
 
-const COLUMN: Dims = { W: 200, H: 62, GAP_X: 232, GAP_Y: 116, PAD: 16 }
+/* The prototype's own `RT_DIMS` (proto.js:3386): taller than the shared dag
+   domain's column dims, since the board's own card (`BoardCard`) carries a
+   two-line title and an agent line the shared SVG card never had to fit. */
+const COLUMN: Dims = { W: 196, H: 78, GAP_X: 210, GAP_Y: 122, PAD: 12 }
 
-/* The board reuses the dag domain's own card as-is (contributing.md's
-   "minimal additions only" -- a domain sheet of dag's own would be a bigger
-   change than this board warrants); the tool count and failure count that
-   have no room on that card are said in the node panel's header instead
-   (`nodeSubtitle`), which already has the room for them. */
 function toDagNodes(row: TaskRow): DagNode[] {
   return row.nodes.map((n) => ({
     id: n.node_id, subagent: n.agent, instance: n.instance ?? null, depends_on: n.depends_on,
     status: n.status, started_at: n.started_at ?? null, ended_at: n.ended_at ?? null,
     node_summary: n.node_summary ?? null, prompt_template: n.prompt_template ?? null,
+    tool_call_count: n.tool_call_count ?? null,
   }))
 }
 
@@ -282,7 +307,7 @@ function Fork({ row, paneId }: { row: TaskRow; paneId: string }): JSX.Element {
   const lanes = laneRects(row.nodes, at, COLUMN)
   return (
     <Board width={width} height={height} fitKey={paneId} label={t('gui.tasks.canvas')} owns=".nd"
-      arrowsTaken={!!s.nodes[paneId]}>
+      arrowsTaken={!!s.nodes[paneId]} onBlank={() => store.pickNode(paneId, null)}>
       <div className="tkfork" style={{ position: 'relative', width, height }}>
         {lanes.map((l) => (
           <div key={l.key} className="tklane" style={{ left: l.x, top: l.y, width: l.w, height: l.h }}>
@@ -297,6 +322,7 @@ function Fork({ row, paneId }: { row: TaskRow; paneId: string }): JSX.Element {
           flow="down"
           selectedId={s.nodes[paneId] ?? null}
           onPick={(n) => store.pickNode(paneId, n.id)}
+          renderNode={(n, now) => <BoardCard node={n} now={now} />}
         />
       </div>
     </Board>
@@ -337,28 +363,48 @@ function useNodeRecord(row: TaskRow, node: TaskNode): RecordLoad {
 function tokensText(node: TaskNode): string {
   if (node.status === 'pending' || node.status === 'skipped') return ''
   if (node.tokens_in == null && node.tokens_out == null) return t('gui.tasks.tokens_none')
-  return t('gui.tasks.tokens_n', { n: (node.tokens_in || 0) + (node.tokens_out || 0) })
+  return t('gui.tasks.tokens_n', { n: fmtN((node.tokens_in || 0) + (node.tokens_out || 0)) })
 }
 
-function nodeSubtitle(node: TaskNode): string {
-  const parts = [node.agent + (node.instance ? ' @' + node.instance : ''), nodeStatusWord(node.status)]
+/* Grouped by thousands, the way the prototype's own `fmtN` reads a token
+   count -- "4,321 tokens" rather than "4321 tokens". */
+const fmtN = (n: number): string => n.toLocaleString('en-US')
+
+/* The rest of the subtitle, after the agent (which the caller sets apart in
+   its own `<b>`): status word, duration, tokens, tool count -- pushed only
+   when the fact is there to push. No dash for a missing tool count: a fact
+   this node's lane never reported is a fact this line says nothing about,
+   not a line that says "—". */
+function nodeSubtitleRest(node: TaskNode): string[] {
+  const parts = [nodeStatusWord(node.status)]
   const dur = node.started_at ? formatDuration((node.ended_at ?? Date.now()) - node.started_at) : ''
   if (dur) parts.push(dur)
   const tk = tokensText(node)
   if (tk) parts.push(tk)
-  parts.push(node.tool_call_count == null
-    ? '—'
-    : (node.tool_failure_count
+  if (node.tool_call_count != null) {
+    parts.push(node.tool_failure_count
       ? t('gui.tasks.tools_n', { n: node.tool_call_count }) + ' · ' + t('gui.tasks.tools_failed_n', { n: node.tool_failure_count })
-      : t('gui.tasks.tools_n', { n: node.tool_call_count })))
+      : t('gui.tasks.tools_n', { n: node.tool_call_count }))
+  }
   if (node.status === 'completed' && node.has_output === false) parts.push(t('gui.tasks.no_output'))
-  return parts.join(' · ')
+  return parts
+}
+
+/* The node panel head's subtitle line: the agent (+@instance) in its own
+   `<b>`, the rest of the sentence plain after it -- the prototype sets the
+   agent apart the same way. */
+function NodeSubtitle({ node }: { node: TaskNode }): JSX.Element {
+  const agent = node.agent + (node.instance ? ' @' + node.instance : '')
+  const rest = nodeSubtitleRest(node)
+  return <span className="tksub"><b>{agent}</b>{rest.length ? ' · ' + rest.join(' · ') : ''}</span>
 }
 
 /* Why a step nobody dispatched has nothing to read: skipped names the
-   upstream that never gave it a conclusion, when one is findable; pending
-   just has not been reached yet. */
+   upstream that never gave it a conclusion, when one is findable; an
+   interrupted step that never got as far as a record says the gateway went
+   away first; pending just has not been reached yet. */
 function nodeWhyText(node: TaskNode, row: TaskRow): string {
+  if (node.status === 'interrupted') return t('gui.tasks.ctx_why_interrupted')
   if (node.status !== 'skipped') return ''
   const bad = node.depends_on
     .map((id) => row.nodes.find((n) => n.node_id === id))
@@ -366,16 +412,25 @@ function nodeWhyText(node: TaskNode, row: TaskRow): string {
   return bad ? t('gui.tasks.skip_why_named', { name: bad.node_summary || bad.node_id }) : t('gui.tasks.skip_why')
 }
 
+/* HH:MM, zero-padded, in the reader's own timezone -- the timestamp a
+   dispatch or an answer wears in its footer. */
+function hhmm(ms: number): string {
+  const d = new Date(ms)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
 const UNTRUSTED = /(\[BEGIN UNTRUSTED[^\]]*\][\s\S]*?\[END UNTRUSTED[^\]]*\])/g
 const IS_UNTRUSTED = /^\[BEGIN UNTRUSTED/
-const CLAMP_LINES = 8
+/* A character count, not a line count -- the prototype folds on length so a
+   long one-line prompt still clamps and a short eight-line one does not. */
+const CLAMP_CHARS = 260
 
-function Dispatch({ text }: { text: string }): JSX.Element {
+function Dispatch({ text, at }: { text: string; at: number | null }): JSX.Element {
   const [open, setOpen] = useState(false)
-  const long = text.split('\n').length > CLAMP_LINES
+  const long = text.length >= CLAMP_CHARS
   return (
     <div className="tkdisp">
-      <div className={'tkdispb' + (long && !open ? ' clamp' : '')}>
+      <div className={'tkdispb' + (long && !open ? ' tkclamp' : '')}>
         {text.split(UNTRUSTED).map((part, i) => (
           IS_UNTRUSTED.test(part)
             ? <span className="tkuntrusted" key={i}>{part}</span>
@@ -384,54 +439,47 @@ function Dispatch({ text }: { text: string }): JSX.Element {
       </div>
       {long
         ? (
-          <button className="tkmore" onClick={() => setOpen(!open)}>
+          <button className="tkmore" aria-expanded={open} onClick={() => setOpen(!open)}>
             {t(open ? 'gui.tasks.rec_less' : 'gui.tasks.rec_more')}
           </button>
         )
         : null}
-    </div>
-  )
-}
-
-function Step({ step }: { step: NodeStep }): JSX.Element {
-  const [open, setOpen] = useState(false)
-  if (step.kind === 'think') {
-    return (
-      <div className="tkthink">
-        <button className="tkthh" onClick={() => setOpen(!open)}>{t('gui.tasks.rec_thought')}</button>
-        {open ? <blockquote>{step.text}</blockquote> : null}
+      <div className="tkansfoot">
+        <button
+          className="tkfootcopy" aria-label={t('gui.tasks.copy')}
+          onClick={() => copy(text, t('gui.tasks.copied_dispatch'))}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+            <rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+          </svg>
+        </button>
+        {at != null ? <span className="tkturnmeta">{hhmm(at)}</span> : null}
       </div>
-    )
-  }
-  if (step.kind === 'console') return <div className="tkconsole">{t('gui.tasks.ctx_console')}</div>
-  return (
-    <div className="tktool">
-      <button className="tkth" onClick={() => setOpen(!open)}>
-        <b className="mono">{step.name}</b>
-        <span className="tkta">{step.args}</span>
-        {step.result != null ? <span className="tktr">{step.result}</span> : null}
-        <span className="tkchev">&rsaquo;</span>
-      </button>
-      {open ? <pre className="tktd">{step.args + '\n\n' + (step.result || '')}</pre> : null}
     </div>
   )
 }
 
 /* The process, folded once it is over and open while it is not: a run of any
    length is mostly steps a reader does not need mid-flight, but the one
-   under way is the thing their eye should find. */
+   under way is the thing their eye should find. Each step's own rendering --
+   the thought, what it said, the calls it led to and their detail cards --
+   is NodeRecord.tsx's `StepList` (proto.js's `stepView` / `callRow` /
+   `plainDtl` / `delegDtl`). */
 function Process({ steps, node }: { steps: NodeStep[]; node: TaskNode }): JSX.Element | null {
   const [open, setOpen] = useState(node.status === 'running')
   if (!steps.length) return null
-  const tools = steps.filter((s) => s.kind === 'tool').length
+  const dur = node.ended_at && node.started_at ? formatDuration(node.ended_at - node.started_at) : ''
   return (
     <div className={'tkproc' + (open ? ' open' : '')}>
-      <button className="tkprock" onClick={() => setOpen(!open)}>
-        {t('gui.tasks.rec_process')}
-        <span className="tkprocn">{t('gui.tasks.record_tools', { n: tools })}</span>
+      <button
+        className="tkprock" aria-expanded={open} aria-label={t('gui.tasks.rec_process_aria')}
+        onClick={() => setOpen(!open)}
+      >
+        {t(node.status === 'running' ? 'gui.tasks.rec_process' : 'gui.tasks.st_completed')}
+        <span className="tkprocn">{dur}</span>
         <span className="tkchev">{open ? '⌃' : '⌄'}</span>
       </button>
-      {open ? <div className="tkprocb">{steps.map((st, i) => <Step step={st} key={i} />)}</div> : null}
+      {open ? <div className="tkprocb"><StepList steps={steps} running={node.status === 'running'} /></div> : null}
     </div>
   )
 }
@@ -468,26 +516,34 @@ function ChatDock({ node, roster }: { node: TaskNode; roster: SubagentRow[] }): 
 
 function ContextTab({ row, node, rec, roster }: {
   row: TaskRow; node: TaskNode; rec: RecordLoad; roster: SubagentRow[]
-}): JSX.Element {
+}): JSX.Element | null {
   if (node.status === 'pending' || node.status === 'skipped') {
     return <p className="tkempty">{nodeWhyText(node, row) || t('gui.tasks.ctx_none')}</p>
   }
-  if (rec.loading) return <p className="tkempty">{t('gui.tasks.loading')}</p>
-  if (rec.failed || !rec.record) return <p className="tkempty">{t('gui.tasks.rec_unread')}</p>
+  /* Nothing rendered while the fetch is in flight (the head already says
+     the node's own state) or once it has failed -- the prototype's own
+     transcript is local and never has a fetch to fail, so it has no
+     sentence for either, and inventing one is not this page's call to
+     make. */
+  if (rec.loading) return null
+  if (rec.failed || !rec.record) return null
   const record = rec.record
+  /* Keyed on the absence of a dispatched prompt, like the prototype's own
+     `!n.prompt` gate -- a node whose record has not been read yet reads the
+     same "nothing here" line as one the run never reached. */
+  if (!record.dispatch) {
+    return <p className="tkempty">{nodeWhyText(node, row) || t('gui.tasks.ctx_none')}</p>
+  }
   return (
     <div className="tkctx">
-      {record.dispatch ? <Dispatch text={record.dispatch} /> : null}
+      <Dispatch text={record.dispatch} at={node.started_at ?? null} />
       <Process steps={record.steps} node={node} />
-      {record.answer ? <div className="tkans">{record.answer}</div> : null}
+      {record.answer ? <Answer text={record.answer} at={node.ended_at ?? null} /> : null}
       {!record.answer && node.status === 'failed'
-        ? <div className="tkerrb">{node.error || t('gui.tasks.why_failed_fallback')}</div>
+        ? <div className="tkerrb">{node.error || t('gui.tasks.ctx_failed')}</div>
         : null}
       {!record.answer && node.status === 'interrupted'
         ? <div className="tkerrb">{t('gui.tasks.ctx_interrupted')}</div>
-        : null}
-      {!record.answer && node.status === 'running'
-        ? <div className="tklive"><span className="dot run" />{t('gui.tasks.running')}</div>
         : null}
       {record.outputTruncated ? <div className="tktrunc">{t('gui.tasks.ctx_truncated')}</div> : null}
       <ChatDock node={node} roster={roster} />
@@ -495,34 +551,48 @@ function ContextTab({ row, node, rec, roster }: {
   )
 }
 
-const PLACEHOLDER = /(\{\{[^}]*\}\})/g
-const IS_PLACEHOLDER = /^\{\{[^}]*\}\}$/
+/* Two placeholder shapes, each marked its own way: `{{...}}` is a template
+   slot filled in at dispatch, `${...}` is one already resolved (the
+   prototype's `now` / `run` classes) -- so a reader can tell "waiting on
+   upstream" from "resolved" at a glance rather than reading both the same. */
+const PLACEHOLDER = /(\{\{[^}]*\}\}|\$\{[^}]*\})/g
+const IS_TEMPLATE_PLACEHOLDER = /^\{\{[^}]*\}\}$/
 
 function Template({ text, label }: { text: string; label: string }): JSX.Element {
   return (
-    <div className="tkprompt">
-      <div className="tkpk">{label}</div>
-      <pre className="tkpv">
-        {text.split(PLACEHOLDER).map((part, i) => (
-          IS_PLACEHOLDER.test(part)
-            ? <mark className="tkph" key={i}>{part}</mark>
-            : <span key={i}>{part}</span>
-        ))}
-      </pre>
+    <div className="tkfield">
+      <div className="tkfk">{label}</div>
+      <div className="tkfv">
+        <pre className="tkpv">
+          {text.split(PLACEHOLDER).map((part, i) => (
+            IS_TEMPLATE_PLACEHOLDER.test(part)
+              ? <mark className="tkph" key={i}>{part}</mark>
+              : (part.startsWith('${') ? <mark className="tkphnow" key={i}>{part}</mark> : <span key={i}>{part}</span>)
+          ))}
+        </pre>
+      </div>
     </div>
   )
 }
 
-const listOrDash = (v?: string[]): string => (v && v.length ? v.join(', ') : '—')
+/* Each skill or MCP as its own tag, not a comma-joined sentence -- the
+   prototype's `specTags`. */
+function Tags({ items }: { items: string[] }): JSX.Element {
+  return <>{items.map((s) => <span className="tktag" key={s}>{s}</span>)}</>
+}
 
-function inputText(v: unknown): string {
-  if (typeof v === 'string') return v
+/* The kind of value beside the value itself, the way the prototype's
+   `inputValue` reads an `{file: ...}` / `{node: ...}` shape -- two chips
+   rather than a brace-syntax string in the reader's face. Not translated:
+   `file` and `node` name a shape in the data, the way the error tag names a
+   condition, not a sentence. */
+function InputValue({ v }: { v: unknown }): JSX.Element {
   if (v && typeof v === 'object' && !Array.isArray(v)) {
     const o = v as Record<string, unknown>
-    if (typeof o.file === 'string') return `{file: ${o.file}}`
-    if (typeof o.node === 'string') return `{node: ${o.node}}`
+    if (typeof o.file === 'string') return <><span className="tkikind">file</span><span className="tkival">{o.file}</span></>
+    if (typeof o.node === 'string') return <><span className="tkikind">node</span><span className="tkival">{o.node}</span></>
   }
-  return JSON.stringify(v)
+  return <span className="tkival">{typeof v === 'string' ? v : JSON.stringify(v)}</span>
 }
 
 /* A `depends_on` entry (or an `inputs` value shaped `{node: id}`) that names
@@ -545,7 +615,9 @@ function externalDeps(node: TaskNode, row: TaskRow): string[] {
 function OrderTab({ row, node, roster, rec }: {
   row: TaskRow; node: TaskNode; roster: SubagentRow[]; rec: RecordLoad
 }): JSX.Element {
-  const known = !node.agent || roster.some((r) => r.name === node.agent && r.enabled)
+  /* A registered-but-disabled agent is still on this machine -- naming it
+     missing here would be wrong in that case, not just imprecise. */
+  const known = !node.agent || roster.some((r) => r.name === node.agent)
   const dispatched = node.status !== 'pending' && node.status !== 'skipped'
   const rendered = dispatched ? rec.record?.dispatch ?? null : null
   const text = rendered ?? node.prompt_template ?? null
@@ -576,18 +648,22 @@ function OrderTab({ row, node, roster, rec }: {
       ))}
       <div className="tkfield">
         <div className="tkfk">{t('gui.tasks.skills')}</div>
-        <div className="tkfv">{node.skills && node.skills.length ? listOrDash(node.skills) : t('gui.tasks.skills_none')}</div>
+        <div className="tkfv">
+          {node.skills && node.skills.length ? <Tags items={node.skills} /> : t('gui.tasks.skills_none')}
+        </div>
       </div>
       <div className="tkfield">
         <div className="tkfk">{t('gui.tasks.mcps')}</div>
-        <div className="tkfv">{node.mcps && node.mcps.length ? listOrDash(node.mcps) : t('gui.tasks.mcps_none')}</div>
+        <div className="tkfv">
+          {node.mcps && node.mcps.length ? <Tags items={node.mcps} /> : t('gui.tasks.mcps_none')}
+        </div>
       </div>
       {inputs.length
         ? (
           <div className="tkfield">
             <div className="tkfk">{t('gui.tasks.inputs')}</div>
             <dl className="tkkv">
-              {inputs.map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{inputText(v)}</dd></div>)}
+              {inputs.map(([k, v]) => <div key={k}><dt>{k}</dt><dd><InputValue v={v} /></dd></div>)}
             </dl>
           </div>
         )
@@ -597,43 +673,53 @@ function OrderTab({ row, node, roster, rec }: {
         : (
           <div className="tkfield">
             <div className="tkfk">{t('gui.tasks.instruction')}</div>
-            <div className="tkfv">{dispatched ? t('gui.tasks.instruction_pending') : t('gui.tasks.left_blank')}</div>
+            <div className="tkfv">{t('gui.tasks.instruction_pending')}</div>
           </div>
         )}
-      {dispatched && !rendered && node.prompt_template ? <p className="tknote">{t('gui.tasks.instruction_note')}</p> : null}
+      {!rendered && node.prompt_template ? <p className="tknote">{t('gui.tasks.instruction_note')}</p> : null}
       <div className="tkspecid">
         <span>{row.kind === 'spawn' ? t('gui.tasks.call_label') : t('gui.tasks.run_label')}</span>
         <b>{row.id}</b>
         <button className="tkspeccopy" aria-label={t('gui.tasks.copy')} onClick={() => copy(row.id, t('gui.tasks.copied'))}>
-          {t('gui.tasks.copy')}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+            <rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+          </svg>
         </button>
       </div>
     </div>
   )
 }
 
-function NodePanel({ row, node, onClose, roster }: {
-  row: TaskRow; node: TaskNode; onClose: () => void; roster: SubagentRow[]
+function NodePanel({ row, node, paneId, onClose, roster }: {
+  row: TaskRow; node: TaskNode; paneId: string; onClose: () => void; roster: SubagentRow[]
 }): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.get)
+  useSyncExternalStore(store.subscribe, store.get)
   const rec = useNodeRecord(row, node)
-  const tab = s.tabPinned ? s.tab : (node.status === 'pending' || node.status === 'skipped' ? 'order' : 'context')
+  const pinned = store.tabOf(paneId)
+  /* A skipped step opens on the context tab too -- it has no order to
+     dispatch, but it does have a reason it never ran, and that reason is
+     what the context tab reads first (`nodeWhyText`). Only a step still
+     ahead of the run (`pending`) opens on the work order by default. */
+  const tab = pinned ?? (node.status === 'pending' ? 'order' : 'context')
   return (
     <div className="tkcard">
       <div className="tkch">
-        <button className="tkback" onClick={onClose} aria-label={t('gui.tasks.back')}>&lsaquo;</button>
+        <button className="tkback" onClick={onClose} aria-label={t('gui.tasks.back')} title={t('gui.tasks.back')}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+            <path d="M15 5l-7 7 7 7" />
+          </svg>
+        </button>
         <div className="tktt">
           <b>{node.node_summary || node.node_id}</b>
-          <span className="tksub">{nodeSubtitle(node)}</span>
+          <NodeSubtitle node={node} />
         </div>
-        {node.status === 'failed' || node.status === 'exception' ? <ErrorTag /> : null}
-      </div>
-      <div className="tktabs" role="tablist">
-        {(['context', 'order'] as const).map((k) => (
-          <button key={k} role="tab" aria-selected={tab === k} onClick={() => store.pickTab(k)}>
-            {t(k === 'context' ? 'gui.tasks.tab_context' : 'gui.tasks.tab_order')}
-          </button>
-        ))}
+        <div className="tktabs" role="tablist">
+          {(['context', 'order'] as const).map((k) => (
+            <button key={k} role="tab" aria-selected={tab === k} onClick={() => store.pickTab(paneId, k)}>
+              {t(k === 'context' ? 'gui.tasks.tab_context' : 'gui.tasks.tab_order')}
+            </button>
+          ))}
+        </div>
       </div>
       {tab === 'context'
         ? <ContextTab row={row} node={node} rec={rec} roster={roster} />
@@ -650,12 +736,21 @@ function StopButton({ row }: { row: TaskRow }): JSX.Element {
     <button
       className="tkbaract"
       disabled={busy}
-      title={t('gui.tasks.stop')}
+      title={t('gui.tasks.stop_title')}
       onClick={() => { setBusy(true); void store.stop(row).finally(() => setBusy(false)) }}
     >
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7.5 7.5h9v9h-9z" /></svg>
       {t('gui.tasks.stop')}
     </button>
   )
+}
+
+/* "挂在：" + the name in its own `<b>`, the way the prototype's `.at` span
+   sets the node name apart from the rest of the sentence. The name sits at
+   the end of the sentence in both languages, so the catalogue entry is the
+   prefix alone -- no interpolation to split back apart. */
+function AtLine({ name }: { name: string }): JSX.Element {
+  return <span className="tkwhyat">{t('gui.tasks.why_at')}<b>{name}</b></span>
 }
 
 function WhyBanner({ row, onPick }: { row: TaskRow; onPick: (id: string) => void }): JSX.Element | null {
@@ -687,16 +782,20 @@ function WhyBanner({ row, onPick }: { row: TaskRow; onPick: (id: string) => void
   const text = replan
     ? (replan.error || t('gui.tasks.why_failed_fallback'))
     : (cold ? t('gui.tasks.why_interrupted') : (bad?.error || t('gui.tasks.why_failed_fallback')))
+  /* The whole banner is the control, not just the name inside it -- the
+     prototype makes the entire `.taskwhy` clickable rather than carving out
+     one span of it. */
   return (
-    <div className={'tkwhy' + (cold ? ' tkcold' : '')}>
+    <div
+      className={'tkwhy' + (cold ? ' tkcold' : '')}
+      role={bad ? 'button' : undefined}
+      tabIndex={bad ? 0 : undefined}
+      style={bad ? { cursor: 'pointer' } : undefined}
+      onClick={bad ? () => onPick(bad.node_id) : undefined}
+      onKeyDown={bad ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(bad.node_id) } } : undefined}
+    >
       <p>{text}</p>
-      {bad
-        ? (
-          <button className="tkwhyat" onClick={() => onPick(bad.node_id)}>
-            {t('gui.tasks.why_at', { name: bad.node_summary || bad.node_id })}
-          </button>
-        )
-        : null}
+      {bad ? <AtLine name={bad.node_summary || bad.node_id} /> : null}
     </div>
   )
 }
@@ -705,7 +804,7 @@ function StatusBar({ row, now }: { row: TaskRow; now: number }): JSX.Element {
   const dur = taskDuration(row, now)
   const line = stepLine(row)
   return (
-    <div className="tkbar" data-st={row.status}>
+    <div className="tkbar" data-st={tdotState(row.status)}>
       <span className={'dot ' + dotOf(row.status)} />
       <span className="st">{taskStatusWord(row.status)}</span>
       {dur != null ? <span>{'· ' + formatDuration(dur)}</span> : null}
@@ -730,25 +829,49 @@ async function openNodeDiff(row: TaskRow, node: TaskNode, file: TaskFile): Promi
   desk.openDeskDiff(change)
 }
 
+const DocGlyph = (): JSX.Element => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+    <path d="M7 3.5h7L18.5 8v12.5h-11z" />
+    <path d="M13.5 3.5V8H18.5" />
+  </svg>
+)
+const DiffGlyph = (): JSX.Element => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+    <path d="M7 4h10a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3z" />
+    <path d="M8 12h8" /><path d="M12 8v8" />
+  </svg>
+)
+
+/* Written files first, then changes -- every node's writes before any node's
+   edits, regardless of which node produced which. The prototype walks the
+   two lists separately (`taskFiles` then `taskDiffs`) rather than
+   interleaving them in node order. */
 function Chips({ row }: { row: TaskRow }): JSX.Element | null {
-  const files: Array<{ node: TaskNode; file: TaskFile }> = []
-  row.nodes.forEach((n) => n.files.forEach((f) => files.push({ node: n, file: f })))
-  if (!files.length) return null
+  const all: Array<{ node: TaskNode; file: TaskFile }> = []
+  row.nodes.forEach((n) => n.files.forEach((f) => all.push({ node: n, file: f })))
+  if (!all.length) return null
+  const writes = all.filter(({ file }) => file.op === 'write')
+  const edits = all.filter(({ file }) => file.op !== 'write')
   return (
     <div className="tkchips">
-      {files.map(({ node, file }) => {
+      {writes.map(({ node, file }) => {
         const name = file.path.split('/').pop() || file.path
-        const key = node.node_id + ':' + file.path
-        if (file.op === 'write') {
-          return (
-            <button className="wchip" key={key} title={file.path} onClick={() => workspace.openPath(file.path)}>
-              {name}{file.size != null ? <span className="tkkd">{humanSize(file.size)}</span> : null}
-            </button>
-          )
-        }
         return (
-          <button className="wchip" key={key} title={file.path} onClick={() => void openNodeDiff(row, node, file)}>
-            {name} <i className="add">+{file.add}</i> <i className="del">&minus;{file.del}</i>
+          <button className="wchip" key={node.node_id + ':' + file.path} onClick={() => workspace.openPath(file.path)}>
+            <DocGlyph />
+            {name}{file.size != null ? <span className="tkkd">{humanSize(file.size)}</span> : null}
+          </button>
+        )
+      })}
+      {edits.map(({ node, file }) => {
+        const name = file.path.split('/').pop() || file.path
+        return (
+          <button className="wchip" key={node.node_id + ':' + file.path} onClick={() => void openNodeDiff(row, node, file)}>
+            <DiffGlyph />
+            {name}
+            <span className="tkdstat">
+              <b className="add">+{file.add}</b> <b className="del">&minus;{file.del}</b>
+            </span>
           </button>
         )
       })}
@@ -778,12 +901,7 @@ export function TaskPane({ task, full = false }: { task: TaskRow; full?: boolean
   const node = row.nodes.find((n) => n.node_id === picked) || null
   const pick = (id: string | null): void => store.pickNode(paneId, id)
   return (
-    <div className={'tkview' + (full ? ' full' : '')}>
-      <div className="tkhead">
-        <span className={'dot ' + dotOf(row.status)} />
-        <b>{row.task_summary || row.id}</b>
-        {row.status === 'failed' ? <ErrorTag /> : null}
-      </div>
+    <div className={'tkview' + (full ? ' full' : '')} data-detail={!!node}>
       <StatusBar row={row} now={now} />
       <WhyBanner row={row} onPick={pick} />
       <Chips row={row} />
@@ -792,12 +910,12 @@ export function TaskPane({ task, full = false }: { task: TaskRow; full?: boolean
           <div className="tkwork">
             <Fork row={row} paneId={paneId} />
             {node
-              ? <NodePanel row={row} node={node} onClose={() => pick(null)} roster={roster} />
+              ? <NodePanel row={row} node={node} paneId={paneId} onClose={() => pick(null)} roster={roster} />
               : <div className="tkpick">{t('gui.tasks.pick_node')}</div>}
           </div>
         )
         : node
-          ? <NodePanel row={row} node={node} onClose={() => pick(null)} roster={roster} />
+          ? <NodePanel row={row} node={node} paneId={paneId} onClose={() => pick(null)} roster={roster} />
           : <Fork row={row} paneId={paneId} />}
     </div>
   )

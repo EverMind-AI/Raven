@@ -440,4 +440,9 @@ export interface TranscriptSource {
      live event handler doing it inline, because the replayed row has to open
      the same thing the live row does. */
   openDagRun?: (runId: string) => void
+  /* One-line label for a tool call, derived from its arguments -- the same
+     table a call's own row in this island reads, so a sibling that draws its
+     own tool rows (features/tasks) shows the same words for the same tool
+     rather than a second guess at them. */
+  actLabel?: (name: string, args: Record<string, unknown>, display?: string | null) => string
 }

@@ -38,7 +38,7 @@ import {
   refresh as refreshTasks, reset as resetTasks,
 } from '../features/tasks/store'
 import {
-  branch, cleanPreview, dagRun, okOf, openDagNode, openDagRun, openSpawn, spawnList, spawnRecord,
+  actLabel, branch, cleanPreview, dagRun, okOf, openDagNode, openDagRun, openSpawn, spawnList, spawnRecord,
 } from '../features/transcript/source'
 import {
   proseSource, setHostPlatformReader, setShortener, workspaceSource,
@@ -135,6 +135,10 @@ export function installSources(): void {
   transcript.spawnRecord = spawnRecord
   transcript.spawnList = spawnList
   transcript.openSpawn = openSpawn
+  /* Read by the tasks domain's own tool rows (features/tasks/NodeRecord.tsx)
+     through `ds('transcript').actLabel`, so a node's own transcript reads the
+     same one-line labels as this island's. */
+  transcript.actLabel = actLabel
 
   /* The four the settings dialog's own wiring used to assign. Here rather than
      there because this is the page's one assigner, and first in this list

@@ -210,7 +210,13 @@ const LEGACY_LOCAL = {
   settings: 0,
   skills: 4,
   subagents: 39,
-  tasks: 8,
+  /* Down from 8: the node panel's inline "still running" line -- a plain
+     `className="dot run"`, the one attribute-form use of `.dot` this domain
+     had -- is gone with the line it lived on (the head already says a
+     running node's state). Every remaining `.dot` here is written from
+     inside a `className={...}` expression, which `LEGACY_EXPR` already
+     counted. */
+  tasks: 7,
   transcript: 74,
   workspace: 37,
 }

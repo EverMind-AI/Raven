@@ -38,11 +38,14 @@ export const taskKey = (row: TaskRow): string => `${row.kind}:${row.id}`
 /* One step of a node's own conversation, in the order it happened. Built from
    the wire's `TranscriptMessage[]` (source.ts's `stepsOf`) rather than a
    second transcript vocabulary: an assistant entry's `reasoning_content` is a
-   thought, its `tool_calls` are actions matched to their `role: 'tool'`
-   result, and a `role: 'console'` entry is the live cli lane's synthetic
-   stand-in for a channel that keeps no transcript at all. */
+   thought, its own `text` (when the entry is not the trailing answer) is
+   something it said between tool calls, its `tool_calls` are actions matched
+   to their `role: 'tool'` result, and a `role: 'console'` entry is the live
+   cli lane's synthetic stand-in for a channel that keeps no transcript at
+   all. */
 export type NodeStep =
   | { kind: 'think'; text: string }
+  | { kind: 'say'; text: string }
   | { kind: 'tool'; id: string; name: string; args: string; result: string | null; ok: boolean | null }
   | { kind: 'console'; text: string }
 

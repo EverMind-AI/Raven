@@ -39,21 +39,18 @@ function DeskTabs({ value, onChange }: { value: DeskTab; onChange: (tab: DeskTab
   return (
     <div className="desk-tabs" role="tablist">
       {(['deliverables', 'tasks', 'diff'] as DeskTab[]).map((tab) => {
-        const label = tab === 'diff' ? 'Diff'
+        const label = tab === 'diff' ? 'diff'
           : tab === 'deliverables' ? t('gui.ws.deliverables') : t('gui.ws.tasks')
         const fresh = tab === 'tasks' ? desk.runningTaskCount() : desk.unseen(tab)
-        /* The count goes in the button's OWN name. An explicit `aria-label`
-           replaces the whole subtree as the accessible name, so a label on the
-           bubble inside it is never announced -- and `<i>` maps to a generic
-           role, where `aria-label` does not apply at all. Hidden from the tree
-           afterwards so the number is not read twice. */
-        const countKey = tab === 'tasks' ? 'gui.ws.tasks_running_tab' : 'gui.ws.unseen_tab'
-        const name = fresh ? `${label}, ${t(countKey, { n: String(fresh) })}` : label
+        /* Shown only on a tab the reader is not already looking at, the way
+           the prototype's own count reads: a selected tab's badge would be
+           telling the reader about the screen already in front of them. */
+        const showBubble = fresh > 0 && value !== tab
         return (
-          <button key={tab} role="tab" aria-label={name} aria-selected={value === tab} onClick={() => onChange(tab)}>
+          <button key={tab} role="tab" aria-label={label} title={label} aria-selected={value === tab} onClick={() => onChange(tab)}>
             <DeskIcon kind={tab} />
             <span className="lb">{label}</span>
-            {fresh ? <i className="desk-count" aria-hidden="true">{fresh}</i> : null}
+            {showBubble ? <i className="desk-count">{fresh}</i> : null}
           </button>
         )
       })}
@@ -68,14 +65,19 @@ function DeskTabs({ value, onChange }: { value: DeskTab; onChange: (tab: DeskTab
 function DeskEmpty({ kind, title, hint, sends }: {
   kind: DeskTab
   title: string
-  hint: string
+  /* Optional: the prototype's own empty state is icon + one bold line and
+     nothing else -- state the fact, don't sell the reader on where to go
+     next. A hint is for a tab whose nothing needs a second sentence to be
+     legible against its sibling tab's own nothing (deliverables and diff,
+     which count against each other). */
+  hint?: string
   sends?: { label: string; to: DeskTab }
 }): JSX.Element {
   return (
     <div className="desk-empty">
       <DeskIcon kind={kind} />
       <b>{title}</b>
-      <span>{hint}</span>
+      {hint ? <span>{hint}</span> : null}
       {sends ? (
         <button type="button" className="desk-empty-to" onClick={() => desk.set({ tab: sends.to })}>
           {sends.label}
@@ -293,7 +295,7 @@ function TasksNav(): JSX.Element {
   /* Answered here rather than inside the view: in the desk, one nothing has to
      look like the other two, and TasksApp's own note belongs to the panel. */
   if (!state.rows.length) {
-    return <DeskEmpty kind="tasks" title={t('gui.ws.tasks_none')} hint={t('gui.ws.tasks_none_sub')} />
+    return <DeskEmpty kind="tasks" title={t('gui.ws.tasks_none')} />
   }
   return <TasksApp />
 }

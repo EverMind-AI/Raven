@@ -26,6 +26,7 @@ import { draw as sessionDraw } from '../rail/store'
 import { plainTitle } from '../rail/title'
 import * as subagents from '../subagents/store'
 import { history as drawHistory } from './mount'
+import { actLabel as storeActLabel } from './store'
 
 import type { SessRow } from '../rail/types'
 import type { HistoryMessage } from './types'
@@ -55,6 +56,12 @@ export function okOf(name: string, preview: string): boolean {
   if (name === 'understand_media' && preview.includes('[could not understand:')) return false
   return true
 }
+
+/* The same one-line-label table this island's own tool rows read, exposed so
+   a sibling domain that draws its own tool calls (features/tasks) can ask for
+   it through the seam rather than importing this island's private store. */
+export const actLabel = (name: string, args: Record<string, unknown>, display?: string | null): string =>
+  storeActLabel(name, args, display)
 
 export function renderHistory(messages: HistoryMessage[]): void {
   /* Opening a stored conversation IS content: the new-task flag comes down

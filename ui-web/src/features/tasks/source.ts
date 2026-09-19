@@ -74,8 +74,10 @@ function splitAnswer(messages: TranscriptMessage[]): { answer: TranscriptMessage
 }
 
 /* Every step between the dispatch and the answer, in the order they
-   happened: a thought (an assistant entry's `reasoning_content`), a tool call
-   (matched to the later `role: 'tool'` entry that answers it by
+   happened: a thought (an assistant entry's `reasoning_content`), something
+   said between tool calls (the same entry's own `text`, when the entry is
+   not the trailing answer -- `fromMessages` has already carved that off), a
+   tool call (matched to the later `role: 'tool'` entry that answers it by
    `tool_call_id`), or a `role: 'console'` entry -- the live cli lane's
    synthetic stand-in for a channel that keeps no transcript of its own
    A `tool` entry with nothing pointing at it is a
@@ -90,6 +92,7 @@ export function stepsOf(messages: TranscriptMessage[]): NodeStep[] {
     if (m.role === 'console') { steps.push({ kind: 'console', text: m.text || '' }); return }
     if (m.role !== 'assistant') return
     if (m.reasoning_content) steps.push({ kind: 'think', text: m.reasoning_content })
+    if (m.text) steps.push({ kind: 'say', text: m.text })
     for (const call of m.tool_calls || []) {
       const res = call.id ? results.get(call.id) : undefined
       steps.push({

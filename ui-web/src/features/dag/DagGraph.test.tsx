@@ -153,4 +153,18 @@ describe('the shared DAG renderer', () => {
     expect(clsOf('n2')).toBe('mk bad')
     expect(clsOf('n3')).toBe('mk warn')
   })
+
+  it('draws a caller-supplied card instead of the default box, when given one', () => {
+    /* The tasks board's own escape hatch (BoardCard.tsx): everything about
+       the default box -- rect, mark, two-line label, tooltip -- is a caller's
+       choice not to draw once it hands DagGraph a renderNode. */
+    act(() => {
+      root.render(<DagGraph dims={SHEET} nodes={[node('n1')]} now={1000} onPick={() => {}} surface="sheet"
+        renderNode={(n) => <div className="stand-in">{n.id}</div>} />)
+    })
+    expect(host.querySelector('.nd rect')).toBeNull()
+    expect(host.querySelector('.nd .mk')).toBeNull()
+    expect(host.querySelector('.nd title')).toBeNull()
+    expect(host.querySelector('.nd .stand-in')?.textContent).toBe('n1')
+  })
 })

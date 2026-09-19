@@ -48,7 +48,7 @@ const task = (id: string): TaskRow => ({
 /* Which tab's bubble, by the tab's own label -- the strip is three buttons and
    an index would silently follow a reordering. */
 const tabButton = (tab: 'diff' | 'deliverables' | 'tasks'): HTMLElement | undefined => {
-  const label = tab === 'diff' ? 'Diff' : tab === 'deliverables' ? 'gui.ws.deliverables' : 'gui.ws.tasks'
+  const label = tab === 'diff' ? 'diff' : tab === 'deliverables' ? 'gui.ws.deliverables' : 'gui.ws.tasks'
   return [...document.querySelectorAll<HTMLElement>('.desk-tabs button')]
     .find((b) => (b.querySelector('.lb')?.textContent || '') === label)
 }
@@ -250,7 +250,9 @@ describe('a tab with nothing in it', () => {
     expect(emptyOf()).toEqual({ title: 'gui.ws.dlv_none', hint: 'gui.ws.dlv_none_sub', icon: true })
 
     await act(async () => { desk.set({ tab: 'tasks' }) })
-    expect(emptyOf()).toEqual({ title: 'gui.ws.tasks_none', hint: 'gui.ws.tasks_none_sub', icon: true })
+    /* The tasks tab's own nothing has no hint -- icon and one bold line, the
+       prototype's own rule for an empty state: state the fact, don't sell. */
+    expect(emptyOf()).toEqual({ title: 'gui.ws.tasks_none', hint: '', icon: true })
     /* And one class, so there is one stylesheet rule to keep them aligned. */
     expect(document.querySelector('.desk-dlv-empty')).toBeNull()
   })
@@ -265,7 +267,7 @@ describe('a tab with nothing in it', () => {
     await act(async () => { desk.set({ paletteOpen: true, tab: 'tasks' }) })
 
 
-    expect(emptyOf()).toEqual({ title: 'gui.ws.tasks_none', hint: 'gui.ws.tasks_none_sub', icon: true })
+    expect(emptyOf()).toEqual({ title: 'gui.ws.tasks_none', hint: '', icon: true })
   })
 })
 
@@ -404,10 +406,11 @@ describe('the desk shelf', () => {
     })
 
     expect(bubble('deliverables')).toBe('1')
-    /* And it is in the name the button already had, because an explicit
-       aria-label replaces the subtree: a label on the bubble is never read. */
-    expect(spoken('deliverables')).toBe('gui.ws.deliverables, gui.ws.unseen_tab {"n":"1"}')
-    expect(document.querySelector('.desk-count')?.getAttribute('aria-hidden')).toBe('true')
+    /* The tab's own label is its whole accessible name, the way the
+       prototype's plain button is -- no composed count phrase, and nothing
+       hidden from the tree to make room for one. */
+    expect(spoken('deliverables')).toBe('gui.ws.deliverables')
+    expect(document.querySelector('.desk-count')?.getAttribute('aria-hidden')).toBeNull()
     expect(spoken('tasks')).toBe('gui.ws.tasks')
     expect(document.querySelector('.desk-dlv-row')).toBeNull()
   })
@@ -435,7 +438,7 @@ describe('the desk shelf', () => {
        it by this class -- the bubble being a sibling is what broke the
        positional rule it used to use. */
     expect([...document.querySelectorAll('.desk-tabs button .lb')].map((n) => n.textContent))
-      .toEqual(['gui.ws.deliverables', 'gui.ws.tasks', 'Diff'])
+      .toEqual(['gui.ws.deliverables', 'gui.ws.tasks', 'diff'])
 
     await act(async () => {
       desk.set({ tab: 'deliverables' })
@@ -861,7 +864,7 @@ describe('the panel drags by its handle', () => {
     render(<DeskPalette />)
     await act(async () => { desk.set({ paletteOpen: true }) })
 
-    await press(tab('Diff'), 500, 500)
+    await press(tab('diff'), 500, 500)
     await to(500 + DESK_DRAG_THRESHOLD + 20, 520)
     await release(520 + DESK_DRAG_THRESHOLD, 520)
 
@@ -882,12 +885,12 @@ describe('the panel drags by its handle', () => {
     render(<DeskPalette />)
     await act(async () => { desk.set({ paletteOpen: true, tab: 'deliverables' }) })
 
-    await press(tab('Diff'), 500, 500)
+    await press(tab('diff'), 500, 500)
     await release(500, 501)
 
     expect(captured).toBe(false)
     await act(async () => {
-      tab('Diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      tab('diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
     expect(desk.get().tab).toBe('diff')
   })
@@ -899,13 +902,13 @@ describe('the panel drags by its handle', () => {
     render(<DeskPalette />)
     await act(async () => { desk.set({ paletteOpen: true, tab: 'deliverables' }) })
 
-    await press(tab('Diff'), 500, 500)
+    await press(tab('diff'), 500, 500)
     await to(501, 501)
     await release(501, 501)
 
     expect(captured).toBe(false)
     await act(async () => {
-      tab('Diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      tab('diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
     expect(desk.get().tab).toBe('diff')
     expect(panel().dataset.anchored).toBe('true')
@@ -917,7 +920,7 @@ describe('the panel drags by its handle', () => {
     render(<DeskPalette />)
     await act(async () => { desk.set({ paletteOpen: true, tab: 'deliverables' }) })
 
-    await press(tab('Diff'), 500, 500)
+    await press(tab('diff'), 500, 500)
     /* A drag DOES capture, which is what keeps the pointer with the handle
        while the hand moves -- checked here, because the release gives it
        straight back. */
@@ -927,7 +930,7 @@ describe('the panel drags by its handle', () => {
     await release(600, 600)
 
     await act(async () => {
-      tab('Diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      tab('diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
     expect(desk.get().tab).toBe('deliverables')
   })

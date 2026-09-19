@@ -56,13 +56,25 @@ interface BoardProps {
   /* Whether the arrow keys are already spoken for. They walk the steps while a
      step is picked, and pan the canvas only when nothing is. */
   arrowsTaken?: boolean
+  /* Fired on a tap that lands on the canvas itself rather than on one of
+     `owns`'s boxes, and did not turn into a drag -- the prototype's own
+     board clears whatever is picked on a tap of open background. Optional:
+     a caller that has no notion of "picked" (there is none today) simply
+     omits it. */
+  onBlank?: () => void
   children: ReactNode
 }
 
-export function Board({ width, height, fitKey, label, owns, arrowsTaken, children }: BoardProps): JSX.Element {
+export function Board({ width, height, fitKey, label, owns, arrowsTaken, onBlank, children }: BoardProps): JSX.Element {
   const box = useRef<HTMLDivElement>(null)
   const [port, setPort] = useState({ w: 0, h: 0 })
   const [view, setView] = useState<View | null>(null)
+  /* Set once the reader has panned or zoomed by hand, and cleared by the fit
+     control -- the one thing that still overrides a held view is the reader
+     asking for the whole graph back. While held, a size change (say, a
+     docked pane going full screen) must not silently snap the view back to
+     the opening frame under their hands. */
+  const held = useRef(false)
 
   /* Measured on every render, plus a frame-by-frame retry while there is nothing
      to measure, and NOT on a notification alone.
@@ -119,8 +131,6 @@ export function Board({ width, height, fitKey, label, owns, arrowsTaken, childre
     z
   })
   const fitZoom = (): number => (port.w && port.h ? clampZoom(Math.min(1, port.w / width, port.h / height)) : 1)
-  /* The whole graph at once -- what the zoom readout goes back to. */
-  const framed = (): View => (port.w ? centred(fitZoom()) : { x: 0, y: 0, z: 1 })
   /* The whole graph is the opening view: a box carries a name and an agent,
      which stay readable much further out than a paragraph would.
      Below the zoom floor it still overflows, and then it opens at its start
@@ -138,11 +148,23 @@ export function Board({ width, height, fitKey, label, owns, arrowsTaken, childre
     return { x: mid.x < 0 ? EDGE : mid.x, y: mid.y < 0 ? EDGE : mid.y, z }
   }
 
+  /* Reframes on any size change -- not only the first -- unless the reader
+     has since panned or zoomed by hand: a docked pane's board going full
+     screen, or back, is a size change the graph should still open framed
+     for, the way the prototype's own `reframeIfNeeded` (its ResizeObserver)
+     does. A subject change (`fitKey`) always reframes and drops the hold,
+     since a held pan belongs to the graph that was on screen when the
+     reader made it. */
   const key = `${fitKey}:${port.w}x${port.h}`
   const lastFit = useRef('')
+  const lastSubject = useRef(fitKey)
+  if (lastSubject.current !== fitKey) {
+    lastSubject.current = fitKey
+    held.current = false
+  }
   if (port.w > 0 && lastFit.current !== key) {
     lastFit.current = key
-    if (view === null) setView(opening())
+    if (!held.current) setView(opening())
   }
   const at = view ?? { x: 0, y: 0, z: 1 }
 
@@ -151,6 +173,7 @@ export function Board({ width, height, fitKey, label, owns, arrowsTaken, childre
      zoom from the closure makes all of them compute the same result -- the
      flick lands as one step and the canvas feels stuck. */
   const zoomBy = (factor: number, about?: { x: number; y: number }): void => {
+    held.current = true
     setView((prev) => {
       const cur = prev ?? { x: 0, y: 0, z: 1 }
       const z = clampZoom(cur.z * factor)
@@ -161,6 +184,10 @@ export function Board({ width, height, fitKey, label, owns, arrowsTaken, childre
       return { x: cx - ((cx - cur.x) / cur.z) * z, y: cy - ((cy - cur.y) / cur.z) * z, z }
     })
   }
+  /* The fit control's own job: put the reader back at the opening view, and
+     let a later resize reframe again rather than defending a view the
+     reader just asked to leave. */
+  const fit = (): void => { held.current = false; setView(opening()) }
 
   const drag = useRef<{ id: number; x: number; y: number; ox: number; oy: number; moved: boolean } | null>(null)
   const onDown = (e: React.PointerEvent<HTMLDivElement>): void => {
@@ -175,11 +202,19 @@ export function Board({ width, height, fitKey, label, owns, arrowsTaken, childre
     const dy = e.clientY - d.y
     if (!d.moved && Math.abs(dx) + Math.abs(dy) < DRAG_SLOP) return
     d.moved = true
+    held.current = true
     setView((prev) => ({ x: d.ox + dx, y: d.oy + dy, z: prev?.z ?? 1 }))
   }
   const onUp = (e: React.PointerEvent<HTMLDivElement>): void => {
     const d = drag.current
-    if (d && d.id === e.pointerId) drag.current = null
+    if (d && d.id === e.pointerId) {
+      /* A tap that did not turn into a drag, on the canvas rather than on
+         one of `owns`'s boxes (`onDown` already returned early for those):
+         the prototype's own board clears whatever is picked on a tap of
+         open background. */
+      if (!d.moved) onBlank?.()
+      drag.current = null
+    }
   }
   /* Attached by hand, non-passive, because React registers `wheel` as a passive
      listener -- and in a passive listener `preventDefault` is a no-op. Through
@@ -206,15 +241,19 @@ export function Board({ width, height, fitKey, label, owns, arrowsTaken, childre
 
   const onKey = (e: React.KeyboardEvent<HTMLDivElement>): void => {
     const pan = e.shiftKey ? 120 : 40
+    const panBy = (dx: number, dy: number): void => {
+      held.current = true
+      setView((prev) => ({ x: (prev ?? at).x + dx, y: (prev ?? at).y + dy, z: (prev ?? at).z }))
+    }
     const step: Record<string, () => void> = {
       '+': () => zoomBy(ZOOM_STEP),
       '=': () => zoomBy(ZOOM_STEP),
       '-': () => zoomBy(1 / ZOOM_STEP),
-      '0': () => setView(framed()),
-      ArrowUp: () => setView((prev) => ({ ...(prev ?? at), y: (prev ?? at).y + pan })),
-      ArrowDown: () => setView((prev) => ({ ...(prev ?? at), y: (prev ?? at).y - pan })),
-      ArrowLeft: () => setView((prev) => ({ ...(prev ?? at), x: (prev ?? at).x + pan })),
-      ArrowRight: () => setView((prev) => ({ ...(prev ?? at), x: (prev ?? at).x - pan }))
+      '0': fit,
+      ArrowUp: () => panBy(0, pan),
+      ArrowDown: () => panBy(0, -pan),
+      ArrowLeft: () => panBy(pan, 0),
+      ArrowRight: () => panBy(-pan, 0)
     }
     if (/^Arrow/.test(e.key) && arrowsTaken) return
     const run = step[e.key]
@@ -247,7 +286,7 @@ export function Board({ width, height, fitKey, label, owns, arrowsTaken, childre
         </button>
         {/* The percentage is the control that puts the whole graph back in view,
             not a note about what the page decided to do. */}
-        <button className="gzpct" onClick={() => setView(framed())} title={t('gui.dag.zoom_fit')}>
+        <button className="gzpct" onClick={fit} title={t('gui.dag.zoom_fit')}>
           {Math.round(at.z * 100)}%
         </button>
         <button className="gzb" aria-label={t('gui.dag.zoom_in')} onClick={() => zoomBy(ZOOM_STEP)}>

@@ -1,5 +1,6 @@
 import { t } from '../../i18n/t'
 import { I18N } from '../../i18n/t'
+import { argPath, firstErrLine, phraseOf, shortArg, splitMcp, verbIngOf, verbOf } from '../../lib/actVerbs'
 import { formatDuration } from '../../lib/duration'
 import * as hunks from '../../lib/hunks'
 import { md } from '../../lib/prose'
@@ -119,19 +120,7 @@ const shortPath = (p: string): string => {
 const MIN_RUN_STEPS = 2
 export const DTL_MAX_LINES = 80
 
-export const shortArg = (a: unknown, max = 40): string => {
-  if (!a) return ''
-  const one = String(a).replace(/\s+/g, ' ').trim()
-  return one.length > max ? one.slice(0, max - 1) + '…' : one
-}
-
-const MCP_RE = /^mcp_([^_]+)_(.+)$/
-const rawVerb = (n: string): string => {
-  const m = MCP_RE.exec(n || '')
-  return m ? (m[2] as string).split('_').join(' ') : String(n || '').split('_').join(' ')
-}
-export const verbOf = (n: string): string => t('gui.act.v.' + n, undefined, rawVerb(n))
-export const verbIngOf = (n: string): string => t('gui.act.ing.' + n, undefined, rawVerb(n))
+export { argPath, firstErrLine, phraseOf, shortArg, verbIngOf, verbOf }
 
 /* The demo replay hands the one string it displays where the live RPC hands
    the argument object; normalised here so a row reads the same either way. */
@@ -154,16 +143,8 @@ function actId(name: string, rawArgs: unknown): { name: string; args: Record<str
     name = a.name
     a = (a.arguments && typeof a.arguments === 'object') ? a.arguments as Record<string, unknown> : {}
   }
-  const m = MCP_RE.exec(name)
-  return { name, args: a, via, srv: m ? (m[1] as string) : null }
-}
-
-/* The file a call names, wherever it named it -- schema violations included. */
-export function argPath(a: Record<string, unknown>): string {
-  for (const k of ['path', 'file_path', 'filename', 'file', 'target']) {
-    if (a && typeof a[k] === 'string' && a[k]) return a[k] as string
-  }
-  return ''
+  const { srv } = splitMcp(name)
+  return { name, args: a, via, srv }
 }
 
 /* One-line label for a call, derived from its arguments. */
@@ -209,23 +190,6 @@ export function actLabel(name: string, a: Record<string, unknown>, display?: str
       return v ? String(v) : ''
     }
   }
-}
-
-/* The line shown on a failed row: the first error-shaped line if any. */
-export const firstErrLine = (res: unknown, cap?: number): string => {
-  const lines = String(res || '').split('\n').filter((x) => x.trim())
-  const hit = lines.find((x) => /error|failed|traceback|could not|denied|exception/i.test(x))
-  const l = hit || lines[0]
-  return l ? shortArg(l.replace(/^\s*\[|\]\s*$/g, ''), cap || 62) : ''
-}
-
-/* Verbs and counts only -- the folded line answers "what kind of work". */
-export function phraseOf(calls: CallData[]): string {
-  const n = new Map<string, number>()
-  calls.forEach((c) => n.set(c.name, (n.get(c.name) || 0) + 1))
-  return [...n].map(([name, k]) => (k === 1
-    ? verbOf(name)
-    : t('gui.act.n.' + name, { n: k }, `${verbOf(name)} ×${k}`))).join(' · ')
 }
 
 /* When an answer landed: today needs only a clock, older needs the date. */

@@ -56,7 +56,7 @@ describe('the tasks seam installSources grows', () => {
 
     wiring.installSources()
     const { set: setTasks } = await import('../features/tasks/store')
-    setTasks({ rows: [row], loaded: true, nodes: {}, hover: null, tab: 'context', tabPinned: false })
+    setTasks({ rows: [row], loaded: true, nodes: {}, hover: null, tabByPane: {} })
 
     const found = sources.tasks!.openByNode!('node-9')
     const missing = sources.tasks!.openByNode!('no-such-node')

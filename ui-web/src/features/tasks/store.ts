@@ -25,12 +25,16 @@ export interface TasksState {
   /* Pointed at from either side: the composer strip and the list light each
      other up, and neither owns the pointer. */
   hover: string | null
-  tab: 'context' | 'order'
-  tabPinned: boolean
+  /* Which tab each pane is pinned to, once its reader has picked one --
+     keyed by the pane's own id so two open task windows do not move each
+     other's tab. A pane absent here has not been pinned: the card decides
+     per node until it is (context for one that has run, the work order for
+     one that has not). */
+  tabByPane: Record<string, 'context' | 'order'>
 }
 
 const initial: TasksState = {
-  rows: [], loaded: false, nodes: {}, hover: null, tab: 'context', tabPinned: false,
+  rows: [], loaded: false, nodes: {}, hover: null, tabByPane: {},
 }
 
 const store = makeStore<TasksState>(initial)
@@ -86,9 +90,16 @@ export function pickNode(paneId: string, id: string | null): void {
   patch({ nodes })
 }
 
-/* Only the reader pins a tab; the card decides per node until they do
-   (context for one that has run, the work order for one that has not). */
-export const pickTab = (tab: 'context' | 'order'): void => patch({ tab, tabPinned: true })
+/** Which tab a pane is pinned to, or null while it is still following the
+    node's own default. */
+export const tabOf = (paneId: string): 'context' | 'order' | null => store.get().tabByPane[paneId] ?? null
+
+/* Only the reader pins a tab, per pane; the card decides per node until
+   they do (context for one that has run, the work order for one that has
+   not). */
+export function pickTab(paneId: string, tab: 'context' | 'order'): void {
+  patch({ tabByPane: { ...store.get().tabByPane, [paneId]: tab } })
+}
 
 export const hover = (id: string | null): void => patch({ hover: id })
 
