@@ -934,3 +934,68 @@ def test_v2_and_inline_payloads_coexist(state):
     assert "plain v1" in first.text and first.degraded is None
     assert second.text.startswith("(… 1 earlier messages unchanged)")
     assert "answer" in second.text
+
+
+def test_v2_oversize_blob_is_capped_to_a_placeholder(state, monkeypatch):
+    big = {"role": "user", "content": "IMG" + "A" * (tconv._ARTIFACT_LIMIT + 4096)}
+    messages = [{"role": "system", "content": "sys"}, big]
+    spans = [
+        _span("t1", "turn", "session.turn", start=0, end=30, attrs=_turn_attrs(state, "turn")),
+        _span("t1", "l1", "llm.call", parent="turn", start=1, end=2, attrs=_v2_llm_attrs(state, "big", messages)),
+    ]
+    _write_log(state, spans)
+
+    reads = []
+    real_read = tconv._read_artifact
+    monkeypatch.setattr(tconv, "_read_artifact", lambda st, p: reads.append(p) or real_read(st, p))
+
+    from raven.tracing import artifact_v2
+
+    sha1 = artifact_v2.message_sha1(big)
+    record = _by_label(tconv.attempt_conversation(["t1"], state), "LLM input")[0]
+    assert f"[message blob over the 512 KiB cap: {sha1}]" in record.text
+    assert "IMGAAAA" not in record.text
+    assert len(record.text) < tconv._ARTIFACT_LIMIT
+    assert record.degraded == "1 message blob(s) over the 512 KiB cap — placeholders shown"
+    assert any(sha1 in p for p in reads)  # the blob read went through the bounded reader
+
+
+def test_v2_blob_cache_reads_once_but_notes_every_payload(state):
+    from raven.tracing import artifact_v2
+
+    base = [{"role": "system", "content": "sys"}, {"role": "user", "content": "q"}]
+    grown = [*base, {"role": "assistant", "content": "a"}]
+    spans = [
+        _span("t1", "turn", "session.turn", start=0, end=30, attrs=_turn_attrs(state, "turn")),
+        _span("t1", "l1", "llm.call", parent="turn", start=1, end=2, attrs=_v2_llm_attrs(state, "c1", base)),
+        _span("t1", "l2", "llm.call", parent="turn", start=3, end=4, attrs=_v2_llm_attrs(state, "c2", grown)),
+    ]
+    _write_log(state, spans)
+    gone = artifact_v2.message_sha1(base[1])
+    artifact_v2.message_path(state / "logs" / "audit-artifacts", gone).unlink()
+
+    first, second = _by_label(tconv.attempt_conversation(["t1"], state), "LLM input")
+    # The cache serves the second payload, but its note must not vanish with it.
+    assert first.degraded == "1 message blob(s) missing — placeholders shown"
+    assert second.degraded == "1 message blob(s) missing — placeholders shown"
+    assert second.text.startswith("(… 2 earlier messages unchanged)")
+
+
+def test_v2_mixed_missing_and_oversize_notes_combine(state):
+    from raven.tracing import artifact_v2
+
+    big = {"role": "user", "content": "B" * (tconv._ARTIFACT_LIMIT + 10)}
+    gone_msg = {"role": "system", "content": "sys"}
+    messages = [gone_msg, big, {"role": "user", "content": "q"}]
+    spans = [
+        _span("t1", "turn", "session.turn", start=0, end=30, attrs=_turn_attrs(state, "turn")),
+        _span("t1", "l1", "llm.call", parent="turn", start=1, end=2, attrs=_v2_llm_attrs(state, "mix", messages)),
+    ]
+    _write_log(state, spans)
+    artifact_v2.message_path(state / "logs" / "audit-artifacts", artifact_v2.message_sha1(gone_msg)).unlink()
+
+    record = _by_label(tconv.attempt_conversation(["t1"], state), "LLM input")[0]
+    assert record.degraded == (
+        "1 message blob(s) missing — placeholders shown; 1 message blob(s) over the 512 KiB cap — placeholders shown"
+    )
+    assert "q" in record.text

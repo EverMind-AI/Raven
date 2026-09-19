@@ -22,10 +22,11 @@ Contracts:
   make "the call never happened" and "the content was lost" look the same.
 - Artifact paths are untrusted log data: only files under the state dir's
   ``logs/`` tree are read, capped at 512 KiB per file. An ``llm.input``
-  stored as an ``audit.artifact.v2`` shell is resolved through
-  :mod:`raven.tracing.artifact_v2` (references are hash-validated there);
-  a missing message blob renders as its deterministic placeholder and is
-  announced, never dropped.
+  stored as an ``audit.artifact.v2`` shell is resolved with the same
+  bounded read per referenced message blob (addressing and reference
+  validation stay in :mod:`raven.tracing.artifact_v2`); a missing or
+  oversize blob renders as its deterministic placeholder and is announced,
+  never dropped.
 - LLM inputs repeat the whole message history on every call. A call's record
   omits exactly the item-by-item verified common prefix against the previous
   call in the same ``(traceId, parentSpanId)`` chain (main-loop chains
@@ -382,36 +383,84 @@ def _emit_turn(info: _SpanInfo, records: list[dict[str, Any]], state: Path) -> N
         _emit(info, records, "Turn", _PHASE_INPUT, "")
 
 
-def _resolve_v2(obj: Any, state: Path) -> tuple[Any, str | None]:
+def _oversize_placeholder(sha1: str) -> dict[str, str]:
+    return {"role": "unknown", "content": f"[message blob over the 512 KiB cap: {sha1}]"}
+
+
+def _load_message_blob(state: Path, sha1: str, cache: dict[str, tuple[Any, str]]) -> tuple[Any, str]:
+    """One referenced message plus its outcome kind (ok/missing/oversize).
+
+    Blob reads go through :func:`_read_artifact`, so each blob honors the
+    same streamed 512 KiB I/O and memory bound as any other artifact — an
+    inline-image message must not bypass the preview's size cap just because
+    the writer content-addressed it. Placeholders are deterministic and keep
+    the message's list position. The cache is attempt-wide: repeated LLM
+    histories reference the same blobs on every call, and each must be read
+    once, not once per call."""
+    cached = cache.get(sha1)
+    if cached is None:
+        path = artifact_v2.message_path(state / "logs" / "audit-artifacts", sha1)
+        text, reason = _read_artifact(state, str(path))
+        if text is None:
+            cached = (artifact_v2.placeholder(sha1), "missing")
+        elif reason is not None:
+            cached = (_oversize_placeholder(sha1), "oversize")
+        else:
+            parsed, ok = _parse_json(text)
+            cached = (parsed, "ok") if ok else (artifact_v2.placeholder(sha1), "missing")
+        cache[sha1] = cached
+    return cached
+
+
+def _resolve_v2(obj: Any, state: Path, cache: dict[str, tuple[Any, str]]) -> tuple[Any, str | None]:
     """An ``audit.artifact.v2`` shell as its inline equivalent, plus a note.
 
     The live trace writer stores an ``llm.input`` as a shell whose messages
-    are ``$msg`` references into the content-addressed store; resolving goes
-    through :mod:`raven.tracing.artifact_v2`, whose placeholders are
-    deterministic and never drop a message position — so prefix comparison
-    and rendering stay valid even across missing blobs. The note names how
-    many blobs were missing; any other payload passes through untouched."""
+    are ``$msg`` references into the content-addressed store. Addressing and
+    reference validation stay in :mod:`raven.tracing.artifact_v2` (a ref is
+    40 hex chars before any path is built); the read itself is bounded here
+    — see :func:`_load_message_blob`. A placeholder never drops a message
+    position, so prefix comparison and rendering stay valid across missing
+    or oversize blobs; the note says how many of each this payload carries.
+    Any other payload passes through untouched."""
     if not artifact_v2.is_v2(obj):
         return obj, None
-    missing: list[str] = []
+    out = {key: value for key, value in obj.items() if key != "artifactFormat"}
+    missing = 0
+    oversize = 0
+    if isinstance(out.get("messages"), list):
+        resolved = []
+        for item in out["messages"]:
+            sha1 = artifact_v2.ref_sha1(item)
+            if sha1 is None:
+                resolved.append(item)
+                continue
+            message, kind = _load_message_blob(state, sha1, cache)
+            missing += kind == "missing"
+            oversize += kind == "oversize"
+            resolved.append(message)
+        out["messages"] = resolved
+    notes = []
+    if missing:
+        notes.append(f"{missing} message blob(s) missing — placeholders shown")
+    if oversize:
+        notes.append(f"{oversize} message blob(s) over the 512 KiB cap — placeholders shown")
+    return out, "; ".join(notes) or None
 
-    def _record(sha1: str) -> dict[str, str]:
-        if sha1 not in missing:
-            missing.append(sha1)
-        return artifact_v2.placeholder(sha1)
 
-    resolved = artifact_v2.resolve_payload(obj, state / "logs" / "audit-artifacts", on_missing=_record)
-    note = f"{len(missing)} message blob(s) missing — placeholders shown" if missing else None
-    return resolved, note
-
-
-def _emit_llm(info: _SpanInfo, records: list[dict[str, Any]], state: Path, chains: _ChainState) -> None:
+def _emit_llm(
+    info: _SpanInfo,
+    records: list[dict[str, Any]],
+    state: Path,
+    chains: _ChainState,
+    blob_cache: dict[str, tuple[Any, str]],
+) -> None:
     meta = _llm_meta(info.attrs)
     chain = (info.trace_id, info.parent_id)
     payload = _slot_payload(state, info.attrs, "llm.input")
     if payload is not None:
         obj, text, degraded = payload
-        obj, blob_note = _resolve_v2(obj, state)
+        obj, blob_note = _resolve_v2(obj, state, blob_cache)
         messages = obj.get("messages") if isinstance(obj, dict) else None
         if degraded is None and isinstance(messages, list):
             is_main = info.turn_span_id is not None and info.parent_id == info.turn_span_id
@@ -566,12 +615,18 @@ def _emit_generic(info: _SpanInfo, records: list[dict[str, Any]], state: Path) -
         _emit(info, records, _label(info.name), _PHASE_OUTPUT, summary)
 
 
-def _emit_span(info: _SpanInfo, records: list[dict[str, Any]], state: Path, chains: _ChainState) -> None:
+def _emit_span(
+    info: _SpanInfo,
+    records: list[dict[str, Any]],
+    state: Path,
+    chains: _ChainState,
+    blob_cache: dict[str, tuple[Any, str]],
+) -> None:
     name = info.name
     if name == "session.turn":
         _emit_turn(info, records, state)
     elif name == "llm.call":
-        _emit_llm(info, records, state, chains)
+        _emit_llm(info, records, state, chains, blob_cache)
     elif name == "tool.call":
         _emit_tool(info, records, state)
     elif name == "skill.read":
@@ -692,11 +747,12 @@ def attempt_conversation(traces: Sequence[str], state_dir: Path | None = None) -
     state = state_dir if state_dir is not None else tracing_config.state_dir()
     infos = _build_infos(_collect_spans(traces, state))
     chains = _ChainState()
+    blob_cache: dict[str, tuple[Any, str]] = {}
     all_records: list[dict[str, Any]] = []
     for info in infos:
         records: list[dict[str, Any]] = []
         try:
-            _emit_span(info, records, state, chains)
+            _emit_span(info, records, state, chains, blob_cache)
             _dedup_span_records(records)
         except Exception as exc:  # noqa: BLE001 — one bad span must stay visible, not sink the preview
             _log.debug("conversation: span %s/%s unreadable", info.trace_id, info.span_id, exc_info=True)
