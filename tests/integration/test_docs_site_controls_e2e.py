@@ -164,9 +164,7 @@ HEADING_TEXT = """() => {
 
 
 @pytest.mark.parametrize(("path", "language"), [("", "en"), ("zh/", "zh")])
-def test_search_keeps_to_the_language_the_reader_is_in(
-    page: Page, site: str, path: str, language: str
-) -> None:
+def test_search_keeps_to_the_language_the_reader_is_in(page: Page, site: str, path: str, language: str) -> None:
     """Both languages are built from one tree, and the search index is written
     once for the pair. A reader on the English site searching an English word
     gets the Chinese page for it back, which is a result they cannot read and
@@ -257,9 +255,7 @@ def test_search_is_a_slim_field_that_opens_a_centred_dialog(page: Page, site: st
     # the field in the rail is a fixture of the shell: opening the dialog must
     # not move or resize it, or the column it sits in changes shape on a click
     opened_rail = page.evaluate(RAIL_FIELD)
-    assert opened_rail == resting_rail, (
-        f"the rail's search field changed on opening: {resting_rail} -> {opened_rail}"
-    )
+    assert opened_rail == resting_rail, f"the rail's search field changed on opening: {resting_rail} -> {opened_rail}"
 
     # the form itself travels into the dialog, so what stays in the rail is a
     # drawn replica. It has to take its metrics from the original rather than
@@ -332,9 +328,7 @@ def test_the_search_box_does_not_animate_between_its_two_states(page: Page, site
     _open(page, site)
     for checked, state in ((True, "opening"), (False, "leaving")):
         widths = page.evaluate(SETTLE_FRAMES, checked)
-        assert len(set(widths)) == 1, (
-            f"{state} search runs a width animation: {sorted(set(widths))[:6]}"
-        )
+        assert len(set(widths)) == 1, f"{state} search runs a width animation: {sorted(set(widths))[:6]}"
         timed = page.evaluate(TIMED_PARTS, checked)
         assert not timed, f"{state} search still animates: " + "; ".join(timed)
 
@@ -694,4 +688,3 @@ def test_table_of_contents_lights_every_heading_on_screen(page: Page, site: str)
 def test_control_is_reachable(page: Page, site: str, path: str, selector: str, control: str) -> None:
     _open(page, site, path)
     assert page.evaluate(HIT_TEST, selector) == "ok", control
-
