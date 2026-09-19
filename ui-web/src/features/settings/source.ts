@@ -24,7 +24,7 @@ import { extMcpRows, extSkillRows, extTools, loadExt } from '../installed/source
 import {
   defaultModel,
   defaultProvider,
-  loadProviders,
+  loadDefaultProviders,
   persistModel,
   providers,
   setDefaultPair,
@@ -128,7 +128,7 @@ export async function loadSettings(): Promise<void> {
    a tools switch sit busy for two seconds while the model list was fetched. */
 export async function loadSettingsWithProviders(): Promise<void> {
   await loadSettings()
-  try { await loadProviders() } catch { /* model options unavailable: keep the rows already shown */ }
+  try { await loadDefaultProviders() } catch { /* model options unavailable: keep the rows already shown */ }
 }
 
 export const settingsSnapshot = (): SettingsSnapshot => ({
