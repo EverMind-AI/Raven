@@ -422,7 +422,7 @@ function CallRow({ call, nodeKey, foldKey }: { call: ToolCall; nodeKey: string; 
     </>
   )
   return (
-    <div className={'tkwrow' + (!done ? ' tkrun' : '') + (bad ? ' tkbad' : '') + (withDtl ? ' tktog' : '') + (withDtl && open ? ' tkopen' : '')}>
+    <div className={'tkwrow' + (!done ? ' tkbusy' : '') + (bad ? ' tkbad' : '') + (withDtl ? ' tktog' : '') + (withDtl && open ? ' tkopen' : '')}>
       {withDtl
         ? <button type="button" aria-expanded={open} onClick={() => store.setFold(nodeKey, foldKey, !open)}>{inner}</button>
         : <div>{inner}</div>}
@@ -456,7 +456,7 @@ function CallsBlock({ calls, nodeKey, foldKey }: { calls: ToolCall[]; nodeKey: s
       {many
         ? (
           <button
-            type="button" className={'tkwrow tktog tksum' + (flying ? ' tkrun' : '') + (open ? ' tkopen' : '')}
+            type="button" className={'tkwrow tktog tksum' + (flying ? ' tkbusy' : '') + (open ? ' tkopen' : '')}
             aria-expanded={open} onClick={() => store.setFold(nodeKey, foldKey, !open)}
           >
             <Glyph d={oneKind ? actIco(bareNames[0] as string) : ACT_ICO.dot as string} cls="tkic" />

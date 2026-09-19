@@ -472,7 +472,21 @@ describe('the folded summary row', () => {
         running
       />,
     )
-    expect(container.querySelector('.tkwrow.tksum')?.className).toContain('tkrun')
+    const cls = container.querySelector('.tkwrow.tksum')?.className.split(' ') ?? []
+    expect(cls).toContain('tkbusy')
+    expect(cls, "the in-flight token is not BoardCard's root class").not.toContain('tkrun')
+  })
+
+  it('marks a single call still out the same way, and never as a board card', () => {
+    const { container } = render(
+      <StepList
+        steps={[tool({ name: 'read_file', id: 'c1', args: JSON.stringify({ path: '/a.py' }), result: null, ok: null })]}
+        running
+      />,
+    )
+    const cls = container.querySelector('.tkwrow')?.className.split(' ') ?? []
+    expect(cls).toContain('tkbusy')
+    expect(cls).not.toContain('tkrun')
   })
 
   it('does not breathe once every call in it has returned', () => {
@@ -485,7 +499,7 @@ describe('the folded summary row', () => {
         running={false}
       />,
     )
-    expect(container.querySelector('.tkwrow.tksum')?.className).not.toContain('tkrun')
+    expect(container.querySelector('.tkwrow.tksum')?.className).not.toContain('tkbusy')
   })
 })
 

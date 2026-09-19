@@ -461,7 +461,7 @@
 .tkwrow.tkbad .tkic {
   color: var(--clay);
 }
-.tkwrow.tkrun .tkic {
+.tkwrow.tkbusy .tkic {
   animation: breathe 1.6s ease-in-out infinite;
 }
 .tkvb {
