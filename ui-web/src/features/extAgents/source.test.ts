@@ -8,12 +8,42 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { FixtureTransport } from '../../rpc/fixtureTransport'
 import { setGateway } from '../../rpc/gateway'
-import { resetExtAgentsSeen, extAgentsFetch, extAgentRowOf, extAgentsSource } from './source'
+import {
+  resetExtAgentsSeen,
+  extAgentsFetch,
+  extAgentRowOf,
+  extAgentsSource,
+  groupOf,
+  isAvailable,
+  isConnected,
+  isFound,
+  stageOf,
+} from './source'
 
 import type { ExtAgentRowWire } from './source'
 import type { ExtAgentRow } from './types'
 
 const wire = (over: Partial<ExtAgentRowWire>): ExtAgentRowWire => ({ name: 'codex', ...over } as ExtAgentRowWire)
+
+/* A row with every field `ExtAgentRow` requires, for the classifier table
+   below -- unlike `card()`, which only fills what one write-test call reads. */
+function fullRow(over: Partial<ExtAgentRow> = {}): ExtAgentRow {
+  return {
+    name: 'agent',
+    kind: 'cli',
+    configured: false,
+    enabled: false,
+    probe_status: 'unknown',
+    probe_detail: '',
+    has_api_key: false,
+    description: '',
+    test_running: false,
+    last_test_ok: null,
+    last_test_at_ms: null,
+    last_test_detail: '',
+    ...over,
+  }
+}
 
 /* A transport whose `subagents.list` answers from a queue, so a test can play
    a probing read and the probe-less read that follows it. */
@@ -200,5 +230,55 @@ describe('the seven writes a card can make', () => {
     await extAgentsSource.act('build', card())
 
     expect(asked[0]).toEqual(['subagents.build', { name: 'codex' }])
+  })
+})
+
+/* The onboarding wizard's two buckets, over the same row the settings page's
+   four-group `stageOf`/`groupOf` reads -- moved here from ExtAgentsPage.tsx so
+   both live beside the row shape they classify. */
+describe('the wizard step buckets', () => {
+  const cases: Array<[string, Partial<ExtAgentRow>, boolean, boolean, boolean]> = [
+    // label, row, isFound, isConnected, isAvailable
+    ['the built-in agent', { builtin: true, probe_status: 'unknown' }, false, false, false],
+    ['a vendored agent switched on', { vendored: true, enabled: true, probe_status: 'ready' }, false, true, false],
+    [
+      'a vendored agent switched off, unverified',
+      { vendored: true, enabled: false, probe_status: 'attention' },
+      false,
+      false,
+      false,
+    ],
+    [
+      'a preset this machine has, unverified',
+      { configured: false, enabled: false, probe_status: 'attention' },
+      true,
+      false,
+      true,
+    ],
+    ['a preset this machine has never had', { configured: false, enabled: false, probe_status: 'missing' }, false, false, false],
+    ['a configured agent switched on', { configured: true, enabled: true, probe_status: 'ready' }, true, true, false],
+    ['a configured agent switched off', { configured: true, enabled: false, probe_status: 'ready' }, true, false, true],
+    [
+      /* Found on every other measure -- proves the exclusion is its own
+         branch in `isAvailable`, not a side effect of `isFound`'s probe
+         check. */
+      'an openai row with no key',
+      { kind: 'openai', configured: false, enabled: false, has_api_key: false, probe_status: 'ready' },
+      true,
+      false,
+      false,
+    ],
+  ]
+
+  it.each(cases)('%s', (_label, over, found, connected, available) => {
+    const row = fullRow(over)
+    expect(isFound(row)).toBe(found)
+    expect(isConnected(row)).toBe(connected)
+    expect(isAvailable(row)).toBe(available)
+  })
+
+  it('still exports the settings page classifiers', () => {
+    expect(typeof stageOf).toBe('function')
+    expect(typeof groupOf).toBe('function')
   })
 })

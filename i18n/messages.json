@@ -4839,6 +4839,22 @@
       "en": "moved",
       "zh": "需迁移"
     },
+    "gui.agent.setup_available": {
+      "en": "Available",
+      "zh": "可以接入"
+    },
+    "gui.agent.setup_connected": {
+      "en": "Connected",
+      "zh": "已接入"
+    },
+    "gui.agent.setup_scanning": {
+      "en": "Scanning",
+      "zh": "检测中"
+    },
+    "gui.agent.setup_connecting": {
+      "en": "Connecting",
+      "zh": "接入中"
+    },
     "gui.pb.back": {
       "en": "Playbooks",
       "zh": "剧本"
