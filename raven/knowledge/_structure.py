@@ -33,9 +33,9 @@ import re
 from html.parser import HTMLParser
 
 from raven.knowledge._chunker import ApproxTokenChunker
-from raven.knowledge._parser import ParserBase
 from raven.knowledge._sections import MAX_SECTION_CHARS, SECTION_ORDINAL, SECTION_TEXT
 from raven.knowledge._types import Chunk, Section, TextBlock
+from raven.knowledge.parser import ATOMIC, ELEMENTS, ParserBase
 
 _ATX_HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
 _CODE_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
@@ -358,28 +358,98 @@ class HeadingAwareChunker(ApproxTokenChunker):
         chunks: list[Chunk] = []
         for section in sections:
             path = section.metadata.get("heading_path")
-            if not path or not isinstance(section.content, TextBlock):
+            if not isinstance(section.content, TextBlock):
                 chunks.extend(await super().chunk([section]))
                 continue
 
-            prefix = " > ".join(str(part) for part in path) + "\n\n"
-            narrowed = ApproxTokenChunker(
-                chunk_size=max(
-                    self.overlap + 1,
-                    self.chunk_size - self._approx_count_tokens(prefix),
-                ),
-                overlap=self.overlap,
+            prefix = (" > ".join(str(part) for part in path) + "\n\n") if path else ""
+            budget = max(
+                self.overlap + 1,
+                self.chunk_size - self._approx_count_tokens(prefix),
             )
-            pieces = await narrowed.chunk([section])
+            texts = self._cut(section, budget)
+            if not path:
+                chunks.extend(
+                    Chunk(
+                        content=TextBlock(text=text),
+                        source=section.source,
+                        chunk_index=0,
+                        total_chunks=0,
+                        metadata=dict(section.metadata),
+                    )
+                    for text in texts
+                )
+                continue
+
             whole = section.content.text
+            pieces = [
+                Chunk(
+                    content=TextBlock(text=text if position == 0 else prefix + text),
+                    source=section.source,
+                    chunk_index=0,
+                    total_chunks=0,
+                    metadata=dict(section.metadata),
+                )
+                for position, text in enumerate(texts)
+            ]
             if len(pieces) > 1 and len(whole) <= MAX_SECTION_CHARS:
                 pieces[0].metadata[SECTION_TEXT] = whole
-            for position, piece in enumerate(pieces):
-                if position and isinstance(piece.content, TextBlock):
-                    piece.content = TextBlock(text=prefix + piece.content.text)
             chunks.extend(pieces)
 
         for index, chunk in enumerate(chunks):
             chunk.chunk_index = index
             chunk.total_chunks = len(chunks)
         return chunks
+
+    def _cut(self, section: Section, budget: int) -> list[str]:
+        """The section's text in pieces, cut where the document allows.
+
+        On element boundaries where the parser recorded them. A paragraph is
+        the unit a person wrote and the unit a reader reads; cutting one in
+        half gives the index two fragments, each embedded as the half-thought
+        it now is, and a retrieved one reads as a sentence that stops. So whole
+        elements are packed until the budget will not take the next one, and
+        the cut falls between them.
+
+        A single element larger than the budget still has to be split -- one
+        paragraph can be longer than any window -- and that is the one case
+        that falls through to cutting by length.
+        """
+        text = section.content.text if isinstance(section.content, TextBlock) else ""
+        if section.metadata.get(ATOMIC):
+            # One section, one piece. Checked before the spans, which on an
+            # atomic section say where its parts sit rather than where it may
+            # be cut -- cutting on them is what this flag exists to stop.
+            return [text]
+        spans = section.metadata.get(ELEMENTS)
+        if not isinstance(spans, list) or not spans:
+            # The budget, not `chunk_size`: the caller narrowed it by what the
+            # heading prefix costs, and a split at the full size hands back
+            # pieces that are over the limit the moment the prefix goes on.
+            return self._split_text(text, budget)
+
+        pieces: list[str] = []
+        held = ""
+        for span in spans:
+            start, end = span.get("char_start"), span.get("char_end")
+            if not isinstance(start, int) or not isinstance(end, int) or start >= end:
+                continue
+            element = text[start:end]
+            joined = f"{held}\n\n{element}" if held else element
+            if self._approx_count_tokens(joined) <= budget:
+                held = joined
+                continue
+            if held:
+                pieces.append(held)
+                held = ""
+            if self._approx_count_tokens(element) <= budget:
+                held = element
+                continue
+            # One element past the budget on its own. Split it, and keep the
+            # last piece open so the element after it can still share a chunk.
+            parts = self._split_text(element, budget)
+            pieces.extend(parts[:-1])
+            held = parts[-1]
+        if held:
+            pieces.append(held)
+        return pieces or [text]

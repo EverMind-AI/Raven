@@ -275,7 +275,7 @@ def test_the_structured_parser_only_claims_what_it_can_cut():
     """This parser claims only the two formats it can find headings in, so a
     registry holding it alone would leave plain text, CSV, JSON, YAML and RST
     with no parser at all. TextParser has to stay alongside it for the rest."""
-    from raven.knowledge._parser import TextParser
+    from raven.knowledge.parser.text_parser import TextParser
 
     assert StructuredTextParser.supported_media_types == ["text/markdown", "text/html"]
     left_behind = set(TextParser.supported_media_types) - set(StructuredTextParser.supported_media_types)
@@ -311,3 +311,127 @@ def test_a_script_inside_the_body_is_still_dropped():
     body = "\n".join(s.content.text for s in sections)
     assert "one" in body
     assert "steal()" not in body
+
+
+# -- cutting where the document allows -----------------------------
+
+
+def _with_elements(parts: list[str]) -> Section:
+    """A section whose element spans say where its parts begin and end.
+
+    What a parser records when it knows: the docx parser writes one span per
+    paragraph, table and figure. Built by hand here so the rule can be tested
+    without a document format in the way.
+    """
+    text = "\n\n".join(parts)
+    spans = []
+    at = 0
+    for index, part in enumerate(parts):
+        spans.append({"reading_order": index, "layout_type": "text", "char_start": at, "char_end": at + len(part)})
+        at += len(part) + 2
+    return Section(content=TextBlock(text=text), source="handbook.docx", metadata={"elements": spans})
+
+
+def test_a_paragraph_is_never_cut_in_half():
+    """A paragraph is the unit a person wrote and the unit a reader reads. Half
+    of one is embedded as the half-thought it has become, and reads back as a
+    sentence that stops."""
+    paragraphs = [f"Paragraph {n}. " + " ".join(f"word{i}" for i in range(60)) for n in range(6)]
+    section = _with_elements(paragraphs)
+
+    chunks = _chunk([section], chunk_size=200, overlap=20)
+
+    assert len(chunks) > 1, "the section is too big for one chunk, so this is a real test"
+    for paragraph in paragraphs:
+        assert sum(paragraph in chunk.content.text for chunk in chunks) == 1, paragraph[:20]
+
+
+def test_chunks_are_packed_with_whole_elements():
+    """Packed until the next one will not fit, so a chunk is as full as whole
+    paragraphs allow rather than as full as bytes allow."""
+    section = _with_elements(["First.", "Second.", "Third."])
+
+    chunks = _chunk([section], chunk_size=200, overlap=20)
+
+    assert _texts(chunks) == ["First.\n\nSecond.\n\nThird."]
+
+
+def test_an_element_larger_than_the_budget_is_still_split():
+    """One paragraph can be longer than any window. Refusing to cut it would
+    mean refusing to index it."""
+    long_one = " ".join(f"word{i}" for i in range(400))
+    section = _with_elements([long_one, "A short one after it."])
+
+    chunks = _chunk([section], chunk_size=100, overlap=10)
+
+    assert len(chunks) > 1
+    assert "".join(c.content.text for c in chunks).count("word399") == 1
+
+
+def test_a_split_inside_a_paragraph_falls_between_words():
+    """Where it has to cut, it cuts at a break rather than through a word: two
+    halves of `paragraph` are not a word either half of the index knows."""
+    section = _with_elements([" ".join(f"word{i}" for i in range(400))])
+
+    chunks = _chunk([section], chunk_size=100, overlap=10)
+
+    for chunk in chunks[:-1]:
+        assert chunk.content.text.endswith(" ") or chunk.content.text[-1].isalnum()
+        # The tail of every piece but the last is a whole token.
+        tail = chunk.content.text.rstrip().rsplit(" ", 1)[-1]
+        assert tail.startswith("word") and tail[4:].isdigit(), tail
+
+
+def test_a_section_with_no_element_spans_is_cut_as_before():
+    """Markdown and plain text carry no spans, and nothing about them
+    changed."""
+    section = Section(content=TextBlock(text="x" * 4000), source="notes.md", metadata={})
+
+    chunks = _chunk([section], chunk_size=100, overlap=10)
+
+    assert len(chunks) > 1
+
+
+def _tokens(text: str) -> int:
+    """The same estimate the chunker sizes with."""
+    return len(text.encode("utf-8")) // 4
+
+
+def test_the_heading_prefix_is_paid_out_of_the_chunk_budget():
+    """The prefix is prepended to every piece after the first, so the split has
+    to be made against what is left after it. Split at the full size instead,
+    every later chunk comes back over the limit the budget exists to keep --
+    which is an embedding input limit, not a preference."""
+    path = ["Handbook", "Operations", "Escalation policy"]
+    section = Section(
+        content=TextBlock(text=" ".join(f"word{n}" for n in range(400))),
+        source="handbook.docx",
+        metadata={"heading_path": path},
+    )
+
+    chunks = _chunk([section], chunk_size=64, overlap=8)
+
+    assert len(chunks) > 1, "the section has to be split for this to mean anything"
+    assert max(_tokens(chunk.content.text) for chunk in chunks) <= 64
+
+
+def test_an_element_too_big_on_its_own_is_split_against_the_budget_too():
+    """The other branch, and the same rule: one paragraph longer than any
+    window still has to come back in pieces that fit with the prefix on."""
+    section = _with_elements([" ".join(f"word{n}" for n in range(400))])
+    section.metadata["heading_path"] = ["Handbook", "Operations", "Escalation policy"]
+
+    chunks = _chunk([section], chunk_size=64, overlap=8)
+
+    assert len(chunks) > 1
+    assert max(_tokens(chunk.content.text) for chunk in chunks) <= 64
+
+
+def test_a_section_with_no_heading_still_cuts_at_the_full_size():
+    """Nothing is prefixed to it, so nothing is taken off its budget."""
+    section = Section(content=TextBlock(text=" ".join(f"word{n}" for n in range(400))), source="n.md", metadata={})
+
+    chunks = _chunk([section], chunk_size=64, overlap=8)
+
+    assert max(_tokens(chunk.content.text) for chunk in chunks) <= 64
+    assert len(chunks) < 20, "and is not cut finer than it was asked to be"

@@ -1,7 +1,18 @@
 import { shell, t } from '../../shell/bridge'
 import { show as toast } from '../../shell/toast'
 
-import type { KbBase, KbDoc, KbHit, KbSettings, KbStatus, KnowledgeSource } from './types'
+import type {
+  KbBase,
+  KbChunk,
+  KbChunkQuery,
+  KbDoc,
+  KbFallback,
+  KbHit,
+  KbProvider,
+  KbSettings,
+  KbStatus,
+  KnowledgeSource,
+} from './types'
 
 /* What an RPC failure actually said.
  *
@@ -43,9 +54,20 @@ interface State {
   /* What the last search cost, for the line above the results. Null until one
      has been run, which is a different state from one that found nothing. */
   cost: { search_ms: number; embed_ms: number } | null
+  /* Why the last search answered by words, when it did. The panel says so
+     above the hits: their scores are BM25 on another scale entirely, and a
+     result set that looks ordinary is exactly what makes that worth saying. */
+  byKeyword: KbFallback[]
   /* A search is in flight. Its own flag rather than `busy`: that one gates
      every write on the page, and a search changes nothing. */
   searching: boolean
+  /* Which page of the open file the preview is showing, when a chunk sent it
+     there. Null is the file as it opens, at page one, which is not the same
+     state: it is what says nothing has been asked for yet. */
+  previewPage: number | null
+  /* The chunk that asked for it, so the list can show which one the preview
+     answers to. A chunk id, or null. */
+  previewChunk: string | null
   /* The recall panel is up. */
   recall: boolean
   /* The settings panel is up. */
@@ -59,6 +81,41 @@ interface State {
      media type to decide what it is showing, and a row that is deleted while
      open should not leave the panel looking up an id that is gone. */
   viewing: KbDoc | null
+  /* The open document's indexed pieces, beside its original. Null while they
+     are still being read, which is a different thing from the empty list a
+     document with nothing indexed answers with -- one is "wait", the other is
+     "there is nothing here", and a panel that showed the same for both would
+     be lying half the time. */
+  chunks: KbChunk[] | null
+  /* Why the pieces could not be read. The panel says so rather than showing an
+     empty list, which a reader would take for a document that indexed to
+     nothing. */
+  chunksFailed: string | null
+  /* How many pieces the current filter admits, which is what the pager counts
+     -- not how many are on screen. */
+  chunksTotal: number
+  /* Which page of the reading order is shown, 1-based. */
+  chunkPage: number
+  /* The query the list is answering. Non-empty replaces the page with what
+     matched, best first, so the pager stands down: relevance has no second
+     page the engine was asked for. */
+  chunkQuery: string
+  /* What is in the search box, which is not the same thing. A search is a
+     round trip to the embedding endpoint, so it waits for the typing to stop
+     (or for Enter) -- and every other reload in between has to keep using the
+     query that is actually in effect, not the half-typed one. */
+  chunkTyped: string
+  /* Which state the list is filtered to, or null for both. */
+  chunkFilter: boolean | null
+  /* Whether a chunk is shown whole or cut to a few lines. A reading preference,
+     so it outlives the document being closed. */
+  chunkView: 'full' | 'ellipse'
+  /* Which pieces are ticked, by id. Cleared whenever the list under them
+     changes, because a tick is a claim about rows that are on screen. */
+  chunkPicked: string[]
+  /* A write to the chunks is in flight. Its own flag rather than `busy`: that
+     one gates the document list, and these two panels are used at once. */
+  chunkBusy: boolean
   /* Which add-a-source dialog is up, if any. One field rather than a boolean
      each, because two of them open at once is not a state this page has. */
   dialog: Dialog | null
@@ -74,8 +131,10 @@ interface State {
 /* A dialog, and what it was opened on: `doc` is the note being rewritten, and
    its absence means a new one. */
 export interface Dialog {
-  kind: 'note' | 'url' | 'rename'
+  kind: 'note' | 'url' | 'rename' | 'chunk'
   doc?: KbDoc
+  /* The piece being rewritten. Absent means a new one is being written. */
+  chunk?: KbChunk
   /* The base being renamed. Only `rename` carries one. */
   base?: KbBase
 }
@@ -90,12 +149,25 @@ const EMPTY: State = {
   busy: false,
   query: '',
   hits: null,
+  byKeyword: [],
   cost: null,
+  previewPage: null,
+  previewChunk: null,
   searching: false,
   recall: false,
   settings: false,
   picked: [],
   viewing: null,
+  chunks: null,
+  chunksFailed: null,
+  chunksTotal: 0,
+  chunkPage: 1,
+  chunkQuery: '',
+  chunkTyped: '',
+  chunkFilter: null,
+  chunkView: 'ellipse',
+  chunkPicked: [],
+  chunkBusy: false,
   dialog: null,
   adding: null,
   dragDepth: 0,
@@ -142,12 +214,18 @@ export async function load(): Promise<void> {
   }
 }
 
-export async function create(name: string, description = '', embedding = true): Promise<void> {
+export async function create(
+  name: string,
+  description = '',
+  embedding = true,
+  model = '',
+  provider = '',
+): Promise<void> {
   const trimmed = name.trim()
   if (!trimmed || state.busy) return
   set({ busy: true })
   try {
-    await source().create(trimmed, description, embedding)
+    await source().create(trimmed, description, embedding, model, provider)
     await load()
   } catch (e) {
     /* Creating measures the model's width against the endpoint, so it reaches
@@ -208,7 +286,7 @@ export async function open_(id: string): Promise<void> {
   /* A query typed in the base being left must not spend a request, nor land
      its hits in the base being opened. */
   cancelSearch()
-  set({ openId: id, docs: [], query: '', hits: null, viewing: null, picked: [] })
+  set({ openId: id, docs: [], query: '', hits: null, byKeyword: [], viewing: null, picked: [] })
   try {
     const docs = await source().documents(id)
     /* The reader may have gone back or opened another base while this was in
@@ -221,7 +299,7 @@ export async function open_(id: string): Promise<void> {
 
 export function back(): void {
   cancelSearch()
-  set({ openId: null, docs: [], query: '', hits: null, viewing: null, picked: [] })
+  set({ openId: null, docs: [], query: '', hits: null, byKeyword: [], viewing: null, picked: [] })
 }
 
 /* At most this many files out of one folder. A source tree holds tens of
@@ -326,6 +404,12 @@ export async function uploadFolder(files: File[]): Promise<void> {
 
 export function openDialog(kind: 'note' | 'url', doc?: KbDoc): void {
   set({ dialog: { kind, doc } })
+}
+
+/* The add dialog with no chunk, the edit dialog with one. One dialog either
+   way: what a reader does in it is the same, and two would drift. */
+export function openChunkDialog(chunk?: KbChunk): void {
+  set({ dialog: { kind: 'chunk', chunk } })
 }
 
 export function openRename(base: KbBase): void {
@@ -601,8 +685,21 @@ export const DEFAULTS: Required<KbSettings> = {
   smart_chunking: true,
   separator: '\n\n',
   chunk_size: 2048,
-  chunk_overlap: 215,
+  /* Off. Overlap repeats text between neighbouring chunks, and every repeated
+     passage is retrieved twice and reads as two findings. */
+  chunk_overlap: 0,
+  /* About a sentence either side of a table or a figure. What the engine
+     defaults to, so the panel and Restore Defaults say the same thing. */
+  table_context_size: 64,
+  image_context_size: 64,
   file_processing: '',
+  /* Empty means the configured endpoint, which is where a base built today
+     gets its model. */
+  embedding_provider: '',
+  /* Never restored to a default: the base's own model is what its vectors were
+     made by, and Restore Defaults is about chunking, not about dropping an
+     index. Present because the type is exhaustive. */
+  embedding_model: '',
 }
 
 /* One base's settings, defaulted field by field rather than wholesale: a base
@@ -614,12 +711,50 @@ export function settingsOf(base: KbBase): Required<KbSettings> {
     separator: base.separator ?? DEFAULTS.separator,
     chunk_size: base.chunk_size ?? DEFAULTS.chunk_size,
     chunk_overlap: base.chunk_overlap ?? DEFAULTS.chunk_overlap,
+    table_context_size: base.table_context_size ?? DEFAULTS.table_context_size,
+    image_context_size: base.image_context_size ?? DEFAULTS.image_context_size,
     file_processing: base.file_processing ?? DEFAULTS.file_processing,
+    embedding_provider: base.embedding_provider ?? DEFAULTS.embedding_provider,
+    embedding_model: base.embedding_model,
   }
+}
+
+/* Every embedding model this install can reach, grouped by provider: what the
+   picker offers, both for a base being created and for one being moved onto
+   another model.
+
+   Read once, when a dialog carrying the picker opens, and kept: the list
+   changes when somebody edits their providers, which is not something that
+   happens while a dialog is up. An install whose providers cannot be read
+   offers a picker holding only what the base already has rather than failing
+   the dialog -- the rest of it is still usable. */
+let models: KbProvider[] = []
+
+export function embeddingChoices(): KbProvider[] {
+  return models
+}
+
+/* Fetched on the way into a dialog that shows the picker, rather than with the
+   page: it is a round trip per open at worst and none at all for a reader who
+   never opens one. */
+export function loadEmbeddingModels(): void {
+  if (models.length) return
+  void (async () => {
+    try {
+      models = await source().embeddingModels()
+      set({})
+    } catch {
+      /* The picker falls back to what the base already names; nothing else on
+         the panel depends on it. Inside the try rather than on a `.catch`
+         because a source too old to have the call at all throws here rather
+         than rejecting, and that would take the dialog down with it. */
+    }
+  })()
 }
 
 export function openSettings(): void {
   set({ settings: true })
+  loadEmbeddingModels()
 }
 
 export function closeSettings(): void {
@@ -635,6 +770,10 @@ export async function saveSettings(values: KbSettings): Promise<void> {
     /* Replaced from the answer rather than from what was sent: the engine is
        what decides, and a field it refused or adjusted has to show as it is. */
     set({ bases: state.bases.map((b) => (b.id === saved.id ? saved : b)), settings: false })
+    /* A model change rebuilds the base: every row is back in the queue with no
+       chunks, and a file list still saying `ready` beside a count that is now
+       zero describes the base as it was a second ago. */
+    if (values.embedding_model !== undefined) await reopen(baseId)
     toast(t('gui.kb.set_saved'))
   } catch (e) {
     toast((e as Error)?.message || String(e))
@@ -657,7 +796,7 @@ export function closeRecall(): void {
    states, and only the first one has a count to report. */
 export function clearRecall(): void {
   cancelSearch()
-  set({ query: '', hits: null, cost: null, searching: false })
+  set({ query: '', hits: null, byKeyword: [], cost: null, searching: false })
 }
 
 export function setQuery(query: string): void {
@@ -671,7 +810,7 @@ export async function searchNow(query: string): Promise<void> {
   set({ query })
   cancelSearch()
   if (!baseId || !text) {
-    set({ hits: null, cost: null })
+    set({ hits: null, byKeyword: [], cost: null })
     return
   }
   const mine = seq
@@ -683,7 +822,11 @@ export async function searchNow(query: string): Promise<void> {
     const base = state.bases.find((b) => b.id === baseId)
     const found = await source().search([baseId], text, base?.top_k)
     if (state.openId !== baseId || mine !== seq) return
-    set({ hits: found.hits, cost: { search_ms: found.search_ms, embed_ms: found.embed_ms } })
+    set({
+      hits: found.hits,
+      byKeyword: found.by_keyword ?? [],
+      cost: { search_ms: found.search_ms, embed_ms: found.embed_ms },
+    })
     remember(text)
   } catch (e) {
     if (state.openId === baseId && mine === seq) toast((e as Error)?.message || String(e))
@@ -754,6 +897,10 @@ export function redraw(): void {
 export function _resetForTests(): void {
   state = EMPTY
   listeners.clear()
+  /* The model list too, for the same reason as the state: it is cached for the
+     life of the page, so a test would otherwise pick a picker whose options
+     came from the source the test before it installed. */
+  models = []
   /* The timer and the token too: a test that types without waiting out the
      debounce would otherwise fire into the next test's source. */
   cancelSearch()
@@ -805,7 +952,7 @@ export function fileFamily(doc: KbDoc): string {
   if (['doc', 'docx', 'odt', 'rtf'].includes(ext)) return 'doc'
   if (['xls', 'xlsx', 'ods', 'csv', 'tsv'].includes(ext)) return 'sheet'
   if (['ppt', 'pptx', 'odp'].includes(ext)) return 'slide'
-  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif'].includes(ext)) return 'image'
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif', 'tif', 'tiff'].includes(ext)) return 'image'
   if (['json', 'xml', 'yaml', 'yml', 'html', 'htm'].includes(ext)) return 'data'
   return 'file'
 }
@@ -846,15 +993,269 @@ export async function readText(doc: KbDoc): Promise<string> {
   return res.text()
 }
 
-export function previewUrl(doc: KbDoc): string {
+export function previewUrl(doc: KbDoc, page?: number | null): string {
   const base = `/knowledge/file?document=${encodeURIComponent(doc.id)}`
-  return previewKind(doc) === 'converted' ? `${base}&render=pdf` : base
+  const url = previewKind(doc) === 'converted' ? `${base}&render=pdf` : base
+  /* `#page=N` is the PDF fragment every built-in viewer reads, and the only
+     way to move this frame: the response arrives under a CSP sandbox with an
+     opaque origin, so the page cannot reach into it and scroll it itself.
+     Only for a PDF -- on anything else the fragment would be an anchor name
+     that does not exist. */
+  return typeof page === 'number' && page > 1 && previewKind(doc) === 'converted' ? `${url}#page=${page}` : url
 }
 
+/* How many pieces a page holds. Twenty is what a reader scans without the page
+   becoming a scroll of its own; the engine caps what it will answer with. */
+export const CHUNK_PAGE = 20
+
 export function openDoc(doc: KbDoc): void {
-  set({ viewing: doc })
+  cancelChunkSearch()
+  /* A fresh opening starts at the top with nothing ticked and no query. The
+     view mode is deliberately left alone: it is how this reader likes to read,
+     not a fact about the file they just opened. */
+  set({
+    viewing: doc,
+    previewPage: null,
+    previewChunk: null,
+    chunks: null,
+    chunksFailed: null,
+    chunksTotal: 0,
+    chunkPage: 1,
+    chunkQuery: '',
+    chunkTyped: '',
+    chunkFilter: null,
+    chunkPicked: [],
+  })
+  void loadChunks(doc)
+}
+
+/* Take the preview to the page a chunk came from.
+
+   The one thing a deck's chunk list can do that a document's cannot: a slide
+   is a page, the preview is that deck rendered to PDF, and the two agree page
+   for page -- so a chunk can put the slide it was cut from in front of the
+   reader instead of describing it.
+
+   Called with nothing for a chunk that names no page (a text file, a
+   spreadsheet row), where the right answer is to do nothing at all rather than
+   to scroll somewhere arbitrary. */
+export function focusPage(page: number | null | undefined, chunkId = ''): void {
+  if (typeof page !== 'number' || page < 1) return
+  set({ previewPage: page, previewChunk: chunkId || null })
 }
 
 export function closeDoc(): void {
-  set({ viewing: null })
+  cancelChunkSearch()
+  set({ viewing: null, chunks: null, chunksFailed: null, chunksTotal: 0, chunkPicked: [] })
+}
+
+/* Read the page the current controls describe.
+
+   One door for every control -- page, query, filter -- because they compose:
+   searching while filtered has to ask for both, and a second path would be the
+   one that forgets. */
+function chunkRequest(): KbChunkQuery {
+  const query = state.chunkQuery.trim()
+  if (query) return { query, page_size: CHUNK_PAGE }
+  return {
+    page: state.chunkPage,
+    page_size: CHUNK_PAGE,
+    ...(state.chunkFilter === null ? {} : { available: state.chunkFilter }),
+  }
+}
+
+export function chunkPages(): number {
+  return Math.max(1, Math.ceil(state.chunksTotal / CHUNK_PAGE))
+}
+
+export function showChunkPage(page: number): void {
+  const doc = state.viewing
+  if (!doc) return
+  set({ chunkPage: Math.min(Math.max(1, page), chunkPages()), chunkPicked: [] })
+  void loadChunks(doc)
+}
+
+export function filterChunks(available: boolean | null): void {
+  const doc = state.viewing
+  if (!doc) return
+  set({ chunkFilter: available, chunkPage: 1, chunkPicked: [] })
+  void loadChunks(doc)
+}
+
+/* How long the typing has to stop before a search goes out.
+
+   Three seconds, which is long for a keystroke debounce and right for this
+   one: the request embeds the query at whatever endpoint the base was built
+   with, so an eager search is a round trip per keystroke against somebody's
+   rate limit. Enter skips the wait for anyone who does not want to serve it. */
+const CHUNK_SEARCH_WAIT = 3000
+let chunkTimer: ReturnType<typeof setTimeout> | null = null
+
+function cancelChunkSearch(): void {
+  if (chunkTimer !== null) {
+    clearTimeout(chunkTimer)
+    chunkTimer = null
+  }
+}
+
+export function typeChunkSearch(query: string): void {
+  set({ chunkTyped: query })
+  cancelChunkSearch()
+  /* An emptied box goes back at once. Waiting three seconds to see the list
+     again after clearing the search reads as a page that has stopped
+     answering, and there is no request to spare by waiting. */
+  if (!query.trim()) {
+    if (state.chunkQuery) searchChunks('')
+    return
+  }
+  chunkTimer = setTimeout(() => {
+    chunkTimer = null
+    searchChunks(state.chunkTyped)
+  }, CHUNK_SEARCH_WAIT)
+}
+
+/* Search now -- what Enter does, and what the timer above ends up calling. */
+export function searchChunks(query: string): void {
+  const doc = state.viewing
+  if (!doc) return
+  cancelChunkSearch()
+  if (query === state.chunkQuery) return
+  set({ chunkQuery: query, chunkTyped: query, chunkPage: 1, chunkPicked: [] })
+  void loadChunks(doc)
+}
+
+export function setChunkView(view: 'full' | 'ellipse'): void {
+  set({ chunkView: view })
+}
+
+export function pickChunk(chunkId: string, on: boolean): void {
+  const picked = new Set(state.chunkPicked)
+  if (on) picked.add(chunkId)
+  else picked.delete(chunkId)
+  set({ chunkPicked: [...picked] })
+}
+
+export function pickAllChunks(on: boolean): void {
+  /* Only what is on screen, and only what can be acted on: a piece with no id
+     was written before ids existed and cannot be addressed one at a time. */
+  const ids = (state.chunks || []).map((c) => c.chunk_id || '').filter(Boolean)
+  set({ chunkPicked: on ? ids : [] })
+}
+
+/* The open document's pieces, read once per opening.
+
+   Guarded on the document still being the open one: a reader clicking down a
+   list faster than the engine answers would otherwise see the pieces of a file
+   they have already moved on from, under the name of the one they are looking
+   at. */
+async function loadChunks(doc: KbDoc): Promise<void> {
+  const asked = chunkRequest()
+  try {
+    const page = await source().chunks(doc.id, asked)
+    if (state.viewing?.id !== doc.id) return
+    /* A page of the reading order is sorted here, where the panel's claim is
+       made, rather than trusted from the wire: the engine orders its answer,
+       but "reading order" is what this list says it shows, and a guarantee is
+       worth holding at the place that states it. A search is not sorted -- its
+       order is the ranking, and renumbering it by position in the document
+       would throw away the only thing the query bought. */
+    const rows = asked.query ? page.chunks : [...page.chunks].sort((a, b) => a.chunk_index - b.chunk_index)
+    set({ chunks: rows, chunksTotal: page.total, chunksFailed: null })
+  } catch (e) {
+    if (state.viewing?.id !== doc.id) return
+    set({ chunks: [], chunksTotal: 0, chunksFailed: said(e) })
+  }
+}
+
+/* Reload the open document's pieces, after a write changed them. */
+function refreshChunks(): void {
+  const doc = state.viewing
+  if (doc) void loadChunks(doc)
+}
+
+export async function switchChunks(chunkIds: string[], enabled: boolean): Promise<void> {
+  const doc = state.viewing
+  if (!doc || !chunkIds.length) return
+  const wanted = new Set(chunkIds)
+  /* Shown before the engine answers, and put back if it refuses: a toggle that
+     waits for a round trip reads as a toggle that did not work. */
+  const before = state.chunks
+  set({
+    chunkBusy: true,
+    chunks: (before || []).map((c) => (wanted.has(c.chunk_id || '') ? { ...c, enabled } : c)),
+  })
+  try {
+    await source().switchChunks(doc.id, chunkIds, enabled)
+    refreshChunks()
+  } catch (e) {
+    set({ chunks: before })
+    toast(said(e))
+  } finally {
+    set({ chunkBusy: false })
+  }
+}
+
+export function deleteChunks(chunkIds: string[]): void {
+  const doc = state.viewing
+  if (!doc || !chunkIds.length) return
+  shell().confirmAsk(
+    t('gui.kb.chunk_delete'),
+    t('gui.kb.chunk_delete_body', { count: chunkIds.length }),
+    t('gui.kb.chunk_delete'),
+    () => {
+      set({ chunkBusy: true })
+      void source()
+        .deleteChunks(doc.id, chunkIds)
+        .then(() => {
+          set({ chunkPicked: [] })
+          /* Back a page when the last one emptied out, so deleting the tail of
+             a document does not leave the pager pointing past the end. */
+          const left = Math.max(1, Math.ceil(Math.max(0, state.chunksTotal - chunkIds.length) / CHUNK_PAGE))
+          if (state.chunkPage > left) set({ chunkPage: left })
+          refreshChunks()
+          if (state.openId) void reopen(state.openId)
+        })
+        .catch((e) => toast(said(e)))
+        .finally(() => set({ chunkBusy: false }))
+    },
+  )
+}
+
+export async function saveChunk(chunk: KbChunk, text: string): Promise<void> {
+  const doc = state.viewing
+  const id = chunk.chunk_id
+  if (!doc || !id || !text.trim()) return
+  set({ chunkBusy: true })
+  try {
+    await source().updateChunk(doc.id, id, text)
+    closeDialog()
+    /* The id changed with the text, so a tick pointing at the old one is
+       pointing at nothing. */
+    set({ chunkPicked: state.chunkPicked.filter((p) => p !== id) })
+    refreshChunks()
+  } catch (e) {
+    toast(said(e))
+  } finally {
+    set({ chunkBusy: false })
+  }
+}
+
+export async function addChunk(text: string): Promise<void> {
+  const doc = state.viewing
+  if (!doc || !text.trim()) return
+  set({ chunkBusy: true })
+  try {
+    await source().createChunk(doc.id, text)
+    closeDialog()
+    /* At the end of the reading order, so that is the page to be looking at. */
+    set({ chunkQuery: '', chunkFilter: null, chunkPicked: [] })
+    const total = state.chunksTotal + 1
+    set({ chunksTotal: total, chunkPage: Math.max(1, Math.ceil(total / CHUNK_PAGE)) })
+    refreshChunks()
+    if (state.openId) void reopen(state.openId)
+  } catch (e) {
+    toast(said(e))
+  } finally {
+    set({ chunkBusy: false })
+  }
 }

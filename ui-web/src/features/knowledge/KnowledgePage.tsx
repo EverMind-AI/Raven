@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 
-import { t } from '../../shell/bridge'
+import { shell, t } from '../../shell/bridge'
 import { md as mdHtml } from '../../shell/prose'
 import { ProviderIcon, ravenIconPath } from '../../shell/provider-mark'
 import { open as openSettings, setTab as setSettingsTab } from '../settings/store'
 import * as store from './store'
 
-import type { KbBase, KbDoc, KbHit } from './types'
+import type { KbBase, KbChunk, KbDoc, KbHit } from './types'
 import type { JSX } from 'react'
 
 /* Controls the panel shows because they belong to it, and which nothing is
@@ -22,14 +22,110 @@ function Soon({ label, className = 'mini ghost' }: { label: string; className?: 
   )
 }
 
-/* Name and embedding model, the two facts a base is created with. The model
-   cannot be changed afterwards -- vector width is fixed when the collection is
-   made -- so it is asked for here rather than offered as a setting later. */
-function CreateDialog({ model, onClose }: { model: string; onClose: () => void }): JSX.Element {
+/* A model and the provider serving it, as one value.
+
+   One control rather than two fields, and the same one in both dialogs: an
+   embedding endpoint is a pair -- a model id names no credential, and neither
+   half is worth reading without the other -- so picking them apart is how a
+   base ends up naming a model its provider does not serve. Grouped by
+   provider, because the group is the answer to "whose credential pays for
+   this".
+
+   A value the list does not hold is shown as an option of its own, so the
+   select never draws empty: an empty select would tell a reader their base has
+   no model when it has one. */
+function EmbeddingPicker({
+  id,
+  value,
+  onPick,
+}: {
+  id?: string
+  value: string
+  onPick: (pair: string) => void
+}): JSX.Element {
+  const groups = store.embeddingChoices()
+  const listed = groups.flatMap((p) => p.models.map((m) => `${p.id}::${m}`))
+  const match = listed.find((pair) => samePair(pair, value))
+  return (
+    <select
+      id={id}
+      className="mini kbmodels"
+      value={match ?? value}
+      onChange={(e) => onPick(e.currentTarget.value)}
+    >
+      {/* Disabled is a real choice, not the absence of one: a base nobody
+          means to search by vector should not be made to carry an index. */}
+      <option value="">{t('gui.kb.embed_off')}</option>
+      {/* Before the groups, so it reads as the current value: the list has not
+          arrived yet, or no longer offers what this base was built on. */}
+      {!match && value !== '' && <option value={value}>{modelOf(value)}</option>}
+      {groups.map((p) => (
+        <optgroup key={p.id} label={p.name}>
+          {p.models.map((m) => (
+            <option key={`${p.id}::${m}`} value={`${p.id}::${m}`}>
+              {m}
+            </option>
+          ))}
+        </optgroup>
+      ))}
+    </select>
+  )
+}
+
+/* The two halves of a `provider::model` pair. Split on the first separator so
+   a model id carrying one of its own survives the round trip. */
+function pairOf(value: string): { provider: string; model: string } {
+  const at = value.indexOf('::')
+  if (at < 0) return { provider: '', model: value }
+  return { provider: value.slice(0, at), model: value.slice(at + 2) }
+}
+
+function modelOf(value: string): string {
+  return pairOf(value).model
+}
+
+/* Whether two pairs name the same model.
+
+   Not string equality, for two reasons the engine already knows about and the
+   page has to agree with, or it offers a reader both spellings of one model
+   and calls picking the one they are on a rebuild.
+
+   A provider stores its models under its own prefix and that prefix comes off
+   before the request is sent, so `siliconflow::siliconflow/BAAI/bge-m3` in the
+   picker and `siliconflow::BAAI/bge-m3` on the base are one model.
+
+   And a base written before providers were recorded names a model and nobody
+   to serve it, which means "wherever this is configured" -- so an empty
+   provider matches any, and naming one for such a base records where it is
+   reached rather than moving it. */
+function samePair(a: string, b: string): boolean {
+  if (a === b) return true
+  const one = pairOf(a)
+  const two = pairOf(b)
+  if (!one.model || !two.model) return false
+  if (one.provider && two.provider && one.provider !== two.provider) return false
+  return wireModel(one) === wireModel(two)
+}
+
+/* A model id as the request carries it: the provider's own prefix off, every
+   other prefix left alone. `BAAI/` in `BAAI/bge-m3` is the maker, not the
+   account, and stripping it would read two different models as one. */
+function wireModel({ provider, model }: { provider: string; model: string }): string {
+  const head = `${provider}/`
+  return provider && model.startsWith(head) ? model.slice(head.length) : model
+}
+
+/* Name and embedding model, the two facts a base is created with. The model is
+   asked for here because it decides the width of the collection, and the
+   configured default is what the picker starts on. */
+function CreateDialog({ pair, onClose }: { pair: string; onClose: () => void }): JSX.Element {
   const [name, setName] = useState('')
-  const [embed, setEmbed] = useState(model)
+  const [embed, setEmbed] = useState(pair)
   const field = useRef<HTMLInputElement>(null)
-  useEffect(() => field.current?.focus(), [])
+  useEffect(() => {
+    field.current?.focus()
+    store.loadEmbeddingModels()
+  }, [])
 
   const submit = (): void => {
     if (!name.trim()) return
@@ -37,7 +133,8 @@ function CreateDialog({ model, onClose }: { model: string; onClose: () => void }
     // rather than a default one: sending only the name is what produced a base
     // that was asked for as Disabled and came back carrying the configured
     // model.
-    void store.create(name, '', embed !== '')
+    const picked = pairOf(embed)
+    void store.create(name, '', embed !== '', picked.model, picked.provider)
     onClose()
   }
   return (
@@ -67,17 +164,7 @@ function CreateDialog({ model, onClose }: { model: string; onClose: () => void }
         <label className="fl" htmlFor="kbembed">
           {t('gui.kb.embed_model')}
         </label>
-        <select
-          id="kbembed"
-          className="mini"
-          value={embed}
-          onChange={(e) => setEmbed(e.currentTarget.value)}
-        >
-          {/* Disabled is a real choice, not the absence of one: a base nobody
-              means to search by vector should not be made to carry an index. */}
-          <option value="">{t('gui.kb.embed_off')}</option>
-          {model && <option value={model}>{model}</option>}
-        </select>
+        <EmbeddingPicker id="kbembed" value={embed} onPick={setEmbed} />
         {!embed && <div className="hint">{t('gui.kb.embed_off_note')}</div>}
 
         <div className="kbacts">
@@ -350,6 +437,10 @@ function SourceMenu({ busy }: { busy: boolean }): JSX.Element {
               files.current?.click()
             }}
           >
+            <svg className="kbmi" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" />
+              <path d="M14 3v5h5" />
+            </svg>
             {t('gui.kb.src_file')}
           </button>
           <button
@@ -360,6 +451,10 @@ function SourceMenu({ busy }: { busy: boolean }): JSX.Element {
               store.openDialog('note')
             }}
           >
+            <svg className="kbmi" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" />
+              <path d="M14 3v5h5M9 13h6M9 17h4" />
+            </svg>
             {t('gui.kb.src_note')}
           </button>
           <button
@@ -370,6 +465,9 @@ function SourceMenu({ busy }: { busy: boolean }): JSX.Element {
               folder.current?.click()
             }}
           >
+            <svg className="kbmi" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+            </svg>
             {t('gui.kb.src_folder')}
           </button>
           <button
@@ -380,6 +478,10 @@ function SourceMenu({ busy }: { busy: boolean }): JSX.Element {
               store.openDialog('url')
             }}
           >
+            <svg className="kbmi" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M10.5 13.5a4 4 0 0 0 5.7 0l2.6-2.6a4 4 0 0 0-5.7-5.7l-1.3 1.3" />
+              <path d="M13.5 10.5a4 4 0 0 0-5.7 0l-2.6 2.6a4 4 0 0 0 5.7 5.7l1.3-1.3" />
+            </svg>
             {t('gui.kb.src_url')}
           </button>
         </div>
@@ -566,6 +668,7 @@ function Hit({ hit, at, docs }: { hit: KbHit; at: number; docs: KbDoc[] }): JSX.
   const from = docs.find((d) => d.id === hit.document_id)
   const name = from?.source || hit.source || t('gui.kb.recall_gone')
   const family = from ? store.fileFamily(from) : 'file'
+  const keyword = hit.retrieval === 'keyword'
   return (
     <div className="kbhit">
       <button className="kbhithd" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
@@ -587,10 +690,22 @@ function Hit({ hit, at, docs }: { hit: KbHit; at: number; docs: KbDoc[] }): JSX.
             #{(hit.chunk_index ?? 0) + 1}
           </span>
         ) : null}
-        {/* The similarity, not only the rank: a recall test is run to find out
-            how near the near thing actually was, and three hits at 0.83 mean
-            something different from one at 0.83 over two at 0.31. */}
-        <span className="kbhitsc">{hit.score.toFixed(3)}</span>
+        {/* The score, not only the rank: a recall test is run to find out how
+            near the near thing actually was, and three hits at 0.83 mean
+            something different from one at 0.83 over two at 0.31.
+
+            Labelled by what it is. A base whose embedding model cannot be
+            reached answers by keyword, and a BM25 score is unbounded and on
+            another scale entirely -- printed as "0.831" beside a cosine
+            similarity it reads as a worse match rather than as a different
+            kind of measurement. */}
+        <span
+          className={`kbhitsc${keyword ? ' kbhitbm' : ''}`}
+          title={t(keyword ? 'gui.kb.recall_bm25' : 'gui.kb.recall_cosine')}
+        >
+          {keyword ? hit.score.toFixed(2) : hit.score.toFixed(3)}
+          {keyword && <span className="kbhitkw">{t('gui.kb.recall_kw')}</span>}
+        </span>
         <span className="kbhitrk">{t('gui.kb.recall_rank', { n: at + 1 })}</span>
         <span className="kbhitcv" aria-hidden="true">
           {open ? '\u2303' : '\u2304'}
@@ -721,10 +836,11 @@ function Field({ label, help, children }: { label: string; help: string; childre
 
 /* One base's settings.
 
-   The embedding model is shown and not offered: the vector store is sized to
-   its width when the base is created, so changing it is a rebuild of every
-   vector rather than a preference. The stale-base check exists because that
-   mismatch has to be detectable; a dropdown here would be a way to cause it. */
+   The embedding model is offered here as well as at creation, and it is the
+   one control on the panel that is not a preference: the collection is sized
+   to the model's width and holds vectors that model made, so moving it drops
+   the index and sends every document back to be cut and embedded again. That
+   is said out loud before it happens rather than discovered afterwards. */
 function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.Element {
   const saved = store.settingsOf(base)
   const [topK, setTopK] = useState(saved.top_k)
@@ -732,6 +848,10 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
   const [sep, setSep] = useState(saved.separator)
   const [size, setSize] = useState(String(saved.chunk_size))
   const [lap, setLap] = useState(String(saved.chunk_overlap))
+  const [tableCtx, setTableCtx] = useState(String(saved.table_context_size ?? 0))
+  const [imageCtx, setImageCtx] = useState(String(saved.image_context_size ?? 0))
+  const own = base.embedding_model ? `${base.embedding_provider ?? ''}::${base.embedding_model}` : ''
+  const [embed, setEmbed] = useState(own)
   const [adv, setAdv] = useState(true)
 
   const close = (): void => store.closeSettings()
@@ -741,19 +861,51 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
     setSep(store.DEFAULTS.separator)
     setSize(String(store.DEFAULTS.chunk_size))
     setLap(String(store.DEFAULTS.chunk_overlap))
+    // From DEFAULTS like every other field above. Written as zero, this button
+    // turned the context feature off instead of restoring it -- the engine,
+    // the record and this store all default these to 64.
+    setTableCtx(String(store.DEFAULTS.table_context_size))
+    setImageCtx(String(store.DEFAULTS.image_context_size))
   }
-  const save = (): void => {
+  const write = (): void => {
+    const picked = pairOf(embed)
     void store.saveSettings({
       top_k: topK,
       smart_chunking: smart,
       separator: sep,
       chunk_size: Number(size),
       chunk_overlap: Number(lap),
+      table_context_size: Number(tableCtx),
+      image_context_size: Number(imageCtx),
+      embedding_provider: picked.provider,
+      // Only when it moved. Sent unchanged it would still be a rebuild call,
+      // and a panel saving a slider must not drop the base's index.
+      ...(samePair(embed, own) ? {} : { embedding_model: picked.model }),
     })
+  }
+  /* Asked once, and only when there is something to lose: a base with no
+     documents has no index to drop, and a confirmation nobody needs is one
+     more click through a dialog that says something the next one will not. */
+  const save = (): void => {
+    if (samePair(embed, own) || !base.documents) {
+      write()
+      return
+    }
+    shell().confirmAsk(
+      t('gui.kb.set_embed_switch'),
+      t('gui.kb.set_embed_switch_body', { count: base.documents }),
+      t('gui.kb.set_embed_switch_go'),
+      write,
+    )
   }
   /* The two numbers are typed, so they can be mid-edit and empty or nonsense;
      saving those would ask the engine to refuse them. */
-  const numbers = Number(size) > 0 && Number(lap) >= 0 && Number(lap) < Number(size)
+  const numbers =
+    Number(size) > 0 &&
+    Number(lap) >= 0 &&
+    Number(lap) < Number(size) &&
+    Number(tableCtx) >= 0 &&
+    Number(imageCtx) >= 0
 
   return (
     <div className="kbmodal" role="dialog" aria-modal="true" aria-label={t('gui.kb.set_title')}>
@@ -767,8 +919,17 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
           <FileProcessing />
         </Field>
 
+        {/* One value, not two fields: an embedding endpoint is a provider and
+            a model together -- a model id does not name a credential, and
+            neither half is worth reading without the other. */}
         <Field label={t('gui.kb.set_embed')} help={t('gui.kb.set_embed_help')}>
-          <div className="kbfixed">{base.embedding_model || t('gui.kb.embed_off')}</div>
+          <div className="kbembed">
+            <EmbeddingPicker value={embed} onPick={setEmbed} />
+            {/* What picking another one costs, where the picking happens. The
+                confirmation on save says it again with the number of
+                documents; this is what a reader sees before they decide. */}
+            {!samePair(embed, own) && <span className="kbwarn">{t('gui.kb.set_embed_moved')}</span>}
+          </div>
         </Field>
 
         <Field label={t('gui.kb.set_topk')} help={t('gui.kb.set_topk_help')}>
@@ -796,16 +957,12 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
 
         {adv && (
           <>
+            {/* Not in force: every base is cut the naive way while the
+                structural chunker is reworked. Shown and disabled rather than
+                hidden -- a switch that silently decides nothing is how the
+                other four settings on this panel spent their first release. */}
             <Field label={t('gui.kb.set_smart')} help={t('gui.kb.set_smart_help')}>
-              <button
-                className="kbtog"
-                role="switch"
-                aria-checked={smart}
-                aria-label={t('gui.kb.set_smart')}
-                onClick={() => setSmart((v) => !v)}
-              >
-                <span />
-              </button>
+              <Soon label={t('gui.kb.set_smart_soon')} />
             </Field>
             <Field label={t('gui.kb.set_sep')} help={t('gui.kb.set_sep_help')}>
               {/* Escaped on the way in and out: the separator a reader means is
@@ -813,7 +970,6 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
               <input
                 className="kbname"
                 value={sep.replace(/\n/g, '\\n').replace(/\t/g, '\\t')}
-                disabled={smart}
                 onChange={(e) =>
                   setSep(e.currentTarget.value.replace(/\\n/g, '\n').replace(/\\t/g, '\t'))
                 }
@@ -828,6 +984,35 @@ function SettingsDialog({ base, busy }: { base: KbBase; busy: boolean }): JSX.El
                   max={8192}
                   value={size}
                   onChange={(e) => setSize(e.currentTarget.value)}
+                />
+                <span>{t('gui.kb.set_tokens')}</span>
+              </div>
+            </Field>
+            {/* A table is its own chunk, and these say how much of the prose
+                around it comes along -- without them a table embeds as a grid
+                of values with nothing saying what they are about. */}
+            <Field label={t('gui.kb.set_tablectx')} help={t('gui.kb.set_tablectx_help')}>
+              <div className="kbunit">
+                <input
+                  className="kbname"
+                  type="number"
+                  min={0}
+                  max={2048}
+                  value={tableCtx}
+                  onChange={(e) => setTableCtx(e.currentTarget.value)}
+                />
+                <span>{t('gui.kb.set_tokens')}</span>
+              </div>
+            </Field>
+            <Field label={t('gui.kb.set_imagectx')} help={t('gui.kb.set_imagectx_help')}>
+              <div className="kbunit">
+                <input
+                  className="kbname"
+                  type="number"
+                  min={0}
+                  max={2048}
+                  value={imageCtx}
+                  onChange={(e) => setImageCtx(e.currentTarget.value)}
                 />
                 <span>{t('gui.kb.set_tokens')}</span>
               </div>
@@ -954,6 +1139,17 @@ function RecallDialog({ s }: { s: ReturnType<typeof store.getState> }): JSX.Elem
         </div>
 
         {s.searching && <Wait label={t('gui.kb.recall_run')} />}
+        {/* Said once, above the results, and not only per hit: an endpoint
+            that has gone turns a search into a differently-scaled but entirely
+            ordinary-looking set of hits, and the reason it changed mode is
+            what a reader can act on. */}
+        {s.byKeyword.length > 0 && !s.searching ? (
+          <div className="kbfellback" role="status">
+            <b>{t('gui.kb.recall_fellback', { n: s.byKeyword.length })}</b>
+            <span>{s.byKeyword[0]?.reason}</span>
+          </div>
+        ) : null}
+
         {s.hits && !s.searching ? (
           <div className="kbstats">
             <b>{t('gui.kb.recall_n', { n: s.hits.length })}</b>
@@ -1014,7 +1210,19 @@ function DocMenu({ doc, busy }: { doc: KbDoc; busy: boolean }): JSX.Element {
       </button>
       {open && (
         <div className="kbmenu" role="menu">
-          <Soon label={t('gui.kb.doc_view_chunks')} className="mi" />
+          {/* The same door as clicking the name: both open the file beside
+              its chunks, and two ways in that showed different things would
+              be two features to keep in step. */}
+          <button
+            className="mi"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false)
+              store.openDoc(doc)
+            }}
+          >
+            {t('gui.kb.doc_view_chunks')}
+          </button>
           {/* Only a note. Every other origin is a copy of something the reader
               holds elsewhere, and offering to edit it here would make this
               base the only place their change exists. */}
@@ -1116,10 +1324,25 @@ function DocRow({ doc, busy, picked }: { doc: KbDoc; busy: boolean; picked: bool
       {/* The reason rides on the status rather than under the row. A red line
           beneath every failure pushed the rows apart and made a list of files
           hard to scan; the status is where a reader is already looking when
-          they want to know what went wrong. */}
-      <div className={`${td} st s-${doc.status}`} title={doc.error || undefined}>
+          they want to know what went wrong.
+
+          A warning rides there too, and means something different: the file
+          was indexed and is searchable, and part of it did not make it in --
+          pictures no model could read, most often. Without the mark the row
+          says ready and the only symptom is a search that answers worse. */}
+      <div className={`${td} st s-${doc.status}`} title={doc.error || doc.warning || undefined}>
         {t('gui.kb.doc_' + doc.status)}
+        {!doc.error && doc.warning && (
+          <span className="kbdocwarn" role="img" aria-label={t('gui.kb.doc_warned')}>
+            {'\u26a0'}
+          </span>
+        )}
       </div>
+      {/* A dash rather than a zero for a document that has not been through
+          the chunker: one that failed, one still queued, and one in a base
+          with no model have no count to report, and a zero would read as a
+          document that was cut into nothing. */}
+      <div className={`${td} kbnum`}>{doc.status === 'ready' ? doc.chunk_count : '\u2014'}</div>
       <div className={td}>{ago(doc.updated_at)}</div>
       <div className={td}>
         <DocMenu doc={doc} busy={busy} />
@@ -1176,7 +1399,407 @@ function MarkdownView({ doc }: { doc: KbDoc }): JSX.Element {
    arrives under a CSP sandbox, which is what gives it an opaque origin; the
    attribute as well would stop the browser's own PDF viewer, which is
    script-driven, from drawing anything at all. */
-function DocViewer({ doc }: { doc: KbDoc }): JSX.Element {
+/* One indexed piece, as the search sees it.
+
+   Numbered from 1 the way the recall panel numbers its hits, so the same piece
+   carries the same name in both places. What the badges say is what the parser
+   found and nothing more: a page only where the format has pages, a layout
+   type only where the source marked one. */
+function ChunkRow({
+  chunk,
+  view,
+  picked,
+  busy,
+  at,
+}: {
+  chunk: KbChunk
+  view: 'full' | 'ellipse'
+  picked: boolean
+  busy: boolean
+  /* Whether the preview is currently showing this chunk's page. */
+  at: boolean
+}): JSX.Element {
+  const path = chunk.heading_path ?? []
+  const id = chunk.chunk_id || ''
+  const on = chunk.enabled !== false
+  const page = typeof chunk.page_number === 'number' ? chunk.page_number : null
+  /* A chunk that crossed a section boundary. The fields above describe where
+     it *starts*, so on their own they say this piece is on one page under one
+     heading while half of what is being read came from somewhere else. The
+     parts are where that is recoverable, and the badge below is the only thing
+     on the row that says to look. */
+  const parts = chunk.parts ?? []
+  const last = typeof chunk.page_end === 'number' ? chunk.page_end : null
+  const spread = page !== null && last !== null && last > page
+  const origins = [...new Set(parts.map((part) => part.section_ordinal).filter((n) => typeof n === 'number'))]
+
+  /* Clicking the piece shows the page it was cut from -- except when the click
+     was a reader selecting words out of it, which is what a click on prose
+     usually is and what the editor being on double-click already protects.
+     A click that produced a selection is that; it moves nothing. */
+  const show = (event: React.MouseEvent): void => {
+    if (page === null) return
+    const target = event.target as HTMLElement
+    if (target.closest('input, label, button')) return
+    if ((window.getSelection()?.toString() ?? '').trim()) return
+    store.focusPage(page, id)
+  }
+
+  return (
+    <div className={`kbchunk${on ? '' : ' off'}${at ? ' at' : ''}`} onClick={show}>
+      <div className="kbchunkhd">
+        <input
+          type="checkbox"
+          checked={picked}
+          disabled={!id}
+          aria-label={t('gui.kb.chunk_pick', { n: chunk.chunk_index + 1 })}
+          onChange={(e) => store.pickChunk(id, e.currentTarget.checked)}
+        />
+        <span className="kbchunkix">#{chunk.chunk_index + 1}</span>
+        {chunk.layout_type && <span className="kbchunkty">{chunk.layout_type}</span>}
+        {/* The badge is the affordance, because it is the thing that names the
+            page: the row as a whole answers to a click too, but a reader
+            looking for "show me this slide" looks here. */}
+        {page !== null && (
+          <button
+            className="kbchunkpg"
+            title={t(spread ? 'gui.kb.chunk_show_first_page' : 'gui.kb.chunk_show_page', { n: page })}
+            onClick={() => store.focusPage(page, id)}
+          >
+            {spread
+              ? t('gui.kb.chunks_pages', { from: page, to: last })
+              : t('gui.kb.chunks_page', { n: page })}
+          </button>
+        )}
+        {/* What the flattened fields cannot say. Hovering names every piece:
+            which section it came from, what page, and under which heading --
+            because the row's own heading and page are the first part's, and a
+            reader with no way to see that reads them as the whole chunk's. */}
+        {parts.length > 1 && (
+          <span
+            className="kbchunkspan"
+            title={parts
+              .map((part) =>
+                t('gui.kb.chunk_part', {
+                  section: typeof part.section_ordinal === 'number' ? part.section_ordinal + 1 : '?',
+                  page: typeof part.page_number === 'number' ? part.page_number : '?',
+                  path: (part.heading_path ?? []).join(' > ') || '-',
+                }),
+              )
+              .join('\n')}
+          >
+            {origins.length > 1
+              ? t('gui.kb.chunk_sections', { n: origins.length })
+              : t('gui.kb.chunk_merged', { n: parts.length })}
+          </span>
+        )}
+        {chunk.manual && <span className="kbchunkty kbwritten">{t('gui.kb.chunk_written')}</span>}
+        {path.length > 0 && (
+          <span className="kbchunkpath" title={path.join(' > ')}>
+            {path.join(' > ')}
+          </span>
+        )}
+        {/* A switch rather than a menu item: it is the state of this piece,
+            and the state is worth seeing without opening anything. */}
+        <label className="kbswitch">
+          <input
+            type="checkbox"
+            checked={on}
+            disabled={!id || busy}
+            aria-label={t(on ? 'gui.kb.chunk_disable' : 'gui.kb.chunk_enable')}
+            onChange={(e) => void store.switchChunks([id], e.currentTarget.checked)}
+          />
+          <span className="kbslider" aria-hidden="true" />
+        </label>
+      </div>
+      {/* Double-click to rewrite, the way the row menu is a second click for
+          the file list: a single click on prose is how a reader selects a
+          word out of it, and taking that away to open an editor would make
+          the panel unreadable. */}
+      <div
+        className={`kbchunktx${view === 'ellipse' ? ' cut' : ''}`}
+        onDoubleClick={() => id && store.openChunkDialog(chunk)}
+        title={id ? t('gui.kb.chunk_edit_hint') : undefined}
+      >
+        {chunk.text}
+      </div>
+    </div>
+  )
+}
+
+/* What the toolbar does to a selection.
+
+   Absent rather than dead while nothing is ticked: three buttons that can
+   never be pressed are three things to read past every time, and this toolbar
+   is already carrying a search box and a pager's worth of controls in half a
+   split. They appear with the selection, which is also what says the selection
+   happened. */
+function ChunkOps({ picked, busy }: { picked: string[]; busy: boolean }): JSX.Element | null {
+  if (!picked.length) return null
+  return (
+    <>
+      <span className="who">{t('gui.kb.picked_n', { n: picked.length })}</span>
+      <button className="mini ghost" disabled={busy} onClick={() => void store.switchChunks(picked, true)}>
+        {t('gui.kb.chunk_enable')}
+      </button>
+      <button className="mini ghost" disabled={busy} onClick={() => void store.switchChunks(picked, false)}>
+        {t('gui.kb.chunk_disable')}
+      </button>
+      <button className="mini ghost danger" disabled={busy} onClick={() => store.deleteChunks(picked)}>
+        {t('gui.kb.chunk_delete')}
+      </button>
+    </>
+  )
+}
+
+/* Which pieces the list admits, behind the icon that means filter.
+
+   A menu rather than a cycling button: three states that a single control
+   steps through leave a reader guessing what the next press does, and the one
+   in force has to be readable at a glance -- which is what the tick is for. */
+function ChunkFilter({ picked }: { picked: boolean | null }): JSX.Element {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (!open) return
+    const shut = (): void => setOpen(false)
+    document.addEventListener('click', shut)
+    return () => {
+      document.removeEventListener('click', shut)
+    }
+  }, [open])
+  const choices: [boolean | null, string][] = [
+    [null, 'gui.kb.chunk_filter_all'],
+    [true, 'gui.kb.chunk_filter_on'],
+    [false, 'gui.kb.chunk_filter_off'],
+  ]
+  return (
+    <div className="kbops kbfilter">
+      <button
+        className={`mini ghost${picked === null ? '' : ' on'}`}
+        aria-label={t('gui.kb.chunk_filter')}
+        title={t('gui.kb.chunk_filter')}
+        aria-expanded={open}
+        onClick={(e) => {
+          e.stopPropagation()
+          setOpen((v) => !v)
+        }}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 7h16M7 12h10M10 17h4" />
+        </svg>
+      </button>
+      {open && (
+        <div className="kbmenu" role="menu">
+          {choices.map(([value, key]) => (
+            <button
+              key={key}
+              className="mi"
+              role="menuitemradio"
+              aria-checked={picked === value}
+              onClick={() => {
+                setOpen(false)
+                store.filterChunks(value)
+              }}
+            >
+              {picked === value ? '\u2713 ' : '\u2007\u2007'}
+              {t(key)}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* The pieces the file was cut into, and what can be done to them.
+
+   Reading order is the chunker's own numbering: it walks the sections a parser
+   produced and numbers as it goes, so the sequence down this list is the
+   sequence in the document beside it. A query replaces that order with the
+   ranking it found, which is the only order a search has. */
+function ChunkList({ s }: { s: ReturnType<typeof store.getState> }): JSX.Element {
+  const rows = s.chunks ?? []
+  const ids = rows.map((c) => c.chunk_id || '').filter(Boolean)
+  const all = ids.length > 0 && ids.every((id) => s.chunkPicked.includes(id))
+  const pages = store.chunkPages()
+  const searching = s.chunkQuery.trim().length > 0
+  return (
+    <div className="kbchunks">
+      <div className="kbchunkshd">
+        <b>{t('gui.kb.chunks_title')}</b>
+        <span className="kbchunksn">{t('gui.kb.chunks_n', { n: s.chunksTotal })}</span>
+      </div>
+
+      <div className="kbchunkbar">
+        <label className="kbpickall">
+          <input
+            type="checkbox"
+            checked={all}
+            disabled={!ids.length}
+            aria-label={t('gui.kb.chunk_pick_all')}
+            onChange={() => store.pickAllChunks(!all)}
+          />
+          <span>{t('gui.kb.chunk_pick_all')}</span>
+        </label>
+        <ChunkOps picked={s.chunkPicked} busy={s.chunkBusy} />
+        {/* Two ways to read the same list, not two lists: full text for
+            checking a cut, cut-down for finding one. */}
+        <div className="kbseg" role="group" aria-label={t('gui.kb.chunk_view')}>
+          <button
+            className={s.chunkView === 'full' ? 'on' : ''}
+            aria-pressed={s.chunkView === 'full'}
+            onClick={() => store.setChunkView('full')}
+          >
+            {t('gui.kb.chunk_full')}
+          </button>
+          <button
+            className={s.chunkView === 'ellipse' ? 'on' : ''}
+            aria-pressed={s.chunkView === 'ellipse'}
+            onClick={() => store.setChunkView('ellipse')}
+          >
+            {t('gui.kb.chunk_ellipse')}
+          </button>
+        </div>
+        {/* Typing does not search: a search embeds the query at whatever
+            endpoint the base was built with, so it waits for the typing to
+            stop. Enter is there for anyone who would rather not wait. */}
+        <div className="kbsearchbox">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="11" cy="11" r="6.5" />
+            <path d="M16 16l4.5 4.5" />
+          </svg>
+          <input
+            className="kbchunksearch"
+            type="search"
+            value={s.chunkTyped}
+            placeholder={t('gui.kb.chunk_search')}
+            aria-label={t('gui.kb.chunk_search')}
+            onChange={(e) => store.typeChunkSearch(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') store.searchChunks(e.currentTarget.value)
+            }}
+          />
+        </div>
+        <ChunkFilter picked={s.chunkFilter} />
+        <button
+          className="mini ghost kbchunkadd"
+          aria-label={t('gui.kb.chunk_add')}
+          title={t('gui.kb.chunk_add')}
+          disabled={s.chunkBusy}
+          onClick={() => store.openChunkDialog()}
+        >
+          +
+        </button>
+      </div>
+
+      {s.chunks === null ? (
+        <Wait label={t('gui.kb.chunks_loading')} />
+      ) : s.chunksFailed ? (
+        <div className="empty-note">
+          <div className="ttl">{s.chunksFailed}</div>
+        </div>
+      ) : rows.length === 0 ? (
+        /* Not the same as still reading: a document that failed, one still
+           queued, and one in a base with no model all land here, and saying so
+           beats an empty column a reader has to interpret. */
+        <div className="empty-note">
+          <div className="ttl">{searching ? t('gui.kb.chunk_no_match') : t('gui.kb.chunks_none')}</div>
+        </div>
+      ) : (
+        <div className="kbchunklist">
+          {rows.map((chunk) => (
+            <ChunkRow
+              key={chunk.chunk_id || chunk.chunk_index}
+              chunk={chunk}
+              view={s.chunkView}
+              picked={s.chunkPicked.includes(chunk.chunk_id || '')}
+              busy={s.chunkBusy}
+              at={!!chunk.chunk_id && chunk.chunk_id === s.previewChunk}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* A pager only where there are pages to turn. A search answers with
+          what matched and has no second page of relevance to offer. */}
+      {!searching && pages > 1 && (
+        <div className="kbchunkfoot">
+          <button
+            className="mini ghost"
+            disabled={s.chunkPage <= 1}
+            aria-label={t('gui.kb.chunk_prev')}
+            onClick={() => store.showChunkPage(s.chunkPage - 1)}
+          >
+            &#8249;
+          </button>
+          <span className="who">{t('gui.kb.chunk_page_of', { page: s.chunkPage, pages })}</span>
+          <button
+            className="mini ghost"
+            disabled={s.chunkPage >= pages}
+            aria-label={t('gui.kb.chunk_next')}
+            onClick={() => store.showChunkPage(s.chunkPage + 1)}
+          >
+            &#8250;
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* A piece written by hand, appended to the end of the document.
+
+   Said out loud in the dialog: it is embedded like every other piece and found
+   by the same queries, and it goes when the document is reindexed. Both halves
+   matter -- the first is why it is worth writing, the second is why it is not
+   a place to keep anything. */
+function ChunkDialog({ chunk, busy }: { chunk?: KbChunk; busy: boolean }): JSX.Element {
+  const [text, setText] = useState(chunk?.text ?? '')
+  const field = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => field.current?.focus(), [])
+  const close = (): void => store.closeDialog()
+  const label = chunk ? t('gui.kb.chunk_edit') : t('gui.kb.chunk_add')
+  return (
+    <div className="kbmodal" role="dialog" aria-modal="true" aria-label={label}>
+      <div className="kbdlg kbwide">
+        <button className="x" aria-label={t('gui.kb.cancel')} onClick={close}>
+          &times;
+        </button>
+        <div className="ttl">{label}</div>
+        <textarea
+          id="kbchunkbody"
+          ref={field}
+          className="kbnote"
+          value={text}
+          placeholder={t('gui.kb.chunk_add_hint')}
+          onChange={(e) => setText(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') close()
+          }}
+        />
+        {/* Both halves said out loud: an edited piece is re-embedded, so the
+            vector says what the text says -- and it is gone with the rest the
+            next time the file is indexed. */}
+        <div className="hint">{chunk ? t('gui.kb.chunk_edit_note') : t('gui.kb.chunk_add_note')}</div>
+        <div className="kbacts">
+          {busy && <Wait label={t('gui.kb.chunk_adding')} />}
+          <button className="mini ghost" onClick={close}>
+            {t('gui.kb.cancel')}
+          </button>
+          <button
+            className="mini"
+            disabled={busy || !text.trim() || text === chunk?.text}
+            onClick={() => (chunk ? void store.saveChunk(chunk, text) : void store.addChunk(text))}
+          >
+            {chunk ? t('gui.kb.note_save') : t('gui.kb.create')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function DocViewer({ doc, page }: { doc: KbDoc; page: number | null }): JSX.Element {
   const kind = store.previewKind(doc)
   return (
     <>
@@ -1195,29 +1818,38 @@ function DocViewer({ doc }: { doc: KbDoc }): JSX.Element {
           </a>
         )}
       </div>
-      {kind === 'markdown' ? (
-        <MarkdownView doc={doc} />
-      ) : kind === 'none' ? (
-        <div className="empty-note">
-          <div className="ttl">{t('gui.kb.no_preview')}</div>
-          {/* A download rather than a wall of bytes: the file is still theirs
-              to open, in whatever does know the format. */}
-          <a className="mini" href={store.previewUrl(doc)} download={doc.source}>
-            {t('gui.kb.download')}
-          </a>
-        </div>
-      ) : (
-        <iframe className="kbframe" src={store.previewUrl(doc)} title={doc.source} />
-      )}
+      <div className="kborig">
+        {kind === 'markdown' ? (
+          <MarkdownView doc={doc} />
+        ) : kind === 'none' ? (
+          <div className="empty-note">
+            <div className="ttl">{t('gui.kb.no_preview')}</div>
+            {/* A download rather than a wall of bytes: the file is still theirs
+                to open, in whatever does know the format. */}
+            <a className="mini" href={store.previewUrl(doc)} download={doc.source}>
+              {t('gui.kb.download')}
+            </a>
+          </div>
+        ) : (
+          /* Keyed on the page so a new one re-navigates the frame. Nothing
+             else can move it: the response is sandboxed to an opaque origin,
+             so `contentWindow` is out of reach and only the src is ours to
+             set. The cost is a reload, which the gateway answers from its
+             render cache -- a re-click is a file read, not another
+             LibreOffice run. */
+          <iframe
+            key={page ?? 0}
+            className="kbframe"
+            src={store.previewUrl(doc, page)}
+            title={doc.source}
+          />
+        )}
+      </div>
     </>
   )
 }
 
 function BasePanel({ base, s }: { base: KbBase; s: ReturnType<typeof store.getState> }): JSX.Element {
-  /* The file takes the whole panel rather than opening beside the table: a
-     document is what the reader came to look at, and half a page of it is not
-     worth keeping a list they can get back to with one button. */
-  if (s.viewing) return <DocViewer doc={s.viewing} />
   /* Every row, and at least one: an empty list whose header tick reads "on"
      would offer to act on nothing. */
   const all = s.docs.length > 0 && s.picked.length === s.docs.length
@@ -1234,6 +1866,19 @@ function BasePanel({ base, s }: { base: KbBase; s: ReturnType<typeof store.getSt
             a mismatch is why a search stops answering. A base made without one
             says so, rather than borrowing today's model to fill the space. */}
         <span className="mdl">{base.embedding_model || t('gui.kb.embed_off')}</span>
+        {/* A base that cannot embed says so here rather than in a line of the
+            gateway log: nothing it holds can be indexed or searched until the
+            model it was built with can be reached again, and the reader who
+            can fix that is the one looking at this header. */}
+        {base.embedding_reach && (
+          <button
+            className="kbunreach"
+            title={t('gui.kb.reach_' + base.embedding_reach + '_help', { model: base.embedding_model })}
+            onClick={() => store.openSettings()}
+          >
+            {t('gui.kb.reach_' + base.embedding_reach)}
+          </button>
+        )}
         {/* A base with no embedding model has no vectors to search, and
             `search` skips it rather than failing -- which from here would look
             like a base that answers nothing to every question. Disabled and
@@ -1300,6 +1945,7 @@ function BasePanel({ base, s }: { base: KbBase; s: ReturnType<typeof store.getSt
           <div className="th">{t('gui.kb.col_name')}</div>
           <div className="th">{t('gui.kb.col_type')}</div>
           <div className="th">{t('gui.kb.col_status')}</div>
+          <div className="th kbnum">{t('gui.kb.col_chunks')}</div>
           <div className="th">{t('gui.kb.col_updated')}</div>
           <div className="th" />
           {s.docs.map((d) => (
@@ -1405,6 +2051,29 @@ export function KnowledgeApp(): JSX.Element {
   }
 
   const open = s.openId ? s.bases.find((b) => b.id === s.openId) : undefined
+  /* A file takes the whole page, rail included, rather than only the panel
+     beside it: a document is what the reader came to look at, and the widest
+     thing on the screen should be the thing being read. What the rail offers
+     -- another base, a new one -- is not a move anyone makes mid-document, and
+     it is one button away. */
+  if (s.viewing) {
+    /* Two halves of one question: the file as it was written, and the pieces
+       the index actually holds. Side by side because the second is only
+       meaningful against the first -- a chunk list alone says nothing about
+       where a cut landed. */
+    return (
+      <>
+        <div className="kbview">
+          <DocViewer doc={s.viewing} page={s.previewPage} />
+          <ChunkList s={s} />
+        </div>
+        {/* The overlays belong to the page, not to the panel under them: the
+            early return above is what the file view is, and a dialog left
+            outside it could be opened from here and never drawn. */}
+        {s.dialog?.kind === 'chunk' && <ChunkDialog chunk={s.dialog.chunk} busy={s.chunkBusy} />}
+      </>
+    )
+  }
   return (
     <>
       <div className="kbsplit">
@@ -1457,9 +2126,15 @@ export function KnowledgeApp(): JSX.Element {
           )}
         </div>
       </div>
-      {creating && <CreateDialog model={s.status?.model ?? ''} onClose={() => setCreating(false)} />}
+      {creating && (
+        <CreateDialog
+          pair={s.status?.model ? `${s.status.provider ?? ''}::${s.status.model}` : ''}
+          onClose={() => setCreating(false)}
+        />
+      )}
       {s.dialog?.kind === 'note' && <NoteDialog doc={s.dialog.doc} busy={s.busy} />}
       {s.dialog?.kind === 'url' && <UrlDialog busy={s.busy} />}
+      {s.dialog?.kind === 'chunk' && <ChunkDialog chunk={s.dialog.chunk} busy={s.chunkBusy} />}
       {s.dialog?.kind === 'rename' && s.dialog.base && (
         <RenameDialog base={s.dialog.base} busy={s.busy} />
       )}

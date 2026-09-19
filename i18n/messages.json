@@ -2987,6 +2987,10 @@
       "en": "Status",
       "zh": "状态"
     },
+    "gui.kb.col_chunks": {
+      "en": "Chunks",
+      "zh": "分块数"
+    },
     "gui.kb.col_type": {
       "en": "Type",
       "zh": "类型"
@@ -3023,6 +3027,154 @@
       "en": "View Chunks",
       "zh": "查看分块"
     },
+    "gui.kb.chunks_title": {
+      "en": "Chunks",
+      "zh": "分块"
+    },
+    "gui.kb.chunks_n": {
+      "en": "Total {n}",
+      "zh": "共 {n} 块"
+    },
+    "gui.kb.chunk_pick": {
+      "en": "Select chunk {n}",
+      "zh": "选择第 {n} 块"
+    },
+    "gui.kb.chunk_pick_all": {
+      "en": "Select all",
+      "zh": "全选"
+    },
+    "gui.kb.chunk_enable": {
+      "en": "Enable",
+      "zh": "启用"
+    },
+    "gui.kb.chunk_disable": {
+      "en": "Disable",
+      "zh": "停用"
+    },
+    "gui.kb.chunk_delete": {
+      "en": "Delete",
+      "zh": "删除"
+    },
+    "gui.kb.chunk_delete_body": {
+      "en": "Delete {count} chunk(s)? They are gone from the index; the file itself stays.",
+      "zh": "删除 {count} 个分块？它们将从索引中移除，文件本身保留。"
+    },
+    "gui.kb.chunk_view": {
+      "en": "How much of each chunk to show",
+      "zh": "分块显示方式"
+    },
+    "gui.kb.chunk_full": {
+      "en": "Full text",
+      "zh": "全文"
+    },
+    "gui.kb.chunk_ellipse": {
+      "en": "Ellipse",
+      "zh": "省略"
+    },
+    "gui.kb.chunk_search": {
+      "en": "Search",
+      "zh": "搜索"
+    },
+    "gui.kb.chunk_no_match": {
+      "en": "Nothing in this file answers that.",
+      "zh": "该文件中没有匹配的内容。"
+    },
+    "gui.kb.chunk_filter": {
+      "en": "Which chunks to show",
+      "zh": "筛选分块"
+    },
+    "gui.kb.chunk_filter_all": {
+      "en": "All",
+      "zh": "全部"
+    },
+    "gui.kb.chunk_filter_on": {
+      "en": "Enabled",
+      "zh": "已启用"
+    },
+    "gui.kb.chunk_filter_off": {
+      "en": "Disabled",
+      "zh": "已停用"
+    },
+    "gui.kb.chunk_add": {
+      "en": "Add a chunk",
+      "zh": "新增分块"
+    },
+    "gui.kb.chunk_add_hint": {
+      "en": "The text to index as one chunk",
+      "zh": "作为一个分块索引的文本"
+    },
+    "gui.kb.chunk_add_note": {
+      "en": "Appended to the end and embedded like every other chunk. Reindexing the file deletes it along with the rest.",
+      "zh": "追加到末尾，并与其他分块一样进行嵌入。重新索引该文件时会与其他分块一并删除。"
+    },
+    "gui.kb.chunk_edit": {
+      "en": "Edit this chunk",
+      "zh": "编辑分块"
+    },
+    "gui.kb.chunk_edit_hint": {
+      "en": "Double-click to edit",
+      "zh": "双击编辑"
+    },
+    "gui.kb.chunk_edit_note": {
+      "en": "Saved as a new vector, so search matches what it now says. Reindexing the file deletes it along with the rest.",
+      "zh": "保存后会重新嵌入，检索将匹配修改后的内容。重新索引该文件时会与其他分块一并删除。"
+    },
+    "gui.kb.chunk_adding": {
+      "en": "Adding",
+      "zh": "正在新增"
+    },
+    "gui.kb.chunk_written": {
+      "en": "written",
+      "zh": "手写"
+    },
+    "gui.kb.chunk_prev": {
+      "en": "Previous page",
+      "zh": "上一页"
+    },
+    "gui.kb.chunk_next": {
+      "en": "Next page",
+      "zh": "下一页"
+    },
+    "gui.kb.chunk_page_of": {
+      "en": "{page} / {pages}",
+      "zh": "{page} / {pages}"
+    },
+    "gui.kb.chunks_none": {
+      "en": "Nothing indexed for this file yet.",
+      "zh": "这个文件还没有索引内容。"
+    },
+    "gui.kb.chunks_loading": {
+      "en": "Reading chunks",
+      "zh": "正在读取分块"
+    },
+    "gui.kb.chunks_page": {
+      "en": "p.{n}",
+      "zh": "第 {n} 页"
+    },
+    "gui.kb.chunks_pages": {
+      "en": "p.{from}-{to}",
+      "zh": "第 {from}-{to} 页"
+    },
+    "gui.kb.chunk_show_first_page": {
+      "en": "This piece spans pages. Show page {n}, where it starts.",
+      "zh": "该分块跨越多页。显示其起始页：第 {n} 页。"
+    },
+    "gui.kb.chunk_sections": {
+      "en": "{n} sections",
+      "zh": "{n} 个小节"
+    },
+    "gui.kb.chunk_merged": {
+      "en": "{n} parts",
+      "zh": "{n} 个片段"
+    },
+    "gui.kb.chunk_part": {
+      "en": "section {section}, page {page} -- {path}",
+      "zh": "第 {section} 个小节，第 {page} 页 -- {path}"
+    },
+    "gui.kb.chunk_show_page": {
+      "en": "Show page {n} of the file beside this",
+      "zh": "在左侧显示文件的第 {n} 页"
+    },
     "gui.kb.download": {
       "en": "Download",
       "zh": "下载"
@@ -3042,6 +3194,22 @@
     "gui.kb.embed_off_note": {
       "en": "No embedding model. The base stores its documents and is not searched by vector.",
       "zh": "不使用嵌入模型。该知识库仅保存文档，不进行向量检索。"
+    },
+    "gui.kb.reach_no_provider": {
+      "en": "Cannot embed",
+      "zh": "无法嵌入"
+    },
+    "gui.kb.reach_no_provider_help": {
+      "en": "{model} is not what this install is configured to embed with, and this base does not record who serves it. Nothing here can be indexed or searched until it does. Set the provider in settings.",
+      "zh": "{model} 不是本安装当前配置的嵌入模型，而该知识库也没有记录由谁提供该模型。在补上之前，这里的内容无法索引，也无法检索。请在设置中指定提供方。"
+    },
+    "gui.kb.reach_no_credential": {
+      "en": "Provider unusable",
+      "zh": "提供方不可用"
+    },
+    "gui.kb.reach_no_credential_help": {
+      "en": "The provider recorded for {model} has no usable credential, so nothing here can be indexed or searched. Give that provider a key, or point this base at another one in settings.",
+      "zh": "为 {model} 记录的提供方没有可用凭据，因此这里的内容无法索引，也无法检索。请为该提供方配置密钥，或在设置中改为其他提供方。"
     },
     "gui.kb.name": {
       "en": "Name",
@@ -3098,6 +3266,10 @@
     "gui.kb.doc_ready": {
       "en": "Searchable",
       "zh": "可检索"
+    },
+    "gui.kb.doc_warned": {
+      "en": "Indexed, but part of this file was not read",
+      "zh": "已建立索引，但文件中有部分内容未被读取"
     },
     "gui.kb.doc_failed": {
       "en": "Failed",
@@ -4295,6 +4467,22 @@
       "en": "Reserved for translation. Nothing calls it yet, so setting it changes nothing today.",
       "zh": "为翻译预留。目前尚无调用方，设置后暂不生效。"
     },
+    "gui.set.dm.vision": {
+      "en": "Vision model",
+      "zh": "视觉模型"
+    },
+    "gui.set.dm.vision_note": {
+      "en": "What reads a picture. Knowledge bases describe uploaded images, and figures inside documents, with it.",
+      "zh": "用于读图的模型。知识库使用它描述上传的图片，以及文档内的插图。"
+    },
+    "gui.set.dm.vision_off": {
+      "en": "Not set -- pictures are not read",
+      "zh": "未设置：不读取图片"
+    },
+    "gui.set.dm.vision_warn": {
+      "en": "Only models that accept an image as input are offered. Unset, an uploaded image cannot be indexed and a figure inside a document keeps only its caption.",
+      "zh": "仅列出可以图片作为输入的模型。未设置时，上传的图片无法建立索引，文档内的插图也只保留其说明文字。"
+    },
     "gui.set.grp.agent": {
       "en": "Agent",
       "zh": "智能体"
@@ -5409,7 +5597,7 @@
     },
     "gui.ws.instance_turn_elapsed": {
       "en": "Working for {d}",
-      "zh": "\u672c\u8f6e\u5df2\u8fd0\u884c {d}"
+      "zh": "本轮已运行 {d}"
     },
     "gui.ws.instance_new_fail": {
       "en": "Could not start: {why}",
@@ -5553,11 +5741,11 @@
     },
     "gui.ws.html_run": {
       "en": "Run it here",
-      "zh": "\u5728\u8fd9\u91cc\u8fd0\u884c"
+      "zh": "在这里运行"
     },
     "gui.ws.html_no_scripts": {
       "en": "Scripts do not run in this preview. A page that needs them may look blank, or may look finished while its layout is wrong and nothing responds. Open the file outside Raven to see it as written.",
-      "zh": "\u9884\u89c8\u4e0d\u8fd0\u884c\u811a\u672c\u3002\u9700\u8981\u811a\u672c\u7684\u9875\u9762\u53ef\u80fd\u4e00\u7247\u7a7a\u767d\uff0c\u4e5f\u53ef\u80fd\u770b\u7740\u50cf\u753b\u597d\u4e86\u3001\u5b9e\u9645\u4e0a\u6392\u7248\u662f\u6b6a\u7684\u4e14\u70b9\u4ec0\u4e48\u90fd\u6ca1\u53cd\u5e94\u3002\u8981\u770b\u5b83\u672c\u6765\u7684\u6837\u5b50\uff0c\u8bf7\u5728 Raven \u4e4b\u5916\u6253\u5f00\u8fd9\u4e2a\u6587\u4ef6\u3002"
+      "zh": "预览不运行脚本。需要脚本的页面可能一片空白，也可能看着像画好了、实际上排版是歪的且点什么都没反应。要看它本来的样子，请在 Raven 之外打开这个文件。"
     },
     "gui.ws.file_gone": {
       "en": "That file is no longer there.",
@@ -6261,23 +6449,23 @@
     },
     "gui.imodel.title": {
       "en": "Model",
-      "zh": "\u6a21\u578b"
+      "zh": "模型"
     },
     "gui.imodel.agent": {
       "en": "Agent's own",
-      "zh": "\u8ddf\u968f\u5b50\u667a\u80fd\u4f53"
+      "zh": "跟随子智能体"
     },
     "gui.imodel.agent_tip": {
       "en": "Answering with whatever this agent chose. Click to give this instance its own model.",
-      "zh": "\u7528\u7684\u662f\u5b50\u667a\u80fd\u4f53\u81ea\u5df1\u9009\u7684\u6a21\u578b\u3002\u70b9\u51fb\u53ef\u4e3a\u8fd9\u4e2a\u5b9e\u4f8b\u5355\u72ec\u6307\u5b9a\u6a21\u578b\u3002"
+      "zh": "用的是子智能体自己选的模型。点击可为这个实例单独指定模型。"
     },
     "gui.imodel.set_tip": {
       "en": "This instance's own model, from its next turn on.",
-      "zh": "\u8fd9\u4e2a\u5b9e\u4f8b\u81ea\u5df1\u7684\u6a21\u578b\uff0c\u4ece\u4e0b\u4e00\u8f6e\u5f00\u59cb\u751f\u6548\u3002"
+      "zh": "这个实例自己的模型，从下一轮开始生效。"
     },
     "gui.imodel.failed": {
       "en": "Could not change this instance's model",
-      "zh": "\u6539\u8fd9\u4e2a\u5b9e\u4f8b\u7684\u6a21\u578b\u6ca1\u6709\u6210\u529f"
+      "zh": "改这个实例的模型没有成功"
     },
     "gui.imode.title": {
       "en": "Effort",
@@ -7007,6 +7195,22 @@
       "en": "Rank #{n}",
       "zh": "第 {n} 名"
     },
+    "gui.kb.recall_kw": {
+      "en": "kw",
+      "zh": "关键词"
+    },
+    "gui.kb.recall_bm25": {
+      "en": "A keyword (BM25) score. Its scale is the index's own and is not comparable with a similarity.",
+      "zh": "关键词（BM25）得分。其量纲由索引决定，不能与相似度直接比较。"
+    },
+    "gui.kb.recall_cosine": {
+      "en": "A vector similarity, from 0 to 1.",
+      "zh": "向量相似度（0 到 1）。"
+    },
+    "gui.kb.recall_fellback": {
+      "en": "{n} knowledge base(s) answered by keyword, not by meaning",
+      "zh": "有 {n} 个知识库此次按关键词检索，而非按语义检索"
+    },
     "gui.kb.recall_chunk": {
       "en": "Chunk {n} of {total}",
       "zh": "第 {n} / {total} 块"
@@ -7060,8 +7264,24 @@
       "zh": "向量模型"
     },
     "gui.kb.set_embed_help": {
-      "en": "Fixed when the base was created. Its vector width sizes the store, so changing it would mean re-embedding every document.",
-      "zh": "创建知识库时确定，不可更改。向量维度决定了存储结构，更换模型需要对所有文档重新向量化。"
+      "en": "Which model this base holds vectors from, and who serves it. Changing the model rebuilds the base: the index is dropped and every document is cut and embedded again on the new model.",
+      "zh": "该知识库的向量来自哪个模型，以及由谁提供。更换模型会重建知识库：原有索引被丢弃，所有文档将在新模型上重新分块并向量化。"
+    },
+    "gui.kb.set_embed_moved": {
+      "en": "Saving rebuilds this base",
+      "zh": "保存后将重建该知识库"
+    },
+    "gui.kb.set_embed_switch": {
+      "en": "Change the embedding model?",
+      "zh": "更换嵌入模型？"
+    },
+    "gui.kb.set_embed_switch_body": {
+      "en": "The vectors this base holds were made by the model it is on now, so they go. Its {count} documents are kept and go back to the queue, to be indexed again on the new model.",
+      "zh": "该知识库现有向量由当前模型生成，将被丢弃。其中 {count} 个文档会保留并重新排队，在新模型上再次建立索引。"
+    },
+    "gui.kb.set_embed_switch_go": {
+      "en": "Change and rebuild",
+      "zh": "更换并重建"
     },
     "gui.kb.set_topk": {
       "en": "Top K",
@@ -7080,16 +7300,16 @@
       "zh": "智能分块"
     },
     "gui.kb.set_smart_help": {
-      "en": "Split on the structure the file has -- headings, slides, pages -- instead of on length alone.",
-      "zh": "按文件自身的结构切分，例如标题、幻灯片、页面，而不是仅按长度切分。"
+      "en": "Split on the structure the file has -- headings, slides, pages -- instead of on the delimiters below. Not in force yet: every base is cut on its delimiters while this is reworked.",
+      "zh": "按文件自身的结构切分，例如标题、幻灯片、页面，而不是按下面的分隔符切分。该选项暂未生效：重做期间，所有知识库均按分隔符切分。"
     },
     "gui.kb.set_sep": {
       "en": "Separator",
       "zh": "分隔符"
     },
     "gui.kb.set_sep_help": {
-      "en": "Where a plain split is allowed to cut, when smart chunking is off.",
-      "zh": "关闭智能分块时，普通切分允许断开的位置。"
+      "en": "Where a chunk may be cut. One delimiter per character; wrap a longer one in backticks, as in `\\n\\n`. The delimiter itself never appears in a chunk, and a unit between two delimiters is never split.",
+      "zh": "分块允许断开的位置。每个字符算一个分隔符；较长的分隔符用反引号包住，例如 `\\n\\n`。分隔符本身不会出现在分块内容中，两个分隔符之间的内容也不会被切断。"
     },
     "gui.kb.set_size": {
       "en": "Chunk Size",
@@ -7104,8 +7324,24 @@
       "zh": "重叠大小"
     },
     "gui.kb.set_lap_help": {
-      "en": "How much of the previous chunk each one repeats, so a sentence split across two is still findable.",
-      "zh": "每个分块重复前一个分块的长度，避免被切断的句子无法检索到。"
+      "en": "Tokens of each neighbouring chunk repeated at both ends, so a passage across a boundary is whole in both. Zero is off: repeated text is retrieved twice.",
+      "zh": "在每个分块两端重复相邻分块的若干 token，使跨边界的段落在两个分块中都完整。为 0 表示关闭：重复的内容会被检索两次。"
+    },
+    "gui.kb.set_tablectx": {
+      "en": "Table Context",
+      "zh": "表格上下文"
+    },
+    "gui.kb.set_tablectx_help": {
+      "en": "Tokens of the surrounding text to carry into a chunk that is a table. A table on its own says nothing about what its numbers are.",
+      "zh": "并入表格分块的上下文 token 数。单独的表格无法说明其中的数字代表什么。"
+    },
+    "gui.kb.set_imagectx": {
+      "en": "Figure Context",
+      "zh": "图片上下文"
+    },
+    "gui.kb.set_imagectx_help": {
+      "en": "The same, for a chunk that is a figure.",
+      "zh": "同上，用于图片分块。"
     },
     "gui.kb.set_tokens": {
       "en": "tokens",
@@ -7182,6 +7418,10 @@
     "gui.kb.save": {
       "en": "Save",
       "zh": "保存"
+    },
+    "gui.kb.set_smart_soon": {
+      "en": "Not yet",
+      "zh": "暂未启用"
     }
   }
 }

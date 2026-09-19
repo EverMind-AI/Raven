@@ -19,6 +19,7 @@ class _FakeBase:
         self.name = name
         self.description = "notes"
         self.embedding_model = "bge-m3"
+        self.embedding_provider = "siliconflow"
         self.dimensions = 1024
         self.created_at = "2026-08-24T00:00:00"
         self.updated_at = "2026-08-24T00:01:00"
@@ -32,9 +33,16 @@ class _FakeManager:
         self._docs = docs
         self.asked: list[str] = []
         self.create_raises: Exception | None = None
+        self.switch_raises: Exception | None = None
+        self.switched: tuple[str, str] | None = None
 
     def list_bases(self) -> list[_FakeBase]:
         return list(self._bases)
+
+    def embedding_reach(self, base: object) -> str:
+        """Reachable unless a test says otherwise; the rule itself is the
+        engine's, and is tested there."""
+        return str(getattr(base, "embedding_reach", "") or "")
 
     def list_documents(self, base_id: str) -> list[object]:
         self.asked.append(base_id)
@@ -43,19 +51,43 @@ class _FakeManager:
     def get_base(self, base_id: str):
         return next((b for b in self._bases if b.id == base_id), None)
 
-    async def create_base(self, *, name: str, description: str = "", embedding: bool = True):
+    async def create_base(
+        self,
+        *,
+        name: str,
+        description: str = "",
+        embedding: bool = True,
+        embedding_model: str = "",
+        embedding_provider: str = "",
+    ):
         if self.create_raises is not None:
             raise self.create_raises
         made = _FakeBase(f"b{len(self._bases) + 1}", name)
         made.description = description
+        if embedding_model:
+            made.embedding_model = embedding_model
+            made.embedding_provider = embedding_provider
         # An empty model is how a base with no vectors is recorded, which is
         # what every reader tests for.
         if not embedding:
             made.embedding_model = ""
+            made.embedding_provider = ""
             made.dimensions = 0
         self.created_with_embedding = embedding
         self._bases.append(made)
         return made
+
+    async def switch_embedding(self, base_id: str, *, model: str, provider: str = ""):
+        if self.switch_raises is not None:
+            raise self.switch_raises
+        base = self.get_base(base_id)
+        if base is None:
+            return None
+        self.switched = (model, provider)
+        base.embedding_model = model
+        base.embedding_provider = provider if model else ""
+        base.dimensions = 1024 if model else 0
+        return base
 
     def rename_base(self, base_id: str, *, name=None, description=None):
         base = self.get_base(base_id)
@@ -85,12 +117,16 @@ def _no_leak():
 async def test_status_reports_the_model_when_embedding_is_configured(monkeypatch) -> None:
     class _Config:
         model = "bge-m3"
+        provider = "siliconflow"
 
     monkeypatch.setattr("raven.knowledge.load_embedding_config", lambda: _Config())
 
     out = await kb.knowledge_status({})
 
     assert (out["configured"], out["model"]) == (True, "bge-m3")
+    # The provider travels with it: the page preselects the pair in the picker
+    # a base is created from, and a model id alone cannot be selected with.
+    assert out["provider"] == "siliconflow"
     # Reported so a surface walking a folder can filter by what this build can
     # actually index, rather than by a list written down beside it.
     assert ".md" in out["extensions"]
@@ -180,6 +216,7 @@ async def test_creating_a_base_answers_the_row_the_list_would_show() -> None:
         "name",
         "description",
         "embedding_model",
+        "embedding_provider",
         "dimensions",
         "created_at",
         "updated_at",
@@ -187,6 +224,9 @@ async def test_creating_a_base_answers_the_row_the_list_would_show() -> None:
         "top_k",
         "smart_chunking",
         "separator",
+        "table_context_size",
+        "image_context_size",
+        "embedding_reach",
         "chunk_size",
         "chunk_overlap",
         "file_processing",
@@ -282,6 +322,7 @@ class _FakeDoc:
         source: str = "handbook.md",
         origin: str = "file",
         origin_ref: str = "",
+        warning: str = "",
     ) -> None:
         self.id = doc_id
         self.base_id = "b1"
@@ -295,6 +336,38 @@ class _FakeDoc:
         self.updated_at = "2026-08-24T00:00:00"
         self.origin = origin
         self.origin_ref = origin_ref
+        self.warning = warning
+
+
+async def test_a_row_carries_what_the_parse_could_not_do(monkeypatch) -> None:
+    """A warning is not an error and does not replace the status: the document
+    is ready and searchable, and the line says which part of it is not in the
+    index."""
+    manager = _FakeManager([_FakeBase("b1", "handbook")], {})
+    manager.list_documents = lambda base_id: [  # type: ignore[assignment]
+        _FakeDoc("d1", "ready", warning="2 of 5 pictures in this file could not be read: rate limited")
+    ]
+    kb._set_manager_for_tests(manager)
+
+    out = await kb.knowledge_documents_list({"base_id": "b1"})
+
+    row = out["documents"][0]
+    assert row["status"] == "ready"
+    assert row["error"] == ""
+    assert "2 of 5 pictures" in row["warning"]
+
+
+async def test_a_row_with_nothing_to_report_carries_an_empty_warning(monkeypatch) -> None:
+    """Never absent: the page reads the field, and a gateway answering nothing
+    for it would have every row look warned or none of them, depending on how
+    the page spelled the check."""
+    manager = _FakeManager([_FakeBase("b1", "handbook")], {})
+    manager.list_documents = lambda base_id: [_FakeDoc("d1", "ready")]  # type: ignore[assignment]
+    kb._set_manager_for_tests(manager)
+
+    out = await kb.knowledge_documents_list({"base_id": "b1"})
+
+    assert out["documents"][0]["warning"] == ""
 
 
 def _fence(monkeypatch, tmp_path: Path, *, restrict: bool = True) -> None:
@@ -502,6 +575,9 @@ async def test_search_projects_the_hit_to_score_document_and_text() -> None:
     assert out["hits"] == [
         {
             "score": 0.87,
+            # What that number is. Always stated, so a surface never has to
+            # guess what an absent field meant.
+            "retrieval": "vector",
             "document_id": "d1",
             "text": "the answer",
             # Where in its document the chunk sat, which is the first thing
@@ -962,6 +1038,115 @@ async def test_the_overlap_is_judged_against_what_the_base_will_hold() -> None:
     assert wrote == [{"chunk_overlap": 100}]
 
 
+async def test_a_picked_model_is_what_the_base_is_built_on() -> None:
+    """The page offers every embedding model the install can reach, so the pair
+    it picked has to reach the engine -- a base built on the configured pin
+    whatever was chosen is a picker that decides nothing."""
+    manager = _FakeManager([], {})
+    kb._set_manager_for_tests(manager)
+
+    out = await kb.knowledge_bases_create(
+        {"name": "handbook", "embedding_model": "text-embedding-3-large", "embedding_provider": "openai"}
+    )
+
+    assert out["base"]["embedding_model"] == "text-embedding-3-large"
+    assert out["base"]["embedding_provider"] == "openai"
+
+
+async def test_a_base_created_without_a_pair_takes_the_configured_pin() -> None:
+    """Which is what every base was built on before the choice existed."""
+    manager = _FakeManager([], {})
+    kb._set_manager_for_tests(manager)
+
+    out = await kb.knowledge_bases_create({"name": "handbook"})
+
+    assert out["base"]["embedding_model"] == "bge-m3"
+
+
+async def test_sending_a_model_rebuilds_the_base_rather_than_writing_a_field() -> None:
+    """The collection is sized to the model's width and holds vectors that
+    model made, so this is a rebuild -- which is why it does not go through
+    the settings write beside it."""
+    manager, wrote, base = _settings_manager()
+    kb._set_manager_for_tests(manager)
+
+    out = await kb.knowledge_bases_settings(
+        {"base_id": "b1", "embedding_model": "text-embedding-3-large", "embedding_provider": "openai"}
+    )
+
+    assert manager.switched == ("text-embedding-3-large", "openai")
+    # And not written twice: the rebuild records the provider that served the
+    # width it measured, so a settings write of the same key would be a second
+    # opinion about it.
+    assert wrote == []
+    assert out["base"]["embedding_model"] == "text-embedding-3-large"
+
+
+async def test_an_empty_model_turns_embedding_off() -> None:
+    """The one choice that used to be fixed at creation."""
+    manager, _, _ = _settings_manager()
+    kb._set_manager_for_tests(manager)
+
+    out = await kb.knowledge_bases_settings({"base_id": "b1", "embedding_model": ""})
+
+    assert manager.switched == ("", "")
+    assert out["base"]["embedding_model"] == ""
+
+
+async def test_the_provider_alone_still_only_moves_the_address() -> None:
+    """Sent without a model it is the repair it has always been: the same model
+    reached through another account, with nothing to rebuild."""
+    manager, wrote, _ = _settings_manager()
+    kb._set_manager_for_tests(manager)
+
+    await kb.knowledge_bases_settings({"base_id": "b1", "embedding_provider": "dashscope"})
+
+    assert wrote == [{"embedding_provider": "dashscope"}]
+    assert manager.switched is None
+
+
+async def test_a_model_that_cannot_be_embedded_with_is_the_callers_mistake() -> None:
+    """So the panel shows the sentence rather than "internal error" -- and the
+    base is untouched, because the width is measured before anything drops."""
+    from raven.knowledge import KnowledgeError
+
+    manager, _, base = _settings_manager()
+    manager.switch_raises = KnowledgeError("provider 'openai' has no usable credential")
+    kb._set_manager_for_tests(manager)
+
+    with pytest.raises(ConfigValidationError) as caught:
+        await kb.knowledge_bases_settings({"base_id": "b1", "embedding_model": "text-embedding-3-large"})
+
+    assert "no usable credential" in str(caught.value)
+    assert base.embedding_model == "bge-m3"
+
+
+async def test_the_settings_land_before_the_documents_are_requeued() -> None:
+    """A rebuild re-cuts every document, and it should cut them by the numbers
+    the same call just wrote rather than by the ones it replaced."""
+    manager, wrote, _ = _settings_manager()
+    order: list[str] = []
+    configure = manager.configure_base
+
+    def _configure(base_id, **settings):
+        order.append("settings")
+        return configure(base_id, **settings)
+
+    switch = manager.switch_embedding
+
+    async def _switch(base_id, **kwargs):
+        order.append("rebuild")
+        return await switch(base_id, **kwargs)
+
+    manager.configure_base = _configure  # type: ignore[assignment]
+    manager.switch_embedding = _switch  # type: ignore[assignment]
+    kb._set_manager_for_tests(manager)
+
+    await kb.knowledge_bases_settings({"base_id": "b1", "chunk_size": 1024, "embedding_model": "bge-large"})
+
+    assert order == ["settings", "rebuild"]
+
+
 async def test_settings_for_a_base_that_is_gone_say_so() -> None:
     manager, wrote, _ = _settings_manager()
     kb._set_manager_for_tests(manager)
@@ -991,3 +1176,331 @@ async def test_a_search_with_no_top_k_leaves_the_number_to_the_engine() -> None:
     await kb.knowledge_search({"base_ids": ["b1"], "query": "what", "top_k": 3})
 
     assert asked == [None, 3]
+
+
+async def test_a_keyword_answer_says_so_on_every_hit_and_once_on_the_answer() -> None:
+    """An unreachable embedding endpoint turns a search into an ordinary
+    looking result set scored on another scale. Forwarded as a bare number
+    under a field documented as a similarity, that is a silent change of
+    retrieval mode -- so the mode travels with it."""
+    from raven.knowledge import SearchOutcome
+    from raven.knowledge._types import Chunk, TextBlock, VectorSearchResult
+
+    hit = VectorSearchResult(
+        score=8.42,
+        document_id="d1",
+        chunk=Chunk(content=TextBlock(text="alpha"), source="a.md", chunk_index=0, total_chunks=1),
+        retrieval="keyword",
+    )
+    manager = _FakeManager([], {})
+
+    async def _search(base_ids, query, top_k=None):
+        return SearchOutcome(hits=[hit], by_keyword={"b1": "the model could not be reached"})
+
+    manager.search = _search  # type: ignore[assignment]
+    kb._set_manager_for_tests(manager)
+
+    out = await kb.knowledge_search({"base_ids": ["b1"], "query": "alpha"})
+
+    assert out["hits"][0]["retrieval"] == "keyword"
+    assert out["by_keyword"] == [{"base_id": "b1", "reason": "the model could not be reached"}]
+
+
+async def test_an_ordinary_search_says_vector_and_nothing_else() -> None:
+    """The field is always present, so a surface never has to guess what an
+    absent one meant."""
+    from raven.knowledge import SearchOutcome
+    from raven.knowledge._types import Chunk, TextBlock, VectorSearchResult
+
+    hit = VectorSearchResult(
+        score=0.83,
+        document_id="d1",
+        chunk=Chunk(content=TextBlock(text="alpha"), source="a.md", chunk_index=0, total_chunks=1),
+    )
+    manager = _FakeManager([], {})
+
+    async def _search(base_ids, query, top_k=None):
+        return SearchOutcome(hits=[hit])
+
+    manager.search = _search  # type: ignore[assignment]
+    kb._set_manager_for_tests(manager)
+
+    out = await kb.knowledge_search({"base_ids": ["b1"], "query": "alpha"})
+
+    assert out["hits"][0]["retrieval"] == "vector"
+    assert out["by_keyword"] == []
+
+
+async def test_a_merged_chunk_carries_where_each_of_its_parts_came_from() -> None:
+    """The flattened fields describe where a chunk starts, which is all they
+    can do once a chunk can merge across sections. Sent alone they say this
+    piece is on page 4 under one heading while half of it came from page 9
+    under another, and the row has no route to the difference."""
+
+    class _Chunk:
+        chunk_index = 0
+        total_chunks = 1
+        text = "Third.\nSeventh."
+        metadata = {
+            "layout_type": "text",
+            "page_number": 4,
+            "page_end": 9,
+            "heading_path": ["Handbook", "Part 3"],
+            "elements": [
+                {
+                    "reading_order": 0,
+                    "layout_type": "text",
+                    "char_start": 0,
+                    "char_end": 6,
+                    "page_number": 4,
+                    "heading_path": ["Handbook", "Part 3"],
+                    "section_ordinal": 3,
+                },
+                {
+                    "reading_order": 1,
+                    "layout_type": "text",
+                    "char_start": 7,
+                    "char_end": 15,
+                    "page_number": 9,
+                    "heading_path": ["Handbook", "Part 7"],
+                    "section_ordinal": 7,
+                },
+            ],
+        }
+
+    class _Held:
+        chunk = _Chunk()
+        chunk_id = "c1"
+        enabled = True
+        manual = False
+
+    row = kb._chunk_row(_Held())
+
+    assert row["page_number"] == 4
+    assert row["page_end"] == 9, "and where it ends, which one page cannot say"
+    assert [part["section_ordinal"] for part in row["parts"]] == [3, 7]
+    assert [part["page_number"] for part in row["parts"]] == [4, 9]
+    assert row["parts"][1]["heading_path"] == ["Handbook", "Part 7"]
+    assert (row["parts"][0]["char_start"], row["parts"][0]["char_end"]) == (0, 6)
+
+
+async def test_a_chunk_that_merged_nothing_carries_no_parts() -> None:
+    """Its own fields already say where it is, and a list of one would make
+    "this chunk was merged" unreadable from the answer."""
+
+    class _Chunk:
+        chunk_index = 0
+        total_chunks = 1
+        text = "Alone."
+        metadata = {
+            "page_number": 4,
+            "heading_path": ["Handbook"],
+            "elements": [{"reading_order": 0, "layout_type": "text", "char_start": 0, "char_end": 6}],
+        }
+
+    class _Held:
+        chunk = _Chunk()
+        chunk_id = "c1"
+        enabled = True
+        manual = False
+
+    row = kb._chunk_row(_Held())
+
+    assert row["parts"] == []
+    assert row["page_end"] is None
+
+
+async def test_chunks_answer_carries_what_the_parser_found(monkeypatch) -> None:
+    """The row is flattened for the page: which piece it is, what kind of
+    region, what page. The parser records more -- a box, the character range
+    each element covers -- and none of it has a reader yet."""
+
+    class _Chunk:
+        chunk_index = 2
+        total_chunks = 5
+        text = "the body of it"
+        metadata = {
+            "layout_type": "heading",
+            "page_number": 3,
+            "heading_path": ["Terms", "Payment"],
+            "bbox": {"x0": 72.0, "x1": 540.0},
+        }
+
+    class _Held:
+        chunk_id = "abc123"
+        chunk = _Chunk()
+        enabled = True
+        manual = False
+
+    class _Manager:
+        async def document_chunks(self, document_id: str, **kw):
+            assert document_id == "d1"
+            return [_Held()], 1
+
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: _Manager())
+
+    out = await kb.knowledge_documents_chunks({"document_id": "d1"})
+
+    assert out == {
+        "chunks": [
+            {
+                "chunk_index": 2,
+                "total_chunks": 5,
+                "text": "the body of it",
+                "layout_type": "heading",
+                "page_number": 3,
+                # Where it ends, and what it merged. Both empty here: this
+                # chunk came from one section and stayed on one page, which is
+                # the ordinary shape and the one that must not grow noise.
+                "page_end": None,
+                "heading_path": ["Terms", "Payment"],
+                "parts": [],
+                "chunk_id": "abc123",
+                "enabled": True,
+                "manual": False,
+            }
+        ],
+        "total": 1,
+    }
+
+
+async def test_chunks_of_a_text_file_carry_no_page(monkeypatch) -> None:
+    """Absent, not zero: a text file has no pages, and a page number of 0 would
+    read as one."""
+
+    class _Chunk:
+        chunk_index = 0
+        total_chunks = 1
+        text = "plain"
+        metadata = {"reading_order": 0}
+
+    class _Held:
+        chunk_id = ""
+        chunk = _Chunk()
+        enabled = True
+        manual = False
+
+    class _Manager:
+        async def document_chunks(self, document_id: str, **kw):
+            return [_Held()], 1
+
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: _Manager())
+
+    row = (await kb.knowledge_documents_chunks({"document_id": "d1"}))["chunks"][0]
+
+    assert row["page_number"] is None
+    assert row["layout_type"] == ""
+    assert row["heading_path"] == []
+
+
+async def test_chunks_needs_a_document_id() -> None:
+    with pytest.raises(ConfigValidationError):
+        await kb.knowledge_documents_chunks({"document_id": "  "})
+
+
+async def test_a_page_of_chunks_is_asked_for_by_number(monkeypatch) -> None:
+    """Twenty a page, and the offset is the page the caller named."""
+    seen: dict[str, object] = {}
+
+    class _Manager:
+        async def document_chunks(self, document_id: str, **kw):
+            seen.update(kw)
+            return [], 57
+
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: _Manager())
+
+    out = await kb.knowledge_documents_chunks({"document_id": "d1", "page": 3})
+
+    assert seen["offset"] == 40 and seen["limit"] == 20
+    assert out["total"] == 57
+
+
+async def test_a_query_searches_the_document_instead_of_paging_it(monkeypatch) -> None:
+    """The search box answers with what matched, best first -- paging that would
+    promise a second page of relevance nobody asked the engine for."""
+
+    class _Chunk:
+        chunk_index = 4
+        total_chunks = 9
+        text = "matched"
+        metadata: dict = {}
+
+    class _Held:
+        chunk_id = "c9"
+        chunk = _Chunk()
+        enabled = True
+        manual = False
+
+    class _Manager:
+        async def search_document(self, document_id: str, query: str, *, limit: int):
+            assert (document_id, query, limit) == ("d1", "latency", 20)
+            return [_Held()]
+
+        async def document_chunks(self, *a, **kw):  # pragma: no cover - must not be reached
+            raise AssertionError("a query searches rather than pages")
+
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: _Manager())
+
+    out = await kb.knowledge_documents_chunks({"document_id": "d1", "query": "  latency "})
+
+    assert out["total"] == 1 and out["chunks"][0]["chunk_id"] == "c9"
+
+
+async def test_switching_chunks_needs_ids(monkeypatch) -> None:
+    with pytest.raises(ConfigValidationError):
+        await kb.knowledge_chunks_switch({"document_id": "d1", "chunk_ids": [], "enabled": False})
+    with pytest.raises(ConfigValidationError):
+        await kb.knowledge_chunks_switch({"document_id": "d1", "chunk_ids": ["  "], "enabled": False})
+
+
+async def test_switching_chunks_answers_with_what_changed(monkeypatch) -> None:
+    class _Manager:
+        async def set_chunks_enabled(self, document_id: str, chunk_ids: list, enabled: bool):
+            assert (document_id, chunk_ids, enabled) == ("d1", ["a", "b"], False)
+            return 2
+
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: _Manager())
+
+    assert await kb.knowledge_chunks_switch({"document_id": "d1", "chunk_ids": ["a", " b "], "enabled": False}) == {
+        "changed": 2
+    }
+
+
+async def test_deleting_chunks_answers_with_what_is_left(monkeypatch) -> None:
+    class _Manager:
+        async def delete_chunks(self, document_id: str, chunk_ids: list):
+            return 7
+
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: _Manager())
+
+    assert await kb.knowledge_chunks_delete({"document_id": "d1", "chunk_ids": ["a"]}) == {"remaining": 7}
+
+
+async def test_a_written_chunk_comes_back_as_the_page_reads_it(monkeypatch) -> None:
+    class _Chunk:
+        chunk_index = 12
+        total_chunks = 13
+        text = "written by hand"
+        metadata = {"layout_type": "text"}
+
+    class _Held:
+        chunk_id = "m1"
+        chunk = _Chunk()
+        enabled = True
+        manual = True
+
+    class _Manager:
+        async def add_chunk(self, document_id: str, text: str):
+            assert text == "written by hand"
+            return _Held()
+
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: _Manager())
+
+    out = await kb.knowledge_chunks_create({"document_id": "d1", "text": "  written by hand  "})
+
+    assert out["chunk"]["manual"] is True and out["chunk"]["chunk_id"] == "m1"
+
+
+async def test_an_empty_written_chunk_is_refused() -> None:
+    with pytest.raises(ConfigValidationError):
+        await kb.knowledge_chunks_create({"document_id": "d1", "text": "   "})

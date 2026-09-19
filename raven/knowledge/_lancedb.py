@@ -23,7 +23,9 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from raven.knowledge._types import Chunk, DocumentSummary, VectorRecord, VectorSearchResult
+from loguru import logger
+
+from raven.knowledge._types import Chunk, DocumentSummary, StoredChunk, VectorRecord, VectorSearchResult
 from raven.knowledge._vector_store import VectorStoreBase
 
 if TYPE_CHECKING:
@@ -39,6 +41,26 @@ def _sql_quote(value: str) -> str:
     """A single-quoted SQL literal, with embedded quotes doubled."""
     escaped = value.replace("'", "''")
     return f"'{escaped}'"
+
+
+def _id_predicate(chunk_ids: list[str], document_id: str = "") -> str:
+    """The clause matching a set of chunk ids inside one document.
+
+    An empty id never matches: rows from a build before ids existed all carry
+    one, and a caller asking to act on "" means something went wrong upstream,
+    not that every unnamed row in the document should change at once.
+
+    ``document_id`` is the other half of that, and it is not a convenience: a
+    chunk id is unique to its text, two documents in one base can hold the same
+    sentence, and a collection-wide predicate lets a caller holding an id from
+    one document change or delete the identical row in another. Scoping the
+    write is what makes "these pieces of this document" the thing that happens.
+    """
+    wanted = ", ".join(_sql_quote(chunk_id) for chunk_id in chunk_ids if chunk_id)
+    if not wanted:
+        return "false"
+    clause = f"chunk_id IN ({wanted})"
+    return f"document_id = {_sql_quote(document_id)} AND {clause}" if document_id else clause
 
 
 def _filter_predicate(metadata_filter: dict[str, Any] | None) -> str | None:
@@ -109,6 +131,17 @@ class LanceDBVectorStore(VectorStoreBase):
                 # would have to change every time a parser adds metadata.
                 pa.field("chunk_json", pa.string()),
                 pa.field("metadata_kv", pa.list_(pa.string())),
+                # What a reader addresses one piece by, and the state they can
+                # put it in. Columns rather than metadata because both are
+                # queried: the id to act on a row, `enabled` on every search.
+                pa.field("chunk_id", pa.string()),
+                pa.field("enabled", pa.bool_()),
+                pa.field("manual", pa.bool_()),
+                # The chunk's text as its own column, for the keyword index.
+                # Not read back from here -- `chunk_json` is still what a
+                # caller gets -- but BM25 needs a column to tokenize, and
+                # tokenizing the JSON would index its keys and punctuation.
+                pa.field("text", pa.string()),
             ]
         )
         await db.create_table(name, schema=schema)
@@ -121,10 +154,33 @@ class LanceDBVectorStore(VectorStoreBase):
     async def has_collection(self, name: str) -> bool:
         return name in await self._collection_names()
 
+    async def _writable(self, collection: str) -> Any:
+        """The table, with the columns this build writes.
+
+        A collection made by an earlier build has neither an id nor a state on
+        its rows, and adding them is a metadata edit rather than a rewrite --
+        so the widening happens on first use rather than in a migration pass.
+        Existing rows come out enabled and unnamed: they answer searches as
+        they always did, and a reader who wants to act on one piece at a time
+        reindexes the document, which writes ids.
+        """
+        table = await self._table(collection)
+        names = set((await table.schema()).names)
+        missing = {
+            "chunk_id": ("string", "''"),
+            "enabled": ("bool", "true"),
+            "manual": ("bool", "false"),
+            "text": ("string", "''"),
+        }
+        adding = {column: default for column, (_, default) in missing.items() if column not in names}
+        if adding:
+            await table.add_columns(adding)
+        return table
+
     async def insert(self, collection: str, records: list[VectorRecord]) -> None:
         if not records:
             return
-        table = await self._table(collection)
+        table = await self._writable(collection)
         await table.add(
             [
                 {
@@ -134,6 +190,10 @@ class LanceDBVectorStore(VectorStoreBase):
                     "chunk_index": record.chunk.chunk_index,
                     "chunk_json": record.chunk.model_dump_json(),
                     "metadata_kv": _encode_metadata(record.chunk.metadata),
+                    "chunk_id": record.chunk_id,
+                    "enabled": record.enabled,
+                    "manual": record.manual,
+                    "text": record.chunk.text,
                 }
                 for record in records
             ]
@@ -149,12 +209,21 @@ class LanceDBVectorStore(VectorStoreBase):
         query_vector: list[float],
         top_k: int = 5,
         metadata_filter: dict[str, Any] | None = None,
+        document_id: str | None = None,
     ) -> list[VectorSearchResult]:
         table = await self._table(collection)
         query = table.vector_search(query_vector).distance_type("cosine").limit(top_k)
+        # Disabled means not retrieved, which has to be enforced where the
+        # retrieval happens -- a filter applied by any one caller is a filter
+        # the next caller forgets. `enabled IS NULL` covers the rows a build
+        # before this column wrote, which are enabled by construction.
+        clauses = ["(enabled IS NULL OR enabled = true)"]
+        if document_id:
+            clauses.append(f"document_id = {_sql_quote(document_id)}")
         predicate = _filter_predicate(metadata_filter)
         if predicate:
-            query = query.where(predicate)
+            clauses.append(predicate)
+        query = query.where(" AND ".join(clauses))
         rows = await query.to_list()
         return [
             VectorSearchResult(
@@ -163,9 +232,178 @@ class LanceDBVectorStore(VectorStoreBase):
                 score=1.0 - float(row["_distance"]),
                 document_id=row["document_id"],
                 chunk=Chunk.model_validate_json(row["chunk_json"]),
+                chunk_id=row.get("chunk_id") or "",
             )
             for row in rows
         ]
+
+    async def _keyword_index(self, table: Any) -> bool:
+        """Make sure the text column is indexed for BM25, once per collection.
+
+        The tokenizer is n-grams rather than the default word splitter, which
+        is what makes this work at all on Chinese: the default splits on
+        whitespace and punctuation, so a query in a language that writes
+        without spaces matches nothing. N-grams cost a larger index and a
+        looser match in English, and they are the only setting that serves a
+        corpus holding both without a language model to download.
+        """
+        from lancedb.index import FTS
+
+        try:
+            for index in await table.list_indices():
+                if "text" in (getattr(index, "columns", None) or []):
+                    return True
+            await table.create_index(
+                "text",
+                config=FTS(base_tokenizer="ngram", ngram_min_length=2, ngram_max_length=3, lower_case=True),
+            )
+            return True
+        except Exception as exc:
+            # Not fatal: a base whose keyword index cannot be built is one that
+            # answers by vector only, which is what it did before this existed.
+            logger.warning("knowledge: no keyword index for this collection: {}", exc)
+            return False
+
+    async def keyword_search(
+        self,
+        collection: str,
+        query: str,
+        top_k: int = 5,
+        document_id: str | None = None,
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> list[VectorSearchResult]:
+        if not query.strip() or not await self.has_collection(collection):
+            return []
+        table = await self._writable(collection)
+        if not await self._keyword_index(table):
+            return []
+        clauses = ["(enabled IS NULL OR enabled = true)"]
+        if document_id:
+            clauses.append(f"document_id = {_sql_quote(document_id)}")
+        predicate = _filter_predicate(metadata_filter)
+        if predicate:
+            clauses.append(predicate)
+        search = await table.search(query, query_type="fts")
+        rows = await search.where(" AND ".join(clauses)).limit(top_k).to_list()
+        return [
+            VectorSearchResult(
+                # BM25, not a cosine similarity. Higher is still nearer, which
+                # is the direction every caller reads, but the scale is the
+                # index's own -- so these are never compared with vector scores
+                # by value. The caller merges by rank instead.
+                score=float(row.get("_score", 0.0)),
+                document_id=row["document_id"],
+                chunk=Chunk.model_validate_json(row["chunk_json"]),
+                chunk_id=row.get("chunk_id") or "",
+                # Marked here, by the call that knows: a hit that travels
+                # without it reaches a surface as a number on an unstated
+                # scale, and the surface has no way to ask.
+                retrieval="keyword",
+            )
+            for row in rows
+        ]
+
+    async def list_chunks(
+        self,
+        collection: str,
+        document_id: str,
+        *,
+        offset: int = 0,
+        limit: int | None = None,
+        enabled: bool | None = None,
+    ) -> tuple[list[StoredChunk], int]:
+        if not await self.has_collection(collection):
+            return [], 0
+        table = await self._writable(collection)
+        clauses = [f"document_id = {_sql_quote(document_id)}"]
+        if enabled is True:
+            clauses.append("(enabled IS NULL OR enabled = true)")
+        elif enabled is False:
+            clauses.append("enabled = false")
+        rows = await (
+            table.query()
+            .where(" AND ".join(clauses))
+            # The vector is the bulk of a row and nothing here reads it.
+            .select(["chunk_index", "chunk_json", "chunk_id", "enabled", "manual"])
+            .to_list()
+        )
+        stored = [
+            StoredChunk(
+                chunk_id=row.get("chunk_id") or "",
+                chunk=Chunk.model_validate_json(row["chunk_json"]),
+                # Null is what a row written before the column had; those rows
+                # are enabled, which is how search already treats them.
+                enabled=row.get("enabled") is not False,
+                manual=bool(row.get("manual")),
+            )
+            for row in rows
+        ]
+        # By the chunk's own number rather than the row's: a scan has no order
+        # to promise, and the number is what the chunker wrote as it walked the
+        # document. Paged after sorting, so a page is a window on the document
+        # and not on whatever the scan happened to return.
+        stored.sort(key=lambda held: held.chunk.chunk_index)
+        total = len(stored)
+        if limit is None:
+            return stored[offset:], total
+        return stored[offset : offset + limit], total
+
+    async def renumber(self, collection: str, document_id: str) -> int:
+        """Renumber a document's pieces 0..N-1 and answer with N.
+
+        What a chunker guarantees on the way in, restored after a hand edit on
+        the way through: ``chunk_index`` runs without gaps and every piece
+        carries the same ``total_chunks``. Deleting the middle of three leaves
+        0 and 2 of 3 otherwise, and appending one leaves N rows claiming N and
+        a new row claiming N+1 -- so a hit reports a position its own document
+        disagrees with, and "piece 7 of 12" stops being a fact.
+
+        The order is the one already stored, so nothing moves: this rewrites
+        the numbers rows are sorted by, never the sort. Only rows whose numbers
+        actually changed are written back.
+        """
+        if not await self.has_collection(collection):
+            return 0
+        table = await self._writable(collection)
+        rows = await (
+            table.query()
+            .where(f"document_id = {_sql_quote(document_id)}")
+            .select(["chunk_index", "chunk_json", "chunk_id"])
+            .to_list()
+        )
+        if not rows:
+            return 0
+        ordered = sorted(rows, key=lambda row: int(row.get("chunk_index") or 0))
+        total = len(ordered)
+        for index, row in enumerate(ordered):
+            chunk = Chunk.model_validate_json(row["chunk_json"])
+            if chunk.chunk_index == index and chunk.total_chunks == total:
+                continue
+            chunk.chunk_index = index
+            chunk.total_chunks = total
+            # By chunk id, which is what names one row; the index column is
+            # being rewritten here and cannot also be the thing addressed by.
+            await table.update(
+                {"chunk_index": index, "chunk_json": chunk.model_dump_json()},
+                where=_id_predicate([row.get("chunk_id") or ""], document_id),
+            )
+        return total
+
+    async def set_chunks_enabled(
+        self, collection: str, chunk_ids: list[str], enabled: bool, *, document_id: str = ""
+    ) -> int:
+        """Turn pieces on or off. Returns how many rows the store changed."""
+        if not chunk_ids or not await self.has_collection(collection):
+            return 0
+        table = await self._writable(collection)
+        result = await table.update({"enabled": enabled}, where=_id_predicate(chunk_ids, document_id))
+        return int(getattr(result, "rows_updated", 0) or 0)
+
+    async def delete_chunks(self, collection: str, chunk_ids: list[str], *, document_id: str = "") -> None:
+        if not chunk_ids or not await self.has_collection(collection):
+            return
+        table = await self._writable(collection)
+        await table.delete(_id_predicate(chunk_ids, document_id))
 
     async def list_documents(
         self,

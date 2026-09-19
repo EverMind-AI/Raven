@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { KnowledgeApp } from './KnowledgePage'
 import * as store from './store'
 
-import type { KbBase, KbDoc, KbSearch, KnowledgeSource } from './types'
+import type { KbBase, KbChunk, KbDoc, KbSearch, KnowledgeSource } from './types'
 import type { Shell } from '../../shell/bridge'
 
 function base(over: Partial<KbBase> & { id: string }): KbBase {
@@ -81,6 +81,15 @@ function source(over: Partial<KnowledgeSource> = {}): void {
       upload: async (_b: string, file: File) => doc({ id: 'd1', source: file.name }),
       index: async (id: string) => doc({ id, status: 'ready', chunk_count: 2 }),
       search: async () => ({ hits: [], search_ms: 0, embed_ms: 0 }),
+      chunks: async () => ({ chunks: [], total: 0 }),
+      embeddingModels: async () => [
+        { id: 'siliconflow', name: 'SiliconFlow', models: ['BAAI/bge-large-zh-v1.5', 'BAAI/bge-m3'] },
+        { id: 'dashscope', name: 'DashScope', models: ['text-embedding-v4'] },
+      ],
+      switchChunks: async () => 0,
+      deleteChunks: async () => 0,
+      createChunk: async (_d: string, text: string) => ({ chunk_index: 9, total_chunks: 10, text, manual: true }),
+      updateChunk: async (_d: string, _c: string, text: string) => ({ chunk_index: 0, total_chunks: 1, text, manual: true }),
       removeDoc: async () => {},
       ...over,
     },
@@ -441,10 +450,35 @@ describe('the write surface', () => {
     })
     expect(screen.getByText('onboarding.md')).toBeTruthy()
     expect(screen.getByText('gui.kb.doc_ready')).toBeTruthy()
-    /* Four columns and no chunk count: the table answers "what is in this base
-       and is it searchable", and how a document was cut up is what View Chunks
-       is for. */
     expect(screen.getByText('gui.kb.col_updated')).toBeTruthy()
+    /* The count is in the table now rather than only behind View Chunks: how
+       many pieces a file became is the first thing a reader checks when a
+       search answers with less than they expected, and opening every file to
+       find out is a poor way to compare them. */
+    expect(screen.getByText('gui.kb.col_chunks')).toBeTruthy()
+    const cells = [...document.querySelectorAll('.kbtable .td')].map((c) => c.textContent)
+    expect(cells).toContain('3')
+  })
+
+  it('shows a dash rather than a zero for a file with no chunks', async () => {
+    /* A document that failed, one still queued and one in a base with no model
+       have no count to report, and a zero would read as a file that was cut
+       into nothing. */
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [
+        doc({ id: 'd1', source: 'broken.pdf', status: 'failed', chunk_count: 0 }),
+        doc({ id: 'd2', source: 'queued.md', status: 'pending', chunk_count: 0 }),
+      ],
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+
+    const cells = [...document.querySelectorAll('.kbtable .td')].map((c) => c.textContent)
+    expect(cells.filter((text) => text === '\u2014').length).toBe(2)
+    expect(cells).not.toContain('0')
   })
 
   it('carries a failed document reason on its status', async () => {
@@ -477,6 +511,141 @@ describe('the write surface', () => {
     const status = document.querySelector('.kbtable .td.s-failed') as HTMLElement
     expect(status.getAttribute('title')).toBe('no parser for application/pdf')
     expect(document.querySelector('.kbtable .td.err')).toBeNull()
+  })
+
+  it('marks a searchable file that part of itself did not make it into', async () => {
+    /* The case the mark exists for: the row says ready, the file is searchable,
+       and a search about the pictures in it answers worse for a reason nothing
+       on the page would otherwise state. */
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [
+        doc({
+          id: 'd1',
+          source: 'report.docx',
+          status: 'ready',
+          chunk_count: 7,
+          warning: '2 of 5 pictures in this file could not be read: rate limited',
+        }),
+      ],
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+
+    const status = document.querySelector('.kbtable .td.s-ready') as HTMLElement
+    expect(status.getAttribute('title')).toContain('2 of 5 pictures')
+    expect(status.querySelector('.kbdocwarn')).not.toBeNull()
+    /* Still ready, and still counted: a warning is not a failure. */
+    expect(status.textContent).toContain('gui.kb.doc_ready')
+  })
+
+  it('leaves an unwarned row unmarked', async () => {
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd1', status: 'ready', chunk_count: 7 })],
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+
+    expect(document.querySelector('.kbdocwarn')).toBeNull()
+    expect((document.querySelector('.kbtable .td.s-ready') as HTMLElement).getAttribute('title')).toBeNull()
+  })
+
+  it('shows the failure rather than the warning when a row has both', async () => {
+    /* It cannot in practice -- a document that failed has no parse to warn
+       about -- but the cell has to pick one, and the reason it did not index is
+       the more urgent of the two. */
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [
+        doc({ id: 'd1', status: 'failed', error: 'embedding endpoint returned 404', warning: 'a picture' }),
+      ],
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+
+    const status = document.querySelector('.kbtable .td.s-failed') as HTMLElement
+    expect(status.getAttribute('title')).toBe('embedding endpoint returned 404')
+    expect(status.querySelector('.kbdocwarn')).toBeNull()
+  })
+
+  it('says when a search answered by words instead of by meaning', async () => {
+    /* The failure this exists for: an unreachable embedding endpoint turns a
+       search into a perfectly ordinary looking set of hits, scored on another
+       scale, with nothing anywhere saying retrieval changed mode. */
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd1', status: 'ready' })],
+      search: async () => ({
+        hits: [{ score: 8.42, retrieval: 'keyword' as const, document_id: 'd1', text: 'alpha' }],
+        by_keyword: [{ base_id: 'b1', reason: "the model 'bge-m3' could not be reached" }],
+        search_ms: 3,
+        embed_ms: 0,
+      }),
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await act(async () => {
+      store.openRecall()
+    })
+    await act(async () => {
+      fireEvent.change(document.querySelector('.kbask .kbname') as HTMLInputElement, {
+        target: { value: 'alpha' },
+      })
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.recall_run').click()
+    })
+
+    const notice = document.querySelector('.kbfellback') as HTMLElement
+    expect(notice).not.toBeNull()
+    expect(notice.textContent).toContain('could not be reached')
+    /* And the score is not dressed as a similarity. */
+    const score = document.querySelector('.kbhitsc') as HTMLElement
+    expect(score.classList.contains('kbhitbm')).toBe(true)
+    expect(score.textContent).toContain('gui.kb.recall_kw')
+    expect(score.getAttribute('title')).toBe('gui.kb.recall_bm25')
+  })
+
+  it('leaves an ordinary search unmarked', async () => {
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd1', status: 'ready' })],
+      search: async () => ({
+        hits: [{ score: 0.83, document_id: 'd1', text: 'alpha' }],
+        by_keyword: [],
+        search_ms: 3,
+        embed_ms: 12,
+      }),
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await act(async () => {
+      store.openRecall()
+    })
+    await act(async () => {
+      fireEvent.change(document.querySelector('.kbask .kbname') as HTMLInputElement, {
+        target: { value: 'alpha' },
+      })
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.recall_run').click()
+    })
+
+    expect(document.querySelector('.kbfellback')).toBeNull()
+    const score = document.querySelector('.kbhitsc') as HTMLElement
+    expect(score.classList.contains('kbhitbm')).toBe(false)
+    expect(score.getAttribute('title')).toBe('gui.kb.recall_cosine')
   })
 
   it('does not answer into a panel the reader has left', async () => {
@@ -766,10 +935,9 @@ describe('the two-panel layout', () => {
   })
 
   it('names the controls it has not built yet instead of pretending', async () => {
-    /* Recall Test, Settings, View Chunks and Disable have nothing behind them.
-       They are on screen because the design puts them there, and disabled
-       because a control that looks live and does nothing when pressed is
-       worse than one that says it is not ready. */
+    /* Disable has nothing behind it. It is on screen because the design puts
+       it there, and disabled because a control that looks live and does
+       nothing when pressed is worse than one that says it is not ready. */
     source({
       bases: async () => [base({ id: 'b1' })],
       documents: async () => [doc({ id: 'd1', source: 'onboarding.md', status: 'ready' })],
@@ -780,9 +948,14 @@ describe('the two-panel layout', () => {
     })
 
     await openRowMenu('onboarding.md')
-    for (const label of ['gui.kb.doc_view_chunks', 'gui.kb.doc_disable']) {
+    for (const label of ['gui.kb.doc_disable']) {
       expect((screen.getByText(label).closest('button') as HTMLButtonElement).disabled).toBe(true)
     }
+    /* View Chunks is wired now: it opens the same panel clicking the name
+       does. */
+    expect(
+      (screen.getByText('gui.kb.doc_view_chunks').closest('button') as HTMLButtonElement).disabled,
+    ).toBe(false)
     /* Every data source in the menu is wired, so the button that opens it is
        not one of the stubs. */
     const add = screen.getByText('+ gui.kb.add_source').closest('button') as HTMLButtonElement
@@ -808,32 +981,54 @@ describe('the create dialog', () => {
   }
 
   it('takes a name and an embedding model, and creates with them', async () => {
-    const made: Array<[string, boolean | undefined]> = []
+    const made: Array<[string, boolean | undefined, string | undefined, string | undefined]> = []
     source({
-      status: async () => ({ configured: true, model: 'bge-m3' }),
-      create: async (name: string, _d: string, embedding?: boolean) => {
-        made.push([name, embedding])
+      status: async () => ({ configured: true, model: 'BAAI/bge-m3', provider: 'siliconflow' }),
+      create: async (name: string, _d: string, embedding?: boolean, model?: string, provider?: string) => {
+        made.push([name, embedding, model, provider])
         return base({ id: 'b1', name })
       },
     })
     await mount()
     await openDialog()
 
-    /* Disabled is a real choice, not the absence of one: a base nobody means
-       to search by vector should not be made to carry an index. */
-    const opts = [...document.querySelectorAll('#kbembed option')].map((o) => o.textContent)
-    expect(opts).toEqual(['gui.kb.embed_off', 'bge-m3'])
+    /* Every model the install can reach, grouped by who serves it, with the
+       configured default preselected -- and Disabled as a real choice, not the
+       absence of one. */
+    const picker = document.getElementById('kbembed') as HTMLSelectElement
+    expect(picker.value).toBe('siliconflow::BAAI/bge-m3')
+    expect([...picker.options].map((o) => o.value)).toEqual([
+      '',
+      'siliconflow::BAAI/bge-large-zh-v1.5',
+      'siliconflow::BAAI/bge-m3',
+      'dashscope::text-embedding-v4',
+    ])
 
     const field = document.getElementById('kbname') as HTMLInputElement
     await act(async () => {
       fireEvent.change(field, { target: { value: 'handbook' } })
     })
     await act(async () => {
+      fireEvent.change(picker, { target: { value: 'dashscope::text-embedding-v4' } })
+    })
+    await act(async () => {
       screen.getByText('gui.kb.create').click()
     })
 
-    expect(made).toEqual([['handbook', true]])
+    expect(made).toEqual([['handbook', true, 'text-embedding-v4', 'dashscope']])
     expect(document.querySelector('.kbdlg')).toBeNull()
+  })
+
+  it('offers the configured model even when it is not in any provider list', async () => {
+    /* A select whose value matches no option draws as empty, which would tell
+       a reader the base they are about to make has no model. */
+    source({ status: async () => ({ configured: true, model: 'house-embed', provider: 'custom' }) })
+    await mount()
+    await openDialog()
+
+    const picker = document.getElementById('kbembed') as HTMLSelectElement
+    expect(picker.value).toBe('custom::house-embed')
+    expect([...picker.options].map((o) => o.textContent)).toContain('house-embed')
   })
 
   it('makes a base with no vectors when the model is left Disabled', async () => {
@@ -855,8 +1050,8 @@ describe('the create dialog', () => {
     await act(async () => {
       fireEvent.change(field, { target: { value: 't3' } })
     })
-    // Disabled is the option the select opens on when nothing is picked.
-    expect((document.getElementById('kbembed') as HTMLSelectElement).value).toBe('bge-m3')
+    // The configured pair is the option the select opens on.
+    expect((document.getElementById('kbembed') as HTMLSelectElement).value).toBe('::bge-m3')
     await act(async () => {
       fireEvent.change(document.getElementById('kbembed') as HTMLSelectElement, { target: { value: '' } })
     })
@@ -865,6 +1060,33 @@ describe('the create dialog', () => {
     })
 
     expect(made).toEqual([['t3', false]])
+  })
+
+  it('sends no model at all when Disabled is picked', async () => {
+    /* Not the model beside an `embedding: false`: a base with no vectors has
+       no model, and sending one would be describing an index it does not
+       have. */
+    const made: Array<[boolean | undefined, string | undefined]> = []
+    source({
+      create: async (_n: string, _d: string, embedding?: boolean, model?: string) => {
+        made.push([embedding, model])
+        return base({ id: 'b1', name: 't3', embedding_model: '' })
+      },
+    })
+    await mount()
+    await openDialog()
+
+    await act(async () => {
+      fireEvent.change(document.getElementById('kbname') as HTMLInputElement, { target: { value: 't3' } })
+    })
+    await act(async () => {
+      fireEvent.change(document.getElementById('kbembed') as HTMLSelectElement, { target: { value: '' } })
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.create').click()
+    })
+
+    expect(made).toEqual([[false, '']])
   })
 
   it('says Disabled on a base that has no model of its own', async () => {
@@ -947,6 +1169,481 @@ describe('viewing the original file', () => {
     expect(document.querySelector('.kbtable')).not.toBeNull()
   })
 
+  it('takes the whole page while a file is open, rail and all', async () => {
+    /* The widest thing on the screen should be the thing being read. Picking
+       another base is not a move anyone makes mid-document, and the way back
+       is the one button in the header. */
+    await openBase([doc({ id: 'd1', source: 'contract.pdf', status: 'ready' })])
+
+    await clickName('contract.pdf')
+
+    expect(document.querySelector('.kbview')).not.toBeNull()
+    expect(document.querySelector('.kbsplit')).toBeNull()
+    expect(document.querySelector('.kbrail')).toBeNull()
+
+    await act(async () => {
+      ;(document.querySelector('.kbback') as HTMLButtonElement).click()
+    })
+    expect(document.querySelector('.kbrail')).not.toBeNull()
+    expect(document.querySelector('.kbview')).toBeNull()
+  })
+
+  it('shows the chunks beside the file, in reading order', async () => {
+    /* The two halves answer one question: what the file says, and what the
+       index actually holds of it. Reading order is the chunker's numbering,
+       so the list runs down the document. */
+    source({
+      bases: async () => [base({ id: 'b1', name: 'handbook' })],
+      documents: async () => [doc({ id: 'd1', source: 'contract.pdf', status: 'ready' })],
+      chunks: async () => ({
+        chunks: [
+          {
+            chunk_index: 1,
+            total_chunks: 2,
+            text: 'Second piece.',
+            layout_type: 'text',
+            page_number: 2,
+            chunk_id: 'c2',
+          },
+          {
+            chunk_index: 0,
+            total_chunks: 2,
+            text: 'First piece.',
+            layout_type: 'heading',
+            page_number: 1,
+            heading_path: ['Terms'],
+            chunk_id: 'c1',
+          },
+        ],
+        total: 2,
+      }),
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+
+    await clickName('contract.pdf')
+    await act(async () => {})
+
+    expect(document.querySelector('.kborig .kbframe')).not.toBeNull()
+    const rows = [...document.querySelectorAll('.kbchunk .kbchunktx')].map((n) => n.textContent)
+    /* Answered out of order on purpose: the panel shows the document's order,
+       not the transport's. */
+    expect(rows).toEqual(['First piece.', 'Second piece.'])
+    const first = document.querySelector('.kbchunk') as HTMLElement
+    expect(first.querySelector('.kbchunkix')?.textContent).toBe('#1')
+    expect(first.querySelector('.kbchunkty')?.textContent).toBe('heading')
+    expect(first.querySelector('.kbchunkpath')?.textContent).toBe('Terms')
+  })
+
+  it('says on the row when a piece was cut from more than one section', async () => {
+    /* The row's page and heading are the first part's, which is all they can
+       be once a chunk can merge across sections. Shown alone they read as
+       facts about the whole piece: this one is half of section 7 on page 9,
+       labelled as section 3 on page 4, with nothing saying so. */
+    source({
+      bases: async () => [base({ id: 'b1', name: 'handbook' })],
+      documents: async () => [doc({ id: 'd1', source: 'contract.pdf', status: 'ready' })],
+      chunks: async () => ({
+        chunks: [
+          {
+            chunk_index: 0,
+            total_chunks: 1,
+            text: 'Third.\nSeventh.',
+            layout_type: 'text',
+            page_number: 4,
+            page_end: 9,
+            heading_path: ['Handbook', 'Part 3'],
+            parts: [
+              {
+                char_start: 0,
+                char_end: 6,
+                page_number: 4,
+                heading_path: ['Handbook', 'Part 3'],
+                section_ordinal: 3,
+              },
+              {
+                char_start: 7,
+                char_end: 15,
+                page_number: 9,
+                heading_path: ['Handbook', 'Part 7'],
+                section_ordinal: 7,
+              },
+            ],
+            chunk_id: 'c1',
+          },
+        ],
+        total: 1,
+      }),
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await clickName('contract.pdf')
+    await act(async () => {})
+
+    const row = document.querySelector('.kbchunk') as HTMLElement
+    /* The page badge stops claiming one page. */
+    expect(row.querySelector('.kbchunkpg')?.textContent).toBe('gui.kb.chunks_pages {"from":4,"to":9}')
+    /* And the badge names the sections, with every part behind the hover --
+       the only route on this row to where the second half came from. */
+    const span = row.querySelector('.kbchunkspan') as HTMLElement
+    expect(span.textContent).toBe('gui.kb.chunk_sections {"n":2}')
+    expect(span.getAttribute('title')).toContain('"section":4')
+    expect(span.getAttribute('title')).toContain('"section":8')
+    expect(span.getAttribute('title')).toContain('Handbook > Part 7')
+  })
+
+  it('leaves a piece that merged nothing exactly as it was', async () => {
+    source({
+      bases: async () => [base({ id: 'b1', name: 'handbook' })],
+      documents: async () => [doc({ id: 'd1', source: 'contract.pdf', status: 'ready' })],
+      chunks: async () => ({
+        chunks: [
+          {
+            chunk_index: 0,
+            total_chunks: 1,
+            text: 'Alone.',
+            page_number: 4,
+            heading_path: ['Handbook'],
+            chunk_id: 'c1',
+          },
+        ],
+        total: 1,
+      }),
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await clickName('contract.pdf')
+    await act(async () => {})
+
+    const row = document.querySelector('.kbchunk') as HTMLElement
+    expect(row.querySelector('.kbchunkspan')).toBeNull()
+    expect(row.querySelector('.kbchunkpg')?.textContent).toBe('gui.kb.chunks_page {"n":4}')
+  })
+
+  const chunk = (over: Partial<KbChunk> = {}): KbChunk => ({
+    chunk_index: 0,
+    total_chunks: 1,
+    text: 'a piece of it',
+    chunk_id: 'c1',
+    enabled: true,
+    manual: false,
+    ...over,
+  })
+
+  const openWithChunks = async (chunks: KbChunk[], total = chunks.length, over = {}) => {
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd1', source: 'contract.pdf', status: 'ready' })],
+      chunks: async () => ({ chunks, total }),
+      ...over,
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await clickName('contract.pdf')
+    await act(async () => {})
+  }
+
+  it('turns one chunk off from its own switch', async () => {
+    /* Disabled is not a ranking penalty: the engine drops it from retrieval
+       entirely, so the switch is worth showing on the row itself. */
+    const asked: unknown[] = []
+    await openWithChunks([chunk({ chunk_id: 'c1' })], 1, {
+      switchChunks: async (d: string, ids: string[], on: boolean) => {
+        asked.push([d, ids, on])
+        return 1
+      },
+    })
+
+    const box = document.querySelector('.kbswitch input') as HTMLInputElement
+    expect(box.checked).toBe(true)
+    await act(async () => {
+      box.click()
+    })
+
+    expect(asked).toEqual([['d1', ['c1'], false]])
+  })
+
+  it('offers the three operations only once something is ticked', async () => {
+    /* Absent rather than dead: three buttons that can never be pressed are
+       three things to read past, in a toolbar that is already full. */
+    const asked: unknown[] = []
+    await openWithChunks([chunk({ chunk_id: 'c1' }), chunk({ chunk_index: 1, chunk_id: 'c2' })], 2, {
+      switchChunks: async (_d: string, ids: string[], on: boolean) => {
+        asked.push([ids, on])
+        return ids.length
+      },
+    })
+
+    expect(screen.queryByText('gui.kb.chunk_disable')).toBeNull()
+    expect(screen.queryByText('gui.kb.chunk_delete')).toBeNull()
+
+    await act(async () => {
+      ;(document.querySelector('.kbpickall input') as HTMLInputElement).click()
+    })
+
+    expect(screen.getByText('gui.kb.picked_n {"n":2}')).toBeTruthy()
+    await act(async () => {
+      ;(screen.getByText('gui.kb.chunk_disable').closest('button') as HTMLButtonElement).click()
+    })
+
+    expect(asked).toEqual([[['c1', 'c2'], false]])
+  })
+
+  it('pages the reading order twenty at a time', async () => {
+    const asked: unknown[] = []
+    await openWithChunks([chunk()], 45, {
+      chunks: async (_d: string, opts: { page?: number; page_size?: number }) => {
+        asked.push(opts)
+        return { chunks: [chunk()], total: 45 }
+      },
+    })
+
+    expect(asked[0]).toMatchObject({ page: 1, page_size: 20 })
+    /* 45 pieces is three pages, so the pager is there and the first page has
+       nowhere back to go. */
+    expect(screen.getByText('gui.kb.chunk_page_of {"page":1,"pages":3}')).toBeTruthy()
+    await act(async () => {
+      ;(document.querySelector('[aria-label="gui.kb.chunk_next"]') as HTMLButtonElement).click()
+    })
+    expect(asked[asked.length - 1]).toMatchObject({ page: 2 })
+  })
+
+  it('searches on Enter without waiting, and not on a keystroke', async () => {
+    /* A search embeds the query at whatever endpoint the base was built with,
+       so typing does not spend one. The box runs the same retrieval a search
+       of the base does, narrowed to this file -- a word that is not on this
+       page still finds its chunk. */
+    const asked: unknown[] = []
+    await openWithChunks([chunk()], 40, {
+      chunks: async (_d: string, opts: { query?: string }) => {
+        asked.push(opts)
+        return { chunks: [chunk({ text: 'the matching piece' })], total: 1 }
+      },
+    })
+    const before = asked.length
+
+    const box = document.querySelector('.kbchunksearch') as HTMLInputElement
+    await act(async () => {
+      fireEvent.change(box, { target: { value: 'latency' } })
+    })
+    expect(asked.length).toBe(before)
+    expect(box.value).toBe('latency')
+
+    await act(async () => {
+      fireEvent.keyDown(box, { key: 'Enter' })
+    })
+
+    expect(asked[asked.length - 1]).toMatchObject({ query: 'latency' })
+    /* No pager over a ranking: relevance has no second page the engine was
+       asked for. */
+    expect(document.querySelector('.kbchunkfoot')).toBeNull()
+  })
+
+  it('searches on its own once the typing stops', async () => {
+    vi.useFakeTimers()
+    try {
+      const asked: unknown[] = []
+      await openWithChunks([chunk()], 40, {
+        chunks: async (_d: string, opts: { query?: string }) => {
+          asked.push(opts)
+          return { chunks: [chunk()], total: 1 }
+        },
+      })
+      const before = asked.length
+      const box = document.querySelector('.kbchunksearch') as HTMLInputElement
+
+      await act(async () => {
+        fireEvent.change(box, { target: { value: 'lat' } })
+        vi.advanceTimersByTime(2000)
+      })
+      /* Still typing: the first keystrokes must not each spend a request. */
+      expect(asked.length).toBe(before)
+
+      await act(async () => {
+        fireEvent.change(box, { target: { value: 'latency' } })
+        vi.advanceTimersByTime(3000)
+      })
+      await act(async () => {})
+
+      expect(asked[asked.length - 1]).toMatchObject({ query: 'latency' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('goes back to the reading order the moment the box is emptied', async () => {
+    /* Nothing to spend by waiting, and three seconds of a list that has
+       stopped answering reads as a fault. */
+    const asked: unknown[] = []
+    await openWithChunks([chunk()], 40, {
+      chunks: async (_d: string, opts: { query?: string; page?: number }) => {
+        asked.push(opts)
+        return { chunks: [chunk()], total: 40 }
+      },
+    })
+    const box = document.querySelector('.kbchunksearch') as HTMLInputElement
+    await act(async () => {
+      fireEvent.change(box, { target: { value: 'latency' } })
+      fireEvent.keyDown(box, { key: 'Enter' })
+    })
+    await act(async () => {})
+
+    await act(async () => {
+      fireEvent.change(box, { target: { value: '' } })
+    })
+    await act(async () => {})
+
+    expect(asked[asked.length - 1]).toMatchObject({ page: 1 })
+    expect(asked[asked.length - 1]).not.toHaveProperty('query')
+  })
+
+  it('shows a chunk whole or cut, and remembers which', async () => {
+    await openWithChunks([chunk({ text: 'a'.repeat(400) })])
+
+    expect(document.querySelector('.kbchunktx.cut')).not.toBeNull()
+    await act(async () => {
+      ;(screen.getByText('gui.kb.chunk_full').closest('button') as HTMLButtonElement).click()
+    })
+    expect(document.querySelector('.kbchunktx.cut')).toBeNull()
+  })
+
+  it('writes a chunk of its own, appended to the end', async () => {
+    const written: string[] = []
+    await openWithChunks([chunk()], 1, {
+      createChunk: async (_d: string, text: string) => {
+        written.push(text)
+        return chunk({ chunk_index: 1, chunk_id: 'c2', text, manual: true })
+      },
+    })
+
+    await act(async () => {
+      ;(document.querySelector('.kbchunkadd') as HTMLButtonElement).click()
+    })
+    const body = document.querySelector('#kbchunkbody') as HTMLTextAreaElement
+    await act(async () => {
+      fireEvent.change(body, { target: { value: 'a clause I typed' } })
+    })
+    await act(async () => {
+      ;(screen.getByText('gui.kb.create').closest('button') as HTMLButtonElement).click()
+    })
+
+    expect(written).toEqual(['a clause I typed'])
+    expect(document.querySelector('.kbmodal')).toBeNull()
+  })
+
+  it('rewrites a chunk on a double click, and re-embeds it', async () => {
+    /* A piece whose text changed and whose vector did not would be found by
+       the old words and read as the new ones. */
+    const saved: unknown[] = []
+    await openWithChunks([chunk({ chunk_id: 'c1', text: 'as it was cut' })], 1, {
+      updateChunk: async (d: string, id: string, text: string) => {
+        saved.push([d, id, text])
+        return chunk({ chunk_id: 'c9', text, manual: true })
+      },
+    })
+
+    await act(async () => {
+      fireEvent.doubleClick(document.querySelector('.kbchunktx') as HTMLElement)
+    })
+    const body = document.querySelector('#kbchunkbody') as HTMLTextAreaElement
+    /* Opens on what is there, so an edit is an edit rather than a retype. */
+    expect(body.value).toBe('as it was cut')
+
+    await act(async () => {
+      fireEvent.change(body, { target: { value: 'as I corrected it' } })
+    })
+    await act(async () => {
+      ;(screen.getByText('gui.kb.note_save').closest('button') as HTMLButtonElement).click()
+    })
+
+    expect(saved).toEqual([['d1', 'c1', 'as I corrected it']])
+    expect(document.querySelector('.kbmodal')).toBeNull()
+  })
+
+  it('will not save an edit that changed nothing', async () => {
+    await openWithChunks([chunk({ chunk_id: 'c1', text: 'as it was cut' })])
+
+    await act(async () => {
+      fireEvent.doubleClick(document.querySelector('.kbchunktx') as HTMLElement)
+    })
+
+    expect((screen.getByText('gui.kb.note_save').closest('button') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('filters by state from the filter icon', async () => {
+    const asked: unknown[] = []
+    await openWithChunks([chunk()], 3, {
+      chunks: async (_d: string, opts: { available?: boolean | null }) => {
+        asked.push(opts)
+        return { chunks: [chunk({ enabled: false })], total: 1 }
+      },
+    })
+
+    await act(async () => {
+      ;(document.querySelector('.kbfilter button') as HTMLButtonElement).click()
+    })
+    await act(async () => {
+      ;(screen.getByText('gui.kb.chunk_filter_off').closest('button') as HTMLButtonElement).click()
+    })
+
+    expect(asked[asked.length - 1]).toMatchObject({ available: false })
+  })
+
+  it('marks a chunk somebody wrote, and one that is off', async () => {
+    await openWithChunks([chunk({ manual: true, enabled: false })])
+
+    expect(screen.getByText('gui.kb.chunk_written')).toBeTruthy()
+    expect(document.querySelector('.kbchunk.off')).not.toBeNull()
+  })
+
+  it('says a file has nothing indexed rather than showing an empty column', async () => {
+    /* A document that failed, one still queued and one in a base with no model
+       all land here, and an empty column would read as a bug. */
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd1', source: 'notes.md', status: 'failed' })],
+      chunks: async () => ({ chunks: [], total: 0 }),
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+
+    await clickName('notes.md')
+    await act(async () => {})
+
+    expect(screen.getByText('gui.kb.chunks_none')).toBeTruthy()
+  })
+
+  it('opens the same panel from the row menu as from the name', async () => {
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd1', source: 'onboarding.md', status: 'ready' })],
+      chunks: async () => ({ chunks: [{ chunk_index: 0, total_chunks: 1, text: 'Only piece.', chunk_id: 'c1' }], total: 1 }),
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+
+    await openRowMenu('onboarding.md')
+    await act(async () => {
+      ;(screen.getByText('gui.kb.doc_view_chunks').closest('button') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+
+    expect(document.querySelector('.kbview')).not.toBeNull()
+    expect(document.querySelector('.kbchunktx')?.textContent).toBe('Only piece.')
+  })
+
   it('asks the gateway to convert the formats no browser draws', async () => {
     await openBase([doc({ id: 'd2', source: 'notice.doc', status: 'ready' })])
 
@@ -957,6 +1654,92 @@ describe('viewing the original file', () => {
     expect((document.querySelector('.kbframe') as HTMLIFrameElement).getAttribute('src')).toBe(
       '/knowledge/file?document=d2&render=pdf',
     )
+  })
+
+  it('takes the preview to the page a chunk came from', async () => {
+    /* What a deck's chunk list can do that a document's cannot: a slide is a
+       page, the preview is that deck rendered to PDF, and the two agree page
+       for page -- so a piece can put the slide it was cut from in front of the
+       reader rather than describing it. */
+    await openBase([doc({ id: 'd9', source: 'deck.pptx', status: 'ready', chunk_count: 3 })])
+    source({
+      bases: async () => [base({ id: 'b1', name: 'handbook' })],
+      documents: async () => [doc({ id: 'd9', source: 'deck.pptx', status: 'ready', chunk_count: 3 })],
+      chunks: async () => ({
+        chunks: [
+          { chunk_index: 0, total_chunks: 2, text: 'Opening', chunk_id: 'c1', page_number: 1 },
+          { chunk_index: 1, total_chunks: 2, text: 'Closing', chunk_id: 'c2', page_number: 7 },
+        ],
+        total: 2,
+      }),
+    })
+    await clickName('deck.pptx')
+
+    const frame = () => document.querySelector('.kbframe') as HTMLIFrameElement
+    expect(frame().getAttribute('src')).toBe('/knowledge/file?document=d9&render=pdf')
+
+    await act(async () => {
+      ;(document.querySelectorAll('.kbchunk')[1] as HTMLElement).click()
+    })
+
+    /* `#page=` is the PDF fragment every built-in viewer reads, and the only
+       way to move this frame: the response is sandboxed to an opaque origin,
+       so the page cannot reach in and scroll it. */
+    expect(frame().getAttribute('src')).toBe('/knowledge/file?document=d9&render=pdf#page=7')
+    /* And the list says which piece the preview is answering to. */
+    expect(document.querySelectorAll('.kbchunk')[1]?.classList.contains('at')).toBe(true)
+    expect(document.querySelectorAll('.kbchunk')[0]?.classList.contains('at')).toBe(false)
+  })
+
+  it('does not move the preview when the click was a reader selecting words', async () => {
+    /* A single click on prose is how a word gets selected, which is why the
+       editor is on double-click. Taking that away would make the panel
+       unreadable. */
+    await openBase([doc({ id: 'd9', source: 'deck.pptx', status: 'ready', chunk_count: 1 })])
+    source({
+      bases: async () => [base({ id: 'b1', name: 'handbook' })],
+      documents: async () => [doc({ id: 'd9', source: 'deck.pptx', status: 'ready', chunk_count: 1 })],
+      chunks: async () => ({
+        chunks: [{ chunk_index: 0, total_chunks: 1, text: 'Opening', chunk_id: 'c1', page_number: 4 }],
+        total: 1,
+      }),
+    })
+    await clickName('deck.pptx')
+    const selection = { toString: () => '  some selected words  ' } as Selection
+    const spy = vi.spyOn(window, 'getSelection').mockReturnValue(selection)
+
+    await act(async () => {
+      ;(document.querySelector('.kbchunk') as HTMLElement).click()
+    })
+
+    expect((document.querySelector('.kbframe') as HTMLIFrameElement).getAttribute('src')).toBe(
+      '/knowledge/file?document=d9&render=pdf',
+    )
+    spy.mockRestore()
+  })
+
+  it('leaves the preview alone for a chunk that names no page', async () => {
+    /* A text file has no pages. Scrolling somewhere arbitrary would be worse
+       than doing nothing. */
+    await openBase([doc({ id: 'd8', source: 'notes.txt', status: 'ready', chunk_count: 1 })])
+    source({
+      bases: async () => [base({ id: 'b1', name: 'handbook' })],
+      documents: async () => [doc({ id: 'd8', source: 'notes.txt', status: 'ready', chunk_count: 1 })],
+      chunks: async () => ({
+        chunks: [{ chunk_index: 0, total_chunks: 1, text: 'Just text', chunk_id: 'c1' }],
+        total: 1,
+      }),
+    })
+    await clickName('notes.txt')
+
+    await act(async () => {
+      ;(document.querySelector('.kbchunk') as HTMLElement).click()
+    })
+
+    expect((document.querySelector('.kbframe') as HTMLIFrameElement).getAttribute('src')).toBe(
+      '/knowledge/file?document=d8',
+    )
+    expect(document.querySelector('.kbchunk')?.classList.contains('at')).toBe(false)
   })
 
   it('offers a download rather than framing what cannot be drawn', async () => {
@@ -1156,8 +1939,20 @@ describe('adding a data source', () => {
     await openBase()
     await openSourceMenu()
 
-    const items = [...document.querySelectorAll('.kbsrc .kbmenu .mi')].map((b) => b.textContent)
-    expect(items).toEqual(['gui.kb.src_file', 'gui.kb.src_note', 'gui.kb.src_folder', 'gui.kb.src_url'])
+    const items = [...document.querySelectorAll('.kbsrc .kbmenu .mi')]
+    expect(items.map((b) => b.textContent)).toEqual([
+      'gui.kb.src_file',
+      'gui.kb.src_note',
+      'gui.kb.src_folder',
+      'gui.kb.src_url',
+    ])
+    /* One drawing each, and hidden from a screen reader: the word beside it is
+       already the name, and an icon read aloud after it says it twice. */
+    for (const item of items) {
+      const glyph = item.querySelector('svg.kbmi')
+      expect(glyph).not.toBeNull()
+      expect(glyph!.getAttribute('aria-hidden')).toBe('true')
+    }
   })
 
   it('picks a folder with the attribute that makes a chooser a folder chooser', async () => {
@@ -1845,7 +2640,7 @@ describe('the knowledge base settings', () => {
     await openSettings()
 
     const helps = [...document.querySelectorAll('.kbsets .kbhelp')]
-    expect(helps.length).toBe(7)
+    expect(helps.length).toBe(9)
     for (const help of helps) {
       expect(help.getAttribute('title')).toBeTruthy()
       /* Reachable without a pointer, or the sentence only exists for people
@@ -1855,15 +2650,234 @@ describe('the knowledge base settings', () => {
     }
   })
 
-  it('shows the embedding model without offering to change it', async () => {
-    /* The store is sized to its vector width when the base is created, so a
-       dropdown here would be a way to invalidate every vector in the base. */
-    await openSettings({}, { embedding_model: 'BAAI/bge-large-zh-v1.5' })
+  it('says a base cannot embed, where a reader is looking at it', async () => {
+    /* Nothing it holds can be indexed or searched until the model it was built
+       with can be reached again, and a line in the gateway log is not where
+       the person who can fix that is looking. */
+    source({
+      bases: async () => [
+        base({ id: 'b1', embedding_model: 'BAAI/bge-large-zh-v1.5', embedding_reach: 'no_provider' }),
+      ],
+      documents: async () => [],
+    })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
 
-    const row = field('gui.kb.set_embed')
-    expect(row.textContent).toContain('BAAI/bge-large-zh-v1.5')
-    expect(row.querySelector('select')).toBeNull()
-    expect(row.querySelector('input')).toBeNull()
+    const warning = document.querySelector('.kbunreach') as HTMLButtonElement
+    expect(warning).not.toBeNull()
+    expect(warning.textContent).toBe('gui.kb.reach_no_provider')
+    expect(warning.title).toContain('BAAI/bge-large-zh-v1.5')
+
+    /* And it opens the panel that holds the repair. */
+    await act(async () => {
+      warning.click()
+    })
+    expect(document.querySelector('.kbsets')).not.toBeNull()
+  })
+
+  it('says nothing when the model is reachable', async () => {
+    source({ bases: async () => [base({ id: 'b1' })], documents: async () => [] })
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+
+    expect(document.querySelector('.kbunreach')).toBeNull()
+  })
+
+  it('shows the provider and the model as one endpoint', async () => {
+    /* An embedding endpoint is a provider and a model together -- a model id
+       does not name a credential -- so they read as one value rather than as
+       two fields to reconcile. A provider with no credential is not offered:
+       that would be offering a repair that fails. */
+    await openSettings({}, { embedding_model: 'BAAI/bge-large-zh-v1.5', embedding_provider: 'siliconflow' })
+
+    const picker = field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement
+    expect(picker.value).toBe('siliconflow::BAAI/bge-large-zh-v1.5')
+    const offered = [...picker.options].map((o) => o.value)
+    expect(offered).toContain('')
+    expect(offered).toContain('dashscope::text-embedding-v4')
+  })
+
+  it('offers a base with no embedding a model to turn it on with', async () => {
+    /* It used to offer nothing at all: the choice was made once, at creation,
+       and a base made without vectors stayed that way or was rebuilt by hand.
+       It is the same rebuild as any other switch, so it is the same control. */
+    await openSettings({}, { embedding_model: '' })
+
+    const picker = field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement
+    expect(picker.value).toBe('')
+    expect([...picker.options].map((o) => o.value)).toContain('siliconflow::BAAI/bge-m3')
+  })
+
+  it('keeps a base on its own model when it is served somewhere the list does not offer', async () => {
+    /* A select whose value matches no option draws as empty, which would tell
+       a reader their base has no model when it has one. */
+    await openSettings({}, { embedding_model: 'house-embed', embedding_provider: 'custom' })
+
+    const picker = field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement
+    expect(picker.value).toBe('custom::house-embed')
+    expect([...picker.options].map((o) => o.textContent)).toContain('house-embed')
+  })
+
+  it('reads a prefixed id and the recorded spelling as one model', async () => {
+    /* A provider stores its models under its own prefix and the prefix comes
+       off before the request goes out, so the picker offers
+       `siliconflow/BAAI/bge-m3` for a base that records `BAAI/bge-m3`. Read as
+       two, the reader is offered both and picking the one they are already on
+       counts as a rebuild. */
+    const saved = await openSettings(
+      {
+        embeddingModels: async () => [
+          { id: 'siliconflow', name: 'SiliconFlow', models: ['siliconflow/BAAI/bge-m3'] },
+        ],
+      },
+      { embedding_model: 'BAAI/bge-m3', embedding_provider: 'siliconflow', documents: 3 },
+    )
+
+    const picker = field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement
+    expect(picker.value).toBe('siliconflow::siliconflow/BAAI/bge-m3')
+    expect([...picker.options].map((o) => o.value)).toEqual(['', 'siliconflow::siliconflow/BAAI/bge-m3'])
+    expect(field('gui.kb.set_embed').textContent).not.toContain('gui.kb.set_embed_moved')
+
+    await act(async () => {
+      fireEvent.change(picker, { target: { value: 'siliconflow::siliconflow/BAAI/bge-m3' } })
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.set_save').click()
+    })
+
+    expect(confirms).toEqual([])
+    expect(saved[0]).not.toHaveProperty('embedding_model')
+  })
+
+  it('records a provider for a base that has none without calling it a rebuild', async () => {
+    /* A base written before providers were recorded names a model and nobody
+       to serve it, which means "wherever this is configured". Naming one is
+       the repair it has always been, not a move -- the vectors are the ones
+       that model makes wherever it is reached from. */
+    const saved = await openSettings(
+      {},
+      { embedding_model: 'BAAI/bge-m3', embedding_provider: '', documents: 3 },
+    )
+
+    const picker = field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement
+    expect(picker.value).toBe('siliconflow::BAAI/bge-m3')
+    await act(async () => {
+      fireEvent.change(picker, { target: { value: 'siliconflow::BAAI/bge-m3' } })
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.set_save').click()
+    })
+
+    expect(confirms).toEqual([])
+    expect(saved[0]).toMatchObject({ embedding_provider: 'siliconflow' })
+    expect(saved[0]).not.toHaveProperty('embedding_model')
+  })
+
+  it('tells one model from another that ends the same way', async () => {
+    /* `BAAI/bge-m3` and `bge-m3` are two models; only a provider's own prefix
+       comes off on the way to the endpoint. */
+    await openSettings({}, { embedding_model: 'bge-m3', embedding_provider: '' })
+
+    const picker = field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement
+    expect(picker.value).toBe('::bge-m3')
+    expect([...picker.options].map((o) => o.textContent)).toContain('bge-m3')
+  })
+
+  it('sends the model only when it moved, and asks first', async () => {
+    /* A panel saving a slider must not drop the index, and a reader changing
+       the model has to be told what it costs before it happens rather than
+       after. */
+    const saved = await openSettings(
+      {},
+      { embedding_model: 'BAAI/bge-large-zh-v1.5', embedding_provider: 'siliconflow', documents: 3 },
+    )
+
+    await act(async () => {
+      ;(document.querySelector('.kbsets input[type="range"]') as HTMLInputElement).value = '9'
+      fireEvent.change(document.querySelector('.kbsets input[type="range"]') as HTMLInputElement, {
+        target: { value: '9' },
+      })
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.set_save').click()
+    })
+    expect(saved[0]).not.toHaveProperty('embedding_model')
+    expect(confirms).toEqual([])
+  })
+
+  it('rebuilds the base when another model is picked', async () => {
+    const saved = await openSettings(
+      {},
+      { embedding_model: 'BAAI/bge-large-zh-v1.5', embedding_provider: 'siliconflow', documents: 3 },
+    )
+
+    const picker = field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement
+    await act(async () => {
+      fireEvent.change(picker, { target: { value: 'dashscope::text-embedding-v4' } })
+    })
+    /* Said where the picking happens, before the confirmation says it again
+       with the number of documents. */
+    expect(field('gui.kb.set_embed').textContent).toContain('gui.kb.set_embed_moved')
+
+    await act(async () => {
+      screen.getByText('gui.kb.set_save').click()
+    })
+
+    expect(confirms[0]).toContain('"count":3')
+    expect(saved[0]).toMatchObject({
+      embedding_model: 'text-embedding-v4',
+      embedding_provider: 'dashscope',
+    })
+  })
+
+  it('re-reads the file list after a rebuild', async () => {
+    /* The rows are all back in the queue with no chunks. A list still saying
+       ready beside a count of zero describes the base as it was a second
+       ago. */
+    let reads = 0
+    await openSettings(
+      {
+        documents: async () => {
+          reads += 1
+          return [doc({ id: 'd1', status: reads > 1 ? 'pending' : 'ready', chunk_count: reads > 1 ? 0 : 4 })]
+        },
+      },
+      { embedding_model: 'BAAI/bge-m3', embedding_provider: 'siliconflow', documents: 1 },
+    )
+
+    await act(async () => {
+      fireEvent.change(field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement, {
+        target: { value: 'dashscope::text-embedding-v4' },
+      })
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.set_save').click()
+    })
+
+    expect(reads).toBeGreaterThan(1)
+    expect(screen.getByText('gui.kb.doc_pending')).toBeTruthy()
+  })
+
+  it('asks nothing of a base with no documents', async () => {
+    /* There is no index to lose, and a confirmation nobody needs is one more
+       click through a dialog. */
+    const saved = await openSettings({}, { embedding_model: 'BAAI/bge-m3', embedding_provider: 'siliconflow', documents: 0 })
+
+    await act(async () => {
+      fireEvent.change(field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement, {
+        target: { value: '' },
+      })
+    })
+    await act(async () => {
+      screen.getByText('gui.kb.set_save').click()
+    })
+
+    expect(confirms).toEqual([])
+    expect(saved[0]).toMatchObject({ embedding_model: '' })
   })
 
   it('lists the processors it will offer, every one of them unavailable', async () => {
@@ -1985,7 +2999,10 @@ describe('the knowledge base settings', () => {
   })
 
   it('puts the defaults back without saving them', async () => {
-    const saved = await openSettings({}, { top_k: 40, chunk_size: 2048, chunk_overlap: 400 })
+    const saved = await openSettings(
+      {},
+      { top_k: 40, chunk_size: 2048, chunk_overlap: 400, table_context_size: 10, image_context_size: 10 },
+    )
 
     await act(async () => {
       ;(screen.getByText('gui.kb.set_restore').closest('button') as HTMLButtonElement).click()
@@ -2000,29 +3017,31 @@ describe('the knowledge base settings', () => {
     expect((field('gui.kb.set_lap').querySelector('input') as HTMLInputElement).value).toBe(
       String(store.DEFAULTS.chunk_overlap),
     )
+    /* The two context sizes too, and from DEFAULTS rather than from zero:
+       written as zero this button turned the feature off instead of restoring
+       it, which is the opposite of what it says. */
+    expect((field('gui.kb.set_tablectx').querySelector('input') as HTMLInputElement).value).toBe(
+      String(store.DEFAULTS.table_context_size),
+    )
+    expect((field('gui.kb.set_imagectx').querySelector('input') as HTMLInputElement).value).toBe(
+      String(store.DEFAULTS.image_context_size),
+    )
+    expect(store.DEFAULTS.table_context_size).toBeGreaterThan(0), 'or the check above proves nothing'
     /* Restoring is an edit like any other: nothing is written until Save. */
     expect(saved).toEqual([])
   })
 
-  it('toggles smart chunking and disables the separator it replaces', async () => {
-    const saved = await openSettings({}, { smart_chunking: true })
+  it('says the strategy switch is not in force rather than offering a dead one', async () => {
+    /* Every base is cut the naive way while the structural chunker is
+       reworked. A switch that silently decides nothing is how the other four
+       settings on this panel spent their first release. */
+    await openSettings({}, { smart_chunking: true })
 
-    const toggle = field('gui.kb.set_smart').querySelector('.kbtog') as HTMLButtonElement
-    expect(toggle.getAttribute('aria-checked')).toBe('true')
-    /* Nothing plainly splits on a separator while the structure is doing it. */
-    expect((field('gui.kb.set_sep').querySelector('input') as HTMLInputElement).disabled).toBe(true)
-
-    await act(async () => {
-      toggle.click()
-    })
-    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    expect(field('gui.kb.set_smart').querySelector('.kbtog')).toBeNull()
+    expect(field('gui.kb.set_smart').textContent).toContain('gui.kb.set_smart_soon')
+    /* And the delimiters it would have replaced are in force, so the field
+       that sets them is live. */
     expect((field('gui.kb.set_sep').querySelector('input') as HTMLInputElement).disabled).toBe(false)
-
-    await act(async () => {
-      ;(screen.getByText('gui.kb.set_save').closest('button') as HTMLButtonElement).click()
-      await Promise.resolve()
-    })
-    expect(saved[0]!.smart_chunking).toBe(false)
   })
 
   it('says that chunking changes reach only what is added next', async () => {
@@ -2091,13 +3110,13 @@ describe('picking several files at once', () => {
   })
 
   it('marks a picked row across its whole width', async () => {
-    /* The table is a grid, so a row is six sibling cells rather than an
+    /* The table is a grid, so a row is seven sibling cells rather than an
        element that could carry the state; marking only some would stripe it. */
     await openWith()
     await tick(1)
 
     const marked = [...document.querySelectorAll('.kbtable .td.kbsel')]
-    expect(marked.length).toBe(6)
+    expect(marked.length).toBe(7)
     expect(marked.map((c) => c.textContent).join('')).toContain('report.docx')
   })
 

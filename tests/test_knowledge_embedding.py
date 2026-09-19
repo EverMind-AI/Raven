@@ -19,6 +19,7 @@ from raven.knowledge._embedding import (
     EmbeddingError,
     SiliconFlowEmbeddingClient,
     embedding_client,
+    embedding_config_for,
     estimate_tokens,
     fit_to_tokens,
     load_embedding_config,
@@ -484,3 +485,125 @@ async def test_a_plain_endpoint_is_left_alone(mock_transport) -> None:
 
 
 # --------------------------------------------------------------------------- resolution order
+
+
+def test_a_base_model_keeps_its_namespace_when_a_provider_is_resolved(monkeypatch) -> None:
+    """``BAAI/bge-large-zh-v1.5`` is one model id, not a provider and a model.
+
+    The configured pin is stored as ``provider/model`` and has its first
+    segment stripped on the way out; a base records what already went on the
+    wire, and stripping that again asks the endpoint for a model nobody
+    serves.
+    """
+    monkeypatch.setattr(
+        "raven.config.update_providers.resolve_provider_credentials",
+        lambda provider: ("https://api.siliconflow.cn/v1", "key"),
+    )
+
+    config = embedding_config_for("siliconflow", "BAAI/bge-large-zh-v1.5", 1024)
+
+    assert config is not None
+    assert config.model == "BAAI/bge-large-zh-v1.5"
+    assert config.provider == "siliconflow"
+    assert config.dimensions == 1024
+
+
+def test_a_provider_with_no_credentials_resolves_to_nothing(monkeypatch) -> None:
+    """The caller decides what that means: one base skipped, not a failed
+    search."""
+    monkeypatch.setattr(
+        "raven.config.update_providers.resolve_provider_credentials",
+        lambda provider: None,
+    )
+
+    assert embedding_config_for("siliconflow", "BAAI/bge-large-zh-v1.5") is None
+    assert embedding_config_for("", "some-model") is None
+
+
+# -- batching ------------------------------------------------------
+
+
+def _echo(request):
+    """Answer with one vector per input, numbered as the endpoint would."""
+    inputs = json.loads(request.read())["input"]
+    return httpx.Response(200, json={"data": [{"index": i, "embedding": [float(i)]} for i in range(len(inputs))]})
+
+
+async def test_a_long_document_is_sent_in_batches_in_order(mock_transport) -> None:
+    """One call carrying every chunk is what the endpoints that cap this
+    reject, and the rejection takes the whole document rather than the excess."""
+    batches: list[list[str]] = []
+
+    def handler(request):
+        batches.append(json.loads(request.read())["input"])
+        return _echo(request)
+
+    mock_transport(handler)
+    client = EmbeddingClient(EmbeddingConfig(model="m", base_url="https://embed.test/v1", api_key="k", batch_size=3))
+
+    vectors = await client.embed([f"chunk {n}" for n in range(7)])
+
+    assert [len(batch) for batch in batches] == [3, 3, 1]
+    assert [text for batch in batches for text in batch] == [f"chunk {n}" for n in range(7)]
+    assert len(vectors) == 7
+
+
+async def test_an_endpoint_that_refuses_a_batch_teaches_the_client_its_cap(mock_transport) -> None:
+    """DashScope answers a batch of 21 with a 400 naming the batch, not the
+    content. The number in the message is not reliably there, so the size is
+    halved until it is accepted -- and remembered, so one document pays for
+    the lesson rather than every document."""
+    sizes: list[int] = []
+
+    def handler(request):
+        inputs = json.loads(request.read())["input"]
+        sizes.append(len(inputs))
+        if len(inputs) > 4:
+            return httpx.Response(
+                400,
+                json={"error": {"message": "batch size is invalid, it should not be larger than 4."}},
+            )
+        return _echo(request)
+
+    mock_transport(handler)
+    client = EmbeddingClient(
+        EmbeddingConfig(model="learned", base_url="https://embed.test/v1", api_key="k", batch_size=16)
+    )
+
+    vectors = await client.embed([f"chunk {n}" for n in range(12)])
+
+    assert len(vectors) == 12
+    # Configured 16 so it sends 12, halves to 6, is refused again, halves to 3
+    # and gets the rest through four at a time. Two wasted requests, once.
+    assert sizes == [12, 6, 3, 3, 3, 3]
+    assert client.batch_size == 3, "the cap outlives the call"
+
+
+async def test_a_refusal_that_is_not_about_the_batch_is_not_retried(mock_transport) -> None:
+    """Retrying a rejected *input* in smaller batches only rejects it again,
+    one batch at a time."""
+    calls: list[int] = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(400, json={"error": {"message": "the parameter is invalid"}})
+
+    mock_transport(handler)
+    client = EmbeddingClient(EmbeddingConfig(model="m", base_url="https://embed.test/v1", api_key="k", batch_size=8))
+
+    with pytest.raises(EmbeddingError, match="400"):
+        await client.embed([f"chunk {n}" for n in range(8)])
+    assert len(calls) == 1
+
+
+async def test_a_batch_of_one_that_is_refused_gives_up(mock_transport) -> None:
+    """Otherwise the halving has nowhere left to go and loops."""
+
+    def handler(request):
+        return httpx.Response(400, json={"error": {"message": "batch size is invalid"}})
+
+    mock_transport(handler)
+    client = EmbeddingClient(EmbeddingConfig(model="one", base_url="https://embed.test/v1", api_key="k", batch_size=1))
+
+    with pytest.raises(EmbeddingError, match="batch size"):
+        await client.embed(["only one"])

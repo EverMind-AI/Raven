@@ -7,8 +7,16 @@ DS.knowledge = {
   /* Unwrapped here rather than in the island: the contract answers an object
      so it can grow a field beside the list, and the page wants the list. */
   bases: () => rpc.call('knowledge.bases.list', {}).then((r) => (r && r.bases) || []),
-  create: (name, description, embedding = true) =>
-    rpc.call('knowledge.bases.create', { name, description, embedding }).then((r) => r && r.base),
+  create: (name, description, embedding = true, model = '', provider = '') =>
+    rpc
+      .call('knowledge.bases.create', {
+        name,
+        description,
+        embedding,
+        embedding_model: model,
+        embedding_provider: provider,
+      })
+      .then((r) => r && r.base),
   rename: (id, name) =>
     rpc.call('knowledge.bases.rename', { base_id: id, name }).then((r) => r && r.base),
   remove: (id) => rpc.call('knowledge.bases.delete', { base_id: id }),
@@ -57,6 +65,50 @@ DS.knowledge = {
     rpc.call('knowledge.documents.add_url', { base_id: baseId, url }).then((r) => r && r.document),
   index: (documentId) =>
     rpc.call('knowledge.documents.index', { document_id: documentId }).then((r) => r && r.document),
+  chunks: (documentId, opts = {}) =>
+    rpc
+      .call('knowledge.documents.chunks', { document_id: documentId, ...opts })
+      .then((r) => ({ chunks: (r && r.chunks) || [], total: (r && r.total) || 0 })),
+  switchChunks: (documentId, chunkIds, enabled) =>
+    rpc
+      .call('knowledge.chunks.switch', { document_id: documentId, chunk_ids: chunkIds, enabled })
+      .then((r) => (r && r.changed) || 0),
+  deleteChunks: (documentId, chunkIds) =>
+    rpc
+      .call('knowledge.chunks.delete', { document_id: documentId, chunk_ids: chunkIds })
+      .then((r) => (r && r.remaining) || 0),
+  createChunk: (documentId, text) =>
+    rpc.call('knowledge.chunks.create', { document_id: documentId, text }).then((r) => r && r.chunk),
+  /* Only the authenticated providers, and only the models that say they
+     embed: a provider with no credential cannot serve an embedding call, and a
+     chat model offered in this picker is an id that fails on first use.
+
+     The configured list wins over the offered one where there is one, which is
+     the same rule the settings page picks models by -- a provider whose models
+     somebody curated should offer that list and not the whole catalogue. */
+  embeddingModels: () =>
+    rpc.call('model.options', {}).then((r) =>
+      ((r && r.providers) || [])
+        .filter((p) => p && p.authenticated)
+        .map((p) => {
+          const labels = p.model_labels || {};
+          const offered =
+            p.configured_models && p.configured_models.length ? p.configured_models : p.models;
+          return {
+            id: p.slug,
+            name: p.name || p.slug,
+            models: (offered || []).filter((m) => {
+              const caps = (labels[m] || {}).capabilities || [];
+              return caps.indexOf('embedding') !== -1;
+            }),
+          };
+        })
+        .filter((p) => p.models.length),
+    ),
+  updateChunk: (documentId, chunkId, text) =>
+    rpc
+      .call('knowledge.chunks.update', { document_id: documentId, chunk_id: chunkId, text })
+      .then((r) => r && r.chunk),
   /* Answers nothing: a document that was already gone and one this call
      removed leave the page in the same place, and the list read that
      follows is what the row is drawn from either way. */
@@ -67,5 +119,12 @@ DS.knowledge = {
   search: (baseIds, query, topK) =>
     rpc
       .call('knowledge.search', { base_ids: baseIds, query, top_k: topK })
-      .then((r) => ({ hits: (r && r.hits) || [], search_ms: (r && r.search_ms) || 0, embed_ms: (r && r.embed_ms) || 0 })),
+      .then((r) => ({
+        hits: (r && r.hits) || [],
+        /* Which bases answered by words. Empty on an ordinary search, and the
+           panel says nothing then. */
+        by_keyword: (r && r.by_keyword) || [],
+        search_ms: (r && r.search_ms) || 0,
+        embed_ms: (r && r.embed_ms) || 0,
+      })),
 };

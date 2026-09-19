@@ -1807,6 +1807,10 @@ export interface KnowledgeBase {
   name: string;
   description: string;
   embedding_model: string;
+  /**
+   * Which account this base reaches its model through. Empty means the configured endpoint, which is what every base built before the pair was recorded says.
+   */
+  embedding_provider?: string;
   dimensions: number;
   created_at: string;
   updated_at: string;
@@ -1817,6 +1821,18 @@ export interface KnowledgeBase {
   chunk_size?: number;
   chunk_overlap?: number;
   file_processing?: string;
+  /**
+   * Tokens of the prose around a table to carry into the chunk that holds it. Zero is off.
+   */
+  table_context_size?: number;
+  /**
+   * Tokens of the prose around a figure to carry into the chunk that holds it. Zero is off.
+   */
+  image_context_size?: number;
+  /**
+   * Empty when this base's model can be reached. Otherwise why not: `no_provider` for a base whose model is not the configured one and which records no provider of its own, `no_credential` for one whose recorded provider has no usable credential. Answered from what is recorded rather than by calling the endpoint, so an endpoint that is merely down still reads as reachable here.
+   */
+  embedding_reach?: string;
 }
 /**
  * One uploaded document and where its indexing got to.
@@ -1837,6 +1853,10 @@ export interface KnowledgeDocument {
   status: string;
   chunk_count: number;
   error: string;
+  /**
+   * What the parse could not do, on a document that was indexed anyway -- pictures no model could read, most often. Not a second `error`: the document is searchable, and this says which part of it is not in the index.
+   */
+  warning?: string;
   created_at: string;
   updated_at: string;
   origin?: string;
@@ -1851,6 +1871,10 @@ export interface KnowledgeDocument {
  */
 export interface KnowledgeHit {
   score: number;
+  /**
+   * How this hit was found, and therefore what `score` is: `vector` is a cosine similarity in 0..1, `keyword` a BM25 score on the index's own unbounded scale. The two are not comparable by value.
+   */
+  retrieval?: 'vector' | 'keyword';
   document_id: string;
   text: string;
   chunk_index?: number;
@@ -2021,6 +2045,79 @@ export interface PlaybookCredentialServer {
  */
 export interface OkResult {
   ok: boolean;
+}
+/**
+ * One indexed piece of a document, as the search sees it. The positional fields are absent for a format that does not have them -- absent means the parser did not know, never that the value is zero.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeChunk".
+ */
+export interface KnowledgeChunk {
+  /**
+   * Where the piece sits in its document. This is the reading order: the chunker numbers pieces as it walks the sections the parser produced.
+   */
+  chunk_index: number;
+  total_chunks: number;
+  text: string;
+  /**
+   * What the region is, as the source file marked it. Empty when the parser had nothing to go on.
+   */
+  layout_type?: string;
+  /**
+   * The 1-based page the piece starts on, where the format has pages.
+   */
+  page_number?: number | null;
+  /**
+   * The 1-based page this piece ends on. Equal to `page_number` unless it runs over a page boundary, which it can whenever it merged.
+   */
+  page_end?: number;
+  /**
+   * The headings the piece sits under, outermost first.
+   */
+  heading_path?: string[];
+  /**
+   * Where each piece of a merged chunk came from. Empty for a chunk that merged nothing, so a non-empty list is itself the statement that this chunk crossed a section boundary.
+   */
+  parts?: KnowledgeChunkPart[];
+  /**
+   * What addresses this piece. Derived from its text, so it survives a rebuild of the same document. Empty on rows written before ids existed, which can be read but not acted on until the document is reindexed.
+   */
+  chunk_id?: string;
+  /**
+   * Whether this piece may be retrieved. A disabled piece is never searched and never reaches the agent.
+   */
+  enabled?: boolean;
+  /**
+   * Whether a person wrote this piece. It is deleted with every other piece when the document is reindexed.
+   */
+  manual?: boolean;
+}
+/**
+ * One piece of a chunk that merged several, and where it came from. The naive strategy merges across section boundaries, so a chunk can hold two pages, two headings and two sections; the flattened fields on the chunk can only carry the first of each.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeChunkPart".
+ */
+export interface KnowledgeChunkPart {
+  char_start: number;
+  char_end: number;
+  layout_type?: string;
+  page_number?: number;
+  heading_path?: string[];
+  /**
+   * Which section of the document this piece was cut from. The section identity: a heading path is not one, because two same-named children of a parent share it.
+   */
+  section_ordinal?: number;
+}
+/**
+ * One base that answered by words, and why its vectors were out of reach.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeFallback".
+ */
+export interface KnowledgeFallback {
+  base_id: string;
+  reason: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -5068,6 +5165,10 @@ export interface KnowledgeStatusParams {}
 export interface KnowledgeStatusResult {
   configured: boolean;
   model: string;
+  /**
+   * Who serves the configured model. The two together are what a picker selects with: a model id names no credential, so half the pin cannot be preselected.
+   */
+  provider?: string;
   extensions?: string[];
 }
 /**
@@ -5090,6 +5191,14 @@ export interface KnowledgeBasesCreateParams {
   name: string;
   description?: string;
   embedding?: boolean;
+  /**
+   * The model to build the base on. Omitted, the configured pin is used.
+   */
+  embedding_model?: string;
+  /**
+   * Who serves that model. A model id names no credential, so the pair travels together.
+   */
+  embedding_provider?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -5126,6 +5235,13 @@ export interface KnowledgeBasesSettingsParams {
   chunk_size?: number;
   chunk_overlap?: number;
   file_processing?: string;
+  table_context_size?: number;
+  image_context_size?: number;
+  embedding_provider?: string;
+  /**
+   * The model this base holds vectors from. Not a setting: sending it rebuilds the base -- the collection is made again at the new width and every document goes back to the queue. Empty turns embedding off.
+   */
+  embedding_model?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -5243,6 +5359,37 @@ export interface KnowledgeDocumentsIndexResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsChunksParams".
+ */
+export interface KnowledgeDocumentsChunksParams {
+  document_id: string;
+  /**
+   * 1-based page of the reading order. Defaults to the first.
+   */
+  page?: number;
+  page_size?: number;
+  /**
+   * Filter by state; omit for both.
+   */
+  available?: boolean | null;
+  /**
+   * When set, the pieces are the ones that answer this query, best first, rather than a page of the reading order -- the same retrieval a search of the base does, narrowed to this document, by keyword where the model cannot be reached.
+   */
+  query?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeDocumentsChunksResult".
+ */
+export interface KnowledgeDocumentsChunksResult {
+  chunks: KnowledgeChunk[];
+  /**
+   * How many pieces the filter admits, which is what a pager counts.
+   */
+  total: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "KnowledgeDocumentsDeleteParams".
  */
 export interface KnowledgeDocumentsDeleteParams {
@@ -5260,6 +5407,71 @@ export interface KnowledgeDocumentsDeleteResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeChunksSwitchParams".
+ */
+export interface KnowledgeChunksSwitchParams {
+  document_id: string;
+  chunk_ids: string[];
+  enabled: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeChunksSwitchResult".
+ */
+export interface KnowledgeChunksSwitchResult {
+  /**
+   * How many pieces the store actually changed.
+   */
+  changed: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeChunksDeleteParams".
+ */
+export interface KnowledgeChunksDeleteParams {
+  document_id: string;
+  chunk_ids: string[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeChunksDeleteResult".
+ */
+export interface KnowledgeChunksDeleteResult {
+  remaining: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeChunksCreateParams".
+ */
+export interface KnowledgeChunksCreateParams {
+  document_id: string;
+  text: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeChunksCreateResult".
+ */
+export interface KnowledgeChunksCreateResult {
+  chunk: KnowledgeChunk;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeChunksUpdateParams".
+ */
+export interface KnowledgeChunksUpdateParams {
+  document_id: string;
+  chunk_id: string;
+  text: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeChunksUpdateResult".
+ */
+export interface KnowledgeChunksUpdateResult {
+  chunk: KnowledgeChunk;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "KnowledgeSearchParams".
  */
 export interface KnowledgeSearchParams {
@@ -5273,6 +5485,10 @@ export interface KnowledgeSearchParams {
  */
 export interface KnowledgeSearchResult {
   hits: KnowledgeHit[];
+  /**
+   * The bases that answered by keyword rather than by meaning, each with the reason its vectors could not be reached. Empty on an ordinary search.
+   */
+  by_keyword?: KnowledgeFallback[];
   search_ms?: number;
   embed_ms?: number;
 }

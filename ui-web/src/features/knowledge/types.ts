@@ -20,7 +20,27 @@ export interface KbBase {
   separator?: string
   chunk_size?: number
   chunk_overlap?: number
+  /* Tokens of the prose around a table or a figure to carry into the chunk
+     that holds it. Read by the naive strategy, where a table is its own
+     chunk. */
+  table_context_size?: number
+  image_context_size?: number
   file_processing?: string
+  /* Where this base's model is reached, when it is not the configured one. */
+  embedding_provider?: string
+  /* Empty when the model can be reached; otherwise why not -- `no_provider`
+     or `no_credential`. Answered from what is recorded, so an endpoint that is
+     merely down still reads as reachable. */
+  embedding_reach?: string
+}
+
+/* One provider and the embedding models it serves, as the picker offers them.
+   Grouped rather than flat because the group is the answer to "whose
+   credential pays for this", which a bare model id does not carry. */
+export interface KbProvider {
+  id: string
+  name: string
+  models: string[]
 }
 
 /* What the settings panel can write. Every field optional: the ones left out
@@ -31,7 +51,15 @@ export interface KbSettings {
   separator?: string
   chunk_size?: number
   chunk_overlap?: number
+  table_context_size?: number
+  image_context_size?: number
   file_processing?: string
+  /* Where the base's model is reached. Sent alone it moves only the address. */
+  embedding_provider?: string
+  /* The model itself. Not a setting: sending it rebuilds the base, because
+     the collection is sized to the model's width and holds vectors that model
+     made. Empty turns embedding off. */
+  embedding_model?: string
 }
 
 /* One document and where its indexing got to. `error` is empty unless `status`
@@ -46,6 +74,12 @@ export interface KbDoc {
   status: string
   chunk_count: number
   error: string
+  /* What the parse could not do, on a document that was indexed anyway. Not a
+     second `error`: this row is `ready` and searchable, and the line says
+     which part of the file is not in the index -- pictures no model could
+     read, most often. Optional so a gateway that predates it still answers a
+     shape this page can read. */
+  warning?: string
   created_at: string
   updated_at: string
   /* Which kind of data source this arrived through. A folder is not one of
@@ -61,6 +95,9 @@ export interface KbDoc {
 export interface KbStatus {
   configured: boolean
   model: string
+  /* Who serves that model. The pair is what the picker preselects with: a
+     model id on its own names no credential and matches no option. */
+  provider?: string
   /* Extensions this build can index, each with its leading dot. What a folder
      walk filters by -- reported rather than listed in the page, because which
      formats are parseable moves with the optional extras installed. */
@@ -74,15 +111,22 @@ export interface KnowledgeSource {
   status(): Promise<KbStatus>
   bases(): Promise<KbBase[]>
   /* ``embedding`` false makes a base that keeps its documents and is never
-     searched by vector. Not revisable: a collection's width is fixed when it
-     is made, so the choice belongs to creation or nowhere. */
-  create(name: string, description: string, embedding?: boolean): Promise<KbBase>
+     searched by vector. ``model`` and ``provider`` are the pair the picker
+     chose; left out, the base is built on the configured default. */
+  create(
+    name: string,
+    description: string,
+    embedding?: boolean,
+    model?: string,
+    provider?: string,
+  ): Promise<KbBase>
   /* A base's name, which is the one thing about it that carries no index
      consequence. Refused when another base already holds it. */
   rename(id: string, name: string): Promise<KbBase>
   remove(id: string): Promise<unknown>
-  /* Write one base's settings. Not the embedding model: the store is sized to
-     its vector width, so changing it is a rebuild rather than a setting. */
+  /* Write one base's settings. Sending `embedding_model` is the exception: it
+     rebuilds the base rather than writing a value, and every document in it
+     goes back to the queue to be indexed again. */
   settings(baseId: string, values: KbSettings): Promise<KbBase>
   documents(baseId: string): Promise<KbDoc[]>
   /* Two calls behind one name: the bytes go up through `fs.upload`, which is
@@ -100,6 +144,24 @@ export interface KnowledgeSource {
      site on the reader's behalf -- and kept as markdown. */
   addUrl(baseId: string, url: string): Promise<KbDoc>
   index(documentId: string): Promise<KbDoc>
+  /* One document's indexed pieces, in reading order. What the search matches
+     against, not a fresh parse: the two stop agreeing as soon as a chunking
+     setting has moved. */
+  chunks(documentId: string, opts?: KbChunkQuery): Promise<KbChunkPage>
+  /* Turn pieces on or off. Off is out of retrieval entirely. */
+  switchChunks(documentId: string, chunkIds: string[], enabled: boolean): Promise<number>
+  /* Remove pieces. Unlike disabling, nothing is kept. Answers with how many
+     the document has left. */
+  deleteChunks(documentId: string, chunkIds: string[]): Promise<number>
+  /* Append a piece a person wrote, embedded like every other piece. */
+  createChunk(documentId: string, text: string): Promise<KbChunk>
+  /* Rewrite one piece, re-embedding it so the vector says what it says.
+     Its id changes with its text, because ids are derived from content. */
+  updateChunk(documentId: string, chunkId: string, text: string): Promise<KbChunk>
+  /* Every embedding model this install can reach, grouped by the provider
+     serving it. What both pickers offer: the one a base is created with and
+     the one that moves an existing base onto another model. */
+  embeddingModels(): Promise<KbProvider[]>
   /* Take one document out. The page's only way past a row that will not
      index: without it the base around it is the smallest thing that can be
      deleted. */
@@ -107,9 +169,79 @@ export interface KnowledgeSource {
   search(baseIds: string[], query: string, topK?: number): Promise<KbSearch>
 }
 
-/* One hit. `score` is a similarity, so higher is nearer. */
+/* One hit. `score` runs one direction whatever found it -- higher is nearer --
+   and `retrieval` says what the number is. */
+/* One indexed piece of a document, as the search sees it.
+
+   The positional fields are there for the formats that have them -- a page and
+   a layout type come off a Word file or a PDF, and a text file has neither.
+   Absent means the parser did not know, never that the value is zero. */
+export interface KbChunk {
+  /* Where the piece sits in its document, and how many there are. This is the
+     reading order: the chunker numbers pieces as it walks the sections the
+     parser produced, so the sequence is the document's own. */
+  chunk_index: number
+  total_chunks: number
+  text: string
+  layout_type?: string
+  page_number?: number | null
+  /* The last page this piece touches. Equal to `page_number` unless it runs
+     over a page boundary, which it can whenever it merged. */
+  page_end?: number | null
+  /* The heading path it sits under -- of the section it *starts* in when it
+     merged several. Each part below carries its own. */
+  heading_path?: string[]
+  /* Where each piece of a merged chunk came from. Empty for a chunk that
+     merged nothing, so a non-empty list is itself the statement that this
+     chunk crossed a section boundary. Without it the row shows the first
+     section's page and heading as if they described the whole piece. */
+  parts?: KbChunkPart[]
+  /* What addresses this piece. Derived from its text, so it survives a rebuild
+     of the same document. */
+  chunk_id?: string
+  /* Whether it may be retrieved. Off is not a ranking penalty: a disabled
+     piece is never searched and never reaches the agent. */
+  enabled?: boolean
+  /* Whether a person wrote it rather than a parser cutting it. It goes with
+     every other piece when the document is reindexed. */
+  manual?: boolean
+}
+
+/* One piece of a chunk that merged several, and where it came from. */
+export interface KbChunkPart {
+  char_start: number
+  char_end: number
+  layout_type?: string
+  page_number?: number | null
+  heading_path?: string[]
+  /* The section identity. A heading path is not one: two same-named children
+     of a parent share it. */
+  section_ordinal?: number | null
+}
+
+/* How a page of chunks is asked for. Absent members mean "the first page of
+   the reading order, both states" -- and a `query` replaces the page entirely
+   with what matched, best first. */
+export interface KbChunkQuery {
+  page?: number
+  page_size?: number
+  available?: boolean | null
+  query?: string
+}
+
+export interface KbChunkPage {
+  chunks: KbChunk[]
+  total: number
+}
+
 export interface KbHit {
   score: number
+  /* How this hit was found: `vector` is a cosine similarity in 0..1,
+     `keyword` a BM25 score on the index's own unbounded scale. The two are not
+     comparable by value, so a surface showing both has to say which is which
+     rather than printing them under one heading. Absent from a gateway that
+     predates the field, which only ever searched by vector. */
+  retrieval?: 'vector' | 'keyword'
   document_id: string
   text: string
   /* Which piece of its document this was, and of how many. A chunk read on
@@ -125,8 +257,18 @@ export interface KbHit {
    its job; `embed_ms` is the round trip to the configured embedding endpoint,
    which is the larger number and the one that describes the provider rather
    than the retrieval. */
+/* One base that answered by words, and why its vectors were out of reach. */
+export interface KbFallback {
+  base_id: string
+  reason: string
+}
+
 export interface KbSearch {
   hits: KbHit[]
+  /* The bases that answered by keyword rather than by meaning. Empty on an
+     ordinary search; a reader comparing two sets of results has to be told
+     that retrieval changed mode, because the hits themselves look normal. */
+  by_keyword?: KbFallback[]
   search_ms: number
   embed_ms: number
 }

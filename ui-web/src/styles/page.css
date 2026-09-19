@@ -5347,6 +5347,149 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   flex: 1; min-height: 0;
   border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px;
 }
+/* A file open takes the page the split would have had: same frame, same
+   bounds, no rail. Two columns inside it -- the file as it was written, and
+   the pieces the index holds -- because the second only means anything against
+   the first. Each column scrolls on its own, so a long document and a long
+   chunk list do not drag each other. */
+.kbview {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 42%);
+  grid-template-rows: auto minmax(0, 1fr); gap: 0 14px;
+  min-height: 0; flex: 1;
+  border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px 14px;
+}
+/* The header names the file, so it spans both halves rather than sitting over
+   one of them. */
+.kbview .kbvhd { grid-column: 1 / -1; }
+.kborig { min-width: 0; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+.kborig .kbframe { flex: 1; height: auto; min-height: 0; }
+.kbchunks {
+  min-width: 0; min-height: 0; display: flex; flex-direction: column;
+  border-left: 1px solid var(--line-soft); padding-left: 14px;
+}
+.kbchunkshd {
+  display: flex; align-items: baseline; gap: 8px; padding-bottom: 8px; flex: none;
+}
+.kbchunkshd b { font-size: 12.5px; font-weight: 600; }
+.kbchunksn { font-size: 11.5px; color: var(--muted); }
+/* Wrapped rather than scrolled: this panel is half a split, and eight controls
+   on one line would either overflow it or shrink the search box to nothing. */
+.kbchunkbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding-bottom: 8px; flex: none;
+}
+.kbchunkbar .mini { padding: 2px 8px; }
+.kbpickall { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); }
+.kbpickall input { margin: 0; }
+/* Two ways to read one list, so they sit in one control rather than as two
+   buttons that could both look off. */
+.kbseg { display: inline-flex; border: 1px solid var(--line-soft); border-radius: 7px; overflow: hidden; }
+.kbseg button {
+  background: none; border: 0; cursor: pointer; padding: 2px 8px;
+  font-size: 11.5px; color: var(--muted);
+}
+.kbseg button.on { background: var(--surface); color: var(--text); font-weight: 600; }
+/* The magnifier sits inside the field rather than beside it, so the icon and
+   the box read as one control and the placeholder starts clear of it. */
+.kbsearchbox {
+  flex: 1 1 130px; min-width: 104px; position: relative; display: flex; align-items: center;
+}
+.kbsearchbox svg {
+  position: absolute; left: 7px; width: 12px; height: 12px; pointer-events: none;
+  fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round;
+}
+.kbchunksearch {
+  width: 100%; font-size: 11.5px; padding: 3px 8px 3px 24px;
+  border: 1px solid var(--line-soft); border-radius: 7px;
+  background: var(--bg); color: var(--text);
+}
+.kbfilter { flex: none; }
+.kbfilter .mini { padding: 3px 6px; line-height: 0; }
+.kbfilter svg {
+  width: 13px; height: 13px; fill: none; stroke: currentColor;
+  stroke-width: 2; stroke-linecap: round;
+}
+/* A filter in force is a reason the list is short, so the control says so
+   rather than leaving the reader to wonder where their chunks went. */
+.kbfilter .mini.on { color: var(--link); }
+.kbfilter .kbmenu { right: 0; left: auto; min-width: 128px; }
+.kbchunkadd { font-size: 15px; line-height: 1; padding: 1px 8px; }
+/* One column, stated as minmax(0, 1fr) rather than left implicit: a grid item
+   is min-width:auto by default, so one unbreakable string -- a bare URL, and
+   these documents are full of them -- widens the track past its container and
+   carries the switch at the end of every row off the panel with it. */
+.kbchunklist {
+  overflow-y: auto; display: grid; grid-template-columns: minmax(0, 1fr);
+  gap: 8px; align-content: start; padding-right: 2px;
+}
+.kbchunk {
+  min-width: 0; border: 1px solid var(--line-soft); border-radius: 9px;
+  padding: 8px 10px; background: var(--surface);
+}
+/* A disabled piece is still readable -- it is in the list to be turned back on
+   -- but it is not pulling its weight in any search, and it should not read as
+   though it were. */
+.kbchunk.off { opacity: 0.55; }
+.kbchunkhd { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+.kbchunkhd > input[type='checkbox'] { margin: 0; flex: none; }
+/* The number is the reading order, so it reads first and stays put. */
+.kbchunkix { font-size: 11px; font-weight: 600; color: var(--muted); flex: none; }
+.kbchunkty, .kbchunkpg, .kbchunkspan {
+  font-size: 10.5px; color: var(--muted); flex: none;
+  border: 1px solid var(--line-soft); border-radius: 5px; padding: 0 4px;
+}
+/* A piece that crossed a section boundary. The badge is the only thing on the
+   row saying the heading and page beside it describe where the chunk starts
+   rather than the whole of it, so it carries the cursor that invites the
+   hover that names every part. */
+.kbchunkspan { cursor: help; border-style: dashed; }
+/* The page badge is a control on a file the viewer can scroll: it takes the
+   preview to that page. A plain badge everywhere else, so the two read the
+   same until the cursor says otherwise. */
+.kbchunkpg { background: none; cursor: pointer; font-family: inherit; }
+.kbchunkpg:hover { color: var(--amber); border-color: var(--amber); }
+/* Which piece the preview beside the list is answering to. The whole row, not
+   a mark on it: the reader is looking back and forth between two panels and
+   needs to find their place in the list at a glance. */
+.kbchunk.at { border-color: var(--amber); }
+.kbwritten { color: var(--gold); border-color: var(--gold); }
+.kbchunkpath {
+  font-size: 10.5px; color: var(--muted); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* The switch sits at the far end of the row, away from what it describes, so
+   the eye finds the state of every piece in one column. */
+.kbswitch { margin-left: auto; flex: none; display: inline-flex; cursor: pointer; }
+.kbswitch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.kbslider {
+  width: 26px; height: 15px; border-radius: 999px; background: var(--line);
+  position: relative; transition: background 120ms ease;
+}
+.kbslider::after {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 11px; height: 11px;
+  border-radius: 50%; background: var(--bg); transition: transform 120ms ease;
+}
+/* Amber, which is this page's own accent -- the colour a focus ring, an
+   active filter and a live control already use here. Green would be a second
+   vocabulary for "on" that nothing else in the product speaks. */
+.kbswitch input:checked + .kbslider { background: var(--amber); }
+.kbswitch input:checked + .kbslider::after { transform: translateX(11px); }
+.kbswitch input:disabled + .kbslider { opacity: 0.5; cursor: not-allowed; }
+.kbswitch input:focus-visible + .kbslider { outline: 2px solid var(--link); outline-offset: 2px; }
+/* The text as it was cut, newlines and all: what the index holds is what the
+   reader is here to check, so it is not reflowed into a paragraph. */
+.kbchunktx { cursor: text; font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+/* Cut to a few lines for scanning a long document. The clamp is on the line
+   count rather than a height, so it lands between lines whatever the text. */
+.kbchunktx.cut {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden;
+}
+.kbchunkfoot {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding-top: 8px; flex: none; font-size: 11.5px; color: var(--muted);
+}
+.kbview .kbprose { margin: 0 auto; }
 .kbrail { overflow-y: auto; display: grid; gap: 2px; align-content: start;
   border-right: 1px solid var(--line-soft); padding-right: 10px; }
 .kbrail .kbadd { justify-self: stretch; margin-bottom: 8px; }
@@ -5388,6 +5531,33 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .kbrow .nm { font-size: 13px; font-weight: 600; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; }
 .kbpane { position: relative; overflow-y: auto; min-width: 0; padding: 0 2px 8px 4px; }
+/* A base that cannot embed. Amber rather than red: nothing is broken or lost
+   -- the vectors are intact and the repair is one setting -- but nothing new
+   can be indexed until it is done, which is worth interrupting for. */
+/* Provider and model as one value, reading left to right the way the pin is
+   written everywhere else in the product: `provider / model`. */
+.kbembed { display: flex; align-items: center; gap: 6px; min-width: 0; justify-content: flex-end; }
+.kbembed select {
+  font-size: 12px; padding: 2px 6px; border-radius: 7px; max-width: 168px;
+  border: 1px solid var(--line-soft); background: var(--bg); color: var(--text);
+}
+/* A model id is long and the row it sits in is narrow, so the control takes
+   what it can and ellipsizes rather than pushing the dialog wider. */
+.kbmodels { min-width: 0; max-width: 220px; text-overflow: ellipsis; }
+/* Said beside the control that causes it: picking another model drops the
+   index, and the reader should see that while they are still deciding. */
+.kbembed .kbwarn { flex: none; font-size: 11px; color: var(--amber); }
+/* A file that is indexed and searchable but missing a part of itself. Beside
+   the status rather than under the row: a second line per warned file is what
+   makes a list of files unscannable, and the status is where a reader already
+   looks. */
+.kbdocwarn { margin-left: 5px; color: var(--amber); font-size: 11px; cursor: help; }
+.kbunreach {
+  flex: none; cursor: pointer; font-size: 11px; font-weight: 600;
+  color: var(--amber); background: none;
+  border: 1px solid var(--amber); border-radius: 6px; padding: 1px 7px;
+}
+.kbunreach:hover { background: var(--surface); }
 .kbhd { display: flex; align-items: center; gap: 10px; padding-bottom: 12px;
   border-bottom: 1px solid var(--line-soft); }
 .kbhd b { font-size: 14px; font-weight: 600; overflow: hidden;
@@ -5416,9 +5586,12 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    narrow as their contents allow: a tick column bought at the name's expense
    leaves a list whose names read as one character. */
 .kbtable {
-  display: grid; grid-template-columns: 26px minmax(0, 1fr) 64px 92px 88px 36px;
+  display: grid; grid-template-columns: 26px minmax(0, 1fr) 64px 92px 56px 88px 36px;
   align-items: center; row-gap: 1px;
 }
+/* A count reads as a count when its digits line up, so the column is right
+   aligned and the header with it. */
+.kbtable .kbnum { text-align: right; padding-right: 10px; font-variant-numeric: tabular-nums; }
 /* The tick sits in its own narrow column so the name still starts at one
    place down the list, picked or not. */
 .kbtable .kbtick { padding-left: 2px; padding-right: 0; }
@@ -5553,10 +5726,6 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   color: var(--faint); font: 600 9.5px/12px var(--serif); text-align: center; cursor: help;
 }
 .kbhelp:hover, .kbhelp:focus { color: var(--text); border-color: var(--muted); outline: none; }
-/* What the model is, not a way to change it: the store is sized to its width
-   when the base is made. */
-.kbfixed { font-family: var(--mono); font-size: 11.5px; color: var(--muted);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kbsetc .kbslide { flex: 1 1 auto; display: flex; flex-direction: column;
   align-items: stretch; gap: 2px; max-width: 260px; }
 .kbslide b { align-self: flex-end; font-size: 13px; }
@@ -5657,6 +5826,18 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .kbhitix, .kbhitsc { flex: none; font-family: var(--mono); font-size: 11px; color: var(--faint); }
 /* The score is the measurement the test was run to see, so it reads as one. */
 .kbhitsc { color: var(--amber); }
+/* A keyword score is not the measurement this panel usually shows, so it does
+   not wear the colour that one does -- and it carries a mark, because the two
+   numbers sit in the same column and only one of them is a similarity. */
+.kbhitbm { color: var(--muted); }
+.kbhitkw { margin-left: 3px; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+/* Above the hits, not beside one: the whole result set changed kind. */
+.kbfellback {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 6px 10px; margin-bottom: 8px; border-radius: 8px;
+  border: 1px solid var(--amber); color: var(--muted); font-size: 11.5px;
+}
+.kbfellback b { color: var(--amber); font-weight: 600; }
 .kbhitrk { flex: none; font-size: 11.5px; color: var(--muted); }
 .kbhitcv { flex: none; color: var(--faint); font-size: 12px; }
 .kbhithd:hover { background: var(--raised); border-radius: 10px; }

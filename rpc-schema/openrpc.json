@@ -7151,6 +7151,10 @@
             "model": {
               "type": "string"
             },
+            "provider": {
+              "type": "string",
+              "description": "Who serves the configured model. The two together are what a picker selects with: a model id names no credential, so half the pin cannot be preselected."
+            },
             "extensions": {
               "type": "array",
               "items": {
@@ -7212,6 +7216,22 @@
           "required": false,
           "schema": {
             "type": "boolean"
+          }
+        },
+        {
+          "name": "embedding_model",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "The model to build the base on. Omitted, the configured pin is used."
+          }
+        },
+        {
+          "name": "embedding_provider",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Who serves that model. A model id names no credential, so the pair travels together."
           }
         }
       ],
@@ -7324,6 +7344,35 @@
           "required": false,
           "schema": {
             "type": "string"
+          }
+        },
+        {
+          "name": "table_context_size",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "image_context_size",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "embedding_provider",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "embedding_model",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "The model this base holds vectors from. Not a setting: sending it rebuilds the base -- the collection is made again at the new width and every document goes back to the queue. Empty turns embedding off."
           }
         }
       ],
@@ -7586,6 +7635,77 @@
       }
     },
     {
+      "name": "knowledge.documents.chunks",
+      "summary": "One document's indexed pieces, in reading order.",
+      "description": "What the search matches against, not what a fresh parse would produce: the two stop agreeing the moment a chunking setting has moved. An empty list is an ordinary answer -- a document that failed, one still queued, and one in a base with no embedding model all have nothing indexed to show.",
+      "params": [
+        {
+          "name": "document_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "page",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "description": "1-based page of the reading order. Defaults to the first."
+          }
+        },
+        {
+          "name": "page_size",
+          "required": false,
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "name": "available",
+          "required": false,
+          "schema": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Filter by state; omit for both."
+          }
+        },
+        {
+          "name": "query",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "When set, the pieces are the ones that answer this query, best first, rather than a page of the reading order -- the same retrieval a search of the base does, narrowed to this document, by keyword where the model cannot be reached."
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeDocumentsChunksResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "chunks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/KnowledgeChunk"
+              }
+            },
+            "total": {
+              "type": "integer",
+              "description": "How many pieces the filter admits, which is what a pager counts."
+            }
+          },
+          "required": [
+            "chunks",
+            "total"
+          ]
+        }
+      }
+    },
+    {
       "name": "knowledge.documents.delete",
       "summary": "Remove one document from its base, with its chunks and blob.",
       "params": [
@@ -7611,6 +7731,171 @@
             "removed"
           ],
           "type": "object"
+        }
+      }
+    },
+    {
+      "name": "knowledge.chunks.switch",
+      "summary": "Turn pieces of one document on or off.",
+      "description": "Disabled means out of retrieval entirely -- not a ranking penalty. The filter is applied by the store, so every present and future caller inherits it.",
+      "params": [
+        {
+          "name": "document_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "chunk_ids",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "name": "enabled",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeChunksSwitchResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "changed": {
+              "type": "integer",
+              "description": "How many pieces the store actually changed."
+            }
+          },
+          "required": [
+            "changed"
+          ]
+        }
+      }
+    },
+    {
+      "name": "knowledge.chunks.delete",
+      "summary": "Remove pieces of one document from the index.",
+      "description": "Unlike disabling, nothing is kept. Answers with the number of pieces the document has left.",
+      "params": [
+        {
+          "name": "document_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "chunk_ids",
+          "required": true,
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeChunksDeleteResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "remaining": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "remaining"
+          ]
+        }
+      }
+    },
+    {
+      "name": "knowledge.chunks.create",
+      "summary": "Append a piece a person wrote to a document.",
+      "description": "Appended rather than inserted: it was not cut from anywhere in the document. It is embedded with the base's own model, and it is deleted along with every other piece when the document is reindexed.",
+      "params": [
+        {
+          "name": "document_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "text",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeChunksCreateResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "chunk": {
+              "$ref": "#/components/schemas/KnowledgeChunk"
+            }
+          },
+          "required": [
+            "chunk"
+          ]
+        }
+      }
+    },
+    {
+      "name": "knowledge.chunks.update",
+      "summary": "Rewrite one piece's text, and the vector that answers for it.",
+      "description": "Replaced rather than edited in place: a piece whose text changed and whose vector did not would be found by the old words and read as the new ones. Its id changes with its text, its place in the reading order and its on/off state are kept, and it is marked as written by hand.",
+      "params": [
+        {
+          "name": "document_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "chunk_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "text",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeChunksUpdateResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "chunk": {
+              "$ref": "#/components/schemas/KnowledgeChunk"
+            }
+          },
+          "required": [
+            "chunk"
+          ]
         }
       }
     },
@@ -7653,6 +7938,13 @@
                 "$ref": "#/components/schemas/KnowledgeHit"
               },
               "type": "array"
+            },
+            "by_keyword": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/KnowledgeFallback"
+              },
+              "description": "The bases that answered by keyword rather than by meaning, each with the reason its vectors could not be reached. Empty on an ordinary search."
             },
             "search_ms": {
               "type": "number"
@@ -11689,6 +11981,10 @@
           "embedding_model": {
             "type": "string"
           },
+          "embedding_provider": {
+            "type": "string",
+            "description": "Which account this base reaches its model through. Empty means the configured endpoint, which is what every base built before the pair was recorded says."
+          },
           "dimensions": {
             "type": "integer"
           },
@@ -11718,6 +12014,18 @@
           },
           "file_processing": {
             "type": "string"
+          },
+          "table_context_size": {
+            "type": "integer",
+            "description": "Tokens of the prose around a table to carry into the chunk that holds it. Zero is off."
+          },
+          "image_context_size": {
+            "type": "integer",
+            "description": "Tokens of the prose around a figure to carry into the chunk that holds it. Zero is off."
+          },
+          "embedding_reach": {
+            "type": "string",
+            "description": "Empty when this base's model can be reached. Otherwise why not: `no_provider` for a base whose model is not the configured one and which records no provider of its own, `no_credential` for one whose recorded provider has no usable credential. Answered from what is recorded rather than by calling the endpoint, so an endpoint that is merely down still reads as reachable here."
           }
         },
         "required": [
@@ -11759,6 +12067,10 @@
           "error": {
             "type": "string"
           },
+          "warning": {
+            "type": "string",
+            "description": "What the parse could not do, on a document that was indexed anyway -- pictures no model could read, most often. Not a second `error`: the document is searchable, and this says which part of it is not in the index."
+          },
           "created_at": {
             "type": "string"
           },
@@ -11792,6 +12104,14 @@
         "properties": {
           "score": {
             "type": "number"
+          },
+          "retrieval": {
+            "type": "string",
+            "enum": [
+              "vector",
+              "keyword"
+            ],
+            "description": "How this hit was found, and therefore what `score` is: `vector` is a cosine similarity in 0..1, `keyword` a BM25 score on the index's own unbounded scale. The two are not comparable by value."
           },
           "document_id": {
             "type": "string"
@@ -12176,6 +12496,119 @@
         "required": [
           "ok"
         ]
+      },
+      "KnowledgeChunk": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One indexed piece of a document, as the search sees it. The positional fields are absent for a format that does not have them -- absent means the parser did not know, never that the value is zero.",
+        "properties": {
+          "chunk_index": {
+            "type": "integer",
+            "description": "Where the piece sits in its document. This is the reading order: the chunker numbers pieces as it walks the sections the parser produced."
+          },
+          "total_chunks": {
+            "type": "integer"
+          },
+          "text": {
+            "type": "string"
+          },
+          "layout_type": {
+            "type": "string",
+            "description": "What the region is, as the source file marked it. Empty when the parser had nothing to go on."
+          },
+          "page_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The 1-based page the piece starts on, where the format has pages."
+          },
+          "page_end": {
+            "type": "integer",
+            "description": "The 1-based page this piece ends on. Equal to `page_number` unless it runs over a page boundary, which it can whenever it merged."
+          },
+          "heading_path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The headings the piece sits under, outermost first."
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeChunkPart"
+            },
+            "description": "Where each piece of a merged chunk came from. Empty for a chunk that merged nothing, so a non-empty list is itself the statement that this chunk crossed a section boundary."
+          },
+          "chunk_id": {
+            "type": "string",
+            "description": "What addresses this piece. Derived from its text, so it survives a rebuild of the same document. Empty on rows written before ids existed, which can be read but not acted on until the document is reindexed."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether this piece may be retrieved. A disabled piece is never searched and never reaches the agent."
+          },
+          "manual": {
+            "type": "boolean",
+            "description": "Whether a person wrote this piece. It is deleted with every other piece when the document is reindexed."
+          }
+        },
+        "required": [
+          "chunk_index",
+          "total_chunks",
+          "text"
+        ]
+      },
+      "KnowledgeFallback": {
+        "additionalProperties": false,
+        "description": "One base that answered by words, and why its vectors were out of reach.",
+        "properties": {
+          "base_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_id",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "KnowledgeChunkPart": {
+        "additionalProperties": false,
+        "description": "One piece of a chunk that merged several, and where it came from. The naive strategy merges across section boundaries, so a chunk can hold two pages, two headings and two sections; the flattened fields on the chunk can only carry the first of each.",
+        "properties": {
+          "char_start": {
+            "type": "integer"
+          },
+          "char_end": {
+            "type": "integer"
+          },
+          "layout_type": {
+            "type": "string"
+          },
+          "page_number": {
+            "type": "integer"
+          },
+          "heading_path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "section_ordinal": {
+            "type": "integer",
+            "description": "Which section of the document this piece was cut from. The section identity: a heading path is not one, because two same-named children of a parent share it."
+          }
+        },
+        "required": [
+          "char_start",
+          "char_end"
+        ],
+        "type": "object"
       }
     },
     "errors": {

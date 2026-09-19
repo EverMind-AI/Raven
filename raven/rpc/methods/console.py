@@ -875,11 +875,14 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "translate.provider": _chk_pin_provider("translate.provider"),
     "embedding.model": _chk_pin_model("embedding.model"),
     "embedding.provider": _chk_pin_provider("embedding.provider"),
+    "vision.model": _chk_pin_model("vision.model"),
+    "vision.provider": _chk_pin_provider("vision.provider"),
     # The pair keys. A surface offering a pin writes one of these, not the two
     # leaves in sequence.
     "sessionTitle": _chk_pin_pair("sessionTitle", "model", "provider"),
     "translate": _chk_pin_pair("translate", "model", "provider"),
     "embedding": _chk_pin_pair("embedding", "model", "provider"),
+    "vision": _chk_pin_pair("vision", "model", "provider"),
     "agents.defaults.enablePersonalization": _chk_bool("agents.defaults.enablePersonalization"),
     "agents.defaults.reasoningEffort": _chk_enum("agents.defaults.reasoningEffort", "minimal", "low", "medium", "high"),
     "permissions.mode": _chk_enum("permissions.mode", "ask", "smart", "full"),

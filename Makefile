@@ -137,7 +137,13 @@ build-tui:
 build-ui:
 	npm ci --prefix ui-web
 	npm run --prefix ui-web build
-	python3 ui-web/build.py
+	# Through uv like every other python line here, rather than through
+	# whatever `python3` the shell resolves. The assembler writes the page
+	# with `Path.write_text(newline="")`, which is 3.10 and later; a stock
+	# macOS resolves `python3` to 3.9 and the build fails on a keyword
+	# argument, which reads as a defect in the script rather than as the
+	# wrong interpreter.
+	uv run --frozen --python $(PYTHON_VERSION) python ui-web/build.py
 
 build-bridge:
 	npm run build --prefix bridge

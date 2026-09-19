@@ -2036,6 +2036,24 @@ function kindOf(facts: ModelTagFacts | undefined): ModelKind {
   return 'text'
 }
 
+/* What a pin row offers. Every slot but one is a kind: the model that draws a
+   picture is an image model, the model that embeds is an embedding model. The
+   model that *reads* a picture is a text model that happens to take one as
+   input, so `kindOf` cannot name it and the vision row asks a different
+   question of the same facts. */
+type PinSlot = ModelKind | 'vision'
+
+function fitsSlot(facts: ModelTagFacts | undefined, slot: PinSlot): boolean {
+  if (slot !== 'vision') return kindOf(facts) === slot
+  /* Either signal, because the registry fills them unevenly: a vendor row
+     states the capability, a gateway's catalogue states the modality, and a
+     model listed with only one of them still reads images. */
+  return (
+    (facts?.input_modalities ?? []).includes('image') ||
+    (facts?.capabilities ?? []).includes('image-recognition')
+  )
+}
+
 /* One pin per row: a model and the provider serving it, written as a pair.
    The offer is filtered by what the slot is for -- a picker listing every
    model for every slot is how an embedding id lands in a painting slot -- and
@@ -2049,17 +2067,22 @@ function PinRow({
   modelField,
   providerField,
   foot,
+  unset,
   s,
 }: {
   title: string
   note: string
-  kind: ModelKind
+  kind: PinSlot
   /* The block the pair lives under, which is also the key it is written by:
      one write, so the two halves cannot be persisted apart. */
   pinKey: string
   modelField: string
   providerField: string
   foot?: string
+  /* What the empty option means on this row. Every pin but one inherits the
+     conversation's model when it is unset; the vision row has nothing to
+     inherit from, so unset there is off. */
+  unset?: string
   s: SettingsState
 }): JSX.Element {
   const [nl, say] = useNl()
@@ -2069,7 +2092,7 @@ function PinRow({
     .filter((p) => p.on)
     .map((p) => ({
       p,
-      models: (p.configured?.length ? p.configured : p.models).filter((m) => kindOf(p.labels?.[m]) === kind),
+      models: (p.configured?.length ? p.configured : p.models).filter((m) => fitsSlot(p.labels?.[m], kind)),
     }))
     .filter((g) => g.models.length)
   const current = model && provider ? `${provider}::${model}` : ''
@@ -2089,7 +2112,7 @@ function PinRow({
               })
           }}
         >
-          <option value="">{t('gui.set.dm.inherit')}</option>
+          <option value="">{unset ?? t('gui.set.dm.inherit')}</option>
           {groups.map((g) => (
             <optgroup key={g.p.id} label={g.p.name}>
               {g.models.map((m) => (
@@ -2166,6 +2189,21 @@ function DefaultsPage({ s }: { s: SettingsState }): JSX.Element {
           has always been -- moved here because a reader looking for "what
           draws my pictures" looks at the defaults, not inside a tool row. */}
       <PaintRow s={s} />
+      {/* The other direction, and beside it for that reason: one row draws a
+          picture, the next reads one. Unset is off rather than "follow the
+          conversation" -- an indexing run has no conversation, and an image
+          posted to a model that cannot see one fails at the endpoint. */}
+      <PinRow
+        title={t('gui.set.dm.vision')}
+        note={t('gui.set.dm.vision_note')}
+        kind="vision"
+        pinKey="vision"
+        modelField="model"
+        providerField="provider"
+        unset={t('gui.set.dm.vision_off')}
+        foot={t('gui.set.dm.vision_warn')}
+        s={s}
+      />
       <PinRow
         title={t('gui.set.dm.embed')}
         note={t('gui.set.dm.embed_note')}
