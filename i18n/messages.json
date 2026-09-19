@@ -6479,6 +6479,10 @@
       "en": "Could not subscribe - {detail}",
       "zh": "订阅失败：{detail}"
     },
+    "gui.model.refused": {
+      "en": "the gateway did not apply it",
+      "zh": "网关没有应用这次切换"
+    },
     "gui.op.switch_failed": {
       "en": "Could not switch - {detail}",
       "zh": "切换失败：{detail}"

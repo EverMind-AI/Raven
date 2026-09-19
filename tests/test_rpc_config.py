@@ -287,6 +287,29 @@ async def test_config_set_model_completes_a_first_run(fake_home: Path) -> None:
     assert written["agents"]["defaults"]["provider"] == "deepseek"
 
 
+async def test_a_first_run_session_pick_says_why_it_was_refused(fake_home: Path) -> None:
+    """A refused session write carries the reason, because it RESOLVES.
+
+    A model picked while the composer is still a draft is written under the
+    new session when the first message is sent. With no loop there is nothing
+    to bind it to, so the answer is `applied: false` -- which a caller
+    watching for a raise never hears. Without the reason the page had nothing
+    to say and left the chip on a model the session does not have.
+    """
+    cfg = fake_home / ".raven"
+    cfg.mkdir(exist_ok=True)
+    (cfg / "config.json").write_text(json.dumps({"providers": {"deepseek": {"apiKey": "sk-deep"}}}), encoding="utf-8")
+
+    result = await config_set(
+        {"key": "model", "value": "deepseek-chat", "provider": "deepseek", "session_id": "s1"},
+        agent_loop_factory=_first_run_factory,
+    )
+
+    assert result["applied"] is False
+    assert result["scope"] == "session"
+    assert result["needs_restart"] is True
+
+
 async def test_config_set_model_on_a_first_run_still_needs_the_key(fake_home: Path) -> None:
     """The loop not being there is not a reason to take a provider on trust.
 

@@ -429,6 +429,30 @@ describe('the staged draft-write recovery', () => {
     expect(h.calls).toContainEqual(['modelSet', 'model-a'])
   })
 
+  it('speaks and reconciles when the refusal RESOLVES rather than raises', async () => {
+    /* A first run answers `applied: false` with the reason: there is no loop
+       to bind a session to, because this gateway started without a model.
+       That resolves, so a catch-only recovery heard nothing and left the chip
+       showing a model the session does not have -- after a pick the reader
+       was told was staged. */
+    const h = stagedHarness()
+    const applied = h.applyStagedModel('a', 0)
+    await h.settle(0, { applied: false, previous: null, scope: 'session', needs_restart: true })
+    await applied
+    expect(h.calls).toContainEqual(['toast', 'gui.onb.restart'])
+    expect(h.inFlight()).toEqual(['config.set', 'model.options'])
+    await h.settle(1, { model: 'model-a', providers: [] })
+    expect(h.calls).toContainEqual(['modelSet', 'model-a'])
+  })
+
+  it('names the refusal generically when the server sends no reason', async () => {
+    const h = stagedHarness()
+    const applied = h.applyStagedModel('a', 0)
+    await h.settle(0, { applied: false, previous: null, scope: 'session' })
+    await applied
+    expect(h.calls).toContainEqual(['toast', 'gui.op.switch_failed'])
+  })
+
   it('says nothing and refreshes nothing when the write lands', async () => {
     const h = stagedHarness()
     const applied = h.applyStagedModel('a', 0)

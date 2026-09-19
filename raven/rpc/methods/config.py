@@ -597,8 +597,16 @@ def _set_model(
     if session_scoped:
         if loop is None:
             # Nothing was built, so nothing was validated -- do not report a
-            # switch that did not happen.
-            return {"applied": False, "previous": None, "value": raw_value, "scope": "session"}
+            # switch that did not happen. The reason is the one the default
+            # scope reports too, and it belongs here for the same cause: a
+            # refusal resolves, so a caller watching only for a raise hears
+            # nothing at all. A pick staged on a draft goes through this branch
+            # on a first run, and used to end as a chip showing a model the
+            # session does not have.
+            refused: dict[str, Any] = {"applied": False, "previous": None, "value": raw_value, "scope": "session"}
+            if agent_loop_factory is not None:
+                refused["needs_restart"] = True
+            return refused
         previous = loop.session_model(session_id)
         loop.set_session_binding(session_id, binding)
         _remember_session_model(loop, session_id, raw_value, new_provider)
