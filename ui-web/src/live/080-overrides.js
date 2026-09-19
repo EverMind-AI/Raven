@@ -130,8 +130,12 @@ async function applyStagedModel(sessionId, gen) {
     // quiet here: with no loop to bind to, the server answers applied:false
     // and says why, and the chip kept a model the session does not have.
     if (r && r.applied === false) {
-      toast(r.needs_restart ? T('gui.onb.restart') : T('gui.op.switch_failed', { detail: T('gui.model.refused') }));
+      // The only way a session write is refused is that there is no loop to
+      // bind to, which a restart does not fix -- nothing was persisted. Say
+      // the way out instead.
+      toast(T('gui.op.switch_failed', { detail: T('gui.model.refused') }));
       void loadProviders(sessionId, gen);
+
     }
 
   } catch (e) {

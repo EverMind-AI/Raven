@@ -603,10 +603,14 @@ def _set_model(
             # nothing at all. A pick staged on a draft goes through this branch
             # on a first run, and used to end as a chip showing a model the
             # session does not have.
-            refused: dict[str, Any] = {"applied": False, "previous": None, "value": raw_value, "scope": "session"}
-            if agent_loop_factory is not None:
-                refused["needs_restart"] = True
-            return refused
+            # Not `needs_restart`: that flag means the write landed and a
+            # restart applies it, and nothing landed here. A session binding
+            # has no loop to live on, and persisting the pick as the default
+            # instead would widen a choice made for one conversation. The
+            # refusal is what the caller gets, and it is the caller's job to
+            # say it -- a refusal resolves, so watching only for a raise
+            # leaves a chip on a model the session does not have.
+            return {"applied": False, "previous": None, "value": raw_value, "scope": "session"}
         previous = loop.session_model(session_id)
         loop.set_session_binding(session_id, binding)
         _remember_session_model(loop, session_id, raw_value, new_provider)

@@ -293,8 +293,12 @@ async def test_a_first_run_session_pick_says_why_it_was_refused(fake_home: Path)
     A model picked while the composer is still a draft is written under the
     new session when the first message is sent. With no loop there is nothing
     to bind it to, so the answer is `applied: false` -- which a caller
-    watching for a raise never hears. Without the reason the page had nothing
-    to say and left the chip on a model the session does not have.
+    watching for a raise never hears, and the chip stayed on a model the
+    session does not have.
+
+    The refusal carries no `needs_restart`: nothing was persisted, so a
+    restart comes back to a gateway with no model either. Persisting the pick
+    as the default instead would widen a choice made for one conversation.
     """
     cfg = fake_home / ".raven"
     cfg.mkdir(exist_ok=True)
@@ -307,7 +311,10 @@ async def test_a_first_run_session_pick_says_why_it_was_refused(fake_home: Path)
 
     assert result["applied"] is False
     assert result["scope"] == "session"
-    assert result["needs_restart"] is True
+    # Deliberately absent: that flag says the write landed and a restart will
+    # apply it, and nothing landed. Sending it here had the page promise a
+    # restart that would come back to a gateway with no model still.
+    assert "needs_restart" not in result
 
 
 async def test_config_set_model_on_a_first_run_still_needs_the_key(fake_home: Path) -> None:
