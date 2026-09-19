@@ -36,6 +36,7 @@ from raven.rpc.errors import (
     ConfigFieldReadonlyError,
     ConfigValidationError,
     ModelNotAvailableError,
+    RpcError,
 )
 from raven.utils.atomic_io import atomic_replace
 
@@ -507,7 +508,21 @@ def _set_model(
     session_id, session_scoped = _session_scope(params, "model")
     has_session = session_id is not None
 
-    loop = agent_loop_factory() if agent_loop_factory is not None else None
+    # A factory that raises for want of credentials has no loop to switch: the
+    # gateway started on a config no provider could be built from, and the
+    # first-run wizard is now writing the first default. Nothing is live to
+    # validate against, so the default-scoped write below goes to disk the way
+    # it does with no factory at all; the next build reads it. A session-scoped
+    # switch still answers that nothing was switched. Any other build failure
+    # (a plugin or engine crash) is not that case and stays the caller's error.
+    loop = None
+    if agent_loop_factory is not None:
+        try:
+            loop = agent_loop_factory()
+        except RpcError as exc:
+            if (exc.data or {}).get("reason") != "missing_credentials":
+                raise
+            logger.info("config.set model: no live loop to switch ({})", exc.detail or exc.message)
     binding = None
     if loop is not None:
         runtime = load_runtime_config(None, None)

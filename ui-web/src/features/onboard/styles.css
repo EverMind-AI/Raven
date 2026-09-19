@@ -1,0 +1,67 @@
+/* The first-run wizard's own stylesheet: the frame the prototype draws --
+   top bar with the step strip, one scrolling column, the footer -- under the
+   domain's `ob-` prefix. The step bodies bring their own sheets (the settings
+   dialog's, the sub-agents roster's); only the sync card is styled here.
+   Imported by OnboardPage.tsx and inlined after styles/page.css by
+   ui-web/build.py (features/extAgents/styles.css says how). */
+
+.ob-app { position: fixed; inset: 0; display: flex; flex-direction: column; min-width: 780px;
+  background: var(--paper); color: var(--text); font-family: var(--sans); font-size: 14px; line-height: 1.6; }
+
+.ob-top { flex: none; display: flex; align-items: center; gap: 16px; height: 56px; padding: 0 24px;
+  border-bottom: 1px solid var(--line-soft); }
+.ob-brand { flex: none; min-width: 160px; font-size: 15px; font-weight: 600; letter-spacing: .01em; }
+
+.ob-steps { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; }
+.ob-sitem { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--faint); white-space: nowrap; }
+.ob-sitem + .ob-sitem::before { content: ""; width: 34px; height: 1px; background: var(--line); margin: 0 12px 0 10px; }
+.ob-dot { width: 20px; height: 20px; border-radius: 99px; border: 1.5px solid var(--line); display: grid; place-items: center;
+  font-size: 10.5px; font-weight: 700; color: var(--faint); background: var(--paper); }
+.ob-sitem[data-state="current"] { color: var(--text); font-weight: 600; }
+.ob-sitem[data-state="current"] .ob-dot { border-color: var(--amber); background: var(--amber-dp); color: var(--gold); }
+.ob-sitem[data-state="done"] { color: var(--text); }
+.ob-sitem[data-state="done"] .ob-dot { border-color: var(--moss); color: var(--moss); }
+.ob-sitem[data-state="skipped"] .ob-dot { border-style: dashed; }
+
+.ob-lang { margin-left: auto; flex: none; display: inline-flex; border: 1px solid var(--line); border-radius: 7px;
+  overflow: hidden; background: var(--raised); }
+.ob-lang button { font: inherit; font-size: 12px; border: 0; border-right: 1px solid var(--line); background: none;
+  color: var(--muted); padding: 3px 11px; cursor: pointer; }
+.ob-lang button:last-child { border-right: 0; }
+.ob-lang button[aria-pressed="true"] { background: var(--paper); color: var(--text); font-weight: 600; }
+
+.ob-main { flex: 1; min-height: 0; overflow-y: auto; padding: 26px 24px 36px; }
+.ob-col { max-width: 760px; margin: 0 auto; }
+.ob-loading { padding: 34px 24px; text-align: center; color: var(--faint); }
+
+.ob-foot { flex: none; border-top: 1px solid var(--line); background: var(--surface); padding: 0 24px; }
+.ob-foot .ob-col { display: flex; align-items: center; gap: 10px; padding: 13px 0; }
+.ob-grow { margin-left: auto; }
+.ob-err { color: var(--clay); font-size: 13px; }
+
+.ob-btn { font: inherit; font-size: 14px; padding: 8px 20px; border-radius: 8px; cursor: pointer; }
+.ob-btn:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.ob-btn:disabled { opacity: .4; cursor: not-allowed; filter: none; }
+.ob-primary { border: 1px solid var(--amber); background: var(--amber); color: var(--ink-on-accent); font-weight: 600; }
+.ob-primary:hover { filter: brightness(1.05); }
+.ob-ghost { border: 1px solid var(--line); background: none; color: var(--muted); }
+.ob-ghost:hover { color: var(--text); border-color: var(--amber); }
+
+/* The sync card: the prototype's card and row, one switch per agent. */
+.ob-card { border: 1px solid var(--line); border-radius: 10px; background: var(--paper); overflow: hidden; }
+.ob-ch { padding: 12px 15px 10px; border-bottom: 1px solid var(--line-soft); }
+.ob-t { font-size: 13.5px; font-weight: 600; }
+.ob-row { display: flex; align-items: center; gap: 12px; padding: 11px 15px; border-bottom: 1px solid var(--line-soft); }
+.ob-row:last-child { border-bottom: none; }
+.ob-am { flex: 1; min-width: 0; }
+.ob-at { font-size: 14px; font-weight: 600; }
+.ob-ad { font-size: 12.5px; color: var(--faint); }
+.ob-switch { position: relative; flex: none; width: 38px; height: 22px; padding: 0; border-radius: 99px;
+  border: 1px solid var(--line); background: var(--raised); cursor: pointer; }
+.ob-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 99px;
+  background: var(--paper); box-shadow: var(--elev); transition: transform .16s; }
+.ob-switch[aria-checked="true"] { background: var(--amber); border-color: var(--amber); }
+.ob-switch[aria-checked="true"]::after { transform: translateX(16px); }
+.ob-chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px; border-radius: 99px;
+  font-size: 11px; font-weight: 600; color: var(--faint); background: var(--raised); }
+.ob-led { width: 6px; height: 6px; border-radius: 99px; background: currentColor; }

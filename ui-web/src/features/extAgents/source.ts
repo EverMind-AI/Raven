@@ -57,6 +57,130 @@ export function extAgentRowOf(r: ExtAgentRowWire): ExtAgentRow {
   }
 }
 
+/* What connecting this row still has to do. One stage, one write -- the page's
+   whole decision, so the row and the card cannot offer different verbs for the
+   same state.
+ *
+ * `install` and `off` both describe a shipped folder that is not on the roster,
+ * and they are not the same job: a folder whose venv was never built needs the
+ * installer (minutes, hundreds of MB), while one that was switched off needs
+ * its manifest flag back. The probe verdict is what separates them. */
+export type Stage = 'builtin' | 'building' | 'install' | 'add' | 'key' | 'stale' | 'off' | 'live'
+
+export function stageOf(row: ExtAgentRow): Stage {
+  if (row.builtin) return 'builtin'
+  if (row.building) return 'building'
+  if (row.vendored) {
+    if (row.probe_status === 'missing') return 'install'
+    return row.enabled ? 'live' : 'off'
+  }
+  /* An HTTP agent cannot answer without its key, so it is not connected by
+     writing an entry -- the key is the missing part, whether the entry exists
+     yet or not. */
+  if (row.kind === 'openai' && !row.has_api_key) return 'key'
+  if (!row.configured) return 'add'
+  if (row.enabled) return 'live'
+  /* Out of service and its preset has moved to another transport. Connecting it
+     is a remove plus an add, not a flag, so it is its own stage rather than a
+     variant of `off` -- the flag left `upgrade_to` standing and the old command
+     line in place, which is an agent the card offered to migrate and never did.
+     After `live`, so an agent still in service keeps offering the one verb its
+     state calls for, which is disconnect. */
+  if (row.upgrade_to) return 'stale'
+  return 'off'
+}
+
+/* Which group a row belongs in: what it would take to use it, in four steps of
+   one answer each. The page used to lead with provenance -- built-in, then
+   vendored, then connected, then available -- which put a broken agent three
+   groups down while a healthy built-in row sat at the top with nothing to do.
+   Two groups replaced that and were right about the ordering and too coarse
+   about the rest: "available" held the switch that takes a click and the CLI
+   this machine has never had, in one list of eleven, sorted by a cost the
+   heading did not name.
+
+   The fourth group is the one worth having. Everything else here is a question
+   about Raven's config; that one is a question about the machine, and it is
+   where nine of the eleven live on a stock install. It is also the only group a
+   reader can be done with, which is why it is the one that folds. */
+export type Grp = 'on' | 'switch' | 'setup' | 'install'
+export const groupOf = (row: ExtAgentRow): Grp => {
+  const stage = stageOf(row)
+  if (stage === 'live' || stage === 'builtin') return 'on'
+  if (stage === 'install' || stage === 'building') return 'install'
+  /* The probe before the stage, for everything that is not connected and runs
+     a command. A switch, an entry, a credential: each is a write to Raven's own
+     config, and each connects nothing when the command it names is not on this
+     machine -- and the probe is the only thing that knows. That includes the
+     switch. A configured agent keeps its entry after its binary is removed, so
+     `off` is a stage a missing executable can be in, and `subagents.toggle`'s
+     enable gate probes the agent and refuses the write when nothing answers; a
+     row like that under "ready to enable" promised the one click that cannot
+     work. `attention` stays out of this group: it means the binary answered
+     and nothing has verified what it can do, which is a row worth connecting
+     and then testing, not one worth hiding.
+
+     Only the command-backed kinds. An openai row is an endpoint, and its probe
+     says `missing` for "unreachable" -- a connection error, a timeout -- which
+     is a network fact with nothing to install behind it, and the enable gate
+     does not ping that kind at all. Its group stays the one its config state
+     says: the switch, or the credential. The server's own grouping draws the
+     same line for the same reason (`_group` keys an openai row off its key). */
+  if ((row.kind === 'cli' || row.kind === 'acp') && row.probe_status === 'missing') return 'install'
+  return stage === 'off' ? 'switch' : 'setup'
+}
+
+/* What connecting costs, which is what a group is ordered by inside itself --
+   the same question the entrances page sorts on. Most of this is now said by
+   which group the row is in; what is left is the one distinction the groups do
+   not draw, between an entry Raven writes on its own and a credential the
+   reader has to go and find. */
+export const costOf = (row: ExtAgentRow): number => {
+  const stage = stageOf(row)
+  return stage === 'off' ? 0 : stage === 'add' ? 1 : stage === 'key' ? 2 : 3
+}
+
+/* The onboarding wizard's agents step draws two buckets instead of stageOf's
+   four groups: available to connect, and connected. Both are pure reads of a
+   row the wizard gets from the same `subagents.list` this page lists from, and
+   the step counts itself done against a third read, FOUND. The three agree on
+   what the wizard never shows -- the built-in Raven and openai endpoints are in
+   none of them -- and differ on one row only, on purpose: a shipped agent is
+   CONNECTED when on and AVAILABLE when off, but never FOUND, because the step
+   is about connecting something external and the prototype counts it done on
+   those alone.
+ *
+ * A row is FOUND when it is a command this machine has: neither one of
+ * Raven's own (`builtin`, `vendored` -- both already usable with no connect
+ * step), nor an openai row (an endpoint, which no scan finds and the wizard
+ * does not offer), nor a probe that answered nothing (`missing`: not on the
+ * machine; `unknown`: never probed). An acp preset that only proved its
+ * binary exists still counts -- `attention` is a row worth connecting and then
+ * testing, not one worth hiding. */
+export function isFound(row: ExtAgentRow): boolean {
+  if (row.builtin || row.vendored || row.kind === 'openai') return false
+  return row.probe_status !== 'missing' && row.probe_status !== 'unknown'
+}
+
+/* Connected: on the roster and dispatchable. Raven's own shipped agents count
+   here once switched on, same as a configured one -- but the built-in
+   in-process Raven never does, and neither does an openai endpoint, because
+   this pane shows neither. */
+export function isConnected(row: ExtAgentRow): boolean {
+  if (row.builtin || row.kind === 'openai') return false
+  return row.enabled && (!!row.vendored || row.configured)
+}
+
+/* Available: what the connect button can act on. A found row not yet enabled,
+   or one of Raven's own shipped agents switched off with its folder built
+   (`off`, not `install`) -- never FOUND, so the step does not count it, but the
+   connected bucket offers to switch it off and it needs somewhere to come back
+   from. */
+export function isAvailable(row: ExtAgentRow): boolean {
+  if (row.vendored) return stageOf(row) === 'off'
+  return isFound(row) && !row.enabled && !row.building
+}
+
 /* What the last fetch reported, kept here rather than read back off the page:
    the carry-over below is a fact about this transport (a probe-less list says
    "unknown" for every row), so the source answers it from its own memory

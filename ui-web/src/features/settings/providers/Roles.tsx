@@ -120,8 +120,15 @@ const providerName = (snap: SettingsSnapshot, id: string): string => {
   return p ? p.name : id
 }
 
+/* A provider with nothing added yet offers the registry's own list: the
+   first-run wizard connects a vendor and picks a chat model in one step,
+   before anyone has visited the provider's page to add one, and an empty
+   column there is a dead end. Once something is added, the added list is
+   what the picker offers, as before. */
 function pickerProviders(rows: ProviderRow[]): PickerProvider[] {
-  return rows.map((p) => ({ id: p.id, name: p.name, models: p.configured || p.models, labels: p.labels }))
+  return rows.map((p) => ({
+    id: p.id, name: p.name, models: p.configured && p.configured.length ? p.configured : p.models, labels: p.labels,
+  }))
 }
 
 /* The write a pick makes, by role. The typed id is added to the provider

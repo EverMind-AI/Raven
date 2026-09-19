@@ -14,9 +14,11 @@ import { staging } from '../../state/session/staging'
 import { open as openSettings, openModels, openProviderModels } from '../settings/store'
 import { setCurrent } from './store'
 
-import type { ParamsOf } from '../../rpc/generated'
+import type { ParamsOf, ResultOf } from '../../rpc/generated'
 import type { TierReply, TierSource } from '../../state/tier'
 import type { ApiProtocol, ModelSource, Provider } from './types'
+
+type ProviderWire = ResultOf<'model.options'>['providers'][number]
 
 /* Providers the page does not offer. Both are the generic "some endpoint of
    your own" row, and the page answers that question twice over without them:
@@ -76,24 +78,11 @@ export function openModelsForMissingProvider(): boolean {
   return true
 }
 
-export async function loadProviders(sid?: string | null, gen?: number): Promise<void> {
-  // The model is per conversation, so ask for the visible one's -- model.options
-  // stars the row that conversation actually runs, not agents.defaults. Omit the
-  // field when there is no session (boot, a draft): the Wire Schema types it as
-  // an optional string, and a serialized null is outside that contract.
-  const target = sid !== undefined ? sid : sessionCurrent()
-  // Captured here when the caller did not bring one, so every refresh carries a
-  // ticket by construction rather than by each call site remembering. A caller
-  // whose session was resolved BEFORE its own await must still pass the
-  // generation it captured then -- the answer is about that older view, and a
-  // ticket taken here would read as current.
-  const ticket = gen !== undefined ? gen : generation()
-  const mo = await gateway().call('model.options', target ? { session_id: target } : {})
-  // model.options does its catalogue work off-thread, so responses can land out
-  // of click order. A refresh keyed to a superseded view must not repaint the
-  // page the reader has since moved to.
-  if (ticket !== generation()) return
-  providersLive = (mo.providers || []).filter((p) => !HIDDEN_PROVIDERS.has(p.slug)).map((p) => ({
+/* One `model.options` answer as the rows the page reads. Shared by the two
+   loads below: the per-conversation one, which may drop its answer, and the
+   default-scoped one, which never does. */
+const rowsOf = (list: ProviderWire[]): Provider[] =>
+  list.filter((p) => !HIDDEN_PROVIDERS.has(p.slug)).map((p) => ({
     id: p.slug, name: p.name, homepage: p.homepage || '', models: p.models || [], on: p.authenticated,
     docs: p.docs || '',
     keyUrl: p.key_url || '', headers: p.extra_headers || {},
@@ -119,6 +108,37 @@ export async function loadProviders(sid?: string | null, gen?: number): Promise<
     env: p.key_env || '', warn: p.warning || '',
     key: p.authenticated ? t('gui.set.tls.key_set') : '',
   })) as Provider[]
+
+/* The settings snapshot's provider list: default-scoped, and kept whatever
+   the session did meanwhile. The per-conversation load below drops an answer
+   whose generation ticket expired, which is right for the chip it stars --
+   but the boot's settings refresh runs while the boot is still switching
+   sessions, so its answer always expired, the snapshot froze on an empty
+   list, and a dialog (or the first-run wizard) that opened inside that window
+   coalesced onto the dropped load and showed no provider to connect. */
+export async function loadDefaultProviders(): Promise<void> {
+  const mo = await gateway().call('model.options', {})
+  providersLive = rowsOf(mo.providers || [])
+}
+
+export async function loadProviders(sid?: string | null, gen?: number): Promise<void> {
+  // The model is per conversation, so ask for the visible one's -- model.options
+  // stars the row that conversation actually runs, not agents.defaults. Omit the
+  // field when there is no session (boot, a draft): the Wire Schema types it as
+  // an optional string, and a serialized null is outside that contract.
+  const target = sid !== undefined ? sid : sessionCurrent()
+  // Captured here when the caller did not bring one, so every refresh carries a
+  // ticket by construction rather than by each call site remembering. A caller
+  // whose session was resolved BEFORE its own await must still pass the
+  // generation it captured then -- the answer is about that older view, and a
+  // ticket taken here would read as current.
+  const ticket = gen !== undefined ? gen : generation()
+  const mo = await gateway().call('model.options', target ? { session_id: target } : {})
+  // model.options does its catalogue work off-thread, so responses can land out
+  // of click order. A refresh keyed to a superseded view must not repaint the
+  // page the reader has since moved to.
+  if (ticket !== generation()) return
+  providersLive = rowsOf(mo.providers || [])
   if (mo.model) showModel(mo.model)
 }
 

@@ -252,6 +252,17 @@ about itself through `src/state/wsPane.ts`) and the desk's floating panes
 DOM touch lives.
 _Avoid_: "panel" for this.
 
+**Step body**:
+What the onboarding wizard (`features/onboard/`) draws for one of its steps: a
+component another domain owns, over that domain's own store, with the four
+questions the wizard asks it (`load`, `subscribe`, `loaded`, `done`;
+`features/onboard/types.ts`). The settings domain hands over its model page
+and its web-search controls, the sub-agents roster its connect list, and
+`src/app/install.ts` is what hands them -- the wizard reads no sibling's
+private file, and every control has one owner. The wizard's own frame around
+them is the step strip, the scrolling column and the footer.
+_Avoid_: "pane" for this -- a pane is a resizable column.
+
 **Sheet**:
 A card that docks above the composer for as long as one turn needs it: a
 clarifying question, an approval request, a dag graph

@@ -9,11 +9,20 @@
  *
  * styles/page.css stays the page's own sheet: the frame, the --z ladder and the
  * shared vocabulary scripts/check-class-namespace.mjs calls SHARED. A rule that
- * styles one domain's markup belongs here, not there. Nothing has moved:
- * page.css's rules are where they were, and the gate's LEGACY_SHARED and
- * LEGACY_LOCAL tables are what carry the debt down.
- *
- * Empty on purpose. This domain's rules are still in page.css and moving them
- * would change bytes the boot goldens and the region goldens are taken from;
- * what this file establishes is the mechanism the next domain uses.
+ * styles one domain's markup belongs here, not there. The rows below are the
+ * first to move in: everything else this domain draws is still in page.css,
+ * and the gate's LEGACY_SHARED and LEGACY_LOCAL tables carry that debt down.
  */
+
+/* The wizard's agents step: a scanning placeholder before the first
+   `subagents.list` answer lands, and the same ring again on a row's own
+   connect button while its write is in flight. `.spin` in page.css is the
+   page's, but reaches no domain today, so this is its own copy under this
+   domain's prefix rather than a first claim on shared vocabulary nothing
+   else uses yet. */
+.extAgents-scan { display: flex; align-items: center; gap: 8px; padding: 14px 16px; }
+.extAgents-spin { display: inline-block; width: 11px; height: 11px; margin-right: 7px; vertical-align: -1px;
+  border: 1.5px solid var(--line); border-top-color: var(--amber); border-radius: 50%;
+  animation: extAgentsspin .8s linear infinite; }
+@keyframes extAgentsspin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .extAgents-spin { animation: none; } }

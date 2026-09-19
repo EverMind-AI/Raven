@@ -1,35 +1,66 @@
-/* The first-run setup flow's DataSource contract. */
+/* The first-run wizard's contracts: what its own source speaks to the gateway,
+   and the shape of a step body another domain hands it. */
 
-import type { ModelTagFacts } from '../../components/ModelTags'
+import type { JSX } from 'react'
 
-export interface OnboardProvider {
-  slug: string
-  name?: string
-  homepage?: string
-  auth_type: string
-  authenticated: boolean
-  needs_api_base?: boolean
-  /* Whether this provider takes a key at all -- false for an OAuth flow and
-     for a local deployment reached by address alone. */
-  accepts_api_key?: boolean
-  api_base?: string
-  default_api_base?: string
-  models: string[]
-  /* Straight off `model.options`, keyed by the ids in `models`. The first
-     model a person ever picks is the one they know least about, so the icons
-     belong here at least as much as in the picker. */
-  model_labels?: Record<string, ModelTagFacts & { label?: string; description?: string }>
+export type StepId = 'model' | 'search' | 'agents' | 'sync'
+
+/** One platform the cold-start importer knows, with what a scan found for it. */
+export interface ImportPlatform {
+  platform: string
+  scannable: boolean
+  memory_files: number
+  conversations: number
+  estimated_size: number
 }
 
-export interface OnboardOptions {
-  model?: string
-  provider?: string
-  providers: OnboardProvider[]
+export interface ImportScan {
+  /* False when no memory backend is configured to receive the import; the
+     sync step is then not offered at all. */
+  ready: boolean
+  reason: string
+  platforms: ImportPlatform[]
+}
+
+export interface ImportStarted {
+  started: boolean
+  total: number
+  detail: string
 }
 
 export interface OnboardSource {
-  options(): Promise<OnboardOptions>
-  saveKey(slug: string, apiKey: string, apiBase: string): Promise<{ provider?: OnboardProvider }>
-  setModel(model: string, provider: string): Promise<unknown>
-  recheck(): Promise<boolean>
+  /* Whether a provider is configured, re-read when the wizard closes so the
+     page's first-run redirects stop once the reader has set one up. */
+  providerConfigured(): Promise<boolean>
+  scan(): Promise<ImportScan>
+  startImport(platforms: string[], tier: 'memory_files' | 'full'): Promise<ImportStarted>
+}
+
+/* A step body the page hands the wizard (src/app/install.ts): the owning
+   domain's own component over its own store, so the wizard draws the settings
+   dialog's model page and the sub-agents roster rather than copies of them.
+   The wizard subscribes to the store through `subscribe`, asks `loaded` before
+   drawing the body and `done` for the step's forward button. */
+export interface StepBody {
+  Body: () => JSX.Element
+  load(): Promise<void>
+  subscribe(listener: () => void): () => void
+  loaded(): boolean
+  done(): boolean
+}
+
+/** An agent the machine has, by the id the importer knows it under. */
+export interface FoundAgent {
+  id: string
+  name: string
+}
+
+export interface AgentsBody extends StepBody {
+  found(): FoundAgent[]
+}
+
+export interface StepBodies {
+  model: StepBody
+  search: StepBody
+  agents: AgentsBody
 }

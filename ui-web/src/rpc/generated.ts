@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 185 methods, 104 component schemas.
+// 189 methods, 104 component schemas.
 
 /* eslint-disable */
 /**
@@ -4352,6 +4352,45 @@ export interface TasksListParams {
 export interface TasksListResult {
   tasks: TaskRow[];
 }
+export interface ImportScanParams {}
+export interface ImportScanResult {
+  ready: boolean;
+  reason: string;
+  platforms: {
+    platform: string;
+    scannable: boolean;
+    memory_files: number;
+    conversations: number;
+    estimated_size: number;
+  }[];
+}
+export interface ImportRunParams {
+  platforms: string[];
+  tier: 'memory_files' | 'full';
+}
+export interface ImportRunResult {
+  started: boolean;
+  total: number;
+  detail: string;
+}
+export interface ImportStatusParams {}
+export interface ImportStatusResult {
+  running: boolean;
+  total: number;
+  submitted: number;
+  failed: number;
+  by_platform: {
+    [k: string]: {
+      total: number;
+      submitted: number;
+      failed: number;
+    };
+  };
+}
+export interface ImportStopParams {}
+export interface ImportStopResult {
+  stopped: boolean;
+}
 
 // ---------------------------------------------------------------------------
 // Method map -- generated from the contract's method list.
@@ -4544,6 +4583,10 @@ export interface RpcMethods {
   'subagent.cancel_session': { params: SubagentCancelSessionParams; result: SubagentCancelSessionResult };
   'subagent.cancel_instance': { params: SubagentCancelInstanceParams; result: SubagentCancelInstanceResult };
   'tasks.list': { params: TasksListParams; result: TasksListResult };
+  'import.scan': { params: ImportScanParams; result: ImportScanResult };
+  'import.run': { params: ImportRunParams; result: ImportRunResult };
+  'import.status': { params: ImportStatusParams; result: ImportStatusResult };
+  'import.stop': { params: ImportStopParams; result: ImportStopResult };
 }
 
 /** The literal union of callable method names. */
@@ -4597,6 +4640,10 @@ export const RPC_METHODS = [
   "fs.reveal",
   "fs.upload",
   "image.attach",
+  "import.run",
+  "import.scan",
+  "import.status",
+  "import.stop",
   "input.detect_drop",
   "knowledge.bases.create",
   "knowledge.bases.delete",

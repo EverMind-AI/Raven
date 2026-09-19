@@ -8,8 +8,10 @@ import { SetupGroup, SetupRow } from '../../components/SetupRow'
 import { t } from '../../i18n/t'
 import { ask as confirmAsk } from '../../state/confirm'
 import * as lang from '../../state/lang'
+import { costOf, groupOf, stageOf } from './source'
 import * as store from './store'
 
+import type { Grp } from './source'
 import type { ExtAgentRow } from './types'
 import type { JSX } from 'react'
 import './styles.css'
@@ -85,39 +87,6 @@ function dotOf(row: ExtAgentRow): string {
   return 'bad'
 }
 
-/* What connecting this row still has to do. One stage, one write -- the page's
-   whole decision, so the row and the card cannot offer different verbs for the
-   same state.
- *
- * `install` and `off` both describe a shipped folder that is not on the roster,
- * and they are not the same job: a folder whose venv was never built needs the
- * installer (minutes, hundreds of MB), while one that was switched off needs
- * its manifest flag back. The probe verdict is what separates them. */
-export type Stage = 'builtin' | 'building' | 'install' | 'add' | 'key' | 'stale' | 'off' | 'live'
-
-export function stageOf(row: ExtAgentRow): Stage {
-  if (row.builtin) return 'builtin'
-  if (row.building) return 'building'
-  if (row.vendored) {
-    if (row.probe_status === 'missing') return 'install'
-    return row.enabled ? 'live' : 'off'
-  }
-  /* An HTTP agent cannot answer without its key, so it is not connected by
-     writing an entry -- the key is the missing part, whether the entry exists
-     yet or not. */
-  if (row.kind === 'openai' && !row.has_api_key) return 'key'
-  if (!row.configured) return 'add'
-  if (row.enabled) return 'live'
-  /* Out of service and its preset has moved to another transport. Connecting it
-     is a remove plus an add, not a flag, so it is its own stage rather than a
-     variant of `off` -- the flag left `upgrade_to` standing and the old command
-     line in place, which is an agent the card offered to migrate and never did.
-     After `live`, so an agent still in service keeps offering the one verb its
-     state calls for, which is disconnect. */
-  if (row.upgrade_to) return 'stale'
-  return 'off'
-}
-
 /* Connect, disconnect, or nothing -- the same component in the row and in the
    card, so the two can never disagree about what this agent needs next.
  *
@@ -174,56 +143,6 @@ function AgentAct({ row, onKey }: { row: ExtAgentRow; onKey?: () => void }): JSX
       {t('gui.agent.connect')}
     </button>
   )
-}
-
-/* Which group a row belongs in: what it would take to use it, in four steps of
-   one answer each. The page used to lead with provenance -- built-in, then
-   vendored, then connected, then available -- which put a broken agent three
-   groups down while a healthy built-in row sat at the top with nothing to do.
-   Two groups replaced that and were right about the ordering and too coarse
-   about the rest: "available" held the switch that takes a click and the CLI
-   this machine has never had, in one list of eleven, sorted by a cost the
-   heading did not name.
-
-   The fourth group is the one worth having. Everything else here is a question
-   about Raven's config; that one is a question about the machine, and it is
-   where nine of the eleven live on a stock install. It is also the only group a
-   reader can be done with, which is why it is the one that folds. */
-type Grp = 'on' | 'switch' | 'setup' | 'install'
-const groupOf = (row: ExtAgentRow): Grp => {
-  const stage = stageOf(row)
-  if (stage === 'live' || stage === 'builtin') return 'on'
-  if (stage === 'install' || stage === 'building') return 'install'
-  /* The probe before the stage, for everything that is not connected and runs
-     a command. A switch, an entry, a credential: each is a write to Raven's own
-     config, and each connects nothing when the command it names is not on this
-     machine -- and the probe is the only thing that knows. That includes the
-     switch. A configured agent keeps its entry after its binary is removed, so
-     `off` is a stage a missing executable can be in, and `subagents.toggle`'s
-     enable gate probes the agent and refuses the write when nothing answers; a
-     row like that under "ready to enable" promised the one click that cannot
-     work. `attention` stays out of this group: it means the binary answered
-     and nothing has verified what it can do, which is a row worth connecting
-     and then testing, not one worth hiding.
-
-     Only the command-backed kinds. An openai row is an endpoint, and its probe
-     says `missing` for "unreachable" -- a connection error, a timeout -- which
-     is a network fact with nothing to install behind it, and the enable gate
-     does not ping that kind at all. Its group stays the one its config state
-     says: the switch, or the credential. The server's own grouping draws the
-     same line for the same reason (`_group` keys an openai row off its key). */
-  if ((row.kind === 'cli' || row.kind === 'acp') && row.probe_status === 'missing') return 'install'
-  return stage === 'off' ? 'switch' : 'setup'
-}
-
-/* What connecting costs, which is what a group is ordered by inside itself --
-   the same question the entrances page sorts on. Most of this is now said by
-   which group the row is in; what is left is the one distinction the groups do
-   not draw, between an entry Raven writes on its own and a credential the
-   reader has to go and find. */
-const costOf = (row: ExtAgentRow): number => {
-  const stage = stageOf(row)
-  return stage === 'off' ? 0 : stage === 'add' ? 1 : stage === 'key' ? 2 : 3
 }
 
 /* Whether `subagents.test` can answer for this row at all.

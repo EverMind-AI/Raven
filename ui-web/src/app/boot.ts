@@ -134,18 +134,21 @@ async function sequence(): Promise<void> {
     const back = landing(sessionRows().map((s: SessRow) => s.id))
     if (back) await switchTo(sess(back) as SessRow)
     else switchToDraft()
-    /* Remember whether task actions need to send the reader to Models. The
-       page itself stays available on first run; ?onboard=1 retains the
-       standalone onboarding flow for an explicit design or support pass. */
+    /* A first run opens on the wizard: nothing can answer a turn until a
+       provider is set, and the wizard is where one gets set. `setupState` is
+       what the task actions read to send the reader to Models instead, for
+       the page a reader closes the wizard on without finishing; the wizard
+       re-reads it when it closes. ?onboard=1 reopens the wizard on a
+       configured install, for a design or support pass. */
     try {
       const setup = await gateway().call('setup.status', {})
-      setupState.providerConfigured = setup.provider_configured !== false
-      /* ?onboard=demo asked for the canned flow, which the demo shell has
-         already put on screen. Both write into #onb, so opening this one would
-         replace it -- and the reader who asked for the version that writes
-         nothing would get the version that writes. */
+      const firstRun = setup.provider_configured === false
+      setupState.providerConfigured = !firstRun
+      /* ?onboard=demo opens the same wizard from onLoad() over the canned
+         transport, whose setup.status answers "first run" until a model is
+         picked; opening it here as well would open it twice. */
       const cannedInstead = /[?&]onboard=demo/.test(location.search)
-      if (!cannedInstead && /[?&]onboard=1/.test(location.search)) {
+      if (!cannedInstead && (firstRun || /[?&]onboard=1/.test(location.search))) {
         openOnboard()
       }
     } catch (e) {
