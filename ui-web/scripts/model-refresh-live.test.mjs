@@ -305,6 +305,7 @@ function combinedHarness({ session = 'a' } = {}) {
   const pending = []
   const build = Function(
     'deps',
+    'T',
     `let viewGen = 0, providersLive = [], defaultModelLive = '', defaultProviderLive = '', pendingModel = null;
      const { rpc, sessionCurrent, modelSet, setModelLabel } = deps;
      ${loadProvidersSrc}
@@ -316,7 +317,7 @@ function combinedHarness({ session = 'a' } = {}) {
     sessionCurrent: () => session,
     modelSet: (m) => calls.push(['modelSet', m]),
     setModelLabel: () => {},
-  })
+  }, (key) => key)
   return {
     ...api,
     calls,
@@ -403,6 +404,30 @@ function stagedHarness({ reject = null } = {}) {
   }
 }
 
+describe('the live-session write', () => {
+  it('rejects a refusal, because only the caller\'s catch puts the chip back', async () => {
+    /* `choose` moves the chip before the round trip and rolls it back only in
+       its catch, so a refusal that RESOLVES leaves the chip on a model the
+       session does not have and the page saying it switched. The draft path
+       reports its refusal; this one dropped the reply entirely. */
+    const h = combinedHarness()
+    const write = h.persistModel('m2', 'minimax', 'session')
+    const caught = write.then(() => null, (e) => e)
+    await h.settle(0, { applied: false, previous: null, scope: 'session' })
+    const err = await caught
+    expect(err).toBeTruthy()
+    expect(err.data.detail).toBe('gui.model.refused')
+    expect(h.calls.filter((c) => c[0] === 'modelSet')).toEqual([])
+  })
+
+  it('says nothing when the write lands', async () => {
+    const h = combinedHarness()
+    const write = h.persistModel('m2', 'minimax', 'session')
+    await h.settle(0, { applied: true, previous: 'm1', scope: 'session' })
+    await expect(write).resolves.toBeUndefined()
+  })
+})
+
 describe('the staged draft-write recovery', () => {
   it('drops its refusal refresh when the reader opened another conversation', async () => {
     /* Order is the whole point: the reader leaves while `config.set` is still
@@ -425,6 +450,21 @@ describe('the staged draft-write recovery', () => {
     const applied = h.applyStagedModel('a', 0)
     await h.fail(0, { data: { detail: 'credential gone' } })
     await applied
+    await h.settle(1, { model: 'model-a', providers: [] })
+    expect(h.calls).toContainEqual(['modelSet', 'model-a'])
+  })
+
+  it('speaks and reconciles when the refusal RESOLVES rather than raises', async () => {
+    /* A first run answers `applied: false`: there is no loop to bind a session
+       to, because this gateway started without a model. That resolves, so a
+       catch-only recovery heard nothing and left the chip showing a model the
+       session does not have -- after a pick the reader was told was staged. */
+    const h = stagedHarness()
+    const applied = h.applyStagedModel('a', 0)
+    await h.settle(0, { applied: false, previous: null, scope: 'session' })
+    await applied
+    expect(h.calls).toContainEqual(['toast', 'gui.op.switch_failed'])
+    expect(h.inFlight()).toEqual(['config.set', 'model.options'])
     await h.settle(1, { model: 'model-a', providers: [] })
     expect(h.calls).toContainEqual(['modelSet', 'model-a'])
   })

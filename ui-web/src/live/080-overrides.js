@@ -125,7 +125,19 @@ async function applyStagedModel(sessionId, gen) {
   if (!pendingModel) return;
   const pm = pendingModel; pendingModel = null;
   try {
-    await rpc.call('config.set', { key: 'model', value: pm.model, provider: pm.provider, session_id: sessionId });
+    const r = await rpc.call('config.set', { key: 'model', value: pm.model, provider: pm.provider, session_id: sessionId });
+    // A refusal RESOLVES. Watching only for a raise is how a first run went
+    // quiet here: with no loop to bind to, the server answers applied:false
+    // and says why, and the chip kept a model the session does not have.
+    if (r && r.applied === false) {
+      // The only way a session write is refused is that there is no loop to
+      // bind to, which a restart does not fix -- nothing was persisted. Say
+      // the way out instead.
+      toast(T('gui.op.switch_failed', { detail: T('gui.model.refused') }));
+      void loadProviders(sessionId, gen);
+
+    }
+
   } catch (e) {
     // Said out loud, not just reversed: the pick was announced as staged, so a
     // silent chip flip back would be an unexplained contradiction.
