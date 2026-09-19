@@ -4,7 +4,7 @@
  * (app/boot.ts) and the page's wiring hands it the step bodies
  * (app/install.ts), neither of which is a component. The wizard owns only the
  * frame -- which step is up, what was skipped, the import the last step
- * starts -- and asks each step's owning domain, through the pane it was
+ * starts -- and asks each step's owning domain, through the step body it was
  * handed, whether the step is loaded and done. */
 
 import { pick as pickLang } from '../../state/lang/pick'
@@ -13,7 +13,7 @@ import { makeStore } from '../../state/store'
 import { setupState } from '../model/source'
 
 import type { Lang } from '../../state/lang'
-import type { FoundAgent, ImportPlatform, ImportScan, OnboardSource, StepId, WizardPanes } from './types'
+import type { FoundAgent, ImportPlatform, ImportScan, OnboardSource, StepId, StepBodies } from './types'
 
 export const STEPS: readonly StepId[] = ['model', 'search', 'agents', 'sync']
 
@@ -28,7 +28,7 @@ export interface OnboardState {
   epoch: number
   step: StepId
   skipped: Partial<Record<StepId, true>>
-  panes: WizardPanes | null
+  bodies: StepBodies | null
   /* null until the importer has answered; the sync step is offered only once
      it has, and only when it can run. */
   scan: ImportScan | null
@@ -43,7 +43,7 @@ const initial = (): OnboardState => ({
   epoch: 0,
   step: 'model',
   skipped: {},
-  panes: null,
+  bodies: null,
   scan: null,
   syncPick: {},
   busy: false,
@@ -61,10 +61,10 @@ export function set(patch: Partial<OnboardState>): void {
 
 const source = (): OnboardSource => ds('onboard')
 
-/* The panes are the page's to hand over, once, before the boot can open the
+/* The bodies are the page's to hand over, once, before the boot can open the
    wizard; kept across opens because the domains behind them are singletons. */
-export function setPanes(panes: WizardPanes): void {
-  set({ panes })
+export function setBodies(bodies: StepBodies): void {
+  set({ bodies })
 }
 
 let scanning: Promise<void> | null = null
@@ -74,12 +74,12 @@ let closeTimer: ReturnType<typeof setTimeout> | null = null
    the reader spends the first step on the provider form, so by the time they
    reach the agents step the answers are in. */
 export function open(): void {
-  const panes = get().panes
-  if (!panes) return
+  const bodies = get().bodies
+  if (!bodies) return
   if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
-  set({ ...initial(), panes, open: true, epoch: get().epoch + 1 })
-  void panes.model.load().catch(() => {})
-  void panes.agents.load().catch(() => {})
+  set({ ...initial(), bodies, open: true, epoch: get().epoch + 1 })
+  void bodies.model.load().catch(() => {})
+  void bodies.agents.load().catch(() => {})
   scanning = source()
     .scan()
     .then((scan) => set({ scan }))
@@ -96,7 +96,7 @@ const failure = (e: unknown): string => {
   return (err && ((err.data && err.data.detail) || err.message)) || String(e)
 }
 
-export const found = (): FoundAgent[] => get().panes?.agents.found() ?? []
+export const found = (): FoundAgent[] => get().bodies?.agents.found() ?? []
 
 /* The importer's row for one found agent, when it knows the platform at all. */
 export const platformOf = (agent: FoundAgent): ImportPlatform | undefined =>
@@ -115,10 +115,10 @@ export function visibleSteps(): StepId[] {
 
 export function stepDone(id: StepId): boolean {
   const s = get()
-  if (!s.panes) return false
-  if (id === 'model') return s.panes.model.done()
-  if (id === 'search') return s.panes.search.done()
-  if (id === 'agents') return s.panes.agents.done()
+  if (!s.bodies) return false
+  if (id === 'model') return s.bodies.model.done()
+  if (id === 'search') return s.bodies.search.done()
+  if (id === 'agents') return s.bodies.agents.done()
   return Object.values(s.syncPick).some(Boolean)
 }
 

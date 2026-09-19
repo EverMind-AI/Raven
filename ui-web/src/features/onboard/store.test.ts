@@ -4,10 +4,10 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { resetSources, setSources } from '../../state/sources'
 import * as store from './store'
 
-import type { AgentsPane, FoundAgent, ImportScan, OnboardSource, WizardPane } from './types'
+import type { AgentsBody, FoundAgent, ImportScan, OnboardSource, StepBody } from './types'
 
-const pane = (done: boolean, found: FoundAgent[] = []): AgentsPane => ({
-  Pane: () => null as never,
+const body = (done: boolean, found: FoundAgent[] = []): AgentsBody => ({
+  Body: () => null as never,
   load: async () => {},
   subscribe: () => () => {},
   loaded: () => true,
@@ -34,14 +34,14 @@ afterEach(() => {
 
 const opened = async (scan: ImportScan, found: FoundAgent[], done = false): Promise<void> => {
   setSources({ onboard: source(scan) })
-  store.setPanes({ model: pane(done) as WizardPane, search: pane(done) as WizardPane, agents: pane(done, found) })
+  store.setBodies({ model: body(done) as StepBody, search: body(done) as StepBody, agents: body(done, found) })
   store.open()
   await Promise.resolve()
   await Promise.resolve()
 }
 
 describe('the wizard store', () => {
-  it('does not open before the page has handed it the panes', () => {
+  it('does not open before the page has handed it the bodies', () => {
     setSources({ onboard: source(READY) })
     store.open()
     expect(store.isOpen()).toBe(false)
@@ -60,7 +60,7 @@ describe('the wizard store', () => {
     expect(store.syncVisible()).toBe(false)
   })
 
-  it('reads each step\'s verdict from its pane, and the sync step from the picks', async () => {
+  it('reads each step\'s verdict from its body, and the sync step from the picks', async () => {
     await opened(READY, [{ id: 'hermes', name: 'Hermes' }], true)
     expect(store.stepDone('model')).toBe(true)
     expect(store.stepDone('sync')).toBe(false)
