@@ -4,6 +4,7 @@ import * as page from '../../state/page'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
+import { isFound } from './source'
 
 import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource } from './types'
 
@@ -28,9 +29,25 @@ export interface ExtAgentsState {
      it -- and it is a union with the row flag, not a substitute: a test another
      client started is only on the row. */
   testing: string[]
+  /* True while a `subagents.list` read is in flight. Reading it directly is
+     what lets the wizard's agents step draw a scanning placeholder before the
+     first answer lands, without a page of its own to hold that flag. */
+  loading: boolean
+  /* Names with a connect or disconnect write in flight. `run` repaints every
+     row from one shared refetch, which cannot tell two rows apart while both
+     are mid-write -- this is what a caller checks to disable one row's own
+     button rather than the whole list. */
+  joining: string[]
 }
 
-const store = makeStore<ExtAgentsState>({ rows: [], sheet: null, epoch: 0, testing: [] })
+const store = makeStore<ExtAgentsState>({
+  rows: [],
+  sheet: null,
+  epoch: 0,
+  testing: [],
+  loading: false,
+  joining: [],
+})
 
 export const { get, subscribe, _resetForTests } = store
 
@@ -51,18 +68,28 @@ const failure = (e: unknown): string => {
   return (err && ((err.data && err.data.detail) || err.detail || err.message)) || String(e)
 }
 
-/* `load(true)` re-measures availability, and opening the page is the only thing
-   that asks for it now: the group heading in the page is a fresh answer every
-   time the reader arrives, which is what the re-check button used to be for. */
-export function open(): void {
-  page.show('extAgentsPage')
-  void source()
-    .load(true)
-    .then((rows) => set({ rows, epoch: get().epoch + 1 }))
+/* `load(true)` re-measures availability. Opening the page is one caller --
+   the group heading there is a fresh answer every time the reader arrives,
+   which is what the re-check button used to be for -- and the wizard's agents
+   step is the other, on its own schedule rather than through page
+   navigation. */
+export async function load(probe: boolean): Promise<void> {
+  set({ loading: true })
+  try {
+    const rows = await source().load(probe)
+    set({ rows, epoch: get().epoch + 1, loading: false })
+  } catch (e) {
+    set({ loading: false })
     /* Through `failure` like every other rejection here: the rpc client rejects
        with the error frame verbatim, and `String()` on that object is
        "[object Object]" -- not a hard-to-read reason but no reason at all. */
-    .catch((e: unknown) => toast(t('gui.agent.failed', { detail: failure(e) })))
+    toast(t('gui.agent.failed', { detail: failure(e) }))
+  }
+}
+
+export function open(): void {
+  page.show('extAgentsPage')
+  void load(true)
 }
 
 export function close(): void {
@@ -92,6 +119,40 @@ export async function run(op: ExtAgentOp, row?: ExtAgentRow, args?: ExtAgentActA
   if (get().sheet && !rows.some((x) => x.name === get().sheet)) closeSheet()
   watchBuilds(rows)
 }
+
+/* The wizard's two writes, mirroring the two stages `isAvailable` draws from
+   without the rest of `stageOf`: a preset not yet on the roster connects with
+   `connect`, one already configured but switched off connects by flipping
+   `enabled` back on. Held in `joining` for the length of the write so a
+   caller can disable that one row alone -- `subagents.add` pings the agent
+   for up to 60s and may refuse. */
+export async function connect(row: ExtAgentRow): Promise<void> {
+  set({ joining: [...get().joining, row.name] })
+  try {
+    await run(row.configured ? 'toggle' : 'connect', row, row.configured ? { enabled: true } : {})
+  } finally {
+    set({ joining: get().joining.filter((name) => name !== row.name) })
+  }
+}
+
+/* Only marks it unavailable in the registry, same as the settings page's own
+   disconnect -- the entry stays, and a later connect puts it back. */
+export async function disconnect(row: ExtAgentRow): Promise<void> {
+  set({ joining: [...get().joining, row.name] })
+  try {
+    await run('toggle', row, { enabled: false })
+  } finally {
+    set({ joining: get().joining.filter((name) => name !== row.name) })
+  }
+}
+
+/* The rows the wizard's step counts against: found on this machine, whatever
+   bucket each currently sits in. */
+export const found = (): ExtAgentRow[] => get().rows.filter(isFound)
+
+/* Done once one of those is actually enabled -- connecting is the ask, not
+   merely having something on the machine to connect. */
+export const stepDone = (): boolean => found().some((r) => r.enabled)
 
 /* One test, and the flag that says it is under way. `run` cannot carry this:
    its await *is* the test -- `subagents.test` holds the connection open for the
