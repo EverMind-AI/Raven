@@ -305,6 +305,7 @@ function combinedHarness({ session = 'a' } = {}) {
   const pending = []
   const build = Function(
     'deps',
+    'T',
     `let viewGen = 0, providersLive = [], defaultModelLive = '', defaultProviderLive = '', pendingModel = null;
      const { rpc, sessionCurrent, modelSet, setModelLabel } = deps;
      ${loadProvidersSrc}
@@ -316,7 +317,7 @@ function combinedHarness({ session = 'a' } = {}) {
     sessionCurrent: () => session,
     modelSet: (m) => calls.push(['modelSet', m]),
     setModelLabel: () => {},
-  })
+  }, (key) => key)
   return {
     ...api,
     calls,
@@ -402,6 +403,30 @@ function stagedHarness({ reject = null } = {}) {
     fail: (i, err) => { pending[i].rej(err); return new Promise((r) => setTimeout(r, 0)) },
   }
 }
+
+describe('the live-session write', () => {
+  it('rejects a refusal, because only the caller\'s catch puts the chip back', async () => {
+    /* `choose` moves the chip before the round trip and rolls it back only in
+       its catch, so a refusal that RESOLVES leaves the chip on a model the
+       session does not have and the page saying it switched. The draft path
+       reports its refusal; this one dropped the reply entirely. */
+    const h = combinedHarness()
+    const write = h.persistModel('m2', 'minimax', 'session')
+    const caught = write.then(() => null, (e) => e)
+    await h.settle(0, { applied: false, previous: null, scope: 'session' })
+    const err = await caught
+    expect(err).toBeTruthy()
+    expect(err.data.detail).toBe('gui.model.refused')
+    expect(h.calls.filter((c) => c[0] === 'modelSet')).toEqual([])
+  })
+
+  it('says nothing when the write lands', async () => {
+    const h = combinedHarness()
+    const write = h.persistModel('m2', 'minimax', 'session')
+    await h.settle(0, { applied: true, previous: 'm1', scope: 'session' })
+    await expect(write).resolves.toBeUndefined()
+  })
+})
 
 describe('the staged draft-write recovery', () => {
   it('drops its refusal refresh when the reader opened another conversation', async () => {

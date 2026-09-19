@@ -423,7 +423,14 @@ async function persistModel(m, provider, scope) {
     return;
   }
   if (sid) {
-    await rpc.call('config.set', { key: 'model', value: m, provider, session_id: sid });
+    const r = await rpc.call('config.set', { key: 'model', value: m, provider, session_id: sid });
+    /* A refusal RESOLVES, and `choose` rolls the chip back only in its catch --
+       so dropping this reply left the chip on the new model and the page saying
+       it switched. The server states the rule it expects of a caller
+       (rpc/methods/config.py): the refusal is what the caller gets, and saying
+       it is the caller's job. Thrown rather than reported, because the rollback
+       this needs is the one the catch already does. */
+    if (r && r.applied === false) throw { data: { detail: T('gui.model.refused') } };
     return;
   }
   pendingModel = { model: m, provider };
