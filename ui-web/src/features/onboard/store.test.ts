@@ -60,6 +60,43 @@ describe('the wizard store', () => {
     expect(store.syncVisible()).toBe(false)
   })
 
+  it('asks the importer again on the way out of the agents step', async () => {
+    /* A first run has no memory backend recorded when the wizard opens; the
+       model step's memory model is what records one. The answer from opening
+       says "not ready", and only a fresh read on leaving the agents step can
+       say otherwise. */
+    let answer: ImportScan = { ...READY, ready: false, reason: 'no memory backend' }
+    const scans: number[] = []
+    setSources({
+      onboard: {
+        ...source(READY),
+        scan: async () => {
+          scans.push(1)
+          return answer
+        },
+      },
+    })
+    store.setBodies({
+      model: body(true) as StepBody,
+      search: body(true) as StepBody,
+      agents: body(true, [{ id: 'hermes', name: 'Hermes' }]),
+    })
+    store.open()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(store.visibleSteps()).toEqual(['model', 'search', 'agents'])
+
+    answer = READY
+    await store.next()
+    await store.next()
+    expect(store.get().step).toBe('agents')
+    await store.next()
+
+    expect(scans.length).toBe(2)
+    expect(store.visibleSteps()).toEqual(['model', 'search', 'agents', 'sync'])
+    expect(store.get().step).toBe('sync')
+  })
+
   it('reads each step\'s verdict from its body, and the sync step from the picks', async () => {
     await opened(READY, [{ id: 'hermes', name: 'Hermes' }], true)
     expect(store.stepDone('model')).toBe(true)

@@ -78,13 +78,20 @@ export function open(): void {
   if (!bodies) return
   if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
   set({ ...initial(), bodies, open: true, epoch: get().epoch + 1 })
-  void bodies.model.load().catch(() => {})
-  void bodies.agents.load().catch(() => {})
-  scanning = source()
+  for (const body of Object.values(bodies)) void body.load().catch(() => {})
+  void scan()
+}
+
+/* One importer read, its answer kept on the state; the promise is held while
+   it is out so a step change can wait on it. */
+function scan(): Promise<void> {
+  const p: Promise<void> = source()
     .scan()
-    .then((scan) => set({ scan }))
+    .then((res) => set({ scan: res }))
     .catch((e: unknown) => set({ scan: { ready: false, reason: failure(e), platforms: [] } }))
-    .finally(() => { scanning = null })
+    .finally(() => { if (scanning === p) scanning = null })
+  scanning = p
+  return p
 }
 
 export function isOpen(): boolean {
@@ -134,12 +141,15 @@ const move = (delta: number): void => {
   set({ step: steps[to] as StepId, error: '' })
 }
 
-/* Forward from the agents step waits for the scan when it is still out: the
-   step after it depends on the answer. */
+/* Forward from the agents step asks the importer again before deciding what
+   the step after it is: whether an import can run turns on the memory model,
+   which the first step may have saved after the answer from opening came in.
+   A wizard that read it once would decide the last step before the reader had
+   done the one thing that makes it appear. */
 export async function next(): Promise<void> {
-  if (get().step === 'agents' && scanning) {
+  if (get().step === 'agents') {
     set({ busy: true })
-    try { await scanning } finally { set({ busy: false }) }
+    try { await scan() } finally { set({ busy: false }) }
   }
   move(1)
 }
