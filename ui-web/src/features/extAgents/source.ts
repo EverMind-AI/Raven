@@ -141,8 +141,9 @@ export const costOf = (row: ExtAgentRow): number => {
 }
 
 /* The onboarding wizard's agents step draws two buckets instead of stageOf's
-   four groups: found on this machine, and connected. Both are pure reads of a
-   row the wizard gets from the same `subagents.list` this page lists from.
+   four groups: available to connect, and connected. Both are pure reads of a
+   row the wizard gets from the same `subagents.list` this page lists from, and
+   the step counts itself done against a third read, FOUND.
  *
  * A row is FOUND when it is neither one of Raven's own (`builtin`, `vendored`
  * -- both already usable with no connect step) nor a probe that answered
@@ -162,10 +163,15 @@ export function isConnected(row: ExtAgentRow): boolean {
   return row.enabled && (!!row.vendored || row.configured)
 }
 
-/* Available: found, not yet enabled, and not an openai row -- an openai agent
-   needs a key to connect, and this pane has no field to type one into. */
+/* Available: what the connect button can act on. A found row not yet enabled,
+   or one of Raven's own shipped agents switched off with its folder built
+   (`off`, not `install`) -- never FOUND, so the step does not count it, but the
+   connected bucket offers to switch it off and it needs somewhere to come back
+   from. Not an openai row: an openai agent needs a key to connect, and this
+   pane has no field to type one into. */
 export function isAvailable(row: ExtAgentRow): boolean {
   if (row.kind === 'openai') return false
+  if (row.vendored) return stageOf(row) === 'off'
   return isFound(row) && !row.enabled
 }
 

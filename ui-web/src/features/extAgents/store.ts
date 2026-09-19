@@ -4,7 +4,7 @@ import * as page from '../../state/page'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
-import { isFound } from './source'
+import { isFound, stageOf } from './source'
 
 import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource } from './types'
 
@@ -120,16 +120,20 @@ export async function run(op: ExtAgentOp, row?: ExtAgentRow, args?: ExtAgentActA
   watchBuilds(rows)
 }
 
-/* The wizard's two writes, mirroring the two stages `isAvailable` draws from
-   without the rest of `stageOf`: a preset not yet on the roster connects with
-   `connect`, one already configured but switched off connects by flipping
-   `enabled` back on. Held in `joining` for the length of the write so a
-   caller can disable that one row alone -- `subagents.add` pings the agent
-   for up to 60s and may refuse. */
+/* The wizard's one connect, choosing the write by the row's stage the way the
+   settings page does: a preset not yet on the roster is added, one switched
+   off (configured, or one of Raven's own shipped agents) has its flag put
+   back, and a stale one -- its preset moved to another transport -- is removed
+   and re-added, because a flag would leave the old command line in place.
+   Held in `joining` for the length of the write so a caller can disable that
+   one row alone -- `subagents.add` pings the agent for up to 60s and may
+   refuse. */
 export async function connect(row: ExtAgentRow): Promise<void> {
+  const stage = stageOf(row)
+  const op: ExtAgentOp = stage === 'add' ? 'connect' : stage === 'stale' ? 'migrate' : 'toggle'
   set({ joining: [...get().joining, row.name] })
   try {
-    await run(row.configured ? 'toggle' : 'connect', row, row.configured ? { enabled: true } : {})
+    await run(op, row, op === 'toggle' ? { enabled: true } : {})
   } finally {
     set({ joining: get().joining.filter((name) => name !== row.name) })
   }
