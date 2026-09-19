@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -129,8 +130,6 @@ def _invoke_agent_capturing_session(
     """Run ``agent -m`` with the provider and AgentLoop stubbed out, capturing
     the session_id that reaches the spine turn (req.conversation is the session
     key, mirroring the old session_key arg)."""
-    import os as _os
-
     from raven.config.loader import save_config
     from raven.config.schema import Config
     from raven.spine import Text, TurnOutcome, Usage
@@ -152,6 +151,9 @@ def _invoke_agent_capturing_session(
         def __init__(self, **kwargs):
             self.channels_config = kwargs.get("channels_config")
             self.subagents = _StubSubagents()
+            # The teardown stops the loop's skill watcher, so the double
+            # carries the context the real loop always has.
+            self.context = SimpleNamespace(skills=SimpleNamespace(stop_file_watcher=lambda: None))
 
         def configure_personalization(self, *_args) -> None:
             pass
@@ -167,10 +169,6 @@ def _invoke_agent_capturing_session(
         async def close_mcp(self) -> None:
             pass
 
-    # The -m path hard-exits via os._exit(0) (torch segfault guard); make it a
-    # catchable SystemExit so the CliRunner sees a clean exit instead of the
-    # whole pytest process dying.
-    monkeypatch.setattr(_os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
     monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: object())
     monkeypatch.setattr("raven.agent.loop.AgentLoop", _StubAgentLoop)
     monkeypatch.setattr("raven.cli.agent_commands._wait_for_background_work", _skip_background_grace)
@@ -452,8 +450,6 @@ def test_agent_auth_error_exit_nonzero_with_guidance(
     to raise the same exception shape litellm raises on an OpenRouter 401 —
     no network involved.
     """
-    import os as _os
-
     from raven.config.loader import save_config
     from raven.config.schema import Config
     from raven.spine import Text, TurnOutcome, Usage
@@ -488,6 +484,7 @@ def test_agent_auth_error_exit_nonzero_with_guidance(
         def __init__(self, **kwargs):
             self.channels_config = kwargs.get("channels_config")
             self.subagents = _StubSubagents()
+            self.context = SimpleNamespace(skills=SimpleNamespace(stop_file_watcher=lambda: None))
 
         def configure_personalization(self, *_args) -> None:
             pass
@@ -510,7 +507,6 @@ def test_agent_auth_error_exit_nonzero_with_guidance(
         async def close_mcp(self) -> None:
             pass
 
-    monkeypatch.setattr(_os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
     monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: object())
     monkeypatch.setattr("raven.agent.loop.AgentLoop", _AuthFailAgentLoop)
     monkeypatch.setattr("raven.core.plugin_stack.maybe_build_memory_backend", lambda *a, **k: None)
@@ -678,8 +674,6 @@ def test_workspace_sync_debug_detail_lifts_with_raven_logging(tmp_path: Path) ->
 def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, turn_summary_off: bool = False):
     """Run ``agent -m`` with a stub AgentLoop that reports LLM usage through
     the TokenWise after-hook, mirroring how the real loop feeds UsageTracker."""
-    import os as _os
-
     from raven.config.loader import save_config
     from raven.config.schema import Config
     from raven.contracts.token_strategy import UsageSnapshot
@@ -703,6 +697,7 @@ def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *,
         def __init__(self, **kwargs):
             self.channels_config = kwargs.get("channels_config")
             self.subagents = _StubSubagents()
+            self.context = SimpleNamespace(skills=SimpleNamespace(stop_file_watcher=lambda: None))
             self.strategies = StrategyRegistry([])
 
         def configure_personalization(self, *_args) -> None:
@@ -728,7 +723,6 @@ def _invoke_agent_with_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *,
         async def close_mcp(self) -> None:
             pass
 
-    monkeypatch.setattr(_os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
     monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: object())
     monkeypatch.setattr("raven.agent.loop.AgentLoop", _StubAgentLoop)
     monkeypatch.setattr("raven.cli.agent_commands._wait_for_background_work", _skip_background_grace)
@@ -745,3 +739,29 @@ def test_turn_summary_line_present(tmp_config: Path, tmp_path: Path, monkeypatch
 def test_turn_summary_respects_config_off(tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     r = _invoke_agent_with_usage(monkeypatch, tmp_path, turn_summary_off=True)
     assert not re.search(r"\d[\d.,k]*\s*(in|tokens)", r.output)
+
+
+def test_one_shot_teardown_stops_the_skill_file_watcher() -> None:
+    """The one-shot teardown must stop the skill watcher before exit.
+
+    The loop's ``ContextBuilder`` starts ``SkillFileWatcher``, a daemon thread
+    parked inside ``watchfiles``' Rust ``watch()``. Nothing here stopped it, so
+    ``Py_FinalizeEx`` tore the interpreter down under that native call:
+    measured 2026-09-18, a one-shot that rendered its whole turn and its own
+    teardown still exited 139.
+
+    This command used to carry its own ``os._exit(0)`` for that hazard. It was
+    traded for a hard-exit gate in ``raven.cli.commands.run``, and that gate has
+    since been removed, so the exit is an ordinary one again and the thread has
+    to actually be stopped.
+
+    The teardown is nested in the command with no import seam, so this pins the
+    call in the source.
+    """
+    import inspect
+
+    from raven.cli import agent_commands
+
+    src = inspect.getsource(agent_commands.register)
+    teardown = src.split("finally:", 1)[1]
+    assert "stop_file_watcher()" in teardown
