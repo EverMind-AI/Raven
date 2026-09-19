@@ -1394,12 +1394,15 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
     if section == "llm":
         # The CLI wizard records the backend name on a CONFIGURED outcome from
         # its own onboard step; a web save has no such step, so record it here.
+        # Only where no key exists: an explicit null is the CLI step's record
+        # of a reader who declined memory, and a model saved for it does not
+        # overturn that.
         from raven.config.loader import get_config_path, read_raw_or_raise
         from raven.config.update import set_memory_backend
         from raven.core.plugin_stack import SHIPPED_DEFAULT_BACKEND
 
         raw = read_raw_or_raise(get_config_path())
-        if not (raw.get("memory") or {}).get("backend"):
+        if "backend" not in (raw.get("memory") or {}):
             set_memory_backend(SHIPPED_DEFAULT_BACKEND)
     return {"applied": True}
 
