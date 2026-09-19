@@ -420,7 +420,7 @@ class ToolRegistry:
             from raven.agent.subagent.charter import prior_calls
 
             role = self._verifier_provider() if self._verifier_provider is not None else DefaultAction()
-            return list(role.judge(name, params, prior_calls()))
+            return list(role.ask_judge(name, params, prior_calls()))
         except Exception:  # noqa: BLE001 - a role that raises must not cost the turn
             logger.warning("tools: the Action role raised judging {!r}; taking no opinion from it", name)
             return []

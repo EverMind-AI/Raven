@@ -642,7 +642,7 @@ async def test_tools_keep_session_cleanup_when_flow_is_disabled(tmp_path):
     after = AgentHookContext(session_key="acp:s1")
     await hook.after_send(after)
     # Only the seat the host parks for this turn, which dies with the dict.
-    assert not [k for k in after.metadata if not k.startswith("raven.conduct.")]
+    assert not [k for k in after.metadata if not k.startswith("raven.participant.")]
     observer.on_session_deleted("acp:s1", True)
     assert not path.exists()
 

@@ -16,13 +16,15 @@ between two model calls of one turn.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING, Any
 
+from raven.agent.harness.participants import compose_tools
 from raven.contracts.harness import CapabilityRequest, CapabilitySelection
 
 if TYPE_CHECKING:
     from raven.agent.tools.registry import ToolRegistry
+    from raven.contracts.participant import AgentParticipant, StepView
 
 
 class DefaultCapability:
@@ -38,6 +40,11 @@ class DefaultCapability:
 
     async def select(self, request: CapabilityRequest) -> CapabilitySelection:
         return CapabilitySelection(tools=self._registry_provider().get_definitions())
+
+    async def ask_select_tools(
+        self, offered: list[dict[str, Any]], step: "StepView", participants: "Sequence[AgentParticipant]"
+    ) -> list[dict[str, Any]] | None:
+        return await compose_tools(offered, step, participants)
 
 
 __all__ = ["DefaultCapability"]

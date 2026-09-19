@@ -924,7 +924,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 self.tools.turn_scope(),
                 delegate_scope(delegate_table),
                 charter_scope(charter),
-                # The conduct seats in the hook chain ask this turn's modules,
+                # The participant seats in the hook chain ask this turn's modules,
                 # so a replaced Action or Planning decides what a plugin's
                 # judgement does -- bound per turn like the model.
                 bind_harness(self.harness),

@@ -95,6 +95,12 @@ history slice is a candidate, how much window the prompt may occupy, and how a t
 made to fit again mid-turn), Planning passes
 messages through, Capability reports `ToolRegistry.get_definitions`, and Action dispatches the
 one streaming-or-retrying call.
+A role's methods come in two kinds, told apart by their names: a plain one produces the
+turn's material itself (`assemble`, `select`, `decide`, `shrink`), while an `ask_`-prefixed one
+produces nothing of its own and exists to put a question to this turn's Agent Participants and
+merge what they answer (`ask_intake`, `ask_advice`, `ask_review`, `ask_salvage`, `ask_judge`,
+`ask_system_addendum`, `ask_archive`, `ask_select_tools`). Replacing a role therefore means two
+different things: a new way to produce, or a new rule for adjudicating what the products say.
 Frozen per Generation: the tool array is the prompt-cache prefix, so the set a turn runs on
 cannot move between two of its model calls.
 
@@ -158,22 +164,35 @@ the last message (`append_note`), and `before_user_inbound` may rewrite the inbo
 (`modified_content`, chained through `inbound_content`). Multiple hooks chain via `CompositeHook`; the EvalEngine
 wires three concrete implementations. It remains the loop's *timing* contract and stays open to
 any hook: what changed is that the bundled agents no longer write their product logic here, but
-as an Agent Conduct seated in this chain.
+as an Agent Participant seated in this chain.
 _Avoid_: "callback" or "middleware" — neither captures the phase-specific, chain-aware semantics.
 
-**Agent Conduct** (`contracts/agent_conduct.py`, seated by `agent/hook/conduct.py`):
+**Agent Participant** (`contracts/participant.py`, seated by `agent/hook/participant.py`):
 What a bundled agent judges, written as verbs rather than as phases: `intake`, `select_tools`,
-`advise`, `system_addendum`, `review`, `salvage`, `outbound`, `archive`, `observe`. Each is asked
-about one step of a Turn, answered against a read-only `StepView`, and returns what it decided --
-a text, a narrower tool array, a note, a `Verdict`, a reply -- never a write into the loop's own
-state. The host builds one per Turn from a `ConductFactory`, so what a conduct has already done
-this turn is an attribute that dies with the turn. `ConductHook` seats one in the Agent Hook
-chain and renders its answers as the `HookDecision` the composite already merges, which is why
-the phases, their order and the rollback mechanism are unchanged by it. The four Harness Modules
-compose what the conducts of a seat say: Memory their `intake`, Planning their `advise`, Action
-their `review` and `salvage` -- so replacing a role replaces what a conduct's judgement does.
+`advise`, `system_addendum`, `review`, `salvage`, `judge`, `outbound`, `archive`. Each is asked
+about one step of a Turn, answered against a read-only `StepView` whose `phase` says which of
+the six moments is asking, and answered in plain data -- a string, a narrower list of tool
+definitions, a mapping built by `Intake`, `Accept`, `Resample` or `End` -- never a write into the loop's own state and
+never an instance of a host class, so a judgement compiled from a dispatch's own source can
+answer the same verbs a plugin does. Three invariants hold for every participant whatever its
+origin: it is shown facts it cannot write, it answers with data the host interprets, and an
+answer that raises or does not parse counts as silence rather than as a refusal. The host builds
+one per Turn from a `ParticipantFactory`, so what a participant has already done this turn is an
+attribute that dies with the turn. `ParticipantHook` seats one in the Agent Hook chain and
+renders its answers as the `HookDecision` the composite already merges, which is why the phases,
+their order and the rollback mechanism are unchanged by it. Eight of the nine verbs are composed
+by a Harness Module rather than by the seat -- Memory asks `intake`, `system_addendum` and
+`archive`, Planning asks `advise`, Capability asks `select_tools`, Action asks `review`,
+`salvage` and `judge` -- so replacing a role replaces what a participant's judgement does. Two
+verbs are exceptions and each says so on its own docstring. `outbound` has no role at all: no
+role owns the turn's delivered reply, so the seat applies it directly and it is the one verb a
+generated participant cannot be handed. `judge` has a role but no seat: the party that asks it is
+`ToolRegistry.execute`, which is not the hook chain and holds no handle on this turn's
+participants, so today the only participant in that list is the dispatch's own `checks` and
+`code`. A plugin refuses a call from `review` instead.
 _Avoid_: reading it as a replacement for Agent Hook. The phases say *when* the loop asks; a
-conduct says *what this agent judges*, and a third-party hook needs neither.
+participant says *what this agent judges*, and a third-party hook needs neither. Unrelated to
+raven-code's **Coding Conduct** prompts, which are a different thing with a similar name.
 
 **Session Mode** (`acp/modes.py`; declared under `acp.modes` in config):
 A named per-session operating profile a client switches over ACP `session/set_mode`; every

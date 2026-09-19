@@ -399,7 +399,7 @@ def test_an_injected_role_is_asked_instead_of_the_default() -> None:
     asked: list[str] = []
 
     class Loud:
-        def judge(self, name, params, prior):
+        def ask_judge(self, name, params, prior, participants=()):
             asked.append(name)
             return ["the role said no"]
 
@@ -407,3 +407,80 @@ def test_an_injected_role_is_asked_instead_of_the_default() -> None:
     with charter_scope(_rules()):
         assert registry._verifier_refusals("write_file", {"path": "./out/a"}) == ["the role said no"]
     assert asked == ["write_file"]
+
+
+def test_a_dispatch_brings_its_judgements_as_a_participant() -> None:
+    """The Charter answers the same verb a plugin answers, rather than being
+    read by the role itself. That is what lets a judgement generated for one
+    dispatch join the same list later."""
+    from raven.agent.subagent.charter import charter_participants
+
+    assert charter_participants() == (), "no charter bound, no participant"
+    with charter_scope(Charter(prompt="just a brief")):
+        assert charter_participants() == (), "a charter with no judgements brings none"
+    with charter_scope(_rules()):
+        brought = charter_participants()
+        assert len(brought) == 1
+        assert brought[0].judge("write_file", {"path": "/etc/passwd"}, []) == [
+            "write under ./out/",
+            "read it first",
+        ]
+
+
+def test_a_plugins_own_rules_speak_before_the_dispatchs() -> None:
+    """Participant order is product first: a veto needs one voice, and the
+    wording the model reads should be the product's own where both would
+    refuse."""
+    from raven.agent.harness.action import DefaultAction
+
+    class Product:
+        def judge(self, name, params, prior):
+            return ["the product refuses this one"]
+
+    action = DefaultAction()
+    with charter_scope(_rules()):
+        assert action.ask_judge("write_file", {"path": "/etc/passwd"}, [], [Product()]) == [
+            "the product refuses this one"
+        ]
+        assert action.ask_judge("write_file", {"path": "/etc/passwd"}, []) == [
+            "write under ./out/",
+            "read it first",
+        ]
+
+
+def test_one_sentence_of_refusal_stays_one_sentence() -> None:
+    """A bare ``str`` satisfies ``Sequence[str]`` structurally, so a participant
+    that refuses with one sentence passes every annotation and every type check
+    -- and iterating it yields one refusal per character. Eighteen refusals for
+    a malformed answer is the opposite of "a malformed answer is silence", and
+    this seam exists to carry judgements that are generated rather than written,
+    where a bare string is a plausible thing to answer."""
+    from raven.agent.harness.participants import compose_judge
+
+    class Sentence:
+        def judge(self, name, params, prior):
+            return "write under ./out/"
+
+    class Blank:
+        def judge(self, name, params, prior):
+            return "   "
+
+    assert compose_judge("write_file", {}, [], [Sentence()]) == ["write under ./out/"]
+    assert compose_judge("write_file", {}, [], [Blank(), Sentence()]) == ["write under ./out/"], (
+        "whitespace is not a refusal, and must not stop the next participant"
+    )
+
+
+def test_a_participant_that_says_nothing_lets_the_next_one_speak() -> None:
+    """A veto stops at the first refusal, not at the first participant."""
+    from raven.agent.harness.action import DefaultAction
+
+    class Quiet:
+        def judge(self, name, params, prior):
+            return []
+
+    with charter_scope(_rules()):
+        assert DefaultAction().ask_judge("write_file", {"path": "/etc/passwd"}, [], [Quiet()]) == [
+            "write under ./out/",
+            "read it first",
+        ]

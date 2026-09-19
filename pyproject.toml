@@ -606,6 +606,19 @@ type = "forbidden"
 # provider registry and pricing table reads) moved out to raven/observability
 # and RAVEN_HOME resolution moved in to raven/home.py, so an ignore_imports
 # entry here would be new debt, not a carry-over.
+#
+# One type-only edge exists and is deliberate, so it is written here rather
+# than left for a reader to discover: contracts/harness.py names
+# raven.agent.harness.participants under TYPE_CHECKING, for the Verdict and
+# Intake the asking half of the role protocol returns. Those are the shapes the
+# shell reads a participant's answer into, and commit-by-commit they were moved
+# off the paper on purpose -- a participant answers with a plain mapping, and a
+# host class on the paper is exactly what a generated judgement cannot build.
+# The price is that the papers name a symbol a papers-only wheel would not
+# contain. It costs nothing at import time, which is what this contract is
+# about, and lint-imports does not see it because exclude_type_checking_imports
+# is on below. If the papers are ever built as their own wheel with type stubs,
+# this is the one edge to resolve.
 source_modules = ["raven.contracts", "raven.home", "raven.spine", "raven.tracing"]
 forbidden_modules = [
     "raven.acp", "raven.acp_client", "raven.agent", "raven.auth", "raven.browser",
