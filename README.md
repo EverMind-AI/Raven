@@ -145,7 +145,7 @@ Runs that end in something other than a deck.
 <td width="50%" valign="top">
 <p align="center"><b>A parameter sweep, written, run and plotted</b></p>
 <a href="https://github.com/user-attachments/assets/e842677a-8b71-4f1b-ae02-0162a440a1e8"><img src="https://github.com/user-attachments/assets/e842677a-8b71-4f1b-ae02-0162a440a1e8" alt="Task graph: Raven-Code into Raven-Oncall into Raven-Design, run in sequence" width="100%"></a>
-<a href="https://github.com/user-attachments/assets/04c1e3fb-e327-4496-ac5e-ce95147a3290"><img src="https://github.com/user-attachments/assets/04c1e3fb-e327-4496-ac5e-ce95147a3290" alt="Recall and latency plotted against chunk size, one line per top_k" width="100%"></a>
+<a href="https://github.com/user-attachments/assets/2b03cc53-e707-4728-8d68-327fcf7d112a"><img src="https://github.com/user-attachments/assets/2b03cc53-e707-4728-8d68-327fcf7d112a" alt="Retrieval sweep: recall@k is set by top_k alone, and latency stays flat across the grid" width="100%"></a>
 </td>
 </tr>
 </table>
