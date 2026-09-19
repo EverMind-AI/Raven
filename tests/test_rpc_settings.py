@@ -501,9 +501,12 @@ async def test_a_borrowed_key_beats_the_redaction_the_page_echoes(everos_toml, l
     assert data["rerank"]["base_url"] == "https://lender.example/v1"
 
 
-async def test_borrowing_keeps_the_section_url_when_the_lender_has_none(everos_toml, lender):
-    """A provider with no address of its own must not blank an address the
-    reader typed: only the key is certain to be worth copying."""
+async def test_a_borrow_hands_over_an_address_as_well_as_a_key(everos_toml, lender):
+    """The lender's address wins, whichever tier it comes from.
+
+    Named for what it pins now: `custom` carries a registry default, so what
+    this asserts is that the borrow supplies an address -- not that the
+    section kept its own, which this PR deliberately stopped doing."""
     lender({"apiKey": "sk-lent"}, name="custom")
     await rpc_console.settings_everos_set(
         {"section": "rerank", "fields": {"base_url": "https://mine/v1"}, "borrow_from": "custom"}
@@ -515,6 +518,53 @@ async def test_borrowing_keeps_the_section_url_when_the_lender_has_none(everos_t
     # section keeps on its own is covered by the endpoints case above, where the
     # entry supplies the address.
     assert data["rerank"]["base_url"]
+
+
+async def test_the_borrowed_address_replaces_the_lenders_predecessor(everos_toml, lender):
+    """The incident, end to end: a role moved from an OpenRouter model to a
+    DeepSeek one kept DeepSeek's key at OpenRouter's address, which the far end
+    refuses. What the section must end up with is DeepSeek's own address -- not
+    the one it was reached at before, and not nothing, which the reader refuses
+    just as flatly."""
+    everos_toml.write_text(
+        '[llm]\nmodel = "openrouter/anthropic/claude-3.5-sonnet"\n'
+        'api_key = "sk-openrouter"\nbase_url = "https://openrouter.ai/api/v1"\n',
+        encoding="utf-8",
+    )
+    lender({"apiKey": "sk-deepseek"}, name="deepseek")
+    await rpc_console.settings_everos_set(
+        {"section": "llm", "fields": {"model": "deepseek/deepseek-chat"}, "borrow_from": "deepseek"}
+    )
+    data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
+    assert data["llm"] == {
+        "model": "deepseek/deepseek-chat",
+        "api_key": "sk-deepseek",
+        "base_url": "https://api.deepseek.com/v1",
+    }
+
+
+async def test_a_vendor_the_table_knows_only_by_its_shown_address_still_lends_one(everos_toml, lender):
+    """groq and zai were the remainder, and the remainder deleted the address.
+
+    The earlier fix carried the fallback table through the lend, which closed
+    deepseek, openai and openrouter and left every other keyed vendor
+    answering "" -- a delete, on a section whose reader cannot tell it from a
+    working one: `role_configured_in` and the page's LED both ask
+    `model and api_key`, so a role with no address went on reporting itself
+    set up until something called it.
+    """
+    everos_toml.write_text(
+        '[llm]\nmodel = "openrouter/anthropic/claude-3.5-sonnet"\n'
+        'api_key = "sk-openrouter"\nbase_url = "https://gateway.internal/v1"\n',
+        encoding="utf-8",
+    )
+    lender({"apiKey": "gsk-groq"}, name="groq")
+    await rpc_console.settings_everos_set(
+        {"section": "llm", "fields": {"model": "groq/llama-3.3-70b"}, "borrow_from": "groq"}
+    )
+    data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
+    assert data["llm"]["api_key"] == "gsk-groq"
+    assert data["llm"]["base_url"] == "https://api.groq.com/openai/v1"
 
 
 async def test_borrowing_finds_a_provider_stored_under_another_spelling(everos_toml, lender):
