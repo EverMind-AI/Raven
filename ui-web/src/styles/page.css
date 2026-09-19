@@ -145,7 +145,6 @@
   --z-menu: 42;
   --z-palette: 45;
   --z-picker: 46;
-  --z-toast: 50;
   --z-takeover: 60;
   --z-scrollbars: 88;
   --z-shade: 90;
@@ -153,6 +152,11 @@
   --z-lightbox: 95;
   --z-failbar: 99;
   --z-onboarding: 110;
+  /* A toast is the page's one transient notice, and it has to reach the
+     reader over whatever surface they are on -- the first-run wizard included,
+     whose provider and key writes report their refusals this way. Only the
+     splash, which nothing happens under, stands above it. */
+  --z-toast: 115;
   --z-splash: 120;
 }
 
