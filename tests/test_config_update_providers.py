@@ -1812,6 +1812,23 @@ def test_borrow_copies_the_key_and_the_address(monkeypatch: pytest.MonkeyPatch) 
     assert borrowed["base_url"] == "https://api.example.test/v1"
 
 
+def test_borrow_hands_back_an_empty_address_when_the_lender_has_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A lender with no address of its own must still answer about the address.
+
+    The borrowing section is being pointed at this provider, and what is in its
+    `base_url` belongs to whoever it pointed at before. Leaving the field out
+    keeps that one: an EverOS role moved from an OpenRouter model to a DeepSeek
+    one ended up with DeepSeek's key at OpenRouter's address, which the far end
+    refuses. DeepSeek and the other LiteLLM-routed vendors carry no
+    `default_api_base`, so this is the ordinary case rather than the corner.
+    """
+    import raven.config
+
+    monkeypatch.setattr(raven.config, "load_config", lambda: _config_with_provider("openai", "sk-lend"))
+
+    assert lend_provider_credentials("openai") == {"api_key": "sk-lend", "base_url": ""}
+
+
 class TestWhatABorrowedCredentialMustCarry:
     """A url/key/header group is reachable only whole, and an everos section
     holds a model, an api_key and a base_url. Anything the section cannot hold

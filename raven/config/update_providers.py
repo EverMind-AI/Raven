@@ -1867,13 +1867,15 @@ def lend_provider_credentials(provider: str) -> dict[str, str]:
         )
 
     spec = find_by_name(provider)
+    # Always answered, empty included. A borrowing section is being pointed at
+    # this provider, and what its `base_url` holds belongs to whoever it pointed
+    # at before -- leaving the field out keeps that one. An EverOS role moved
+    # from an OpenRouter model to a DeepSeek one ended up with DeepSeek's key at
+    # OpenRouter's address, which the far end refuses; the vendors LiteLLM
+    # routes carry no `default_api_base`, so that is the ordinary case rather
+    # than the corner. An empty value reads the same way an unset one does.
     base_url = str(lent.api_base or "") or str(getattr(spec, "default_api_base", "") or "")
-    out = {"api_key": lent.api_key}
-    # A provider with no address of its own leaves the section's own base_url
-    # alone rather than blanking it: the reader may have typed one that works.
-    if base_url:
-        out["base_url"] = base_url
-    return out
+    return {"api_key": lent.api_key, "base_url": base_url}
 
 
 # Providers whose main model can be reused as a bare-OpenAI-client memory LLM:
