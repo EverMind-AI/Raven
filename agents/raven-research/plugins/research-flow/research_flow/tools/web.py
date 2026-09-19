@@ -1823,7 +1823,9 @@ class WebFetchTool(Tool):
         # seconds on a slow resolver, and one process serves every session's turn.
         is_valid, error_msg = await asyncio.to_thread(_judge_fetch_target, url)
         if not is_valid:
-            return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
+            # The same rule as the handlers below: most of these reasons name the
+            # hostname, and a reader whose every target is refused is one cause.
+            return json.dumps({"error": "URL validation failed", "detail": error_msg, "url": url}, ensure_ascii=False)
 
         # "no explicit proxy" is not "direct": with trust_env on, httpx
         # still honours HTTP(S)_PROXY from the environment.

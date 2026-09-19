@@ -466,6 +466,26 @@ async def test_two_vendor_refusals_stay_two_streak_classes(monkeypatch: pytest.M
     assert failure_class(spent) != failure_class(blocked)
 
 
+async def test_one_blocked_reason_on_two_hosts_is_one_streak_class() -> None:
+    """The gate in front of the reader, which the two tests above never reach.
+
+    Every reason this gate composes names the address it refused, so the reason
+    in the classification key gave a model walking an internal range one class
+    per address: the streak never reached the break threshold and the nudge that
+    would have sent it somewhere else never fired. The gate runs before any
+    transport, so nothing here needs a reader.
+    """
+    envelopes = [
+        await WebFetchTool(api_key="k", provider="jina").execute(u)
+        for u in ("http://10.0.0.1/p", "http://192.168.1.1/p")
+    ]
+
+    assert all(is_hard_tool_failure(raw) for raw in envelopes)
+    assert len({failure_class(raw) for raw in envelopes}) == 1
+    # The address the model has to stop reaching for is still in front of it.
+    assert "10.0.0.1" in json.loads(envelopes[0])["detail"]
+
+
 def test_every_reader_is_covered_by_the_fetch_table() -> None:
     assert set(_FETCH_CASES) == set(FETCH_PROVIDERS)
 

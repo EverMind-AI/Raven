@@ -474,6 +474,23 @@ async def test_a_private_address_is_still_refused(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_one_blocked_reason_on_two_hosts_is_one_streak_class(monkeypatch):
+    """This copy of the reader carries the same gate, and drifting from the host's
+    is what let the envelope fix land on one of them last time. Every reason the
+    gate composes names the address, so the reason in the classification key gave
+    a model walking an internal range one class per address and the stop-repeating
+    nudge never came."""
+    _patch_client(monkeypatch, _PageTransport())
+    set_current_session("t")
+
+    envelopes = [await WebFetchTool().execute(url=u) for u in ("http://10.0.0.1/p", "http://192.168.1.1/p")]
+
+    assert all(is_hard_tool_failure(raw) for raw in envelopes)
+    assert len({failure_class(raw) for raw in envelopes}) == 1
+    assert "10.0.0.1" in json.loads(envelopes[0])["detail"]
+
+
+@pytest.mark.asyncio
 async def test_a_non_http_scheme_is_still_refused(monkeypatch):
     _patch_client(monkeypatch, _PageTransport())
     set_current_session("t")
