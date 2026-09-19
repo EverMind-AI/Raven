@@ -844,3 +844,93 @@ def test_error_on_bodyless_turn_gets_completion_placeholder(state):
     assert marker.event_time == _ts(1)
     assert placeholder.error == "boom"
     assert placeholder.event_time == _ts(9)
+
+
+def _v2_llm_attrs(state: Path, name: str, messages, output=None):
+    """An llm.input artifact exactly as the live trace writer stores it: an
+    audit.artifact.v2 shell whose messages are $msg references published
+    through the real TraceStore, not hand-built inline payloads."""
+    from raven.tracing import artifact_v2
+    from raven.tracing.store import TraceStore
+
+    store = TraceStore(state)
+    refs = store.address_items(messages)
+    shell = {
+        "artifactFormat": artifact_v2.ARTIFACT_FORMAT,
+        "provider": "test",
+        "model": "m",
+        "systemPrompt": "",
+        "prompt": refs[-1] if refs else "",
+        "messages": refs,
+        "tools": [],
+    }
+    assert artifact_v2.is_v2(shell)
+    attrs = {"llm.input.artifact_path": _artifact(state, shell, f"{name}-in")}
+    if output is not None:
+        attrs["llm.output.artifact_path"] = _artifact(state, output, f"{name}-out")
+    return attrs
+
+
+def test_v2_llm_input_shell_resolves_to_message_text(state):
+    base = [{"role": "system", "content": "sys"}, {"role": "user", "content": "fix the bug"}]
+    grown = [*base, {"role": "assistant", "content": "on it"}]
+    spans = [
+        _span("t1", "turn", "session.turn", start=0, end=30, attrs=_turn_attrs(state, "turn")),
+        _span("t1", "l1", "llm.call", parent="turn", start=1, end=2, attrs=_v2_llm_attrs(state, "v2a", base)),
+        _span("t1", "l2", "llm.call", parent="turn", start=3, end=4, attrs=_v2_llm_attrs(state, "v2b", grown)),
+    ]
+    _write_log(state, spans)
+    first, second = _by_label(tconv.attempt_conversation(["t1"], state), "LLM input")
+    assert "[system]\nsys" in first.text
+    assert "fix the bug" in first.text
+    assert "$msg" not in first.text and "[?]" not in first.text
+    assert first.degraded is None
+    assert second.text.startswith("(… 2 earlier messages unchanged)")
+    assert "on it" in second.text
+
+
+def test_v2_missing_blob_renders_placeholder_and_note(state):
+    from raven.tracing import artifact_v2
+
+    base = [{"role": "system", "content": "sys"}, {"role": "user", "content": "fix the bug"}]
+    grown = [*base, {"role": "assistant", "content": "on it"}]
+    spans = [
+        _span("t1", "turn", "session.turn", start=0, end=30, attrs=_turn_attrs(state, "turn")),
+        _span("t1", "l1", "llm.call", parent="turn", start=1, end=2, attrs=_v2_llm_attrs(state, "v2a", base)),
+        _span("t1", "l2", "llm.call", parent="turn", start=3, end=4, attrs=_v2_llm_attrs(state, "v2b", grown)),
+    ]
+    _write_log(state, spans)
+    gone = artifact_v2.message_sha1(base[0])
+    artifact_v2.message_path(state / "logs" / "audit-artifacts", gone).unlink()
+
+    first, second = _by_label(tconv.attempt_conversation(["t1"], state), "LLM input")
+    assert f"[message blob missing: {gone}]" in first.text
+    assert "fix the bug" in first.text  # the intact blob still resolves
+    assert first.degraded == "1 message blob(s) missing — placeholders shown"
+    # The placeholder is deterministic, so the next call still gets its
+    # verified-prefix omission instead of a contagious full dump.
+    assert second.text.startswith("(… 2 earlier messages unchanged)")
+    assert "on it" in second.text
+    assert second.degraded == "1 message blob(s) missing — placeholders shown"
+
+
+def test_v2_and_inline_payloads_coexist(state):
+    inline = [{"role": "user", "content": "plain v1"}]
+    spans = [
+        _span("t1", "turn", "session.turn", start=0, end=30, attrs=_turn_attrs(state, "turn")),
+        _span("t1", "l1", "llm.call", parent="turn", start=1, end=2, attrs=_llm_attrs(state, "v1", inline)),
+        _span(
+            "t1",
+            "l2",
+            "llm.call",
+            parent="turn",
+            start=3,
+            end=4,
+            attrs=_v2_llm_attrs(state, "v2", [*inline, {"role": "assistant", "content": "answer"}]),
+        ),
+    ]
+    _write_log(state, spans)
+    first, second = _by_label(tconv.attempt_conversation(["t1"], state), "LLM input")
+    assert "plain v1" in first.text and first.degraded is None
+    assert second.text.startswith("(… 1 earlier messages unchanged)")
+    assert "answer" in second.text

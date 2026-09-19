@@ -21,7 +21,11 @@ Contracts:
   expected-but-unreadable payloads always yield a record — silent loss would
   make "the call never happened" and "the content was lost" look the same.
 - Artifact paths are untrusted log data: only files under the state dir's
-  ``logs/`` tree are read, capped at 512 KiB per file.
+  ``logs/`` tree are read, capped at 512 KiB per file. An ``llm.input``
+  stored as an ``audit.artifact.v2`` shell is resolved through
+  :mod:`raven.tracing.artifact_v2` (references are hash-validated there);
+  a missing message blob renders as its deterministic placeholder and is
+  announced, never dropped.
 - LLM inputs repeat the whole message history on every call. A call's record
   omits exactly the item-by-item verified common prefix against the previous
   call in the same ``(traceId, parentSpanId)`` chain (main-loop chains
@@ -37,6 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
+from raven.tracing import artifact_v2
 from raven.tracing import config as tracing_config
 from raven.trajectory import store as tstore
 
@@ -377,18 +382,44 @@ def _emit_turn(info: _SpanInfo, records: list[dict[str, Any]], state: Path) -> N
         _emit(info, records, "Turn", _PHASE_INPUT, "")
 
 
+def _resolve_v2(obj: Any, state: Path) -> tuple[Any, str | None]:
+    """An ``audit.artifact.v2`` shell as its inline equivalent, plus a note.
+
+    The live trace writer stores an ``llm.input`` as a shell whose messages
+    are ``$msg`` references into the content-addressed store; resolving goes
+    through :mod:`raven.tracing.artifact_v2`, whose placeholders are
+    deterministic and never drop a message position — so prefix comparison
+    and rendering stay valid even across missing blobs. The note names how
+    many blobs were missing; any other payload passes through untouched."""
+    if not artifact_v2.is_v2(obj):
+        return obj, None
+    missing: list[str] = []
+
+    def _record(sha1: str) -> dict[str, str]:
+        if sha1 not in missing:
+            missing.append(sha1)
+        return artifact_v2.placeholder(sha1)
+
+    resolved = artifact_v2.resolve_payload(obj, state / "logs" / "audit-artifacts", on_missing=_record)
+    note = f"{len(missing)} message blob(s) missing — placeholders shown" if missing else None
+    return resolved, note
+
+
 def _emit_llm(info: _SpanInfo, records: list[dict[str, Any]], state: Path, chains: _ChainState) -> None:
     meta = _llm_meta(info.attrs)
     chain = (info.trace_id, info.parent_id)
     payload = _slot_payload(state, info.attrs, "llm.input")
     if payload is not None:
         obj, text, degraded = payload
+        obj, blob_note = _resolve_v2(obj, state)
         messages = obj.get("messages") if isinstance(obj, dict) else None
         if degraded is None and isinstance(messages, list):
             is_main = info.turn_span_id is not None and info.parent_id == info.turn_span_id
             text, degraded = chains.render_input(chain, is_main, messages)
         else:
             chains.mark_unreadable(chain)
+        if blob_note:
+            degraded = f"{degraded}; {blob_note}" if degraded else blob_note
         _emit(info, records, "LLM input", _PHASE_INPUT, text, degraded=degraded, meta=meta)
     payload = _slot_payload(state, info.attrs, "llm.output", "llm.output_preview")
     if payload is None:
