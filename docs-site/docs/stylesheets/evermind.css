@@ -15,20 +15,27 @@
 
 @import url("https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@1,500;1,600&family=Brygada+1918:ital,wght@0,400;0,500&display=swap");
 
+/*
+ * Surfaces and text are sampled from the EverMe application rather than from
+ * the marketing site: same warm axis (every value keeps R >= G >= B, so none
+ * of them is the cool grey the brand rules out), but far less chroma. A tinted
+ * light reads heavier than a neutral one of the same lightness, which is what
+ * made the parchment set look dark in a dense documentation page.
+ */
 :root {
-  --em-canvas: #fcfcf5;
-  --em-panel: #f2f1e9;
-  --em-panel-warm: #ebe8dd;
-  --em-ink: #1c1b1b;
-  --em-text: #1c1b1b;
-  --em-text-serif: #423924;
-  --em-text-muted: #70695a;
-  --em-text-faint: #8f887b;
-  --em-text-on-dark: #f2f1e9;
+  --em-canvas: #fffefc;
+  --em-panel: #f5f5f5;
+  --em-panel-warm: #ebebeb;
+  --em-ink: #0d0b04;
+  --em-text: #0d0b04;
+  --em-text-serif: #312f29;
+  --em-text-muted: #6b6966;
+  --em-text-faint: #908f8c;
+  --em-text-on-dark: #fffefc;
   --em-gold: #d99400;
   --em-gold-light: #f7cb72;
   --em-gold-olive: #9c7c1e;
-  --em-hairline: rgba(49, 48, 46, 0.08);
+  --em-hairline: rgba(13, 11, 4, 0.08);
 
   --em-font-serif: "Cormorant Garamond", serif;
   --em-font-label: "Brygada 1918", serif;
@@ -58,9 +65,11 @@
   --md-code-bg-color: var(--em-panel);
   --md-code-fg-color: var(--em-text);
 
-  --md-footer-bg-color: var(--em-ink);
-  --md-footer-bg-color--dark: #050505;
-  --md-footer-fg-color: var(--em-text-on-dark);
+  --md-footer-bg-color: var(--em-canvas);
+  --md-footer-bg-color--dark: var(--em-panel);
+  --md-footer-fg-color: var(--em-text);
+  --md-footer-fg-color--light: var(--em-text-muted);
+  --md-footer-fg-color--lighter: var(--em-text-faint);
 }
 
 /* ------------------------------------------------------- Square first --- */
@@ -166,6 +175,49 @@
   letter-spacing: -0.02em;
 }
 
+/*
+ * The EverMind mark, in place of Material's default book icon. Section 7 of
+ * AGENTS.md keeps image files out of the repository, so it is inlined here
+ * rather than shipped as a file and pointed at by theme.logo. Material puts a
+ * logo in two places -- the header above 76.25em, the navigation drawer below
+ * it -- and both are replaced here, sized to the glyph each one drops.
+ */
+:root {
+  --em-mark: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="38.8" fill="%23ffc53d"/><g fill="none" stroke="%230c0902" stroke-width="3.6"><ellipse cx="101.3" cy="96" rx="5.3" ry="30.9" opacity="0.21"/><ellipse cx="90.7" cy="96" rx="5.3" ry="30.9" opacity="0.21"/><ellipse cx="112.9" cy="96" rx="16.9" ry="30.9" opacity="0.42"/><ellipse cx="79.1" cy="96" rx="16.9" ry="30.9" opacity="0.42"/><ellipse cx="124.4" cy="96" rx="28.4" ry="30.9" opacity="0.63"/><ellipse cx="67.6" cy="96" rx="28.4" ry="30.9" opacity="0.63"/><ellipse cx="136.2" cy="96" rx="40.2" ry="30.9" opacity="0.84"/><ellipse cx="55.8" cy="96" rx="40.2" ry="30.9" opacity="0.84"/><path d="M16 96C16 78.3 30.4 64 48 64C69.6 64 88 86.1 96 96C104 105.9 122.4 128 144 128C161.6 128 176 113.7 176 96C176 78.3 161.6 64 144 64C122.4 64 104 86.1 96 96C88 105.9 69.6 128 48 128C30.4 128 16 113.7 16 96Z"/></g></svg>');
+}
+
+.md-header__button.md-logo::before,
+.md-nav__button.md-logo::before {
+  content: "";
+  display: block;
+  background-image: var(--em-mark);
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.md-header__button.md-logo::before {
+  width: 1rem;
+  height: 1rem;
+}
+
+.md-nav__button.md-logo::before {
+  width: 2.4rem;
+  height: 2.4rem;
+}
+
+/*
+ * Material sets display on the drawer glyph through a three-class selector,
+ * which outranks a two-class rule whatever the load order, so the drawer half
+ * has to carry .md-nav__title as well.
+ */
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg,
+.md-nav__title .md-nav__button.md-logo img,
+.md-nav__title .md-nav__button.md-logo svg {
+  display: none;
+}
+
 .md-tabs {
   background-color: var(--em-ink);
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
@@ -206,7 +258,14 @@
   font-weight: 500;
 }
 
+/*
+ * Material colours the section label through `.md-nav__item--section >
+ * .md-nav__link[for]`, whose attribute selector outranks the same rule without
+ * it: the uppercase and the size below land, the colour alone loses. Match the
+ * attribute to take it back.
+ */
 .md-nav--secondary .md-nav__title,
+.md-nav__item--section > .md-nav__link[for],
 .md-nav__item--section > .md-nav__link {
   color: var(--em-gold);
   font-weight: 500;
@@ -230,8 +289,7 @@
 
 /* ------------------------------------------------------------- Content --- */
 
-.md-typeset pre > code,
-.md-typeset .highlight {
+.md-typeset pre > code {
   border: 1px solid var(--em-hairline);
 }
 
@@ -242,6 +300,7 @@
 
 .md-typeset table:not([class]) th {
   background-color: var(--em-panel);
+  border-bottom: 1px solid var(--em-hairline);
   color: var(--em-ink);
   font-weight: 500;
 }
@@ -259,7 +318,7 @@
 
 .md-typeset .grid.cards > ul > li,
 .md-typeset .grid > .card {
-  background-color: var(--em-panel);
+  background-color: var(--em-canvas);
   border: 1px solid var(--em-hairline);
   border-radius: 12px;
   box-shadow: none;
@@ -303,8 +362,45 @@
 
 /* ------------------------------------------------------------- Footer --- */
 
+.md-footer,
 .md-footer-meta {
-  background-color: #050505;
+  background-color: var(--em-canvas);
+  color: var(--em-text-muted);
+}
+
+.md-footer {
+  border-top: 1px solid var(--em-hairline);
+}
+
+.md-footer-meta {
+  border-top: 1px solid var(--em-hairline);
+  font-size: 0.66rem;
+}
+
+/*
+ * The meta bar carried only Material's generator notice, which mkdocs.yml now
+ * switches off; with no copyright and no social links configured there is
+ * nothing left in it but an empty strip under the previous/next row. Drop this
+ * rule if a copyright line is ever added.
+ */
+.md-footer-meta {
+  display: none;
+}
+
+.md-footer__link {
+  color: var(--em-text-muted);
+}
+
+.md-footer__link:hover {
+  color: var(--em-ink);
+}
+
+.md-footer__title {
+  font-size: 0.8rem;
+}
+
+.md-footer__direction {
+  color: var(--em-text-faint);
 }
 
 .md-footer__link {
@@ -313,4 +409,973 @@
 
 .md-footer__link:hover {
   opacity: 1;
+}
+
+/* ------------------------------------------------------------- Shell --- */
+/*
+ * The reference layout this site follows puts the brand, the search box and
+ * the whole navigation tree in one full-height rail down the left, and gives
+ * the section tabs only the width of the content column. Material ships a
+ * full-width header above a full-width tab bar instead, and its markup cannot
+ * be rearranged here, so the header is taken out of flow and stacked into the
+ * rail. Everything below is desktop-only: at narrow widths Material's own
+ * drawer is the better answer and is left alone.
+ */
+
+:root {
+  --em-rail: 13.7rem;
+  --em-rail-head: 7.6rem;
+  --em-rail-mark: 1.7rem;
+}
+
+@media screen and (min-width: 76.25em) {
+  .md-header {
+    position: fixed;
+    top: 0 !important;
+    left: 0;
+    width: var(--em-rail);
+    height: var(--em-rail-head);
+    background: var(--em-panel);
+    color: var(--em-text);
+    box-shadow: none;
+    border: 0;
+    border-right: 1px solid var(--em-hairline);
+    /*
+     * Above the rail, which the header does not overlap but the search
+     * results panel does: it hangs out of the header over the nav tree.
+     */
+    z-index: 5;
+  }
+
+  .md-header__inner {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+    padding: 0.85rem 0.8rem 0;
+    margin: 0;
+    max-width: none;
+  }
+
+  .md-header__button.md-logo {
+    margin: 0;
+    padding: 0;
+    width: var(--em-rail-mark);
+  }
+
+  .md-header__button.md-logo::before {
+    width: var(--em-rail-mark);
+    height: var(--em-rail-mark);
+  }
+
+  .md-header__title {
+    margin: 0;
+    font-size: 0.92rem;
+    line-height: 1.9rem;
+    height: auto;
+    order: -1;
+  }
+
+  /*
+   * Material animates the site name out and the page name in as you scroll,
+   * and parks both topics at opacity 0 with a transform while it does. In the
+   * rail the name is a fixed wordmark, not a scroll state, so the first topic
+   * is pinned visible and laid out statically (Material positions it
+   * absolutely) and the second is dropped.
+   */
+  .md-header__title .md-header__topic:first-child {
+    position: static;
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+    z-index: auto;
+    font-weight: 500;
+  }
+
+  .md-header__title .md-header__topic:nth-child(2) {
+    display: none;
+  }
+
+  /* Brand row: mark and wordmark side by side, above the search box. */
+  .md-header__inner > .md-header__button.md-logo {
+    position: absolute;
+    top: 0.85rem;
+    left: 0.8rem;
+  }
+
+  .md-header__title {
+    padding-left: 2.45rem;
+  }
+
+  .md-header__button[for="__drawer"],
+  .md-header__button[for="__search"] {
+    display: none;
+  }
+
+  /* Search sits inside the rail, full width, as a bordered box. */
+  .md-header .md-search {
+    position: static;
+    margin-top: 0;
+    padding: 0;
+  }
+
+  .md-header .md-search__overlay {
+    display: none;
+  }
+
+  .md-header .md-search__inner {
+    position: static;
+    width: 100%;
+    height: auto;
+    margin: 0;
+    transform: none;
+    opacity: 1;
+    float: none;
+  }
+
+  /*
+   * Material widens the search box on focus, which is right for a top bar and
+   * wrong here: the rail is narrower than the width it grows to, so the box
+   * would break out over the page. Pin both states to the rail.
+   */
+  [data-md-toggle="search"]:checked ~ .md-header .md-search__inner {
+    width: 100%;
+  }
+
+  .md-header .md-search__form {
+    height: 1.9rem;
+    background: var(--em-canvas);
+    border: 1px solid var(--em-hairline);
+    border-radius: 6px;
+  }
+
+  .md-header .md-search__form:hover {
+    background: var(--em-canvas);
+    border-color: var(--em-gold-light);
+  }
+
+  .md-header .md-search__input {
+    font-size: 0.66rem;
+    padding-left: 1.8rem;
+  }
+
+  .md-header .md-search__input::placeholder {
+    color: var(--em-text-faint);
+  }
+
+  .md-header .md-search__icon[for="__search"] {
+    width: 0.85rem;
+    height: 0.85rem;
+    top: 0.52rem;
+    left: 0.55rem;
+    color: var(--em-text-faint);
+  }
+
+  .md-header .md-search__output {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    width: var(--em-rail);
+    border: 1px solid var(--em-hairline);
+    background: var(--em-canvas);
+  }
+
+  /*
+   * Material lays the result rows out at a fixed 34.4rem, the width of the
+   * dropdown its own header bar opens. The panel above is clipped to the rail,
+   * so without this the rows are typeset 415px wider than the box that shows
+   * them and every one is cut off mid-line.
+   */
+  .md-header .md-search__scrollwrap {
+    width: 100%;
+  }
+
+  /* The repo link and the language selector drop to the foot of the rail. */
+  .md-header__option,
+  .md-header__source {
+    position: fixed;
+    bottom: 16px;
+    margin: 0;
+    max-width: none;
+    width: auto;
+  }
+
+  .md-header__option {
+    left: 16px;
+    width: 32px;
+    height: 32px;
+  }
+
+  .md-header__source {
+    left: 48px;
+    width: 32px;
+  }
+
+  [dir="ltr"] .md-header__source,
+  [dir="rtl"] .md-header__source {
+    margin-left: 0;
+    margin-right: 0;
+  }
+
+  .md-header__option .md-select {
+    width: 32px;
+    height: 32px;
+  }
+
+  /*
+   * Material opens this menu downward, which is right under a header bar at
+   * the top of the page and wrong at the foot of the rail: there the menu
+   * lands below the viewport, where it still animates and still answers
+   * querySelector but cannot be reached. Direction, alignment and the little
+   * arrow all flip with the control.
+   */
+  .md-select__inner {
+    top: auto;
+    bottom: calc(100% - 0.2rem);
+    left: 0;
+    margin-top: 0;
+    margin-bottom: 0.2rem;
+    transform: translate3d(0, -0.3rem, 0);
+  }
+
+  .md-select:focus-within .md-select__inner,
+  .md-select:hover .md-select__inner {
+    transform: translate3d(0, 0, 0);
+  }
+
+  .md-select__inner::after {
+    top: auto;
+    bottom: 0;
+    left: 1.2rem;
+    margin-top: 0;
+    margin-bottom: -0.2rem;
+    border-top: 0.2rem solid var(--md-default-bg-color);
+    border-bottom: 0;
+  }
+
+  /* The rail foot carries icon buttons only, as the reference layout does. */
+  .md-header__source .md-source__repository {
+    display: none;
+  }
+
+  .md-header__source .md-source__icon {
+    padding-right: 0;
+  }
+
+  /* Match the reference docs shell: a 32px icon button with a 20px solid
+     GitHub mark, quiet until the pointer reaches it. */
+  .md-header__option .md-select > .md-header__button,
+  .md-header__source .md-source {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 6px;
+    margin: 0;
+    border-radius: 6px;
+    color: var(--em-text-muted);
+    transition: background-color 120ms, color 120ms;
+  }
+
+  .md-header__option .md-select > .md-header__button:hover,
+  .md-header__source .md-source:hover {
+    background-color: var(--em-panel-warm);
+    color: var(--em-ink);
+  }
+
+  .md-header__option .md-select > .md-header__button svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .md-header__source .md-source__icon {
+    width: 20px;
+    height: 20px;
+    padding: 0;
+  }
+
+  .md-header__source .md-source__icon svg {
+    display: none;
+  }
+
+  .md-header__source .md-source__icon::before {
+    content: "";
+    display: block;
+    width: 20px;
+    height: 20px;
+    background-color: currentColor;
+    -webkit-mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12Z"/></svg>') center / contain no-repeat;
+    mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12Z"/></svg>') center / contain no-repeat;
+  }
+
+  /* The nav tree fills the rest of the rail. */
+  .md-sidebar--primary {
+    position: fixed;
+    top: var(--em-rail-head);
+    left: 0;
+    width: var(--em-rail);
+    height: calc(100vh - var(--em-rail-head));
+    margin: 0;
+    padding: 0;
+    background: var(--em-panel);
+    border-right: 1px solid var(--em-hairline);
+    transform: none;
+    z-index: 4;
+  }
+
+  .md-sidebar--primary .md-sidebar__scrollwrap {
+    margin: 0;
+    height: 100%;
+    padding: 0.4rem 0.6rem 2.6rem;
+  }
+
+  .md-sidebar--primary .md-nav__title {
+    display: none;
+  }
+
+  /* Tabs take only the content column, on parchment rather than ink. */
+  .md-tabs {
+    position: fixed;
+    top: 0;
+    left: var(--em-rail);
+    width: calc(100% - var(--em-rail));
+    background: var(--em-canvas);
+    color: var(--em-text);
+    border-bottom: 1px solid var(--em-hairline);
+    z-index: 3;
+  }
+
+  .md-tabs__list {
+    padding-left: 1.6rem;
+  }
+
+  .md-tabs__link {
+    color: var(--em-text-muted);
+    opacity: 1;
+    font-size: 0.7rem;
+  }
+
+  .md-tabs__link:hover,
+  .md-tabs__link--active {
+    color: var(--em-ink);
+  }
+
+  .md-tabs__item--active {
+    box-shadow: inset 0 -2px 0 var(--em-gold);
+  }
+
+  /* Content clears the rail and the tab strip. */
+  .md-container {
+    padding-top: 1.6rem;
+  }
+
+  .md-footer,
+  .md-footer-meta {
+    margin-left: var(--em-rail);
+  }
+
+  .md-main__inner {
+    margin-left: var(--em-rail);
+    max-width: none;
+    padding-right: 1.2rem;
+  }
+
+  .md-content {
+    max-width: 44rem;
+  }
+
+  .md-sidebar--secondary {
+    margin-left: 0;
+  }
+}
+
+/* --------------------------------------------------- Shell corrections --- */
+/*
+ * Material paints the tab labels in the primary background colour, which is
+ * cream: correct over its own ink header, invisible once the strip is moved
+ * onto parchment. The colour has to be restated after the move, and the
+ * opacity Material animates them in with has to be pinned open.
+ */
+
+@media screen and (min-width: 76.25em) {
+  .md-tabs .md-tabs__list .md-tabs__link {
+    color: var(--em-text-muted);
+    opacity: 1;
+    transition: none;
+  }
+
+  .md-tabs .md-tabs__list .md-tabs__link:hover,
+  .md-tabs .md-tabs__list .md-tabs__item--active .md-tabs__link {
+    color: var(--em-ink);
+  }
+
+  /* The search box carries the shortcut that actually works: Material binds
+     f, s and slash, so printing the reference's Command-K would name a key
+     this site does not listen for. */
+  .md-header .md-search__form::after {
+    content: "/";
+    position: absolute;
+    top: 50%;
+    right: 0.45rem;
+    transform: translateY(-50%);
+    min-width: 1rem;
+    padding: 0.05rem 0.25rem;
+    border: 1px solid var(--em-hairline);
+    border-radius: 4px;
+    background: var(--em-panel);
+    color: var(--em-text-faint);
+    font-size: 0.6rem;
+    line-height: 1.1;
+    text-align: center;
+    pointer-events: none;
+  }
+}
+
+/* ------------------------------------------------ Card grid, corrected --- */
+/*
+ * Three to a row, as on the reference layout, and short enough that a row of
+ * them reads as one band rather than three columns of prose. Each card leads
+ * with a line icon: they are CSS masks rather than files, because the
+ * repository does not take committed SVGs and the emoji extension that would
+ * otherwise supply them needs a YAML tag the check-yaml hook refuses.
+ */
+
+/*
+ * Material puts display:contents on the ul inside .grid.cards, so the ul takes
+ * part in no layout at all and the grid lives on the .grid.cards div itself.
+ * Column rules written against the ul are silently inert.
+ */
+.md-typeset .grid.cards {
+  gap: 0.85rem;
+  margin: 0;
+}
+
+/*
+ * Fixed column counts below this width squeeze the cards past the viewport
+ * edge; Material's own auto-fit track list handles the narrow case.
+ */
+@media screen and (min-width: 60em) {
+  .md-typeset .grid.cards {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.md-typeset .grid.cards > ul > li {
+  padding: 1.1rem 1.15rem;
+  margin: 0;
+}
+
+.md-typeset .grid.cards > ul > li > p {
+  font-size: 0.72rem;
+  line-height: 1.5;
+  margin: 0.3rem 0 0;
+}
+
+.md-typeset .grid.cards > ul > li > p:first-child strong {
+  font-size: 0.85rem;
+}
+
+.md-typeset .grid.cards > ul > li > hr {
+  display: none;
+}
+
+.md-typeset .grid.cards > ul > li::before {
+  content: "";
+  display: block;
+  width: 1.15rem;
+  height: 1.15rem;
+  margin-bottom: 0.6rem;
+  background-color: var(--em-gold-olive);
+  -webkit-mask: var(--em-icon) center / contain no-repeat;
+  mask: var(--em-icon) center / contain no-repeat;
+}
+
+/* The numbered sequence keeps its numeral, placed beside the icon. */
+.md-typeset .em-step > ul > li::before {
+  display: inline-block;
+  vertical-align: middle;
+  margin-bottom: 0;
+  margin-right: 0.45rem;
+}
+
+.md-typeset .em-step > ul > li > p:first-child::before {
+  display: inline;
+  font-size: 0.85rem;
+  color: var(--em-gold);
+  margin: 0 0.3rem 0 0;
+}
+
+/*
+ * One icon per card, keyed per grid. Scoping them to :nth-child alone
+ * restarts the count in every grid, which is how three separate sections came
+ * to show the same three icons.
+ */
+
+.md-typeset .em-step > ul > li:nth-child(1) {
+  --em-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>');
+}
+
+.md-typeset .em-step > ul > li:nth-child(2) {
+  --em-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6"><rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="14" width="18" height="6" rx="1"/><path d="M7 7h.01M7 17h.01"/></svg>');
+}
+
+.md-typeset .em-step > ul > li:nth-child(3) {
+  --em-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/></svg>');
+}
+
+.md-typeset .em-run  > ul > li:nth-child(1) {
+  --em-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6"><path d="M3 11h18v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><rect x="6" y="5" width="4" height="4"/><rect x="11" y="5" width="4" height="4"/></svg>');
+}
+
+.md-typeset .em-run  > ul > li:nth-child(2) {
+  --em-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M13 6l-2 12"/></svg>');
+}
+
+.md-typeset .em-docs > ul > li:nth-child(1) {
+  --em-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6"><rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="14" width="18" height="6" rx="1"/><path d="M7 7h.01M7 17h.01"/></svg>');
+}
+
+.md-typeset .em-docs > ul > li:nth-child(2) {
+  --em-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/></svg>');
+}
+
+.md-typeset .em-docs > ul > li:nth-child(3) {
+  --em-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="m7 10 2.5 2L7 14M12 14h5"/></svg>');
+}
+
+.md-typeset .em-docs > ul > li:nth-child(4) {
+  --em-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6"><path d="M3 7a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></svg>');
+}
+
+/* Four cards read as a block at two columns; at three the fourth is stranded. */
+@media screen and (min-width: 60em) {
+  .md-typeset .grid.cards.em-docs,
+  .md-typeset .grid.cards.em-run {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ------------------------------------------------------ Scale refinement --- */
+/*
+ * The first pass established the layout and colour system. These values keep
+ * the same restrained palette while giving reading text, controls and card
+ * content enough room to breathe at the desktop rail width and on phones.
+ */
+
+:root {
+  --em-radius-card: 14px;
+  --em-radius-control: 8px;
+}
+
+.md-typeset {
+  font-size: 0.78rem;
+  line-height: 1.68;
+}
+
+.md-typeset p,
+.md-typeset li {
+  font-size: 0.78rem;
+  line-height: 1.68;
+  letter-spacing: 0.006em;
+}
+
+.md-typeset h1 {
+  font-size: clamp(2.1rem, 4.8vw, 3.1rem);
+  line-height: 1.02;
+  margin-bottom: 0.55em;
+}
+
+.md-typeset h2 {
+  font-size: 1.4rem;
+  line-height: 1.25;
+  margin-top: 2.8em;
+  padding-top: 1.25em;
+}
+
+.md-typeset h3 {
+  font-size: 1.12rem;
+  line-height: 1.35;
+}
+
+.md-typeset .grid.cards {
+  gap: 1rem;
+}
+
+.md-typeset .grid.cards > ul > li {
+  border-radius: var(--em-radius-card);
+  padding: 1.3rem 1.35rem;
+}
+
+.md-typeset .grid.cards > ul > li > p {
+  font-size: 0.78rem;
+  line-height: 1.58;
+  margin-top: 0.45rem;
+}
+
+.md-typeset .grid.cards > ul > li > p:first-child strong {
+  font-size: 0.95rem;
+  line-height: 1.3;
+}
+
+.md-typeset .grid.cards > ul > li::before {
+  width: 1.3rem;
+  height: 1.3rem;
+  margin-bottom: 0.75rem;
+  background-color: var(--em-gold);
+}
+
+.md-typeset .em-step > ul > li > p:first-child::before {
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.md-typeset pre > code {
+  font-size: 0.76rem;
+  line-height: 1.55;
+  padding: 1rem 1.1rem;
+}
+
+.md-typeset table:not([class]) th,
+.md-typeset table:not([class]) td {
+  font-size: 0.76rem;
+  line-height: 1.55;
+  padding: 0.72rem 0.9rem;
+}
+
+.md-typeset code {
+  font-size: 0.84em;
+  padding: 0.12em 0.28em;
+}
+
+.md-nav__link {
+  letter-spacing: 0.01em;
+}
+
+.md-sidebar--secondary .md-nav__link {
+  font-size: 0.7rem;
+  line-height: 1.45;
+  padding-top: 0.3rem;
+  padding-bottom: 0.3rem;
+}
+
+.md-header .md-search__form {
+  border-radius: var(--em-radius-control);
+}
+
+@media screen and (min-width: 76.25em) {
+  :root {
+    --em-rail-head: 6.4rem;
+  }
+
+  /*
+   * Mark and wordmark are both anchored to the top of the brand row, so they
+   * share a centre line only while the wordmark's line box is the mark's box.
+   * The leading that drops out is added back underneath, which keeps the row
+   * 2.1rem tall and the search box below it where it was.
+   */
+  .md-header__title {
+    font-size: 1rem;
+    line-height: var(--em-rail-mark);
+    padding-bottom: calc(2.1rem - var(--em-rail-mark));
+    padding-left: 2.35rem;
+  }
+
+  .md-header .md-search__form {
+    height: 2.1rem;
+  }
+
+  .md-header .md-search__input {
+    font-size: 0.72rem;
+  }
+
+  .md-header .md-search__icon[for="__search"] {
+    width: 1rem;
+    height: 1rem;
+    top: 0.56rem;
+  }
+
+  .md-header .md-search__form::after {
+    min-width: 1.1rem;
+    font-size: 0.64rem;
+  }
+
+  .md-sidebar--primary .md-nav__link {
+    font-size: 0.72rem;
+    line-height: 1.45;
+    padding: 0.3rem 0.5rem;
+    border-radius: 6px;
+    margin-top: 0.1rem;
+  }
+
+  .md-sidebar--primary .md-nav__link--active,
+  .md-sidebar--primary .md-nav__link:hover {
+    background: rgba(217, 148, 0, 0.1);
+  }
+
+  .md-nav__item--section > .md-nav__link[for],
+  .md-nav__item--section > .md-nav__link {
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+  }
+}
+
+/* ----------------------------------------------------- Section markers --- */
+/*
+ * Section headings use the same quiet line-icon language as the landing cards.
+ * Keeping them in CSS avoids a second icon set and keeps the navigation text
+ * free of colour emoji that vary across operating systems.
+ */
+
+.md-typeset h2 .em-section-icon {
+  display: inline-block;
+  width: 1.35rem;
+  height: 1.35rem;
+  margin-right: 0.55rem;
+  vertical-align: -0.18em;
+  background-color: var(--em-gold);
+  -webkit-mask: var(--em-section-icon) center / contain no-repeat;
+  mask: var(--em-section-icon) center / contain no-repeat;
+}
+
+.em-section-icon--prerequisites {
+  --em-section-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1.5"/><path d="M9 3.5h6M8 9l1.5 1.5L12 8M8 14l1.5 1.5L12 13M13.5 9H16M13.5 14H16"/></svg>');
+}
+
+.em-section-icon--compose {
+  --em-section-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="14" width="18" height="6" rx="1"/><path d="M7 7h.01M7 17h.01"/></svg>');
+}
+
+.em-section-icon--configuration {
+  --em-section-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 14 5l2.5-.2 1.2 2.2 2.2 1.2-.2 2.5 1.5 2-1.5 2 .2 2.5-2.2 1.2-1.2 2.2-2.5-.2-2 1.5-2-1.5-2.5.2-1.2-2.2-2.2-1.2.2-2.5-1.5-2 1.5-2-.2-2.5 2.2-1.2L7.5 4.8 10 5z"/><circle cx="12" cy="12" r="3"/></svg>');
+}
+
+.em-section-icon--build {
+  --em-section-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m14.5 5.5 4 4M4 20l5.8-1.5L19.7 8.6a2.8 2.8 0 0 0-4-4L5.8 14.7zM4 20l3.4-3.4"/><path d="M14 15.5 20.5 22"/></svg>');
+}
+
+.em-section-icon--source {
+  --em-section-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M13 6l-2 12"/></svg>');
+}
+
+@media screen and (max-width: 59.99em) {
+  .md-typeset h1 {
+    font-size: 2.2rem;
+    line-height: 1.06;
+  }
+
+  .md-typeset h2 {
+    font-size: 1.35rem;
+    margin-top: 2.35em;
+    padding-top: 1.15em;
+  }
+
+  .md-typeset .grid.cards {
+    gap: 0.75rem;
+  }
+
+  .md-typeset .grid.cards > ul > li {
+    padding: 1.2rem 1.15rem;
+  }
+
+  .md-typeset .grid.cards > ul > li::before {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
+
+  .md-typeset h2 .em-section-icon {
+    width: 1.2rem;
+    height: 1.2rem;
+    margin-right: 0.4rem;
+  }
+}
+
+/* ------------------------------------------------ Reading progress rail --- */
+/* Material marks the current section while the reader scrolls. Keep that
+   state visible with one short gold line, matching the reference layout. */
+
+@media screen and (min-width: 76.25em) {
+  .md-sidebar--secondary {
+    position: fixed;
+    top: 0 !important;
+    right: 0;
+    bottom: 0;
+    width: 286px;
+    height: 100vh;
+    margin: 0;
+    padding: 48px 0 8px;
+    box-sizing: border-box;
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  .md-sidebar--secondary .md-sidebar__scrollwrap {
+    height: calc(100vh - 56px);
+    max-height: none;
+    margin: 0;
+    padding: 0 16px 0 0;
+    overflow: auto;
+    pointer-events: none;
+  }
+
+  .md-sidebar--secondary .md-sidebar__inner {
+    padding: 0;
+  }
+
+  .md-sidebar--secondary .md-nav--secondary {
+    margin: 0;
+    pointer-events: auto;
+  }
+
+  .md-sidebar--secondary .md-nav--secondary > .md-nav__list > .md-nav__item > .md-nav {
+    position: relative;
+    margin-left: 0;
+    padding-left: 0;
+  }
+
+  .md-sidebar--secondary .md-nav--secondary > .md-nav__list > .md-nav__item > .md-nav > .md-nav__list {
+    padding: 0 !important;
+  }
+
+  .md-sidebar--secondary .md-nav__title {
+    height: 20px;
+    padding: 0;
+    background: transparent;
+    color: var(--em-text-muted);
+    font-size: 0;
+    font-weight: 500;
+    line-height: 20px;
+    text-transform: none;
+  }
+
+  .md-sidebar--secondary .md-nav__title .md-nav__icon {
+    display: none;
+  }
+
+  .md-sidebar--secondary .md-nav__title::before {
+    content: "";
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    margin-right: 6px;
+    vertical-align: -3px;
+    background: currentColor;
+    -webkit-mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18" fill="none" stroke="black" stroke-width="2" stroke-linecap="round"/></svg>') center / contain no-repeat;
+    mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18" fill="none" stroke="black" stroke-width="2" stroke-linecap="round"/></svg>') center / contain no-repeat;
+  }
+
+  .md-sidebar--secondary .md-nav__title::after {
+    content: "On this page";
+    font-size: 0.7rem;
+    letter-spacing: 0;
+  }
+
+  html[lang^="zh"] .md-sidebar--secondary .md-nav__title::after {
+    content: "本页内容";
+  }
+
+  .md-sidebar--secondary .md-nav__list {
+    padding: 12px 0 12px 0 !important;
+  }
+
+  .md-sidebar--secondary .md-nav--secondary > .md-nav__list {
+    position: relative;
+  }
+
+  .md-sidebar--secondary .raven-toc-progress {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 12px;
+    height: 100%;
+    overflow: visible;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .md-sidebar--secondary .raven-toc-progress path {
+    fill: none;
+    stroke-linecap: butt;
+    stroke-linejoin: miter;
+    stroke-width: 1;
+  }
+
+  .md-sidebar--secondary .raven-toc-progress__base {
+    stroke: var(--em-hairline);
+  }
+
+  .md-sidebar--secondary .raven-toc-progress__active {
+    stroke: var(--em-gold);
+  }
+
+  .md-sidebar--secondary .raven-toc-progress clipPath rect {
+    transition: y 150ms ease, height 150ms ease;
+  }
+
+  .md-sidebar--secondary .md-nav__link {
+    position: relative;
+    min-height: 0;
+    margin: 0;
+    margin-right: 0;
+    padding: 6px 11px 6px 26px;
+    color: var(--em-text-muted);
+    font-size: 14px;
+    line-height: 20px;
+    transition: color 120ms;
+    z-index: 1;
+  }
+
+  /*
+   * The indent follows the heading level, not whether an entry happens to have
+   * children: a trailing h2 with no h3 under it belongs in the same column as
+   * the h2 that does.
+   */
+  .md-sidebar--secondary .md-nav--secondary > .md-nav__list > .md-nav__item > .md-nav__link {
+    padding-left: 14px;
+  }
+
+  .md-sidebar--secondary
+    .md-nav--secondary
+    > .md-nav__list
+    > .md-nav__item
+    > .md-nav
+    > .md-nav__list
+    > .md-nav__item
+    > .md-nav
+    > .md-nav__list
+    > .md-nav__item
+    > .md-nav__link {
+    padding-left: 38px;
+  }
+
+  /*
+   * Material pulls a nested list up into the entry below it. The rail is drawn
+   * across entry boundaries, so it needs them to meet rather than overlap.
+   */
+  .md-sidebar--secondary .md-nav__item > .md-nav {
+    margin-bottom: 0;
+  }
+
+  .md-sidebar--secondary .md-nav--secondary > .md-nav__list > .md-nav__item:first-of-type > .md-nav__link {
+    margin-top: 0;
+    padding-top: 0;
+  }
+
+  .md-sidebar--secondary .md-nav--secondary > .md-nav__list > .md-nav__item:last-of-type > .md-nav__link {
+    padding-bottom: 0;
+  }
+
+  .md-sidebar--secondary .md-nav__link--active {
+    color: var(--em-text-muted);
+    font-weight: 400;
+  }
+
+  .md-sidebar--secondary .md-nav__link--raven-active {
+    color: var(--em-ink);
+  }
+
+
+  .md-sidebar--secondary .md-nav__link:hover {
+    color: var(--em-ink);
+  }
 }

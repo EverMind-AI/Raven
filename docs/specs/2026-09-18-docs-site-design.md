@@ -32,15 +32,16 @@ different material:
 | Repo layout | 68 | 68 | `repo-layout` |
 | Total | 206 | 180 | |
 
-`README.md` ends at 318 lines and `README.zh-CN.md` at 305. Quick Start stays, as
-do Built-in Agents, Connect Third-Party Agents, Core Systems, Architecture, the
-ecosystem section, contributing and license.
+`README.md` ends at 318 lines and `README.zh-CN.md` at 305. Built-in Agents,
+Connect Third-Party Agents, Core Systems, Architecture, the ecosystem section,
+contributing and license stay in the READMEs.
 
-Quick Start stays because it is the one instruction a reader needs before they
-have anything installed, and because `install.sh` and both READMEs are pinned to
-each other by `test_readme_quickstart_matches_the_installer`. Core Systems stays
-because it is a five-row positioning table, not a procedure. Architecture stays
-because its Mermaid diagram is the shortest accurate answer to "how is this put
+Quick Start is also available as a first-class site page so the documentation
+site is self-contained. The README keeps its own install section because
+`install.sh` and both READMEs are pinned to each other by
+`test_readme_quickstart_matches_the_installer`. Core Systems stays because it
+is a five-row positioning table, not a procedure. Architecture stays because
+its Mermaid diagram is the shortest accurate answer to "how is this put
 together", which is a README's job.
 
 ## Site structure
@@ -56,7 +57,9 @@ docs-site/
   mkdocs.yml
   docs/
     index.md          index.zh.md
+    quick-start.md    quick-start.zh.md
     self-hosting.md   self-hosting.zh.md
+    docker.md         docker.zh.md
     webui.md          webui.zh.md
     commands.md       commands.zh.md
     repo-layout.md    repo-layout.zh.md
@@ -80,11 +83,46 @@ the web UI") rather than a step within a longer procedure.
 
 ## Presentation
 
-The navigation is sectioned rather than flat: `Home`, `Getting Started` and
-`Reference` are top-level entries, which Material renders as a tab row that swaps
-the sidebar beneath it. Five pages do not support more sections than that; a tab
-per page would be the shape of a sectioned site without its function, which is
-that a reader can see the whole of one area at once.
+The shell is a fixed left rail, 13.7rem wide, carrying the brand, the search
+box, the whole navigation tree, and language and repository icons at its foot;
+the content column and the footer both begin at the rail's right edge.
+Material's default shell puts the navigation under a horizontal header, and
+`navigation.tabs` adds a tab row that swaps the sidebar beneath it. Both hide
+one group while showing another. Seven pages in two groups fit in a single rail,
+so every destination stays on screen and no section is a click away.
+
+The navigation is sectioned rather than flat: `Guide` and `Reference` are group
+labels, rendered in the rail as headings above their pages rather than as
+entries a reader can land on.
+
+**The brand mark is inlined in the stylesheet as a `data:` URI, not shipped as
+`theme.logo`.** Section 7 of `AGENTS.md` blocks image files outside the
+application source trees, and `scripts/check_large_files.py` enforces it by
+extension, so a committed `.svg` under `docs-site/` fails the gate. Material
+draws a logo in two places -- the header above 76.25em and the navigation
+drawer below it -- and each is replaced by a `::before` sized to the glyph it
+drops. The drawer half of the rule carries `.md-nav__title` because Material
+sets `display` on that glyph through a three-class selector, which outranks a
+two-class rule whatever the load order.
+
+**Every popup that hangs off a relocated control is relocated with it.**
+Material sizes and aims its popups for the header bar it ships: the language
+menu opens downward from `top: calc(100% - .2rem)` and centres on its button,
+and the search panel typesets its results at a fixed `34.4rem`. In the rail the
+language control sits at the foot, so that menu is flipped to open upward,
+left-aligned, with its arrow turned over; the search panel is clipped to the
+rail, so the rows are sized to it rather than to the width of a header dropdown.
+Neither failure is visible to a build or to a DOM query -- a menu below the
+viewport and a row clipped mid-line both report a box and answer
+`querySelector` -- so `tests/integration/test_docs_site_controls_e2e.py` hit-tests
+each control against the rendered page instead. `norecursedirs` excludes
+`tests/integration`, so that file is run by hand, not by CI.
+
+The footer carries the previous/next row and nothing else. Material's generator
+notice is switched off through the theme's own `extra.generator` flag, which its
+`partials/copyright.html` reads; with no `copyright` and no social links
+configured the meta bar below that row then holds nothing, so it is not shown.
+Configuring a copyright line means dropping the rule that hides it.
 
 The landing page is a directory of linked cards rather than prose. A list of
 links reads as a paragraph to be worked through; cards make the four
@@ -96,63 +134,67 @@ already knows what they want can leave the page.
 `mkdocs.yml` rather than in a page.** They therefore need `nav_translations` per
 locale, and no comparison of the two languages' Markdown can detect their
 absence: the pages are identical whether or not the labels are translated. The
-build reports the count it applied (`Translated 7 navigation elements to 'zh'`),
+build reports the count it applied (`Translated 9 navigation elements to 'zh'`),
 which is the signal to read. The Chinese pages also drop the brand's italic
 serif accent word, because Cormorant Garamond carries no CJK glyphs and the
 accent would silently fall back to another face.
+
+The right table of contents draws the heading outline as **one continuous
+polyline** and lights the stretch of it the reader is inside.
+
+The line is walked in document order rather than drawn per nesting level. Each
+entry contributes a vertical run in the column its heading level owns -- level
+one at x=1, each level below it 10px further right -- and the 12px between two
+entries is where the line changes column, which renders as a diagonal when the
+depths differ and as plain vertical when they do not. A run stops 6px short of
+each boundary it shares with a neighbour so that gap is free for the turn; the
+first and last runs are flush, having no neighbour above or below. Drawing one
+line per level instead leaves a second line running the length of every parent
+row, which is the shape this replaced.
+
+An entry is current while its heading is anywhere in the viewport, so several
+are current at once and the lit stretch grows and shrinks rather than jumping.
+It runs from the first current entry's run to the last without a break, which is
+what carries the colour across a diagonal when a parent and the children under
+it are on screen together. The lit path is the same path as the skeleton,
+clipped to that range, so the two can never disagree about where the line goes.
+
+The indent follows the heading level, not whether an entry has children: a
+trailing level-one heading with nothing under it belongs in the same column as
+one that does. Material pulls a nested list up into the entry below it, which
+the geometry above cannot survive, so that margin is reset -- entries have to
+meet exactly for the line to cross their boundary.
+
+`docs-site/docs/javascripts/toc-progress.js` rebuilds the path on load and
+resize and moves only the clip rectangle on scroll.
 
 The brand skin in `docs-site/docs/stylesheets/evermind.css` remaps Material's own
 CSS custom properties onto the EverMind token set, then resets the corners
 Material hardcodes rather than reading from a variable.
 
-**It has to be CSS alone.** Material's documented customisation path is
+**No template overrides.** Material's documented customisation path is
 `theme.custom_dir` with Jinja partials under `overrides/`, and those are `.html`:
 `scripts/check_large_files.py` holds `.html` in `BLOCKED_ASSET_EXTENSIONS` and
 fails any commit adding one outside `bridge/`, `ui-web/` and `ui-tui/`. A future
 maintainer reaching for a template override will hit that gate rather than a
 review comment, so the constraint is recorded here and not in the stylesheet
-alone. What it rules out is everything that needs new markup in the page chrome:
+alone. `extra_css` and `extra_javascript` are unaffected -- neither extension is
+gated -- so behaviour that needs to read the rendered page, as the table of
+contents does, is reachable; what stays out of reach is anything that needs new
+markup Material does not already emit. What it rules out is everything that needs new markup in the page chrome:
 a feedback widget, a last-updated line, a copy-page-as-Markdown control, and any
 footer card carrying more than the next page's title.
 
-### Links out of the moved content
+### Links between site pages
 
-The moved sections carry eight repository-relative links, four per language
-(collected by extracting `](...)` targets from the four section ranges and
-dropping absolute and anchor-only ones):
+The site keeps documentation links inside `docs-site/`. The Quick Start card
+points to `quick-start.md`, Self-Hosting points to `docker.md`, and all pages
+use relative links for other site destinations. Repository files are described
+as code paths when needed rather than linked to an external GitHub page.
 
-| Link | Section |
-|---|---|
-| `docker/README.md` | Self-Hosting |
-| `docker/.env` | Self-Hosting |
-| `commitlint.config.cjs` | Repo layout |
-| `AGENTS.md` | Repo layout |
-
-These resolve from the repository root and will not resolve from
-`/en/self-hosting/`. They become absolute, for example
-`https://github.com/EverMind-AI/Raven/blob/main/docker/README.md`.
-
-The last two are the same files whose own prose points back at the Repo layout
-section, so the move has to fix both directions of that pair.
-
-Half of this breakage is silent and half is not, measured by building the site
-with each link planted and reading `mkdocs build --strict`'s exit code:
-
-| Planted link | `--strict` |
-|---|---|
-| `docker/README.md` | exit 1, warning naming the file and the link |
-| `AGENTS.md` | exit 1, same |
-| `docker/.env` | exit 0, clean, no warning |
-
-MkDocs resolves a relative link whose target ends in `.md` against the documents
-it knows, so the four `.md` targets among the eight abort the build. It says
-nothing about the four that do not end in `.md` -- those render and 404 only on a
-click.
-
-A guard covers all eight anyway, for two reasons neither of which is "the build
-would miss them": it fails with the offending file and link named rather than as
-a build abort, and it runs in the ordinary test suite, which does not install the
-`docs` dependency group that `mkdocs` lives in.
+Install commands still contain the URLs they must download from, and the local
+runtime addresses remain clickable examples. Neither is a documentation
+navigation link.
 
 ## What the READMEs become
 
@@ -224,8 +266,8 @@ Written before the content moves, each confirmed to fail first.
 1. **The `RAVEN_ENGINE` assertion covers the new pages.** Prevents the vacuous
    pass described above. This is the one guard that prevents a regression rather
    than adding coverage.
-2. **No repository-relative links in site pages.** A link that is neither an
-   absolute URL nor an intra-site page fails, naming the file and the link.
+2. **No external documentation links in site pages.** A page link that points
+   to an external webpage fails, naming the file and the target.
 3. **Every page has both languages.** `X.md` implies `X.zh.md` and the reverse.
    This is what keeps full parity from decaying at the first English-only page.
 4. **The READMEs neither regrow the sections nor lose the pointer.** Both halves
@@ -306,10 +348,9 @@ The exposure is the intermediate state: after the second pull request merges, a
 site that goes down -- Pages disabled, workflow broken -- leaves the READMEs
 without the content and pointing at a 404.
 
-The pointers therefore carry a second link, to the Markdown sources under
-`docs-site/docs/` on GitHub, which render as readable Markdown regardless of the
-site's health. This makes the site an accelerator over the repository rather than
-the only path to the content.
+The site pages carry the complete user-facing content and link only to one
+another. The repository remains the source for installation commands and code,
+but reading the documentation does not require leaving the site.
 
 The README sections move as whole blocks and their line counts are re-measured
 against the branch base rather than carried forward, because `main` edits both
@@ -330,3 +371,13 @@ This is left as it stands. The claims are equally unguarded before and after the
 move, so closing the gap is separable work rather than part of relocating the
 content. It is recorded here so a later reader knows it was seen and left, not
 missed.
+
+Search spans both languages from one index. `mkdocs-static-i18n` 1.3.1 builds a
+single `search/search_index.json` for the whole site: `reconfigure_search_index`
+stacks every language's entries into it, and `reconfigure_search` only drops
+entries that are identical in title and text, which is the untranslated case.
+A reader searching the English site therefore sees Chinese pages among the
+results. Splitting the index needs a per-language index file and a theme
+override to point each language's search worker at its own -- and the override
+is an `.html` partial, which section 7 blocks under `docs-site/` for the same
+reason as the logo. Left as it stands.
