@@ -50,6 +50,17 @@ describe('settings source', () => {
     expect(toasts).toEqual(['Applies after a restart'])
   })
 
+  it('a settings write reloads the config and leaves the provider catalogue alone', async () => {
+    /* `model.options` is a live read of every configured vendor -- seconds on
+       a home with several -- and no settings key changes what it answers.
+       Reloading it per write made a tools switch sit busy for two seconds.
+       The provider writes still refresh it: the setFields case below is the
+       control. */
+    const mod = await load({ 'settings.set': { applied: true, previous: null } })
+    await mod.settingsSource.set('tools.disabledTools', ['exec'])
+    expect(seen.map(([m]) => m).filter((m) => m !== 'config.get')).toEqual(['settings.set', 'settings.get'])
+  })
+
   it('set with no warning says saved, and a refusal toasts the detail and throws handled', async () => {
     const mod = await load({ 'settings.set': { applied: true, previous: null } })
     await mod.settingsSource.set('language', 'en')

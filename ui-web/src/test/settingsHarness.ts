@@ -48,6 +48,12 @@ export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
       { id: 'deep_research', name: 'research', group: 'net', reach: 'net', one: 'researches', on: false },
       { id: 'image_generate', name: 'draw', group: 'generate', reach: 'net', one: 'draws', on: false },
       { id: 'spawn', name: 'spawn', group: 'collab', reach: 'local', one: 'spawns', on: true },
+      /* What `ext.list` reports for a schema-hidden tool: registered, and
+         reachable only through `tool_call`. One sits in the meta card and
+         one beside the tool it controls, which is the pair the page has to
+         draw the same way. */
+      { id: 'tool_search', name: 'tool search', group: 'search', reach: 'local', one: 'finds tools', on: true, builtin: true },
+      { id: 'cancel_dag', name: 'cancel dag', group: 'collab', reach: 'local', one: 'cancels a dag', on: true, builtin: true },
     ],
     skills: [
       { name: 'git-flow', description: 'Branch and merge the house way', source: 'builtin', always: true, hub: false, hub_id: '' },

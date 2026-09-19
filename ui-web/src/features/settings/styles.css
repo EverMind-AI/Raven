@@ -71,6 +71,12 @@ h1 {font-size:34px; font-weight:700; letter-spacing:-.02em; margin:8px 0 8px}
 .settings-swi[aria-checked="true"] {background:var(--amber); border-color:var(--amber)}
 .settings-swi[aria-checked="true"]::after {transform:translateX(16px)}
 .settings-swi:focus-visible {outline:2px solid var(--amber); outline-offset:2px}
+/* Built in: the row is here so the tool is not invisible, and there is
+   nothing to set. `aria-disabled` alone says so only to a screen reader --
+   drawn like every other switch, with a pointer cursor, it reads as a
+   control that ignores clicks. */
+.settings-swi-fixed {opacity:.45; cursor:default; box-shadow:none}
+.settings-swi-fixed[aria-checked="true"] {background:var(--line); border-color:var(--line)}
 .settings-seg {display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--raised)}
 .settings-seg button {font:inherit; font-size:12.5px; border:0; background:none; color:var(--muted); padding:5px 11px; cursor:pointer; border-right:1px solid var(--line)}
 .settings-seg button:last-child {border-right:0}
