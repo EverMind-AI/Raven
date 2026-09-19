@@ -28,6 +28,7 @@ import pytest
 
 pytest.importorskip("playwright.sync_api")
 from playwright.sync_api import Page, sync_playwright  # noqa: E402
+from playwright.sync_api import TimeoutError as PlaywrightTimeout  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 DOCS = REPO / "docs-site"
@@ -93,6 +94,27 @@ def page(site: str) -> Iterator[Page]:
         browser.close()
 
 
+ROWS_PRESENT = "() => document.querySelectorAll('.md-search-result__link').length > 0"
+
+
+def _await_results(page: Page, query: str) -> None:
+    """The index is fetched and indexed off the main thread, so a query typed
+    before the theme has subscribed to the field is simply never searched: the
+    value is set, no input is observed, and no row ever appears. Waiting on a
+    clock is what makes such a test flake, so wait for the rows, and re-type
+    once if the first attempt went nowhere."""
+    page.wait_for_selector(".md-search-result__meta", state="attached", timeout=15000)
+    for attempt in range(3):
+        try:
+            page.wait_for_function(ROWS_PRESENT, timeout=5000)
+            return
+        except PlaywrightTimeout:
+            if attempt == 2:
+                raise AssertionError(f"no results for {query!r} after three attempts") from None
+            page.fill(".md-search__input", "")
+            page.type(".md-search__input", query, delay=20)
+
+
 def _open(page: Page, site: str, path: str = "") -> None:
     page.goto(site + path, wait_until="domcontentloaded")
     page.wait_for_selector(".md-content")
@@ -127,6 +149,367 @@ def test_search_results_stay_inside_the_rail_panel(page: Page, site: str) -> Non
     )
     assert overflow <= 1, f"result rows run {overflow}px past the panel's right edge"
     assert page.evaluate(HIT_TEST, ".md-search-result__link") == "ok"
+
+
+SEARCH_RESULTS = """() => [...document.querySelectorAll('.md-search-result__link')]
+  .map((a) => a.getAttribute('href'))"""
+
+
+HEADING_TEXT = """() => {
+  const h = document.querySelector('h1').cloneNode(true);
+  const anchor = h.querySelector('.headerlink');
+  if (anchor) anchor.remove();
+  return h.textContent.trim();
+}"""
+
+
+@pytest.mark.parametrize(("path", "language"), [("", "en"), ("zh/", "zh")])
+def test_search_keeps_to_the_language_the_reader_is_in(page: Page, site: str, path: str, language: str) -> None:
+    """Both languages are built from one tree, and the search index is written
+    once for the pair. A reader on the English site searching an English word
+    gets the Chinese page for it back, which is a result they cannot read and
+    a link that leaves the language they chose.
+
+    The query is the page's own heading rather than a written-in word, so the
+    Chinese half searches Chinese without this file holding a Chinese string.
+    """
+    _open(page, site, path + "sandbox/")
+    query = page.evaluate(HEADING_TEXT)
+    assert query, f"the {language} sandbox page has no heading to search for"
+
+    _open(page, site, path)
+    page.click(".md-search__input")
+    page.fill(".md-search__input", query)
+    _await_results(page, query)
+    hrefs = page.evaluate(SEARCH_RESULTS)
+    assert hrefs, f"no results for {query!r} on the {language} site"
+    stray = [h for h in hrefs if ("/zh/" in h) != (language == "zh")]
+    assert not stray, f"the {language} site returned {len(stray)} result(s) from the other language: {stray[:3]}"
+
+
+RAIL_FIELD = """() => {
+  const e = document.querySelector('.md-header .md-search');
+  const r = e.getBoundingClientRect();
+  return [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)];
+}"""
+
+
+RESTING_INK = """() => {
+  const input = document.querySelector('.md-header .md-search__input');
+  const chip = getComputedStyle(document.querySelector('.md-header .md-search__form'), '::after');
+  const css = getComputedStyle(input);
+  return {padLeft: css.paddingLeft, fontSize: css.fontSize,
+          colour: getComputedStyle(input, '::placeholder').color,
+          chipWidth: chip.width, chipRight: chip.right};
+}"""
+
+
+STANDING_INK = """() => {
+  const css = getComputedStyle(document.querySelector('.md-header .md-search'), '::after');
+  return {padLeft: css.paddingLeft, fontSize: css.fontSize, colour: css.color,
+          layers: (css.backgroundImage.match(/url\\(/g) || []).length,
+          position: css.backgroundPosition};
+}"""
+
+
+SEARCH_SHAPE = """() => {
+  const b = (s) => { const e = document.querySelector(s); if (!e) return null;
+    const r = e.getBoundingClientRect(), c = getComputedStyle(e);
+    return {w: Math.round(r.width), h: Math.round(r.height), left: Math.round(r.left),
+            centre: Math.round(r.left + r.width / 2), top: Math.round(r.top),
+            position: c.position, display: c.display}; };
+  return {form: b('.md-header .md-search__form'), inner: b('.md-header .md-search__inner'),
+          overlay: b('.md-search__overlay'), viewportCentre: Math.round(innerWidth / 2),
+          viewport: innerWidth};
+}"""
+
+
+def test_search_is_a_slim_field_that_opens_a_centred_dialog(page: Page, site: str) -> None:
+    """At rest the field is one control in the rail, the height the reference
+    layout uses. Opening it should not grow a panel out of a 274px column: the
+    reference lifts the whole thing into a dialog over the page, which is the
+    only shape wide enough to show a result line without cutting it."""
+    _open(page, site)
+    resting = page.evaluate(SEARCH_SHAPE)
+    resting_rail = page.evaluate(RAIL_FIELD)
+    resting_ink = page.evaluate(RESTING_INK)
+    assert abs(resting["form"]["h"] - 36) <= 1, (
+        f"the resting search field is {resting['form']['h']}px tall, not the reference's 36px"
+    )
+
+    page.click(".md-search__input")
+    page.fill(".md-search__input", "sandbox")
+    _await_results(page, "sandbox")
+    open_ = page.evaluate(SEARCH_SHAPE)
+    inner, overlay = open_["inner"], open_["overlay"]
+    assert inner["position"] == "fixed", f"the open search is {inner['position']}, not lifted off the rail"
+    assert abs(inner["centre"] - open_["viewportCentre"]) <= 2, (
+        f"the dialog's centre is at {inner['centre']}px, the viewport's at {open_['viewportCentre']}px"
+    )
+    assert inner["w"] >= 560, f"the dialog is only {inner['w']}px wide"
+    assert overlay["display"] != "none" and overlay["w"] >= open_["viewport"] - 2, (
+        f"no backdrop behind the dialog: display={overlay['display']} width={overlay['w']}"
+    )
+    assert page.evaluate(HIT_TEST, ".md-search-result__link") == "ok"
+
+    # the field in the rail is a fixture of the shell: opening the dialog must
+    # not move or resize it, or the column it sits in changes shape on a click
+    opened_rail = page.evaluate(RAIL_FIELD)
+    assert opened_rail == resting_rail, f"the rail's search field changed on opening: {resting_rail} -> {opened_rail}"
+
+    # the form itself travels into the dialog, so what stays in the rail is a
+    # drawn replica. It has to take its metrics from the original rather than
+    # from hand-set constants, or the two drift apart on the next type change.
+    standing = page.evaluate(STANDING_INK)
+    assert standing["padLeft"] == resting_ink["padLeft"], (
+        f"the replica's label starts at {standing['padLeft']}, the field's at {resting_ink['padLeft']}"
+    )
+    assert standing["fontSize"] == resting_ink["fontSize"], (
+        f"the replica's label is {standing['fontSize']}, the field's is {resting_ink['fontSize']}"
+    )
+    assert standing["colour"] == resting_ink["colour"], (
+        f"the replica's label is {standing['colour']}, the field's is {resting_ink['colour']}"
+    )
+    assert standing["layers"] == 2, (
+        f"the replica paints {standing['layers']} mark(s); the field shows a magnifier and a key chip"
+    )
+
+    href = page.get_attribute(".md-search-result__link", "href")
+    page.click(".md-search-result__link")
+    page.wait_for_timeout(700)
+    assert href.split("#")[0].rstrip("/").split("/")[-1] in page.url, (
+        f"clicking a result did not land on it: url is {page.url}"
+    )
+
+
+SETTLE_FRAMES = """async (checked) => {
+  const box = document.getElementById('__search');
+  const inner = document.querySelector('.md-header .md-search__inner');
+  box.checked = checked;
+  box.dispatchEvent(new Event('change'));
+  const seen = [];
+  for (let i = 0; i < 12; i++) {
+    await new Promise((r) => requestAnimationFrame(r));
+    seen.push(Math.round(inner.getBoundingClientRect().width));
+  }
+  return seen;
+}"""
+
+
+TIMED_PARTS = """(checked) => {
+  document.getElementById('__search').checked = checked;
+  const search = document.querySelector('.md-header .md-search');
+  const parts = [search, ...search.querySelectorAll('*')];
+  const moving = [];
+  for (const e of parts) {
+    // the backdrop is the page behind the dialog, not the box in the corner
+    if (e.classList.contains('md-search__overlay')) continue;
+    // the placeholder is its own pseudo-element and carries its own
+    // transition, which reading the input alone does not show
+    for (const pseudo of [null, '::placeholder', '::before', '::after']) {
+      const c = getComputedStyle(e, pseudo);
+      const slowest = Math.max(...c.transitionDuration.split(',').map((d) => parseFloat(d) || 0));
+      if (slowest > 0) {
+        moving.push((e.className || e.tagName) + (pseudo || '') + ' ' + c.transitionProperty + ' ' + c.transitionDuration);
+      }
+    }
+  }
+  return moving;
+}"""
+
+
+def test_the_search_box_does_not_animate_between_its_two_states(page: Page, site: str) -> None:
+    """The dialog and the field in the rail are two different shapes, and the
+    theme transitions between them: leaving search runs that in the rail, so
+    the corner of the page is left playing an animation after the reader has
+    already moved on. Each state should be reached in one frame, and nothing
+    the corner is drawn from should carry a duration -- the width is only the
+    part that shows most, the field's own background fades the same way."""
+    _open(page, site)
+    for checked, state in ((True, "opening"), (False, "leaving")):
+        widths = page.evaluate(SETTLE_FRAMES, checked)
+        assert len(set(widths)) == 1, f"{state} search runs a width animation: {sorted(set(widths))[:6]}"
+        timed = page.evaluate(TIMED_PARTS, checked)
+        assert not timed, f"{state} search still animates: " + "; ".join(timed)
+
+
+TOC_FOLLOW = """() => {
+  const wrap = document.querySelector('.md-sidebar--secondary .md-sidebar__scrollwrap');
+  const links = [...wrap.querySelectorAll('a.md-nav__link')];
+  const active = links.filter((a) => a.classList.contains('md-nav__link--raven-active'));
+  if (!active.length) return null;
+  const w = wrap.getBoundingClientRect();
+  const f = active[0].getBoundingClientRect();
+  const max = wrap.scrollHeight - wrap.clientHeight;
+  return {
+    inView: f.top >= w.top - 1 && f.bottom <= w.bottom + 1,
+    offCentre: Math.round((f.top + f.height / 2 - w.top) - wrap.clientHeight / 2),
+    clamped: wrap.scrollTop <= 1 || wrap.scrollTop >= max - 1,
+    label: active[0].textContent.trim().slice(0, 28),
+  };
+}"""
+
+
+TOC_SETTLED = """async () => {
+  const wrap = document.querySelector('.md-sidebar--secondary .md-sidebar__scrollwrap');
+  const frame = () => new Promise((r) => requestAnimationFrame(r));
+  let last = null;
+  for (let i = 0; i < 30; i++) {
+    await frame();
+    if (wrap.scrollTop === last) return wrap.scrollTop;
+    last = wrap.scrollTop;
+  }
+  return wrap.scrollTop;
+}"""
+
+
+def test_the_contents_column_follows_the_reader(page: Page, site: str) -> None:
+    """The column scrolls independently of the page, so on a long outline the
+    lit entry walks off its bottom edge and the reader loses their place. The
+    reference layout centres the first lit entry in the column and clamps at
+    both ends, which is what is checked here at points down a long page."""
+    _open(page, site, "proactivity/")
+    height = page.evaluate("() => document.body.scrollHeight")
+    strays = []
+    for step in range(1, 14):
+        page.evaluate(f"() => window.scrollTo(0, {height} * {step / 14})")
+        page.evaluate(TOC_SETTLED)
+        seen = page.evaluate(TOC_FOLLOW)
+        if not seen:
+            continue
+        if not seen["inView"]:
+            strays.append(f"{seen['label']!r} is outside the column")
+        elif not seen["clamped"] and abs(seen["offCentre"]) > 40:
+            strays.append(f"{seen['label']!r} sits {seen['offCentre']}px off the column's centre")
+    assert not strays, "; ".join(strays)
+
+
+COLUMN_REACH = """() => {
+  const R = (s) => { const e = document.querySelector(s); return e ? e.getBoundingClientRect() : null; };
+  const rail = R('.md-sidebar--primary');
+  const railWrap = R('.md-sidebar--primary .md-sidebar__scrollwrap');
+  const toc = R('.md-sidebar--secondary .md-sidebar__scrollwrap');
+  const foot = R('.md-header__option');
+  if (!rail || !railWrap || !toc || !foot) return 'a column is missing';
+  const wrap = document.querySelector('.md-sidebar--secondary .md-sidebar__scrollwrap');
+  return {
+    railShortBy: Math.round((rail.bottom - (foot.height + 32)) - railWrap.bottom),
+    tocShortBy: Math.round(innerHeight - toc.bottom),
+    tocScrollbar: getComputedStyle(wrap).scrollbarWidth,
+    tocScrolls: wrap.scrollHeight > wrap.clientHeight,
+    tocMask: getComputedStyle(wrap).maskImage || getComputedStyle(wrap).webkitMaskImage,
+  };
+}"""
+
+
+@pytest.mark.parametrize("height", [700, 780, 900])
+def test_both_columns_scroll_the_whole_way_down(page: Page, site: str, height: int) -> None:
+    """Material's script writes an inline height on each column's scroll area,
+    sized for the header bar and sidebars it ships. Under this shell both are
+    too short, which cuts the list off partway down the screen and leaves dead
+    space below it -- the reader sees the column's own end as an obstruction."""
+    page.set_viewport_size({"width": 1440, "height": height})
+    _open(page, site, "proactivity/")
+    page.wait_for_timeout(400)
+    reach = page.evaluate(COLUMN_REACH)
+    assert isinstance(reach, dict), reach
+    assert abs(reach["railShortBy"]) <= 2, f"the rail's list stops {reach['railShortBy']}px above the foot band"
+    assert abs(reach["tocShortBy"]) <= 2, (
+        f"the table of contents stops {reach['tocShortBy']}px above the foot of the screen"
+    )
+    assert reach["tocScrollbar"] == "none", (
+        f"the table of contents paints a {reach['tocScrollbar']} scrollbar over its own entries"
+    )
+    assert reach["tocScrolls"], "the contents column is not scrollable, so this page proves nothing"
+    mask = reach["tocMask"]
+    assert "gradient" in mask and mask.rstrip(")").rstrip().endswith("0"), (
+        f"the contents column ends on a hard edge rather than fading out: mask is {mask!r}"
+    )
+
+
+PAGE_FOOT = r"""() => {
+  window.scrollTo(0, document.body.scrollHeight);
+  const R = (e) => e.getBoundingClientRect();
+  const hits = (a, b) =>
+    !(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top);
+  const columns = [['the table of contents', '.md-sidebar--secondary'],
+                   ['the navigation rail', '.md-sidebar--primary']];
+  const clashes = [];
+  for (const link of document.querySelectorAll('.md-footer__link')) {
+    const f = R(link);
+    const label = (link.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 24);
+    for (const [name, sel] of columns) {
+      const col = document.querySelector(sel);
+      if (col && hits(f, R(col))) clashes.push(`footer link ${label} runs under ${name}`);
+    }
+  }
+  const band = R(document.querySelector('.md-footer'));
+  for (const entry of document.querySelectorAll('.md-sidebar--secondary a.md-nav__link')) {
+    const r = R(entry);
+    if (r.height && hits(r, band)) {
+      clashes.push(`contents entry "${(entry.textContent || '').trim().slice(0, 20)}" sits in the footer`);
+    }
+  }
+  return clashes;
+}"""
+
+
+@pytest.mark.parametrize("path", ["", "proactivity/", "sandbox/"])
+def test_the_footer_keeps_to_the_content_column(page: Page, site: str, path: str) -> None:
+    """The rail and the table of contents are taken out of flow and fixed to the
+    viewport, so the document below them keeps the full width unless it is told
+    otherwise. The footer is the part a reader reaches by scrolling to the end,
+    which is where it and a fixed column are drawn over each other."""
+    _open(page, site, path)
+    page.wait_for_timeout(300)
+    clashes = page.evaluate(PAGE_FOOT)
+    assert not clashes, "at the end of the page: " + "; ".join(clashes)
+
+
+RAIL_FOOT = """() => {
+  const sw = document.querySelector('.md-sidebar--primary .md-sidebar__scrollwrap');
+  if (sw) sw.scrollTop = sw.scrollHeight;
+  const opt = document.querySelector('.md-header__option');
+  const src = document.querySelector('.md-header__source');
+  if (!opt || !src) return 'the rail foot has no controls';
+  const a = opt.getBoundingClientRect(), b = src.getBoundingClientRect();
+  const band = {top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom)};
+  const rail = document.querySelector('.md-sidebar--primary').getBoundingClientRect();
+  const y = (band.top + band.bottom) / 2;
+  const leaks = [];
+  for (let x = Math.ceil(b.right) + 8; x < rail.right - 2; x += 12) {
+    const el = document.elementFromPoint(x, y);
+    if (!el) continue;
+    if (el.closest('.md-sidebar__scrollwrap') || el.closest('.md-nav')) {
+      leaks.push(`(${Math.round(x)},${Math.round(y)}) -> ${el.tagName.toLowerCase()}.${(el.className || '').toString().split(' ')[0]}`);
+    }
+  }
+  const links = [...document.querySelectorAll('.md-sidebar--primary a.md-nav__link')];
+  const tail = links[links.length - 1];
+  const t = tail.getBoundingClientRect();
+  const under = document.elementFromPoint(t.x + t.width / 2, t.y + t.height / 2);
+  return {
+    leaks,
+    tail: tail.textContent.trim().slice(0, 30),
+    tailClear: t.bottom <= band.top + 0.5,
+    tailClickable: !!under && (tail.contains(under) || under.contains(tail)),
+  };
+}"""
+
+
+def test_rail_foot_is_a_box_the_navigation_cannot_show_through(page: Page, site: str) -> None:
+    """The language and repository buttons sit at the foot of the rail, over the
+    same column the navigation tree scrolls in. Without a band of its own the
+    tree scrolls right up behind them, so a heading and an icon share a row --
+    and the band then has to leave the last entry somewhere to scroll to."""
+    _open(page, site)
+    foot = page.evaluate(RAIL_FOOT)
+    assert isinstance(foot, dict), foot
+    assert not foot["leaks"], "navigation shows through the rail foot at: " + "; ".join(foot["leaks"])
+    assert foot["tailClear"] and foot["tailClickable"], (
+        f"scrolled to the end, {foot['tail']!r} is not clear of the foot band "
+        f"(clear={foot['tailClear']}, clickable={foot['tailClickable']})"
+    )
 
 
 BRAND_LOCKUP = """() => {

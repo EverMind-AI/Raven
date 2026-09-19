@@ -146,6 +146,31 @@
     /* The transition runs on the styled value, so both are kept in step. */
     rect.style.y = `${top}px`;
     rect.style.height = `${height}px`;
+
+    follow(active);
+  };
+
+  /*
+   * The column scrolls on its own, so on a long outline the lit entry walks
+   * off its bottom edge and the reader loses their place. The reference layout
+   * centres the first lit entry and clamps at both ends -- the first, not the
+   * lit stretch, so the anchor does not drift as the stretch grows and shrinks.
+   */
+  const follow = (active) => {
+    if (!active.length) return;
+    const scroller = state.list.closest(".md-sidebar__scrollwrap");
+    if (!scroller) return;
+
+    const link = state.entries[active[0]].link;
+    const box = link.getBoundingClientRect();
+    const frame = scroller.getBoundingClientRect();
+    const centre = scroller.scrollTop + (box.top - frame.top) + box.height / 2;
+    const limit = scroller.scrollHeight - scroller.clientHeight;
+    const target = Math.max(0, Math.min(limit, centre - scroller.clientHeight / 2));
+
+    /* A hair of tolerance: writing scrollTop every frame fights a reader who
+       is dragging the column, and a sub-pixel correction is never visible. */
+    if (Math.abs(target - scroller.scrollTop) > 1) scroller.scrollTop = target;
   };
 
   const relayout = () => {

@@ -425,7 +425,17 @@
 :root {
   --em-rail: 13.7rem;
   --em-rail-head: 7.6rem;
+  --em-rail-foot: 64px;
+  --em-toc: 286px;
   --em-rail-mark: 1.7rem;
+  --em-search-dialog: 640px;
+  --em-search-height: 1.8rem;
+  --em-search-radius: 6px;
+  /* The two marks the search field carries, redrawn: a data URI cannot read a
+     custom property, so these repeat the values of --em-text-faint, --em-panel
+     and --em-hairline and have to be changed with them. */
+  --em-search-glyph: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="%23908f8c" d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>');
+  --em-search-key: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 18"><rect x=".5" y=".5" width="21" height="17" rx="4" fill="%23f5f5f5" stroke="rgba(13,11,4,0.08)"/><path d="M12.4 4.9 9.6 13.1" fill="none" stroke="%23908f8c" stroke-width="1.3" stroke-linecap="round"/></svg>');
 }
 
 @media screen and (min-width: 76.25em) {
@@ -532,20 +542,142 @@
     float: none;
   }
 
+  /* Leaving search puts the dialog's parts back in the rail, and the theme
+     transitions each of them: the box collapses its width, fades its
+     background in and fades the magnifier's colour, so the corner of the page
+     goes on animating after the reader has moved on. The backdrop keeps its
+     own fade -- it is the page behind the dialog, not the box. */
+  .md-header .md-search__inner,
+  .md-header .md-search__form,
+  .md-header .md-search__icon,
+  .md-header .md-search__output {
+    transition: none;
+  }
+
+  .md-header .md-search__input::placeholder {
+    transition: none;
+  }
+
   /*
-   * Material widens the search box on focus, which is right for a top bar and
-   * wrong here: the rail is narrower than the width it grows to, so the box
-   * would break out over the page. Pin both states to the rail.
+   * Opening the search lifts it off the rail. Material grows the field in
+   * place, which cannot work in a 274px column -- a result line is typeset
+   * wider than that and every one comes out cut. The reference layout opens a
+   * dialog over the page instead, which is what these rules build out of the
+   * parts Material already emits: the overlay becomes the backdrop and the
+   * inner wrapper becomes the dialog.
    */
-  [data-md-toggle="search"]:checked ~ .md-header .md-search__inner {
+  /*
+   * The dialog takes the only field Material emits, which would leave a hole
+   * in the rail where the control was. The rail keeps a field of its own
+   * shape in that place instead, built from the same measures, so the column
+   * does not change on a click.
+   */
+  [data-md-toggle="search"]:checked ~ .md-header .md-search {
+    position: relative;
+    display: block;
+    /* the wrapper Material lays the field out in sits 2px proud of it */
+    height: calc(var(--em-search-height) + 4px);
+    color: var(--em-text-faint);
+  }
+
+  [data-md-toggle="search"]:checked ~ .md-header .md-search::before {
+    content: "";
+    position: absolute;
+    inset: 2px 0;
+    background: var(--em-canvas);
+    border: 1px solid var(--em-hairline);
+    border-radius: var(--em-search-radius);
+  }
+
+  [data-md-toggle="search"]:checked ~ .md-header .md-search::after {
+    content: "Search";
+    position: absolute;
+    inset: 2px 0;
+    /* The field's label sits inside the form's 1px border while its two marks
+       are placed from the outer edge, so the replica carries that border for
+       the text and paints the marks from the border box. */
+    border: 1px solid transparent;
+    background-origin: border-box;
+    padding-left: 1.8rem;
+    font-size: 0.72rem;
+    line-height: var(--em-search-height);
+    color: var(--em-text-faint);
+    background-image: var(--em-search-glyph), var(--em-search-key);
+    background-position: 12px calc(50% + 3px), right 10px center;
+    background-size: 24px, 22px 18px;
+    background-repeat: no-repeat;
+  }
+
+  html[lang^="zh"] [data-md-toggle="search"]:checked ~ .md-header .md-search::after {
+    content: "搜索";
+  }
+
+  [data-md-toggle="search"]:checked ~ .md-header .md-search__overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
     width: 100%;
+    height: 100%;
+    background: rgba(28, 27, 27, 0.32);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    opacity: 1;
+    z-index: 6;
+  }
+
+  [data-md-toggle="search"]:checked ~ .md-header .md-search__inner {
+    transition: none;
+    position: fixed;
+    top: 20vh;
+    left: 50%;
+    width: var(--em-search-dialog);
+    max-width: calc(100vw - 4rem);
+    height: auto;
+    transform: translateX(-50%);
+    background: var(--em-canvas);
+    border: 1px solid var(--em-hairline);
+    border-radius: 12px;
+    box-shadow: 0 16px 48px rgba(28, 27, 27, 0.18);
+    overflow: hidden;
+    z-index: 7;
+  }
+
+  /* inside the dialog the field is the header, not a bordered control */
+  [data-md-toggle="search"]:checked ~ .md-header .md-search__form {
+    height: 2.8rem;
+    border: 0;
+    border-bottom: 1px solid var(--em-hairline);
+    border-radius: 0;
+    background: transparent;
+  }
+
+  [data-md-toggle="search"]:checked ~ .md-header .md-search__input {
+    font-size: 0.9rem;
+    padding-left: 2.6rem;
+  }
+
+  [data-md-toggle="search"]:checked ~ .md-header .md-search__icon[for="__search"] {
+    width: 1.1rem;
+    height: 1.1rem;
+    top: 0.85rem;
+    left: 0.9rem;
+  }
+
+  /* the results become the dialog's body rather than a panel hung off the rail */
+  [data-md-toggle="search"]:checked ~ .md-header .md-search__output {
+    position: static;
+    width: 100%;
+    max-height: min(26rem, 60vh);
+    border: 0;
+    border-radius: 0;
+    overflow: auto;
   }
 
   .md-header .md-search__form {
-    height: 1.9rem;
+    height: var(--em-search-height);
     background: var(--em-canvas);
     border: 1px solid var(--em-hairline);
-    border-radius: 6px;
+    border-radius: var(--em-search-radius);
   }
 
   .md-header .md-search__form:hover {
@@ -589,7 +721,26 @@
     width: 100%;
   }
 
-  /* The repo link and the language selector drop to the foot of the rail. */
+  /*
+    * The repo link and the language selector drop to the foot of the rail.
+    * They are fixed to the viewport and carry no background of their own, so
+    * without a band behind them the navigation tree scrolls right up into
+    * their row and a heading ends up sharing a line with an icon. The band is
+    * painted here rather than wrapped around them because Material emits the
+    * two as siblings with no container to style.
+    */
+  .md-header::after {
+    content: "";
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    width: var(--em-rail);
+    height: var(--em-rail-foot);
+    background: var(--em-panel);
+    border-top: 1px solid var(--em-hairline);
+    border-right: 1px solid var(--em-hairline);
+  }
+
   .md-header__option,
   .md-header__source {
     position: fixed;
@@ -597,6 +748,7 @@
     margin: 0;
     max-width: none;
     width: auto;
+    z-index: 1;
   }
 
   .md-header__option {
@@ -723,10 +875,16 @@
     z-index: 4;
   }
 
+  /*
+   * The tree ends where the foot band starts, so no entry is ever half-hidden
+   * behind it. Material's own script writes an inline height on this element,
+   * computed from the viewport and its header bar and blind to the band, and
+   * an inline declaration is what !important is for.
+   */
   .md-sidebar--primary .md-sidebar__scrollwrap {
     margin: 0;
-    height: 100%;
-    padding: 0.4rem 0.6rem 2.6rem;
+    height: calc(100% - var(--em-rail-foot)) !important;
+    padding: 0.4rem 0.6rem 0.6rem;
   }
 
   .md-sidebar--primary .md-nav__title {
@@ -769,9 +927,16 @@
     padding-top: 1.6rem;
   }
 
+  /*
+   * Both columns are fixed, so the document keeps the full width underneath
+   * them. That only shows where a reader can scroll level with a column, which
+   * is the footer: without the right inset its links are drawn in the same
+   * strip as the table of contents.
+   */
   .md-footer,
   .md-footer-meta {
     margin-left: var(--em-rail);
+    margin-right: var(--em-toc);
   }
 
   .md-main__inner {
@@ -1082,7 +1247,7 @@
   }
 
   .md-header .md-search__form {
-    height: 2.1rem;
+    height: var(--em-search-height);
   }
 
   .md-header .md-search__input {
@@ -1092,7 +1257,7 @@
   .md-header .md-search__icon[for="__search"] {
     width: 1rem;
     height: 1rem;
-    top: 0.56rem;
+    top: 0.4rem;
   }
 
   .md-header .md-search__form::after {
@@ -1200,22 +1365,44 @@
     top: 0 !important;
     right: 0;
     bottom: 0;
-    width: 286px;
+    width: var(--em-toc);
     height: 100vh;
     margin: 0;
-    padding: 48px 0 8px;
+    padding: 48px 0 0;
     box-sizing: border-box;
     z-index: 2;
     pointer-events: none;
   }
 
+  /*
+   * Material's script writes an inline height here too, sized for the column
+   * it ships rather than this full-height one, which leaves the list cut off
+   * partway down the screen with empty space beneath it.
+   */
   .md-sidebar--secondary .md-sidebar__scrollwrap {
-    height: calc(100vh - 56px);
+    height: calc(100vh - 48px) !important;
     max-height: none;
     margin: 0;
     padding: 0 16px 0 0;
     overflow: auto;
     pointer-events: none;
+    /* the column carries no chrome of its own; the bar would be drawn over
+       the entries, since this engine overlays it rather than reserving a gutter */
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    /*
+     * The list runs to the foot of the screen, so an entry crossing that edge
+     * would otherwise be sliced through the letters. It fades out over the
+     * last 16px instead, the distance the reference layout uses. Only the
+     * bottom fades: Material puts the "On this page" label inside this
+     * scrolling box, and a matching fade at the top would wash it out.
+     */
+    -webkit-mask-image: linear-gradient(#fff calc(100% - 16px), rgba(0, 0, 0, 0));
+    mask-image: linear-gradient(#fff calc(100% - 16px), rgba(0, 0, 0, 0));
+  }
+
+  .md-sidebar--secondary .md-sidebar__scrollwrap::-webkit-scrollbar {
+    display: none;
   }
 
   .md-sidebar--secondary .md-sidebar__inner {
@@ -1237,10 +1424,20 @@
     padding: 0 !important;
   }
 
+  /*
+   * Material pins this title while the entries scroll under it. Transparent,
+   * the two are drawn through each other and the entry takes the pointer as
+   * well, so the label needs to be opaque and to carry the gap the entries
+   * pass behind.
+   */
   .md-sidebar--secondary .md-nav__title {
     height: 20px;
-    padding: 0;
-    background: transparent;
+    padding: 0 0 8px;
+    background: var(--em-canvas);
+    pointer-events: auto;
+    /* the entries carry z-index 1 so they sit over the rail's polyline, and at
+       an equal z-index the later element wins, so the label has to outrank it */
+    z-index: 2;
     color: var(--em-text-muted);
     font-size: 0;
     font-weight: 500;

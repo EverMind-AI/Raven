@@ -5,6 +5,12 @@ docs_dir: docs
 
 theme:
   name: material
+  # The EverMind mark, simplified for the sizes a favicon is drawn at: the
+  # mark's eight faint rings are a 3.6-unit stroke on a 192-unit canvas, which
+  # is a third of a pixel at 16px and reads as mud. Section 7 of AGENTS.md
+  # keeps icon files out of the repository, so it is inlined rather than
+  # shipped as a file.
+  favicon: 'data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%20192%20192%22%3E%3Crect%20width=%22192%22%20height=%22192%22%20rx=%2238.8%22%20fill=%22%23ffc53d%22/%3E%3Cpath%20fill=%22none%22%20stroke=%22%230c0902%22%20stroke-width=%2212%22%20stroke-linejoin=%22round%22%20d=%22M16%2096C16%2078.3%2030.4%2064%2048%2064C69.6%2064%2088%2086.1%2096%2096C104%20105.9%20122.4%20128%20144%20128C161.6%20128%20176%20113.7%20176%2096C176%2078.3%20161.6%2064%20144%2064C122.4%2064%20104%2086.1%2096%2096C88%20105.9%2069.6%20128%2048%20128C30.4%20128%2016%20113.7%2016%2096Z%22/%3E%3C/svg%3E'
   font:
     text: Atkinson Hyperlegible Next
   features:
@@ -12,7 +18,6 @@ theme:
     - navigation.top
     - navigation.footer
     - content.code.copy
-    - toc.follow
   palette:
     - scheme: default
       primary: custom
@@ -26,6 +31,9 @@ extra_css:
 
 extra_javascript:
   - javascripts/toc-progress.js
+
+hooks:
+  - hooks/search_by_language.py
 
 markdown_extensions:
   - admonition
