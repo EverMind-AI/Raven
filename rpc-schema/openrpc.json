@@ -8637,7 +8637,7 @@
     {
       "name": "import.status",
       "summary": "Progress of the cold-start import: whether one is running in this gateway, and the counts recorded on disk.",
-      "description": "The counts come from the importer's state file (the one `raven import status` reads); `running` is this process's own knowledge of a task import.run started.",
+      "description": "The counts come from the importer's state file (the one `raven import status` reads), scoped to the sources the last import.run recorded -- a run the CLI started records none, and then every entry counts; `running` is this process's own knowledge of a task import.run started.",
       "params": [],
       "result": {
         "name": "ImportStatusResult",

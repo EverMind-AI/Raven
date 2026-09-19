@@ -92,6 +92,12 @@ class TestImportState:
         assert summary["submitted"] == 1
         assert summary["failed"] == 1
 
+    def test_set_total_records_the_run_keys_and_a_keyless_total_drops_them(self, state: ImportState) -> None:
+        state.set_total(2, keys=["hermes:h1", "claude_code:c1"])
+        assert state.get_progress()["meta"] == {"total": 2, "keys": ["claude_code:c1", "hermes:h1"]}
+        state.set_total(5)
+        assert state.get_progress()["meta"] == {"total": 5}
+
     def test_meta_separated_from_entries(self, state: ImportState) -> None:
         state.set_total(10)
         state.mark_submitted("hermes", "x")
