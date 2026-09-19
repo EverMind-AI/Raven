@@ -16,6 +16,10 @@ from prompt_toolkit.data_structures import Size  # noqa: E402
 from prompt_toolkit.input.defaults import create_pipe_input  # noqa: E402
 from prompt_toolkit.output import DummyOutput  # noqa: E402
 
+# Runtime CJK values are written as escapes: the fixtures test display-width
+# handling, and the source itself must stay English per the language gate.
+_CJK_FILTER = "\u4e2d\u6587\u8fc7\u6ee4"
+
 
 class _SizedOutput(DummyOutput):
     def __init__(self, columns=40, rows=10):
@@ -224,7 +228,7 @@ def test_status_bar_narrow_keeps_hint_and_range():
     assert "…" in text  # a variable field was clipped, not the essentials
 
     # Wide CJK filter: budgeting is by display width, not len().
-    viewer._filter = "中文过滤中文过滤中文过滤"
+    viewer._filter = _CJK_FILTER * 3
     text = "".join(fragment for _style, fragment in viewer._status_fragments())
     assert pviewer._cwidth(text) <= 40
     assert "h for help" in text and "1-9/30" in text
@@ -320,11 +324,13 @@ def test_rendered_status_bar_with_long_and_cjk_filters():
     assert pviewer._cwidth(bar) <= 80
     assert "h for help" in bar and "/30" in bar
 
-    viewer, _result, frames = _run_capture("%中文过滤\r\x03", _static_lines(30), _SizedOutput(columns=40, rows=10))
+    viewer, _result, frames = _run_capture(
+        f"%{_CJK_FILTER}\r\x03", _static_lines(30), _SizedOutput(columns=40, rows=10)
+    )
     bar = _last_frame(frames)[-1]
     assert pviewer._cwidth(bar) <= 40
     assert "h for help" in bar and "/30" in bar
-    assert viewer._filter == "中文过滤"
+    assert viewer._filter == _CJK_FILTER
 
 
 def _render_frame(viewer, output, state=None, help_offset=0):

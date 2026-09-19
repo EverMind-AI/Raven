@@ -14,6 +14,11 @@ from raven.trajectory import conversation as tconversation
 from raven.trajectory import store as tstore
 from raven.trajectory import verdict as tverdict
 
+# Runtime CJK values are written as escapes: the fixtures test display-width
+# handling, and the source itself must stay English per the language gate.
+_WIDE = "\u5bbd"
+_WIDE_RUN = "\u5bbd\u5b57\u7b26"
+
 _CANCEL = object()
 _BACK = tbrowse._BACK
 
@@ -1382,12 +1387,12 @@ def test_conversation_lines_alignment_and_hanging_indent():
 
 
 def test_conversation_lines_cjk_wrap_keeps_width():
-    records = [_rec("Tool output", "tool", "宽" * 10)]
+    records = [_rec("Tool output", "tool", _WIDE * 10)]
     width = 27
     lines = tbrowse._conversation_lines(records, width)
     assert all(tbrowse._cell_width(line.plain) <= width for line in lines)
     joined = "".join(line.plain for line in lines).replace(" ", "")
-    assert joined == "Tooloutput:" + "宽" * 10
+    assert joined == "Tooloutput:" + _WIDE * 10
 
 
 def test_conversation_lines_kind_styles():
@@ -1462,7 +1467,7 @@ def test_conversation_lines_marker_feeds_separator_only():
 
 @pytest.mark.parametrize("width", [10, 6, 5, 3])
 def test_conversation_lines_narrow_stacked_layout_keeps_content(width):
-    body = "abcdef宽字符xyz"
+    body = f"abcdef{_WIDE_RUN}xyz"
     records = [_rec("Tool output", "tool", body)]
     lines = tbrowse._conversation_lines(records, width)
     assert all(tbrowse._cell_width(line.plain) <= width for line in lines)
@@ -1561,7 +1566,7 @@ def test_wrap_display_breaks_at_spaces_not_mid_word():
     assert tbrowse._wrap_display("alpha beta gamma", 11) == ["alpha beta", "gamma"]
     assert tbrowse._wrap_display("supercalifragilistic", 8) == ["supercal", "ifragili", "stic"]
     assert tbrowse._wrap_display(" leading indent", 9) == [" leading", "indent"]
-    assert tbrowse._wrap_display("宽宽 narrow words", 8) == ["宽宽", "narrow", "words"]
+    assert tbrowse._wrap_display(f"{_WIDE * 2} narrow words", 8) == [_WIDE * 2, "narrow", "words"]
 
 
 def test_conversation_lines_meta_shown_once_per_span():
