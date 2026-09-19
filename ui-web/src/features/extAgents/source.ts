@@ -143,7 +143,12 @@ export const costOf = (row: ExtAgentRow): number => {
 /* The onboarding wizard's agents step draws two buckets instead of stageOf's
    four groups: available to connect, and connected. Both are pure reads of a
    row the wizard gets from the same `subagents.list` this page lists from, and
-   the step counts itself done against a third read, FOUND.
+   the step counts itself done against a third read, FOUND. The three agree on
+   what the wizard never shows -- the built-in Raven and openai endpoints are in
+   none of them -- and differ on one row only, on purpose: a shipped agent is
+   CONNECTED when on and AVAILABLE when off, but never FOUND, because the step
+   is about connecting something external and the prototype counts it done on
+   those alone.
  *
  * A row is FOUND when it is a command this machine has: neither one of
  * Raven's own (`builtin`, `vendored` -- both already usable with no connect
@@ -159,9 +164,10 @@ export function isFound(row: ExtAgentRow): boolean {
 
 /* Connected: on the roster and dispatchable. Raven's own shipped agents count
    here once switched on, same as a configured one -- but the built-in
-   in-process Raven never does, because this pane never shows it at all. */
+   in-process Raven never does, and neither does an openai endpoint, because
+   this pane shows neither. */
 export function isConnected(row: ExtAgentRow): boolean {
-  if (row.builtin) return false
+  if (row.builtin || row.kind === 'openai') return false
   return row.enabled && (!!row.vendored || row.configured)
 }
 
@@ -172,7 +178,7 @@ export function isConnected(row: ExtAgentRow): boolean {
    from. */
 export function isAvailable(row: ExtAgentRow): boolean {
   if (row.vendored) return stageOf(row) === 'off'
-  return isFound(row) && !row.enabled
+  return isFound(row) && !row.enabled && !row.building
 }
 
 /* What the last fetch reported, kept here rather than read back off the page:

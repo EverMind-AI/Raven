@@ -12,16 +12,15 @@ import { useSyncExternalStore } from 'react'
 import { AgentMark, isOwnAgent } from '../../components/AgentMark'
 import { SetupGroup, SetupRow } from '../../components/SetupRow'
 import { t } from '../../i18n/t'
+import { ask as confirmAsk } from '../../state/confirm'
 import * as lang from '../../state/lang'
-import { isAvailable, isConnected } from './source'
+import { isAvailable, isConnected, stageOf } from './source'
 import * as store from './store'
 
 import type { ExtAgentRow } from './types'
 import type { JSX } from 'react'
 
-/* The same kind labels the settings page prints, without its transport-
-   migration tag: a row in either of this pane's buckets never carries
-   `upgrade_to`. */
+/* The same kind labels the settings page prints. */
 const kindText = (kind: string): string =>
   t(
     kind === 'builtin'
@@ -34,10 +33,24 @@ const kindText = (kind: string): string =>
   )
 
 function AvailableRow({ row, joining }: { row: ExtAgentRow; joining: boolean }): JSX.Element {
+  /* A stale row -- its preset moved to another transport -- connects by a
+     remove plus an add, which drops the handles of runs already in flight;
+     the settings page asks first and so does this. The tag beside the kind
+     says which transport it moves to, the same words the page uses. */
+  const connect = (): void => {
+    if (stageOf(row) === 'stale') {
+      confirmAsk(
+        t('gui.agent.migrate_do'),
+        t('gui.agent.migrate_body', { name: row.name, to: kindText(row.upgrade_to || '') }),
+        t('gui.agent.migrate_do'),
+        () => void store.connect(row),
+      )
+    } else void store.connect(row)
+  }
   return (
     <SetupRow
       act={
-        <button className="mini" disabled={joining} onClick={() => void store.connect(row)}>
+        <button className="mini" disabled={joining} onClick={connect}>
           {joining ? (
             <>
               <span className="extAgents-spin" />
@@ -51,7 +64,12 @@ function AvailableRow({ row, joining }: { row: ExtAgentRow; joining: boolean }):
       name={row.name}
       onOpen={() => {}}
       state={{ cls: 'off', text: '' }}
-      tags={<span className="kd">{kindText(row.kind)}</span>}
+      tags={
+        <>
+          <span className="kd">{kindText(row.kind)}</span>
+          {row.upgrade_to ? <span className="kd">{t('gui.agent.stale_to', { to: kindText(row.upgrade_to) })}</span> : null}
+        </>
+      }
       tile={<AgentMark preset={row.preset} own={isOwnAgent(row)} />}
     />
   )

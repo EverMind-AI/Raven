@@ -7,6 +7,7 @@ import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
 import { resetSources, setSources } from '../../state/sources'
 import { AgentsStepBody } from './AgentsBody'
 import * as store from './store'
@@ -79,6 +80,7 @@ afterEach(() => {
   cleanup()
   resetSources()
   store._resetForTests()
+  vi.restoreAllMocks()
 })
 
 describe('the onboarding wizard\'s agents pane', () => {
@@ -175,19 +177,28 @@ describe('the onboarding wizard\'s agents pane', () => {
     expect(acts).toEqual([['toggle', 'off_one', { enabled: true }]])
   })
 
-  it('connects a stale row through act(migrate), the settings page\'s own write for it', async () => {
+  it('connects a stale row through act(migrate) after the same confirm the settings page asks', async () => {
     /* A flag would have left `upgrade_to` standing and the old command line
-       in place -- the migration the card offered and never did. */
+       in place -- the migration the card offered and never did. The remove
+       plus add drops the handles of runs in flight, hence the confirm; the
+       tag beside the kind says where the row moves to. */
+    const confirms: string[] = []
+    vi.spyOn(confirmStore, 'ask').mockImplementation((title, _body, _label, fn) => {
+      confirms.push(title)
+      fn()
+    })
     const { acts } = install([row({ name: 'pi', configured: true, enabled: false, upgrade_to: 'acp' })])
     render(<AgentsStepBody />)
     await act(async () => {
       await store.load(true)
     })
+    expect(rowNamed('pi').textContent).toContain('gui.agent.stale_to {"to":"gui.agent.kind_acp"}')
 
     await act(async () => {
       actBtn('pi').click()
     })
 
+    expect(confirms).toEqual(['gui.agent.migrate_do'])
     expect(acts).toEqual([['migrate', 'pi', {}]])
   })
 
