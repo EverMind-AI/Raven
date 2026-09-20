@@ -55,7 +55,7 @@ export function mkToolRow(tool: ExtToolRow): ToolRow {
     /* Present but withheld for want of a key. The row exists so the reader
        learns the tool exists and what it wants -- before this, a key-gated
        tool was simply absent, which reads as removed. */
-    needs: tool.needs || null } as ToolRow
+    needs: tool.needs || null, builtin: !!tool.builtin } as ToolRow
   if (tool.needs) {
     o.on = false
     return o

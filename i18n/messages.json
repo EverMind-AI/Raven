@@ -6928,8 +6928,8 @@
       "zh": "记忆"
     },
     "gui.settings.tools.grp_search": {
-      "en": "Built-in meta tools",
-      "zh": "内置元工具"
+      "en": "Tool search",
+      "zh": "工具检索"
     },
     "gui.settings.plugins.counter": {
       "en": "Connected {on} / {total}",
