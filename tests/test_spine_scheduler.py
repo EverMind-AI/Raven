@@ -661,6 +661,14 @@ def _turn_entry_strays(package_root):
         "raven/agent/spine_runner.py",
         "raven/rpc/spine.py",
         "raven/gateway/spine.py",
+        # The fourth adapter: an inbound A2A task is one turn, run for a peer
+        # agent with no watcher and no conversation of its own, the way
+        # rpc/spine.py's CRON branch runs one for a cron job. It joins the
+        # roster rather than hiding behind a rename, because the cost is real
+        # and belongs written down: a turn started here is one the scheduler
+        # cannot order, cancel or swap, so a peer's concurrency is bounded by
+        # nothing on this path.
+        "raven/a2a/runtime.py",
     }
     allowed_private = {
         "raven/spine/scheduler.py",

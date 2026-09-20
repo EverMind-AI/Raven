@@ -14,7 +14,9 @@ import pytest
 
 from raven.config.update import (
     allow_exec_pattern,
+    initialize_a2a_server,
     reset_cron_config,
+    set_a2a_server_enabled,
     set_default_model,
     set_memory_backend,
     set_playbook_disabled,
@@ -347,3 +349,171 @@ def test_allow_exec_pattern_roundtrips_through_the_loader(cfg_path: Path) -> Non
     cfg_path.write_text("{}", encoding="utf-8")
     allow_exec_pattern("git push *", config_path=cfg_path)
     assert load_config(cfg_path).permissions.tools == {"exec": {"git push *": "allow"}}
+
+
+# ---------------------------------------------------------------------------
+# initialize_a2a_server
+# ---------------------------------------------------------------------------
+
+
+def test_a2a_init_mints_a_token_and_leaves_the_face_off(cfg_path: Path) -> None:
+    """Onboarding provisions the credential; it does not open the door.
+
+    The inbound face is a second network surface, so it is opened by an
+    explicit ``raven a2a enable`` rather than as a side effect of finishing an
+    unrelated install.
+    """
+    token = initialize_a2a_server(config_path=cfg_path)
+
+    server = _read(cfg_path)["a2a"]["server"]
+    assert server.get("enabled") is not True
+    assert server["token"] == token
+    # Long enough that guessing is not the attack: token_urlsafe(32) is 256
+    # bits of entropy, rendered as 43 characters.
+    assert len(token) >= 40
+
+
+def test_a2a_init_writes_no_enabled_flag_at_all(cfg_path: Path) -> None:
+    """Minting touches the token and nothing else.
+
+    Writing ``enabled: false`` here would spell the schema's own default a
+    second time, and it would close a face the operator had opened by hand the
+    next time an unrelated ``raven onboard`` ran.
+    """
+    initialize_a2a_server(config_path=cfg_path)
+    assert "enabled" not in _read(cfg_path)["a2a"]["server"]
+
+
+def test_a2a_init_never_rotates_a_token_it_finds(cfg_path: Path) -> None:
+    """Re-onboarding must not invalidate credentials already given to callers."""
+    first = initialize_a2a_server(config_path=cfg_path)
+
+    assert initialize_a2a_server(config_path=cfg_path) is None
+    assert _read(cfg_path)["a2a"]["server"]["token"] == first
+
+
+def test_a2a_init_leaves_a_face_the_operator_switched_off(cfg_path: Path) -> None:
+    """The token, not ``enabled``, is the already-initialized mark.
+
+    Keying on ``enabled`` instead would re-assert it on every onboard, and an
+    operator who deliberately closed the face would find it reopened by an
+    unrelated ``raven onboard``.
+    """
+    initialize_a2a_server(config_path=cfg_path)
+    data = _read(cfg_path)
+    data["a2a"]["server"]["enabled"] = False
+    cfg_path.write_text(json.dumps(data), encoding="utf-8")
+
+    initialize_a2a_server(config_path=cfg_path)
+
+    assert _read(cfg_path)["a2a"]["server"]["enabled"] is False
+
+
+def test_a2a_init_creates_a_missing_config_owner_only(cfg_path: Path) -> None:
+    """The mode has to hold for a file this write creates, not only for one it
+    finds: ``atomic_update`` would otherwise land a brand-new config at the
+    process umask -- 0644 under the common one -- with the token already in it.
+    """
+    assert not cfg_path.exists()
+
+    initialize_a2a_server(config_path=cfg_path)
+
+    assert cfg_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_a2a_init_narrows_a_world_readable_config(cfg_path: Path) -> None:
+    """Nothing else narrows this file, and onboarding creates it under the
+    umask, so the write that puts a credential in it is the one that owes the
+    mode -- alongside the provider API keys already there.
+    """
+    cfg_path.write_text(json.dumps({"providers": {"openai": {"apiKey": "sk-x"}}}), encoding="utf-8")
+    cfg_path.chmod(0o644)
+
+    initialize_a2a_server(config_path=cfg_path)
+
+    assert cfg_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_a2a_init_that_mints_nothing_leaves_the_mode_alone(cfg_path: Path) -> None:
+    """Narrowing rides the minting write rather than the call, so a repeat
+    onboard does not keep overriding a mode the operator chose afterwards.
+    """
+    initialize_a2a_server(config_path=cfg_path)
+    cfg_path.chmod(0o640)
+
+    initialize_a2a_server(config_path=cfg_path)
+
+    assert cfg_path.stat().st_mode & 0o777 == 0o640
+
+
+def test_a2a_init_touches_no_unrelated_field(cfg_path: Path) -> None:
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "providers": {"openai": {"apiKey": "sk-keep"}},
+                "agents": {"defaults": {"model": "openai/gpt-4o"}},
+                "a2a": {"peers": [{"origin": "https://peer.example"}]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    initialize_a2a_server(config_path=cfg_path)
+
+    data = _read(cfg_path)
+    assert data["providers"]["openai"]["apiKey"] == "sk-keep"
+    assert data["agents"]["defaults"]["model"] == "openai/gpt-4o"
+    assert data["a2a"]["peers"] == [{"origin": "https://peer.example"}]
+    assert "enabled" not in data["a2a"]["server"]
+
+
+# ---------------------------------------------------------------------------
+# set_a2a_server_enabled
+# ---------------------------------------------------------------------------
+
+
+def test_a2a_enable_opens_the_face_and_mints_a_missing_token(cfg_path: Path) -> None:
+    """Enabling without a credential would advertise a face that answers nobody.
+
+    ``a2a/auth.py`` refuses every caller while the token is empty, so opening
+    the face mints one in the same command rather than leaving a window where
+    it is switched on and shut.
+    """
+    token = set_a2a_server_enabled(True, config_path=cfg_path)
+
+    server = _read(cfg_path)["a2a"]["server"]
+    assert server["enabled"] is True
+    assert server["token"] == token and len(token) >= 40
+
+
+def test_a2a_enable_keeps_a_token_it_finds(cfg_path: Path) -> None:
+    """Opening the face must not invalidate credentials already handed out."""
+    initialize_a2a_server(config_path=cfg_path)
+    existing = _read(cfg_path)["a2a"]["server"]["token"]
+
+    assert set_a2a_server_enabled(True, config_path=cfg_path) is None
+    server = _read(cfg_path)["a2a"]["server"]
+    assert server["enabled"] is True and server["token"] == existing
+
+
+def test_a2a_disable_closes_the_face_and_keeps_the_token(cfg_path: Path) -> None:
+    """Closing is reversible without re-issuing the credential to every caller."""
+    minted = set_a2a_server_enabled(True, config_path=cfg_path)
+
+    assert set_a2a_server_enabled(False, config_path=cfg_path) is None
+    server = _read(cfg_path)["a2a"]["server"]
+    assert server["enabled"] is False and server["token"] == minted
+
+
+def test_a2a_toggle_leaves_a_mode_the_operator_chose(cfg_path: Path) -> None:
+    """Narrowing rides the minting write, not the flip.
+
+    The token is already on disk by then, so a later toggle adds no secret
+    material and has no claim on a mode the operator set deliberately.
+    """
+    set_a2a_server_enabled(True, config_path=cfg_path)
+    cfg_path.chmod(0o640)
+
+    set_a2a_server_enabled(False, config_path=cfg_path)
+
+    assert cfg_path.stat().st_mode & 0o777 == 0o640

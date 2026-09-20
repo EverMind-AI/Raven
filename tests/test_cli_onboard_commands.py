@@ -3214,6 +3214,67 @@ def test_bootstrap_leaves_a_preexisting_config_alone(tmp_env: Path, monkeypatch:
     assert rc.memory.memory_top_k == 20  # the user's value
 
 
+def _onboard_once() -> Any:
+    return runner.invoke(
+        app,
+        [
+            "onboard",
+            "--non-interactive",
+            "--provider",
+            "openai",
+            "--api-key",
+            "sk-fake",
+            "--skip-channel",
+            "--skip-memory",
+            "--yes",
+        ],
+    )
+
+
+def test_onboard_materializes_the_a2a_face(tmp_env: Path, everos_isolated: Path, stub_verify, stub_step3) -> None:
+    """A finished install provisions the A2A credential and leaves the face shut.
+
+    The token is the one write that cannot come from a schema default: it is
+    per-install secret material, and an empty one refuses every caller. Opening
+    a listening face is a separate decision, so the wizard mints and stops.
+    """
+    r = _onboard_once()
+    assert r.exit_code == 0, r.stdout
+
+    server = json.loads(tmp_env.read_text())["a2a"]["server"]
+    assert "enabled" not in server
+    assert len(server["token"]) >= 40
+    # A provisioned-but-closed face is only useful if the operator is told how
+    # to open it, so the closing recap carries the command rather than a bare
+    # "off" they would have to go looking for.
+    assert "A2A" in r.stdout
+    assert "a2a enable" in r.stdout
+
+
+def test_onboard_writes_the_a2a_token_owner_only(tmp_env: Path, everos_isolated: Path, stub_verify, stub_step3) -> None:
+    """Nothing else narrows config.json -- it is created under the umask, 0644
+    under the common one -- so the wizard must not leave an execution-granting
+    bearer token in a world-readable file.
+    """
+    assert _onboard_once().exit_code == 0
+
+    assert tmp_env.stat().st_mode & 0o777 == 0o600
+
+
+def test_reonboarding_does_not_rotate_the_a2a_token(
+    tmp_env: Path, everos_isolated: Path, stub_verify, stub_step3
+) -> None:
+    """Re-running the wizard is routine; invalidating credentials already handed
+    to peers is not.
+    """
+    assert _onboard_once().exit_code == 0
+    first = json.loads(tmp_env.read_text())["a2a"]["server"]["token"]
+
+    assert _onboard_once().exit_code == 0
+
+    assert json.loads(tmp_env.read_text())["a2a"]["server"]["token"] == first
+
+
 def test_prompt_channel_fields_gates_skip_on_required(monkeypatch: pytest.MonkeyPatch) -> None:
     """Optional fields get an ``(optional)`` label + skip hint; a required field
     that is not the first prompt (feishu ``app_secret``) must NOT show a skip
