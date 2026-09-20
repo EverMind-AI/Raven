@@ -148,6 +148,18 @@ Runs that end in something other than a deck.
 <a href="https://github.com/user-attachments/assets/2b03cc53-e707-4728-8d68-327fcf7d112a"><img src="https://github.com/user-attachments/assets/2b03cc53-e707-4728-8d68-327fcf7d112a" alt="Retrieval sweep: recall@k is set by top_k alone, and latency stays flat across the grid" width="100%"></a>
 </td>
 </tr>
+<tr>
+<td width="50%" valign="top">
+<p align="center"><b>A light-pollution campaign, researched and art-directed</b></p>
+<a href="https://github.com/user-attachments/assets/edd62b5e-b2f0-406b-88a1-32b69676a422"><img src="https://github.com/user-attachments/assets/edd62b5e-b2f0-406b-88a1-32b69676a422" alt="Task graph: three Raven-Research nodes and one Raven-Design plate node in parallel into a Raven-Code node, then one Raven-Design node" width="100%"></a>
+<a href="https://github.com/user-attachments/assets/7767ac05-6785-4e6a-9e27-c1b123753766"><img src="https://github.com/user-attachments/assets/7767ac05-6785-4e6a-9e27-c1b123753766" alt="Key visual plus the derived series: street poster, data panel, social square and wide banner" width="100%"></a>
+</td>
+<td width="50%" valign="top">
+<p align="center"><b>An interactive explainer, with its own solver</b></p>
+<a href="https://github.com/user-attachments/assets/2e53e8b0-1a7c-4032-8506-dcc298561b90"><img src="https://github.com/user-attachments/assets/2e53e8b0-1a7c-4032-8506-dcc298561b90" alt="Task graph: two Raven-Code nodes and one Raven-Design node in parallel into a Raven-Oncall cross-check, then one Raven-Design node" width="100%"></a>
+<a href="https://github.com/user-attachments/assets/25c57220-c5fc-4f72-94fb-ea4b7e83f429"><img src="https://github.com/user-attachments/assets/25c57220-c5fc-4f72-94fb-ea4b7e83f429" alt="GPS trilateration explainer: the live page, and the fix at two, three and four satellites" width="100%"></a>
+</td>
+</tr>
 </table>
 
 ## ❯❯ Connect Third-Party Agents
