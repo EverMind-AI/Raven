@@ -146,10 +146,15 @@ def _declare(**over):
     return OpsDeclareTool().execute(**args)
 
 
-def _sibling(ops_home: Path, name: str, remote_dir: str, *, concluded: bool = False) -> None:
+def _sibling(
+    ops_home: Path, name: str, remote_dir: str, *, concluded: bool = False, jobs: list[str] | None = None
+) -> None:
     d = ops_home / name
     d.mkdir()
     (d / "meta.json").write_text(json.dumps({"connection": "conn_ok", "remote_dir": remote_dir}), encoding="utf-8")
+    if jobs:
+        records = {k: {"idem_key": k, "status": "succeeded", "campaign": name} for k in jobs}
+        (d / "ledger.json").write_text(json.dumps({"version": 1, "records": records}), encoding="utf-8")
     if concluded:
         (d / "concluded.json").write_text("{}", encoding="utf-8")
 
@@ -169,3 +174,63 @@ async def test_a_concluded_siblings_directory_and_ones_own_are_free_to_use(ops_h
     assert "Declared 'round2'" in await _declare()
     assert "Declared 'round2'" in await _declare(), "re-declaring the same campaign is not a collision"
     assert "Declared 'round3'" in await _declare(campaign="round3", remote_dir="/srv/runs3")
+
+
+@pytest.mark.asyncio
+async def test_a_concluded_sibling_that_left_jobs_keeps_its_directory(ops_home: Path) -> None:
+    """A job directory is named from its config, so the same trial names the same directory.
+
+    The newcomer's ledger then records that key as its own: the ownership filter
+    reads the predecessor's minutes as this campaign's, and submit finds the old
+    result.json and calls the trial done instead of running it. Concluding does
+    not remove the jobs, so concluding alone does not free the directory.
+    """
+    _sibling(ops_home, "round1", "/srv/runs", concluded=True, jobs=["jobhd38d604f_seed0"])
+
+    out = await _declare()
+
+    assert out.startswith("REFUSED"), out
+    assert "'round1'" in out and "/srv/runs" in out
+    assert not (ops_home / "round2" / "meta.json").exists(), "a refusal writes nothing"
+
+
+@pytest.mark.asyncio
+async def test_a_sibling_ledger_that_cannot_be_read_keeps_the_directory(ops_home: Path) -> None:
+    """Unreadable means occupied: the alternative hands over a directory nobody can account for."""
+    _sibling(ops_home, "round1", "/srv/runs", concluded=True)
+    (ops_home / "round1" / "ledger.json").write_text("{not json", encoding="utf-8")
+
+    assert (await _declare()).startswith("REFUSED")
+
+
+@pytest.mark.asyncio
+async def test_the_openfoam_backend_bills_only_its_own_cases() -> None:
+    """OpenFoamExecutor overrides spent_minutes, so it has to ask the ownership question itself.
+
+    It inherits restrict_spend_to, so billing_only appears to configure it while
+    its own loop walks every scanned row -- cores and timeline included, both of
+    which the caller reads back.
+    """
+    from oncall_flow.openfoam_backend import OpenFoamExecutor
+
+    # 600s ClockTime on 2 cores = 20 core-minutes of ours; 600s on 8 = 80 of a sibling's.
+    rows = "\n".join(
+        [
+            "mine|2|0|1000|600|1600|1",
+            "theirs|8|0|1000|600|1600|1",
+            "NOW|2000",
+        ]
+    )
+
+    def shell(_cmd: str) -> tuple[int, str]:
+        return 0, rows
+
+    unrestricted = OpenFoamExecutor(shell, remote_dir="/srv/runs", command="bash run_case.sh")
+    assert await unrestricted.spent_minutes() == pytest.approx(100.0), "the reading without ownership"
+
+    exe = OpenFoamExecutor(shell, remote_dir="/srv/runs", command="bash run_case.sh")
+    exe.restrict_spend_to({"mine"})
+    assert await exe.spent_minutes() == pytest.approx(20.0)
+    recorded = exe.cores_used()
+    assert "theirs" not in recorded, "a sibling's width is not recorded either"
+    assert recorded == {"mine": 2}
