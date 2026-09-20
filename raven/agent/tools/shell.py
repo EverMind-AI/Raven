@@ -14,7 +14,7 @@ from typing import Any
 
 from raven.agent import workdir
 from raven.contracts.tool import STOP_RETRY_INSTRUCTION, Continuation, Tool, ToolOutput, ToolResult
-from raven.permissions.shell_policy import executable_text
+from raven.permissions.shell_policy import _command_segments, executable_text
 from raven.sandbox import DirectExecutor, SandboxExecutor
 
 
@@ -312,12 +312,17 @@ class ExecTool(Tool):
 
         cwd_path = Path(cwd).resolve()
         roots = [cwd_path, *(Path(d).resolve() for d in self.extra_allowed_dirs)]
-        for raw in self._extract_absolute_paths(cmd):
+        env = self._child_env(cwd_path)
+        readable = self._as_the_shell_reads_it(cmd, env)
+
+        if self._steps_outside(readable, cwd_path, roots, env):
+            return "Error: Command blocked by safety guard (directory change outside working dir)"
+
+        for raw in self._extract_absolute_paths(readable):
             try:
-                expanded = os.path.expandvars(raw.strip())
-                if expanded in self._DEVICE_FILES:
+                if raw in self._DEVICE_FILES:
                     continue
-                p = Path(expanded).expanduser().resolve()
+                p = Path(raw.strip()).expanduser().resolve()
             except Exception:
                 continue
             if not p.is_absolute():
@@ -327,6 +332,147 @@ class ExecTool(Tool):
             return "Error: Command blocked by safety guard (path outside working dir)"
 
         return None
+
+    # `$NAME` and `${NAME}`, the two spellings that carry a path. `$(`, `$$`
+    # and `$?` are deliberately not names, so they fall through untouched.
+    _VARIABLE = re.compile(r"\$(?:\{([A-Za-z_]\w*)([^}]*)\}|([A-Za-z_]\w*))")
+
+    # The brace bodies that offer a second word the shell may substitute
+    # instead of the value (`:-`, `:=`, `:?`, `:+` and their colon-less forms).
+    # `%`, `#` and `/` reshape the value rather than naming a word, so they are
+    # not here and are left standing.
+    _BRACE_WORD_OPERATOR = re.compile(r"^:?[-=?+]")
+
+    @staticmethod
+    def _child_env(cwd: Path) -> dict[str, str]:
+        """The environment the command will be run with.
+
+        ``PWD`` is overridden because a shell sets it from the directory it is
+        started in: this command's ``$PWD`` is the workspace, whatever this
+        process inherited.
+        """
+        from raven.sandbox.direct_executor import _baseline_env
+
+        env = _baseline_env()
+        env["PWD"] = str(cwd)
+        return env
+
+    @classmethod
+    def _steps_outside(cls, command: str, cwd: Path, roots: list[Path], env: dict[str, str]) -> bool:
+        """Whether the command leaves the workspace before doing its work.
+
+        Reaching out and stepping out are the same escape, but only the first
+        leaves a path for :meth:`_extract_absolute_paths` to find. A ``cd``
+        whose destination is spelled out is already refused there, because
+        ``/etc`` is a path like any other. What is left are the destinations
+        the pattern cannot take: ``/`` has nothing after it, ``..`` is not
+        absolute, and a ``cd`` with no argument names ``$HOME`` by saying
+        nothing -- and after any of them, every relative path in the rest of
+        the command resolves somewhere the operator did not allow.
+        """
+        try:
+            segments = list(_command_segments(command))
+        except ValueError:
+            # Quoting the lexer cannot close. The permission gate reads the
+            # same text through the same lexer and refuses it there, so
+            # answering here would only duplicate that refusal.
+            return False
+
+        for segment in segments:
+            tokens = list(segment)
+            while tokens and tokens[0] in ("(", "{"):
+                tokens.pop(0)
+            if tokens and tokens[0].startswith("("):
+                tokens[0] = tokens[0].lstrip("(")
+            if not tokens or tokens[0] != "cd":
+                continue
+            arguments = [token for token in tokens[1:] if token not in ("-L", "-P")]
+            if arguments and arguments[0] == "-":
+                # ``$OLDPWD`` is a directory some earlier ``cd`` already passed.
+                continue
+            target = arguments[0] if arguments else env.get("HOME", "")
+            if not target:
+                continue
+            try:
+                destination = (cwd / Path(target).expanduser()).resolve()
+            except Exception:
+                return True
+            if not any(root == destination or root in destination.parents for root in roots):
+                return True
+        return False
+
+    @classmethod
+    def _as_the_shell_reads_it(cls, command: str, env: dict[str, str]) -> str:
+        """``command`` with its parameters expanded, as the child will expand them.
+
+        The scan below reads text, so it can only refuse a path it can see, and
+        a name is where a path hides: ``$HOME/.ssh/id_rsa`` put a letter in
+        front of the ``/`` that :meth:`_extract_absolute_paths` looks for, and
+        the whole command went through as naming no path at all. Expanding
+        first is what puts the path back in view -- expanding afterwards, which
+        is what this used to do, only ever saw candidates the scan had already
+        passed.
+
+        Three rules, each taken from the shell rather than invented:
+
+        - **An unknown name is nothing.** ``$NOPE/etc/shadow`` *is*
+          ``/etc/shadow``, and it is the case with no literal spelling to fall
+          back on.
+        - **The child's environment decides.** ``DirectExecutor`` hands over an
+          allowlisted baseline, so a name outside that list arrives unset
+          however this process reads it; ``os.environ`` would answer for a
+          variable the command will never have.
+        - **Single quotes expand nothing.** ``echo 'keys go in $HOME/.ssh'`` is
+          a sentence, and refusing it would teach the operator to turn the
+          fence off.
+
+        A sandboxed executor runs somewhere with its own environment, which
+        nothing here can read. The values are a host-side approximation there;
+        the rule that carries is the first one, which needs no value to hold.
+        """
+        out: list[str] = []
+        quote = ""
+        index = 0
+        while index < len(command):
+            char = command[index]
+            if quote == "'":
+                out.append(char)
+                if char == "'":
+                    quote = ""
+                index += 1
+                continue
+            if char == "\\" and index + 1 < len(command):
+                out.append(char)
+                out.append(command[index + 1])
+                index += 2
+                continue
+            if quote == '"' and char == '"':
+                quote = ""
+                out.append(char)
+                index += 1
+                continue
+            if not quote and char in "'\"":
+                quote = char
+                out.append(char)
+                index += 1
+                continue
+            if char == "$":
+                name_match = cls._VARIABLE.match(command, index)
+                if name_match is not None:
+                    value = env.get(name_match.group(1) or name_match.group(3), "")
+                    # A brace body stands beside the value rather than being
+                    # applied to it: both are candidates, because which one the
+                    # shell uses depends on a value this cannot read. The word
+                    # operator becomes a space so its word starts on a
+                    # boundary -- `${NOPE:-/etc/shadow}` is that path whenever
+                    # the name is unset, and nothing else would put it in view.
+                    remainder = cls._BRACE_WORD_OPERATOR.sub(" ", name_match.group(2) or "")
+                    out.append(f"{value} {remainder}" if remainder else value)
+                    index = name_match.end()
+                    continue
+            out.append(char)
+            index += 1
+        return "".join(out)
 
     @staticmethod
     def _extract_absolute_paths(command: str) -> list[str]:
