@@ -239,6 +239,38 @@ def _prior_satisfied(
     return False
 
 
+class CharterParticipant:
+    """This dispatch's own judgements, as a participant.
+
+    The thin shell the design calls for: a Charter is data the model sent, and
+    this is what lets it answer the same verb a plugin answers rather than
+    being read by the role itself. Stateless, so one instance serves every call
+    of a turn; what it judges comes from the scope, not from this object.
+
+    Only ``judge`` today. The other verbs stay at their defaults, which is what
+    "a Charter carries no opinion about that" already means.
+    """
+
+    __slots__ = ()
+
+    def judge(
+        self,
+        name: str,
+        params: Mapping[str, Any],
+        prior: Sequence[tuple[str, Mapping[str, Any]]],
+    ) -> list[str]:
+        return judge(name, params, prior)
+
+
+def charter_participants() -> tuple[CharterParticipant, ...]:
+    """The participants this dispatch brings, or none when it brought no
+    judgements. Asked after the plugins' own, so a product's rules speak first."""
+    charter = current_charter()
+    if charter is None or not (charter.checks or charter.code):
+        return ()
+    return (CharterParticipant(),)
+
+
 def judge(
     name: str,
     params: Mapping[str, Any],

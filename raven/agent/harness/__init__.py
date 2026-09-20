@@ -16,13 +16,17 @@ would answer for the retired one.
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 from raven.agent.harness.action import DefaultAction
+from raven.agent.harness.action import bind as bind_action
 from raven.agent.harness.capability import DefaultCapability
 from raven.agent.harness.memory import DefaultMemory
 from raven.agent.harness.memory import bind as bind_memory
 from raven.agent.harness.planning import DefaultPlanning
+from raven.agent.harness.planning import bind as bind_planning
 from raven.contracts.harness import HarnessModules
 
 if TYPE_CHECKING:
@@ -38,6 +42,8 @@ def default_harness_modules(
     model: Callable[[], str],
     context_window_tokens: Callable[[], int],
     system_prompt: Callable[[list[Any] | None], str],
+    compaction: Callable[[], Any],
+    output_ceiling: Callable[[str | None], int],
 ) -> HarnessModules:
     """Assemble the default four around this generation's own organs."""
     memory = DefaultMemory(
@@ -47,16 +53,39 @@ def default_harness_modules(
         context_window_tokens=context_window_tokens,
         tool_definitions=lambda: registry_provider().get_definitions(),
         system_prompt=system_prompt,
+        compaction=compaction,
+        output_ceiling=output_ceiling,
     )
     return HarnessModules(
         memory=bind_memory(memory),
-        planning=DefaultPlanning(),
+        planning=bind_planning(DefaultPlanning()),
         capability=DefaultCapability(registry_provider),
-        action=DefaultAction(),
+        action=bind_action(DefaultAction()),
     )
 
 
+_BOUND: ContextVar["HarnessModules | None"] = ContextVar("raven_harness", default=None)
+
+
+@contextmanager
+def bind_harness(modules: HarnessModules):
+    """The modules a turn runs on, for the seats that ask them from inside the
+    hook chain. Turn-scoped like the model binding: a swap that lands mid-turn
+    is not visible to the turn that already started."""
+    token = _BOUND.set(modules)
+    try:
+        yield modules
+    finally:
+        _BOUND.reset(token)
+
+
+def current_harness() -> "HarnessModules | None":
+    return _BOUND.get()
+
+
 __all__ = [
+    "bind_harness",
+    "current_harness",
     "DefaultAction",
     "DefaultCapability",
     "DefaultMemory",

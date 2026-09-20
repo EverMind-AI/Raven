@@ -71,6 +71,7 @@ ACCEPTED = (
     ("tests/test_ppt_engine_marks.py", 'EXPECT = "{cjk}"\n'),
     ("plugins-dist/design-engine/raven_design/skills/palette.py", 'NAME = "{cjk}"\n'),
     ("tests/test_design_engine_palette.py", 'EXPECT = "{cjk}"\n'),
+    ("docs-site/mkdocs.yml", 'name: "{cjk}"\n'),
     ("raven/i18n/zh_extra.py", 'WORD = "{cjk}"\n'),
     ("raven/templates/prompts/zh/planner.txt", "{cjk}\n"),
     ("raven/agent/notes.md", "# {cjk}\n"),

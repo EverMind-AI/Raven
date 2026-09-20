@@ -191,21 +191,6 @@ def _charter_withheld(tools: "Mapping[str, Tool]") -> frozenset[str]:
     return narrowed_tools(tuple(tools))
 
 
-def _charter_refusals(name: str, params: dict[str, Any]) -> list[str]:
-    """Why this turn's charter refuses this call, or an empty list.
-
-    Lazily imported for the reason ``_charter_withheld`` is, and quiet on any
-    failure: a charter that cannot be judged must not be able to stop a turn
-    the install would otherwise have run.
-    """
-    try:
-        from raven.agent.subagent.charter import judge, prior_calls
-
-        return judge(name, params, prior_calls())
-    except Exception:  # noqa: BLE001 - a brief that cannot be read is not a refusal
-        return []
-
-
 def _record_call(name: str, params: dict[str, Any]) -> None:
     """Remember a call that ran and did not fail.
 
@@ -290,8 +275,29 @@ class ToolRegistry:
     # internal timeout that never returns), not to enforce a tight per-tool SLA.
     DEFAULT_TOOL_TIMEOUT_S = 300.0
 
-    def __init__(self, *, tool_gates: "Sequence[Any]" = (), permission_gate: "Any | None" = None):
+    def __init__(
+        self,
+        *,
+        tool_gates: "Sequence[Any]" = (),
+        permission_gate: "Any | None" = None,
+        verifier_provider: "Callable[[], Any] | None" = None,
+    ):
         self._tools: dict[str, Tool] = {}
+        # The Action role, asked once per call for the judgement this
+        # dispatch's Charter carries. Injected the way the permission gate
+        # beside it is: the module supplies the sentences, ``execute`` still
+        # decides what to do with them, so a replaced role can withhold
+        # nothing it was not already able to withhold. ``None`` on a registry
+        # built without a harness (a test rig, a tool-only surface), which
+        # reads as "no judgement" -- the answer this question had before the
+        # role existed -- which is the right answer for every registry that is
+        # not a turn's: the MCP connection managers and the curator's own
+        # lookup table build one to hold tool definitions, never to dispatch a
+        # turn's calls, so there is no dispatch for a Charter to judge.
+        #
+        # A provider rather than the role itself: the registry is built before
+        # the loop assembles its harness, so there is no role to hand over yet.
+        self._verifier_provider = verifier_provider
         # The platform's own gate (raven.permissions), distinct from the plugin
         # gates below: it can wait on a human mid-adjudication and answers with
         # a full ToolResult, both of which the plugin paper deliberately does
@@ -382,6 +388,42 @@ class ToolRegistry:
         and it is the same shape the channel restriction already has.
         """
         self._withheld = source
+
+    def _verifier_refusals(self, name: str, params: dict[str, Any]) -> list[str]:
+        """Why the Action role refuses this call, or an empty list.
+
+        The call log is read here and handed over rather than reached for by
+        the role: what already ran this turn is the registry's own record (it
+        is the thing that watched them run), and a role asking for it would be
+        a module reaching into the shell's state.
+
+        Caught here and nowhere inside: this is a boundary onto a *replaceable*
+        role, and the shell does not get to assume what is behind it. The
+        default implementation guards nothing of its own -- a defect in rule
+        evaluation is meant to be loud -- but a replacement that raises must
+        cost its own judgement rather than the turn, which is the same bargain
+        the plugin gates beside it are held to.
+
+        A registry nobody handed a role to still asks one. Most of the ten
+        registries this tree builds take no provider -- the curator's own tool
+        set among them, and it dispatches inside the turn's ``charter_scope``
+        -- so an absent provider means "nobody chose a role here", not "this
+        dispatch carries no Charter". The default role is what the module-level
+        helper this method replaced already was.
+        """
+        try:
+            # Imported in the call, and not for style: ``raven.agent.subagent``
+            # pulls its manager on package import, whose backends import this
+            # module -- so naming the charter at the top of this file closes a
+            # cycle. import-linter reads direction and cannot see this one.
+            from raven.agent.harness import DefaultAction
+            from raven.agent.subagent.charter import prior_calls
+
+            role = self._verifier_provider() if self._verifier_provider is not None else DefaultAction()
+            return list(role.ask_judge(name, params, prior_calls()))
+        except Exception:  # noqa: BLE001 - a role that raises must not cost the turn
+            logger.warning("tools: the Action role raised judging {!r}; taking no opinion from it", name)
+            return []
 
     def withheld_names(self) -> frozenset[str]:
         """The current off switches, or an empty set when nobody installed a source.
@@ -885,7 +927,7 @@ class ToolRegistry:
             # result, so the next attempt can be right. Ahead of the permission
             # gate, which is about what a person allows rather than what this
             # dispatch was briefed to do.
-            errors += _charter_refusals(name, params)
+            errors += self._verifier_refusals(name, params)
             if errors:
                 return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + _hint
 

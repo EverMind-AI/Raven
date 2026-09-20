@@ -340,7 +340,7 @@ def shows_picture(shape: Any) -> bool:
 # A picture at most this long on a side is a mark beside one unit of the page rather than
 # a picture of something. Measured over the 62 picture slots of the eight bundled
 # templates: the marks that stand one per unit -- the three seals on red page 4 (1.7in),
-# the badges on beige 21 (1.4-1.5in), mint 13 (1.3in) and red 13 (1.4in) -- all sit at
+# the badges on beige 20 (1.4-1.5in), mint 13 (1.3in) and red 13 (1.4in) -- all sit at
 # or under 1.7in, and the smallest picture that shows something of its own, a card
 # cartoon on teal 7, starts at 2.0in (two of that page's four cartoons are smaller and
 # take the label too, which costs nothing: they are already one per card). The generated

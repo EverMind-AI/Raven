@@ -93,6 +93,11 @@ class RavenRuntime:
         await self.loop.subagents.cancel_all()
         await self.loop.close_mcp()
         self.loop.stop()
+        # The context builder started a skill watcher in __init__, so it goes
+        # with the generation that owns it. Left running it is a daemon thread
+        # parked in native code, and Py_FinalizeEx tears the interpreter down
+        # under that call whenever the process later exits.
+        self.loop.context.skills.stop_file_watcher()
         if self.backend is not None:
             await self.loop.drain_backend_stores()
             try:
@@ -106,11 +111,19 @@ class RavenRuntime:
     def discard(self) -> None:
         """Drop a candidate that never served.
 
-        A built-but-never-started generation holds no started resources --
-        no backend.start(), no MCP connections, no running loop -- so there is
-        nothing to stop; dispose()'s sequence assumes a generation that ran.
-        The method exists so a superseded candidate is dropped on purpose,
-        not by falling out of scope.
+        A built-but-never-started generation holds none of the resources
+        dispose()'s sequence retires -- no backend.start(), no MCP
+        connections, no running loop -- so that sequence, which assumes a
+        generation that ran, does not apply here.
+
+        One resource does exist from construction rather than from starting:
+        the context builder starts its skill watcher in __init__, so even a
+        candidate nothing ever served owns a daemon thread parked in native
+        code. Retiring it here would put a call in this method, which the
+        phase ordering forbids -- starting an organ before FREEZE is the thing
+        that emptiness is asserting against. The gateway's shutdown stops that
+        watcher directly instead, and the watcher not being construction-time
+        work in the first place is a separate change.
         """
         return None
 
@@ -218,6 +231,7 @@ def build_runtime(
             plugin_tools=plugin_tools,
             plugin_tool_gates=plugin_tool_gates,
             deliverables=deliverables,
+            a2a_config=config.a2a,
         ),
         subagents=SubagentWiring(
             max_concurrent_subagents=config.agents.defaults.max_concurrent_subagents,
@@ -302,6 +316,7 @@ class SwapCoordinator:
         self._booting = True
         self._swapping = False
         self._candidate: SwapCandidate | None = None
+        self._in_transition: SwapCandidate | None = None
         self._last_accept: float | None = None
         self._tasks: set[asyncio.Task] = set()
         self._clock = clock
@@ -310,6 +325,11 @@ class SwapCoordinator:
     @property
     def in_flight(self) -> bool:
         return self._in_flight
+
+    @property
+    def in_transition(self) -> SwapCandidate | None:
+        """The candidate handed out by take() that no loop is running yet."""
+        return self._in_transition
 
     def begin(self) -> str | None:
         """Claim the swap slot; None when claimed, else the refusal reason."""
@@ -336,6 +356,13 @@ class SwapCoordinator:
         candidate, self._candidate = self._candidate, None
         if candidate is not None:
             self._swapping = True
+            # Handing it over is not giving it away. The caller holds it in a
+            # local across the outgoing generation's unbind, and a shutdown
+            # cancelling that await drops the local with the coroutine: the
+            # candidate is then staged nowhere and bound nowhere, while the
+            # build it came from already started its skill watcher. Keeping a
+            # reference here is what lets a teardown still find it.
+            self._in_transition = candidate
         return candidate
 
     def release(self) -> None:
@@ -344,6 +371,9 @@ class SwapCoordinator:
         if self._swapping:
             self.generation += 1
             self._swapping = False
+        # Wiring is done, so the caller's own binding now points at this
+        # generation and an ordinary teardown reaches it.
+        self._in_transition = None
         self._booting = False
         self._in_flight = False
 

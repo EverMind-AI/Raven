@@ -361,6 +361,23 @@ def _bootstrap_empty_config() -> None:
     sync_workspace_templates(workspace, notify=lambda m: console.print(f"  [dim]{m}[/dim]"))
 
 
+def _initialize_a2a_face() -> None:
+    """Mint the inbound A2A credential, leaving the face closed.
+
+    Deliberately not folded into ``_bootstrap_empty_config``: that one writes
+    nothing the declarations already answer, and a generated per-install secret
+    is the one thing no declaration can answer. It runs on every onboard, so an
+    install that predates the A2A face picks one up, and it never rotates a
+    token that is already there.
+
+    Provisioning only. Opening the face is ``raven a2a enable``, so an operator
+    who never asked for a second network surface does not get one.
+    """
+    from raven.config.update import initialize_a2a_server
+
+    initialize_a2a_server()
+
+
 # ---------------------------------------------------------------------------
 # Step 1 — provider primitives (reused verbatim from the 3-step wizard)
 # ---------------------------------------------------------------------------
@@ -1703,6 +1720,12 @@ def _current_sandbox_backend() -> str:
     return ((data.get("tools") or {}).get("sandbox") or {}).get("backend") or "none"
 
 
+def _a2a_enabled() -> bool:
+    """Read ``a2a.server.enabled`` from disk; absent means off."""
+    data = _load_raw_config()
+    return bool(((data.get("a2a") or {}).get("server") or {}).get("enabled"))
+
+
 def _persist_sandbox_backend(backend: str) -> None:
     """Patch ``sandbox.backend`` on the on-disk config via the ops layer."""
     from raven.config.update import set_sandbox_backend
@@ -2040,6 +2063,13 @@ def _print_next_steps(*, warnings: list[str], show_next_steps: bool = True) -> N
     run_loc = t("Host (direct)") if _current_sandbox_backend() == "none" else t("Sandbox (boxlite)")
     chans = ", ".join(onboard_channels._enabled_channels()) or t("none")
     mem = _selected_backend() if _memory_enabled() else t("[yellow]off[/yellow]")
+    # Onboarding provisions the token but never opens the face, so the recap
+    # names the command that does rather than leaving "off" as a dead end.
+    a2a = (
+        t("on  [dim](token in a2a.server.token)[/dim]")
+        if _a2a_enabled()
+        else t("[yellow]off[/yellow]  [dim](raven a2a enable)[/dim]")
+    )
     recap = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
     recap.add_column(style="dim", no_wrap=True)
     recap.add_column()
@@ -2048,6 +2078,7 @@ def _print_next_steps(*, warnings: list[str], show_next_steps: bool = True) -> N
     recap.add_row(t("Run location"), run_loc)
     recap.add_row(t("Channels"), chans)
     recap.add_row(t("Memory"), mem)
+    recap.add_row(t("A2A"), a2a)
     console.print(
         Panel(
             recap,
@@ -2651,6 +2682,7 @@ def _run_wizard_body(
         _pick_language()  # may change the UI language (persisted after bootstrap below)
     _handle_existing_config(reset=reset, yes=yes, non_interactive=non_interactive)
     _bootstrap_empty_config()
+    _initialize_a2a_face()
     if not non_interactive:
         from raven.config.update import set_language
 

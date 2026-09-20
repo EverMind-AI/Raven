@@ -19,8 +19,13 @@ PLUGIN_DIR = REPO / "agents" / "raven-research" / "plugins" / "research-flow"
 sys.path.insert(0, str(PLUGIN_DIR))
 
 from research_flow.support.harness_text import (  # noqa: E402
+    CHECKPOINT_ASK_PREFIX,
+    FINALIZE_ASK_PREFIX,
+    ORPHAN_ENTITIES_HEADER,
     SEARCH_CLOSED_PREFIX,
     TOOL_OUTPUT_ELIDED,
+    VERIFY_REJECT_PREFIX,
+    harness_ask_kind,
     harness_body_kind,
     is_elided_tool_output,
     is_harness_authored,
@@ -176,3 +181,61 @@ def test_evidence_pack_reaches_past_harness_text_to_real_evidence():
     assert "the answer is 19" in pack
     assert SEARCH_CLOSED_PREFIX not in pack
     assert TOOL_OUTPUT_ELIDED not in pack
+
+
+def test_each_ask_prefix_still_opens_the_text_its_emitter_writes():
+    """The prefixes are a measurement, so they are pinned against the emitters.
+
+    ``harness_ask_kind`` names how a turn ended. A reworded nudge that no longer
+    starts with its prefix does not fail anything at run time: it silently retires
+    one bucket of the measurement, and the symptom is a distribution that looks
+    like the failure mode stopped happening.
+    """
+    from research_flow.gates.finalize import _commit_nudge
+    from research_flow.gates.spin_breaker import _FORCE_REPORT_NOTE
+    from research_flow.gates.verify import _EVIDENCE_ROUND_PROMPT, _REVISION_PROMPT
+
+    assert _commit_nudge("empty_visible_answer").startswith(FINALIZE_ASK_PREFIX)
+    assert _FORCE_REPORT_NOTE.startswith(CHECKPOINT_ASK_PREFIX)
+    assert _REVISION_PROMPT.startswith(VERIFY_REJECT_PREFIX)
+    assert _EVIDENCE_ROUND_PROMPT.startswith(VERIFY_REJECT_PREFIX)
+
+
+@pytest.mark.parametrize(
+    "body,kind",
+    [
+        ("[finalize] you produced no answer. commit now.", "finalize"),
+        ("[research checkpoint] you are restarting research.", "checkpoint"),
+        ("A reviewer rejected the draft above. Fix the listed issues.", "verify_reject"),
+        ("  [finalize] leading whitespace is stripped", "finalize"),
+    ],
+)
+def test_harness_asks_are_named_by_kind(body, kind):
+    assert harness_ask_kind(body) == kind
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "",
+        None,
+        "The finalize step is where the answer gets committed.",
+        "I rejected the draft above because a reviewer asked me to.",
+    ],
+)
+def test_model_prose_is_not_a_harness_ask(body):
+    """A false positive here mislabels how a run ended, so prose that merely
+    discusses an ask must not match: the prefixes anchor at the start."""
+    assert harness_ask_kind(body) is None
+
+
+def test_the_sidecar_header_is_strict_only():
+    """The block rides on a real tool result, so a permissive match would condemn
+    the page it is attached to rather than costing one item of look-back."""
+    page = f"the real page text\n\n{ORPHAN_ENTITIES_HEADER}\nAda Lovelace, 1843"
+    assert is_harness_authored(page) is False
+    assert is_harness_echo(f"{ORPHAN_ENTITIES_HEADER}\nAda Lovelace, 1843") is True
+
+
+def test_an_answer_discussing_the_sidecar_is_not_an_echo():
+    assert is_harness_echo(f"The page listed extra names under {ORPHAN_ENTITIES_HEADER}.") is False

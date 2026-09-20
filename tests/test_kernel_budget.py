@@ -99,6 +99,146 @@ and the memory backend read one endpoint rather than a copy each. Measured at
 so the host can read back what a sub-agent left behind through the contract
 rather than that backend's HTTP API, and ``store``'s two metadata conventions
 are written down where a plugin author reads them. Measured at 3,013.
+
+3,040 -> 3,100 (2026-09-17), and this is that review. No new paper: thirty-
+nine lines onto two that were already here, both spent saying where a
+dispatch's playbook is read rather than adding anything it can say.
+
+``ActionModule`` gains ``judge`` (28 lines with its prose). The judgement a
+playbook carries was read by a module-level helper inside the tool registry,
+which put "what the agent does next" in two places -- the role for deciding it
+and a private function for vetting it. The method moves the reading to the
+role and leaves the refusing where it was: ``ToolRegistry.execute`` still
+decides what a refusal does, so a replaced role withholds nothing it could not
+already withhold. The prose is most of the 28: two callers and two moments is
+the part a reader gets wrong.
+
+``TurnContext`` and ``AssemblyContext`` gain ``task_brief`` and
+``task_done_when``, 11 lines. The identity segment used to reach into the
+dispatch layer's ContextVar to find out what this turn was asked to do, which
+decided "what does this turn show its model" somewhere the Memory role could
+not see it. Memory fills the two strings now and the segment renders them.
+
+Measured at 3,072, and the twenty-eight above it is the headroom this
+docstring has argued for since the first bump: a ceiling the next field trips
+is a ceiling somebody edits on the way past.
+
+3,100 -> 3,200 (2026-09-17), and this is that review. The Memory role gains
+its mid-turn seat: ``shrink``, with ``WindowPressure`` (the five reasons a
+window is asked to get smaller), ``WindowState`` (one turn's readings and
+retry budgets, held by the shell because the role outlives the turn) and
+``ShrinkResult``, 84 lines of which the prose is most. The five recoveries the
+loop ran inline -- proactive compaction, the standing image window, overflow,
+a picture refused in a tool result, pictures refused for size -- now go
+through this one method, so the policy half moved onto the role while the
+retry mechanism stayed in the shell; the six ``continue`` statements did not
+move. ``REASONING_EFFORT_LADDER`` (11 lines with its prose) also lands in
+``llm_provider.py``: the loop's empty-response descent and the window's head
+summary both read it, and neither package may import the other.
+
+Measured at 3,170, thirty over the count rather than one, for the reason the
+first bump gave.
+
+3,200 -> 3,410 (2026-09-18), and this is that review. The change is a whole
+paper: contracts/agent_conduct.py, 191 lines, the nine verbs a sub-agent
+implements instead of the six hook phases (``AgentConduct``, its ``StepView``
+of fourteen read-only fields, the ``Intake`` and ``Verdict`` it answers with,
+the per-turn ``ConductFactory``, and a diagnostic trail so a gate's one-line
+findings still reach the loop's notes). Left in the names and the count it was
+written with: an entry here is a dated record of one bump, not a description of
+the file today, and the paper has since been renamed to contracts/participant.py
+and grown past 191 lines -- both under their own entries below. It sits beside ``loop_hooks`` rather
+than replacing it: the phases remain the loop's timing contract, this is the
+judgement contract, and an adapter seats one in the other. Surveyed before it
+was written -- 42 real hook implementations across five plugins read fourteen
+context fields and used six decision fields, and every one of them fits one of
+the verbs -- so the paper is sized to what exists, not to what might.
+Factory-loop tier, so the contract-tier digest and ``CONTRACTS_VERSION`` do
+not move with it.
+
+Measured at 3,379, thirty-one over the count, for the reason given above.
+
+3,410 -> 3,440 (2026-09-18), when the participants were seated on the roles:
+``MemoryModule.intake``, ``PlanningModule.advise`` and ``ActionModule.review``
+/ ``salvage`` -- the four verbs a participant answers that belong to a role rather
+than to the seat, each taking this turn's participants so a replaced role decides
+what a plugin's judgement does. 28 lines of protocol and prose; the
+composition rules themselves live in the harness, not here.
+
+Measured at 3,406, thirty-four over the count, for the reason given above.
+
+And once more, 3,440 -> 3,470, for the closeout of the participant contract
+(2026-09-18). Four changes, all of them narrowing what the paper claims rather
+than widening it: ``observe`` is gone, because a verb with no return value
+decides nothing and can only keep the state a participant is forbidden to
+keep; ``outbound`` says on its own docstring that it is the one verb with no
+module seat and therefore the one a generated participant cannot be handed;
+``StepView`` gains ``phase``, so a verb asked at two moments reads which one it
+is instead of inferring it from whichever other field happens to be set, and
+``tools_ran`` becomes a property derived from it so the two cannot disagree;
+and the four delegating role methods are named apart from the verbs they ask
+(``read_inbound`` asks ``intake``, ``guide`` asks ``advise``, ``judge_step``
+asks ``review``, ``rescue`` asks ``salvage``), so a reader of either name knows
+which layer they are on.
+
+Measured at 3,444. The headroom is the twenty-odd this docstring has argued
+for since the first bump, not room set aside to spend.
+
+
+And once more, 3,470 -> 3,500 (2026-09-18), for the three verbs the
+seam applied without a seat. ``system_addendum``, ``archive`` and
+``select_tools`` were rendered straight onto the hook decision, so each was the
+one judgement in the set with nowhere to compose two participants, nowhere to
+vet what came back, and nothing a replacement role could decide. They join the
+roles the other four sit on: ``MemoryModule.ask_system_addendum`` and
+``ask_archive``, and ``CapabilityModule.ask_select_tools``. The tool seat is
+deliberately not the point where narrowing takes effect -- ``select`` still is, and the
+registry still adjudicates every call -- so a participant narrows after the
+product has spoken and never instead of it. 47 lines of protocol and prose.
+
+Measured at 3,477.
+
+
+And once more, 3,500 -> 3,540 (2026-09-18), for the verb that lets a
+dispatch's own judgements be a participant rather than something a role reads
+for itself. ``AgentParticipant.judge`` is the one synchronous verb -- it runs before
+every tool dispatch and ahead of the permission gate -- and it was already pure
+data, a list of sentences. Adding it is what makes the participant list the only
+route an external judgement takes: a Charter's ``checks`` and ``code`` answer it
+through a thin shell, and a judgement generated for one dispatch can join the
+same list without a second way in. ``ActionModule.judge`` takes the list; the
+merge is a veto, so the first participant that refuses decides and the rest are
+not asked. 30 lines of protocol and prose.
+
+Measured at 3,515.
+
+
+And once more, 3,540 -> 3,550 (2026-09-18), for prose only -- no executable
+line moves with it. Two claims on the paper were wider than the tree: the
+``max_iterations`` docstring had been orphaned by the property inserted above
+it, and ``judge`` read as though a plugin's override were asked, when the party
+that asks it is the tool registry and a registry holds no handle on this turn's
+participants. Both now say what is wired. A ceiling bump for a docstring is the
+cost of keeping the paper honest about what it does not do, which is the half a
+reader cannot check by reading the code.
+
+Measured at 3,528.
+
+
+And once more, 3,550 -> 3,570 (2026-09-18), for review. Prose again, and again
+about what the papers do not do. The ``judge`` disclosure had landed in two of
+its four homes; ``ActionModule.ask_judge`` on this paper was a third, and it is
+the one a reader of the role protocol meets first, phrased without naming
+anything the earlier fix touched -- which is why grepping the claim rather than
+the symbol is what found it. The other addition is the type-only edge from this
+paper to ``raven.agent.harness.participants``: the first the kernel has, taken
+knowingly when ``Verdict`` and ``Intake`` moved off the paper so a generated
+judgement could build what a participant answers with. It costs nothing at
+import time and lint-imports does not see it, so it is written down here and
+beside the contract it bends rather than left for the next reader to find.
+
+Measured at 3,542.
+
 """
 
 from __future__ import annotations
@@ -109,7 +249,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 3_040
+CONTRACTS_LINE_CEILING = 3_570
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 

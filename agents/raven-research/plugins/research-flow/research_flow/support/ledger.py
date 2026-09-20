@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
@@ -110,7 +111,14 @@ def open_product_ledger(token: str) -> str | None:
     Failure is degradation, never an exception: an unwritable directory leaves the
     ledger off and the appendix reports ``ledger_not_configured`` as before. An
     appendix is a nicety; the answer is not.
+
+    Opening twice in one context releases the earlier file rather than stranding it.
+    The turn boundary this is called on is the loop's first iteration, and a turn the
+    loop re-runs reaches that boundary again; without the release, the first file is
+    unreachable from the ContextVar that the matching close reads, so it would survive
+    every close and accumulate against the one-file-per-turn contract above.
     """
+    close_product_ledger()
     if _ledger_dir is None:
         _product_path.set(None)
         return None
@@ -196,6 +204,94 @@ def _resolve_session_seq(path: str) -> int:
     except Exception as e:  # noqa: BLE001 - an instrument must not kill the run
         logger.warning("ledger session_seq unresolved ({}): {}", path, e)
         return 1
+
+
+VERBATIM_ENV = "RAVEN_VERBATIM_SINK"
+"""Names the verbatim sink: the text the trajectory drops. Off unless set; env only.
+
+Why this is a second file rather than more fields on the ledger, which already has a row
+per fetch: the ledger's rows are read, and read cheaply. Several consumers partition it
+by ``op`` and most only count rows; a fetch row carrying its page would grow the file
+from ~5 MB to ~250 MB per run and make every one of them read a quarter of a gigabyte to
+count. Worse, :func:`_resolve_session_seq` recovers the re-run split by reading the
+**last 64 KB** of the file and parsing the last complete line - a single 250 KB row
+leaves no complete line in that window, so the split would silently reset to 1 and an
+offline replay would over-count a re-run question exactly the way that function exists
+to prevent.
+
+That same argument is why this file does NOT borrow the ledger's ``session_seq``. The
+tail read works there because the ledger's rows are small; here the rows are exactly the
+oversized ones the paragraph above describes, so a sequence recovered that way resets to
+1 on the first record wider than the window and two runs become indistinguishable. Runs
+are told apart by :func:`_verbatim_run_id` instead, which is minted in memory and never
+recovered from disk.
+
+Off by default and named by the environment rather than the config: the product side is
+long-lived and would otherwise accumulate pages per turn with no reader, and a page
+store is not a nicety the answer path should ever pay for.
+"""
+
+
+def verbatim_path() -> str | None:
+    """Where the verbatim sink writes, or ``None`` when it is off. The ONLY resolver."""
+    return os.environ.get(VERBATIM_ENV)
+
+
+_verbatim_run: str | None = None
+"""This process's tag on the sink. See :func:`_verbatim_run_id`."""
+
+
+def _verbatim_run_id() -> str:
+    """Which run of the sink this process is, minted rather than recovered.
+
+    The ledger answers the same question by reading its own tail, and that is the one
+    technique this file cannot use: its rows are the large ones, so the read that
+    recovers the answer is the read a large row defeats. Minting removes the recovery
+    step entirely - nothing has to be parsed back, so no row size can break it, and two
+    processes appending to one sink are distinguishable however big their records are.
+
+    Opaque and unordered on purpose. A reader that wants the runs in order has ``ts`` on
+    every row; a sequence number here would imply this process knows what came before it,
+    which is the claim that was wrong.
+    """
+    global _verbatim_run
+    if _verbatim_run is None:
+        _verbatim_run = uuid.uuid4().hex[:12]
+    return _verbatim_run
+
+
+def verbatim_append(record: dict[str, Any]) -> None:
+    """Append one verbatim record, if a sink is configured. Readers partition on ``op``.
+
+    Why this is needed at all: by the time a tool result reaches disk it has been through
+    three lossy stages, and the trajectory keeps none of the originals. Measured over two
+    360-item runs:
+
+      * the **digest** discards the page at the tool seam - the model saw a median 5.59%
+        of the fetched text and the remaining 94.41% is not written anywhere;
+      * the context **trimmer** replaces 44.9% / 50.2% of tool messages with
+        :data:`~research_flow.support.harness_text.TOOL_OUTPUT_ELIDED`, always as a
+        prefix, leaving long items about three readable results;
+      * the **ingest cap** truncates what is left.
+
+    So "what did this tool actually return" is unanswerable after the fact, and any
+    pricing of the digest seam can only be done on the short-trajectory stratum - whose
+    survivorship bias runs one way, because it drops the items that searched longest.
+    This sink is the smallest thing that closes that, and it is an instrument:
+    append-only, read by nobody at run time, and a write failure is logged and swallowed,
+    because an instrument that can kill the run it measures is worse than no instrument.
+
+    ``run_id`` is stamped here for the same reason :func:`ledger_append` stamps
+    ``session_seq``: several call sites, one definition of a line.
+    """
+    if not (path := verbatim_path()):
+        return
+    record.setdefault("run_id", _verbatim_run_id())
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:  # noqa: BLE001 - same reasoning as ledger_append below
+        logger.error("verbatim sink append failed ({}): {}", path, e)
 
 
 def ledger_append(record: dict[str, Any]) -> None:

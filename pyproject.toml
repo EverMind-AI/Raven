@@ -68,6 +68,13 @@ dependencies = [
     "aiohttp>=3.13.4",
     "click>=8.1",
     "pyarrow>=17",
+    "a2a-sdk>=1.1.2",
+    # The A2A object model IS protobuf, so the inbound face converts at its own
+    # boundary (raven/a2a/runtime.py, routes_aiohttp.py) rather than letting the
+    # SDK's types leak outward. That makes google.protobuf a direct import of
+    # ours, not an incidental one -- declared for the same reason as numpy and
+    # idna above, and range-matched to what a2a-sdk itself allows.
+    "protobuf>=5.29.5,<7",
 ]
 
 [project.optional-dependencies]
@@ -541,6 +548,7 @@ dev = [
     "json-repair>=0.59.5",
     "jsonschema>=4.23.0",
     "lxml-stubs>=0.5.1",
+    "markdown>=3.10",
     "packaging>=26.1",
     "pexpect>=4.9",
     "pip-audit>=2.10.0",
@@ -552,6 +560,12 @@ dev = [
     "pytest-xdist>=3.8.0",
     "ruff==0.15.12",
     "ty==0.0.80",
+]
+docs = [
+    "jieba>=0.42.1",
+    "mkdocs-git-revision-date-localized-plugin>=1.6.0",
+    "mkdocs-material>=9.5",
+    "mkdocs-static-i18n>=1.0",
 ]
 
 [tool.importlinter]
@@ -583,8 +597,11 @@ source_modules = [
     # (measured: zero cli/rpc/acp imports in either); seated inner so the
     # machine watches the edge instead of a ruling note.
     "raven.browser", "raven.importer", "raven.updates",
+    # The outbound shelf, seated as `acp_client`'s mirror: `a2a_client/` is
+    # raven calling somebody else's agent, `a2a/` is the entrance.
+    "raven.a2a_client",
 ]
-forbidden_modules = ["raven.cli", "raven.rpc", "raven.acp"]
+forbidden_modules = ["raven.cli", "raven.rpc", "raven.acp", "raven.a2a"]
 # Debt allowlist: none. The last allowlisted edge (market reaching the skill
 # install engine through its rpc wrapper) closed when the engine moved to
 # skill_hub; an ignore_imports entry here would be new debt, not a carry-over.
@@ -599,6 +616,19 @@ type = "forbidden"
 # provider registry and pricing table reads) moved out to raven/observability
 # and RAVEN_HOME resolution moved in to raven/home.py, so an ignore_imports
 # entry here would be new debt, not a carry-over.
+#
+# One type-only edge exists and is deliberate, so it is written here rather
+# than left for a reader to discover: contracts/harness.py names
+# raven.agent.harness.participants under TYPE_CHECKING, for the Verdict and
+# Intake the asking half of the role protocol returns. Those are the shapes the
+# shell reads a participant's answer into, and commit-by-commit they were moved
+# off the paper on purpose -- a participant answers with a plain mapping, and a
+# host class on the paper is exactly what a generated judgement cannot build.
+# The price is that the papers name a symbol a papers-only wheel would not
+# contain. It costs nothing at import time, which is what this contract is
+# about, and lint-imports does not see it because exclude_type_checking_imports
+# is on below. If the papers are ever built as their own wheel with type stubs,
+# this is the one edge to resolve.
 source_modules = ["raven.contracts", "raven.home", "raven.spine", "raven.tracing"]
 forbidden_modules = [
     "raven.acp", "raven.acp_client", "raven.agent", "raven.auth", "raven.browser",
@@ -621,7 +651,7 @@ type = "forbidden"
 source_modules = [
     "raven.agent.tools", "raven.agent.subagent", "raven.acp_client",
     "raven.agent.context", "raven.agent.hook", "raven.agent.personalizer",
-    "raven.agent.workdir", "raven.agent.harness",
+    "raven.agent.workdir", "raven.agent.harness", "raven.agent.window",
 ]
 forbidden_modules = ["raven.agent.loop"]
 
@@ -683,7 +713,7 @@ forbidden_modules = ["benchmarks", "demos", "tests"]
 # by the host).
 name = "the served surfaces do not import the launcher"
 type = "forbidden"
-source_modules = ["raven.rpc", "raven.acp"]
+source_modules = ["raven.rpc", "raven.acp", "raven.a2a"]
 forbidden_modules = ["raven.cli"]
 
 [[tool.importlinter.contracts]]

@@ -7,10 +7,17 @@ import subprocess
 import sys
 
 import pytest
+from rich.console import Console
 
 from raven.cli import trajectory_browse as tbrowse
+from raven.trajectory import conversation as tconversation
 from raven.trajectory import store as tstore
 from raven.trajectory import verdict as tverdict
+
+# Runtime CJK values are written as escapes: the fixtures test display-width
+# handling, and the source itself must stay English per the language gate.
+_WIDE = "\u5bbd"
+_WIDE_RUN = "\u5bbd\u5b57\u7b26"
 
 _CANCEL = object()
 _BACK = tbrowse._BACK
@@ -1347,25 +1354,376 @@ def test_turn_previews_sanitize_types_and_length(state, workspace):
     assert len(row.preview) == 32 and row.preview.endswith("…")
 
 
-def test_preview_screen_placeholder_and_escape(monkeypatch):
-    from io import StringIO
+def _rec(label="Tool output", kind="tool", text="", **kw):
+    base = dict(
+        trace_id="t1",
+        span_id="s1",
+        turn_span_id="turn",
+        event_time="2026-08-20T10:00:00+00:00",
+        seq=0,
+        degraded=None,
+        error=None,
+        meta=None,
+    )
+    base.update(kw)
+    return tconversation.ConversationRecord(label=label, kind=kind, text=text, **base)
 
-    from rich.console import Console
+
+def _plain(lines):
+    return [line.plain for line in lines]
+
+
+def test_conversation_lines_alignment_and_hanging_indent():
+    records = [
+        _rec("LLM input", "llm", "question", span_id="a", seq=0),
+        _rec("Tool output", "tool", "line one\nline two", span_id="b", seq=1),
+    ]
+    lines = _plain(tbrowse._conversation_lines(records, 80))
+    label_col = tbrowse._cell_width("Tool output:") + 1
+    assert lines[0].startswith("LLM input:")
+    assert lines[0][label_col:] == "question"
+    assert lines[1][label_col:] == "line one"
+    assert lines[2] == " " * label_col + "line two"
+
+
+def test_conversation_lines_cjk_wrap_keeps_width():
+    records = [_rec("Tool output", "tool", _WIDE * 10)]
+    width = 27
+    lines = tbrowse._conversation_lines(records, width)
+    assert all(tbrowse._cell_width(line.plain) <= width for line in lines)
+    joined = "".join(line.plain for line in lines).replace(" ", "")
+    assert joined == "Tooloutput:" + _WIDE * 10
+
+
+def test_conversation_lines_kind_styles():
+    records = [
+        _rec("User input", "user", "u", span_id="a", seq=0),
+        _rec("LLM output", "llm", "l", span_id="b", seq=1),
+        _rec("Tool input", "tool", "t", span_id="c", seq=2),
+        _rec("Skill read", "skill", "s", span_id="d", seq=3),
+        _rec("Memory recall", "memory", "m", span_id="e", seq=4),
+        _rec("LLM thinking", "llm", "think", span_id="f", seq=5),
+    ]
+    lines = tbrowse._conversation_lines(records, 100)
+    styles = [str(line.spans[0].style) for line in lines]
+    assert styles == ["green", "cyan", "yellow", "magenta", "dim", "dim cyan"]
+
+
+def test_conversation_lines_sanitize_all_fields():
+    record = _rec(
+        "Bad\x1b[31m\nlabel",
+        "tool",
+        "x[red]y\x1b[31mz\r\tw\nnext",
+        degraded="deg\x1b[7m\nraded",
+        error="err\x1b[0m\nor",
+        meta="me\x1b[1m\nta",
+    )
+    lines = tbrowse._conversation_lines([record], 200)
+    plains = _plain(lines)
+    assert all("\x1b" not in plain and "\r" not in plain and "\t" not in plain for plain in plains)
+    assert "x[red]y" in plains[0]
+    assert any(plain.strip() == "next" for plain in plains)
+    label_line = plains[0]
+    assert label_line.startswith("Bad [31m label:")
+    notes = [plain.strip() for plain in plains[-3:]]
+    assert notes[0].startswith("(! deg [7m raded")
+    assert notes[1].startswith("[ERROR] err [0m or")
+    assert notes[2] == "(me [1m ta)"
+
+
+def test_conversation_lines_note_styles_and_order():
+    record = _rec("Tool output", "tool", "body", degraded="lost", error="boom", meta="run")
+    lines = tbrowse._conversation_lines([record], 80)
+    tail = [(line.plain.strip(), str(line.style)) for line in lines[1:]]
+    assert tail == [("(! lost)", "dim yellow"), ("[ERROR] boom", "red"), ("(run)", "dim")]
+
+
+def test_conversation_lines_turn_separators_no_regroup():
+    records = [
+        _rec("User input", "user", "a1", trace_id="tA", turn_span_id="turnA", span_id="a1", seq=0),
+        _rec("User input", "user", "b1", trace_id="tB", turn_span_id="turnB", span_id="b1", seq=1),
+        _rec("Agent reply", "user", "a2", trace_id="tA", turn_span_id="turnA", span_id="a2", seq=2),
+    ]
+    plains = _plain(tbrowse._conversation_lines(records, 80))
+    assert plains[0].startswith("── Turn 1 · ")
+    assert plains[2].startswith("── Turn 2 · ")
+    assert plains[4] == "── Turn 1 (continued) ──"
+    assert plains[3].endswith("b1")
+    assert plains[5].endswith("a2")
+
+
+def test_conversation_lines_marker_feeds_separator_only():
+    records = [
+        _rec("Turn", "user", "", trace_id="tA", turn_span_id="turnA", event_time="2026-08-20T10:00:00+00:00", seq=0),
+        _rec("User input", "user", "hello", trace_id="tB", turn_span_id="turnB", span_id="b1", seq=1),
+    ]
+    plains = _plain(tbrowse._conversation_lines(records, 80))
+    assert plains[0] == "── Turn 1 · 2026-08-20 10:00 ──"
+    assert plains[1].startswith("── Turn 2 · ")
+    assert len(plains) == 3
+    single = _plain(tbrowse._conversation_lines(records[1:], 80))
+    assert not any(plain.startswith("── Turn") for plain in single)
+
+
+@pytest.mark.parametrize("width", [10, 6, 5, 3])
+def test_conversation_lines_narrow_stacked_layout_keeps_content(width):
+    body = f"abcdef{_WIDE_RUN}xyz"
+    records = [_rec("Tool output", "tool", body)]
+    lines = tbrowse._conversation_lines(records, width)
+    assert all(tbrowse._cell_width(line.plain) <= width for line in lines)
+    joined = "".join(line.plain.strip() for line in lines)
+    assert joined == "Tooloutput:" + body or joined == "Tool output:" + body
+
+
+def _preview_console(monkeypatch):
+    from io import StringIO
 
     buf = StringIO()
     monkeypatch.setattr(tbrowse, "console", Console(file=buf, force_terminal=True, color_system="truecolor", width=500))
+    return buf
 
-    tbrowse._preview_screen(1, _mk_attempt())
-    tbrowse._preview_screen(
-        2, _mk_attempt(turn_previews=(tbrowse._TurnPreview("s", "i", "t", "x[red]y", "pre[/dim]view"),))
-    )
-    tbrowse._preview_screen(3, _mk_attempt(turn_previews=(tbrowse._TurnPreview("s", "i", "t", "", ""),)))
 
+def test_preview_screen_empty_and_marker_only(state, monkeypatch):
+    buf = _preview_console(monkeypatch)
+    assert tbrowse._preview_screen(1, _mk_attempt(traces=("trace-none",)), state) is True
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+    assert tbrowse._preview_screen(2, _mk_attempt(traces=("trace-1",)), state) is True
     out = buf.getvalue()
     assert "(no turns recorded)" in out
+    assert "(no preview recorded)" in out  # a bare Turn marker renders no body line
+
+
+def test_preview_screen_falls_back_to_legacy_on_rebuild_failure(monkeypatch):
+    buf = _preview_console(monkeypatch)
+
+    def _boom(traces, state_dir=None):
+        raise RuntimeError("store exploded")
+
+    monkeypatch.setattr(tbrowse.tconversation, "attempt_conversation", _boom)
+    row = _mk_attempt(turn_previews=(tbrowse._TurnPreview("s", "i", "t", "x[red]y", "pre[/dim]view"),))
+    assert tbrowse._preview_screen(1, row) is True
+    out = buf.getvalue()
     assert "x[red]y" in out and "pre[/dim]view" in out
-    assert "(no preview recorded)" in out  # turns exist, but nothing is displayable
     assert "\x1b[31" not in out
+
+
+def test_preview_screen_renders_full_conversation(state, monkeypatch):
+    import json as _json
+
+    buf = _preview_console(monkeypatch)
+    artifact_dir = state / "logs" / "audit-artifacts"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    def _artifact(name, payload):
+        path = artifact_dir / f"{name}.json"
+        path.write_text(_json.dumps(payload), encoding="utf-8")
+        return str(path)
+
+    turn = _span("trace-1", session_key="cli:a", span_id="turn")
+    turn["attributes"]["turn.input.artifact_path"] = _artifact("turn-in", {"content": "fix the bug"})
+    llm = _span("trace-1", session_key="cli:a", name="llm.call", span_id="llm")
+    llm["parentSpanId"] = "turn"
+    llm["startTime"] = "2026-08-20T10:00:00.500+00:00"
+    llm["attributes"]["llm.input.artifact_path"] = _artifact(
+        "llm-in", {"messages": [{"role": "user", "content": "fix the bug"}]}
+    )
+    llm["attributes"]["llm.output.artifact_path"] = _artifact("llm-out", {"content": "done", "tool_calls": []})
+    _write_log(state / "logs" / "audit-spans.log", [turn, llm])
+
+    assert tbrowse._preview_screen(1, _mk_attempt(traces=("trace-1",)), state) is True
+    out = buf.getvalue()
+    assert "User input:" in out and "LLM input:" in out and "LLM output:" in out
+    assert "fix the bug" in out and "done" in out
+
+
+def test_conversation_lines_narrow_separators_respect_width():
+    records = [
+        _rec("User input", "user", "a", trace_id="tA", turn_span_id="turnA", span_id="a1", seq=0),
+        _rec("User input", "user", "b", trace_id="tB", turn_span_id="turnB", span_id="b1", seq=1),
+        _rec("Agent reply", "user", "c", trace_id="tA", turn_span_id="turnA", span_id="a2", seq=2),
+    ]
+    width = 10
+    lines = tbrowse._conversation_lines(records, width)
+    assert all(tbrowse._cell_width(line.plain) <= width for line in lines)
+    compact = "".join(line.plain for line in lines).replace(" ", "")
+    assert "──Turn1·" in compact
+    assert "──Turn2·" in compact
+    assert "──Turn1(continued)──" in compact
+
+
+def test_conversation_lines_marker_only_narrow_separators_respect_width():
+    records = [
+        _rec("Turn", "user", "", trace_id="tA", turn_span_id="turnA", seq=0),
+        _rec("Turn", "user", "", trace_id="tB", turn_span_id="turnB", seq=1),
+    ]
+    width = 10
+    lines = tbrowse._conversation_lines(records, width)
+    assert lines  # separators only, but real lines within the real width
+    assert all(tbrowse._cell_width(line.plain) <= width for line in lines)
+
+
+def test_wrap_display_breaks_at_spaces_not_mid_word():
+    assert tbrowse._wrap_display("alpha beta gamma", 11) == ["alpha beta", "gamma"]
+    assert tbrowse._wrap_display("supercalifragilistic", 8) == ["supercal", "ifragili", "stic"]
+    assert tbrowse._wrap_display(" leading indent", 9) == [" leading", "indent"]
+    assert tbrowse._wrap_display(f"{_WIDE * 2} narrow words", 8) == [_WIDE * 2, "narrow", "words"]
+
+
+def test_conversation_lines_meta_shown_once_per_span():
+    meta = "model-x · in 5 / out 2 tok"
+    records = [
+        _rec("LLM input", "llm", "q", span_id="llm1", seq=0, meta=meta),
+        _rec("LLM thinking", "llm", "t", span_id="llm1", seq=1, meta=meta),
+        _rec("LLM output", "llm", "a", span_id="llm1", seq=2, meta=meta),
+        _rec("Tool input", "tool", "p", span_id="tool1", seq=3, meta="run"),
+        _rec("Tool output", "tool", "r", span_id="tool1", seq=4, meta="run"),
+    ]
+    plains = _plain(tbrowse._conversation_lines(records, 120))
+    assert plains.count(f"             ({meta})") + plains.count(f"              ({meta})") <= 1
+    assert sum(1 for plain in plains if plain.strip() == f"({meta})") == 1
+    assert sum(1 for plain in plains if plain.strip() == "(run)") == 1
+    assert plains.index(next(p for p in plains if p.strip() == f"({meta})")) > plains.index(
+        next(p for p in plains if p.startswith("LLM output:"))
+    )
+
+
+def test_conversation_lines_meta_not_deduped_across_traces():
+    meta = "model-x"
+    records = [
+        _rec("LLM output", "llm", "a", trace_id="tA", turn_span_id="tuA", span_id="same", seq=0, meta=meta),
+        _rec("LLM output", "llm", "b", trace_id="tB", turn_span_id="tuB", span_id="same", seq=1, meta=meta),
+    ]
+    plains = _plain(tbrowse._conversation_lines(records, 100))
+    assert sum(1 for plain in plains if plain.strip() == f"({meta})") == 2
+
+
+def test_conversation_lines_three_trace_interleave_snapshot():
+    records = [
+        _rec("User input", "user", "a1", trace_id="tA", turn_span_id="tuA", span_id="a1", seq=0),
+        _rec("User input", "user", "b1", trace_id="tB", turn_span_id="tuB", span_id="b1", seq=1),
+        _rec("User input", "user", "c1", trace_id="tC", turn_span_id="tuC", span_id="c1", seq=2),
+        _rec("Agent reply", "user", "b2", trace_id="tB", turn_span_id="tuB", span_id="b2", seq=3),
+        _rec("Agent reply", "user", "a2", trace_id="tA", turn_span_id="tuA", span_id="a2", seq=4),
+    ]
+    plains = _plain(tbrowse._conversation_lines(records, 100))
+    bodies = [p for p in plains if not p.startswith("── Turn")]
+    assert [p.split()[-1] for p in bodies] == ["a1", "b1", "c1", "b2", "a2"]
+    seps = [p for p in plains if p.startswith("── Turn")]
+    assert seps[0].startswith("── Turn 1 · ")
+    assert seps[1].startswith("── Turn 2 · ")
+    assert seps[2].startswith("── Turn 3 · ")
+    assert seps[3] == "── Turn 2 (continued) ──"
+    assert seps[4] == "── Turn 1 (continued) ──"
+
+
+def test_collapse_folds_by_display_lines():
+    body = "\n".join(f"line {i}" for i in range(6))
+    records = [_rec("Tool output", "tool", body)]
+    expanded = _plain(tbrowse._conversation_lines(records, 80))
+    assert len([p for p in expanded if "line " in p]) == 6
+    folded = _plain(tbrowse._conversation_lines(records, 80, collapse=True))
+    assert len([p for p in folded if "line " in p]) == 5
+    assert folded[-1].strip() == "… (+1 more lines, s to expand)"
+
+    exactly_five = [_rec("Tool output", "tool", "\n".join(f"l{i}" for i in range(5)))]
+    assert _plain(tbrowse._conversation_lines(exactly_five, 80, collapse=True)) == _plain(
+        tbrowse._conversation_lines(exactly_five, 80)
+    )
+
+
+def test_collapse_threshold_uses_display_lines_not_source_lines():
+    records = [_rec("Tool output", "tool", "abcdef " * 12)]  # one source line
+    wide = tbrowse._conversation_lines(records, 200, collapse=True)
+    assert not any("s to expand" in line.plain for line in wide)
+    narrow = tbrowse._conversation_lines(records, 26, collapse=True)  # wraps past 5 display lines
+    assert any("… (+" in line.plain for line in narrow)  # the ellipsis line itself wraps at this width
+    assert all(tbrowse._cell_width(line.plain) <= 26 for line in narrow)
+
+
+def test_collapse_never_hides_note_lines():
+    body = "\n".join(f"line {i}" for i in range(8))
+    records = [_rec("Tool output", "tool", body, degraded="lost", error="boom", meta="run")]
+    plains = _plain(tbrowse._conversation_lines(records, 80, collapse=True))
+    tail = [p.strip() for p in plains[-3:]]
+    assert tail == ["(! lost)", "[ERROR] boom", "(run)"]
+    assert any("s to expand" in p for p in plains)
+
+
+def test_label_filter_matches_case_insensitively():
+    records = [
+        _rec("LLM input", "llm", "q", span_id="a", seq=0),
+        _rec("LLM output", "llm", "a", span_id="b", seq=1),
+        _rec("Tool output", "tool", "r", span_id="c", seq=2),
+    ]
+    for needle in ("LLM", "llm"):
+        plains = _plain(tbrowse._conversation_lines(records, 80, label_filter=needle))
+        assert [p.split(":")[0] for p in plains] == ["LLM input", "LLM output"]
+    assert tbrowse._conversation_lines(records, 80, label_filter="nothing-matches") == []
+
+
+def test_label_filter_shrinks_label_column_and_stacks_with_collapse():
+    records = [
+        _rec("LLM input", "llm", "\n".join(f"line {i}" for i in range(6)), span_id="a", seq=0),
+        _rec("Personalize classify output", "memory", "x", span_id="b", seq=1),
+    ]
+    filtered = _plain(tbrowse._conversation_lines(records, 80, label_filter="llm", collapse=True))
+    label_col = tbrowse._cell_width("LLM input:") + 1
+    assert filtered[0][:label_col] == tbrowse._cell_pad("LLM input:", label_col)
+    assert filtered[-1].strip() == "… (+1 more lines, s to expand)"
+
+
+def test_label_filter_drops_empty_turn_groups_and_their_separators():
+    records = [
+        _rec("User input", "user", "u", trace_id="tA", turn_span_id="tuA", span_id="a1", seq=0),
+        _rec("Turn", "user", "", trace_id="tB", turn_span_id="tuB", span_id="b0", seq=1),
+        _rec("LLM output", "llm", "x", trace_id="tB", turn_span_id="tuB", span_id="b1", seq=2),
+    ]
+    plains = _plain(tbrowse._conversation_lines(records, 80, label_filter="llm"))
+    assert not any(p.startswith("── Turn") for p in plains)  # single visible group
+    assert [p.split(":")[0] for p in plains] == ["LLM output"]
+
+    both = _plain(tbrowse._conversation_lines(records, 80, label_filter="u"))
+    # "u" matches both User input and LLM output, so both groups stay visible.
+    assert len([p for p in both if p.startswith("── Turn")]) == 2
+
+
+def test_preview_screen_opens_viewer_on_tty(state, monkeypatch):
+    _preview_console(monkeypatch)
+    _write_log(
+        state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a", attrs={"turn.input_preview": "hi"})]
+    )
+    row = _mk_attempt(traces=("trace-1",))
+    seen = {}
+
+    def fake_view(make_lines, *, title, **kw):
+        seen["title"] = title
+        seen["lines"] = make_lines(False, None, 80)
+        return False
+
+    monkeypatch.setattr(tbrowse, "_viewer_available", lambda: True)
+    monkeypatch.setattr(tbrowse.pviewer, "view_lines", fake_view)
+    assert tbrowse._preview_screen(3, row, state) is False
+    assert seen["title"] == "Preview #3"
+    assert any("User input" in line.plain for line in seen["lines"])
+
+
+def test_preview_screen_viewer_cancel_raises_browser_cancel(state, monkeypatch):
+    _preview_console(monkeypatch)
+    _write_log(
+        state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a", attrs={"turn.input_preview": "hi"})]
+    )
+    row = _mk_attempt(traces=("trace-1",))
+    monkeypatch.setattr(tbrowse, "_viewer_available", lambda: True)
+    monkeypatch.setattr(tbrowse.pviewer, "view_lines", lambda make_lines, *, title, **kw: True)
+    with pytest.raises(tbrowse._CancelledError):
+        tbrowse._preview_screen(1, row, state)
+
+
+def test_space_skips_waiter_after_viewer(state, workspace, monkeypatch):
+    _two_turn_log(state)
+    monkeypatch.setattr(tbrowse, "_preview_screen", lambda index, row, state_dir=None: False)
+    fake = _browse(monkeypatch, [("pick", "session"), ("hit", " ", "#1"), _BACK, _CANCEL], workspace)
+    assert "press" not in [k for k, _m, _t in fake.prompts]
 
 
 @pytest.mark.parametrize(

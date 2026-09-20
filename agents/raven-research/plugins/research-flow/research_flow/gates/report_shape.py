@@ -70,7 +70,8 @@ from __future__ import annotations
 import logging
 import re
 
-from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.loop_hooks import HookDecision
+from research_flow.gates.base import Gate, GateCtx
 from research_flow.support.answer_text import closing_tag_bar, visible_answer
 from research_flow.support.brief_checklist import render_checklist
 
@@ -245,7 +246,7 @@ _REWRITE_PROMPT = (
 )
 
 
-class ReportShapeGate(AgentHook):
+class ReportShapeGate(Gate):
     """Bounce a terminal draft that is missing a template section, once.
 
     Deliberately **not** wrapped in ``GatedHook``: it is the one DR observer that
@@ -268,7 +269,7 @@ class ReportShapeGate(AgentHook):
     def name(self) -> str:
         return "ReportShapeGate"
 
-    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def after_iteration(self, ctx: GateCtx) -> HookDecision:
         if getattr(ctx.response, "has_tool_calls", False):
             return HookDecision()
         draft = visible_answer(

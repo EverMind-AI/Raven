@@ -40,9 +40,10 @@ import logging
 import time
 from contextvars import ContextVar
 
-from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.loop_hooks import HookDecision
 from raven.security.trust import unwrap_untrusted
 from research_flow.gates.ask_user import is_first_turn
+from research_flow.gates.base import Gate, GateCtx
 from research_flow.gates.conversation import ConversationGate, TurnMode
 from research_flow.support._verdict import coerce_bool, parse_bool_verdict
 from research_flow.support.answer_text import closing_tag_bar, visible_answer
@@ -155,7 +156,7 @@ evidence covers.
 When two readings are close, choose "research"."""
 
 
-class PlainFirstGate(AgentHook):
+class PlainFirstGate(Gate):
     """Withhold the web tools for the first reply; accept, or escalate to research."""
 
     def __init__(
@@ -187,7 +188,7 @@ class PlainFirstGate(AgentHook):
     def name(self) -> str:
         return "PlainFirstGate"
 
-    async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def before_iteration(self, ctx: GateCtx) -> HookDecision:
         if not (is_first_turn() or is_plain_turn()) or (ctx.iteration or 0) != 1:
             return HookDecision()
         state = ctx.metadata.setdefault("plain_first", {})
@@ -205,7 +206,7 @@ class PlainFirstGate(AgentHook):
             notes=["plain_first: web tools withheld"],
         )
 
-    async def before_execute_tools(self, ctx: AgentHookContext) -> HookDecision:
+    async def before_execute_tools(self, ctx: GateCtx) -> HookDecision:
         state = ctx.metadata.get("plain_first") or {}
         if not state.get("withheld"):
             return HookDecision()
@@ -236,7 +237,7 @@ class PlainFirstGate(AgentHook):
         self._finish(ctx, state, "escalated_tool")
         return self._escalate(state["request_reason"] or "the model asked for it", draft=None)
 
-    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def after_iteration(self, ctx: GateCtx) -> HookDecision:
         state = ctx.metadata.get("plain_first") or {}
         if not state.get("withheld") or state.get("outcome"):
             return HookDecision()
@@ -286,7 +287,7 @@ class PlainFirstGate(AgentHook):
             return self._escalate(why, draft=draft)
         return self._finish(ctx, state, "accepted")
 
-    def _finish(self, ctx: AgentHookContext, state: dict, outcome: str) -> HookDecision:
+    def _finish(self, ctx: GateCtx, state: dict, outcome: str) -> HookDecision:
         state["outcome"] = outcome
         ledger_append(
             {
@@ -316,7 +317,7 @@ class PlainFirstGate(AgentHook):
         )
         return HookDecision(rollback=True, rollback_inject=inject, notes=[f"plain_first: escalated ({why})"])
 
-    async def _judge(self, ctx: AgentHookContext, draft: str) -> tuple[dict | None, bool]:
+    async def _judge(self, ctx: GateCtx, draft: str) -> tuple[dict | None, bool]:
         """The verdict, or None, and whether the judge was asked again for its keys.
 
         The re-ask bit is carried on the failure side too: a corrective call that
@@ -408,7 +409,7 @@ def _first_json_object(text: str) -> dict | None:
     return None
 
 
-class PlainScopedReview(AgentHook):
+class PlainScopedReview(Gate):
     """Route a judged, evidence-free plain answer past the evidence reviewer.
 
     The reviewer's rubric is claims against evidence; on a turn that opened no page it
@@ -425,7 +426,7 @@ class PlainScopedReview(AgentHook):
     reads this turn's transcript, not the configuration.
     """
 
-    def __init__(self, inner: AgentHook, closing_tag_required: bool = False) -> None:
+    def __init__(self, inner: Gate, closing_tag_required: bool = False) -> None:
         self._inner = inner
         self._closing_tag_required = closing_tag_required
 
@@ -434,25 +435,25 @@ class PlainScopedReview(AgentHook):
         return f"PlainScoped({self._inner.name})"
 
     @property
-    def inner(self) -> AgentHook:
+    def inner(self) -> Gate:
         return self._inner
 
-    async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
+    async def before_user_inbound(self, ctx: GateCtx) -> HookDecision:
         return await self._inner.before_user_inbound(ctx)
 
-    async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def before_iteration(self, ctx: GateCtx) -> HookDecision:
         return await self._inner.before_iteration(ctx)
 
-    async def before_execute_tools(self, ctx: AgentHookContext) -> HookDecision:
+    async def before_execute_tools(self, ctx: GateCtx) -> HookDecision:
         return await self._inner.before_execute_tools(ctx)
 
-    async def terminal_answerless(self, ctx: AgentHookContext) -> HookDecision:
+    async def terminal_answerless(self, ctx: GateCtx) -> HookDecision:
         return await self._inner.terminal_answerless(ctx)
 
-    async def after_send(self, ctx: AgentHookContext) -> HookDecision:
+    async def after_send(self, ctx: GateCtx) -> HookDecision:
         return await self._inner.after_send(ctx)
 
-    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def after_iteration(self, ctx: GateCtx) -> HookDecision:
         if not self._plain_unsourced(ctx):
             return await self._inner.after_iteration(ctx)
         plain = ctx.metadata["plain_first"]
@@ -475,7 +476,7 @@ class PlainScopedReview(AgentHook):
         logger.info("plain-review: skipped, the judge read the draft")
         return HookDecision(notes=["plain_review: skipped_judged"])
 
-    def _plain_unsourced(self, ctx: AgentHookContext) -> bool:
+    def _plain_unsourced(self, ctx: GateCtx) -> bool:
         plain = ctx.metadata.get("plain_first") or {}
         if plain.get("outcome") not in _ACCEPTED or plain.get("review"):
             return False
