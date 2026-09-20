@@ -234,6 +234,37 @@ describe('live event consumers', () => {
     expect(store.byKey('dag', 'r1')?.task_summary).toBe('reconciled')
   })
 
+  /* A node's own terminal frame too: with a sibling still running the run's
+     terminal frame can be minutes away, and the settled node's final usage
+     is only on the server. */
+  it("a node's terminal frame reconciles the row; a running frame does not", async () => {
+    const node = (over: Partial<TaskNode> & Pick<TaskNode, 'node_id' | 'status'>): TaskNode => ({
+      agent: 'raven', depends_on: [], files: [], ...over,
+    })
+    store.set((prev) => ({
+      ...prev,
+      rows: [row({ id: 'r1', kind: 'dag', status: 'running', nodes: [node({ node_id: 'n1', status: 'running' }), node({ node_id: 'n2', status: 'pending' })] })],
+      loaded: true,
+    }))
+    let reads = 0
+    source.one = async (kind, id) => { reads += 1; return rows.find((r) => r.kind === kind && r.id === id) || null }
+    rows = [row({
+      id: 'r1', kind: 'dag', status: 'running',
+      nodes: [node({ node_id: 'n1', status: 'completed', tokens_in: 4000, tokens_out: 910 }), node({ node_id: 'n2', status: 'running' })],
+    })]
+
+    store.onNodeUpdated({ run_id: 'r1', node: 'n1', status: 'running', tool_call_id: 'c1' })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(reads).toBe(0)
+
+    store.onNodeUpdated({ run_id: 'r1', node: 'n1', status: 'completed', ended_at: 2000 })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(reads).toBe(1)
+    expect(store.byKey('dag', 'r1')?.nodes[0]).toMatchObject({ status: 'completed', tokens_in: 4000, tokens_out: 910 })
+  })
+
   /* Independent of any React or effect timing: a terminal event schedules
      reconcile, the reader switches conversations before it answers, and the
      answer must not prepend or overwrite a row into the session now open. */

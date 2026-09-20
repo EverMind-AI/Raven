@@ -89,8 +89,8 @@ export const byKey = (kind: TaskKind, id: string): TaskRow | null =>
  * trip describes a row the answer cannot: a run dispatched in that window is
  * missing from it entirely, and a node the frame moved is stale in it. Neither
  * is recoverable afterwards -- `dag.run_started` fires once per run, and
- * `applyNodeUpdated` schedules no reconcile, so whatever the answer writes
- * stands until the next frame or the next read.
+ * `applyNodeUpdated` schedules a reconcile only on a node's own terminal frame,
+ * so whatever the answer writes stands until the next frame or the next read.
  *
  * A key stamped later than the tick a read captured is a row that read must
  * leave alone. A key stamped with no row behind it is one a frame RETIRED (a
@@ -138,7 +138,7 @@ export async function refresh(): Promise<void> {
      The answer is the richer copy -- it alone carries the tokens, the output
      files and the final error text -- but it may also be describing a node
      the reader has already watched finish, and nothing would correct that:
-     `dag.node_updated` schedules no reconcile. The other way costs nothing
+     a mid-run `dag.node_updated` schedules no reconcile. The other way costs nothing
      for long, because every terminal frame DOES schedule one (`apply`'s
      refetch), so the richer copy lands a moment later of its own accord. */
   const fresher = (k: string): boolean => (liveAt.get(k) ?? 0) > tick
@@ -250,7 +250,7 @@ export function onRunStarted(p: live.RunStartedPayload): void {
   liveRows(live.applyRunStarted(store.get().rows, p))
 }
 export function onNodeUpdated(p: live.NodeUpdatedPayload): void {
-  liveRows(live.applyNodeUpdated(store.get().rows, p))
+  apply(live.applyNodeUpdated(store.get().rows, p))
   bumpNodeVersion('dag', p.run_id, p.node)
 }
 export function onRunCompleted(p: live.RunCompletedPayload): void {

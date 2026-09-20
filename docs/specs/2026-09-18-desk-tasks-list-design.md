@@ -134,7 +134,9 @@ already reads on. Each such read of a running node also re-reads its row through
 
 `dag.run_started` builds a row (`status=running`; `nodes[].subagent` becomes `agent`; no
 timestamps, so `started_at` starts from the run id's prefix); `dag.node_updated` moves a
-node (timestamps only on `running` / `completed` / `failed` / `exception`);
+node (timestamps only on `running` / `completed` / `failed` / `exception`) and, on a node's
+own terminal frame, re-reads the row so the account the runner set aside for the node reaches
+the page before the run's own end;
 `dag.run_completed` ends a row (a hard stop sends `{stopped: true}` and no `files`);
 `dag.run_replanned` marks the old row `cancelled` with `replan`; `subagent.status` builds
 a spawn row at `pending` with `handle = instance ?? task_id`, and `call_id` from `running`

@@ -888,6 +888,51 @@ describe('the node panel', () => {
       await act(async () => { store.onNodeUpdated({ run_id: 'r1', node: 'n1', status: 'running', tool_call_id: 'c3' }) })
       expect(reads).toBe(2)
     })
+
+    /* The node's own terminal frame brings its final usage while a sibling
+       keeps the run going -- and a row read that was out when the frame
+       landed is the older copy, dropped rather than put over the frame. */
+    it("shows a settled dag node's final usage while a sibling still runs, over a stale read that was out", async () => {
+      let reads = 0
+      let release: ((r: TaskRow | null) => void) | null = null
+      const before = task({
+        id: 'r1', kind: 'dag', status: 'running',
+        nodes: [node({ node_id: 'n1', status: 'running', started_at: 1000 }), node({ node_id: 'n2', status: 'pending' })],
+      })
+      const after = task({
+        id: 'r1', kind: 'dag', status: 'running',
+        nodes: [
+          node({ node_id: 'n1', status: 'completed', started_at: 1000, ended_at: 2000, tokens_in: 4000, tokens_out: 910 }),
+          node({ node_id: 'n2', status: 'running', started_at: 2000 }),
+        ],
+      })
+      setSources({
+        tasks: {
+          ...source(),
+          one: () => {
+            reads += 1
+            /* The first read (the panel's, on open) hangs; the frame's own
+               reconcile, which comes second, answers the settled row. */
+            if (reads === 1) return new Promise((res) => { release = res })
+            return Promise.resolve(after)
+          },
+        },
+        workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
+      })
+      store.set((prev) => ({ ...prev, rows: [before], loaded: true }))
+      pick(before)
+      await act(async () => {})
+      expect(reads).toBe(1)
+
+      await act(async () => { store.onNodeUpdated({ run_id: 'r1', node: 'n1', status: 'completed', ended_at: 2000 }) })
+      expect(reads).toBe(2)
+      expect(document.querySelector('.tksub')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1s · gui.tasks.tokens_n {"n":"4,910"}')
+
+      /* The stale read lands now, still saying n1 runs with no usage. */
+      await act(async () => { release?.(before) })
+      expect(document.querySelector('.tksub')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1s · gui.tasks.tokens_n {"n":"4,910"}')
+      expect(store.byKey('dag', 'r1')?.status).toBe('running')
+    })
   })
 
   describe('the context tab while the record is loading or failed', () => {
