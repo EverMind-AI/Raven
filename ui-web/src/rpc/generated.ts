@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 179 methods, 97 component schemas.
+// 179 methods, 99 component schemas.
 
 /* eslint-disable */
 /**
@@ -1504,6 +1504,21 @@ export interface PlaybookNodeShape {
   depends_on: string[];
 }
 /**
+ * One durable Harness alias and the registered agent behind it.
+ */
+export interface PlaybookWorkerShape {
+  label: string;
+  agent: string;
+}
+/**
+ * The full worker detail; its brief is the durable per-job instruction.
+ */
+export interface PlaybookWorker {
+  label: string;
+  agent: string;
+  brief: string;
+}
+/**
  * One playbook as the library list needs it. ``error`` is empty unless the
  * file would not parse, in which case it carries the reason and ``nodes`` is
  * empty -- one unreadable file in a directory of user-edited text must not
@@ -1515,6 +1530,9 @@ export interface PlaybookRow {
   name: string;
   description: string;
   task_summary: string;
+  schema_version: number;
+  artifact_kind: 'legacy' | 'workflow' | 'harness' | 'composite';
+  workers: PlaybookWorkerShape[];
   mode: 'dag' | 'prompt';
   confirm: boolean;
   origin: string;
@@ -1566,6 +1584,9 @@ export interface PlaybookDetail {
   description: string;
   task_summary: string;
   version: number;
+  schema_version: number;
+  artifact_kind: 'legacy' | 'workflow' | 'harness' | 'composite';
+  workers: PlaybookWorker[];
   mode: 'dag' | 'prompt';
   confirm: boolean;
   origin: string;

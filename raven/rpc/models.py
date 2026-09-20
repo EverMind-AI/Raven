@@ -3921,6 +3921,19 @@ class PlaybookNodeShape(_Strict):
     depends_on: list[str]
 
 
+class PlaybookWorkerShape(_Strict):
+    """One durable Harness alias and the registered agent behind it."""
+
+    label: str
+    agent: str
+
+
+class PlaybookWorker(PlaybookWorkerShape):
+    """The full worker detail; its brief is the durable per-job instruction."""
+
+    brief: str
+
+
 class PlaybookRow(_Strict):
     """One playbook as the library list needs it.
 
@@ -3933,6 +3946,9 @@ class PlaybookRow(_Strict):
     name: str
     description: str
     task_summary: str
+    schema_version: int
+    artifact_kind: Literal["legacy", "workflow", "harness", "composite"]
+    workers: list[PlaybookWorkerShape]
     mode: Literal["dag", "prompt"]
     confirm: bool
     origin: str
@@ -4017,6 +4033,9 @@ class PlaybookDetail(_Strict):
     description: str
     task_summary: str
     version: int
+    schema_version: int
+    artifact_kind: Literal["legacy", "workflow", "harness", "composite"]
+    workers: list[PlaybookWorker]
     mode: Literal["dag", "prompt"]
     confirm: bool
     origin: str
@@ -4683,6 +4702,8 @@ __all__ = [
     "PlaybookDetail",
     "PlaybookNode",
     "PlaybookNodeShape",
+    "PlaybookWorker",
+    "PlaybookWorkerShape",
     "PlaybookParam",
     "PlaybookRow",
     "PlaybooksGetParams",

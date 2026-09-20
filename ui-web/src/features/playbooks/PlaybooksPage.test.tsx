@@ -25,6 +25,9 @@ function row(over: Partial<PlaybookRow> & { name: string }): PlaybookRow {
     description: 'what it is for',
     task_summary: 'what running it dispatches',
     mode: 'dag',
+    schema_version: 1,
+    artifact_kind: 'legacy',
+    workers: [],
     confirm: true,
     origin: 'user',
     disabled: false,
@@ -42,6 +45,9 @@ function detail(over: Partial<PlaybookDetail> & { name: string }): PlaybookDetai
     description: 'what it is for',
     task_summary: 'what running it dispatches',
     version: 1,
+    schema_version: 1,
+    artifact_kind: 'legacy',
+    workers: [],
     mode: 'dag',
     confirm: true,
     origin: 'user',
@@ -113,6 +119,27 @@ describe('the playbook library', () => {
     install({ list: async () => [row({ name: 'competitor-scan', mode: 'prompt', nodes: [] })] })
     await mount()
     expect(document.querySelector('.pbcard .pbcap')?.textContent).toBe('gui.pb.shape_live')
+  })
+
+  it('draws a Harness-only artifact as its reusable workers', async () => {
+    install({
+      list: async () => [
+        row({
+          name: 'launch-crew',
+          schema_version: 2,
+          artifact_kind: 'harness',
+          mode: 'prompt',
+          nodes: [],
+          workers: [
+            { label: 'signal-extractor', agent: 'Researcher' },
+            { label: 'brief-writer', agent: 'Writer' }
+          ]
+        })
+      ]
+    })
+    await mount()
+    expect(document.querySelectorAll('.pbcard .pbcell.worker')).toHaveLength(2)
+    expect(document.querySelector('.pbcard .pbcap')?.textContent).toBe('gui.pb.shape_harness {"n":2}')
   })
 
   it('counts the matches while a query is on, not the library', async () => {
@@ -708,6 +735,50 @@ describe('the graph-level fields', () => {
     expect(screen.getByText('v3')).toBeTruthy()
   })
 
+  it('shows the reusable Harness beside a composite Workflow', async () => {
+    await open({
+      schema_version: 2,
+      artifact_kind: 'composite',
+      workers: [
+        {
+          label: 'signal-extractor',
+          agent: 'Researcher',
+          brief: 'Extract only decision-relevant facts.'
+        },
+        {
+          label: 'brief-writer',
+          agent: 'Writer',
+          brief: 'Turn verified facts into a concise executive brief.'
+        }
+      ]
+    })
+    expect(screen.getByText('composite')).toBeTruthy()
+    expect(screen.getByText('signal-extractor')).toBeTruthy()
+    expect(screen.getByText('Researcher')).toBeTruthy()
+    expect(screen.getByText('Extract only decision-relevant facts.')).toBeTruthy()
+    expect(document.querySelector('.pbboard')).not.toBeNull()
+  })
+
+  it('does not invent a graph for a Harness-only artifact', async () => {
+    await open({
+      schema_version: 2,
+      artifact_kind: 'harness',
+      mode: 'prompt',
+      nodes: [],
+      workers: [
+        {
+          label: 'brand-voice',
+          agent: 'Writer',
+          brief: 'Speak in the saved brand voice.'
+        }
+      ]
+    })
+    expect(tab('gui.pb.tab_harness').getAttribute('aria-selected')).toBe('true')
+    expect(document.querySelector('.pbboard')).toBeNull()
+    expect(screen.getByText('gui.pb.harness_only')).toBeTruthy()
+    expect(screen.getByText('brand-voice')).toBeTruthy()
+  })
+
   it('writes out both states of confirm', async () => {
     const confirmCell = (): string | undefined =>
       [...document.querySelectorAll('.pbmeta div')]
@@ -846,7 +917,6 @@ describe('the graph-level fields', () => {
   })
 })
 
-
 describe('the credentials tab', () => {
   const carried = {
     params: {
@@ -881,7 +951,7 @@ describe('the credentials tab', () => {
     }
   }
   const tab = (label: string): HTMLElement | undefined =>
-    [...document.querySelectorAll('.pbtab')].find((b) => b.textContent === label) as HTMLElement | undefined
+    [...document.querySelectorAll('.pbtab')].find(b => b.textContent === label) as HTMLElement | undefined
 
   async function openCarried(over: Partial<PlaybooksSource> = {}) {
     const calls: string[] = []
@@ -933,11 +1003,11 @@ describe('the credentials tab', () => {
     fireEvent.click(tab('gui.pb.tab_credentials')!)
     await act(async () => {})
     expect(tab('gui.pb.tab_credentials')!.getAttribute('aria-selected')).toBe('true')
-    const rows = [...document.querySelectorAll('.pbtbl tr .nm')].map((n) => n.textContent || '')
-    expect(rows.some((r) => r.startsWith('PROBE_TOKEN'))).toBe(true)
-    expect(rows.some((r) => r.startsWith('sentry'))).toBe(true)
-    expect(rows.some((r) => r.startsWith('topic'))).toBe(false)
-    expect(rows.some((r) => r.startsWith('tokened'))).toBe(false)
+    const rows = [...document.querySelectorAll('.pbtbl tr .nm')].map(n => n.textContent || '')
+    expect(rows.some(r => r.startsWith('PROBE_TOKEN'))).toBe(true)
+    expect(rows.some(r => r.startsWith('sentry'))).toBe(true)
+    expect(rows.some(r => r.startsWith('topic'))).toBe(false)
+    expect(rows.some(r => r.startsWith('tokened'))).toBe(false)
     /* The badge that says authorizing the host's sentry does nothing here. */
     expect(document.body.textContent).toContain('gui.pb.cred_shadows_host')
     expect(document.body.textContent).toContain('gui.pb.cred_unset')
@@ -963,7 +1033,7 @@ describe('the credentials tab', () => {
     const { calls } = await openCarried()
     fireEvent.click(tab('gui.pb.tab_credentials')!)
     await act(async () => {})
-    const authorize = [...document.querySelectorAll('button')].find((b) => b.textContent === 'gui.pb.cred_authorize')!
+    const authorize = [...document.querySelectorAll('button')].find(b => b.textContent === 'gui.pb.cred_authorize')!
     fireEvent.click(authorize)
     await act(async () => {})
     expect(calls).toEqual(['authorize sentry'])

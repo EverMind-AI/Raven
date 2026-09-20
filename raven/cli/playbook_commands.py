@@ -103,7 +103,7 @@ def playbook_validate(
     """Validate without running: spec shape plus the field definition's rules."""
     from pydantic import ValidationError
 
-    from raven.playbook.validate import validate_structure
+    from raven.playbook.runtime import validation_errors
 
     config = _load_config()
     as_path = Path(target)
@@ -145,7 +145,7 @@ def playbook_validate(
 
         registry = AgentRegistry()
         registry.apply(config.subagents.agents)
-        errors.extend(validate_structure(spec, known_agents=registry.all_names()))
+        errors.extend(validation_errors(spec, list(registry.all_names())))
     if errors:
         text = path.read_text(encoding="utf-8")
         for error in errors:
@@ -214,8 +214,10 @@ def playbook_create(
         live_inventory(config.tools.mcp_servers),
         model=config.playbooks.model,
     )
-    generated = asyncio.run(generator.generate("\n\n".join(pieces)))
-    spec = generated.spec.model_copy(update={"name": name})
+    generated = asyncio.run(generator.generate("\n\n".join(pieces), dag_only=True))
+    from raven.playbook.unified import unified_from_legacy
+
+    spec = unified_from_legacy(generated.spec, name=name)
     path = store.save(spec, notes=generated.notes)
     console.print(f"[green]Created[/green] {escape(str(path))}")
     if generated.notes:

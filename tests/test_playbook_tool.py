@@ -173,7 +173,7 @@ class FakeGenerator:
         self.fail = fail
         self.calls = []
 
-    async def generate(self, workflow, skills=None):
+    async def generate(self, workflow, skills=None, *, dag_only=False):
         from raven.playbook import GeneratedPlaybook, PlaybookGenerationError
 
         self.calls.append((workflow, skills))
@@ -578,8 +578,8 @@ async def test_create_reports_a_name_written_while_generation_was_running(tmp_pa
     tool, store, adopted = _create_tool(tmp_path)
     generate = tool._generator.generate
 
-    async def _generate_after_another_writer(workflow, skills=None):
-        generated = await generate(workflow, skills)
+    async def _generate_after_another_writer(workflow, skills=None, *, dag_only=False):
+        generated = await generate(workflow, skills, dag_only=dag_only)
         store.save(_spec(name="weekly-scan", description="written by the winning request"))
         return generated
 

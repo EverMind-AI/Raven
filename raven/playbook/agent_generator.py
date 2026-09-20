@@ -19,7 +19,8 @@ configuration step failed is strictly worse than a turn that runs without one.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
 
@@ -43,6 +44,23 @@ the author wrote into one the gate refuses for a reason they cannot see."""
 MAX_REPAIR_ROUNDS = 1
 EMIT_TOOL = "emit_worker_table"
 
+HarnessDisposition = Literal["none", "runtime", "artifact", "runtime_and_artifact"]
+
+
+@dataclass(frozen=True)
+class HarnessResolution:
+    """The single pre-turn decision: reuse, generate, persist, or do nothing."""
+
+    disposition: HarnessDisposition = "none"
+    spec: AgentPlaybookSpec | None = None
+    table: DelegateTable | None = None
+    selected_playbook: str | None = None
+    artifact_name: str | None = None
+    capture_workflow: bool = False
+    active: bool = False
+    description: str = ""
+
+
 SYSTEM_PROMPT = (
     "You prepare the workers for one task before the agent that will run it starts.\n\n"
     "Given the task, decide which of the offered sub-agents it needs and write each one a brief. "
@@ -51,6 +69,16 @@ SYSTEM_PROMPT = (
     "Write a brief only where it changes what the worker would do: what to cover, what to leave "
     "alone, where to put its output, what counts as done. Do not restate the agent's own job -- it "
     "already knows that. If the task needs no sub-agents, emit an empty list.\n\n"
+    "First consider the offered saved playbooks. Select one only when it directly matches the task; "
+    "then emit no workers because its durable Harness will be loaded. Otherwise set disposition: "
+    "none for no Harness, runtime for temporary workers, artifact when the user asks to create a "
+    "reusable agent/persona without running it, or runtime_and_artifact when that created Harness "
+    "must also work now. artifactName is required for either artifact disposition. Set "
+    "captureWorkflow true only for a multi-step execution whose successful DAG would be useful "
+    "again. When true, the running agent must express the complete reusable process in one "
+    "run_subagent_dag call; a fragmented or failed run is not saved. Never set it merely because "
+    "the user asked a question. A digital-person/agent creation request is Harness-only unless "
+    "the user also asks to save a process.\n\n"
     "Be sparing. Every worker you name is a separate process the agent has to wait for."
 )
 
@@ -138,7 +166,10 @@ def _roster_description(agent_names: list[str], agent_notes: "Mapping[str, str] 
 
 
 def emit_tool(
-    agent_names: list[str], tool_names: list[str], agent_notes: "Mapping[str, str] | None" = None
+    agent_names: list[str],
+    tool_names: list[str],
+    agent_notes: "Mapping[str, str] | None" = None,
+    playbook_candidates: "Mapping[str, str] | None" = None,
 ) -> list[dict[str, Any]]:
     """The one tool the generator may call, with the install's own enums.
 
@@ -237,19 +268,40 @@ def emit_tool(
             "additionalProperties": False,
             "description": "Optional generated participant functions, keyed by their loop verb.",
         }
+    decision_properties: dict[str, Any] = {
+        "description": {"type": "string", "description": "One sentence explaining this setup."},
+        "disposition": {
+            "type": "string",
+            "enum": ["none", "runtime", "artifact", "runtime_and_artifact"],
+            "description": "How newly generated workers are used this turn.",
+        },
+        "artifactName": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "Durable kebab-case name, required for artifact dispositions.",
+        },
+        "captureWorkflow": {
+            "type": "boolean",
+            "description": "Whether a successful DAG from this run should be compiled and saved.",
+        },
+        "workers": {"type": "array", "items": worker},
+    }
+    if playbook_candidates:
+        decision_properties["selectedPlaybook"] = {
+            "type": "string",
+            "enum": sorted(playbook_candidates),
+            "description": "An existing directly applicable Playbook; omit when none fits.",
+        }
     return [
         {
             "type": "function",
             "function": {
                 "name": EMIT_TOOL,
-                "description": "Emit the workers this task needs.",
+                "description": "Resolve a saved Playbook or emit the workers this task needs.",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "description": {"type": "string", "description": "One sentence on the plan (<= 200 chars)."},
-                        "workers": {"type": "array", "items": worker},
-                    },
-                    "required": ["workers"],
+                    "properties": decision_properties,
+                    "required": ["disposition", "workers"],
                     "additionalProperties": False,
                 },
             },
@@ -334,7 +386,7 @@ def build_table(spec: AgentPlaybookSpec, briefs: dict[str, str]) -> DelegateTabl
     workers: dict[str, Worker] = {}
     for entry in spec.delegate:
         pb = entry.playbook
-        brief = briefs.get(entry.label, "")
+        brief = briefs.get(entry.label, entry.brief)
         charter = render_charter(
             brief,
             pb.memory.system_prompt if pb else "",
@@ -434,7 +486,7 @@ def _spec_from_args(args: dict[str, Any], roster: set[str]) -> tuple[AgentPlaybo
         timeout = row.get("timeoutSeconds")
         if isinstance(timeout, int) and not isinstance(timeout, bool) and timeout > 0:
             sub["timeoutSeconds"] = timeout
-        delegate.append({"as": label, "name": name, "playbook": sub or None})
+        delegate.append({"as": label, "name": name, "brief": str(row.get("brief") or ""), "playbook": sub or None})
         briefs[label] = str(row.get("brief") or "")
     if errors:
         raise ValueError("; ".join(errors))
@@ -451,21 +503,27 @@ class WorkerTableGenerator:
         self._provider = provider
         self._model = model
 
-    async def generate(
+    async def resolve(
         self,
         query: str,
         agent_names: list[str],
         tool_names: list[str],
         agent_notes: "Mapping[str, str] | None" = None,
-    ) -> DelegateTable | None:
-        """The table for ``query``, or ``None`` to run this turn unconfigured."""
+        playbook_candidates: "Mapping[str, str] | None" = None,
+    ) -> HarnessResolution:
+        """Resolve reuse and generation in the one setup call a turn pays for."""
         if not query.strip() or not agent_names:
-            return None
+            return HarnessResolution()
+        candidates = dict(playbook_candidates or {})
+        candidate_text = "\n".join(f"- {name}: {detail}" for name, detail in candidates.items())
+        user = f"Task:\n{query}"
+        if candidate_text:
+            user += f"\n\nSaved Playbook candidates:\n{candidate_text}"
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Task:\n{query}"},
+            {"role": "user", "content": user},
         ]
-        tools = emit_tool(sorted(agent_names), sorted(tool_names), agent_notes)
+        tools = emit_tool(sorted(agent_names), sorted(tool_names), agent_notes, candidates)
         roster = set(agent_names)
         for _ in range(1 + MAX_REPAIR_ROUNDS):
             try:
@@ -475,22 +533,67 @@ class WorkerTableGenerator:
                     model=self._model or None,
                     tool_choice={"type": "function", "function": {"name": EMIT_TOOL}},
                 )
-            except Exception as exc:  # noqa: BLE001 - a failed setup step must not cost the turn
-                logger.warning("agent playbook: generation call failed ({}); running unconfigured", exc)
-                return None
+            except Exception as exc:  # noqa: BLE001 - setup failure must not cost the turn
+                logger.warning("agent playbook: resolution call failed ({}); running unconfigured", exc)
+                return HarnessResolution()
             args = _emitted_args(response)
             if args is None:
-                messages.append({"role": "user", "content": f"You emitted no table. Call {EMIT_TOOL}."})
+                messages.append({"role": "user", "content": f"You emitted no decision. Call {EMIT_TOOL}."})
                 continue
+            selected = args.get("selectedPlaybook")
+            if isinstance(selected, str) and selected in candidates:
+                return HarnessResolution(
+                    active=True,
+                    selected_playbook=selected,
+                    capture_workflow=False,
+                    description=str(args.get("description") or "")[:200],
+                )
             try:
                 spec, briefs = _spec_from_args(args, roster)
+                raw = args.get("disposition")
+                disposition: HarnessDisposition = (
+                    raw
+                    if raw in {"none", "runtime", "artifact", "runtime_and_artifact"}
+                    else ("runtime" if spec.delegate else "none")
+                )
+                if disposition in {"artifact", "runtime_and_artifact"} and not spec.delegate:
+                    raise ValueError("artifact disposition requires at least one worker")
+                if disposition == "none" and spec.delegate:
+                    raise ValueError("disposition none requires an empty worker list")
+                artifact_name = None
+                if disposition in {"artifact", "runtime_and_artifact"}:
+                    from raven.playbook.types import slugify
+
+                    artifact_name = slugify(str(args.get("artifactName") or spec.description or query))
+                    spec = spec.model_copy(update={"name": artifact_name})
+                table = build_table(spec, briefs) or None
             except Exception as exc:  # noqa: BLE001 - the message is the repair prompt
                 logger.info("agent playbook: rejected, repairing once ({})", exc)
-                messages.append({"role": "user", "content": f"That table was rejected: {exc}\nEmit a corrected one."})
+                messages.append(
+                    {"role": "user", "content": f"That decision was rejected: {exc}\nEmit a corrected one."}
+                )
                 continue
-            return build_table(spec, briefs) or None
+            return HarnessResolution(
+                disposition=disposition,
+                active=True,
+                spec=spec if spec.delegate else None,
+                table=table,
+                artifact_name=artifact_name,
+                capture_workflow=bool(args.get("captureWorkflow", False)),
+                description=str(args.get("description") or "")[:200],
+            )
         logger.warning("agent playbook: still invalid after one repair; running unconfigured")
-        return None
+        return HarnessResolution()
+
+    async def generate(
+        self,
+        query: str,
+        agent_names: list[str],
+        tool_names: list[str],
+        agent_notes: "Mapping[str, str] | None" = None,
+    ) -> DelegateTable | None:
+        """Backward-compatible table-only face used by direct callers."""
+        return (await self.resolve(query, agent_names, tool_names, agent_notes)).table
 
 
 def _emitted_args(response: Any) -> dict[str, Any] | None:

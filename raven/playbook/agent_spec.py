@@ -210,6 +210,9 @@ class DelegateEntry(CamelBase):
     """The roster agent behind the label. Validated against the live roster by
     the generator's caller, not here: the schema cannot know the install."""
 
+    brief: str = ""
+    """The reusable dispatch brief (v1 kept this only in a transient sidecar)."""
+
     playbook: SubPlaybook | None = None
 
     @property

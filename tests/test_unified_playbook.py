@@ -1,0 +1,351 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from raven.agent.subagent.dag_adjudication import Final, Report
+from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec
+from raven.agent.subagent.dag_runner import DagRunResult
+from raven.agent.subagent.dag_tool import _successful_final
+from raven.agent.subagent.delegate import current_delegate, delegate_scope
+from raven.playbook.agent_generator import EMIT_TOOL, WorkerTableGenerator
+from raven.playbook.agent_spec import AgentPlaybookSpec, DelegateEntry
+from raven.playbook.runtime import PlaybookRuntime
+from raven.playbook.store import PlaybookStore
+from raven.playbook.unified import PlaybookMatch, UnifiedPlaybookSpec, WorkflowSpec
+from raven.playbook.workflow_compiler import EMIT_WORKFLOW, WorkflowCompiler
+from raven.providers.base import LLMResponse, ToolCallRequest
+
+
+class _Provider:
+    def __init__(self, *responses: LLMResponse) -> None:
+        self.responses = list(responses)
+        self.calls: list[dict] = []
+
+    async def chat_with_retry(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.responses.pop(0)
+
+
+def _call(name: str, arguments: dict) -> LLMResponse:
+    return LLMResponse(
+        content="",
+        tool_calls=[ToolCallRequest(id="call", name=name, arguments=arguments)],
+        finish_reason="tool_calls",
+    )
+
+
+def _harness() -> AgentPlaybookSpec:
+    return AgentPlaybookSpec(
+        name="research-team",
+        description="A focused research team",
+        delegate=[
+            DelegateEntry(
+                **{
+                    "as": "analyst",
+                    "name": "Raven",
+                    "brief": "Collect evidence only",
+                    "playbook": {"memory": {"systemPrompt": "Cite every claim."}},
+                }
+            )
+        ],
+    )
+
+
+def _workflow() -> WorkflowSpec:
+    return WorkflowSpec(
+        summary="Research and report",
+        confirm=False,
+        nodes=[
+            DagNodeSpec(
+                id="research",
+                subagent="analyst",
+                nodeSummary="Collect evidence",
+                promptTemplate="Research the topic",
+            )
+        ],
+    )
+
+
+def test_unified_composite_round_trips_through_the_existing_store(tmp_path: Path) -> None:
+    store = PlaybookStore(tmp_path / "user", builtin_root=tmp_path / "builtin")
+    spec = UnifiedPlaybookSpec(
+        name="research-team",
+        description="Research a topic with a reusable evidence worker",
+        match=PlaybookMatch(summary="Research a topic", keywords=["research topic", "evidence scan"]),
+        harness=_harness(),
+        workflow=_workflow(),
+    )
+
+    path = store.save(spec)
+    loaded = store.load(spec.name)
+
+    assert loaded == spec
+    assert "schemaVersion: 2" in path.read_text(encoding="utf-8")
+    assert "Workers: analyst" in path.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_resolver_can_choose_an_existing_playbook_without_generating_workers() -> None:
+    provider = _Provider(
+        _call(
+            EMIT_TOOL,
+            {
+                "description": "The saved procedure is an exact match",
+                "disposition": "none",
+                "selectedPlaybook": "due-diligence",
+                "captureWorkflow": False,
+                "workers": [],
+            },
+        )
+    )
+
+    result = await WorkerTableGenerator(provider, "stub").resolve(
+        "Run due diligence on Acme",
+        ["Raven"],
+        ["web_search"],
+        {"Raven": "general worker"},
+        {"due-diligence": "Checks a company before acquisition"},
+    )
+
+    assert result.active
+    assert result.selected_playbook == "due-diligence"
+    assert result.table is None
+    assert not result.capture_workflow
+    assert "Saved Playbook candidates" in provider.calls[0]["messages"][1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_resolver_emits_a_durable_harness_with_its_brief() -> None:
+    provider = _Provider(
+        _call(
+            EMIT_TOOL,
+            {
+                "description": "A citation-first research persona",
+                "disposition": "artifact",
+                "artifactName": "citation-researcher",
+                "captureWorkflow": False,
+                "workers": [
+                    {
+                        "as": "researcher",
+                        "name": "Raven",
+                        "brief": "Find primary sources",
+                        "systemPrompt": "Cite primary sources only.",
+                    }
+                ],
+            },
+        )
+    )
+
+    result = await WorkerTableGenerator(provider, "stub").resolve(
+        "Create a citation-first research digital persona",
+        ["Raven"],
+        ["web_search"],
+    )
+
+    assert result.disposition == "artifact"
+    assert result.artifact_name == "citation-researcher"
+    assert result.spec is not None
+    assert result.spec.delegate[0].brief == "Find primary sources"
+    assert result.table and result.table.get("researcher").brief == "Find primary sources"
+
+
+@pytest.mark.asyncio
+async def test_harness_only_load_binds_workers_for_the_rest_of_the_turn(tmp_path: Path) -> None:
+    class _Executor:
+        dag_tool = None
+
+    store = PlaybookStore(tmp_path / "user", builtin_root=tmp_path / "builtin")
+    store.save(
+        UnifiedPlaybookSpec(
+            name="research-team",
+            description="Reusable evidence workers",
+            match=PlaybookMatch(summary="Evidence research", keywords=["evidence research"]),
+            harness=_harness(),
+        )
+    )
+    runtime = PlaybookRuntime(store=store, executor=_Executor(), known_agents=lambda: ["Raven"])
+
+    with delegate_scope(None):
+        plan = await runtime.load("research-team")
+        assert plan is not None and plan.kind == "guidance"
+        table = current_delegate()
+        assert table is not None
+        assert table.get("analyst").brief == "Collect evidence only"
+    assert current_delegate() is None
+
+
+@pytest.mark.asyncio
+async def test_workflow_compiler_builds_a_composite_v2_artifact() -> None:
+    dag = SubAgentDagSpec(taskSummary="Research", confirm=False, nodes=_workflow().nodes)
+    emitted = {
+        "name": "research-team",
+        "description": "Research a topic with cited evidence",
+        "match": {"summary": "Research a topic", "keywords": ["research topic", "cited evidence"]},
+        "inputSchema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        "workflow": {
+            "summary": "Research",
+            "confirm": False,
+            "nodes": [node.model_dump(by_alias=True) for node in dag.nodes],
+        },
+    }
+    provider = _Provider(_call(EMIT_WORKFLOW, emitted))
+
+    compiled = await WorkflowCompiler(provider, "stub").compile(
+        query="Research Acme",
+        dag=dag,
+        run_id="pb-test",
+        harness=_harness(),
+    )
+
+    assert compiled.schema_version == 2
+    assert compiled.harness is not None and compiled.workflow is not None
+    assert compiled.workflow.nodes[0].subagent == "analyst"
+    assert compiled.metadata.source_run_id == "pb-test"
+    schema = provider.calls[0]["tools"][0]["function"]["parameters"]
+    assert schema["properties"]["workflow"]["properties"]["nodes"]["items"]
+
+
+def test_workflow_capture_accepts_only_a_clean_completed_dag() -> None:
+    complete = DagRunResult(
+        run_id="run-ok",
+        dir="/tmp/run-ok",
+        summary={"total": 2, "completed": 2, "failed": 0, "cancelled": 0, "skipped": 0},
+    )
+    failed = DagRunResult(
+        run_id="run-failed",
+        dir="/tmp/run-failed",
+        summary={"total": 2, "completed": 1, "failed": 1, "cancelled": 0, "skipped": 0},
+    )
+
+    assert _successful_final(Final(complete))
+    assert not _successful_final(Final(failed))
+    assert not _successful_final(Final(complete, stopped=True))
+    assert not _successful_final(Report(node_id="research", text="needs a decision"))
+
+
+def test_v2_file_is_plain_yaml_and_contains_no_run_values(tmp_path: Path) -> None:
+    store = PlaybookStore(tmp_path / "user", builtin_root=tmp_path / "builtin")
+    spec = UnifiedPlaybookSpec(
+        name="research-team",
+        description="Reusable evidence workers",
+        match=PlaybookMatch(summary="Evidence research", keywords=["evidence research"]),
+        harness=_harness(),
+    )
+    body = store.save(spec).read_text(encoding="utf-8")
+    assert json.loads(json.dumps(spec.model_dump(by_alias=True)))["schemaVersion"] == 2
+    assert "sourceRunId: null" not in body
+
+
+@pytest.mark.asyncio
+async def test_workflow_compiler_rejects_semantically_invalid_model_output() -> None:
+    dag = SubAgentDagSpec(taskSummary="Research", confirm=False, nodes=_workflow().nodes)
+    invalid = {
+        "name": "research-team",
+        "description": "Research a topic with cited evidence",
+        "match": {"summary": "Research a topic", "keywords": ["research topic"]},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "required": True,
+                    "description": "Topic to research",
+                }
+            },
+            "required": ["topic"],
+            "additionalProperties": False,
+        },
+        "workflow": {
+            "summary": "Research",
+            "confirm": False,
+            "nodes": [
+                {
+                    **dag.nodes[0].model_dump(by_alias=True),
+                    "inputs": {"topic": "${params.topic}"},
+                }
+            ],
+        },
+    }
+    provider = _Provider(_call(EMIT_WORKFLOW, invalid), _call(EMIT_WORKFLOW, invalid))
+
+    compiled = await WorkflowCompiler(provider, "stub").compile(
+        query="Research Acme",
+        dag=dag,
+        run_id="pb-invalid",
+        harness=_harness(),
+    )
+
+    assert len(provider.calls) == 2
+    assert compiled.input_schema.properties == {}
+    assert compiled.workflow is not None
+    assert compiled.workflow.nodes == dag.nodes
+
+
+@pytest.mark.asyncio
+async def test_workflow_compiler_rejects_a_rewritten_accepted_graph() -> None:
+    dag = SubAgentDagSpec(taskSummary="Research", confirm=False, nodes=_workflow().nodes)
+    rewritten = {
+        "name": "research-team",
+        "description": "Research a topic with cited evidence",
+        "match": {"summary": "Research a topic", "keywords": ["research topic"]},
+        "inputSchema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        "workflow": {
+            "summary": "Research",
+            "confirm": False,
+            "nodes": [
+                {
+                    **dag.nodes[0].model_dump(by_alias=True),
+                    "subagent": "invented-worker",
+                }
+            ],
+        },
+    }
+    provider = _Provider(_call(EMIT_WORKFLOW, rewritten), _call(EMIT_WORKFLOW, rewritten))
+
+    compiled = await WorkflowCompiler(provider, "stub").compile(
+        query="Research Acme",
+        dag=dag,
+        run_id="pb-rewritten",
+        harness=_harness(),
+    )
+
+    assert len(provider.calls) == 2
+    assert compiled.workflow is not None
+    assert compiled.workflow.nodes == dag.nodes
+
+
+def test_unified_artifact_rejects_an_empty_durable_harness() -> None:
+    with pytest.raises(ValueError, match="at least one worker"):
+        UnifiedPlaybookSpec(
+            name="empty-team",
+            description="An empty worker table is not a reusable Harness",
+            match=PlaybookMatch(summary="Empty team", keywords=["empty team"]),
+            harness=AgentPlaybookSpec(
+                name="empty-team",
+                description="No workers",
+                delegate=[],
+            ),
+        )
+
+
+def test_composite_workflow_may_mix_harness_aliases_and_registered_agents() -> None:
+    workflow = _workflow()
+    mixed = workflow.model_copy(
+        update={
+            "nodes": [
+                *workflow.nodes,
+                DagNodeSpec(id="report", subagent="Raven", nodeSummary="Write report", promptTemplate="Write report"),
+            ]
+        }
+    )
+    spec = UnifiedPlaybookSpec(
+        name="mixed-team",
+        description="Use a specialist and the default roster together",
+        match=PlaybookMatch(summary="Research and report", keywords=["research report"]),
+        harness=_harness(),
+        workflow=mixed,
+    )
+    assert [node.subagent for node in spec.workflow.nodes] == ["analyst", "Raven"]

@@ -24,6 +24,7 @@ from raven.playbook.router import RouterSizes, select_playbooks
 from raven.playbook.store import PlaybookStore
 from raven.playbook.triggers import find_collisions
 from raven.playbook.types import PlaybookSpec
+from raven.playbook.unified import StoredPlaybook, UnifiedPlaybookSpec
 from raven.playbook.validate import validate_structure
 
 #: How many times one conversation may be told "still missing X" for the same
@@ -67,7 +68,7 @@ class PlaybookRuntime:
         #: the bundled ``create_playbook`` tool binds one object. ``None`` on a
         #: host that assembles a runtime without creation (the CLI's run path).
         self._generator = generator
-        self._specs: dict[str, PlaybookSpec] = {}
+        self._specs: dict[str, StoredPlaybook] = {}
         #: Parsed, and refused by the structural check. Kept rather than dropped
         #: because the reason is usually not in the file: an agent switched off,
         #: or one not added yet. Fixing that changes the agent table and not the
@@ -75,7 +76,7 @@ class PlaybookRuntime:
         #: to be reconsidered -- a restart-shaped failure in the shape that is
         #: worse than a restart, since the corrective action succeeds and changes
         #: nothing. Re-checked on every refresh, which costs no read and no parse.
-        self._refused: dict[str, PlaybookSpec] = {}
+        self._refused: dict[str, StoredPlaybook] = {}
         self._index: TriggerIndex | None = None
         #: The agent table to validate against, asked rather than copied. It has
         #: to be the live one: ``apply_agents`` rebuilds the registry in place,
@@ -182,7 +183,8 @@ class PlaybookRuntime:
             # caller to fill is what ``load_playbook`` asks for by name, and
             # refusing it here would refuse the hand-written shape this refresh
             # exists to make visible.
-            if errors := validate_structure(spec, known_agents=known_agents, allow_blank_fillable=True):
+            errors = validation_errors(spec, known_agents)
+            if errors:
                 # Refused rather than offered: a graph naming an agent that is
                 # not on the table cannot run, and offering it spends a turn to
                 # find that out. Said at warning level because a file the user
@@ -207,7 +209,7 @@ class PlaybookRuntime:
         # thing that changed is usually the agent table rather than the file.
         promoted = []
         for name, spec in list(self._refused.items()):
-            if validate_structure(spec, known_agents=known_agents, allow_blank_fillable=True):
+            if validation_errors(spec, known_agents):
                 continue
             self._specs[name] = spec
             del self._refused[name]
@@ -279,6 +281,16 @@ class PlaybookRuntime:
             logger.warning("Playbook {!r} was written but could not be loaded back: {}", name, exc)
             self._specs.pop(name, None)
             self._refused.pop(name, None)
+            if digest is None:
+                self._fingerprints.pop(name, None)
+            else:
+                self._fingerprints[name] = digest
+            self._reindex()
+            return False
+        if errors := validation_errors(spec, self._known_agents()):
+            logger.warning("Playbook {!r} was written but is not usable: {}", name, "; ".join(errors))
+            self._specs.pop(name, None)
+            self._refused[name] = spec
             if digest is None:
                 self._fingerprints.pop(name, None)
             else:
@@ -363,7 +375,7 @@ class PlaybookRuntime:
         """
         return self.library_view(message)[0]
 
-    def _detail(self, spec: PlaybookSpec) -> str:
+    def _detail(self, spec: StoredPlaybook) -> str:
         """One playbook as the tool description renders it."""
         parts = [spec.description]
         if spec.params:
@@ -391,7 +403,13 @@ class PlaybookRuntime:
                     bits.append(f"one of {p.enum}")
                 rows.append(f"{name} ({', '.join(bits)}): {p.description}")
             parts.append("params: " + "; ".join(rows))
-        if gaps := _blank_fields(spec):
+        if isinstance(spec, UnifiedPlaybookSpec):
+            shape = (
+                "composite" if spec.harness and spec.workflow else "harness-only" if spec.harness else "workflow-only"
+            )
+            parts.append(f"v2 {shape}")
+        executable = spec.as_legacy_workflow() if isinstance(spec, UnifiedPlaybookSpec) else spec
+        if executable is not None and (gaps := _blank_fields(executable)):
             parts.append("left for you to fill: " + "; ".join(f"{nid}.{field}" for nid, field in gaps))
         return " | ".join(parts)
 
@@ -429,6 +447,21 @@ class PlaybookRuntime:
             return None
         cid = self._context.get("session_key") or ""
         key = (cid, name)
+        if isinstance(spec, UnifiedPlaybookSpec):
+            if spec.harness is not None:
+                from raven.agent.subagent.delegate import bind_delegate_for_turn
+                from raven.playbook.agent_generator import build_table
+
+                bind_delegate_for_turn(build_table(spec.harness, {}))
+            executable = spec.as_legacy_workflow()
+            if executable is None:
+                self._gap_rounds.pop(key, None)
+                return ExecutionPlan(
+                    kind="guidance",
+                    reply=f"Loaded Harness-only playbook '{name}'. Its workers are active for this turn; continue using spawn or run_subagent_dag.",
+                )
+            spec = executable
+
         plan = await self._executor.execute(spec, params or {}, fills=fills or {}, confirmed=confirmed)
         if plan.kind == "gaps":
             rounds = self._gap_rounds.get(key, 0) + 1
@@ -447,6 +480,46 @@ class PlaybookRuntime:
             return plan
         self._gap_rounds.pop(key, None)
         return plan
+
+    def spec(self, name: str) -> StoredPlaybook | None:
+        """Return one offered artifact for pre-turn resolution."""
+        self._refresh()
+        if name in self.disabled():
+            return None
+        return self._specs.get(name)
+
+    def harness_table(self, name: str):
+        """Build the durable Harness selected before a turn, if it has one."""
+        spec = self.spec(name)
+        if not isinstance(spec, UnifiedPlaybookSpec) or spec.harness is None:
+            return None
+        from raven.playbook.agent_generator import build_table
+
+        return build_table(spec.harness, {})
+
+
+def validation_errors(spec: StoredPlaybook, known_agents: list[str] | None) -> list[str]:
+    """Semantic findings for either on-disk Playbook contract."""
+    if not isinstance(spec, UnifiedPlaybookSpec):
+        return validate_structure(spec, known_agents=known_agents, allow_blank_fillable=True)
+    if spec.state != "ready":
+        return ["playbook is still a draft"]
+    errors: list[str] = []
+    if known_agents is not None and spec.harness:
+        errors.extend(
+            f"harness agent {entry.name!r} is not registered"
+            for entry in spec.harness.delegate
+            if entry.name not in known_agents
+        )
+    executable = spec.as_legacy_workflow()
+    if executable is not None:
+        allowed = (
+            [*known_agents, *(entry.label for entry in spec.harness.delegate)]
+            if known_agents is not None and spec.harness
+            else known_agents
+        )
+        errors.extend(validate_structure(executable, known_agents=allowed, allow_blank_fillable=True))
+    return errors
 
 
 def _blank_fields(spec: PlaybookSpec) -> list[tuple[str, str]]:

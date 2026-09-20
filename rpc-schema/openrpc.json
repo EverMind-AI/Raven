@@ -11915,6 +11915,44 @@
         "type": "object",
         "description": "Just enough of one step to draw the graph: which step it is, and what it\nwaits for. The library page draws a concept diagram per card, and shipping\nthe prompts and per-node config the detail view needs would be the whole\nlibrary on page open."
       },
+      "PlaybookWorkerShape": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "agent"
+        ],
+        "type": "object",
+        "description": "One durable Harness alias and the registered agent behind it."
+      },
+      "PlaybookWorker": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "brief": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "agent",
+          "brief"
+        ],
+        "type": "object",
+        "description": "The full worker detail; its brief is the durable per-job instruction."
+      },
       "PlaybookRow": {
         "additionalProperties": false,
         "properties": {
@@ -11926,6 +11964,24 @@
           },
           "task_summary": {
             "type": "string"
+          },
+          "schema_version": {
+            "type": "integer"
+          },
+          "artifact_kind": {
+            "enum": [
+              "legacy",
+              "workflow",
+              "harness",
+              "composite"
+            ],
+            "type": "string"
+          },
+          "workers": {
+            "items": {
+              "$ref": "#/components/schemas/PlaybookWorkerShape"
+            },
+            "type": "array"
           },
           "mode": {
             "enum": [
@@ -11957,6 +12013,9 @@
           "name",
           "description",
           "task_summary",
+          "schema_version",
+          "artifact_kind",
+          "workers",
           "mode",
           "confirm",
           "origin",
@@ -12067,6 +12126,24 @@
           "version": {
             "type": "integer"
           },
+          "schema_version": {
+            "type": "integer"
+          },
+          "artifact_kind": {
+            "enum": [
+              "legacy",
+              "workflow",
+              "harness",
+              "composite"
+            ],
+            "type": "string"
+          },
+          "workers": {
+            "items": {
+              "$ref": "#/components/schemas/PlaybookWorker"
+            },
+            "type": "array"
+          },
           "mode": {
             "enum": [
               "dag",
@@ -12120,6 +12197,9 @@
           "task_summary",
           "version",
           "mode",
+          "schema_version",
+          "artifact_kind",
+          "workers",
           "confirm",
           "origin",
           "disabled",

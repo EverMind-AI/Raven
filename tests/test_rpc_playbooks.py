@@ -593,8 +593,8 @@ async def test_validate_answers_its_findings_rather_than_raising(
     look like a broken call, and carries one string where this carries the list."""
     library.save(_spec())
     monkeypatch.setattr(
-        "raven.playbook.validate.validate_structure",
-        lambda spec, known_agents=None: ["merge: depends on a node that does not exist"],
+        "raven.playbook.runtime.validate_structure",
+        lambda spec, known_agents=None, **kwargs: ["merge: depends on a node that does not exist"],
     )
 
     out = await mod.playbooks_validate({"name": "competitor-scan"})
@@ -612,7 +612,7 @@ async def test_validate_says_ok_with_an_empty_list_not_a_missing_one(
     """Paired with the case above so neither is satisfied by a handler that
     always answers the same shape."""
     library.save(_spec())
-    monkeypatch.setattr("raven.playbook.validate.validate_structure", lambda spec, known_agents=None: [])
+    monkeypatch.setattr("raven.playbook.runtime.validate_structure", lambda spec, known_agents=None, **kwargs: [])
 
     out = await mod.playbooks_validate({"name": "competitor-scan"})
 
@@ -1189,7 +1189,7 @@ class _Generator:
         self._raises = raises
         self._hangs = hangs
 
-    async def generate(self, workflow, skills=None):
+    async def generate(self, workflow, skills=None, *, dag_only=False):
         import asyncio
 
         self.calls.append((workflow, skills))
@@ -1370,3 +1370,56 @@ async def test_creating_with_no_runtime_refuses(library: PlaybookStore) -> None:
 
 def test_the_create_contract_is_mirrored_by_a_model_pair() -> None:
     assert "playbooks.create" in METHOD_MODELS
+
+
+@pytest.mark.asyncio
+async def test_frontend_rpc_exposes_unified_kind_workers_and_workflow(library: PlaybookStore) -> None:
+    """The old graph view stays populated while a new page can render Harness workers."""
+    from raven.agent.subagent.dag_graph import DagNodeSpec
+    from raven.playbook.agent_spec import AgentPlaybookSpec, DelegateEntry
+    from raven.playbook.unified import PlaybookMatch, UnifiedPlaybookSpec, WorkflowSpec
+
+    library.save(
+        UnifiedPlaybookSpec(
+            name="evidence-team",
+            description="Reusable evidence team and report process",
+            match=PlaybookMatch(summary="Build evidence report", keywords=["evidence report"]),
+            harness=AgentPlaybookSpec(
+                name="evidence-team",
+                description="Evidence workers",
+                delegate=[
+                    DelegateEntry(
+                        **{
+                            "as": "researcher",
+                            "name": "Raven",
+                            "brief": "Use primary sources",
+                        }
+                    )
+                ],
+            ),
+            workflow=WorkflowSpec(
+                summary="Build evidence report",
+                confirm=False,
+                nodes=[
+                    DagNodeSpec(
+                        id="research",
+                        subagent="researcher",
+                        nodeSummary="Collect evidence",
+                        promptTemplate="Research the subject",
+                    )
+                ],
+            ),
+        )
+    )
+
+    row = (await mod.playbooks_list({}))["playbooks"][0]
+    assert row["schema_version"] == 2
+    assert row["artifact_kind"] == "composite"
+    assert row["workers"] == [{"label": "researcher", "agent": "Raven"}]
+    assert row["nodes"] == [{"id": "research", "depends_on": []}]
+    METHOD_MODELS["playbooks.list"][1].model_validate({"playbooks": [row]})
+
+    detail = (await mod.playbooks_get({"name": "evidence-team"}))["playbook"]
+    assert detail["workers"] == [{"label": "researcher", "agent": "Raven", "brief": "Use primary sources"}]
+    assert detail["nodes"][0]["subagent"] == "researcher"
+    METHOD_MODELS["playbooks.get"][1].model_validate({"playbook": detail})

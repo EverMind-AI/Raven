@@ -680,64 +680,111 @@ class WiringMixin:
         """
         return self._session_charters.pop(session_key, None)
 
-    async def _write_worker_table(self, req: Any, session_key: str, binding: Any) -> "DelegateTable | None":
-        """This turn's worker table, or ``None`` to run it unconfigured.
+    async def _resolve_playbook_turn(self, req: Any, session_key: str, binding: Any):
+        """Retrieve or generate the one Harness decision for this turn."""
+        from raven.playbook.agent_generator import HarnessResolution
 
-        ``None`` on every path that is not a deliberate, successful generation:
-        the feature off, a sub-agent process (a worker writing its own workers
-        would be the third level the two-level rule forbids), a direct chat with
-        one sub-agent, an empty roster, or a generation that failed. A turn that
-        dies because its setup step failed is strictly worse than one that runs
-        without it.
-
-        The binding is handed in rather than resolved here. It has to be the
-        turn's own pair, because this runs *before* ``use_binding`` opens and
-        ``self.provider`` still answers with the loop's default; and it has to
-        be resolved once for both, because this call awaits a model and a
-        session that switched while it was in flight would otherwise split the
-        turn across two pairs.
-
-        The tool names handed over are the registry's current view, taken
-        outside the turn's freeze for the same reason. They are a vocabulary for
-        the brief, not the array the turn will run on, so a session-overlay tool
-        missing from them costs a word the generator could have used and
-        nothing else.
-        """
         cfg = self._playbook_config
         if cfg is None or not cfg.enabled or getattr(cfg, "agent_harness", "default") != "generate":
-            return None
-        if is_subagent_process():
-            return None
-        # A direct chat with one sub-agent returns through ``subagents.chat``
-        # without ever rendering or executing ``spawn``, so a table written for
-        # it is never read. Guarded before the call rather than after: the cost
-        # of generating one is a model round trip (two, when the table needs a
-        # repair round), paid on every direct turn for nothing.
-        if getattr(req, "direct_target", None) is not None:
-            return None
+            return HarnessResolution()
+        if is_subagent_process() or getattr(req, "direct_target", None) is not None:
+            return HarnessResolution()
         try:
+            from dataclasses import replace
+
             from raven.playbook.agent_generator import WorkerTableGenerator, roster_note
 
             metas = list(self.subagents.list_agents())
             agents = [a.name for a in metas]
             if not agents:
-                return None
-            # What each agent is for, in the registry's own words and its own
-            # advertised capabilities. Without them the generating model is
-            # handed a list of bare names and, on a roster that is not the
-            # shipped one, cannot tell which agent the task wants -- not even
-            # when only one of them can read the local files it is about.
+                return HarnessResolution()
             notes = {a.name: roster_note(a) for a in metas}
             tools = sorted((d.get("function", d) or {}).get("name", "") for d in self.tools.get_definitions())
-            table = await WorkerTableGenerator(binding.provider, binding.model).generate(
-                getattr(req, "text", "") or "", agents, [t for t in tools if t], notes
+            candidates = dict(self._playbooks.listing(getattr(req, "text", "") or "")) if self._playbooks else {}
+            resolution = await WorkerTableGenerator(binding.provider, binding.model).resolve(
+                getattr(req, "text", "") or "",
+                agents,
+                [t for t in tools if t],
+                notes,
+                candidates,
             )
+            if resolution.selected_playbook and self._playbooks is not None:
+                resolution = replace(resolution, table=self._playbooks.harness_table(resolution.selected_playbook))
         except Exception:  # noqa: BLE001 - setup must not cost the turn
-            logger.opt(exception=True).warning("agent playbook: worker table failed; running unconfigured")
-            return None
+            logger.opt(exception=True).warning("agent playbook: resolution failed; running unconfigured")
+            return HarnessResolution()
+        table = resolution.table
+        if resolution.disposition == "artifact":
+            resolution = replace(resolution, table=None)
+            table = None
         if table:
             logger.info("agent playbook: {} worker(s) for this turn: {}", len(table.workers), table.labels())
-        return table
+        loader = self.tools.get("load_playbook")
+        if loader is not None and hasattr(loader, "set_preselected"):
+            loader.set_preselected(resolution.selected_playbook)
+        return resolution
+
+    async def _write_worker_table(self, req: Any, session_key: str, binding: Any) -> "DelegateTable | None":
+        """Backward-compatible table-only face used by focused tests."""
+        return (await self._resolve_playbook_turn(req, session_key, binding)).table
+
+    async def _finish_playbook_turn(self, resolution: Any, capture: Any, binding: Any) -> None:
+        """Persist run evidence and promote reusable Harness/Workflow artifacts."""
+        if self._playbooks is None:
+            return
+        from raven.playbook.run_record import RunRecordStore
+
+        try:
+            artifact = None
+            harness = resolution.spec
+            if resolution.capture_workflow and capture.dags and not resolution.selected_playbook:
+                from raven.playbook.workflow_compiler import WorkflowCompiler
+
+                artifact = await WorkflowCompiler(binding.provider, binding.model).compile(
+                    query=capture.query,
+                    dag=capture.dags[-1].spec,
+                    run_id=capture.run_id,
+                    harness=harness,
+                    name_hint=resolution.artifact_name,
+                    description_hint=resolution.description,
+                )
+            elif resolution.disposition in {"artifact", "runtime_and_artifact"} and harness is not None:
+                import re
+
+                from raven.playbook.unified import PlaybookMatch, PlaybookMetadata, UnifiedPlaybookSpec
+
+                description = (resolution.description or capture.query.strip().splitlines()[0])[:200]
+                keywords = [w.lower() for w in re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]{2,}", capture.query)[:8]]
+                artifact = UnifiedPlaybookSpec(
+                    name=resolution.artifact_name or harness.name,
+                    description=description,
+                    match=PlaybookMatch(summary=description, keywords=keywords or [description[:80]]),
+                    harness=harness,
+                    workflow=None,
+                    metadata=PlaybookMetadata(sourceRunId=capture.run_id),
+                )
+            if artifact is not None:
+                store = self._playbooks.store
+                if store.origin_of(artifact.name) is not None:
+                    suffix = capture.run_id.rsplit("-", 1)[-1]
+                    artifact = artifact.model_copy(update={"name": f"{artifact.name[:54]}-{suffix}"})
+                path = store.save(artifact)
+                self._playbooks.adopt(artifact.name)
+                capture.saved_playbook = artifact.name
+                logger.info("playbook: saved reusable artifact {!r} at {}", artifact.name, path)
+            capture.finish()
+        except Exception as exc:  # noqa: BLE001 - persistence must not replace the user's answer
+            logger.opt(exception=True).warning("playbook: turn finalization failed")
+            capture.finish(status="completed", error=str(exc))
+        finally:
+            try:
+                path = RunRecordStore(self._playbooks.store.root).save(capture)
+                logger.info("playbook: saved run record {}", path)
+            except Exception:  # noqa: BLE001 - record failure must not cost the turn
+                logger.opt(exception=True).warning("playbook: run record could not be saved")
+            loader = self.tools.get("load_playbook")
+            if loader is not None and hasattr(loader, "set_preselected"):
+                loader.set_preselected(None)
 
     def set_default_binding(self, binding: ModelBinding) -> None:
         """Change what new sessions start on.

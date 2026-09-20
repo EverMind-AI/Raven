@@ -888,6 +888,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         """
         session_key = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
         flush = True
+        capture = None
         try:
             # Pick up a mid-session `deep-research enable` BEFORE the freeze below
             # captures the turn's pairs. The promotion re-registers the offer
@@ -915,23 +916,49 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             # forbids: a turn resolves its pair once and holds it for the whole
             # turn tree.
             binding = self.binding_for_session(session_key)
-            delegate_table = await self._write_worker_table(req, session_key, binding)
+            resolution = await self._resolve_playbook_turn(req, session_key, binding)
+            delegate_table = resolution.table
+            if resolution.active:
+                from raven.playbook.run_record import PlaybookRunCapture
+
+                capture = PlaybookRunCapture(
+                    query=getattr(req, "text", "") or "",
+                    disposition=resolution.disposition,
+                    selected_playbook=resolution.selected_playbook,
+                    artifact_name=resolution.artifact_name,
+                    capture_workflow=resolution.capture_workflow,
+                )
+            from raven.playbook.run_record import capture_scope
+
             # The charter a dispatch staged for this session, taken for this turn
             # only. Both scopes below are None on an ordinary turn, which is the
             # path every reader answers to as "no playbook".
             charter = self._take_session_charter(session_key)
+            if resolution.disposition == "artifact" and resolution.artifact_name:
+                from raven.agent.subagent.charter import Charter
+
+                charter = Charter(
+                    prompt=(
+                        f"The platform has prepared the reusable Harness {resolution.artifact_name!r} "
+                        "and will persist it automatically after this turn. Do not search for a persona "
+                        "format and do not write Playbook, skill, persona, Harness, Workflow, or run-record "
+                        "files yourself. Do not execute a Workflow. Reply concisely with what the saved "
+                        "Harness is for and that it will be available by this name."
+                    )
+                )
             with (
                 use_binding(binding),
                 self.tools.session_scope_for(session_key),
                 self.tools.turn_scope(),
                 delegate_scope(delegate_table),
                 charter_scope(charter),
+                capture_scope(capture),
                 # The participant seats in the hook chain ask this turn's modules,
                 # so a replaced Action or Planning decides what a plugin's
                 # judgement does -- bound per turn like the model.
                 bind_harness(self.harness),
             ):
-                return await self._run_turn(
+                outcome = await self._run_turn(
                     req,
                     emit,
                     drain,
@@ -940,10 +967,25 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                     usage_sink=usage_sink,
                     text_sink=text_sink,
                 )
+            if capture is not None:
+                await self._finish_playbook_turn(resolution, capture, binding)
+            return outcome
         except asyncio.CancelledError:
             flush = False
             raise
         finally:
+            if capture is not None and capture.status == "running" and self._playbooks is not None:
+                from raven.playbook.run_record import RunRecordStore
+
+                capture.finish(status="cancelled" if not flush else "failed")
+                try:
+                    RunRecordStore(self._playbooks.store.root).save(capture)
+                except Exception:  # noqa: BLE001 - cleanup cannot replace the turn's error
+                    logger.opt(exception=True).warning("playbook: failed turn record could not be saved")
+            loader = self.tools.get("load_playbook")
+            if loader is not None and hasattr(loader, "set_preselected"):
+                loader.set_preselected(None)
+
             # Every way a turn ends passes here, which is what makes this the
             # place a foreground DAG run learns its turn is over. A direct chat
             # runs on an instance's own lane, concurrently with the main agent's
