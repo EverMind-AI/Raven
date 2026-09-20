@@ -146,9 +146,11 @@ _RECALL_TIMEOUT_S: float = 4.0
 _STORE_TIMEOUT_S: float = 10.0
 # ...and an append is not flat work: EverOS may carve a boundary out of any
 # add, which runs a model, so the cost follows how much is handed over. A turn
-# passes a handful of messages and lands well inside the floor; a bulk import
-# passes up to a hundred at once and did not, which read as a dead service and
-# failed every source behind it.
+# passes a handful of messages and lands well inside the floor. A writer that
+# hands over more than a turn and says so (``metadata["bulk"]``) skips this
+# estimate for the extraction budget below: measured against a real service,
+# fifty messages took 24s and a hundred ran past six minutes, which no
+# per-message slope sized for turns can follow.
 _STORE_TIMEOUT_PER_MESSAGE_S: float = 0.5
 
 # Shutdown's total budget for flushing every session left with buffered-but-
@@ -1242,8 +1244,11 @@ class EverosBackend:
 
         # A per-turn append must not hold a turn open; a final flush is the call
         # that makes EverOS extract, which is what the six-minute budget was
-        # sized for. One number for both silently overrode the other.
-        budget = _MEMORIZE_TIMEOUT_S if is_final else _store_budget(len(payload))
+        # sized for. One number for both silently overrode the other. A bulk
+        # write is neither a turn nor a flush: nothing waits on it, and EverOS
+        # extracts on the add itself, so it takes the extraction budget outright.
+        bulk = bool(metadata.get("bulk")) if metadata else False
+        budget = _MEMORIZE_TIMEOUT_S if is_final or bulk else _store_budget(len(payload))
         # Marked before the call, not after: if this is cancelled mid-flight
         # the add may already have landed, and the safe direction is one
         # redundant flush rather than content that is never extracted.

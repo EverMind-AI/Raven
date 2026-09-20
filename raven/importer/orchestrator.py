@@ -17,7 +17,11 @@ from raven.importer.types import ImportMessage, ImportSession, Scanner, ScanResu
 # message_id from (session_id, timestamp_ms, index-within-batch), so those
 # boundaries are part of the id: two messages sharing a millisecond collide,
 # and one is dropped, if they land at the same index in different batches.
-_BATCH_MSG_LIMIT = 100
+# Fifty, not a hundred: EverOS extracts on every add, and that cost is
+# superlinear in the message count -- against a real service a 15-message
+# batch took 12s and a 52-message batch 24s, while a batch of 100 ran past the
+# six-minute extraction budget and failed every memory-file source.
+_BATCH_MSG_LIMIT = 50
 _BATCH_CHAR_LIMIT = 30_000
 
 
@@ -200,7 +204,9 @@ async def _feed_session(backend: MemoryBackend, session: ImportSession) -> None:
 
     async def _flush(*, is_final: bool) -> None:
         nonlocal batch, batch_chars
-        metadata: dict[str, Any] = {"is_final": is_final}
+        # ``bulk``: nothing waits on this write, so the backend may give it its
+        # extraction budget rather than a turn's.
+        metadata: dict[str, Any] = {"is_final": is_final, "bulk": True}
         _log_store_request(session.session_id, batch, metadata, batch_chars)
         landed = await backend.store(session.session_id, batch, metadata=metadata)
         if landed is False:

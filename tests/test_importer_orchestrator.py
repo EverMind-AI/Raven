@@ -250,18 +250,26 @@ class TestErrorIsolation:
 class TestBatching:
     @pytest.mark.asyncio
     async def test_msg_count_limit(self, tmp_path: Path) -> None:
-        """150 messages -> 2 batches (100 + 50)."""
+        """120 messages -> 3 batches (50 + 50 + 20), only the last one final, every one bulk."""
         state = ImportState(path=tmp_path / "state.json")
         backend = FakeBackend()
-        scanner = FakeScanner({"k1": _session(n_msgs=150, session_id="s1", content="x")})
+        scanner = FakeScanner({"k1": _session(n_msgs=120, session_id="s1", content="x")})
 
         await run_import([(scanner, _scan_result("k1"))], backend, state)
 
-        assert len(backend.calls) == 2
-        assert len(backend.calls[0]["messages"]) == 100
-        assert backend.calls[0]["metadata"]["is_final"] is False
-        assert len(backend.calls[1]["messages"]) == 50
-        assert backend.calls[1]["metadata"]["is_final"] is True
+        assert [len(c["messages"]) for c in backend.calls] == [50, 50, 20]
+        assert [c["metadata"]["is_final"] for c in backend.calls] == [False, False, True]
+        assert all(c["metadata"]["bulk"] is True for c in backend.calls)
+
+    def test_a_batch_stays_inside_the_zone_everos_extracts_linearly(self) -> None:
+        """Fifty is a ceiling, not a tuning knob. EverOS extracts on every add
+        and the cost is superlinear in the count: against a real service a
+        15-message batch took 12s and a 52-message batch 24s, while a batch of
+        100 ran past the six-minute extraction budget and failed every
+        memory-file source it belonged to."""
+        from raven.importer.orchestrator import _BATCH_MSG_LIMIT
+
+        assert _BATCH_MSG_LIMIT <= 50
 
     @pytest.mark.asyncio
     async def test_char_limit_fallback(self, tmp_path: Path) -> None:
@@ -280,10 +288,10 @@ class TestBatching:
 
     @pytest.mark.asyncio
     async def test_is_final_only_on_last_batch(self, tmp_path: Path) -> None:
-        """Exactly 100 messages -> 1 batch with is_final=True."""
+        """Exactly 50 messages -> 1 batch with is_final=True."""
         state = ImportState(path=tmp_path / "state.json")
         backend = FakeBackend()
-        scanner = FakeScanner({"k1": _session(n_msgs=100, session_id="s1", content="x")})
+        scanner = FakeScanner({"k1": _session(n_msgs=50, session_id="s1", content="x")})
 
         await run_import([(scanner, _scan_result("k1"))], backend, state)
 
@@ -349,19 +357,18 @@ class TestMessageConversion:
 
 class TestMetadata:
     @pytest.mark.asyncio
-    async def test_metadata_contains_is_final_only(self, tmp_path: Path) -> None:
-        """app_id/project_id are deliberately omitted so EverOS defaults
-        to 'default'/'default', matching the daily recall partition."""
+    async def test_metadata_marks_the_write_bulk_and_names_no_owner(self, tmp_path: Path) -> None:
+        """``bulk`` tells the backend nothing waits on this append, so it may
+        take its extraction budget; app_id/project_id are deliberately omitted
+        so EverOS defaults to 'default'/'default', matching the daily recall
+        partition."""
         state = ImportState(path=tmp_path / "state.json")
         backend = FakeBackend()
         scanner = FakeScanner({"k1": _session(n_msgs=1, session_id="s1")})
 
         await run_import([(scanner, _scan_result("k1"))], backend, state)
 
-        meta = backend.calls[0]["metadata"]
-        assert "app_id" not in meta
-        assert "project_id" not in meta
-        assert meta["is_final"] is True
+        assert backend.calls[0]["metadata"] == {"is_final": True, "bulk": True}
 
 
 class TestOnProgress:
