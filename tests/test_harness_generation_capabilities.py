@@ -7,8 +7,8 @@ import json
 import pytest
 from pydantic import ValidationError
 
+from raven.agent import harness_capabilities
 from raven.agent.subagent.charter import parse
-from raven.contracts import harness_capabilities
 from raven.playbook.agent_generator import _spec_from_args, emit_tool
 from raven.playbook.agent_spec import AgentPlaybookSpec
 

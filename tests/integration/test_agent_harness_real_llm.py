@@ -106,7 +106,7 @@ async def test_real_model_generated_checks_and_judge_execute(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_real_model_cannot_emit_disabled_harness_fields(tmp_path, monkeypatch) -> None:
-    from raven.contracts import harness_capabilities
+    from raven.agent import harness_capabilities
 
     document = json.loads(harness_capabilities._PATH.read_text(encoding="utf-8"))
     root = document["harnessGeneration"]

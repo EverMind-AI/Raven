@@ -23,8 +23,8 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from raven.agent.harness_capabilities import function_enabled, parameter_enabled
 from raven.agent.subagent.delegate import DelegateTable, Worker
-from raven.contracts.harness_capabilities import function_enabled, parameter_enabled
 from raven.playbook.agent_spec import AgentPlaybookSpec
 
 if TYPE_CHECKING:

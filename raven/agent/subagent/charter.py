@@ -44,13 +44,13 @@ MAX_CODE_CHARS = 8000
 
 
 def _parameter_enabled(module: str, name: str) -> bool:
-    from raven.contracts.harness_capabilities import parameter_enabled
+    from raven.agent.harness_capabilities import parameter_enabled
 
     return parameter_enabled(module, name)
 
 
 def _function_enabled(module: str, kind: str, name: str) -> bool:
-    from raven.contracts.harness_capabilities import function_enabled
+    from raven.agent.harness_capabilities import function_enabled
 
     return function_enabled(module, kind, name)
 
