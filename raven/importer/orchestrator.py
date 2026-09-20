@@ -219,8 +219,7 @@ async def _feed_session(
 
     async def _flush(*, is_final: bool) -> None:
         nonlocal batch, batch_chars
-        # ``bulk``: nothing waits on this write, so the backend may give it its
-        # extraction budget rather than a turn's.
+        # bulk: nothing waits on an import write; the backend budgets it as extraction.
         metadata: dict[str, Any] = {"is_final": is_final, "bulk": True}
         _log_store_request(session.session_id, batch, metadata, batch_chars)
         landed = await backend.store(session.session_id, batch, metadata=metadata)
