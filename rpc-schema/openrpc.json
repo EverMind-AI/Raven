@@ -10651,6 +10651,10 @@
           "needs_api_base": {
             "type": "boolean"
           },
+          "gateway": {
+            "type": "boolean",
+            "description": "The registry's is_gateway: resells other vendors' models under vendor/model ids. The catalogue's gateway filter reads this; absent means false."
+          },
           "platforms": {
             "type": "array",
             "items": {
@@ -10744,7 +10748,8 @@
         "additionalProperties": false,
         "description": "How a model reads to a person, and what it can do. Absent for a model the registry knows nothing about -- one released since the bundled files, or served by a local deployment -- in which case the id is all there is to show. An empty tag list means nothing is published, not that the model cannot: a surface renders absence as no icon, never as a denial.",
         "required": [
-          "label"
+          "label",
+          "kind"
         ],
         "properties": {
           "label": {
@@ -10773,6 +10778,18 @@
             "items": {
               "type": "string"
             }
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "text",
+              "image",
+              "audio",
+              "video",
+              "embedding",
+              "reranker"
+            ],
+            "description": "The bucket a model list files this model under, from what it writes (registry_data.kind_of): a model that reads images is still text. A model with no label entry is text."
           },
           "context_window": {
             "type": "integer",
