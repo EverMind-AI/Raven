@@ -2566,6 +2566,17 @@ def test_every_shim_requirement_names_a_shim_launched_row() -> None:
         assert install.strip() == install and install, key
 
 
+def test_a_shim_that_brings_its_own_agent_is_not_held_to_a_local_install() -> None:
+    """``codex-acp`` ships the agent as its own binary, and ``claude-agent-acp``
+    runs the CLI its SDK pin carries as a per-platform optional dependency, so
+    a ``claude`` on PATH is neither needed nor the one that answers. A
+    requirement for either would report a working adapter as missing on a
+    machine that never installed the CLI globally."""
+    from raven.agent.subagent.presets import SHIM_REQUIRED_EXECUTABLES
+
+    assert {"claude_code", "codex"}.isdisjoint(SHIM_REQUIRED_EXECUTABLES)
+
+
 def test_presets_declare_their_own_provenance() -> None:
     # The UI groups by provenance rather than by name, because a configured
     # preset's name is user-editable. A preset that shipped without this would

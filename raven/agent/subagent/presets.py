@@ -45,8 +45,8 @@ The **agent itself** is never fetched. Its row names the bare executable
 installed, at the version they chose, holding the login they already granted --
 and a machine without it says so, because ``_probe_acp`` resolves ``argv[0]`` and
 an ``npx`` command always resolves whether the agent is there or not. For a shim
-the probe therefore asks after the agent the shim drives instead
-(:data:`SHIM_REQUIRED_EXECUTABLES`), so a machine without ``pi`` reads Pi as
+that reaches for a local install the probe therefore asks after that agent as
+well (:data:`SHIM_REQUIRED_EXECUTABLES`), so a machine without ``pi`` reads Pi as
 absent rather than as connectable. :data:`SHIM_LAUNCHED_PRESETS` is that split,
 declared; a test holds every command to it.
 
@@ -134,7 +134,6 @@ change (``test_provenance_survives_a_rename``).
 """
 
 SHIM_REQUIRED_EXECUTABLES: dict[str, tuple[str, str]] = {
-    "claude_code": ("claude", "npm install -g @anthropic-ai/claude-code"),
     "pi": ("pi", "npm install -g @earendil-works/pi-coding-agent"),
 }
 """The local agent a shim drives, as ``(executable, install command)``, by preset key.
@@ -143,9 +142,14 @@ A shim is plumbing in front of an agent the user installs themselves, and its
 ``npx`` command resolves whether that agent is there or not. ``_probe_acp`` asks
 after this executable as well, so a machine without it reports the row absent
 with the install beside it, instead of offering a connect that fails a minute
-later inside the adapter with the same sentence. Codex is absent on purpose:
-``codex-acp`` ships the agent as its own binary and wants a login, not an
-install.
+later inside the adapter with the same sentence. Listed only where the shim
+really does reach for a local install: ``pi-acp`` launches ``pi`` and fails
+with "executable not found" without it. The other two shims bring their agent
+along -- ``codex-acp`` ships it as its own binary, and ``claude-agent-acp``
+runs the CLI its ``@anthropic-ai/claude-agent-sdk`` pin carries as a
+per-platform optional dependency (read from the 0.66.0 package on 2026-09-20),
+so a ``claude`` on PATH is neither needed nor the one that answers -- and what
+either wants is a login, not an install.
 """
 
 
