@@ -260,8 +260,8 @@ describe('opening a conversation after a reload', () => {
     expect(dagOpen('s1')!.run_id).toBe('r1')
   })
 
-  /* One sheet per conversation, so a conversation that ran several graphs comes
-     back on its newest -- the one whose nodes may still be moving. */
+  /* One run held per conversation, so a conversation that ran several graphs
+     comes back on its newest -- the one whose nodes may still be moving. */
   it('draws the newest run when the conversation ran several', async () => {
     reload()
 

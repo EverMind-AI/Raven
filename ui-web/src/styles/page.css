@@ -4572,10 +4572,11 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
 /* Drawn, not typed: as text glyphs these two sat on different baselines inside
    equal boxes, so the caret read as sagging next to the cross.
 
-   Shared with the dag sheet, which wears the same two controls in the same
-   corner. It had none of this: an unstyled button in a flex row with a growing
+   Written when the graph sheet wore the same two controls in the same corner
+   and had none of this: an unstyled button in a flex row with a growing
    sibling, so the close cross was squeezed to half a box and neither control
-   took a hover or turned its caret over on fold. */
+   took a hover or turned its caret over on fold. That sheet is gone; these are
+   the clarify and approval sheets' own rules now. */
 .csheet .ic { border: 0; background: none; color: var(--faint);
   border-radius: 6px; width: 24px; height: 24px; flex: none; cursor: pointer;
   display: grid; place-items: center; }

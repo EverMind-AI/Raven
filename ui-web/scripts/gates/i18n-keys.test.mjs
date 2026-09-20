@@ -114,7 +114,7 @@ const SHARED = {
   arts: 'an artifact is produced in the transcript and collected in the workspace',
   att: 'an attachment is composed, carried into a delegation and drawn in the transcript',
   cron: 'a schedule is the cron page\'s and a delegated agent can carry one',
-  dag: 'the delegated graph is drawn as a sheet, a transcript card and a roster row',
+  dag: 'the delegated graph is drawn as a transcript card, a task pane board and a roster row',
   deleg: 'a delegated call\'s own facts are drawn in the transcript\'s card and in a task node\'s own call row',
   dtl: 'a tool call\'s own detail card is drawn in the transcript and in a task node\'s own call row',
   model: 'a model is picked in one domain and defaulted in another, plus the chip component',

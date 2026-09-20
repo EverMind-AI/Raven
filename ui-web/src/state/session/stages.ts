@@ -275,9 +275,9 @@ export const STAGES: readonly Stage[] = [
     sources.tasks?.onRunCompleted?.(p)
   }),
 
-  /* The trail card alone: the sheet shows one run at a time by design, so a
-     replanned run's sheet just keeps showing the old graph until the new run's
-     own dag.run_started arrives and replaces it wholesale. The tasks panel's
+  /* The trail card alone: one run is held per conversation by design, so a
+     replanned run's state just keeps the old graph until the new run's own
+     dag.run_started arrives and replaces it wholesale. The tasks panel's
      own row is not so lucky -- there is no second card to swap, so it marks
      the superseded run cancelled itself. */
   arm('dag.run_replanned', (_rt, p) => {

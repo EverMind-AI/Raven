@@ -10,14 +10,13 @@
  *
  * A sheet's own element is the host its tenant hands over, not something React
  * renders: `.dock .sheets > *` styles that element as the flex item and
- * `data-sess` is written on it, so a wrapper around it would take both, and the
- * rack's child list is mixed -- the dag sheet is a host with a root of its own.
+ * `data-sess` is written on it, so a wrapper around it would take both.
  * The interior is a component (src/chrome/SheetRack.tsx portals each view into
  * the host it belongs to), so this module keeps the DOM order it always had:
  * newest first, the same insertBefore, and the caret undisturbed by a sync.
  *
- * What docks here -- a clarify question, an approval request, a dag graph --
- * belongs to the conversation it was raised in. Each used to be appended
+ * What docks here -- a clarify question, an approval request -- belongs to the
+ * conversation it was raised in. Each used to be appended
  * straight into `.dock-in`, which is one element for the whole window, so
  * switching sessions left another conversation's question sitting over the
  * composer: still answerable, and answering it replied on behalf of a turn the
@@ -104,8 +103,10 @@ export function watchAsking(fn: (key: string, asking: number) => void): () => vo
 /* The interior of each sheet whose conversation is open, for <SheetRack/>.
  *
  * A tenant that renders its sheet from a component hands the view over with the
- * host; one that fills its host itself (the dag sheet, which roots a tree of its
- * own in it) hands over no view and is absent from here. What is rendered is
+ * host; one that fills its host itself hands over no view and is absent from
+ * here. Every tenant takes the first path today -- the delegated graph, which
+ * rooted a tree of its own, was the one that did not, and it no longer docks --
+ * so the optional view on `add` is a capability with no caller. What is rendered is
  * therefore the open conversation's views -- a parked sheet's interior is
  * unmounted, which is what "not rendered" means for the conversation the reader
  * is not looking at. */
