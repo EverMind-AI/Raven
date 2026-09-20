@@ -148,6 +148,18 @@ Runs that end in something other than a deck.
 <a href="https://github.com/user-attachments/assets/2b03cc53-e707-4728-8d68-327fcf7d112a"><img src="https://github.com/user-attachments/assets/2b03cc53-e707-4728-8d68-327fcf7d112a" alt="Retrieval sweep: recall@k is set by top_k alone, and latency stays flat across the grid" width="100%"></a>
 </td>
 </tr>
+<tr>
+<td width="50%" valign="top"><p align="center"><b>A light-pollution poster campaign</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>An interactive explainer and its solver</b></p></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/d3e4c873-cf95-4011-8471-0fda72778cfd"><img src="https://github.com/user-attachments/assets/d3e4c873-cf95-4011-8471-0fda72778cfd" alt="Task graph: three Raven-Research nodes in parallel into a Raven-Code node; that node and a Raven-Design plate node running alongside them both feed the final Raven-Design node" width="83%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/9754976b-11ff-4738-b53d-0621ec6ae7da"><img src="https://github.com/user-attachments/assets/9754976b-11ff-4738-b53d-0621ec6ae7da" alt="Task graph: two Raven-Code nodes in parallel into a Raven-Oncall cross-check; that node and a Raven-Design plate node running alongside them both feed the final Raven-Design node" width="100%"></a></p></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/7767ac05-6785-4e6a-9e27-c1b123753766"><img src="https://github.com/user-attachments/assets/7767ac05-6785-4e6a-9e27-c1b123753766" alt="Key visual plus the derived series: street poster, data panel, social square and wide banner" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/25c57220-c5fc-4f72-94fb-ea4b7e83f429"><img src="https://github.com/user-attachments/assets/25c57220-c5fc-4f72-94fb-ea4b7e83f429" alt="GPS trilateration explainer: the live page, and the fix at two, three and four satellites" width="97%"></a></p></td>
+</tr>
 </table>
 
 ## ❯❯ Connect Third-Party Agents
