@@ -54,6 +54,12 @@ export function extAgentRowOf(r: ExtAgentRowWire): ExtAgentRow {
     last_test_detail: r.last_test_detail || '',
     last_test_at_ms: r.last_test_at_ms || null,
     test_running: !!r.test_running,
+    own: !!r.own,
+    model: r.model ?? null,
+    model_choices: (r.model_choices || [])
+      .filter((c) => c && c.value)
+      .map((c) => ({ value: c.value, name: c.name || '', group: c.group || '' })),
+    model_source: r.model_source,
   }
 }
 
@@ -203,6 +209,15 @@ export const extAgentsSource: ExtAgentsSource = {
         description: a.description,
         api_key: a.api_key || undefined,
       })
+    } else if (op === 'model') {
+      /* The row's own model, set or cleared. `clear_model` wins over `model`
+         server-side, so the two never travel together from here. The built-in
+         row's pick names its provider, which the server spells into the
+         stored id; an acp row's value is the agent's own and goes verbatim. */
+      await gateway().call(
+        'subagents.update',
+        a.clear_model ? { name: row.name, clear_model: true } : { name: row.name, model: a.model, provider: a.provider || undefined },
+      )
     } else if (op === 'toggle') {
       /* One switch for every kind of row. A discovered folder has no config
          entry, so the server writes one from the folder's own manifest and puts
@@ -232,7 +247,10 @@ export const extAgentsSource: ExtAgentsSource = {
          The verdict is recorded server-side and comes back on the refetched
          rows (`last_test_ok` / `last_test_at_ms` / `last_test_detail`), so
          nothing here has to hold it. */
-      await gateway().call('subagents.test', { name: row.name, source: row.configured ? 'config' : 'preset' })
+      await gateway().call('subagents.test', {
+        name: row.name,
+        source: row.vendored ? 'vendored' : row.configured ? 'config' : 'preset',
+      })
     } else if (op === 'test_cancel') {
       /* Kills the agent's process group server-side. The test's own call is
          still open on another connection and answers `cancelled: true` from

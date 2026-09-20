@@ -216,6 +216,16 @@ export function describe(row: ExtAgentRow, text: string): void {
   else set({ drafts: { ...get().drafts, [row.name]: text } })
 }
 
+/* The row's own model, or back to the agent's default. A refusal is toasted
+   rather than held on the row: the row is not broken, the pick was. */
+export function setModel(row: ExtAgentRow, model: string, provider?: string): Promise<string | null> {
+  return run('model', row, provider ? { model, provider } : { model })
+}
+
+export function clearModel(row: ExtAgentRow): Promise<string | null> {
+  return run('model', row, { clear_model: true })
+}
+
 /* What the reader typed for a preset, or nothing. */
 export const draftOf = (name: string): string | undefined => get().drafts[name]
 

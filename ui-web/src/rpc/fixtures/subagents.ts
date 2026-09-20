@@ -102,6 +102,13 @@ export function createSubagents(env: FixtureEnv): SubagentsFixture {
       'subagents.update': (p) => {
         const row = find(p.name)
         if (row && p.api_key) { row.has_api_key = true; row.enabled = true }
+        if (row && typeof p.description === 'string') row.description = p.description
+        /* The row's own model, kept the way the server keeps it: a clear wins
+           over a pick sent beside it, and the built-in row's pick is stored
+           naming its provider (the server spells it in; here it is prefixed
+           unless the id already carries it). */
+        if (row && p.clear_model) row.model = null
+        else if (row && p.model) row.model = p.provider && !p.model.startsWith(`${p.provider}/`) ? `${p.provider}/${p.model}` : p.model
         return { updated: true, name: p.name }
       },
       /* One switch for every kind of row, including the discovered ones: the

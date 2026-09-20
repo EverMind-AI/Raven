@@ -4,13 +4,17 @@ import { createPortal } from 'react-dom'
 
 import { AgentMark } from '../../components/AgentMark'
 import { KeyInput } from '../../components/KeyInput'
+import { ModelPicker } from '../../components/ModelPicker'
 import { t } from '../../i18n/t'
 import { ask as confirmAsk } from '../../state/confirm'
 import * as lang from '../../state/lang'
+import { loadDefaultProviders, providers as hostProviders } from '../model/source'
+import { offered } from '../model/types'
 import { byOf, installOf, isOwnRow, shortOf } from './catalogue'
 import { sectionOf, stageOf } from './source'
 import * as store from './store'
 
+import type { PickerProvider } from '../../components/ModelPicker'
 import type { Section } from './source'
 import type { ExtAgentsState } from './store'
 import type { ExtAgentRow } from './types'
@@ -227,12 +231,11 @@ function OutIcon(): JSX.Element {
 }
 
 /* Whether `subagents.test` can answer for this row at all. A built-in agent is
-   this process, and `run_test` refuses one outright. A discovered folder is
-   looked up by neither name the call accepts, so both answer not-found;
-   offering the button there would be offering a click that can only fail. A
-   shipped product this install registered as a config row is found by
-   `source: "config"` like any other. */
-const canTest = (row: ExtAgentRow): boolean => !row.builtin && !row.vendored
+   this process, and `run_test` refuses one outright. Everything else has a
+   command or an endpoint to dispatch once: a discovered folder is found by
+   `source: "vendored"`, a shipped product this install registered as a config
+   row by `source: "config"` like any other. */
+const canTest = (row: ExtAgentRow): boolean => !row.builtin
 
 /* What the agent is good at, in the reader's words. Committed when the field
    is left: Enter is a newline in a textarea, and a click away from a field one
@@ -298,6 +301,130 @@ function InstallBlock({ row }: { row: ExtAgentRow }): JSX.Element | null {
           {site}
           <OutIcon />
         </a>
+      ) : null}
+    </div>
+  )
+}
+
+/* The pill's menu, by the row's editing rule. The built-in row picks from
+   raven's own connected providers, each with what it offers; an acp row picks
+   from the choices its handshake advertised, bucketed the way the agent
+   bucketed them. Empty is "no menu", whatever the rule. */
+function pickerProvidersFor(row: ExtAgentRow): PickerProvider[] {
+  if (row.model_source === 'raven') {
+    return hostProviders()
+      .filter((p) => p.on)
+      .map((p) => ({ id: p.id, name: p.name, models: offered(p), labels: p.labels }))
+  }
+  if (row.model_source !== 'agent') return []
+  const groups = new Map<string, PickerProvider>()
+  for (const c of row.model_choices || []) {
+    const id = c.group || row.name
+    const group = groups.get(id) ?? { id, name: id, models: [], labels: {} }
+    group.models.push(c.value)
+    if (c.name) group.labels![c.value] = { label: c.name }
+    groups.set(id, group)
+  }
+  return [...groups.values()]
+}
+
+/* The set model as the pill shows it: an acp choice by the name the agent gave
+   it and its group; a host id split off the provider it is stored under, the
+   way the host stores it. `provider` is what the picker's tick matches. */
+function shownModel(row: ExtAgentRow): { id: string; by: string; provider: string } | null {
+  if (!row.model) return null
+  if (row.model_source === 'agent') {
+    const hit = (row.model_choices || []).find((c) => c.value === row.model)
+    return { id: hit?.name || row.model, by: hit?.group || '', provider: hit?.group || row.name }
+  }
+  const cut = row.model.indexOf('/')
+  const head = cut > 0 ? row.model.slice(0, cut) : ''
+  const known = hostProviders().find((p) => p.id === head)
+  return { id: cut > 0 ? row.model.slice(cut + 1) : row.model, by: known ? known.name : head, provider: head }
+}
+
+/* The model a row answers with, and the picker that changes it. Unset reads by
+   ownership: one of Raven's own follows the main Raven, a third party runs on
+   its own default. A row with no menu wears the pill disabled: an openai or
+   cli row (`fixed`) says "managed by itself" -- its configured model is not a
+   pick and is not shown as one -- and an acp row whose handshake offered none
+   says the same, unless it is Raven's own, which really does follow; a model
+   such a row still carries is shown with its clear control, since the clear is
+   the one write left. A server that predates the model field draws no pill:
+   it has no model write. */
+function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Element | null {
+  const pill = useRef<HTMLButtonElement>(null)
+  const [open, setOpen] = useState(false)
+  if (!row.model_source) return null
+  const own = isOwnRow(row)
+  const provs = pickerProvidersFor(row)
+  const fixed = row.model_source === 'fixed'
+  /* The built-in row's list may simply not have landed yet; its click loads it. */
+  const menuless = fixed || (row.model_source === 'agent' && !provs.length)
+  const shown = fixed ? null : shownModel(row)
+  const unset = own ? 'gui.agent.model_follow' : menuless ? 'gui.agent.model_managed' : 'gui.agent.model_own_default'
+  const cls = [
+    'extAgents-pill',
+    menuless ? 'extAgents-pill-fixed' : '',
+    shown ? '' : 'extAgents-pill-dim',
+    shown ? 'extAgents-pill-clearable' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+  const openPicker = async (): Promise<void> => {
+    /* The host list is loaded at boot for the composer's chip; a sheet opened
+       before that landed asks once itself rather than offering nothing. */
+    if (row.model_source === 'raven' && !hostProviders().length) await loadDefaultProviders()
+    setOpen(true)
+  }
+  return (
+    <div className="extAgents-fld">
+      <span className="extAgents-k">{t('gui.agent.model_label')}</span>
+      <span className={cls}>
+        <button
+          aria-expanded={open}
+          aria-label={t('gui.agent.model_change')}
+          className="extAgents-pm"
+          disabled={menuless || busy}
+          onClick={() => void openPicker()}
+          ref={pill}
+          type="button"
+        >
+          {shown ? (
+            <>
+              <span className="extAgents-mid">{shown.id}</span>
+              {shown.by ? <span className="extAgents-mpv">{shown.by}</span> : null}
+            </>
+          ) : (
+            <span className="extAgents-mid">{t(unset)}</span>
+          )}
+          {menuless ? null : <span className="extAgents-mch">{'⌄'}</span>}
+        </button>
+        {shown ? (
+          <button
+            aria-label={t('gui.agent.model_clear')}
+            className="extAgents-mx"
+            disabled={busy}
+            onClick={() => void store.clearModel(row)}
+            type="button"
+          >
+            {'×'}
+          </button>
+        ) : null}
+      </span>
+      {open ? (
+        <ModelPicker
+          anchor={pill.current}
+          current={shown ? { model: row.model_source === 'agent' ? row.model || '' : shown.id, provider: shown.provider } : null}
+          emptyNote={t(row.model_source === 'raven' ? 'gui.agent.model_no_provider' : 'gui.agent.model_managed')}
+          onClose={() => setOpen(false)}
+          onPick={(model, provider) => {
+            setOpen(false)
+            void store.setModel(row, model, row.model_source === 'raven' ? provider : undefined)
+          }}
+          providers={provs}
+          title={t('gui.agent.model_label')}
+        />
       ) : null}
     </div>
   )
@@ -424,6 +551,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
               row={row}
               saved={(!row.configured && !row.vendored && store.draftOf(row.name)) || row.description || ''}
             />
+            <ModelPill busy={shown === 'pending'} row={row} />
             {needsKey ? (
               <label className="extAgents-fld">
                 <span className="extAgents-k">{t('gui.agent.key')}</span>

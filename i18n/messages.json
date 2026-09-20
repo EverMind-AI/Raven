@@ -4983,6 +4983,34 @@
       "en": "Moonshot",
       "zh": "月之暗面"
     },
+    "gui.agent.model_label": {
+      "en": "Model",
+      "zh": "模型"
+    },
+    "gui.agent.model_follow": {
+      "en": "Follows the main Raven",
+      "zh": "跟随主 Raven"
+    },
+    "gui.agent.model_own_default": {
+      "en": "Its own default",
+      "zh": "用它自己的默认"
+    },
+    "gui.agent.model_managed": {
+      "en": "Managed by itself",
+      "zh": "由它自己管理"
+    },
+    "gui.agent.model_change": {
+      "en": "Change the model",
+      "zh": "更换模型"
+    },
+    "gui.agent.model_clear": {
+      "en": "Back to the default model",
+      "zh": "清除，回到默认模型"
+    },
+    "gui.agent.model_no_provider": {
+      "en": "Connect a provider first",
+      "zh": "先接入一个模型供应商"
+    },
     "gui.agent.setup_available": {
       "en": "Available",
       "zh": "可以接入"

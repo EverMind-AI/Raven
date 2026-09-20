@@ -23,6 +23,18 @@ vi.mock('../../state/toast', () => ({
   },
 }))
 
+/* The host's provider list, which the built-in row's pill picks from. */
+const hostModels = vi.hoisted(() => ({
+  providers: [] as Array<{ id: string; name: string; models: string[]; on: boolean }>,
+  loads: 0,
+}))
+vi.mock('../model/source', () => ({
+  providers: () => hostModels.providers,
+  loadDefaultProviders: async () => {
+    hostModels.loads += 1
+  },
+}))
+
 function row(over: Partial<ExtAgentRow> = {}): ExtAgentRow {
   return {
     name: 'claude_code',
@@ -516,5 +528,139 @@ describe('the sheet', () => {
     await mount()
     await openSheet('claude_code')
     expect(domSnapshot(document.getElementById('dBody')!)).toMatchSnapshot()
+  })
+})
+
+describe('the model pill', () => {
+  const choices = [
+    { value: 'v/opus', name: 'Opus', group: 'Anthropic' },
+    { value: 'v/sonnet', name: 'Sonnet', group: 'Anthropic' },
+    { value: 'o/gpt', name: 'GPT', group: 'OpenAI' },
+  ]
+  const builtin = (over: Partial<ExtAgentRow> = {}): ExtAgentRow =>
+    row({
+      name: 'Raven',
+      preset: undefined,
+      kind: 'builtin',
+      builtin: true,
+      configured: false,
+      probe_status: 'unknown',
+      own: true,
+      model_source: 'raven',
+      ...over,
+    })
+  const pill = (): HTMLButtonElement | null => sheet()?.querySelector('.extAgents-pm') ?? null
+  const picker = (): HTMLElement | null => sheet()?.querySelector('.model-picker') ?? null
+  const modelButton = (label: string): HTMLButtonElement | undefined =>
+    [...(picker()?.querySelectorAll<HTMLButtonElement>('.model-picker-model') ?? [])].find((b) => b.textContent!.includes(label))
+
+  it('is not drawn for a server that has no model field', async () => {
+    install([row()])
+    await mount()
+    await openSheet('claude_code')
+    expect(sheet()!.querySelector('.extAgents-pill')).toBeNull()
+  })
+
+  it('says a third party runs on its own default, opens the menu it advertised, and sends the pick verbatim', async () => {
+    const { acts } = install([row({ model_source: 'agent', model_choices: choices })])
+    await mount()
+    await openSheet('claude_code')
+    expect(pill()!.textContent).toBe('gui.agent.model_own_default⌄')
+    expect(pill()!.disabled).toBe(false)
+    expect(sheet()!.querySelector('.extAgents-mx')).toBeNull()
+    await click(pill())
+    expect(picker()!.textContent).toContain('Anthropic')
+    expect(picker()!.textContent).toContain('OpenAI')
+    await click(modelButton('Sonnet'))
+    expect(picker()).toBeNull()
+    expect(acts).toEqual([['model', 'claude_code', { model: 'v/sonnet' }]])
+  })
+
+  it('shows the chosen model by the name the agent gave it, and clears back to the default', async () => {
+    const { acts } = install([row({ model_source: 'agent', model_choices: choices, model: 'v/sonnet' })])
+    await mount()
+    await openSheet('claude_code')
+    expect(pill()!.querySelector('.extAgents-mid')!.textContent).toBe('Sonnet')
+    expect(pill()!.querySelector('.extAgents-mpv')!.textContent).toBe('Anthropic')
+    await click(sheet()!.querySelector('.extAgents-mx'))
+    expect(acts).toEqual([['model', 'claude_code', { clear_model: true }]])
+  })
+
+  it("draws the built-in row on raven's own connected providers and sends the provider with the pick", async () => {
+    hostModels.providers = [
+      { id: 'openrouter', name: 'OpenRouter', models: ['anthropic/claude-sonnet-5'], on: true },
+      { id: 'dark', name: 'Not connected', models: ['x'], on: false },
+    ]
+    const { acts } = install([builtin()])
+    await mount()
+    await openSheet('Raven')
+    expect(pill()!.textContent).toBe('gui.agent.model_follow⌄')
+    await click(pill())
+    expect(picker()!.textContent).toContain('OpenRouter')
+    expect(picker()!.textContent).not.toContain('Not connected')
+    await click(modelButton('anthropic/claude-sonnet-5'))
+    expect(acts).toEqual([['model', 'Raven', { model: 'anthropic/claude-sonnet-5', provider: 'openrouter' }]])
+  })
+
+  it('splits a stored host id into the model and the provider it is stored under', async () => {
+    hostModels.providers = [{ id: 'openrouter', name: 'OpenRouter', models: ['anthropic/claude-sonnet-5'], on: true }]
+    install([builtin({ model: 'openrouter/anthropic/claude-sonnet-5' })])
+    await mount()
+    await openSheet('Raven')
+    expect(pill()!.querySelector('.extAgents-mid')!.textContent).toBe('anthropic/claude-sonnet-5')
+    expect(pill()!.querySelector('.extAgents-mpv')!.textContent).toBe('OpenRouter')
+    expect(sheet()!.querySelector('.extAgents-mx')).not.toBeNull()
+  })
+
+  it('asks for the host list once when it has not landed yet', async () => {
+    hostModels.providers = []
+    hostModels.loads = 0
+    install([builtin()])
+    await mount()
+    await openSheet('Raven')
+    await click(pill())
+    expect(hostModels.loads).toBe(1)
+    expect(picker()!.textContent).toContain('gui.agent.model_no_provider')
+  })
+
+  it('wears a disabled pill for a row with no menu, worded by ownership', async () => {
+    install([
+      row({ name: 'Coder', preset: undefined, kind: 'cli', model_source: 'fixed' }),
+      row({ name: 'Raven-Code', preset: undefined, kind: 'acp', own: true, model_source: 'agent', model_choices: [] }),
+    ])
+    await mount()
+    await openSheet('Coder')
+    expect(pill()!.textContent).toBe('gui.agent.model_managed')
+    expect(pill()!.disabled).toBe(true)
+    await openSheet('Raven-Code')
+    expect(sheetName()).toBe('Raven-Code')
+    expect(pill()!.textContent).toBe('gui.agent.model_follow')
+    expect(pill()!.disabled).toBe(true)
+  })
+
+  it("does not show an endpoint's configured model as a pick, and still lets a menuless acp row clear one", async () => {
+    const { acts } = install([
+      row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', model_source: 'fixed', model: 'miro-1' }),
+      row({ name: 'quiet', preset: undefined, kind: 'acp', model_source: 'agent', model_choices: [], model: 'v/old' }),
+    ])
+    await mount()
+    await openSheet('mirothinker')
+    expect(pill()!.textContent).toBe('gui.agent.model_managed')
+    expect(sheet()!.querySelector('.extAgents-mx')).toBeNull()
+    await openSheet('quiet')
+    expect(sheetName()).toBe('quiet')
+    expect(pill()!.querySelector('.extAgents-mid')!.textContent).toBe('v/old')
+    expect(pill()!.disabled).toBe(true)
+    await click(sheet()!.querySelector('.extAgents-mx'))
+    expect(acts).toEqual([['model', 'quiet', { clear_model: true }]])
+  })
+
+  it('lets a shipped product be tested, under its own source', async () => {
+    const { acts } = install([row({ name: 'Raven-Code', preset: undefined, kind: 'acp', vendored: true, configured: false, own: true })])
+    await mount()
+    await openSheet('Raven-Code')
+    expect(sheetActs()).toEqual(['gui.agent.disconnect', 'gui.agent.test_label'])
+    await click(sheet()!.querySelectorAll('.extAgents-act button')[1])
+    expect(acts.map((a) => a.slice(0, 2))).toEqual([['test', 'Raven-Code']])
   })
 })

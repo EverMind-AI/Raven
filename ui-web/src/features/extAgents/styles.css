@@ -108,14 +108,16 @@
 .extAgents-fld { display: block; }
 .extAgents-fld + .extAgents-fld { margin-top: 16px; }
 .extAgents-k { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
-.extAgents-fld textarea, .extAgents-fld input {
+/* The field's own controls only -- the picker that opens under the model pill
+   lives inside a field too, and its search box keeps the component's look. */
+.extAgents-fld > textarea, .extAgents-fld .keyfield input {
   width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
   padding: 8px 10px; outline: 0; font-size: 13px; color: var(--text); box-sizing: border-box;
 }
-.extAgents-fld textarea { font-family: var(--sans); resize: none; height: 104px; line-height: 1.65; font-size: 12.5px; overflow-y: auto; }
-.extAgents-fld textarea[readonly] { color: var(--muted); }
-.extAgents-fld input { font-family: var(--mono); font-size: 12.5px; }
-.extAgents-fld textarea:focus, .extAgents-fld input:focus { border-color: var(--muted); }
+.extAgents-fld > textarea { font-family: var(--sans); resize: none; height: 104px; line-height: 1.65; font-size: 12.5px; overflow-y: auto; }
+.extAgents-fld > textarea[readonly] { color: var(--muted); }
+.extAgents-fld .keyfield input { font-family: var(--mono); font-size: 12.5px; }
+.extAgents-fld > textarea:focus, .extAgents-fld .keyfield input:focus { border-color: var(--muted); }
 /* The key field is the shared component; its eye button keeps its own styling. */
 .extAgents-fld .keyfield { display: flex; width: 100%; }
 
@@ -137,3 +139,45 @@
 
 /* The action bar: right-aligned, primary rightmost, the destructive one left of it. */
 .extAgents-act { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 9px; padding: 14px 20px 18px; border-top: 1px solid var(--line-soft); }
+
+/* ── the model pill ─────────────────────────────────────────────── */
+
+/* The settings page's pill, in this domain's clothes: id and provider inside
+   one frame, a chevron that gives way to the clear control on hover. */
+.extAgents-pill {
+  position: relative; display: inline-flex; align-items: stretch; width: 320px; max-width: 100%;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--text); overflow: hidden;
+}
+.extAgents-pill:hover:not(.extAgents-pill-fixed) { border-color: var(--amber); }
+.extAgents-pill-fixed { color: var(--faint); }
+.extAgents-pill-dim { background: none; }
+.extAgents-pm {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px;
+  font: inherit; color: inherit; background: none; border: 0;
+  padding: 5px 8px 5px 10px; cursor: pointer; text-align: left;
+}
+.extAgents-pm:disabled { cursor: default; }
+.extAgents-pm:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.extAgents-mid {
+  flex: 1; min-width: 0; font-family: var(--mono); font-size: 12.5px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.extAgents-pill-dim .extAgents-mid { font-family: var(--sans); font-weight: 400; color: var(--muted); }
+.extAgents-mpv { font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+.extAgents-mch { color: var(--faint); font-size: 11px; margin-left: 2px; }
+.extAgents-mx {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 30px;
+  font: inherit; font-size: 15px; line-height: 1; border: 0;
+  background: var(--paper); color: var(--faint); cursor: pointer; display: none;
+}
+.extAgents-pill-clearable:hover .extAgents-mx, .extAgents-pill-clearable:focus-within .extAgents-mx { display: block; }
+.extAgents-pill-clearable:hover .extAgents-mch, .extAgents-pill-clearable:focus-within .extAgents-mch { visibility: hidden; }
+/* The clear control sits over the pill's right edge; the provider steps back
+   from under it while it is showing. */
+.extAgents-pill-clearable:hover .extAgents-mpv, .extAgents-pill-clearable:focus-within .extAgents-mpv { margin-right: 18px; }
+.extAgents-mx:hover { color: var(--clay); }
+
+/* The shared picker, sized to hang under the pill inside the 520px sheet: the
+   settings dialog's 720x560 would neither fit below the pill nor above it. */
+.extAgents-sheet .model-picker { width: 478px; max-width: calc(100vw - 32px); height: min(390px, 56vh); }
+.extAgents-sheet .model-picker-body { grid-template-columns: 168px 1fr; }

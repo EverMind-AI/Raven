@@ -173,3 +173,27 @@ describe('the wizard verbs keep their toast', () => {
     expect(store.get().failed).toEqual({})
   })
 })
+
+describe('the model verbs', () => {
+  it('sends a host pick with its provider, an agent pick alone, and a clear on its own', async () => {
+    const r = row()
+    const { acts } = install([r])
+    await store.setModel(r, 'anthropic/claude-x', 'openrouter')
+    await store.setModel(r, 'v/m')
+    await store.clearModel(r)
+    expect(acts).toEqual([
+      ['model', 'claude_code', { model: 'anthropic/claude-x', provider: 'openrouter' }],
+      ['model', 'claude_code', { model: 'v/m' }],
+      ['model', 'claude_code', { clear_model: true }],
+    ])
+  })
+
+  it('toasts a refused pick and leaves the row unmarked: the pick was wrong, not the row', async () => {
+    const r = row()
+    install([r], (op) => (op === 'model' ? 'it offers 3' : null))
+    await store.setModel(r, 'v/bogus')
+    expect(toastWriter.items).toEqual(['gui.agent.failed {"detail":"it offers 3"}'])
+    expect(store.get().failed).toEqual({})
+    expect(store.get().joining).toEqual([])
+  })
+})
