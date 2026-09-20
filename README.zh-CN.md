@@ -109,8 +109,8 @@ Raven 的模块化架构面向 harness 自进化和子 Agent 创建。四个内�
 <table>
 <tr>
 <td width="50%" valign="top">
-<p align="center"><b>一场可玩的第一人称 Boss 战</b></p>
-<a href="https://github.com/user-attachments/assets/240d5b5d-c6e0-4f32-8e98-3c8621299563"><img src="https://github.com/user-attachments/assets/240d5b5d-c6e0-4f32-8e98-3c8621299563" alt="Task graph: three Raven-Code nodes running in sequence across 42 game rounds" width="100%"></a>
+<p align="center"><b>构建 FPS 游戏：选题、实现、评判</b></p>
+<a href="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1"><img src="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1" alt="Task graph: three Raven-Code nodes running in sequence across 42 game rounds" width="100%"></a>
 
 https://github.com/user-attachments/assets/f5229599-4187-43ee-a42c-473910e2d535
 

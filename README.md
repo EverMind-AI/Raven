@@ -109,8 +109,8 @@ orchestration Raven chose for the task; below it is what the run produced.
 <table>
 <tr>
 <td width="50%" valign="top">
-<p align="center"><b>A playable first-person boss fight</b></p>
-<a href="https://github.com/user-attachments/assets/240d5b5d-c6e0-4f32-8e98-3c8621299563"><img src="https://github.com/user-attachments/assets/240d5b5d-c6e0-4f32-8e98-3c8621299563" alt="Task graph: three Raven-Code nodes running in sequence across 42 game rounds" width="100%"></a>
+<p align="center"><b>An FPS game, picked, built and judged</b></p>
+<a href="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1"><img src="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1" alt="Task graph: three Raven-Code nodes running in sequence across 42 game rounds" width="100%"></a>
 
 https://github.com/user-attachments/assets/f5229599-4187-43ee-a42c-473910e2d535
 
