@@ -1183,3 +1183,93 @@ async def test_config_set_model_surfaces_a_build_crash_instead_of_persisting(fak
         )
     cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
     assert "model" not in cfg.get("agents", {}).get("defaults", {})
+
+
+async def test_a_first_run_assembles_the_stack_it_started_without(fake_home: Path) -> None:
+    """The write that completes a first run also gets this process a loop.
+
+    A process that came up with no model has no loop, and the wiring a turn
+    needs is put together with it -- so the config being right was not enough,
+    and the reply could only say the gateway had to come back. It now asks the
+    host to assemble the stack that was skipped, and reports what came back.
+    """
+    cfg = fake_home / ".raven"
+    cfg.mkdir(exist_ok=True)
+    (cfg / "config.json").write_text(json.dumps({"providers": {"deepseek": {"apiKey": "sk-deep"}}}), encoding="utf-8")
+
+    seen: list[str] = []
+
+    async def _ensure_stack() -> bool:
+        seen.append(json.loads((cfg / "config.json").read_text())["agents"]["defaults"]["model"])
+        return True
+
+    result = await config_set(
+        {"key": "model", "value": "deepseek-chat", "provider": "deepseek"},
+        agent_loop_factory=_first_run_factory,
+        ensure_stack=_ensure_stack,
+    )
+
+    assert result["applied"] is True
+    # Asked only after the write: the assembly builds from the config on disk,
+    # so a build requested any earlier would rebuild the state that had no
+    # model and refuse for the same reason all over again.
+    assert seen == ["deepseek/deepseek-chat"]
+    assert "needs_restart" not in result
+
+
+async def test_a_first_run_that_cannot_be_assembled_still_says_restart(fake_home: Path) -> None:
+    """An assembly that fails leaves the claim it was meant to remove.
+
+    The write landed and this process still cannot run a turn on it -- the same
+    state as before, reached a different way. The flag is the honest answer for
+    both, which is why it survives rather than being deleted with the limit.
+    """
+    cfg = fake_home / ".raven"
+    cfg.mkdir(exist_ok=True)
+    (cfg / "config.json").write_text(json.dumps({"providers": {"deepseek": {"apiKey": "sk-deep"}}}), encoding="utf-8")
+
+    async def _ensure_stack() -> bool:
+        return False
+
+    result = await config_set(
+        {"key": "model", "value": "deepseek-chat", "provider": "deepseek"},
+        agent_loop_factory=_first_run_factory,
+        ensure_stack=_ensure_stack,
+    )
+
+    assert result["applied"] is True
+    assert result["needs_restart"] is True
+
+
+async def test_a_switch_on_a_running_process_never_asks_for_an_assembly(fake_home: Path, monkeypatch) -> None:
+    """A process that already has a loop re-points it; it does not rebuild.
+
+    Assembly is expensive and a setting write is on the page's critical path.
+    The seam is reached only through the answer that says this process has no
+    loop, so an ordinary switch cannot pay for one.
+    """
+    import raven.rpc.methods.config as config_mod
+
+    loop = _FakeLoop("old-prov", "old-model")
+    monkeypatch.setattr(config_mod, "make_provider", lambda _cfg: SimpleNamespace(name="new-prov"))
+    monkeypatch.setattr(
+        config_mod,
+        "load_runtime_config",
+        lambda *a, **k: SimpleNamespace(agents=SimpleNamespace(defaults=SimpleNamespace(model="", provider="auto"))),
+    )
+
+    asked = False
+
+    async def _ensure_stack() -> bool:
+        nonlocal asked
+        asked = True
+        return True
+
+    result = await config_set(
+        {"key": "model", "value": "anthropic/claude-opus-4-8", "provider": "anthropic", "scope": "default"},
+        agent_loop_factory=lambda: loop,
+        ensure_stack=_ensure_stack,
+    )
+
+    assert result["applied"] is True
+    assert asked is False
