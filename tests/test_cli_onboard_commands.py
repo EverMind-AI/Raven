@@ -3232,23 +3232,23 @@ def _onboard_once() -> Any:
 
 
 def test_onboard_materializes_the_a2a_face(tmp_env: Path, everos_isolated: Path, stub_verify, stub_step3) -> None:
-    """A finished install serves A2A rather than shipping a face nobody can open.
+    """A finished install provisions the A2A credential and leaves the face shut.
 
-    This is the one write that cannot come from a schema default: the token is
-    per-install secret material, and an empty one refuses every caller, so the
-    face is only real once the wizard has minted it.
+    The token is the one write that cannot come from a schema default: it is
+    per-install secret material, and an empty one refuses every caller. Opening
+    a listening face is a separate decision, so the wizard mints and stops.
     """
     r = _onboard_once()
     assert r.exit_code == 0, r.stdout
 
     server = json.loads(tmp_env.read_text())["a2a"]["server"]
-    assert server["enabled"] is True
+    assert "enabled" not in server
     assert len(server["token"]) >= 40
-    # Opening a listening face is not something an install may do quietly: the
-    # closing recap is where it says so, and where the operator learns the key
-    # to read the credential out of.
+    # A provisioned-but-closed face is only useful if the operator is told how
+    # to open it, so the closing recap carries the command rather than a bare
+    # "off" they would have to go looking for.
     assert "A2A" in r.stdout
-    assert "a2a.server.token" in r.stdout
+    assert "a2a enable" in r.stdout
 
 
 def test_onboard_writes_the_a2a_token_owner_only(tmp_env: Path, everos_isolated: Path, stub_verify, stub_step3) -> None:

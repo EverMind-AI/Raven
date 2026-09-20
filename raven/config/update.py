@@ -583,7 +583,7 @@ def embedding_model_change(previous: dict[str, Any], fields: dict[str, Any]) -> 
 
 
 def initialize_a2a_server(*, config_path: Path | None = None) -> str | None:
-    """Mint this install's inbound A2A credential and switch the face on.
+    """Mint this install's inbound A2A credential, leaving the face closed.
 
     Returns the token it generated, or None when the install already had one.
 
@@ -591,12 +591,16 @@ def initialize_a2a_server(*, config_path: Path | None = None) -> str | None:
     so the field ships empty and is materialized here instead -- the same reason
     the Skill Hub endpoint is seeded at onboard time rather than declared. An
     empty token is not a weak credential but a closed door: ``a2a/auth.py``
-    refuses every caller while it is empty, so enabling without minting one
-    would advertise a face that answers nobody.
+    refuses every caller while it is empty, so a face switched on without one
+    would advertise a capability that answers nobody.
 
-    A present token is the "already initialized" mark. It is never rotated, and
-    ``enabled`` is not re-asserted alongside it, so an operator who switched the
-    face back off keeps it off across every later onboard.
+    ``enabled`` is not written here at all. The inbound face is a second network
+    surface, and finishing an unrelated install is not consent to open one --
+    ``set_a2a_server_enabled`` is, reached through ``raven a2a enable``. Leaving
+    the key absent rather than writing ``false`` also keeps a repeat onboard
+    from closing a face the operator opened by hand.
+
+    A present token is the "already initialized" mark, and it is never rotated.
 
     The minting write is the one that fixes the file to owner-only, and it does
     so from the temp file's first byte rather than with a chmod afterwards.
@@ -614,14 +618,39 @@ def initialize_a2a_server(*, config_path: Path | None = None) -> str | None:
             return None, None
         minted = secrets.token_urlsafe(32)
         server["token"] = minted
-        server["enabled"] = True
         return json.dumps(data, indent=2, ensure_ascii=False), minted
 
     token = atomic_update(path, _apply, mode=0o600)
     if token is not None:
         # The value itself never reaches the log: it is the credential.
-        logger.info("config/update: a2a.server initialized (token minted, face enabled)")
+        logger.info("config/update: a2a.server initialized (token minted, face left closed)")
     return token
+
+
+def set_a2a_server_enabled(enabled: bool, *, config_path: Path | None = None) -> str | None:
+    """Open or close the inbound A2A face, minting the credential it needs.
+
+    Returns the token it had to mint, or None when one was already on disk.
+
+    Opening runs the minting pass first, so the two never disagree: a face that
+    is on with an empty token answers every caller with a 401, which looks like
+    a broken deployment rather than the closed door it is.
+
+    Minting is what narrows the file to owner-only; the flip that follows asks
+    for no mode. By then the credential is already on disk, so a later toggle
+    adds no secret material and has no claim on a mode the operator chose.
+    """
+    path = config_path or get_config_path()
+    minted = initialize_a2a_server(config_path=path) if enabled else None
+
+    def _apply(_text: str | None) -> tuple[str, None]:
+        data = read_raw_or_raise(path)
+        data.setdefault("a2a", {}).setdefault("server", {})["enabled"] = enabled
+        return json.dumps(data, indent=2, ensure_ascii=False), None
+
+    atomic_update(path, _apply)
+    logger.info("config/update: a2a.server.enabled set to {}", enabled)
+    return minted
 
 
 __all__ = [
@@ -638,4 +667,5 @@ __all__ = [
     "set_skill_blocked",
     "set_playbook_disabled",
     "initialize_a2a_server",
+    "set_a2a_server_enabled",
 ]

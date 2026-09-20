@@ -1,12 +1,14 @@
-"""`raven a2a serve`: the A2A face without a gateway.
+"""`raven a2a`: the inbound A2A face, and the switch that opens it.
 
-The headless hosting. The gateway-mounted one is ``gate.mount_gateway_face``,
-called from the app builder; both refuse in a sub-agent process through the same
-check, so neither can be the one that forgot.
+``serve`` is the headless hosting. The gateway-mounted one is
+``gate.mount_gateway_face``, called from the app builder; both refuse in a
+sub-agent process through the same check, so neither can be the one that forgot.
 
 The two are not gated alike, which is easy to misread as an oversight: the config
-flag decides only the gateway-mounted face, because running this command is
-itself the opt-in for this one.
+flag decides only the gateway-mounted face, because running ``serve`` is itself
+the opt-in for that one. ``enable`` and ``disable`` write that flag, and they are
+the only thing that does -- an install finishes with the face closed, so opening
+a second network surface is always something an operator typed.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ import typer
 
 from raven.a2a.gate import refuse_if_subagent
 
-a2a_app = typer.Typer(name="a2a", help="Serve the A2A protocol face.", subcommand_metavar="")
+a2a_app = typer.Typer(name="a2a", help="Serve and switch the A2A protocol face.")
 
 
 @a2a_app.callback()
@@ -88,3 +90,27 @@ def serve(
 
     typer.echo(f"Serving A2A on http://{host}:{port}")
     asyncio.run(_serve())
+
+
+@a2a_app.command("enable")
+def enable() -> None:
+    """Open the gateway-mounted A2A face, minting a token if there is none."""
+    from raven.config.update import set_a2a_server_enabled
+
+    minted = set_a2a_server_enabled(True)
+    if minted is not None:
+        typer.echo("Minted an inbound token into a2a.server.token.")
+    typer.echo("A2A inbound face enabled.")
+    # The face is mounted while the app is built, so a process already serving
+    # was built against the old flag and will not pick this up on its own.
+    typer.echo("Restart `raven gateway` (or `raven web`) for it to take effect.")
+
+
+@a2a_app.command("disable")
+def disable() -> None:
+    """Close the gateway-mounted A2A face, keeping the token for later."""
+    from raven.config.update import set_a2a_server_enabled
+
+    set_a2a_server_enabled(False)
+    typer.echo("A2A inbound face disabled.")
+    typer.echo("Restart `raven gateway` (or `raven web`) for it to take effect.")

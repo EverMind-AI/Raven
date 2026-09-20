@@ -1,5 +1,8 @@
 """The inbound face refuses to start in a sub-agent process, on both hostings."""
 
+import json
+
+import pytest
 from aiohttp import web
 from typer.testing import CliRunner
 
@@ -80,3 +83,62 @@ def test_the_gateway_facade_is_refused_in_a_subagent_process(monkeypatch):
     cfg = A2aConfig.model_validate({"server": {"enabled": True, "token": "t0ken"}})
     assert mount_gateway_face(app, cfg, agent_loop_factory=lambda: None) is None
     assert list(app.router.routes()) == []
+
+
+# ---------------------------------------------------------------------------
+# `raven a2a enable` / `raven a2a disable`
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def cfg_at(tmp_path, monkeypatch):
+    """Point the config writes this module drives at a throwaway file."""
+    path = tmp_path / "config.json"
+    monkeypatch.setattr("raven.config.update.get_config_path", lambda: path)
+    return path
+
+
+def _server(path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))["a2a"]["server"]
+
+
+def test_enable_opens_the_face_from_a_fresh_install(cfg_at, monkeypatch):
+    """The install ships the face off, so this command is the whole opt-in."""
+    monkeypatch.delenv("RAVEN_SUBAGENT", raising=False)
+
+    result = runner.invoke(a2a_app, ["enable"])
+
+    assert result.exit_code == 0, result.output
+    server = _server(cfg_at)
+    assert server["enabled"] is True and server["token"]
+
+
+def test_enable_never_prints_the_token(cfg_at, monkeypatch):
+    """It is the credential: it belongs in the file, not in a terminal buffer."""
+    monkeypatch.delenv("RAVEN_SUBAGENT", raising=False)
+
+    result = runner.invoke(a2a_app, ["enable"])
+
+    assert _server(cfg_at)["token"] not in result.output
+
+
+def test_disable_closes_the_face(cfg_at, monkeypatch):
+    monkeypatch.delenv("RAVEN_SUBAGENT", raising=False)
+    runner.invoke(a2a_app, ["enable"])
+
+    result = runner.invoke(a2a_app, ["disable"])
+
+    assert result.exit_code == 0, result.output
+    assert _server(cfg_at)["enabled"] is False
+
+
+def test_a_disabled_face_does_not_mount(cfg_at, monkeypatch):
+    """The command's write is what `may_mount` reads, not a separate switch."""
+    from raven.a2a.gate import may_mount
+
+    monkeypatch.delenv("RAVEN_SUBAGENT", raising=False)
+    runner.invoke(a2a_app, ["enable"])
+    assert may_mount(A2aConfig.model_validate({"server": _server(cfg_at)})) is True
+
+    runner.invoke(a2a_app, ["disable"])
+    assert may_mount(A2aConfig.model_validate({"server": _server(cfg_at)})) is False

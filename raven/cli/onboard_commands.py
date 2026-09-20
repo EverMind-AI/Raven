@@ -362,13 +362,16 @@ def _bootstrap_empty_config() -> None:
 
 
 def _initialize_a2a_face() -> None:
-    """Mint the inbound A2A credential so a finished install serves A2A.
+    """Mint the inbound A2A credential, leaving the face closed.
 
     Deliberately not folded into ``_bootstrap_empty_config``: that one writes
     nothing the declarations already answer, and a generated per-install secret
     is the one thing no declaration can answer. It runs on every onboard, so an
     install that predates the A2A face picks one up, and it never rotates a
     token that is already there.
+
+    Provisioning only. Opening the face is ``raven a2a enable``, so an operator
+    who never asked for a second network surface does not get one.
     """
     from raven.config.update import initialize_a2a_server
 
@@ -2060,7 +2063,13 @@ def _print_next_steps(*, warnings: list[str], show_next_steps: bool = True) -> N
     run_loc = t("Host (direct)") if _current_sandbox_backend() == "none" else t("Sandbox (boxlite)")
     chans = ", ".join(onboard_channels._enabled_channels()) or t("none")
     mem = _selected_backend() if _memory_enabled() else t("[yellow]off[/yellow]")
-    a2a = t("on  [dim](token in a2a.server.token)[/dim]") if _a2a_enabled() else t("[yellow]off[/yellow]")
+    # Onboarding provisions the token but never opens the face, so the recap
+    # names the command that does rather than leaving "off" as a dead end.
+    a2a = (
+        t("on  [dim](token in a2a.server.token)[/dim]")
+        if _a2a_enabled()
+        else t("[yellow]off[/yellow]  [dim](raven a2a enable)[/dim]")
+    )
     recap = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
     recap.add_column(style="dim", no_wrap=True)
     recap.add_column()
