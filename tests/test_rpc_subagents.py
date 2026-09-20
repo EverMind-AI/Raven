@@ -2142,3 +2142,38 @@ async def test_a_reserved_name_entry_is_reported_once_and_as_ignored(config_path
     assert len(rows) == 1
     assert rows[0]["kind"] == "builtin"
     assert rows[0]["enabled"] is True
+
+
+async def test_a_row_carries_the_credential_verdict_its_snapshot_measured(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The agents page draws `Unauthorized` off this and nothing else.
+
+    It cannot be derived client-side: what survives on the wire otherwise is
+    ``probe_status``, which is ``attention`` for "wants signing in" and equally
+    ``attention`` for "installed and never verified" -- two rows that need
+    opposite things from the reader. The snapshot measured the difference; this
+    is the field that carries it out.
+    """
+    from raven.acp_client.capabilities import CapabilitySnapshot
+    from raven.rpc.methods import subagents as mod
+
+    def snapshot_for(cfg: object) -> CapabilitySnapshot | None:
+        if getattr(cfg, "name", "") != "Codex":
+            return None
+        return CapabilitySnapshot(
+            agent="Codex", fingerprint="f", status="attention", detail="no session", measured_at_ms=0, needs_auth=True
+        )
+
+    monkeypatch.setattr(mod, "acp_snapshot_for", snapshot_for, raising=False)
+    monkeypatch.setattr("raven.agent.subagent.probe.acp_snapshot_for", snapshot_for)
+
+    rows = {row["name"]: row for row in (await subagents_list({"probe": False}))["rows"]}
+    assert rows["Codex"]["needs_auth"] is True
+    # Every other row says so too, rather than leaving the key out: a missing key
+    # and a false one read the same to a client, right up until one of them means
+    # "this server is too old to know". A cli row and an openai row have no
+    # handshake to be refused in, so both answer false rather than nothing.
+    assert rows["Coder"]["needs_auth"] is False
+    assert rows["Researcher"]["needs_auth"] is False
+    assert all("needs_auth" in row for row in rows.values())

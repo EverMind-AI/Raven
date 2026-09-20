@@ -90,7 +90,23 @@ function dotOf(row: XaRow): string {
  * and they are not the same job: a folder whose venv was never built needs the
  * installer (minutes, hundreds of MB), while one that was switched off needs
  * its manifest flag back. The probe verdict is what separates them. */
-export type Stage = 'builtin' | 'building' | 'install' | 'add' | 'key' | 'stale' | 'off' | 'live'
+export type Stage =
+  | 'builtin'
+  | 'building'
+  | 'install'
+  | 'add'
+  | 'key'
+  | 'stale'
+  | 'off'
+  | 'live'
+  /* The two the reader cannot act on from here. Every other stage names a write
+     this page can make; these name why it would fail, and the probe knows both
+     before anything is pressed -- `absent` from resolving the command on PATH,
+     `unauthorized` from the handshake the agent refused. They are stages rather
+     than a flag on the button for the reason the others are: one row, one
+     decision, so the row and the card cannot disagree. */
+  | 'absent'
+  | 'unauthorized'
 
 export function stageOf(row: XaRow): Stage {
   if (row.builtin) return 'builtin'
@@ -103,6 +119,16 @@ export function stageOf(row: XaRow): Stage {
      writing an entry -- the key is the missing part, whether the entry exists
      yet or not. */
   if (row.kind === 'openai' && !row.has_api_key) return 'key'
+  /* Before the write stages, and only for a row that is not already on the
+     roster: a connected agent keeps Disconnect whatever its credential has
+     since done, or an expired token would leave it with no verb at all. The
+     openai kinds are excluded above and deliberately -- `missing` there means
+     an endpoint did not answer, which is a network fact with nothing to install
+     behind it, and its credential is settled by the free probe instead. */
+  if (!row.enabled && (row.kind === 'cli' || row.kind === 'acp')) {
+    if (row.probe_status === 'missing') return 'absent'
+    if (row.needs_auth) return 'unauthorized'
+  }
   if (!row.configured) return 'add'
   if (row.enabled) return 'live'
   /* Out of service and its preset has moved to another transport. Connecting it
@@ -134,6 +160,18 @@ function AgentAct({ row, busy, onKey }: { row: XaRow; busy?: boolean; onKey?: ()
     return (
       <button className="mini" disabled title={t('gui.agent.install_note')}>
         {t('gui.agent.installing')}
+      </button>
+    )
+  }
+  /* Named, not offered. Both remedies are outside this page -- install the
+     command, sign in to the agent -- so there is no press to make here, and one
+     that looked like a working Connect spent a launch to arrive at the same
+     sentence this label already carries. The way back is the card's own Test,
+     which re-measures and lets the row return to Connect. */
+  if (stage === 'absent' || stage === 'unauthorized') {
+    return (
+      <button className="mini" disabled>
+        {t(stage === 'absent' ? 'gui.agent.not_installed' : 'gui.agent.unauthorized')}
       </button>
     )
   }

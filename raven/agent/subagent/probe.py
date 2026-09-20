@@ -27,7 +27,7 @@ from loguru import logger
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
-from raven.agent.subagent.presets import install_hint_for
+from raven.agent.subagent.presets import install_hint_for, third_party_subagent_presets
 from raven.agent.subagent.probe_state import LastTest
 
 ProbeStatus = Literal["ready", "attention", "missing", "unknown"]
@@ -542,6 +542,60 @@ weak reference to a task it did not create, and an unrefed task can be collected
 mid-run with a "Task was destroyed but it is pending!" warning at exit."""
 
 
+class _PresetRow:
+    """A registry-row shape around a preset, so one backfill serves both halves.
+
+    The registry holds configured agents only. Everything the reader has not
+    connected yet is therefore invisible to it -- which is exactly the set whose
+    Connect button is about to promise something the agent will refuse.
+    """
+
+    __slots__ = ("config", "enabled", "kind", "name")
+
+    def __init__(self, config: Any) -> None:
+        self.config = config
+        self.name = getattr(config, "name", "")
+        self.kind = "acp"
+        self.enabled = False
+
+
+def _unconfigured_acp_preset_rows(configured: set[str]) -> list[Any]:
+    """Shipped acp presets this machine could actually answer for.
+
+    Three filters, each for its own reason. A configured name is the registry
+    half's already. A non-acp preset has no handshake to record -- an openai
+    row's credential is settled by the free ``/models`` probe and a cli row is
+    never handshaken at all. And a command that does not resolve is one whose
+    verdict the free probe already reached for nothing: launching it to learn
+    the same thing is the cost this filter exists to refuse.
+    """
+    from raven.config.schema import SubagentsConfig
+
+    wanted = [
+        preset
+        for preset in third_party_subagent_presets()
+        if preset.get("kind") == "acp" and preset.get("name") not in configured
+    ]
+    here = []
+    for preset in wanted:
+        try:
+            argv = shlex.split((preset.get("command") or "").strip())
+        except ValueError:
+            continue
+        if argv and shutil.which(argv[0]) is not None:
+            here.append(preset)
+    if not here:
+        return []
+    try:
+        # Validated as one list, the way the row builder reads the same table:
+        # these are shipped entries, so a failure here is a packaging fault, not
+        # a user's typo, and it must not take the boot with it.
+        return [_PresetRow(cfg) for cfg in SubagentsConfig(agents=here).agents]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("acp presets cannot be read for auto-verify: {}", exc)
+        return []
+
+
 def schedule_snapshot_verification(manager: Any) -> asyncio.Task | None:
     """Verify every enabled acp agent that has no fresh capability snapshot.
 
@@ -564,7 +618,13 @@ def schedule_snapshot_verification(manager: Any) -> asyncio.Task | None:
         # scheduling nothing is the correct degradation, not a missing feature.
         return None
     _SCHEDULED = True
-    rows = [row for row in registry.rows() if getattr(row, "kind", None) == "acp" and getattr(row, "enabled", False)]
+    live = list(registry.rows())
+    rows = [row for row in live if getattr(row, "kind", None) == "acp" and getattr(row, "enabled", False)]
+    # After the configured rows, never before: those are the ones a run can
+    # dispatch to this minute, and a slow preset adapter ahead of them would
+    # hold the roster's own capabilities back behind an agent nobody has asked
+    # for yet.
+    rows += _unconfigured_acp_preset_rows({getattr(row, "name", "") for row in live})
     if not rows:
         return None
     task = asyncio.create_task(_verify_missing_snapshots(manager, rows))
@@ -596,7 +656,11 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any]) -> None:
             if snapshot is not None and not snapshot.stale:
                 continue
             result = await verify_agent(cfg)
-            if result.status == "ready":
+            # A pass, or a refusal the agent explained. Every other failure stays
+            # unrecorded on purpose: a timeout or a crashed adapter is a fact
+            # about this minute, and a snapshot of one would label a working
+            # agent broken until somebody happened to press Test.
+            if result.status == "ready" or getattr(result, "needs_auth", False):
                 store.record(result)
                 recorded = True
             logger.info("acp agent {!r}: auto-verify {}", getattr(row, "name", ""), result.status)

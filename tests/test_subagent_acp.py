@@ -261,6 +261,41 @@ async def test_verify_survives_diagnostics_on_stdout_and_bulk_stderr() -> None:
     assert snapshot.status == "ready"
 
 
+async def test_a_snapshot_remembers_that_the_refusal_was_about_a_credential() -> None:
+    """Whether a refusal was an auth refusal is decided here and nowhere else.
+
+    ``verify_agent`` already reads it off the handshake's auth methods and the
+    error text; it used to spend that on picking a status and then drop it. A
+    later reader cannot recover it: the surviving evidence is ``auth_methods``,
+    and a perfectly usable agent advertises those too (CodeBuddy names four),
+    so the pair "not ready and has auth methods" is a guess where this is a
+    measurement. The agents page renders it as ``Unauthorized``.
+    """
+    refused = await verify_agent(stub_config(mode="no_session"))
+    assert refused.needs_auth is True
+
+    ready = await verify_agent(stub_config())
+    assert ready.needs_auth is False
+    assert ready.auth_methods, "the ready agent advertises auth methods too -- that is the whole point"
+
+
+async def test_the_credential_verdict_outlives_the_process_that_measured_it(tmp_path: Path) -> None:
+    """It is read back from disk on every later page load, so it has to persist.
+
+    Kept out of ``usable``, which stays "ready and not stale": an agent that
+    needs signing in is not usable and not broken either, and collapsing the two
+    is how a row that wants a credential came to read as one that wants a bug
+    report.
+    """
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    cfg = stub_config("a", mode="no_session")
+    store.record(await verify_agent(cfg))
+
+    loaded = store.load([cfg])["a"]
+    assert loaded.needs_auth is True
+    assert loaded.usable is False
+
+
 async def test_snapshot_store_round_trips_and_invalidates_on_launch_change(tmp_path: Path) -> None:
     store = SnapshotStore(path=tmp_path / "caps.json")
     cfg = stub_config("a")

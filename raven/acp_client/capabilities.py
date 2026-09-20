@@ -148,6 +148,14 @@ class CapabilitySnapshot:
     picks from is the one the agent actually serves: a row that named its own
     would drift the first time the agent gained or dropped a mode."""
     auth_methods: tuple[str, ...] = ()
+    needs_auth: bool = False
+    """The agent answered, and then refused to open a session without a credential.
+
+    Measured, not inferred. ``auth_methods`` alone cannot stand in for it: an
+    agent that works advertises those too, so "not ready and has auth methods"
+    is a guess. Deliberately outside ``usable``, which stays "ready and not
+    stale" -- an agent waiting to be signed in is neither usable nor broken, and
+    the surface that tells a reader which is which needs the distinction."""
     elapsed_ms: int = 0
     stale: bool = False
     """Measured against a launch config this agent no longer has.
@@ -186,6 +194,7 @@ class CapabilitySnapshot:
                 {"id": m.id, "name": m.name, "description": m.description} for m in self.available_modes
             ],
             "authMethods": list(self.auth_methods),
+            "needsAuth": self.needs_auth,
             "elapsedMs": self.elapsed_ms,
         }
 
@@ -255,6 +264,7 @@ class CapabilitySnapshot:
             model_choices=_choices("modelChoices"),
             available_modes=_modes("availableModes"),
             auth_methods=_strs("authMethods"),
+            needs_auth=bool(row.get("needsAuth")),
             elapsed_ms=int(row.get("elapsedMs") or 0),
         )
 
@@ -625,7 +635,9 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
     fingerprint = snapshot_fingerprint(cfg)
     budget = max(1.0, (getattr(cfg, "ready_timeout_ms", None) or 30000) / 1000)
 
-    def done(status: SnapshotStatus, detail: str, hs: _Handshake | None = None) -> CapabilitySnapshot:
+    def done(
+        status: SnapshotStatus, detail: str, hs: _Handshake | None = None, *, needs_auth: bool = False
+    ) -> CapabilitySnapshot:
         hs = hs or _Handshake()
         full = "; ".join([detail, *hs.warnings]) if hs.warnings else detail
         return CapabilitySnapshot(
@@ -649,6 +661,7 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
             model_choices=hs.model_choices,
             available_modes=hs.available_modes,
             auth_methods=hs.auth_methods,
+            needs_auth=needs_auth,
             elapsed_ms=int((time.monotonic() - started) * 1000),
         )
 
@@ -688,7 +701,12 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
                 needs_auth = bool(handshake.auth_methods) or _looks_like_auth(exc.message)
                 status: SnapshotStatus = "attention" if needs_auth else "unknown"
                 hint = f" (auth methods: {', '.join(handshake.auth_methods)})" if handshake.auth_methods else ""
-                return done(status, f"connected, but no session could be opened: {exc.message}{hint}", handshake)
+                return done(
+                    status,
+                    f"connected, but no session could be opened: {exc.message}{hint}",
+                    handshake,
+                    needs_auth=needs_auth,
+                )
             except AcpError as exc:
                 tail = client.stderr_tail(400)
                 suffix = f"; stderr: {tail}" if tail else ""

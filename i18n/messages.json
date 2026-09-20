@@ -799,6 +799,14 @@
       "en": "openai",
       "zh": "openai"
     },
+    "gui.agent.not_installed": {
+      "en": "Not Installed",
+      "zh": "未安装"
+    },
+    "gui.agent.unauthorized": {
+      "en": "Unauthorized",
+      "zh": "未授权"
+    },
     "gui.agent.none": {
       "en": "Nothing connected yet.",
       "zh": "还没有连接任何智能体。"

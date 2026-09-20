@@ -636,6 +636,36 @@ describe('xa island', () => {
       expect(button().disabled).toBe(false)
     })
 
+    /* Two rows whose Connect could only ever fail, and which used to carry one
+       indistinguishable from a working row's. The probe knows both before the
+       reader touches anything -- one from `which`, one from the handshake -- so
+       the page says which it is instead of offering a press that spends a
+       launch to arrive at the same sentence. Neither is pressable: the remedy
+       for both is outside this page (install the binary, sign in to the agent),
+       and the way back is the card's own Test once that is done. */
+    it('names a row whose command is not on this machine instead of offering it', async () => {
+      const { acts } = install([row({ name: 'copilot', kind: 'acp', configured: false, enabled: false, probe_status: 'missing' })])
+      await mount()
+      await expandGroup('gui.agent.g_install')
+      expect(rowActs('copilot')).toEqual(['gui.agent.not_installed'])
+      const button = rowNamed('copilot').querySelector('.suact button') as HTMLButtonElement
+      expect(button.disabled).toBe(true)
+      await click(button)
+      expect(acts).toEqual([])
+    })
+
+    it('names a row the agent itself refused to let in', async () => {
+      const { acts } = install([
+        row({ name: 'grok', kind: 'acp', configured: false, enabled: false, probe_status: 'attention', needs_auth: true }),
+      ])
+      await mount()
+      expect(rowActs('grok')).toEqual(['gui.agent.unauthorized'])
+      const button = rowNamed('grok').querySelector('.suact button') as HTMLButtonElement
+      expect(button.disabled).toBe(true)
+      await click(button)
+      expect(acts).toEqual([])
+    })
+
     /* The one connect this page cannot finish on its own: only the reader has
        the credential. So the row opens the card, where the field is, and writes
        nothing on the way. */

@@ -853,6 +853,10 @@ class TestAutomaticSnapshotVerification:
             "raven.acp_client.capabilities.SnapshotStore",
             lambda: type("S", (), {"record": staticmethod(lambda s: recorded.append(getattr(s, "status")))})(),
         )
+        # This one pins the registry half. The preset half reads the machine's
+        # own PATH, so leaving it live would make the assertions below depend on
+        # which agents happen to be installed here.
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured: [])
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
 
         manager = _FakeManager([fresh, missing, stale], with_refresh=True)
@@ -864,6 +868,72 @@ class TestAutomaticSnapshotVerification:
 
         assert len(recorded) == 2  # both missing and stale round-tripped to a fresh snapshot
         assert manager.refresh_calls == 1, "the materialized rows must be rebuilt after recording"
+
+    async def test_a_credential_refusal_is_recorded_and_not_only_a_pass(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Recording only ``ready`` meant the one verdict worth remembering was
+        the one thrown away.
+
+        An agent that answers the handshake and then refuses to open a session
+        without a credential has told us something durable about itself, and the
+        agents page reads exactly that to say `Unauthorized` instead of offering
+        a Connect that spends a launch to be refused again. Every other failure
+        stays unrecorded, deliberately: a timeout or a crashed adapter is a fact
+        about this minute, and freezing it into a snapshot would label a working
+        agent broken until someone pressed Test.
+        """
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        recorded: list[str] = []
+        verdicts = {
+            "refused": type("S", (), {"status": "attention", "needs_auth": True})(),
+            "wedged": type("S", (), {"status": "unknown", "needs_auth": False})(),
+            "fine": type("S", (), {"status": "ready", "needs_auth": False})(),
+        }
+
+        async def fake_verify(cfg: object) -> object:
+            return verdicts[cfg.name]
+
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.acp_client.capabilities.SnapshotStore",
+            lambda: type("S", (), {"record": staticmethod(lambda s: recorded.append(s.status))})(),
+        )
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured: [])
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        await schedule_snapshot_verification(_FakeManager([_FakeRow("refused"), _FakeRow("wedged"), _FakeRow("fine")]))
+        assert sorted(recorded) == ["attention", "ready"]
+
+    async def test_a_preset_nobody_has_configured_is_verified_too(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Or the page can never say `Unauthorized` before the first press.
+
+        The rows this backfill was written for come off the registry, which
+        holds configured agents only -- so an agent the reader has not connected
+        yet is exactly the one it never reached, and exactly the one whose
+        Connect button is about to lie to them.
+        """
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        seen: list[str] = []
+
+        async def fake_verify(cfg: object) -> object:
+            seen.append(cfg.name)
+            return type("S", (), {"status": "ready", "needs_auth": False})()
+
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.acp_client.capabilities.SnapshotStore",
+            lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
+        )
+        monkeypatch.setattr(
+            probe_mod, "_unconfigured_acp_preset_rows", lambda configured: [_FakeRow("a-preset")] if configured else []
+        )
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        await schedule_snapshot_verification(_FakeManager([_FakeRow("configured")]))
+        assert seen == ["configured", "a-preset"], "the configured rows first: they are the ones a run can dispatch to"
 
     async def test_failed_verification_does_not_stop_the_rest(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from raven.agent.subagent.probe import schedule_snapshot_verification
@@ -887,6 +957,10 @@ class TestAutomaticSnapshotVerification:
             "raven.acp_client.capabilities.SnapshotStore",
             lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
         )
+        # This one pins the registry half. The preset half reads the machine's
+        # own PATH, so leaving it live would make the assertions below depend on
+        # which agents happen to be installed here.
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured: [])
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
 
         task = schedule_snapshot_verification(_FakeManager([make("boom"), make("after")]))
@@ -942,6 +1016,10 @@ class TestAutomaticSnapshotVerification:
             "raven.acp_client.capabilities.SnapshotStore",
             lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
         )
+        # This one pins the registry half. The preset half reads the machine's
+        # own PATH, so leaving it live would make the assertions below depend on
+        # which agents happen to be installed here.
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured: [])
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
 
         rows = [
@@ -953,3 +1031,31 @@ class TestAutomaticSnapshotVerification:
         await task
 
         assert called == ["on"]
+
+
+def test_only_resolvable_unconfigured_acp_presets_are_offered_for_verification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Three filters, each for its own reason.
+
+    Already configured: the registry half of the backfill has it. Not acp: there
+    is no handshake to record. Not on PATH: launching it is how you learn it is
+    not there, and the free probe answered that for nothing.
+    """
+    from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+    # Real preset keys: the schema checks `preset` against the shipped table, so
+    # a made-up one would fail validation rather than the filter under test.
+    presets = [
+        {"name": "Here", "preset": "claude_code", "kind": "acp", "command": "present-agent acp"},
+        {"name": "Gone", "preset": "codex", "kind": "acp", "command": "absent-agent acp"},
+        {"name": "Mine", "preset": "opencode", "kind": "acp", "command": "present-agent acp"},
+        {"name": "Http", "preset": "mirothinker", "kind": "openai", "baseUrl": "https://x/v1", "model": "m"},
+    ]
+    monkeypatch.setattr(probe_mod, "third_party_subagent_presets", lambda: presets)
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: "/bin/x" if exe == "present-agent" else None)
+
+    rows = probe_mod._unconfigured_acp_preset_rows({"Mine"})
+
+    assert [row.name for row in rows] == ["Here"]
+    assert isinstance(rows[0].config, ThirdPartyAcpSubagentConfig)
