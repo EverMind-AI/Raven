@@ -6279,6 +6279,10 @@
       "en": "Check failed",
       "zh": "检查失败"
     },
+    "gui.settings.about.upgrade": {
+      "en": "Upgrade to",
+      "zh": "升级到"
+    },
     "gui.settings.about.config": {
       "en": "Config file",
       "zh": "配置文件"
@@ -6988,8 +6992,12 @@
       "zh": "记忆"
     },
     "gui.settings.tools.grp_search": {
-      "en": "Tool search",
-      "zh": "工具检索"
+      "en": "Meta tools",
+      "zh": "元工具"
+    },
+    "gui.settings.tools.meta_elsewhere": {
+      "en": "switched on by the tool-search setting, not here",
+      "zh": "由工具检索设置控制，不在这里开关"
     },
     "gui.settings.setup.web_search": {
       "en": "Web search",
