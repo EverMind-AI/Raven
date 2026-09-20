@@ -3012,8 +3012,8 @@
       "zh": "{n} 失败"
     },
     "gui.nav.agents": {
-      "en": "Subagents",
-      "zh": "子智能体"
+      "en": "Agent Hub",
+      "zh": "智能体连接"
     },
     "gui.nav.conn": {
       "en": "Channels",
@@ -3248,8 +3248,8 @@
       "zh": "新任务"
     },
     "gui.page.agents": {
-      "en": "Subagents",
-      "zh": "子智能体"
+      "en": "Agents",
+      "zh": "智能体"
     },
     "gui.page.conn": {
       "en": "Channels",
