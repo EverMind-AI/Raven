@@ -112,7 +112,7 @@ Raven 的模块化架构面向 harness 自进化和子 Agent 创建。四个内�
 <p align="center"><b>构建 FPS 游戏：选题、实现、评判</b></p>
 <a href="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1"><img src="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1" alt="Task graph: three Raven-Code nodes running in sequence across 42 game rounds" width="100%"></a>
 
-https://github.com/user-attachments/assets/f5229599-4187-43ee-a42c-473910e2d535
+https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 </td>
 <td width="50%" valign="top"></td>
