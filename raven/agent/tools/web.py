@@ -11,6 +11,7 @@ these tools always sent; do not tidy them into the others.
 import asyncio
 import json
 import os
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -116,6 +117,82 @@ def resolve_vendor_key(
     return None
 
 
+# The statuses that are about the key, not the page or the query: a rejected
+# key, an account out of credit, a key that may not make this request. Every
+# call after one of these meets the same answer until the key or the account
+# changes, so the tool stops asking instead of failing the same way per call.
+REFUSAL_STATUSES = frozenset({401, 402, 403})
+_REFUSAL_MEANING = {
+    401: "the key was rejected",
+    402: "the account is out of credit (payment required)",
+    403: "the key is not allowed to make this request",
+}
+# How long a refusal keeps the tool from asking again. A topped-up account or a
+# rotated key takes effect on the vendor's side within minutes, and the tool
+# must not stay dead for the process's life once the user has fixed it. A key
+# that changes (a config reload builds the tool with the new one) lifts the
+# pause at once.
+VENDOR_REFUSAL_PAUSE_S = 600.0
+
+
+class _VendorRefusal:
+    """What a vendor last said about the key, so later calls stop asking.
+
+    Held per tool rather than per session: the key is shared by every session
+    of the process, so a refusal one session met is the answer every other
+    session would get. ``note`` records a refusal status and says whether it
+    was one; ``active`` is the status a call with ``key`` would meet again, or
+    ``None`` once the key changed or the pause ran out, at which point one real
+    request goes through and re-arms the pause if it is refused again.
+    """
+
+    def __init__(self) -> None:
+        self.status: int | None = None
+        self.key: str | None = None
+        self.at: float = 0.0
+
+    def note(self, status: int, key: str) -> bool:
+        if status not in REFUSAL_STATUSES:
+            return False
+        self.status, self.key, self.at = status, key, time.monotonic()
+        return True
+
+    def active(self, key: str) -> int | None:
+        if self.status is None:
+            return None
+        if key != self.key or time.monotonic() - self.at >= VENDOR_REFUSAL_PAUSE_S:
+            self.status = None
+            return None
+        return self.status
+
+
+def refusal_text(
+    spec: "SearchProviderSpec | FetchProviderSpec", status: int, *, kind: str, sent: bool
+) -> tuple[str, str]:
+    """The ``error`` and ``detail`` a refused key produces, for the model and the user.
+
+    ``error`` is the same string for the refusing call and for every paused
+    call after it, so the loop's failure streak counts them as one cause and
+    its stop-repeating nudge fires. ``detail`` carries what changed with
+    ``sent`` -- whether this call reached the vendor -- and what the user has
+    to do, since a model cannot fix a key or a bill on its own.
+    """
+    meaning = _REFUSAL_MEANING[status]
+    error = f"{spec.label} refused the key (HTTP {status})"
+    outcome = (
+        f"{meaning}; no further request will be sent to {spec.label} until the key changes or "
+        f"{VENDOR_REFUSAL_PAUSE_S / 60:g} minutes pass"
+        if sent
+        else f"{meaning} on the last request, so this call was not sent"
+    )
+    detail = (
+        f"{outcome}. Tell the user: {spec.label} needs attention -- set a working key at "
+        f"{spec.config_path} (or export {spec.env_var}; sign-up at {spec.signup}), or select another "
+        f"vendor under tools.web.{kind}.provider. Do not retry this tool until they have."
+    )
+    return error, detail
+
+
 class _ProviderPageError(RuntimeError):
     """A fetch backend answered, but not with a page."""
 
@@ -173,6 +250,7 @@ class WebSearchTool(Tool):
         # added there serves the next call; a plain string stays a snapshot.
         self._api_key_source: "Callable[[], str] | None" = api_key if callable(api_key) else None
         self._init_api_key: str | None = None if callable(api_key) else api_key
+        self._refusal = _VendorRefusal()
         self.max_results = max_results
         self.proxy = proxy
         # The vendor is live for the same reason the key is, and they have to
@@ -221,6 +299,9 @@ class WebSearchTool(Tool):
                 "then restart the gateway."
             )
 
+        if (refused := self._refusal.active(self.api_key)) is not None:
+            error, detail = refusal_text(self.spec, refused, kind="search", sent=False)
+            return f"Error: {error}. {detail}"
         try:
             n = min(max(count or self.max_results, 1), 10)
             logger.debug("WebSearch[{}]: {}", self.provider, "proxy enabled" if self.proxy else "direct connection")
@@ -257,6 +338,9 @@ class WebSearchTool(Tool):
             # the model and the log.
             status = e.response.status_code
             logger.error("WebSearch error: {} answered HTTP {}", self.spec.label, status)
+            if self._refusal.note(status, self.api_key):
+                error, detail = refusal_text(self.spec, status, kind="search", sent=True)
+                return f"Error: {error}. {detail}"
             return f"Error: {self.spec.label} answered HTTP {status}"
         except httpx.ProxyError as e:
             logger.error("WebSearch proxy error: {}", e)
@@ -534,6 +618,7 @@ class ImageSearchTool(Tool):
         # A callable is the live form (a reader over the config file), as for web_search.
         self._api_key_source: "Callable[[], str] | None" = api_key if callable(api_key) else None
         self._init_api_key: str | None = None if callable(api_key) else api_key
+        self._refusal = _VendorRefusal()
         self.max_results = max_results
         self.proxy = proxy
         self._provider_source: "Callable[[], str] | None" = provider if callable(provider) else None
@@ -584,12 +669,19 @@ class ImageSearchTool(Tool):
 
         async def one(said: str) -> str:
             async with gate:
+                if (refused := self._refusal.active(self.api_key)) is not None:
+                    error, detail = refusal_text(self.spec, refused, kind="search", sent=False)
+                    return f"Image results for: {said}\n\n{error}. {detail}"
                 try:
                     return await self._search_images(said, per_query, floor)
                 except httpx.HTTPStatusError as exc:
                     # Status only: httpx puts the request in the message, and SerpApi
                     # carries its key as a query parameter.
-                    return f"Image results for: {said}\n\n{self.spec.label} answered HTTP {exc.response.status_code}."
+                    status = exc.response.status_code
+                    if self._refusal.note(status, self.api_key):
+                        error, detail = refusal_text(self.spec, status, kind="search", sent=True)
+                        return f"Image results for: {said}\n\n{error}. {detail}"
+                    return f"Image results for: {said}\n\n{self.spec.label} answered HTTP {status}."
                 except Exception as exc:  # noqa: BLE001 -- one query's failure is not the batch's
                     return f"Image results for: {said}\n\nThis search failed ({type(exc).__name__})."
 
@@ -805,6 +897,7 @@ class WebFetchTool(Tool):
         self.max_chars = max_chars
         self.proxy = proxy
         self._substitution_said = False
+        self._refusal = _VendorRefusal()
 
     @property
     def provider(self) -> str:
@@ -864,6 +957,9 @@ class WebFetchTool(Tool):
             # The same rule as the handlers below: most of these reasons name the
             # hostname, and a reader whose every target is refused is one cause.
             return json.dumps({"error": "URL validation failed", "detail": error_msg, "url": url}, ensure_ascii=False)
+        if (refused := self._refusal.active(self.api_key)) is not None:
+            error, detail = refusal_text(self.spec, refused, kind="fetch", sent=False)
+            return json.dumps({"error": error, "detail": detail, "paused": True, "url": url}, ensure_ascii=False)
 
         try:
             logger.debug("WebFetch[{}]: {}", self.provider, "proxy enabled" if self.proxy else "direct connection")
@@ -892,6 +988,9 @@ class WebFetchTool(Tool):
             # message that repeats the request URL.
             status = e.response.status_code
             logger.error("WebFetch error for {}: {} answered HTTP {}", url, self.spec.label, status)
+            if self._refusal.note(status, self.api_key):
+                error, detail = refusal_text(self.spec, status, kind="fetch", sent=True)
+                return json.dumps({"error": error, "detail": detail, "paused": True, "url": url}, ensure_ascii=False)
             return json.dumps({"error": f"{self.spec.label} answered HTTP {status}", "url": url}, ensure_ascii=False)
         except httpx.ProxyError as e:
             # The same rule as the status half above, and it reaches past the log line:

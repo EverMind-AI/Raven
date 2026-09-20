@@ -213,11 +213,11 @@ async def test_a_status_error_never_echoes_the_key(vendor: str, monkeypatch: pyt
     """httpx puts the whole request URL in a status error, and SerpApi carries
     its key as a query parameter, so the default text would hand the credential
     to the model and the log. Every vendor renders as vendor plus status."""
-    with _patched(monkeypatch, {}, status=401):
+    with _patched(monkeypatch, {}, status=500):
         rendered = await WebSearchTool(api_key="SECRET-KEY-123", provider=vendor).execute("q1")
 
     assert "SECRET-KEY-123" not in rendered
-    assert rendered == f"Error: {SEARCH_PROVIDERS[vendor].label} answered HTTP 401"
+    assert rendered == f"Error: {SEARCH_PROVIDERS[vendor].label} answered HTTP 500"
 
 
 @pytest.mark.parametrize("vendor", sorted(_SEARCH_REQUESTS))
@@ -407,12 +407,113 @@ async def test_each_reader_serves_the_page_through_one_envelope(
 async def test_a_reader_status_error_names_the_vendor_and_status_only(
     vendor: str, monkeypatch: pytest.MonkeyPatch, _open_gate: None
 ) -> None:
-    with _patched(monkeypatch, {}, status=402):
+    with _patched(monkeypatch, {}, status=500):
         raw = await WebFetchTool(api_key="SECRET-KEY-123", provider=vendor).execute("https://a.example")
 
     envelope = json.loads(raw)
     assert "SECRET-KEY-123" not in raw
-    assert envelope["error"] == f"{FETCH_PROVIDERS[vendor].label} answered HTTP 402"
+    assert envelope["error"] == f"{FETCH_PROVIDERS[vendor].label} answered HTTP 500"
+
+
+# --------------------------------------------------------------------------- #
+# A refused key pauses the tool instead of failing every call the same way
+
+
+@pytest.mark.parametrize("status", sorted(web_mod.REFUSAL_STATUSES))
+@pytest.mark.parametrize("vendor", sorted(FETCH_PROVIDERS))
+async def test_a_reader_refusing_the_key_pauses_the_tool(
+    vendor: str, status: int, monkeypatch: pytest.MonkeyPatch, _open_gate: None
+) -> None:
+    """On 2026-09-20 Jina answered 402 on every fetch of a session and the tool
+    kept asking: each call was one more identical envelope. A refusal is about
+    the key, so the next call is answered without a request, in the same words,
+    with what the user has to do."""
+    with _patched(monkeypatch, {}, status=status) as recorder:
+        tool = WebFetchTool(api_key="SECRET-KEY-123", provider=vendor)
+        first = json.loads(await tool.execute("https://a.example"))
+        second = json.loads(await tool.execute("https://b.example"))
+
+    assert len(recorder.calls) == 1, "the second call never reached the vendor"
+    label = FETCH_PROVIDERS[vendor].label
+    assert first["error"] == second["error"] == f"{label} refused the key (HTTP {status})"
+    assert first["paused"] is True and second["paused"] is True
+    assert "SECRET-KEY-123" not in json.dumps([first, second])
+    assert "not sent" in second["detail"] and "Tell the user" in second["detail"]
+    assert FETCH_PROVIDERS[vendor].config_path in first["detail"]
+    assert "tools.web.fetch.provider" in first["detail"]
+    # The failure streak reads a refusal as a deterministic failure, so a model
+    # that keeps calling meets the stop-repeating nudge rather than a retry.
+    from raven.agent.loop.failure_streak import failure_class, is_hard_tool_failure
+
+    assert is_hard_tool_failure(json.dumps(second))
+    assert failure_class(json.dumps(first)) == failure_class(json.dumps(second))
+
+
+async def test_a_new_key_lifts_the_pause_at_once(monkeypatch: pytest.MonkeyPatch, _open_gate: None) -> None:
+    with _patched(monkeypatch, {}, status=402) as recorder:
+        tool = WebFetchTool(api_key="old", provider="tavily")
+        await tool.execute("https://a.example")
+        tool._init_api_key = "new"
+        await tool.execute("https://a.example")
+
+    assert len(recorder.calls) == 2
+
+
+async def test_the_pause_ends_after_the_cooldown_and_one_request_goes_through(
+    monkeypatch: pytest.MonkeyPatch, _open_gate: None
+) -> None:
+    clock = [1000.0]
+    monkeypatch.setattr(web_mod.time, "monotonic", lambda: clock[0])
+    with _patched(monkeypatch, {}, status=402) as recorder:
+        tool = WebFetchTool(api_key="k", provider="tavily")
+        await tool.execute("https://a.example")
+        clock[0] += web_mod.VENDOR_REFUSAL_PAUSE_S - 1
+        paused = json.loads(await tool.execute("https://a.example"))
+        clock[0] += 2
+        again = json.loads(await tool.execute("https://a.example"))
+
+    assert paused["paused"] is True and "not sent" in paused["detail"]
+    assert len(recorder.calls) == 2, "the cooldown's end sends one real request"
+    assert "not sent" not in again["detail"], "a refusal met again re-arms the pause"
+
+
+async def test_a_status_that_is_not_about_the_key_does_not_pause(
+    monkeypatch: pytest.MonkeyPatch, _open_gate: None
+) -> None:
+    with _patched(monkeypatch, {}, status=500) as recorder:
+        tool = WebFetchTool(api_key="k", provider="tavily")
+        await tool.execute("https://a.example")
+        await tool.execute("https://a.example")
+
+    assert len(recorder.calls) == 2
+
+
+@pytest.mark.parametrize("vendor", sorted(SEARCH_PROVIDERS))
+async def test_a_search_vendor_refusing_the_key_pauses_the_tool(vendor: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    with _patched(monkeypatch, {}, status=401) as recorder:
+        tool = WebSearchTool(api_key="SECRET-KEY-123", provider=vendor)
+        first = await tool.execute("q1")
+        second = await tool.execute("q2")
+
+    assert len(recorder.calls) == 1
+    label = SEARCH_PROVIDERS[vendor].label
+    assert first.startswith(f"Error: {label} refused the key (HTTP 401). ")
+    assert second.startswith(f"Error: {label} refused the key (HTTP 401). ")
+    assert "SECRET-KEY-123" not in first + second
+    assert "tools.web.search.provider" in first and "not sent" in second
+
+
+async def test_an_image_search_refusal_pauses_the_later_queries(monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven.agent.tools.web import ImageSearchTool
+
+    with _patched(monkeypatch, {}, status=403) as recorder:
+        tool = ImageSearchTool(api_key="k", provider="serper")
+        first = await tool.execute(query="sky")
+        second = await tool.execute(query="sea")
+
+    assert len(recorder.calls) == 1
+    assert "Serper refused the key (HTTP 403)" in first and "Serper refused the key (HTTP 403)" in second
+    assert "not sent" in second
 
 
 @contextmanager

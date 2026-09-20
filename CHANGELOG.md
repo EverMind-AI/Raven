@@ -92,6 +92,18 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- `web_fetch`, `web_search` and `image_search` stop asking a vendor that has
+  refused the key. A 401, 402 or 403 is about the key or the account, not the
+  page, and every later call met the same answer: on 2026-09-20 Jina answered
+  402 on every fetch of a session and the tool returned one identical error
+  envelope per call. The refusal is now remembered per tool: later calls are
+  answered without a request, with the same `error` (so the loop's failure
+  streak reads them as one cause), what the status means, and what the user
+  has to do (`tools.web.providers.<vendor>.apiKey`, the env var, the sign-up
+  page, or another vendor under `tools.web.<search|fetch>.provider`). A new
+  key lifts the pause at once; otherwise one real request is sent again
+  after ten minutes and re-arms it if refused.
+
 - The `find`, `list_dir` (recursive) and pure-Python `grep` tools can no
   longer freeze the gateway on a large tree. One `find` over a home
   directory held the event loop for 2h21m: the walk ran synchronously on
