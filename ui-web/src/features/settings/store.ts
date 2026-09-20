@@ -241,13 +241,17 @@ export async function open(): Promise<void> {
   await refresh()
 }
 
+/* "Nothing is connected, go and connect something" and "this provider has no
+   model added, go and add one" both land on Model providers: since the split
+   that is where a key is entered and a model list is built, and the Model
+   settings page these used to open holds only the roles card. */
 export async function openModels(): Promise<void> {
-  settingsTab.id = 'model'
+  settingsTab.id = 'provider'
   await open()
 }
 
 export async function openProviderModels(slug: string): Promise<void> {
-  settingsTab.id = 'model'
+  settingsTab.id = 'provider'
   set({ provider: slug })
   await open()
 }

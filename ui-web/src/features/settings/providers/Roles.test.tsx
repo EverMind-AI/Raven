@@ -132,6 +132,44 @@ describe('model roles', () => {
     ])
   })
 
+  it('a slot with no provider offers the providers page and goes there', async () => {
+    /* A fresh install starts here: every slot empty, and the way out has to be
+       reachable. A sentence naming the page is not. */
+    const data = snap()
+    data.providers = data.providers.map((p) => ({ ...p, on: false }))
+    install(data)
+    await mount('model')
+    const out = screen.getAllByText('gui.settings.roles.no_provider')[0]!
+    expect(out.tagName).toBe('BUTTON')
+    await act(async () => { fireEvent.click(out) })
+    expect(store.get().tab).toBe('provider')
+  })
+
+  it('a media slot with OpenRouter off opens that row on the providers page', async () => {
+    const data = snap()
+    data.providers = data.providers.map((p) => (p.id === 'openrouter' ? { ...p, on: false } : p))
+    install(data)
+    await mount('model')
+    await act(async () => { fireEvent.click(screen.getAllByText('gui.settings.roles.connect_openrouter')[0]!) })
+    expect([store.get().tab, store.get().provider]).toEqual(['provider', 'openrouter'])
+  })
+
+  it('a typed id keeps the kind the chip stated, not the one its name implies', async () => {
+    /* "our-finetune" matches neither name pattern, so without the chip's answer
+       it is stored as text and disappears from the embedding slot it was just
+       typed into. */
+    const { calls } = install()
+    await mount('model')
+    await act(async () => { fireEvent.click(pill('gui.settings.roles.embedding')) })
+    const box = screen.getByPlaceholderText('gui.picker.search_ph') as HTMLInputElement
+    await act(async () => { fireEvent.change(box, { target: { value: 'our-finetune' } }) })
+    await act(async () => { fireEvent.click(screen.getByText('gui.model.pick_use {"id":"our-finetune"}')) })
+    expect(calls[0]).toEqual(['provider', {
+      op: 'add_model', slug: 'anthropic', model: 'our-finetune',
+      capabilities: ['embedding'], output_modalities: ['vector'],
+    }])
+  })
+
   it('rolesUsing counts a role following the chat model through the chat provider', () => {
     const data = snap()
     expect(rolesUsing(data, 'anthropic').map((r) => r.id)).toEqual(['chat', 'title', 'gate'])

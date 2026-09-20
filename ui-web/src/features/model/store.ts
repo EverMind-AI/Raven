@@ -177,7 +177,7 @@ export async function choose(m: string, provider: string, typed = false, kind?: 
      alternatives, not steps. */
   if (offer.pick) {
     try {
-      await offer.pick(m, provider, typed)
+      await offer.pick(m, provider, typed, kind ?? offer.kind)
     } catch (e) {
       toast(t('gui.op.switch_failed', { detail: detail(e) }))
     }

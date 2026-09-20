@@ -26,7 +26,7 @@ import { createPortal } from 'react-dom'
 import { ModelTags, TagGlyph } from '../../../components/ModelTags'
 import { t } from '../../../i18n/t'
 import { KIND_GLYPH, KIND_LABEL, guessKind } from '../../model/types'
-import { KIND_ORDER } from '../../model/types'
+import { KIND_ORDER, nextKind } from '../../model/types'
 import { Rov } from '../Fields'
 import * as store from '../store'
 
@@ -90,11 +90,11 @@ function KindChip({ value, onCycle }: { value: Kind; onCycle(next: Kind): void }
       role="button"
       tabIndex={0}
       aria-label={t('gui.model.add_type')}
-      onClick={(e) => { e.stopPropagation(); onCycle(KIND_ORDER[(KIND_ORDER.indexOf(value) + 1) % KIND_ORDER.length]!) }}
+      onClick={(e) => { e.stopPropagation(); onCycle(nextKind(value)) }}
       onKeyDown={(e) => {
         if (e.key !== 'Enter' && e.key !== ' ') return
         e.stopPropagation(); e.preventDefault()
-        onCycle(KIND_ORDER[(KIND_ORDER.indexOf(value) + 1) % KIND_ORDER.length]!)
+        onCycle(nextKind(value))
       }}
     >
       <TagGlyph name={KIND_GLYPH[value]} />

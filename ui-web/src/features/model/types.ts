@@ -72,8 +72,10 @@ export interface Offer {
      `pick` (the composer's), the conversation's current model. */
   current?: { model: string; provider: string }
   /* What a pick does. Absent means switch this conversation (`store.choose`).
-     `typed` is true for an id the provider does not list yet. */
-  pick?(model: string, provider: string, typed: boolean): Promise<void>
+     `typed` is true for an id the provider does not list yet, and `kind` is
+     what the chip beside it was showing -- what the person says that id IS,
+     which no catalogue can tell the caller. */
+  pick?(model: string, provider: string, typed: boolean, kind: Kind): Promise<void>
 }
 
 /* Which bucket a model is in, and what a name alone says it is.
@@ -96,6 +98,11 @@ export interface Offer {
    catalogue newer than this page, and text is the honest fallback. */
 export const modelKind = (facts: ModelTagFacts | undefined): Kind =>
   (KIND_ORDER as readonly string[]).includes(facts?.kind ?? '') ? (facts!.kind as Kind) : 'text'
+
+/* The next kind in the cycle. Both surfaces that let an id be typed offer the
+   same wheel, and the arithmetic was written four times between them. */
+export const nextKind = (kind: Kind): Kind =>
+  KIND_ORDER[(KIND_ORDER.indexOf(kind) + 1) % KIND_ORDER.length]!
 
 export const KIND_LABEL: Record<Kind, string> = {
   text: 'gui.model.type.text',

@@ -17,7 +17,7 @@ import { clearance } from '../../lib/popover'
 import * as lang from '../../state/lang'
 import * as store from './store'
 import { KIND_GLYPH, KIND_LABEL, guessKind } from './types'
-import { KIND_ORDER } from './types'
+import { nextKind } from './types'
 
 import type { ApiProtocol, Kind, Provider } from './types'
 import type { JSX } from 'react'
@@ -300,15 +300,12 @@ function Pick(): JSX.Element {
                     role="button"
                     tabIndex={0}
                     aria-label={t('gui.model.add_type')}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setStatedKind(KIND_ORDER[(KIND_ORDER.indexOf(typedKind) + 1) % KIND_ORDER.length]!)
-                    }}
+                    onClick={(e) => { e.stopPropagation(); setStatedKind(nextKind(typedKind)) }}
                     onKeyDown={(e) => {
                       if (e.key !== 'Enter' && e.key !== ' ') return
                       e.stopPropagation()
                       e.preventDefault()
-                      setStatedKind(KIND_ORDER[(KIND_ORDER.indexOf(typedKind) + 1) % KIND_ORDER.length]!)
+                      setStatedKind(nextKind(typedKind))
                     }}
                   >
                     <TagGlyph name={KIND_GLYPH[typedKind]} />

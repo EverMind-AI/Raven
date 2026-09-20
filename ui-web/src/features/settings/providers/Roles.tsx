@@ -5,6 +5,7 @@ import { useRef } from 'react'
 
 import { t } from '../../../i18n/t'
 import { openPicker } from '../../model/source'
+import { statedTags } from '../../model/types'
 import { Card, Row, Rov, Seg, Stepper } from '../Fields'
 import * as store from '../store'
 
@@ -140,9 +141,12 @@ const providerName = (snap: SettingsSnapshot, id: string): string => {
    what the picker offers, as before. */
 /* The write a pick makes, by role. The typed id is added to the provider
    first, so the role never names a model the provider does not list. */
-async function setRole(r: Role, model: string, provider: string, typed: boolean): Promise<SettingsSnapshot | void> {
+async function setRole(r: Role, model: string, provider: string, typed: boolean, kind?: Kind): Promise<SettingsSnapshot | void> {
   const src = store.source()
-  if (typed) await src.provider('add_model', { slug: provider, model })
+  /* The typed id joins the provider's list first, with what the person said it
+     is: a name the registry's patterns miss ("our-finetune") would otherwise be
+     stored as text and vanish from the very slot it was typed into. */
+  if (typed) await src.provider('add_model', { slug: provider, model, ...statedTags(kind ?? 'text') })
   if (r.id === 'chat') {
     if (await src.pickModel(model, provider)) store.set({ needsRestart: true })
     return src.load()
@@ -197,9 +201,26 @@ export function RolePill({ role }: { role: Role }): JSX.Element {
      case -- the picker lists it, says the column is empty and offers a row to
      type an id into. */
   if (!provs.length && !val) {
-    return role.media
-      ? <button type="button" className="mini ghost" onClick={() => store.set({ provider: MEDIA_PROVIDER, provAdd: MEDIA_PROVIDER })}>{t('gui.settings.roles.connect_openrouter')}</button>
-      : <Rov>{t(role.everos ? 'gui.settings.roles.no_key_provider' : 'gui.settings.roles.no_provider')}</Rov>
+    /* The way out is the providers page, so say so with a button that goes
+       there. A sentence that names the page without taking the reader to it
+       leaves every slot on a fresh install a dead end -- which is the state a
+       fresh install starts in. */
+    const label = role.media
+      ? 'gui.settings.roles.connect_openrouter'
+      : role.everos ? 'gui.settings.roles.no_key_provider' : 'gui.settings.roles.no_provider'
+    return (
+      <button type="button" className="mini ghost" onClick={() => {
+        /* The tab first: switching a section clears every drawer of the one it
+           leaves, `provider` included, so naming the row before the switch
+           names it into the state the switch is about to wipe.
+           A media role can only run on OpenRouter, so open that row rather than
+           leaving the reader to find it among fifty-five. */
+        store.setTab('provider')
+        if (role.media) store.set({ provider: MEDIA_PROVIDER, provAdd: MEDIA_PROVIDER })
+      }}>
+        {t(label)}
+      </button>
+    )
   }
   const dim = !val
   const clearable = !!val && role.id !== 'chat'
@@ -209,8 +230,8 @@ export function RolePill({ role }: { role: Role }): JSX.Element {
     providers: provs.map((p) => p.id),
     title: roleName(role),
     current: val ?? (inherit && chat ? chat : undefined),
-    pick: async (model, provider, typed) => {
-      await store.run(`role:${role.id}`, () => setRole(role, model, provider, typed))
+    pick: async (model, provider, typed, kind) => {
+      await store.run(`role:${role.id}`, () => setRole(role, model, provider, typed, kind))
     },
   }
   return (

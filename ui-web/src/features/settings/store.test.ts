@@ -15,6 +15,7 @@ afterEach(() => {
   store._resetForTests()
   settingsDialog._resetForTests()
   resetSources()
+  vi.restoreAllMocks()
 })
 
 describe('settings store', () => {
@@ -39,6 +40,20 @@ describe('settings store', () => {
     /* The model picker is no longer one of them: it is the composer's, owned by
        the model store, and it closes on its own when the dialog does. */
     expect([s.provider, s.sheet, s.skill, s.toolOpen, s.plugOpen, s.err]).toEqual([null, null, null, null, null, ''])
+  })
+
+  it('both model doors open the providers page, which is where a key and a list are', async () => {
+    /* `openModels` answers "nothing is connected" and `openProviderModels`
+       answers "this one has no model added". Since the split, neither question
+       is answerable on the Model settings page: it holds the roles card and no
+       way to connect anything. */
+    setSources({ settings: { load: async () => snapOf('m') } as unknown as SettingsSource })
+    vi.spyOn(settingsDialog, 'open').mockImplementation(() => {})
+    await store.openModels()
+    expect(settingsDialog.settingsTab.id).toBe('provider')
+    settingsDialog.settingsTab.id = 'general'
+    await store.openProviderModels('moonshot')
+    expect([settingsDialog.settingsTab.id, store.get().provider]).toEqual(['provider', 'moonshot'])
   })
 
   it('run marks the key busy while the write runs and lands the snapshot it returns', async () => {
