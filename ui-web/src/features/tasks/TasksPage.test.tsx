@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import { setCurrent } from '../../lib/session'
@@ -685,6 +685,104 @@ describe('the node panel', () => {
       expect(document.querySelector('.tkans')?.textContent).toBe('first answer')
       await act(async () => { resolveSecond?.({ dispatch: 'go', steps: [], answer: 'second answer', outputTruncated: false }) })
       expect(document.querySelector('.tkans')?.textContent).toBe('second answer')
+    })
+
+    /* A spawn's lane sends no per-step event -- `subagent.status` moves on
+       pending, running and the terminal word only -- so a running spawn's
+       record is re-read on a beat, the transcript's spawn card's own
+       cadence, rather than left at whatever the first read saw. */
+    it("a running spawn's record is re-read on a beat, so its steps keep arriving", async () => {
+      vi.useFakeTimers()
+      try {
+        const calls: string[] = []
+        record = { dispatch: 'go', steps: [], answer: null, outputTruncated: false }
+        setSources({
+          tasks: { ...source(), node: async () => { calls.push('fetch'); return record } },
+          workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
+        })
+        const running = task({
+          id: 's1', kind: 'spawn', status: 'running', nodes: [node({ node_id: 's1', status: 'running' })],
+        })
+        pick(running)
+        await act(async () => {})
+        expect(calls).toEqual(['fetch'])
+
+        record = { dispatch: 'go', steps: [{ kind: 'say', text: 'first step' }], answer: null, outputTruncated: false }
+        await act(async () => { vi.advanceTimersByTime(1000) })
+        expect(calls).toEqual(['fetch', 'fetch'])
+        expect(document.querySelector('.tkprocb .tkans')?.textContent).toBe('first step')
+
+        await act(async () => { vi.advanceTimersByTime(1000) })
+        expect(calls).toEqual(['fetch', 'fetch', 'fetch'])
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('skips a beat while a read is still out, rather than stacking reads', async () => {
+      vi.useFakeTimers()
+      try {
+        let calls = 0
+        setSources({
+          tasks: { ...source(), node: () => { calls += 1; return new Promise<NodeRecord>(() => {}) } },
+          workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
+        })
+        const running = task({
+          id: 's1', kind: 'spawn', status: 'running', nodes: [node({ node_id: 's1', status: 'running' })],
+        })
+        pick(running)
+        await act(async () => {})
+        expect(calls).toBe(1)
+        await act(async () => { vi.advanceTimersByTime(3000) })
+        expect(calls).toBe(1)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('a running dag node is not re-read on a beat: its node_updated events already do that', async () => {
+      vi.useFakeTimers()
+      try {
+        const calls: string[] = []
+        setSources({
+          tasks: { ...source(), node: async () => { calls.push('fetch'); return record } },
+          workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
+        })
+        const running = task({
+          id: 'r1', kind: 'dag', status: 'running', nodes: [node({ node_id: 'n1', status: 'running' })],
+        })
+        pick(running)
+        await act(async () => {})
+        await act(async () => { vi.advanceTimersByTime(3000) })
+        expect(calls).toEqual(['fetch'])
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it("is re-read once when the spawn settles, so the answer lands without reopening the node", async () => {
+      const calls: string[] = []
+      record = { dispatch: 'go', steps: [], answer: null, outputTruncated: false }
+      setSources({
+        tasks: { ...source(), node: async () => { calls.push('fetch'); return record } },
+        workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
+      })
+      const running = task({
+        id: 's1', kind: 'spawn', status: 'running', agent: 'raven', handle: 'h1',
+        nodes: [node({ node_id: 's1', status: 'running', instance: 'h1', started_at: 1000 })],
+      })
+      store.set((prev) => ({ ...prev, rows: [running], loaded: true }))
+      pick(running)
+      await act(async () => {})
+      expect(calls).toEqual(['fetch'])
+
+      record = { dispatch: 'go', steps: [], answer: 'the answer', outputTruncated: false }
+      await act(async () => {
+        store.onSubagentStatus({ task_id: 't1', call_id: 's1', agent: 'raven', label: 'x', status: 'completed', ended_at: 2000 })
+      })
+      expect(calls).toEqual(['fetch', 'fetch'])
+      expect(document.querySelector('.tkanswer .tkans')?.textContent).toBe('the answer')
+      expect(document.querySelector('.tksub')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1s')
     })
   })
 
