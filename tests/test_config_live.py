@@ -22,8 +22,14 @@ from pathlib import Path
 from raven.config import live as live_module
 from raven.config.live import (
     LiveConfig,
+    context_window_tokens,
+    curator_pin,
     disabled_playbook_names,
     disabled_tool_names,
+    held,
+    hold_for_this_turn,
+    max_tool_iterations,
+    skill_gate_pin,
 )
 
 
@@ -429,3 +435,248 @@ def test_a_retired_destructive_toggle_is_accepted_ignored_and_flagged():
     assert cfg.should_warn_deprecated_allow_destructive is True
     assert "allowDestructiveCommands" not in cfg.model_dump(by_alias=True)
     assert ExecToolConfig().should_warn_deprecated_allow_destructive is False
+
+
+class TestSubsystemPinsAndTheCap:
+    """The three values that used to be settled when the loop was built.
+
+    A pin and an iteration cap are sentences about the next call, not work to
+    redo, so they belong on this side of the line the module docstring draws.
+    Each is written by ``settings.set``, which follows the spelling already in
+    the file -- so each is read under both.
+    """
+
+    def test_the_curator_pin_is_read_from_either_spelling(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.json"
+        _write(path, {"context": {"curatorModel": "m", "curatorProvider": "deepseek"}})
+        assert curator_pin(LiveConfig(path)) == ("m", "deepseek")
+
+        _write(path, {"context": {"curator_model": "m2", "curator_provider": "gemini"}})
+        assert curator_pin(LiveConfig(path)) == ("m2", "gemini")
+
+    def test_the_gate_pin_is_read_from_either_spelling_of_the_block_too(self, tmp_path: Path) -> None:
+        """``skillForge`` is the block ``settings.set`` writes; ``skill_forge``
+        is what the loader's schema calls it, and a hand-written config may
+        hold either."""
+        path = tmp_path / "config.json"
+        _write(path, {"skillForge": {"llmGateModel": "g", "llmGateProvider": "deepseek"}})
+        assert skill_gate_pin(LiveConfig(path)) == ("g", "deepseek")
+
+        _write(path, {"skill_forge": {"llm_gate_model": "g2", "llm_gate_provider": "gemini"}})
+        assert skill_gate_pin(LiveConfig(path)) == ("g2", "gemini")
+
+    def test_an_unset_pin_is_two_nones(self, tmp_path: Path) -> None:
+        """Unset and empty both mean "follow the conversation's model", which
+        is what the resolver turns into None rather than a half pair."""
+        path = tmp_path / "config.json"
+        _write(path, {"context": {"curatorModel": ""}})
+        assert curator_pin(LiveConfig(path)) == (None, None)
+        _write(path, {})
+        assert curator_pin(LiveConfig(path)) == (None, None)
+
+    def test_a_repointed_pin_is_the_next_answer(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.json"
+        _write(path, {"context": {"curatorModel": "before"}})
+        live = LiveConfig(path)
+        assert curator_pin(live)[0] == "before"
+
+        _write(path, {"context": {"curatorModel": "after"}})
+
+        assert curator_pin(live)[0] == "after"
+
+    def test_the_cap_is_read_from_either_spelling(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.json"
+        _write(path, {"agents": {"defaults": {"maxToolIterations": 7}}})
+        assert max_tool_iterations(LiveConfig(path)) == 7
+
+        _write(path, {"agents": {"defaults": {"max_tool_iterations": 9}}})
+        assert max_tool_iterations(LiveConfig(path)) == 9
+
+    def test_a_cap_that_is_not_a_positive_int_is_no_answer(self, tmp_path: Path) -> None:
+        """None means "keep what the loop was built with". A bool is an int in
+        Python and would otherwise cap the loop at 1."""
+        path = tmp_path / "config.json"
+        for value in ("40", 0, -1, True, None):
+            _write(path, {"agents": {"defaults": {"maxToolIterations": value}}})
+            assert max_tool_iterations(LiveConfig(path)) is None
+
+    def test_the_loop_reads_its_cap_through_this(self, tmp_path: Path) -> None:
+        """The property is the whole consumer: a cap raised on the settings
+        page applies to the next turn, and an unset one keeps the built one."""
+        from types import SimpleNamespace
+
+        from raven.agent.loop import AgentLoop
+
+        path = tmp_path / "config.json"
+        _write(path, {"agents": {"defaults": {"maxToolIterations": 7}}})
+        loop = SimpleNamespace(_live_config=LiveConfig(path), _default_max_iterations=40)
+
+        assert AgentLoop.max_iterations.fget(loop) == 7
+
+        _write(path, {})
+
+        assert AgentLoop.max_iterations.fget(loop) == 40
+
+
+class TestTheWindowIsResolvedPerTurn:
+    """``agents.defaults.contextWindowTokens`` reaches a turn through its binding.
+
+    The number used to live in two places -- one copy frozen on the loop that
+    only the usage report read, one on each binding that the budget read -- so a
+    write reached neither until a restart, and after a model switch the two
+    disagreed: the trimming ran on the new number while the page showed the old
+    model's catalogue size. One source now, resolved once when a turn starts.
+    """
+
+    def test_the_window_is_read_from_either_spelling(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.json"
+        _write(path, {"agents": {"defaults": {"contextWindowTokens": 50000}}})
+        assert context_window_tokens(LiveConfig(path)) == 50000
+
+        _write(path, {"agents": {"defaults": {"context_window_tokens": 60000}}})
+        assert context_window_tokens(LiveConfig(path)) == 60000
+
+    def test_no_override_is_no_answer(self, tmp_path: Path) -> None:
+        """None lets the rates ladder answer with the model's own window, which
+        is what an unset key means."""
+        path = tmp_path / "config.json"
+        for value in ("50000", 0, -1, True, None):
+            _write(path, {"agents": {"defaults": {"contextWindowTokens": value}}})
+            assert context_window_tokens(LiveConfig(path)) is None
+        _write(path, {})
+        assert context_window_tokens(LiveConfig(path)) is None
+
+    def test_a_turn_takes_the_window_the_file_has_when_it_starts(self, tmp_path: Path) -> None:
+        from types import SimpleNamespace
+
+        from raven.agent.loop import AgentLoop
+        from raven.providers.binding import ModelBinding
+
+        path = tmp_path / "config.json"
+        _write(path, {"agents": {"defaults": {"contextWindowTokens": 50000}}})
+        loop = SimpleNamespace(_live_config=LiveConfig(path))
+        built = ModelBinding(object(), "some/model")
+
+        pinned = AgentLoop._with_live_window(loop, built)
+
+        assert pinned.configured_window == 50000
+        assert pinned.model == built.model and pinned.provider is built.provider
+
+    def test_an_unchanged_number_keeps_the_binding_it_was_given(self, tmp_path: Path) -> None:
+        """Same object, so the window it already resolved from the rates
+        catalogue is not resolved again every turn."""
+        from types import SimpleNamespace
+
+        from raven.agent.loop import AgentLoop
+        from raven.providers.binding import ModelBinding
+
+        path = tmp_path / "config.json"
+        _write(path, {"agents": {"defaults": {"contextWindowTokens": 50000}}})
+        loop = SimpleNamespace(_live_config=LiveConfig(path))
+        binding = ModelBinding(object(), "some/model", 50000)
+
+        assert AgentLoop._with_live_window(loop, binding) is binding
+
+    def test_clearing_the_key_drops_the_override(self, tmp_path: Path) -> None:
+        from types import SimpleNamespace
+
+        from raven.agent.loop import AgentLoop
+        from raven.providers.binding import ModelBinding
+
+        path = tmp_path / "config.json"
+        _write(path, {})
+        loop = SimpleNamespace(_live_config=LiveConfig(path))
+
+        dropped = AgentLoop._with_live_window(loop, ModelBinding(object(), "some/model", 50000))
+
+        assert dropped.configured_window is None
+
+    def test_a_turn_already_running_keeps_its_number(self, tmp_path: Path) -> None:
+        """Resolved once at the start and then held: the budget is read several
+        times while a turn runs, and a number that moved between those reads
+        would leave one turn disagreeing with itself."""
+        from types import SimpleNamespace
+
+        from raven.agent.loop import AgentLoop
+        from raven.providers.binding import ModelBinding, use_binding
+
+        path = tmp_path / "config.json"
+        _write(path, {"agents": {"defaults": {"contextWindowTokens": 50000}}})
+        loop = SimpleNamespace(_live_config=LiveConfig(path), _default_binding=ModelBinding(object(), "d/m"))
+        turn_binding = AgentLoop._with_live_window(loop, ModelBinding(object(), "some/model"))
+
+        with use_binding(turn_binding):
+            _write(path, {"agents": {"defaults": {"contextWindowTokens": 9999}}})
+            assert AgentLoop.context_window_tokens.fget(loop) == 50000
+
+        assert AgentLoop._with_live_window(loop, turn_binding).configured_window == 9999
+
+
+class TestOneTurnOneAnswer:
+    """A preference is read live; a turn still gets one answer for it.
+
+    A turn asks several times and sometimes minutes apart, so "read at the
+    moment of use" and "one answer per turn" are not the same rule. The cap is
+    the sharp case: it is first read after context assembly, which can spend
+    minutes in the curator, so an edit made while a turn is running would
+    otherwise change that turn.
+    """
+
+    def test_a_held_value_is_read_once(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.json"
+        _write(path, {"agents": {"defaults": {"maxToolIterations": 7}}})
+        live = LiveConfig(path)
+
+        with hold_for_this_turn():
+            assert held("cap", lambda: max_tool_iterations(live)) == 7
+            _write(path, {"agents": {"defaults": {"maxToolIterations": 99}}})
+            assert held("cap", lambda: max_tool_iterations(live)) == 7
+
+        assert held("cap", lambda: max_tool_iterations(live)) == 99
+
+    def test_a_hold_ends_with_its_turn(self, tmp_path: Path) -> None:
+        """Outside one, every read is live again -- which is what a caller below
+        ``run_turn`` and every background path gets, and what this did before
+        there was a hold at all. A hold that outlived its turn would freeze the
+        setting for the rest of the process."""
+        path = tmp_path / "config.json"
+        _write(path, {"agents": {"defaults": {"maxToolIterations": 7}}})
+        live = LiveConfig(path)
+
+        with hold_for_this_turn():
+            assert held("cap", lambda: max_tool_iterations(live)) == 7
+
+        _write(path, {"agents": {"defaults": {"maxToolIterations": 99}}})
+        assert held("cap", lambda: max_tool_iterations(live)) == 99
+        _write(path, {"agents": {"defaults": {"maxToolIterations": 55}}})
+        assert held("cap", lambda: max_tool_iterations(live)) == 55
+
+    def test_the_cap_is_resolved_when_the_turn_opens_not_at_its_first_read(self, tmp_path: Path) -> None:
+        """The crux: resolved lazily it would still be read after assembly,
+        which is exactly the window an operator's edit lands in."""
+        from types import SimpleNamespace
+
+        from raven.agent.loop import AgentLoop
+
+        path = tmp_path / "config.json"
+        _write(path, {"agents": {"defaults": {"maxToolIterations": 7}}})
+        loop = SimpleNamespace(_live_config=LiveConfig(path), _default_max_iterations=40)
+
+        with AgentLoop._turn_scope(loop):
+            _write(path, {"agents": {"defaults": {"maxToolIterations": 99}}})
+            assert AgentLoop.max_iterations.fget(loop) == 7
+
+        assert AgentLoop.max_iterations.fget(loop) == 99
+
+    def test_a_turn_with_no_override_keeps_the_built_cap(self, tmp_path: Path) -> None:
+        from types import SimpleNamespace
+
+        from raven.agent.loop import AgentLoop
+
+        path = tmp_path / "config.json"
+        _write(path, {})
+        loop = SimpleNamespace(_live_config=LiveConfig(path), _default_max_iterations=40)
+
+        with AgentLoop._turn_scope(loop):
+            _write(path, {"agents": {"defaults": {"maxToolIterations": 99}}})
+            assert AgentLoop.max_iterations.fget(loop) == 40

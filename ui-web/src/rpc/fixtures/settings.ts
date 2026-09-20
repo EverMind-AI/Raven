@@ -92,18 +92,6 @@ function asStrings(value: Json): string[] {
    empty, which is what the walk probe caught. */
 const clone = (value: Record<string, Json>): Record<string, Json> => JSON.parse(JSON.stringify(value))
 
-const RELOAD_ONLY = new Set([
-  'agents.defaults.maxToolIterations',
-  'agents.defaults.contextWindowTokens',
-  'context.curatorModel',
-  'context.curatorProvider',
-  'skillForge.llmGateModel',
-  'skillForge.llmGateProvider',
-  'context',
-  'skillForge',
-])
-const RELOAD_WARNING = 'Saved. Applies after the next gateway reload or restart.'
-
 const isoDay = (ms: number): string => new Date(ms).toISOString().slice(0, 10)
 const DAY_MS = 86_400_000
 
@@ -198,9 +186,7 @@ export function createSettings(env: FixtureEnv, ext: ExtFixture): SettingsFixtur
         put(config, p.key, p.value)
         if (p.key === 'tools.disabledTools') ext.disabledTools = asStrings(p.value)
         if (p.key === 'plugins.disabled') ext.disabledPlugins = asStrings(p.value)
-        /* The same keys the gateway says this about (raven/rpc/methods/console.py
-           _RELOAD_ONLY_KEYS): a value the loop binds at build time. */
-        return { applied: true, previous: null, warning: RELOAD_ONLY.has(p.key) ? RELOAD_WARNING : null }
+        return { applied: true, previous: null, warning: null }
       },
       /* Nothing has been spent on this canvas, so the usage panel draws an
          empty ledger rather than a number nothing produced -- one zero bucket
