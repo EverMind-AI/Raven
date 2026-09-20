@@ -119,7 +119,11 @@ is 1440 of them.
 **`ops_connections` lists the machines this instance can run on** — the owner's
 own name for each, what it is, and what it has installed. You never need a host,
 a port, a user or a key: those belong to the connection and the tools use them
-for you. A task statement that names no machine is normal.
+for you. A task statement that names no machine is normal. When it lists none
+that fits, ask the owner what it says to ask -- is it this computer or another,
+what they call it, and an address if another -- and hand the answer to
+`ops_connection_add`; ssh's own config fills a port, user or key they left out,
+and the machine is reached before anything is written.
 
 **`exec` takes a `machine`** — an id from `ops_connections`, or a campaign name —
 and runs the command there instead of on this computer. Use it to look at anything
