@@ -262,6 +262,7 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
                 }
             )
         tools.extend(_gated_tools({t["name"] for t in tools}, getattr(loop, "web_search_provider", "serper")))
+        tools.extend(_absent_meta_tools({t["name"] for t in tools}))
 
     return {"skills": skills, "plugins": plugins, "tools": tools, "mcp": mcp}
 
@@ -315,6 +316,37 @@ def _needs_of(name: str) -> dict | None:
             return None
         return {"setting": cap.key_path, "env": cap.env_var}
     return None
+
+
+def _absent_meta_tools(registered: set[str]) -> list[dict]:
+    """Rows for meta-tools the loop did not register, for the same reason
+    ``_gated_tools`` exists: absent from the list reads as deleted.
+
+    Only ``tool_search`` reaches this. It is registered when progressive tool
+    disclosure is on (``tools.toolSearch.enabled``, off by default) and skipped
+    when it is not, so a default install showed a card named after tool search
+    holding the one meta-tool that is not tool search. ``tool_call`` is
+    registered either way and never lands here.
+
+    ``builtin`` is true and it is not a convenience: this page writes
+    ``tools.disabledTools``, and an entry there would not register this tool.
+    Its switch is a different setting, which is what the row's own note says.
+    """
+    rows: list[dict] = []
+    from raven.agent.tools.tool_search import META_TOOL_NAMES
+
+    for name in sorted(META_TOOL_NAMES - registered):
+        rows.append(
+            {
+                "name": name,
+                "description": "",
+                "enabled": False,
+                "mcp_server": None,
+                "needs": None,
+                "builtin": True,
+            }
+        )
+    return rows
 
 
 def _gated_tools(registered: set[str], search_provider: str = "serper") -> list[dict]:

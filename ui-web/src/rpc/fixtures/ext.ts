@@ -34,16 +34,19 @@ const TOOLS: ExtTool[] = [
   { name: 'web_fetch', description: 'Read a given address as prose', enabled: true , builtin: false },
   { name: 'deep_research', description: 'Many rounds of search and cross-checking; slow and expensive', enabled: false , builtin: false },
   { name: 'ask_user', description: 'Stop and ask rather than guess', enabled: true , builtin: false },
-  /* Reachable only through `tool_call`, so the page draws them fixed rather
-     than switchable. One in the meta card and one beside `run_subagent_dag`:
-     the offline page has to show that the state follows the tool, not the
-     card it sits in. */
-  { name: 'tool_search', description: 'Find the tool for a job among the ones installed', enabled: true, builtin: true },
+  /* The meta-tools, the only two whose switch the loop would not honour: this
+     page writes `tools.disabledTools`, and neither is registered from it.
+     `tool_search` is drawn with the fold off, which is the default -- absent
+     from the list, the page showed a meta card with one row in it. */
+  { name: 'tool_search', description: 'Find the tool for a job among the ones installed', enabled: false, builtin: true },
   { name: 'tool_call', description: 'Call a tool found that way', enabled: true, builtin: true },
+  /* Schema-hidden and switchable, which is the pair the offline page exists to
+     show apart: the model reaches these by name through `tool_call`, and an
+     entry in `tools.disabledTools` still takes them away. */
   { name: 'run_subagent_dag', description: 'Run a graph of sub-agent steps', enabled: true, builtin: false },
-  { name: 'cancel_dag', description: 'Stop a running graph', enabled: true, builtin: true },
-  { name: 'dag_status', description: 'Where a running graph has got to', enabled: true, builtin: true },
-  { name: 'resolve_dag_node', description: 'Answer one node of a running graph', enabled: true, builtin: true },
+  { name: 'cancel_dag', description: 'Stop a running graph', enabled: true, builtin: false },
+  { name: 'dag_status', description: 'Where a running graph has got to', enabled: true, builtin: false },
+  { name: 'resolve_dag_node', description: 'Answer one node of a running graph', enabled: true, builtin: false },
 ]
 
 /* The skills on disk. Their names are the hub's, because that is where these

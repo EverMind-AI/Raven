@@ -1775,3 +1775,49 @@ async def test_ext_list_marks_only_the_tools_whose_switch_the_loop_ignores(
     switchable = [n for n, r in rows.items() if n not in fixed and "builtin" in r]
     assert switchable, "no switchable tool reported"
     assert all(rows[n]["builtin"] is False for n in switchable)
+
+
+async def test_ext_list_reports_tool_search_even_when_the_fold_is_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A meta-tool the loop skipped is still the page's to draw.
+
+    ``tool_search`` is registered only when progressive tool disclosure is on
+    (``tools.toolSearch.enabled``, off by default); ``tool_call`` is registered
+    either way. Reporting only what the registry holds left a default install
+    with a card named after tool search containing the one meta-tool that is
+    not tool search, and nothing said the feature existed. The same reasoning
+    as ``_gated_tools``: absent from the list reads as deleted.
+    """
+    from raven.agent.tools.tool_search import TOOL_CALL_NAME, TOOL_SEARCH_NAME
+
+    loop = _console_loop(tmp_path, monkeypatch, {"providers": {}})
+    assert TOOL_SEARCH_NAME not in loop.tools.tool_names, (
+        "the fold is on in this fixture, so the absent case below is not being exercised"
+    )
+
+    rows = await _ext_rows(loop, monkeypatch)
+    assert TOOL_SEARCH_NAME in rows, "the page cannot draw a row it is never told about"
+    # True because this page writes `tools.disabledTools`, and no entry there
+    # registers this tool: its switch is `tools.toolSearch.enabled`.
+    assert rows[TOOL_SEARCH_NAME]["builtin"] is True
+    assert rows[TOOL_SEARCH_NAME]["enabled"] is False
+    assert rows[TOOL_CALL_NAME]["builtin"] is True
+
+
+async def test_ext_list_reports_a_registered_meta_tool_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The absent-row pass must not double a tool the registry already holds."""
+    from raven.agent.tools.tool_search import TOOL_CALL_NAME
+
+    loop = _console_loop(tmp_path, monkeypatch, {"providers": {}})
+    from raven.config import raven as raven_config
+
+    monkeypatch.setattr(
+        raven_config,
+        "load_raven_config",
+        lambda: SimpleNamespace(skill_forge=None, plugins=SimpleNamespace(disabled=[])),
+    )
+    monkeypatch.setattr(console_module, "_hub_marker_name", lambda: None)
+    payload = await console_module.ext_list({}, agent_loop_factory=lambda: loop)
+    names = [t["name"] for t in payload["tools"]]
+    assert names.count(TOOL_CALL_NAME) == 1

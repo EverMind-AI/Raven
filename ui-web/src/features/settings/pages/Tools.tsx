@@ -152,10 +152,19 @@ export function Tools(): JSX.Element {
     if (!known_) return null
     const isOn = !meta && wanted(id)
     const blk = isOn ? blocker(id, raw) : ''
+    /* The one meta-tool whose switch is a different setting
+       (`tools.toolSearch.enabled`), so the row says where it is rather than
+       looking like a tool that cannot be turned on at all. */
+    const elsewhere = id === 'tool_search'
     return (
       <Xrow
         key={id}
-        name={<span className="mono">{id}</span>}
+        name={
+          <>
+            <span className="mono">{id}</span>
+            {elsewhere ? <span className="settings-xd">{t('gui.settings.tools.meta_elsewhere')}</span> : null}
+          </>
+        }
         status={meta
           ? <Rov>{t('gui.settings.tools.builtin')}</Rov>
           : blk ? <Chip state="warn">{t('gui.settings.tools.setup')}</Chip> : null}
