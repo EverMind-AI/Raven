@@ -167,7 +167,15 @@ export async function persistModel(
     return
   }
   if (sid) {
-    await gateway().call('config.set', { key: 'model', value: m, provider, session_id: sid })
+    const r = await gateway().call('config.set', { key: 'model', value: m, provider, session_id: sid })
+    /* A refusal RESOLVES, and `choose` rolls the chip back only in its catch --
+       so dropping this reply left the chip on the new model and the page saying
+       it switched, after a write the session never took. The server states the
+       rule it expects of a caller (rpc/methods/config.py): the refusal is what
+       the caller gets, and saying it is the caller's job. Thrown rather than
+       reported, because the rollback this needs is the one the catch already
+       does, and `data.detail` is the shape it renders. */
+    if (r && r.applied === false) throw { data: { detail: t('gui.model.refused') } }
     return
   }
   staging().model = { model: m, provider }

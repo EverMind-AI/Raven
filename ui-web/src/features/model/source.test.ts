@@ -224,6 +224,22 @@ describe('the live model persist', () => {
     expect([h.settings.defaultModelLive, h.settings.defaultProviderLive]).toEqual(['m2', 'minimax'])
   })
 
+  it('rejects a refused session write, because only the caller\'s catch puts the chip back', async () => {
+    /* `choose` moves the chip before the round trip and rolls it back only in
+       its catch, so a refusal that RESOLVES left the chip on a model the
+       session does not have and the page saying it switched. */
+    const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: false, previous: null, scope: 'session' } } })
+    const { t } = await import('../../i18n/t')
+    await expect(h.settings.persistModel('m2', 'minimax', 'session')).rejects.toMatchObject({
+      data: { detail: t('gui.model.refused') },
+    })
+  })
+
+  it('an applied session write resolves and says nothing', async () => {
+    const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: true, previous: 'm1', scope: 'session' } } })
+    await expect(h.settings.persistModel('m2', 'minimax', 'session')).resolves.toBeUndefined()
+  })
+
   it('a default write moves a visible draft chip, which follows the default like an unswitched session', async () => {
     const h = await live({ answers: { 'config.set': { applied: true } } })
     await h.settings.persistModel('m2', 'minimax', 'default')
@@ -395,6 +411,21 @@ describe('the staged draft-write recovery', () => {
     const applied = h.overrides.applyStagedModel('a', h.gen())
     await h.fail(0, { data: { detail: 'credential gone' } })
     await applied
+    await h.settle(1, { model: 'model-a', providers: [] })
+    expect(h.calls).toContainEqual(['modelSet', 'model-a'])
+  })
+
+  it('speaks and reconciles when the refusal RESOLVES rather than raises', async () => {
+    /* A first run answers `applied: false`: there is no loop to bind a session
+       to, because this gateway started without a model. That resolves, so a
+       catch-only recovery heard nothing and left the chip showing a model the
+       session does not have -- after a pick the reader was told was staged. */
+    const h = await staged()
+    const applied = h.overrides.applyStagedModel('a', h.gen())
+    await h.settle(0, { applied: false, previous: null, scope: 'session' })
+    await applied
+    expect(h.calls.some((c) => c[0] === 'toast')).toBe(true)
+    expect(h.inFlight()).toEqual(['config.set', 'model.options'])
     await h.settle(1, { model: 'model-a', providers: [] })
     expect(h.calls).toContainEqual(['modelSet', 'model-a'])
   })
