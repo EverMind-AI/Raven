@@ -60,6 +60,15 @@ export function mkToolRow(tool: ExtToolRow): ToolRow {
     o.on = false
     return o
   }
+  /* A tool no switch on this page can move keeps the state the loop reported.
+     The accessor below answers `tools.disabledTools`, which is the right
+     question for a switchable tool and a meaningless one here: `tool_search`
+     is reported precisely because the loop did not register it, and it is not
+     in that list either, so the accessor called it on. */
+  if (tool.builtin) {
+    o.on = !!tool.enabled
+    return o
+  }
   Object.defineProperty(o, 'on', {
     get: () => !disabledToolsLive.includes(id),
     set: (v) => {
