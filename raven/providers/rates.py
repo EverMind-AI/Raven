@@ -220,9 +220,18 @@ def may_fetch(model: str) -> bool:
     per configured vendor, so a settings page paid six sequential round trips
     -- about 1.5s -- on every call, and the page reloaded it after every write.
 
-    They bought nothing: the id handed over still carries its routing prefix,
-    so the address asked for is `huggingface.co/huggingface/<repo>`, which is
-    not a repo and answers 404. The window came back None either way.
+    They buy nothing, and this is LiteLLM's bug rather than a bad id on our
+    side. `_get_model_info_helper` computes `split_model` -- the bare repo id --
+    and then passes the caller's original string to
+    `_get_max_position_embeddings` (utils.py:5817 on main, :5678 in 1.85.0), so
+    the address asked for is `huggingface.co/huggingface/<repo>`, which is not
+    a repo and answers 404. Measured both ways: with the routing prefix, 404
+    and an empty answer after 533ms; without it, `get_llm_provider` raises for
+    want of a provider in 1ms. No id from here reaches a working lookup.
+
+    `get_max_tokens` does it correctly one function away -- it reassigns
+    `model` from `get_llm_provider` before the same branch -- which is what the
+    fix upstream looks like.
 
     Any segment counts, the way it does in ``may_prompt``: the candidate list
     pairs a bare id with its ``openrouter/`` alias, and both reach the same
