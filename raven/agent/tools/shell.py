@@ -24,7 +24,7 @@ from raven.permissions.shell_policy import (
 from raven.sandbox import DirectExecutor, SandboxExecutor
 
 
-class _UnmodelledExpansion(Exception):
+class _UnmodelledExpansionError(Exception):
     """A parameter expansion the fence cannot resolve to the text the shell runs.
 
     The fence's promise is that it reads what will run. Where it cannot, the
@@ -354,7 +354,7 @@ class ExecTool(Tool):
         env = self._child_env(cwd_path)
         try:
             readable = self._as_the_shell_reads_it(cmd, env)
-        except _UnmodelledExpansion as unresolved:
+        except _UnmodelledExpansionError as unresolved:
             return f"Error: Command blocked by safety guard (unsupported shell expansion: {unresolved.construct})"
 
         try:
@@ -503,7 +503,7 @@ class ExecTool(Tool):
         trim = cls._BRACE_TRIM.match(body)
         if trim is not None:
             return cls._trim(value, trim.group(1), trim.group(2))
-        raise _UnmodelledExpansion(construct)
+        raise _UnmodelledExpansionError(construct)
 
     @staticmethod
     def _trim(value: str, operator: str, pattern: str) -> str:
@@ -608,7 +608,7 @@ class ExecTool(Tool):
                 other = cls._BRACE_OTHER.match(command, index)
                 if other is not None:
                     if not other.group(1).startswith("#"):
-                        raise _UnmodelledExpansion(other.group(0))
+                        raise _UnmodelledExpansionError(other.group(0))
                     # A character count. Whatever it yields is a number, and a
                     # number cannot name a path, so it needs no value here.
                     out.append("0")
