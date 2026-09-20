@@ -2,39 +2,36 @@ import { useEffect, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
-import { AgentMark, isOwnAgent } from '../../components/AgentMark'
+import { AgentMark } from '../../components/AgentMark'
 import { KeyInput } from '../../components/KeyInput'
-import { SetupGroup, SetupRow } from '../../components/SetupRow'
 import { t } from '../../i18n/t'
 import { ask as confirmAsk } from '../../state/confirm'
 import * as lang from '../../state/lang'
-import { costOf, groupOf, stageOf } from './source'
+import { byOf, installOf, isOwnRow, shortOf } from './catalogue'
+import { sectionOf, stageOf } from './source'
 import * as store from './store'
 
-import type { Grp } from './source'
+import type { Section } from './source'
+import type { ExtAgentsState } from './store'
 import type { ExtAgentRow } from './types'
 import type { JSX } from 'react'
 import './styles.css'
 
-/* Connect the agents this machine can hand work to. One row per agent; the rows
-   are whatever `DS.extAgents` answers -- the fixture source with no gateway
-   behind the page, the `subagents.*` source in the live layer.
+/* The agents this machine can hand work to, drawn to the Agent Hub prototype.
  *
- * Two verbs on a row, and only two: connect and disconnect. Connect does whatever
- * this particular agent needs to become dispatchable -- build a shipped folder's
- * venv and its dependencies, write a config entry from a preset, take a
- * credential, or just flip the roster switch back on -- and disconnect only marks
- * it unavailable in the registry, so it is one click away from working again. What
- * used to be here instead was the mechanism, spread across five buttons
- * (install, connect, enable, test, switch to) that each named a step of the same
- * errand and left the reader to sequence them. Test is back, but not as a step of
- * that errand and not on a row: it is a question about one agent, asked inside the
- * card that agent opens.
+ * Three sections answer the reader's three questions -- which agents work for
+ * me now, which could I connect, which are not on this machine -- and a row
+ * answers three more: who it is (mark, name, a line about what it is good at),
+ * how it is doing (a dot that is only there when there is something to say),
+ * and the one thing to do about it now. Everything else is in the sheet the
+ * row opens: what the agent is good at, as the reader words it; a key, where
+ * one is needed; how to install one that is absent; and the actions its state
+ * calls for, in one bar.
  *
- * The rows carry no descriptions. They are the preset's own prompt text, written
- * for the model that reads it when choosing whom to delegate to -- printing it
- * under every row put sentences like "IMPORTANT: it cannot call sub-agents" on
- * screen as if they were help. It appears once, in the card the row opens.
+ * Connecting is the server's readiness ping -- up to a minute for a cli or acp
+ * agent -- so the row and the sheet both say "connecting" for its length and
+ * offer nothing else meanwhile; a refusal stays on the row as red text with a
+ * Retry, rather than as a toast that is gone before the reader looks up.
  */
 
 const kindText = (kind: string): string =>
@@ -48,421 +45,404 @@ const kindText = (kind: string): string =>
           : 'gui.agent.kind_cli',
   )
 
-/* How Raven reaches this agent, which is the one technical fact about it worth
-   printing: a subprocess, a protocol, an HTTP endpoint, or this process itself.
-   Deliberately not where the agent came from: whether an install shipped it or
-   a reader connected it changes nothing about using it, and the row and the card
-   are both about using it. */
-function wayIn(row: ExtAgentRow): string {
-  return [
-    kindText(row.kind),
-    /* The preset moved to another transport since this entry was written.
-       Rewriting it silently would change its command line and invalidate every
-       session handle bound to it, so it is stated, and disconnect-then-connect
-       is what re-reads the preset. */
-    row.upgrade_to ? t('gui.agent.stale_to', { to: kindText(row.upgrade_to) }) : '',
-  ]
-    .filter(Boolean)
-    .join(' · ')
+/* The states a row and its sheet are drawn in. `pending` and `failed` are
+   this page's own, about a write in flight or refused; the other three are the
+   section the server's facts put the row in. */
+type Shown = 'pending' | 'failed' | 'missing' | 'on' | 'off'
+
+function shownOf(row: ExtAgentRow, s: ExtAgentsState): Shown {
+  if (s.joining.includes(row.name)) return 'pending'
+  if (s.failed[row.name]) return 'failed'
+  const section = sectionOf(row)
+  return section === 'missing' ? 'missing' : section === 'on' ? 'on' : 'off'
 }
 
-/* The dot beside the name, and nothing under it. Health is a colour here, not a
-   sentence: the group heading says whether the agent is connected, the button
-   says what to do about it, and a third line repeating either in grey was the
-   standing small print this page was cleared of.
- *
- * Four probe verdicts, and they are not two. `attention` means the binary is
- * there but nothing has verified it can do a task -- an amber nudge, not a
- * failure. `unknown` is "not measured", which earns no colour at all. */
-function dotOf(row: ExtAgentRow): string {
-  /* A built-in agent is this process: reading it through the probe verdicts
-     would report "not measured" about a loop that is demonstrably running. */
-  if (row.builtin) return row.enabled ? 'ok' : 'off'
-  if (row.building || row.test_running) return 'warn'
-  if (row.kind === 'openai' && !row.has_api_key) return 'bad'
-  if (row.configured && !row.enabled && row.probe_status !== 'missing') return 'off'
-  if (row.probe_status === 'ready') return 'ok'
-  if (row.probe_status === 'attention') return 'warn'
-  if (row.probe_status === 'unknown') return 'off'
-  return 'bad'
+function Spin(): JSX.Element {
+  return <span className="extAgents-spin" aria-hidden="true" />
 }
 
-/* Connect, disconnect, or nothing -- the same component in the row and in the
-   card, so the two can never disagree about what this agent needs next.
- *
- * `key` is the one stage whose write cannot be done from here: only the reader
- * has the credential. In the row it opens the card, where the field is; in the
- * card it is the field's own button, which is why the card passes `onKey`. */
-function AgentAct({ row, onKey }: { row: ExtAgentRow; onKey?: () => void }): JSX.Element | null {
-  const stage = stageOf(row)
-  if (stage === 'builtin') return null
-  if (stage === 'building') {
+/* The dot: green for a working agent, gold when the probe has a caveat, amber
+   and pulsing while a write is in flight, red for a refusal. None at all for a
+   row that is merely off or absent -- "not connected" is what the section
+   already says. */
+function Led({ row, shown }: { row: ExtAgentRow; shown: Shown }): JSX.Element | null {
+  if (shown === 'pending') return <span className="extAgents-led extAgents-led-busy" />
+  if (shown === 'failed') return <span className="extAgents-led extAgents-led-bad" />
+  if (shown !== 'on') return null
+  const warn = !row.builtin && row.probe_status === 'attention'
+  return <span className={'extAgents-led' + (warn ? ' extAgents-led-warn' : '')} />
+}
+
+function Tile({ row }: { row: ExtAgentRow }): JSX.Element {
+  const own = isOwnRow(row)
+  return (
+    <span className={'extAgents-tile' + (own ? ' extAgents-tile-own' : '')}>
+      <AgentMark preset={row.preset} own={own} />
+    </span>
+  )
+}
+
+/* The line under the name: the catalogue's one sentence about the agent, or --
+   for a row nobody catalogued -- the probe's own verdict when it has one, else
+   how Raven reaches it. A refusal replaces it in red; a write in flight
+   replaces it with the ring. */
+function oneLine(row: ExtAgentRow): string {
+  const short = shortOf(row)
+  const stale = stageOf(row) === 'stale' ? t('gui.agent.tag_stale') : ''
+  const base =
+    short || ((row.probe_status === 'attention' || row.probe_status === 'missing') && row.probe_detail) || kindText(row.kind)
+  return stale ? `${base} · ${stale}` : base
+}
+
+/* Connect, by what the row's stage calls for. The one case with a question in
+   it is a preset that moved transport: connecting it removes the entry and adds
+   it back from the preset, which drops the handles of runs already in flight. */
+function connect(row: ExtAgentRow): void {
+  if (stageOf(row) === 'key') {
+    store.sheetOpen(row)
+    return
+  }
+  if (stageOf(row) === 'stale') {
+    confirmAsk(
+      t('gui.agent.migrate_do'),
+      t('gui.agent.migrate_body', { name: row.name, to: kindText(row.upgrade_to || '') }),
+      t('gui.agent.migrate_do'),
+      () => store.connectRow(row),
+    )
+    return
+  }
+  store.connectRow(row)
+}
+
+/* The one control a row carries. Exactly one, or none for the built-in loop,
+   which is always on and has nothing to do. */
+function RowControl({ row, shown }: { row: ExtAgentRow; shown: Shown }): JSX.Element | null {
+  if (shown === 'pending') return <span className="extAgents-state">{t('gui.agent.setup_connecting')}</span>
+  if (shown === 'failed') {
     return (
-      <button className="mini" disabled title={t('gui.agent.install_note')}>
-        {t('gui.agent.installing')}
+      <button className="mini danger" onClick={() => store.retry(row)}>
+        {t('gui.retry')}
       </button>
     )
   }
-  if (stage === 'live') {
-    /* No confirm: this only marks it unavailable in the registry -- the entry,
-       the folder and the sessions it already ran all stay, and connect puts it
-       back. A dialog would be asking permission for a switch. */
+  if (shown === 'missing') {
     return (
-      <button className="mini ghost" onClick={() => void store.run('toggle', row, { enabled: false })}>
+      <button className="mini" onClick={() => store.sheetOpen(row)}>
+        {t('gui.agent.go_install')}
+      </button>
+    )
+  }
+  if (shown === 'on') {
+    if (row.builtin) return null
+    return (
+      <button className="mini" onClick={() => store.disconnectRow(row)}>
         {t('gui.agent.disconnect')}
       </button>
     )
   }
-  const connect = (): void => {
-    if (stage === 'install') void store.run('build', row, {})
-    else if (stage === 'add') void store.run('connect', row, {})
-    else if (stage === 'stale') {
-      /* The one connect that is not a flag. A preset that changed transport
-         cannot be applied by switching `enabled`: there is no write that
-         changes a transport, so the entry is removed and added back from the
-         preset -- which drops the handles of runs already in flight, and is
-         why this one asks first. */
-      confirmAsk(
-        t('gui.agent.migrate_do'),
-        t('gui.agent.migrate_body', { name: row.name, to: kindText(row.upgrade_to || '') }),
-        t('gui.agent.migrate_do'),
-        () => void store.run('migrate', row, {}),
-      )
-    } else if (stage === 'off') void store.run('toggle', row, { enabled: true })
-    else if (onKey) onKey()
-    else store.sheetOpen(row)
-  }
   return (
-    <button
-      className="mini"
-      /* The one connect that costs the reader something to know about before
-         they click it. */
-      title={stage === 'install' ? t('gui.agent.install_note') : undefined}
-      onClick={connect}
-    >
+    <button className="mini go" onClick={() => connect(row)}>
       {t('gui.agent.connect')}
     </button>
   )
 }
 
-/* Whether `subagents.test` can answer for this row at all.
-
-   Two rows it cannot. A built-in agent is this process, and `run_test` refuses
-   one outright -- "there is nothing to test". A discovered one is looked up by
-   neither name the call accepts: `source: "preset"` searches the preset table
-   it was never in, and `source: "config"` searches a config file it has no
-   entry in, so both answer `subagent_not_found`. Offering the button there
-   would be offering a click that can only fail. */
-const canTest = (row: ExtAgentRow): boolean => !row.builtin && !row.vendored
-
-/* How long ago, in the coarsest unit that still says it. Same thresholds as the
-   TUI's roster (ui-tui/src/components/subagentsHub.tsx `ageText`), spelled
-   again rather than imported across the two apps -- and through t(), because a
-   bare "3h" beside a Chinese sentence is the one part of the line that stays
-   English. */
-function agoText(ms: number): string {
-  const mins = Math.max(0, Math.round((Date.now() - ms) / 60000))
-  if (mins < 1) return t('gui.time.ago_now')
-  if (mins < 60) return t('gui.time.ago_m', { n: mins })
-  const hours = Math.round(mins / 60)
-  if (hours < 24) return t('gui.time.ago_h', { n: hours })
-  return t('gui.time.ago_d', { n: Math.round(hours / 24) })
-}
-
-/* The last verdict as one sentence, and the dot beside it.
-
-   A verdict with no time on it reads as untested rather than as a verdict with
-   a hole in it: the server writes `ok` and `tested_at_ms` from one record, so
-   the two are either both there or both absent, and printing "Worked, {ago}"
-   with the placeholder still in it is worse than saying nothing was measured. */
-function testVerdict(row: ExtAgentRow): { cls: string; text: string } {
-  if (row.last_test_ok == null || row.last_test_at_ms == null) {
-    return { cls: 'off', text: t('gui.agent.test_never') }
-  }
-  const ago = agoText(row.last_test_at_ms)
-  return row.last_test_ok
-    ? { cls: '', text: t('gui.agent.test_ok', { ago }) }
-    : { cls: 'bad', text: t('gui.agent.test_bad', { ago }) }
-}
-
-/* Does running this one cost the reader anything? Only a cli test dispatches a
-   real task; acp reaches its verdict in the handshake and openai in the free
-   `/models` probe, and warning about a bill neither of them sends is how a
-   reader learns to ignore the warning. */
-const testCosts = (row: ExtAgentRow): boolean => row.kind === 'cli'
-
-function AgentRow({ row, sel }: { row: ExtAgentRow; sel: boolean }): JSX.Element {
-  /* Health is only a question about an agent that is supposed to be working.
-     Outside the connected group not-dispatchable is what every row is, so a red
-     dot and the clay stripe that comes with it were an alarm about the group's
-     own definition -- and with the status line gone there was nothing left to
-     say what the alarm meant. */
-  const cls = groupOf(row) === 'on' ? dotOf(row) : 'off'
+function AgentRow({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Element {
+  const shown = shownOf(row, s)
+  const failed = s.failed[row.name]
+  const open = (): void => store.sheetOpen(row)
   return (
-    <SetupRow
-      name={row.name}
-      /* The brand of the package behind the row, not an initial taken off its
-         name: the name is the reader's to change, and the two need not agree. */
-      tile={<AgentMark preset={row.preset} own={isOwnAgent(row)} />}
-      /* Empty text on purpose: SetupRow draws the second line only when there
-         is something to say there, and here there is not. */
-      state={{ cls, text: '' }}
-      tags={
-        <>
-          <span className="kd">{kindText(row.kind)}</span>
-          {/* The one row in this group whose connect is not the group's verb:
-              a preset that changed transport is removed and added back, and
-              the card asks first. Without the tag it sits among the ordinary
-              entries looking identical to them. */}
-          {stageOf(row) === 'stale' ? <span className="kd warn">{t('gui.agent.tag_stale')}</span> : null}
-        </>
-      }
-      act={<AgentAct row={row} />}
-      sel={sel}
-      onOpen={() => store.sheetOpen(row)}
-    />
+    <div
+      className="extAgents-row"
+      role="button"
+      tabIndex={0}
+      aria-current={s.sheet === row.name ? 'true' : undefined}
+      onClick={open}
+      onKeyDown={(e) => {
+        /* The row's own keys only: a keydown on the control inside bubbles to
+           here, and preventing it would cancel that button's own activation. */
+        if (e.target !== e.currentTarget) return
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          open()
+        }
+      }}
+    >
+      <Tile row={row} />
+      <div className="extAgents-who">
+        <div className="extAgents-nm">
+          <Led row={row} shown={shown} />
+          <span className="extAgents-t">{row.name}</span>
+        </div>
+        {shown === 'pending' ? (
+          <div className="extAgents-one extAgents-one-work">
+            <Spin />
+            {t('gui.agent.setup_connecting')}
+          </div>
+        ) : shown === 'failed' && failed ? (
+          <div className="extAgents-one extAgents-one-bad">{failed.detail}</div>
+        ) : (
+          <div className="extAgents-one">{oneLine(row)}</div>
+        )}
+      </div>
+      {/* The control stops the click here: pressing Connect must not also open
+          the sheet. */}
+      <div className="extAgents-ctl" onClick={(e) => e.stopPropagation()}>
+        <RowControl row={row} shown={shown} />
+      </div>
+    </div>
   )
 }
 
-/* A fact on the card the reader owns, edited where it is read.
+/* Raven's own first, then the server's order. */
+const ordered = (rows: ExtAgentRow[]): ExtAgentRow[] =>
+  [...rows].sort((a, b) => Number(isOwnRow(b)) - Number(isOwnRow(a)))
 
-   Two of the three things this card says are the reader's: what this agent is
-   called here, and what it is for. The rest -- how Raven reaches it, whether it
-   answered -- belongs to the transport and to the agent. `subagents.update` has
-   always taken both, `DS.extAgents` has always forwarded both, and the store has always
-   moved an open sheet onto a new name; the page was the only piece missing, and
-   it went out with the form this card replaced.
+function SectionBlock({ label, rows, s }: { label: string; rows: ExtAgentRow[]; s: ExtAgentsState }): JSX.Element {
+  return (
+    <section className="extAgents-sec">
+      <div className="extAgents-hd">
+        <b>{label}</b>
+        <span className="extAgents-n">{String(rows.length)}</span>
+      </div>
+      {rows.length ? (
+        <div className="extAgents-set">
+          {rows.map((row) => (
+            <AgentRow key={row.name} row={row} s={s} />
+          ))}
+        </div>
+      ) : null}
+    </section>
+  )
+}
 
-   Not that form back. There is no second field to fill in and no save button to
-   find: the text is the control, Enter commits and Escape restores. Blur commits
-   too -- clicking away from a field you have just typed into means the typing,
-   and the alternative is a card that discards work whenever the reader reaches
-   for something else. In the multi-line one Enter is a newline, so there the
-   blur is the only commit. */
-function Editable({
-  value,
-  multiline,
-  placeholder,
-  label,
-  onCommit,
-}: {
-  value: string
-  multiline?: boolean
-  placeholder: string
-  label: string
-  onCommit: (next: string) => void
-}): JSX.Element {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(value)
-  /* The rows are re-read after every write, and a rename lands as a new value
-     for this same field. Without this the box would go on showing what was
-     typed even where the server settled on something else. */
-  useEffect(() => setDraft(value), [value])
+function OutIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M14 5h5v5" />
+      <path d="M19 5l-7.5 7.5" />
+      <path d="M17 14v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h4" />
+    </svg>
+  )
+}
 
-  if (!editing) {
+/* Whether `subagents.test` can answer for this row at all. A built-in agent is
+   this process, and `run_test` refuses one outright. A discovered folder is
+   looked up by neither name the call accepts, so both answer not-found;
+   offering the button there would be offering a click that can only fail. A
+   shipped product this install registered as a config row is found by
+   `source: "config"` like any other. */
+const canTest = (row: ExtAgentRow): boolean => !row.builtin && !row.vendored
+
+/* What the agent is good at, in the reader's words. Committed when the field
+   is left: Enter is a newline in a textarea, and a click away from a field one
+   has just typed into means the typing. Left blank it goes back to what was
+   there -- this is the text the dispatching model reads, and it cannot be
+   nothing. */
+function GoodAt({ row, saved, readOnly }: { row: ExtAgentRow; saved: string; readOnly: boolean }): JSX.Element {
+  const [draft, setDraft] = useState(saved)
+  useEffect(() => setDraft(saved), [saved])
+  const commit = (): void => {
+    const next = draft.trim()
+    if (!next) {
+      setDraft(saved)
+      return
+    }
+    if (next !== saved) store.describe(row, next)
+  }
+  return (
+    <label className="extAgents-fld">
+      <span className="extAgents-k">{t('gui.agent.good_at')}</span>
+      <textarea
+        aria-label={t('gui.agent.good_at')}
+        onBlur={commit}
+        onChange={(e) => setDraft(e.target.value)}
+        readOnly={readOnly}
+        value={draft}
+      />
+    </label>
+  )
+}
+
+/* The install block for an absent agent: the vendor's command with a copy
+   button, and the vendor's site. Copy confirms itself on the button rather
+   than in a toast, since the reader is looking at the button. */
+function InstallBlock({ row }: { row: ExtAgentRow }): JSX.Element | null {
+  const { site, cmd } = installOf(row)
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 1400)
+    return () => clearTimeout(timer)
+  }, [copied])
+  if (!site && !cmd) return null
+  return (
+    <div className="extAgents-inst">
+      <span className="extAgents-k">{t('gui.plug.install')}</span>
+      {cmd ? (
+        <div className="extAgents-cmd">
+          <code>{cmd}</code>
+          <button
+            type="button"
+            onClick={() => {
+              void navigator.clipboard?.writeText(cmd)
+              setCopied(true)
+            }}
+          >
+            {t(copied ? 'gui.agent.copied' : 'gui.agent.copy')}
+          </button>
+        </div>
+      ) : null}
+      {site ? (
+        <a className="extAgents-site" href={`https://${site}`} rel="noreferrer" target="_blank">
+          {site}
+          <OutIcon />
+        </a>
+      ) : null}
+    </div>
+  )
+}
+
+/* One line under the name in the sheet: what is happening to this agent right
+   now, or who makes it when nothing is. */
+function StatusLine({ row, shown, s }: { row: ExtAgentRow; shown: Shown; s: ExtAgentsState }): JSX.Element {
+  const by = byOf(row)
+  const testing = s.testing.includes(row.name) || row.test_running
+  if (shown === 'pending' || testing) {
     return (
-      <button className="xaedit" type="button" aria-label={label} title={label} onClick={() => setEditing(true)}>
-        {value || <span className="none">{placeholder}</span>}
+      <div className="extAgents-by">
+        <Spin />
+        {t(testing ? 'gui.agent.testing_head' : 'gui.agent.setup_connecting')}
+      </div>
+    )
+  }
+  if (shown === 'failed') {
+    return (
+      <div className="extAgents-by extAgents-by-bad">
+        <span className="extAgents-led extAgents-led-bad" />
+        {s.failed[row.name]?.detail}
+      </div>
+    )
+  }
+  if (shown === 'on' && row.last_test_ok === false) {
+    return (
+      <div className="extAgents-by extAgents-by-bad">
+        <span className="extAgents-led extAgents-led-bad" />
+        {t('gui.agent.hd_test_bad', { detail: row.last_test_detail || '' })}
+      </div>
+    )
+  }
+  if (shown === 'on') {
+    return (
+      <div className="extAgents-by">
+        <span className="extAgents-led" />
+        {row.last_test_ok ? t('gui.agent.hd_on_tested') : t('gui.agent.hd_on_by', { by })}
+      </div>
+    )
+  }
+  if (shown === 'missing') return <div className="extAgents-by">{t('gui.agent.hd_missing_by', { by })}</div>
+  return <div className="extAgents-by">{by}</div>
+}
+
+/* The sheet: identity and this moment's status, the fields the reader owns,
+   and the actions the state calls for -- right-aligned, primary rightmost,
+   the destructive one left of it. Every change lands as it is made, so there
+   is no Save. The shared drawer's own close control floats at the top right;
+   the head leaves it room. */
+function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Element {
+  const dHost = store.detailHost()
+  const keyRef = useRef<HTMLInputElement>(null)
+  const [keyTyped, setKeyTyped] = useState(false)
+  const shown = shownOf(row, s)
+  const stage = stageOf(row)
+  const testing = s.testing.includes(row.name) || row.test_running
+  const saveKey = (): void => {
+    const api_key = keyRef.current ? keyRef.current.value.trim() : ''
+    store.saveKey(row, api_key)
+  }
+  const needsKey = stage === 'key'
+  const primaryDisabled = shown === 'pending' || (needsKey && !keyTyped)
+  const primary = (): void => {
+    if (needsKey) saveKey()
+    else if (shown === 'failed') store.retry(row)
+    else connect(row)
+  }
+
+  let actions: JSX.Element | null
+  if (shown === 'missing') {
+    actions = (
+      <button className="mini go" disabled={s.loading} onClick={() => void store.recheck(row)}>
+        {s.loading ? <Spin /> : null}
+        {t(s.loading ? 'gui.agent.checking' : 'gui.agent.recheck')}
+      </button>
+    )
+  } else if (shown === 'on') {
+    actions = row.builtin ? null : (
+      <>
+        <button className="mini danger" onClick={() => store.disconnectRow(row)}>
+          {t('gui.agent.disconnect')}
+        </button>
+        {canTest(row) ? (
+          <button className="mini" disabled={testing} onClick={() => void store.runTest(row)}>
+            {testing ? <Spin /> : null}
+            {t(testing ? 'gui.agent.testing_chip' : 'gui.agent.test_label')}
+          </button>
+        ) : null}
+      </>
+    )
+  } else {
+    actions = (
+      <button className="mini go" disabled={primaryDisabled} onClick={primary}>
+        {shown === 'pending' ? <Spin /> : null}
+        {t(shown === 'pending' ? 'gui.agent.setup_connecting' : shown === 'failed' ? 'gui.retry' : 'gui.agent.connect')}
       </button>
     )
   }
 
-  const commit = (): void => {
-    setEditing(false)
-    const next = multiline ? draft : draft.trim()
-    if (next !== value) onCommit(next)
-  }
-  const onKeyDown = (event: { key: string; preventDefault: () => void }): void => {
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      setEditing(false)
-      setDraft(value)
-    } else if (event.key === 'Enter' && !multiline) {
-      event.preventDefault()
-      commit()
-    }
-  }
-  return multiline ? (
-    <textarea
-      autoFocus
-      aria-label={label}
-      className="xaedit on"
-      onBlur={commit}
-      onChange={(e) => setDraft(e.target.value)}
-      onKeyDown={onKeyDown}
-      rows={3}
-      value={draft}
-    />
-  ) : (
-    <input
-      autoFocus
-      aria-label={label}
-      className="xaedit on"
-      onBlur={commit}
-      onChange={(e) => setDraft(e.target.value)}
-      onKeyDown={onKeyDown}
-      type="text"
-      value={draft}
-    />
-  )
-}
-
-/* One agent's card, drawn into the same #detail dialog the skill and plugin
-   details use -- and with their anatomy, not one of its own: identity block,
-   then a described section. Three things about the agent (who it is, what it is
-   good at, how Raven reaches it) and the one verb its state calls for.
- *
- * What it is not any more: a form. It carried editable name and description
- * fields, a status line with a second copy of the row's own sentence, a test
- * verdict, a transport-migration offer and a save button -- five things to read
- * before the one thing to do. The verdict is back, but as a section of its own
- * with the button that renews it: it was noise as a line in a form nobody had
- * asked a question of, and it is the answer once somebody asks. */
-function AgentCard({ row, testing }: { row: ExtAgentRow; testing: boolean }): JSX.Element {
-  const dHost = store.detailHost()
-  const keyRef = useRef<HTMLInputElement>(null)
-  const stage = stageOf(row)
-  /* An entry that exists takes the key as an edit; one that does not is written
-     from its preset with the key in hand. Either way the reader typed one thing
-     and the agent is connected after it. */
-  const saveKey = (): void => {
-    const api_key = keyRef.current ? keyRef.current.value.trim() : ''
-    if (!api_key) return
-    void store.run(row.configured ? 'update' : 'connect', row, { api_key })
-  }
-  /* An agent with an entry to write. A discovered folder has none yet and
-     `subagents.update` writes one from its own manifest, which is why it counts.
-     A preset nobody has connected has nothing to update, and making the fields
-     live there would leave a typed name either vanishing or -- worse --
-     connecting the agent, which is not what typing a name asks for. Connect
-     first and describe after: neither field is out of reach either way. */
-  const owned = row.configured || !!row.vendored
-  const verdict = testVerdict(row)
-  /* Two ways to be running, and both count: this page started one and is
-     holding the call open, or the rows came back saying somebody else's is
-     still in flight. Reading only the row flag left the button live for the
-     whole two minutes of the test this very card started. */
-  const running = testing || row.test_running
-  /* And the name is narrower than the description. `subagents.update` refuses a
-     rename on a row it had to materialise from a shipped launcher -- "its name
-     binds it to the shipped launcher" -- so offering the control there would be
-     offering a write the server always refuses. The description has no such
-     rule and writes the entry, after which the row is configured and its name
-     is the reader's like any other.
-
-     Narrower again while a test runs, and this one is not about the write: the
-     name is the only handle either side keeps on the run. The server registers
-     the task under it (`_RUNNING[name]`, which is what `subagents.test_cancel`
-     looks in) and records the verdict against it. Rename mid-run and the row
-     the card is now showing matches neither -- Stop disappears, Run comes back
-     and starts a *second* test under the new name, and the first goes on for
-     up to two minutes with nothing pointing at it and a verdict nothing will
-     display. Holding the name for the length of the test is the whole fix; the
-     description keys nothing and stays live. */
-  const renamable = row.configured && !running
-  const edit = (patch: { description?: string; new_name?: string }): void => {
-    void store.run('update', row, patch)
-  }
   return createPortal(
-    <>
-      <div className="pmdhead">
-        <AgentMark preset={row.preset} own={isOwnAgent(row)} />
-        <div className="pmdmeta">
-          <div className="l1">
-            <b>
-              {renamable ? (
-                <Editable
-                  label={t('gui.agent.rename')}
-                  onCommit={(next) => {
-                    if (next) edit({ new_name: next })
-                  }}
-                  placeholder={row.name}
-                  value={row.name}
-                />
-              ) : (
-                row.name
-              )}
-            </b>
-          </div>
-          <div className="l2">{wayIn(row)}</div>
+    <div className="extAgents-sheet" aria-label={row.name} role="document">
+      <div className="extAgents-head">
+        <Tile row={row} />
+        <div className="extAgents-meta">
+          <h3>{row.name}</h3>
+          <StatusLine row={row} s={s} shown={shown} />
         </div>
-        {/* The key stage's button belongs beside its field, not up here where
-            there is nothing to type into. */}
-        <div className="dact">{stage === 'key' ? null : <AgentAct row={row} />}</div>
       </div>
-      {/* An owned agent gets the section whether or not it has a description:
-          the empty one is where the reader writes the first. An unowned row
-          keeps the old rule -- a heading over nothing is a heading about
-          nothing. */}
-      {owned || row.description ? (
-        <div className="pmsec">
-          <div className="cap">{t('gui.plug.sec_about')}</div>
-          <div className="pmdesc">
-            {owned ? (
-              <Editable
-                label={t('gui.agent.redescribe')}
-                multiline
-                onCommit={(next) => edit({ description: next })}
-                placeholder={t('gui.agent.about_none')}
-                value={row.description || ''}
-              />
-            ) : (
-              row.description
-            )}
-          </div>
-        </div>
-      ) : null}
-      {/* Whether it works, which is the one thing about an agent this page
-          could never say: the probe answers "the command is on the machine",
-          and the reader wanting to know whether it can be delegated to had to
-          find out by delegating. Its own section, below the description and
-          not beside the connect button, because it is not a step of connecting
-          -- a connected agent is the one most worth asking about. */}
-      {canTest(row) ? (
-        <div className="pmsec">
-          <div className="cap">{t('gui.agent.sec_test')}</div>
-          <div className="sutest">
-            <span className={verdict.cls ? `led ${verdict.cls}` : 'led'} />
-            <span className="vd">{verdict.text}</span>
-            {/* Stop is offered only while one is running, and it is the ghost
-                of the pair: the reader who opened this section came to test. */}
-            {running ? (
-              <button className="mini ghost" onClick={() => store.stopTest(row)}>
-                {t('gui.agent.test_stop')}
-              </button>
+      <div className="extAgents-body">
+        {shown === 'missing' ? (
+          <>
+            {row.description ? <div className="extAgents-about">{row.description}</div> : null}
+            <InstallBlock row={row} />
+            {s.stillMissing.includes(row.name) && !s.loading ? (
+              <div className="extAgents-probe extAgents-probe-bad">{t('gui.agent.still_missing')}</div>
             ) : null}
-            <button className="mini" disabled={running} onClick={() => void store.runTest(row)}>
-              {running ? t('gui.agent.test_running') : t('gui.agent.test_do')}
-            </button>
-          </div>
-          {/* The detail is worth the line only when it is a reason. A passing
-              cli test says "the agent ran and replied", which the verdict above
-              already said in fewer words. */}
-          {row.last_test_ok === false && row.last_test_detail ? (
-            <div className="pmdesc">{row.last_test_detail}</div>
-          ) : null}
-          {testCosts(row) ? <div className="pmdesc">{t('gui.agent.test_note')}</div> : null}
-        </div>
-      ) : null}
-      {stage === 'key' ? (
-        <div className="pmsec">
-          <div className="cap">{t('gui.agent.key')}</div>
-          <div className="sukey">
-            <KeyInput
-              placeholder={row.has_api_key ? t('gui.agent.key_set') : ''}
-              aria-label={t('gui.agent.key')}
-              ref={keyRef}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') saveKey()
-              }}
+          </>
+        ) : (
+          <>
+            <GoodAt
+              readOnly={!!row.builtin}
+              row={row}
+              saved={(!row.configured && !row.vendored && store.draftOf(row.name)) || row.description || ''}
             />
-            <button className="mini key" onClick={saveKey}>
-              {t('gui.agent.connect')}
-            </button>
-          </div>
-        </div>
-      ) : null}
-    </>,
+            {needsKey ? (
+              <label className="extAgents-fld">
+                <span className="extAgents-k">{t('gui.agent.key')}</span>
+                <KeyInput
+                  aria-label={t('gui.agent.key')}
+                  onChange={(e) => setKeyTyped(!!e.target.value.trim())}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && keyTyped) saveKey()
+                  }}
+                  placeholder={row.has_api_key ? t('gui.agent.key_set') : ''}
+                  ref={keyRef}
+                />
+              </label>
+            ) : null}
+          </>
+        )}
+      </div>
+      <div className="extAgents-act">{actions}</div>
+    </div>,
     dHost,
   )
 }
@@ -472,53 +452,23 @@ export function ExtAgentsApp(): JSX.Element {
   /* The language the page resolved, so a pick repaints this island: every word
      below is a t(key) read at render time (state/lang/store.ts). */
   useSyncExternalStore(lang.subscribe, lang.get)
-  /* One pass, in the order the groups are drawn in, so a row can only be in
-     one of them and a group nobody is in cannot be drawn. The last is the
-     catalogue, and the only one that folds. */
-  const groups: Array<{ grp: Grp; label: string; folds?: boolean }> = [
-    { grp: 'on', label: t('gui.agent.g_on') },
-    { grp: 'switch', label: t('gui.agent.g_switch') },
-    { grp: 'setup', label: t('gui.agent.g_setup') },
-    { grp: 'install', label: t('gui.agent.g_install'), folds: true },
-  ]
-  const listFor = (grp: Grp): ExtAgentRow[] =>
-    s.rows.filter((a) => groupOf(a) === grp).sort((a, b) => costOf(a) - costOf(b))
+  const by = (section: Section): ExtAgentRow[] => ordered(s.rows.filter((row) => sectionOf(row) === section))
+  const on = by('on')
+  const avail = by('avail')
+  const missing = by('missing')
   const sheetRow = s.sheet ? s.rows.find((x) => x.name === s.sheet) : undefined
-  const rows = (list: ExtAgentRow[]): JSX.Element => (
-    <div className="sulist">
-      {list.map((row) => (
-        <AgentRow key={row.name} row={row} sel={s.sheet === row.name} />
-      ))}
-    </div>
-  )
   return (
     <>
       <div className="pmhero">
         <h3>{t('gui.page.agents')}</h3>
       </div>
-      {/* A heading with nothing under it is a heading about nothing: each group
-          appears only when it has rows -- which on a stock install is two of
-          the four, and on a machine with three CLIs installed is three. The
-          ordering inside a group is still by what connecting costs -- that is
-          behaviour, and it does not need a caption to be true. */}
-      {groups.map(({ grp, label, folds }) => {
-        const list = listFor(grp)
-        /* Except while one of them is installing. A build is minutes of
-           downloads with no notification at the end of it, so the row carrying
-           `building` is the one thing on this page a reader is watching -- and
-           folding the group it sits in hides the progress behind the click
-           that started it. The group folds again on its own when the flag
-           clears, because nothing here remembers a decision. */
-        const shuts = folds && !list.some((r) => r.building)
-        return list.length ? (
-          <SetupGroup count={list.length} folds={shuts} key={grp} label={label}>
-            {rows(list)}
-          </SetupGroup>
-        ) : null
-      })}
-      {sheetRow ? (
-        <AgentCard key={`${s.sheet}:${s.epoch}`} row={sheetRow} testing={s.testing.includes(sheetRow.name)} />
-      ) : null}
+      {/* The connected section is always there, even empty: it is the answer to
+          the page's first question. The other two are only drawn with rows in
+          them -- a heading over nothing is a heading about nothing. */}
+      <SectionBlock label={t('gui.agent.g_on')} rows={on} s={s} />
+      {avail.length ? <SectionBlock label={t('gui.agent.g_avail')} rows={avail} s={s} /> : null}
+      {missing.length ? <SectionBlock label={t('gui.agent.g_missing')} rows={missing} s={s} /> : null}
+      {sheetRow ? <AgentSheet key={`${s.sheet}:${s.epoch}`} row={sheetRow} s={s} /> : null}
     </>
   )
 }

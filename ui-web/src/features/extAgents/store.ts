@@ -4,15 +4,23 @@ import * as page from '../../state/page'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
-import { isFound, stageOf } from './source'
+import { isFound, sectionOf, stageOf } from './source'
 
 import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource } from './types'
 
 /* Page state, outside React on purpose: two of the callers that drive this page
- * are not React. The More row opens it (state/navfly.ts) and Esc closes it
+ * are not React. The rail opens it (chrome/Rail.tsx) and Esc closes it
  * (state/escapeOrder.ts) -- so the state lives in a plain store those two can
  * call, and the component subscribes.
  */
+
+/* A write that did not land, kept on the row so the row can say so and offer
+   it again: which write, with what, and the server's own sentence about why. */
+export interface Failure {
+  op: ExtAgentOp
+  args: ExtAgentActArgs
+  detail: string
+}
 
 export interface ExtAgentsState {
   rows: ExtAgentRow[]
@@ -31,13 +39,27 @@ export interface ExtAgentsState {
   testing: string[]
   /* True while a `subagents.list` read is in flight. Reading it directly is
      what lets the wizard's agents step draw a scanning placeholder before the
-     first answer lands, without a page of its own to hold that flag. */
+     first answer lands, and the sheet's re-check button its ring. */
   loading: boolean
   /* Names with a connect or disconnect write in flight. `run` repaints every
      row from one shared refetch, which cannot tell two rows apart while both
      are mid-write -- this is what a caller checks to disable one row's own
-     button rather than the whole list. */
+     button rather than the whole list. The enable gate pings a cli or acp
+     agent for up to 60s, so this is also the length of "connecting". */
   joining: string[]
+  /* The last write that failed, per row. A failure is a state the row is in
+     -- red text where the summary was, Retry where Connect was -- rather than
+     a toast that is gone before the reader looks up. Cleared by the next
+     write on the same row, whichever way that one goes. */
+  failed: Record<string, Failure>
+  /* What the reader typed into a preset's description before connecting it.
+     A preset has no row to write until `subagents.add`, so the text waits
+     here and travels with the add. */
+  drafts: Record<string, string>
+  /* Rows a re-check was asked for and still found absent, so the sheet can
+     say "still not found" rather than nothing. Cleared when the row leaves
+     the missing section. */
+  stillMissing: string[]
 }
 
 const store = makeStore<ExtAgentsState>({
@@ -47,6 +69,9 @@ const store = makeStore<ExtAgentsState>({
   testing: [],
   loading: false,
   joining: [],
+  failed: {},
+  drafts: {},
+  stillMissing: [],
 })
 
 export const { get, subscribe, _resetForTests } = store
@@ -69,10 +94,9 @@ const failure = (e: unknown): string => {
 }
 
 /* `load(true)` re-measures availability. Opening the page is one caller --
-   the group heading there is a fresh answer every time the reader arrives,
-   which is what the re-check button used to be for -- and the wizard's agents
-   step is the other, on its own schedule rather than through page
-   navigation. */
+   the section heading there is a fresh answer every time the reader arrives --
+   the sheet's re-check button is another, and the wizard's agents step a third,
+   on its own schedule rather than through page navigation. */
 export async function load(probe: boolean): Promise<void> {
   set({ loading: true })
   try {
@@ -96,10 +120,18 @@ export function close(): void {
   page.show(null)
 }
 
-/* Every write goes through here: one place that toasts the failure and repaints
-   from whatever the source answered, so no caller has to remember either. */
-export async function run(op: ExtAgentOp, row?: ExtAgentRow, args?: ExtAgentActArgs): Promise<void> {
+/* Every write goes through here: one place that repaints from whatever the
+   source answered, so no caller has to remember to. A failure is toasted
+   unless the caller says it will show it itself; either way it is returned,
+   as the server's sentence, so a caller that keeps failures per row can. */
+export async function run(
+  op: ExtAgentOp,
+  row?: ExtAgentRow,
+  args?: ExtAgentActArgs,
+  opts: { quiet?: boolean } = {},
+): Promise<string | null> {
   let rows = get().rows
+  let failedWith: string | null = null
   /* A rename moves the open sheet, but only once the rows that carry the new
      name are here: the sheet is resolved by looking the name up in rows, so
      moving it any earlier resolves to nothing, and the shared drawer -- which
@@ -111,13 +143,90 @@ export async function run(op: ExtAgentOp, row?: ExtAgentRow, args?: ExtAgentActA
     rows = await source().act(op, row as ExtAgentRow, args || {})
     if (row && args?.new_name && args.new_name !== row.name) renamed = args.new_name
   } catch (e) {
-    toast(t('gui.agent.failed', { detail: failure(e) }))
+    failedWith = failure(e)
+    if (!opts.quiet) toast(t('gui.agent.failed', { detail: failedWith }))
   }
   const landed: Partial<ExtAgentsState> = { rows, epoch: get().epoch + 1 }
   if (renamed && get().sheet === row?.name) landed.sheet = renamed
   set(landed)
   if (get().sheet && !rows.some((x) => x.name === get().sheet)) closeSheet()
   watchBuilds(rows)
+  return failedWith
+}
+
+const without = (map: Record<string, Failure>, name: string): Record<string, Failure> => {
+  if (!(name in map)) return map
+  const next = { ...map }
+  delete next[name]
+  return next
+}
+
+/* One row's write, held on `joining` for its length and remembered on `failed`
+   when it does not land. The page's verbs all come through here; the wizard's
+   `connect` / `disconnect` below keep their toast. */
+export async function act(row: ExtAgentRow, op: ExtAgentOp, args: ExtAgentActArgs = {}): Promise<void> {
+  set({ joining: [...get().joining, row.name], failed: without(get().failed, row.name) })
+  try {
+    const detail = await run(op, row, args, { quiet: true })
+    if (detail !== null) set({ failed: { ...get().failed, [row.name]: { op, args, detail } } })
+  } finally {
+    set({ joining: get().joining.filter((name) => name !== row.name) })
+  }
+}
+
+/* The same write again, as it was asked for. */
+export function retry(row: ExtAgentRow): void {
+  const last = get().failed[row.name]
+  if (last) void act(row, last.op, last.args)
+}
+
+/* Connect, by what the row's stage calls for: a preset not yet on the roster is
+   added (with whatever the reader wrote about it while it was still a preset),
+   one switched off has its flag put back, a stale one -- its preset moved to
+   another transport -- is removed and re-added. The page confirms the stale
+   case before calling this; the key case never reaches here, since the
+   credential is typed in the sheet and saved from there. */
+export function connectRow(row: ExtAgentRow): void {
+  const stage = stageOf(row)
+  if (stage === 'add') {
+    const description = get().drafts[row.name]
+    void act(row, 'connect', description ? { description } : {})
+  } else if (stage === 'stale') void act(row, 'migrate')
+  else void act(row, 'toggle', { enabled: true })
+}
+
+/* Only marks it unavailable in the registry: the entry, the folder and the
+   sessions it already ran all stay, and connect puts it back. */
+export function disconnectRow(row: ExtAgentRow): void {
+  void act(row, 'toggle', { enabled: false })
+}
+
+/* The credential, and the connect that spends it: an entry that exists takes
+   the key as an edit; one that does not is written from its preset with the
+   key in hand. */
+export function saveKey(row: ExtAgentRow, api_key: string): void {
+  if (!api_key) return
+  void act(row, row.configured ? 'update' : 'connect', { api_key })
+}
+
+/* What this agent is good at, as the reader words it. A row that exists takes
+   it as a write; a preset holds it until the connect that writes the row. */
+export function describe(row: ExtAgentRow, text: string): void {
+  if (row.configured || row.vendored) void act(row, 'update', { description: text })
+  else set({ drafts: { ...get().drafts, [row.name]: text } })
+}
+
+/* What the reader typed for a preset, or nothing. */
+export const draftOf = (name: string): string | undefined => get().drafts[name]
+
+/* Measure the machine again for one absent row, and remember when it is still
+   absent afterwards -- that is the one answer the sheet has to say out loud. */
+export async function recheck(row: ExtAgentRow): Promise<void> {
+  await load(true)
+  const now = get().rows.find((r) => r.name === row.name)
+  const still = !!now && sectionOf(now) === 'missing'
+  const rest = get().stillMissing.filter((name) => name !== row.name)
+  set({ stillMissing: still ? [...rest, row.name] : rest })
 }
 
 /* The wizard's one connect, choosing the write by the row's stage the way the
@@ -225,7 +334,7 @@ function watchBuilds(rows: ExtAgentRow[]): void {
 
 /* ── the shared detail drawer ────────────────────────────────────── */
 
-/** Where the card renders: the host the shared drawer keeps for this island. */
+/** Where the sheet renders: the host the shared drawer keeps for this island. */
 export function detailHost(): HTMLDivElement {
   return detail.host('extAgents')
 }
