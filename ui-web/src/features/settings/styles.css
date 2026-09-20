@@ -409,6 +409,6 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
 .settings-xrow.settings-dim .settings-xn {color:var(--muted)}
 .settings-xname {display:inline-flex; align-items:center; gap:9px; flex:1; min-width:0; font:inherit; color:inherit; background:none; border:0; padding:0; text-align:left; cursor:pointer}
 .settings-xname .settings-xn {font-size:13.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-.settings-xname .settings-xd {font-size:11.5px; color:var(--faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0}
+.settings-xname .settings-xd {margin-left:9px; font-size:11.5px; color:var(--faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0}
 .settings-xrow.settings-open .settings-chev {transform:rotate(90deg); border-color:var(--amber); color:var(--gold); background:var(--amber-dp)}
 .settings-lnkico {margin-left:6px; vertical-align:middle}
