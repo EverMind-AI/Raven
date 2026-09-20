@@ -734,6 +734,30 @@ def test_a_proven_walk_survives_a_separator_later_in_the_command(fenced: ExecToo
     assert refusal(fenced, command) is None
 
 
+@pytest.mark.parametrize(
+    "command",
+    ["pushd ..; ls", "pushd /; cat etc/passwd", "pushd -- ..; ls"],
+    ids=["up", "root", "after-terminator"],
+)
+def test_pushd_leaves_by_the_same_door_as_cd(fenced: ExecTool, command: str) -> None:
+    """`pushd` is a `cd` that also remembers where it was.
+
+    The walk read `cd` alone, so the builtin that moves the shell exactly as
+    far, and is on every interactive user's fingers, stepped over the fence
+    untouched. Its destination is checked the same way; what the stack does
+    afterwards is why the walk stops carrying (see the test below).
+    """
+    assert refusal(fenced, command) is not None
+
+
+def test_a_stack_return_stops_the_walk_from_carrying(fenced: ExecTool) -> None:
+    """`popd` and a bare `pushd` take their destination off a stack this
+    cannot see, so a walk carried past one would be guessing. The stricter
+    reading holds instead, the same answer a bracket already gets.
+    """
+    assert refusal(fenced, "pushd subdir && popd && cd .. && ls") is not None
+
+
 def test_a_subshell_makes_the_walk_strict_again(fenced: ExecTool) -> None:
     """A `cd` inside a subshell does not outlive it, and the splitter has
     already dropped the bracket that said so. Carrying the directory forward

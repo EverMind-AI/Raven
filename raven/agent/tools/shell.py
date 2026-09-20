@@ -468,6 +468,12 @@ class ExecTool(Tool):
         nothing -- and after any of them, every relative path in the rest of
         the command resolves somewhere the operator did not allow.
 
+        ``pushd`` moves the shell exactly as far and is read the same way. Its
+        stack is what this cannot follow: ``popd`` and a bare ``pushd`` take
+        their destination from entries earlier pushes already cleared, so the
+        walk falls back to the shallowest of those, which is where the command
+        began.
+
         Each `cd` starts from where the last one landed, so
         `cd subdir && cd ..` ends where it began rather than being read as
         leaving. Which is knowable only where the separator says so: `&&` runs
@@ -490,7 +496,13 @@ class ExecTool(Tool):
             # segment with the bracket already gone, and the bracket is now
             # one more separator that proves nothing.
             tokens = _unwrap_command_wrappers(raw_tokens)
-            if not tokens or tokens[0] != "cd":
+            if not tokens or tokens[0] not in ("cd", "pushd", "popd"):
+                continue
+            if tokens[0] == "popd":
+                # A stack return lands on a directory some earlier push put
+                # there, and each of those was cleared on the way in. The
+                # shallowest of them is where the command began.
+                here = cls._either(here, [cwd])
                 continue
             arguments = list(tokens[1:])
             while arguments and arguments[0] in ("-L", "-P"):
@@ -502,6 +514,12 @@ class ExecTool(Tool):
                 arguments.pop(0)
             elif arguments and arguments[0] == "-":
                 # ``$OLDPWD`` is a directory some earlier ``cd`` already passed.
+                continue
+            if not arguments and tokens[0] == "pushd":
+                # A bare `pushd` swaps the top two entries rather than naming a
+                # destination. Both were cleared on the way in, so the worst
+                # case is the one `popd` gets.
+                here = cls._either(here, [cwd])
                 continue
             target = arguments[0] if arguments else env.get("HOME", "")
             if not target:
