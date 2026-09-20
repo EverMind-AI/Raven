@@ -79,8 +79,8 @@ plugins:
             Repo Layout: 仓库布局
             Developers: 开发者
             Development: 开发
-            Proactivity Design: 主动性设计
-            Proactivity Reference: 主动性参考
+            Proactivity Guide: 主动性使用指南
+            Proactivity Design and Implementation: 主动性设计与实现
             Self-Evolution Map: 自进化映射
             Tracing API: 追踪 API
 
@@ -97,13 +97,13 @@ nav:
       - Docker Deployment: docker.md
       - Launch WebUI: webui.md
       - Sandbox: sandbox.md
+      - Proactivity Guide: proactivity.md
   - Reference:
       - Architecture: architecture.md
       - Command Reference: commands.md
       - Repo Layout: repo-layout.md
   - Developers:
       - Development: development.md
-      - Proactivity Design: proactivity-design.md
-      - Proactivity Reference: proactivity.md
+      - Proactivity Design and Implementation: proactivity-design.md
       - Self-Evolution Map: self-evolution-map.md
       - Tracing API: tracing-api.md

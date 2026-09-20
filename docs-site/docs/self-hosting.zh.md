@@ -8,12 +8,16 @@ Docker 部署需要 Docker Engine 和 Docker Compose v2。从源码运行需要 
 
 ## <span class="em-section-icon em-section-icon--compose" aria-hidden="true"></span>使用 Docker Compose 启动 { #compose }
 
-Compose 配置会将 WebUI 和 Python 环境一并构建到镜像中，无需在宿主机上分别构建：
+使用 Compose 构建并运行当前源码。它会将 WebUI 和 Python 环境一并构建到镜像中，
+无需在宿主机上分别构建：
 
 ```bash
 cd docker
-docker compose up
+docker compose up --build
 ```
+
+如需运行已配置的镜像而不构建当前源码，请使用 `docker compose up --no-build`。
+仅运行 `docker compose up` 并不保证重新构建本地源码改动。
 
 打开 <http://127.0.0.1:18793>。容器运行完整的 `gateway` 引擎。在 **设置 > 模型服务商（Settings > Model providers）** 中添加的模型服务商会在下一轮生效，无需重启。
 
@@ -21,9 +25,12 @@ docker compose up
 
 ## <span class="em-section-icon em-section-icon--configuration" aria-hidden="true"></span>配置 { #configuration }
 
-Compose 先加载 `docker/.env` 中的默认值，再应用可选文件 `docker/.env.local` 中的覆盖配置。凭据和部署专用配置应写入 `.env.local`，该文件会被 Git 忽略。
+Compose 使用 Shell 环境变量和 `docker/.env` 对镜像、发布端口及构建参数进行插值。
+服务的可选文件 `docker/.env.local` 用于覆盖模型服务商凭据等容器运行时变量，
+不会自动参与 Compose 插值。凭据应写入该文件，构建和端口覆盖值则通过 Shell 环境变量
+或显式的 `--env-file` 选项传入。示例见 [Docker 部署](docker.md#configure-environment-values)。
 
-Raven 将配置、会话、工作区文件、日志和记忆保存在 `RAVEN_HOME` 下。Compose 部署中，该目录为 `/data`，由 `raven-data` 卷提供持久化存储。升级或重启时请保留该卷。`docker compose down -v` 会删除卷及其中的全部数据。
+Raven 将配置、会话、工作区文件、日志和记忆保存在 `RAVEN_HOME` 下。Compose 部署中，该目录为 `/data/.raven`，位于挂载到 `/data` 的 `raven-data` 卷内。升级或重启时请保留该卷。`docker compose down -v` 会删除卷及其中的全部数据。
 
 ## <span class="em-section-icon em-section-icon--build" aria-hidden="true"></span>构建 Docker 镜像 { #build-a-docker-image }
 
@@ -40,7 +47,10 @@ make docker-build DOCKER_IMAGE=raven:local
 docker build -t raven:local --build-arg RAVEN_EXTRAS="channels,tools,sandbox" .
 ```
 
-要通过 Compose 运行本地镜像，请设置 `RAVEN_IMAGE=raven:local`，然后在 `docker/` 目录运行 `docker compose up`。可以先导出该环境变量，也可以将赋值写在命令前。对应的 Makefile 命令为 `RAVEN_IMAGE=raven:local make docker-up`。运行 `make docker-down` 可停止服务。
+要通过 Compose 运行本地镜像且不重新构建，请设置 `RAVEN_IMAGE=raven:local`，然后在
+`docker/` 目录运行 `docker compose up --no-build`。可以先导出该环境变量，也可以将赋值
+写在命令前。如需通过 Makefile 重新构建并启动当前源码，则使用
+`RAVEN_IMAGE=raven:local make docker-up`。运行 `make docker-down` 可停止服务。
 
 ## <span class="em-section-icon em-section-icon--source" aria-hidden="true"></span>从源码启动服务 { #from-source }
 

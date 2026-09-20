@@ -1,6 +1,9 @@
 # Raven Sandbox — User Manual
 
-Sandbox execution runs every shell command and stdio MCP server process inside an isolated **boxlite microVM**, preventing them from touching the host filesystem, network, or kernel outside the declared boundaries.
+With sandboxing enabled, shell commands and stdio MCP server processes dispatched
+through `BoxliteExecutor` run in a **Boxlite microVM**. The VM has its own kernel,
+resource limits, and network policy. Mounted directories remain accessible
+according to their configured permissions, including the shared workspace.
 
 ---
 
@@ -33,21 +36,29 @@ Sandbox execution runs every shell command and stdio MCP server process inside a
 
 ## 1. Installation
 
-The sandbox backend (`boxlite`) is an optional dependency:
+The sandbox backend (`boxlite`) is an optional dependency. Install it from your
+Raven source checkout:
 
 ```bash
-pip install raven[sandbox]
+uv sync --extra sandbox
 ```
 
-Without this extra, the fallback `DirectExecutor` is always used regardless of config, and no microVM is started.
+When the backend is `"auto"` or `"boxlite"`, a missing dependency raises
+`SandboxInitError`. Raven does not silently fall back to host execution.
+`DirectExecutor` is used only when the backend is `"none"` or no sandbox configuration
+is supplied.
 
-The `sandbox` extra pins `boxlite==0.8.2`. Boxlite's Python API changed in minor versions; the pin prevents silent breakage on upgrades. Revisit when 0.9.x is available.
+The `sandbox` extra pins `boxlite==0.9.5` in `pyproject.toml`. Use the pinned
+version to keep the backend compatible with Raven's executor implementation.
 
 ---
 
 ## 2. Configuration
 
-Add a `sandbox` block inside `tools` in your `config.json` / `config.yaml`:
+Add a `sandbox` block inside `tools` in your `config.json`. The loader accepts
+JSON, not YAML. Invalid JSON produces a warning and falls back to defaults,
+including `tools.sandbox.backend = "none"`, so check startup warnings before
+relying on sandbox isolation:
 
 ```json
 {
@@ -65,7 +76,7 @@ Add a `sandbox` block inside `tools` in your `config.json` / `config.yaml`:
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `backend` | `"none" \| "auto" \| "boxlite"` | `"none"` | `"none"` → host (no isolation); `"auto"` → probe and use best available; `"boxlite"` → force boxlite. Both `"auto"` and `"boxlite"` probe availability at startup and raise `SandboxInitError` on failure. |
+| `backend` | `"none" \| "auto" \| "boxlite"` | `"none"` | `"none"` runs commands on the host. Both `"auto"` and `"boxlite"` currently select Boxlite and raise `SandboxInitError` if it cannot be initialized. |
 | `image` | `str` | `"ubuntu:22.04"` | OCI image used for the microVM root filesystem. |
 | `cpus` | `int` | `2` | vCPU count allocated to the VM. |
 | `memory_mib` | `int` | `2048` | RAM in MiB. |
@@ -213,7 +224,12 @@ class ExecResult:
     def as_text(self, max_chars: int = 10_000) -> str: ...
 ```
 
-`as_text()` concatenates stdout, a `STDERR:` block (if non-empty), and `Exit code: N` into a single string. The exit-code line is always present. When the output exceeds `max_chars` the middle is truncated with a `... (N chars truncated) ...` marker.
+`as_text()` combines stdout, a `STDERR:` block when stderr contains non-whitespace
+characters, and an `Exit code: N` line into a single string before truncation.
+Output longer than `max_chars` is truncated in the middle, with a
+`... (N chars truncated) ...` marker indicating the omitted content. Very small
+limits can truncate the exit-code line itself; read `result.exit_code` directly
+when the complete exit code is required independently of the formatted output.
 
 **Lifecycle — explicit start/stop:**
 
@@ -343,7 +359,6 @@ from raven.agent.loop import AgentLoop
 from raven.sandbox import SandboxConfig
 
 loop = AgentLoop(
-    bus=bus,
     provider=provider,
     workspace=workspace,
     sandbox_config=SandboxConfig(
@@ -396,7 +411,11 @@ await loop.close_mcp()   # closes MCP connections and the sandbox executor toget
 
 **MCP stdio servers:**
 
-When `sandbox.backend` is `"auto"` or `"boxlite"`, stdio MCP servers are launched **inside the VM** rather than on the host. Three asyncio bridge tasks translate between boxlite's streaming execution API and the `anyio` `MemoryObjectStream` pairs that `ClientSession` expects:
+When `sandbox.backend` is `"auto"` or `"boxlite"`, stdio MCP servers are launched
+**inside the VM** rather than on the host. Raven creates two pairs of `anyio`
+memory object streams and passes a receive stream and a send stream to
+`ClientSession`. Three asyncio tasks bridge stdout and stdin to those streams
+and forward stderr to the application log:
 
 - `_stdout_bridge` — reads VM stdout chunks, buffers until `\n`, parses JSON-RPC, wraps in `SessionMessage`, forwards to read stream
 - `_stdin_bridge` — receives `SessionMessage` from write stream, extracts the inner `JSONRPCMessage`, serialises to JSON + newline, writes to VM stdin
@@ -415,7 +434,14 @@ Non-JSON lines on stdout (e.g. npm download progress during `npx -y ...` startup
 
 ## 7. Wiring into `SubagentManager`
 
-Each sub-agent gets its **own isolated VM instance** — stronger isolation than sharing the parent's VM.
+With sandboxing enabled, the built-in `raven-loop` subagent backend uses its
+own sandbox executor for shell commands rather than sharing the parent agent's
+VM. This does not place the entire subagent process or its host-side filesystem
+tools inside the VM.
+
+External ACP and CLI agents still launch as host processes. Passing a sandbox
+executor to a backend does not sandbox that backend's own process or tools;
+configure isolation in the external agent separately when required.
 
 ```python
 from raven.agent.subagent import SubagentManager
@@ -424,7 +450,6 @@ from raven.sandbox import SandboxConfig
 manager = SubagentManager(
     provider=provider,
     workspace=workspace,
-    bus=bus,
     sandbox_config=SandboxConfig(backend="boxlite"),
 )
 
@@ -432,17 +457,21 @@ manager = SubagentManager(
 handle = await manager.spawn(task="run the test suite and report failures")
 ```
 
-Internally, `_run_subagent()` calls `build_executor(self._sandbox_config, self.workspace, sandbox_dir=get_sandbox_dir)` and wraps the mini agent loop in `async with executor:`, so the VM is started when the sub-agent begins and torn down when it finishes — regardless of whether the task succeeds or raises.
+`_run_subagent()` creates an executor for the subagent's workspace and passes it
+to the backend inside `async with executor:`. The VM starts before backend
+execution and is cleaned up when the task finishes, including when it fails.
+Only operations the backend sends through that executor run inside the VM.
 
-Each subagent VM incurs its own cold-start (~2–5 s). For workloads that spawn many subagents concurrently, consider pre-pulling the image (`pip install raven[sandbox]` + running the integration tests once) to eliminate the image-pull component of that cost.
+Each subagent VM incurs its own cold-start (~2–5 s). For workloads that spawn many subagents concurrently, consider pre-pulling the image (`uv sync --extra sandbox` + running the integration tests once) to eliminate the image-pull component of that cost.
 
-When `AgentLoop` creates a `SubagentManager` it passes down the same `sandbox_config`, so the inheritance is automatic:
+`AgentLoop` passes its `sandbox_config` to `SubagentManager`, so the executors
+created for subagent tasks inherit the same configuration:
 
 ```python
 # In AgentLoop.__init__ (simplified)
 self.subagents = SubagentManager(
     ...,
-    sandbox_config=sandbox_config,   # same config, isolated VM per sub-agent
+    sandbox_config=sandbox_config,
 )
 ```
 
@@ -531,12 +560,12 @@ result = await executor.exec("pip install numpy", timeout=10)
 
 | Requirement | Notes |
 |-------------|-------|
-| Python 3.11+ | Check with `python3 --version` |
+| Python 3.12+ | Check with `python3 --version` |
 | [uv](https://docs.astral.sh/uv/) | Preferred package manager; install with `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | boxlite (integration tests only) | macOS Apple Silicon M1+ **or** Linux x86_64/ARM64 with `/dev/kvm` |
 | Node.js / npx (MCP roundtrip test only) | Provided by the `node:20-slim` OCI image — no local Node required |
 
-Unit tests have **no** boxlite or KVM requirement and run on any machine where Python 3.11+ is available.
+Unit tests have **no** boxlite or KVM requirement and run on any machine where Python 3.12+ is available.
 
 ---
 
@@ -553,13 +582,8 @@ cd raven
 uv sync
 ```
 
-If you don't have `uv`, you can use plain `pip` instead:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate     # macOS / Linux
-# .venv\Scripts\activate      # Windows (PowerShell)
-```
+`uv sync` creates the project environment and installs the locked dependencies.
+Use `uv run` for the commands below; manual activation is not required.
 
 ---
 
@@ -570,16 +594,14 @@ source .venv/bin/activate     # macOS / Linux
 ```bash
 # Core project + dev tools (pytest, pytest-asyncio, etc.)
 uv sync
-
-# The mcp package is required for the three MCP bridge unit tests;
-# without it those tests auto-skip.
-uv add --dev "mcp>=1.0"
 ```
+
+MCP is already a core dependency and does not need to be added separately.
 
 **Integration tests** — additionally require the sandbox optional extra:
 
 ```bash
-# Install boxlite (pinned to 0.8.2) and anyio
+# Install boxlite (pinned to 0.9.5) and anyio
 uv sync --extra sandbox
 ```
 
@@ -636,7 +658,7 @@ uv run python -m pytest tests/test_sandbox_unit.py -k "translate_cwd"
 ### 9.5 Run integration tests
 
 Integration tests start real boxlite VMs. They require:
-- `pip install raven[sandbox]` (or `uv sync --extra sandbox`)
+- The sandbox extra, installed with `uv sync --extra sandbox`
 - macOS Apple Silicon M1+ **or** Linux with `/dev/kvm` accessible
 
 On Linux without `/dev/kvm` the entire file is **automatically skipped** — no failure, no action needed.
@@ -710,14 +732,14 @@ uv run python -m pytest "tests/integration/test_sandbox_real_vm.py::TestBoxliteS
 
 ```bash
 uv sync --extra sandbox
-# or
-pip install "raven[sandbox]"
 ```
 
-**`ModuleNotFoundError: No module named 'mcp'`** (3 bridge tests skip or fail)
+**`ModuleNotFoundError: No module named 'mcp'`**
+
+Restore the core dependencies in the project environment:
 
 ```bash
-uv add --dev "mcp>=1.0"
+uv sync
 ```
 
 **`PanicException: Another BoxliteRuntime is already using directory`**

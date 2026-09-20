@@ -10,8 +10,6 @@ which parts are present but unwired.
 `benchmarks/appworld/evolve/**`, locate the SOP clause here; if your
 change alters a correspondence, update this document in the same PR.
 
----
-
 ## 0. The fundamental architectural difference (read first)
 
 The SOP's loop (§3 / §8.3) is **Claude-driven**: no driver program — a human
@@ -32,8 +30,6 @@ The SOP itself (§8.3) judges this route: "packaging into one-click tools is a
 large-benchmark task". Raven chose to build the integration now, buying
 cross-window hand-off freedom and mechanized methodology (see §5, "Where we
 exceed the SOP").
-
----
 
 ## 1. SOP §0 general rules -> implementation
 

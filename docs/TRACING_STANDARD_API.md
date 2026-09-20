@@ -1,8 +1,10 @@
 # Tracing Standard API — v1 (draft)
 
-The contract between **raven** (and any other adopter) and **raven-tracing**.
+The contract between **raven** (and any other adopter) and the in-tree
+`raven.tracing` implementation. `raven-tracing` is the planned standalone
+distribution, not a separate dependency of the current Raven package.
 
-Principle: *tracing owns the standard, the app adopts it.* raven-tracing defines
+Principle: *tracing owns the standard, the app adopts it.* `raven.tracing` defines
 what a span is, which fields each span kind carries, and how it renders. An app
 (raven) instruments itself by calling one small, stable facade — `trace.span(...)`
 — at points it chooses. Neither side depends on the other's internals; the only
@@ -24,7 +26,7 @@ the **write-side** standard that produces those records.
 One import, one primary call:
 
 ```python
-from raven_tracing import trace
+from raven.tracing import trace
 
 with trace.span("llm.call", {"llm.provider": provider, "llm.model": model}) as s:
     resp = do_call(...)
@@ -54,7 +56,7 @@ root of a turn is a `session.turn` span; everything else nests beneath it.
 
 | method | effect |
 |---|---|
-| `s.set(attrs=None, **kw)` | merge attributes onto the span (dotted-key mapping and/or bare kwargs) |
+| `s.set(attributes=None, **kw)` | merge attributes onto the span (dotted-key mapping and/or bare kwargs) |
 | `s.artifact(key, payload, *, kind="json")` | persist a large payload out-of-line; attach `<key>.artifact_path/_sha1/_bytes` + a truncated `preview`. Use for prompts / tool IO / recall results. |
 | `_spans.address_items(items)` | content-address a list of messages under `audit-artifacts/_messages/`; returns `{"$msg": sha1}` references to embed in a payload. See `audit.artifact.v2` below. |
 | `s.event(name)` | append a timeline event `{time, name}` |
@@ -72,20 +74,25 @@ Read-only: `s.trace_id`, `s.span_id`, `s.name`.
 
 ### Hard guarantees (why an adopter is safe)
 
-1. **No-op when off.** If disabled (config) or no SDK backend is active,
-   `trace.span(...)` yields a no-op handle: no I/O, near-zero overhead, the
-   `with` block runs normally.
-2. **Never breaks the caller.** The facade swallows *its own* failures (bad
-   attribute, disk error, SDK bug) and logs at debug level. It re-raises the
-   *application's* exception unchanged (after recording `status=ERROR`). A
-   tracing bug can never alter or crash the host's control flow.
-3. **Import-safe.** Importing `raven_tracing` and calling the API must succeed
+1. **No-op when off.** When tracing is disabled, `trace.span(...)` yields a
+   no-op handle: no spans or artifacts are written, and the `with` block runs
+   normally.
+2. **Error boundaries.** Span creation, span emission, and artifact persistence
+   catch internal exceptions and log them at debug level. Exceptions raised
+   inside the `with` block are re-raised after marking the span as an error.
+   Handle methods still require correctly typed inputs: for example,
+   `s.set(42)` raises `TypeError`, which also propagates out of the block.
+   Pass a mapping as `s.set({...})` or `s.set(attributes={...})`;
+   `attrs` is not an alias and would be stored as an ordinary attribute key.
+3. **Import-safe.** Importing `raven.tracing` and calling the API must succeed
    even with no config present.
 
 ### `@trace.instrument(...)` — the decorator (primary adopter mechanism)
 
 Adopters instrument a method by annotating it — the body is untouched, so this
 does not change core logic (only adds an observation wrapper)::
+
+    from raven.observability import semconv
 
     @trace.instrument("llm.call", extract=semconv.llm_call)
     async def chat_with_retry(self, ...): ...
@@ -97,7 +104,7 @@ wraps a sync **or** async method:
   even on error); fills final attributes/artifacts. `bound_args` is the call's
   arguments by name; `result` is the return (`None` on error); `exc` the raised
   exception (`None` on success). The standard extractors live in
-  :mod:`raven.tracing.semconv` (`llm_call`, `tool_call`, `memory_*`, …).
+  `raven.observability.semconv` (`llm_call`, `tool_call`, `memory_*`, …).
 - `seed(bound_args) -> dict` — returns `session_key` / `channel` / `chat_id` to
   open a *root* span (a turn) whose identity every child inherits.
 - `on_open(span, bound_args)` — runs right after open, before the body; used to
@@ -215,9 +222,9 @@ Rules:
 
 ## 4. Adopter integration contract (raven)
 
-1. Declare `raven-tracing` as a default dependency (default-on extra
-   `raven[tracing]`), so it ships with raven and survives `uv tool upgrade`.
-2. `from raven_tracing import trace` at instrumentation sites; wrap the operation
+1. Tracing ships inside Raven as `raven.tracing`; no separate `raven-tracing`
+   dependency or `raven[tracing]` extra is required.
+2. `from raven.tracing import trace` at instrumentation sites; wrap the operation
    in `with trace.span(...)`. Instrumentation lives in the app's own code, moves
    with refactors, and is visible in diffs (no external monkeypatch to silently
    break).
@@ -233,6 +240,9 @@ the code and shows up in diffs (never silently breaks on a refactor).
 
 ## 5. Versioning & governance
 
+The API versioning rules below are proposed for the standalone distribution;
+they do not describe an independently versioned package shipped by Raven today.
+
 - The API + semantic conventions are versioned together as `standard-api.v1`,
   independent of the app.
 - **Additive** changes (new optional attribute, new span name/kind) → minor bump,
@@ -240,8 +250,8 @@ the code and shows up in diffs (never silently breaks on a refactor).
 - **Breaking** changes (rename/remove an attribute or the API signature) → major
   bump + a migration note; adopters pin a supported range and warn (not silently
   degrade) on mismatch.
-- A conformance snapshot test (frozen span names + required fields) guards the
-  contract in CI; changing it without a version bump fails the build.
+- A conformance snapshot test (frozen span names + required fields) should guard
+  the standalone contract in CI and require a version bump for contract changes.
 - On-disk record format is versioned separately as `audit.span.v1`
   (defined in `raven/tracing/spans.py`); the two move independently.
 
@@ -252,14 +262,15 @@ the code and shows up in diffs (never silently breaks on a refactor).
 In-tree, complete. Every span family (turn / llm / tool / memory / skill.inject /
 plugin.load / subagent) is instrumented with `@trace.instrument` on raven's own
 methods; there is no monkeypatch and no `instrument.install()` — the auto-probe
-module was removed. `semconv.py` owns the standard attribute/artifact builders.
+module was removed. `raven.observability.semconv` already owns the Raven-specific
+attribute/artifact builders, separately from the tracing machinery.
 
 Remaining for the standalone-OSS phase (P4), none blocking in-tree use:
 - Make the import optional: raven core hard-imports `raven.tracing` at module load
   (decorators applied at class-definition time), so it must ship with raven; a
   no-op fallback shim is needed before tracing can be a truly optional extra.
-- Move the raven-specific extractors (`semconv.py`) to raven's side; keep only the
-  generic API + schema + viewer in the standalone package.
-- Drop raven branding from the standalone package (`FRAMEWORK`, `RAVEN_*` env,
-  `~/.raven` paths) and the `raven.config`/`raven.token_wise` soft imports.
+- Keep the Raven-specific extractors in `raven.observability.semconv`; package
+  only the generic API + schema + viewer in the standalone distribution.
+- Decouple Raven-specific defaults and path resolution (`FRAMEWORK`, `RAVEN_*`
+  env, `~/.raven` paths) from the standalone package.
 - Freeze `standard-api.v1`; publish `raven-tracing`; raven default-depends on it.
