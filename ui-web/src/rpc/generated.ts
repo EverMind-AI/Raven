@@ -2973,7 +2973,7 @@ export interface FsDirsResult {
    */
   ok: boolean;
   /**
-   * Subdirectories only, dotfiles omitted, sorted by name, capped at 500.
+   * Subdirectories only, dotfiles omitted, sorted by name; only the first 500 names are examined.
    */
   entries: FsDirEntry[];
 }

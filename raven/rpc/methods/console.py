@@ -1575,23 +1575,39 @@ async def fs_dirs(params: dict, *, agent_loop_factory=None) -> dict:
 
     Every entry carries ``ok``, the answer ``validate_override`` would give
     ``session.create`` for that path, so the picker can grey out the agent's
-    own data instead of offering a folder the create is going to refuse.
+    own data instead of offering a folder the create is going to refuse. A
+    directory that merely CONTAINS that data answers false too (the validator
+    refuses agent home's ancestors), which says nothing about its children --
+    the picker lets such a row be entered and only withholds the pick.
+
+    The cap bounds the scan, not just the answer, as ``fs_list`` does: the
+    first 500 names are stat'ed and the rest are never looked at, so a
+    caller-chosen directory of thirty thousand files costs 500 stats, not
+    thirty thousand. And the walk runs off the event loop, as ``fs_read``
+    does, because the directory is the caller's choice and a slow mount would
+    otherwise stall every other client on the shared socket.
     """
-    from raven.agent.workdir import validate_override
     from raven.config.loader import load_config
 
     raw = str(params.get("path") or "")
     target = Path(raw).expanduser() if raw else Path.home()
     if not target.is_absolute():
         raise ConfigValidationError(f"path must be absolute, got {raw!r}", data={"field": "path"})
+    home = load_config().workspace_path
+    return await asyncio.to_thread(_walk_dirs, target, home)
+
+
+def _walk_dirs(target: Path, agent_home: Path) -> dict:
+    """The blocking half of ``fs.dirs``: resolve, list, stat, judge."""
+    from raven.agent.workdir import validate_override
+
     target = target.resolve()
     if not target.is_dir():
         raise ConfigValidationError(f"not a directory: {target}", data={"field": "path"})
-    home = load_config().workspace_path
 
     def allowed(path: Path) -> bool:
         try:
-            validate_override(path, home)
+            validate_override(path, agent_home)
         except ValueError:
             return False
         return True
@@ -1601,15 +1617,13 @@ async def fs_dirs(params: dict, *, agent_loop_factory=None) -> dict:
     except OSError as e:
         raise ConfigValidationError(str(e)) from None
     entries = []
-    for child in children:
+    for child in children[:_FS_MAX_ENTRIES]:
         try:
             if not child.is_dir():
                 continue
         except OSError:
             continue
         entries.append({"name": child.name, "path": str(child), "ok": allowed(child)})
-        if len(entries) >= _FS_MAX_ENTRIES:
-            break
     return {
         "path": str(target),
         "parent": None if target.parent == target else str(target.parent),

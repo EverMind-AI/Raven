@@ -790,7 +790,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .pop .sec { padding: 8px 9px 2px; font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em;
   text-transform: uppercase; color: var(--faint); }
 .pop .rulel { height: 1px; margin: 5px 4px; background: var(--line-soft); }
-.pop .prow:disabled { opacity: .45; cursor: not-allowed; }
+/* A folder that cannot itself be the workspace, but can be entered. */
+.pop .prow.off .txt { color: var(--faint); }
+.pop .prow.off .pic { opacity: .55; }
 /* The browser: where we are, then what is here, then the two ways out. The path
    is drawn from its tail because the tail is the part that changes as one
    descends and the part that names the folder. */

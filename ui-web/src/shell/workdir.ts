@@ -256,8 +256,13 @@ function renderBrowse(body: HTMLElement): void {
     const r = row(e.name, '', false, () => void browse(e.path))
     r.setAttribute('role', 'button')
     r.removeAttribute('aria-checked')
+    /* `ok` says whether THIS directory may be the working directory, and the
+       validator also refuses every ancestor of raven's own data -- so a folder
+       that merely contains it answers false while the folders inside it are
+       fine. The row stays a way in, marked; only the pick is withheld, which
+       the use button below does on the listing's own `ok`. */
     if (!e.ok) {
-      r.disabled = true
+      r.classList.add('off')
       r.title = t('gui.wd.blocked')
     }
     list.appendChild(r)

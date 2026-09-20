@@ -135,11 +135,17 @@ describe('the working-directory chip', () => {
   it('walks the gateway listing and offers the folder only where the engine would take it', async () => {
     const wd = await load()
     const asked: Array<string | undefined> = []
+    /* Agent home is /srv/raven-home/workspace here, so /srv/raven-home is an
+       ancestor: not a workspace itself, but its `projects` is a fine one. That
+       is the one kind of row the gateway ever marks false, since it never
+       lists dotted names. */
     const listings: Record<string, DirListing> = {
-      '': { path: '/home/me', parent: '/home', home: '/home/me', ok: true,
-        entries: [{ name: 'proj', path: '/home/me/proj', ok: true }, { name: '.raven-data', path: '/home/me/.raven', ok: false }] },
-      '/home/me/proj': { path: '/home/me/proj', parent: '/home/me', home: '/home/me', ok: true, entries: [] },
-      '/home/me/.raven': { path: '/home/me/.raven', parent: '/home/me', home: '/home/me', ok: false, entries: [] },
+      '': { path: '/srv', parent: '/', home: '/home/me', ok: true,
+        entries: [{ name: 'proj', path: '/srv/proj', ok: true }, { name: 'raven-home', path: '/srv/raven-home', ok: false }] },
+      '/srv/proj': { path: '/srv/proj', parent: '/srv', home: '/home/me', ok: true, entries: [] },
+      '/srv/raven-home': { path: '/srv/raven-home', parent: '/srv', home: '/home/me', ok: false,
+        entries: [{ name: 'projects', path: '/srv/raven-home/projects', ok: true }, { name: 'workspace', path: '/srv/raven-home/workspace', ok: false }] },
+      '/srv/raven-home/projects': { path: '/srv/raven-home/projects', parent: '/srv/raven-home', home: '/home/me', ok: true, entries: [] },
     }
     composer.browseDirs = async (p) => { asked.push(p); return listings[p || '']! }
     const staged: Array<string | null> = []
@@ -149,21 +155,32 @@ describe('the working-directory chip', () => {
     byText('gui.wd.open').click()
     await Promise.resolve(); await Promise.resolve()
     expect(asked).toEqual([undefined])
-    expect(document.querySelector('.wdpath .p')?.textContent?.replace(/\u200e/g, '')).toBe('/home/me')
-    expect(document.querySelector('.wdpath .p')?.getAttribute('title')).toBe('/home/me')
-    expect(rows().map((r) => r.querySelector('.nm')?.textContent)).toEqual(['proj', '.raven-data'])
-    expect(byText('.raven-data').disabled).toBe(true)
-    expect(byText('.raven-data').title).toBe('gui.wd.blocked')
-
-    byText('proj').click()
+    expect(document.querySelector('.wdpath .p')?.textContent?.replace(/\u200e/g, '')).toBe('/srv')
+    expect(document.querySelector('.wdpath .p')?.getAttribute('title')).toBe('/srv')
+    expect(rows().map((r) => r.querySelector('.nm')?.textContent)).toEqual(['proj', 'raven-home'])
+    /* Marked and explained, but still a way in: the folders under it may be
+       perfectly good workspaces, and the panel offers no typed path to reach
+       them any other way. */
+    const anc = byText('raven-home')
+    expect(anc.disabled).toBe(false)
+    expect(anc.classList.contains('off')).toBe(true)
+    expect(anc.title).toBe('gui.wd.blocked')
+    anc.click()
     await Promise.resolve(); await Promise.resolve()
-    expect(asked).toEqual([undefined, '/home/me/proj'])
+    expect(asked.at(-1)).toBe('/srv/raven-home')
+    /* Inside it the pick is withheld, since the directory itself is refused. */
+    const useHere = () => [...document.querySelectorAll<HTMLButtonElement>('.wdfoot button')].find((b) => b.textContent === 'gui.wd.use')!
+    expect(useHere().disabled).toBe(true)
+    expect(byText('projects').classList.contains('off')).toBe(false)
+    expect(byText('workspace').classList.contains('off')).toBe(true)
+    byText('projects').click()
+    await Promise.resolve(); await Promise.resolve()
+    expect(asked.at(-1)).toBe('/srv/raven-home/projects')
     expect(document.querySelector('.wdlist .note')?.textContent).toBe('gui.wd.empty')
-    const use = [...document.querySelectorAll<HTMLButtonElement>('.wdfoot button')].find((b) => b.textContent === 'gui.wd.use')!
-    expect(use.disabled).toBe(false)
-    use.click()
-    expect(staged).toEqual(['/home/me/proj'])
-    expect(name().textContent).toBe('proj')
+    expect(useHere().disabled).toBe(false)
+    useHere().click()
+    expect(staged).toEqual(['/srv/raven-home/projects'])
+    expect(name().textContent).toBe('projects')
     expect(pop().dataset.open).toBe('false')
   })
 

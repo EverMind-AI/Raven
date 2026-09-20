@@ -5336,8 +5336,8 @@
       "zh": "返回"
     },
     "gui.wd.blocked": {
-      "en": "Raven cannot work here: it is inside its own data",
-      "zh": "这里不能作为工作区：是 Raven 自己的数据目录"
+      "en": "Not a workspace: Raven's own data is here or beneath it. Its folders may still be.",
+      "zh": "这里不能作为工作区：Raven 自己的数据在此处或其下；里面的文件夹可以"
     },
     "gui.wd.empty": {
       "en": "No subfolders",
