@@ -6915,10 +6915,6 @@
       "en": "Meta tools",
       "zh": "元工具"
     },
-    "gui.settings.tools.meta_elsewhere": {
-      "en": "switched on by the tool-search setting, not here",
-      "zh": "由工具检索设置控制，不在这里开关"
-    },
     "gui.settings.setup.web_search": {
       "en": "Web search",
       "zh": "联网搜索"
