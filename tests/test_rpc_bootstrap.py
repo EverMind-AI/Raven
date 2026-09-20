@@ -445,6 +445,38 @@ async def test_the_owning_teardown_cancels_subagents_before_the_spine_seals(monk
     assert loop.order.index("cancel_all") < loop.order.index("turn_teardown")
 
 
+async def test_a_cancel_that_fails_does_not_keep_the_spine_from_sealing(monkeypatch) -> None:
+    """The cancel now runs ahead of the turn teardown, so a failure in it would
+    be a failure in front of the spine's own teardown -- logged and stepped
+    over, the way the rest of this teardown treats its steps."""
+    from raven.rpc import spine as spine_module
+
+    loop = _FakeLoop(_FakeCron())
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: loop)
+
+    async def _failing_cancel() -> None:
+        raise RuntimeError("cancel blew up")
+
+    loop.subagents.cancel_all = _failing_cancel
+    real_build = spine_module.build_rpc_spine
+
+    def _recording_build(*args, **kwargs):
+        scheduler, hub, ids, teardown = real_build(*args, **kwargs)
+
+        async def _teardown() -> None:
+            loop.order.append("turn_teardown")
+            await teardown()
+
+        return scheduler, hub, ids, _teardown
+
+    monkeypatch.setattr(spine_module, "build_rpc_spine", _recording_build)
+
+    stack = await bootstrap.build_rpc_stack(_sink)
+    await stack.teardown()
+
+    assert "turn_teardown" in loop.order
+
+
 def test_the_served_shutdown_stops_subagents_before_it_stops_the_backend() -> None:
     """Closing the memory adapter while a sub-agent run is still going fails
     that run's next write for a reason the service had no part in."""
