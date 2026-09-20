@@ -16,7 +16,7 @@ over its two longest steps.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -56,6 +56,8 @@ class PhaseOutcome:
     profile_error: str = ""
     skills: SkillImportSummary | None = None
     skill_error: str = ""
+    # A stop arrived while the phases ran; whatever landed before it stays.
+    cancelled: bool = False
 
 
 def profile_entries(items: Sequence[tuple[Scanner, ScanResult]]) -> list[str]:
@@ -112,17 +114,17 @@ def skill_source_for(platform: Platform) -> SkillSource | None:
     return make() if make is not None else None
 
 
-def skill_sources(items: Sequence[tuple[Scanner, ScanResult]]) -> list[SkillSource]:
-    """One skill source per platform present in the run that has skills to offer.
+def skill_sources(platforms: Iterable[Platform]) -> list[SkillSource]:
+    """One skill source per platform in scope that has skills to offer.
 
     Skills are directories, not message sources, so they never travel as a
-    ScanResult; a platform's presence among the scanned items is what puts its
-    skills in scope.
+    ScanResult; the scope is the platforms the run was asked for, so a
+    platform whose only importable data is skills still gets them installed.
     """
-    present = {result.platform for _scanner, result in items}
+    wanted = set(platforms)
     sources: list[SkillSource] = []
     for platform in _SKILL_SOURCES:
-        source = skill_source_for(platform) if platform in present else None
+        source = skill_source_for(platform) if platform in wanted else None
         if source is not None:
             sources.append(source)
     return sources
@@ -135,18 +137,33 @@ async def run_phases(
     *,
     provider: LLMProvider | None,
     model: str,
+    platforms: Iterable[Platform] | None = None,
     on_phase: OnPhase | None = None,
+    cancel_path: Path | None = None,
 ) -> PhaseOutcome:
-    """Mirror the profile, then install the skills, for the platforms in ``items``.
+    """Mirror the profile, then install the skills, for the run's platforms.
 
-    ``on_phase(kind, done, total)`` reports each phase's own progress: the
-    profile mirror is one classification call per entry and the skill install
-    one tree copy per skill, and neither can otherwise be told from a hang.
+    ``platforms`` is the run's scope; left out, it is the platforms the items
+    came from. ``cancel_path`` is the stop file the message pass polls, polled
+    here too between profile entries and between skills, because a stop is
+    offered while the phases run. ``on_phase(kind, done, total)`` reports each
+    phase's own progress: one classification call per entry and one tree copy
+    per skill, neither of which can otherwise be told from a hang.
+
+    How the phases ended is written to ``state`` -- pending while they run,
+    then done, failed or cancelled -- so a reader of the file can tell a run
+    whose phases finished from one the gateway lost halfway through them.
     """
+    scope = set(platforms) if platforms is not None else {result.platform for _scanner, result in items}
+
+    def cancelled() -> bool:
+        return cancel_path is not None and cancel_path.exists()
+
+    state.set_phases("pending")
     profile: ImportedSections | None = None
     profile_error = ""
     entries = profile_entries(items)
-    if entries:
+    if entries and not cancelled():
         from raven.importer.hermes_user_md import import_user_md_sections
         from raven.memory_engine import MemoryStore
 
@@ -157,6 +174,7 @@ async def run_phases(
                 provider=provider,
                 model=model,
                 on_progress=(lambda done, total: on_phase("profile", done, total)) if on_phase else None,
+                cancelled=cancelled,
             )
             logger.info("profile mirror: {} entries landed", len(profile.written))
         except Exception as exc:
@@ -165,7 +183,9 @@ async def run_phases(
 
     summaries: list[SkillImportSummary] = []
     skill_errors: list[str] = []
-    for source in skill_sources(items):
+    for source in skill_sources(scope):
+        if cancelled():
+            break
         try:
             summaries.append(
                 await install_skills(
@@ -173,17 +193,22 @@ async def run_phases(
                     workspace,
                     state,
                     on_progress=(lambda done, total: on_phase("skills", done, total)) if on_phase else None,
+                    cancelled=cancelled,
                 )
             )
         except Exception as exc:
             logger.warning("{} skill import failed: {}", source.platform.value, exc)
             skill_errors.append(f"{source.platform.value}: {exc}")
 
+    stopped = cancelled()
+    errors = ([f"profile: {profile_error}"] if profile_error else []) + skill_errors
+    state.set_phases("cancelled" if stopped else "failed" if errors else "done", errors)
     return PhaseOutcome(
         profile=profile,
         profile_error=profile_error,
         skills=_total(summaries) if summaries else None,
         skill_error="; ".join(skill_errors),
+        cancelled=stopped,
     )
 
 

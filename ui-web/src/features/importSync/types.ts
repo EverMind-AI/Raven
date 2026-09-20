@@ -6,6 +6,7 @@ import type { ResultOf } from '../../rpc/generated'
 
 export type ImportStatus = ResultOf<'import.status'>
 export type ImportPhase = NonNullable<ImportStatus['phase']>
+export type ImportPhases = NonNullable<ImportStatus['phases']>
 export type ImportTier = 'memory_files' | 'full'
 
 export interface ImportStarted {

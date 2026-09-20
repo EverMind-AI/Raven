@@ -17,14 +17,15 @@ type Platform = ResultOf<'import.scan'>['platforms'][number]
 type Status = ResultOf<'import.status'>
 type Counts = Status['by_platform'][string]
 type Phase = NonNullable<Status['phase']>
+type Phases = NonNullable<Status['phases']>
 type Tier = 'memory_files' | 'full'
 
 const PLATFORMS: Platform[] = [
-  { platform: 'claude_code', scannable: true, memory_files: 31, conversations: 284, estimated_size: 18_400_000 },
-  { platform: 'codex', scannable: false, memory_files: 0, conversations: 0, estimated_size: 0 },
-  { platform: 'kimicode', scannable: false, memory_files: 0, conversations: 0, estimated_size: 0 },
-  { platform: 'hermes', scannable: true, memory_files: 8, conversations: 52, estimated_size: 2_100_000 },
-  { platform: 'openclaw', scannable: false, memory_files: 0, conversations: 0, estimated_size: 0 },
+  { platform: 'claude_code', scannable: true, memory_files: 31, conversations: 284, estimated_size: 18_400_000, skills: 3 },
+  { platform: 'codex', scannable: false, memory_files: 0, conversations: 0, estimated_size: 0, skills: 0 },
+  { platform: 'kimicode', scannable: false, memory_files: 0, conversations: 0, estimated_size: 0, skills: 0 },
+  { platform: 'hermes', scannable: true, memory_files: 8, conversations: 52, estimated_size: 2_100_000, skills: 12 },
+  { platform: 'openclaw', scannable: false, memory_files: 0, conversations: 0, estimated_size: 0, skills: 0 },
 ]
 
 /* The message pass, in five steps; then the profile phase and the skill
@@ -43,6 +44,7 @@ export function createImport(env: FixtureEnv): ImportFixture {
   let tier: Tier | undefined
   let platforms: string[] = []
   let phase: Phase | undefined
+  let phases: Phases | undefined
   const by: Record<string, Counts> = {}
 
   const totals = (): { total: number; submitted: number; failed: number } => {
@@ -85,6 +87,7 @@ export function createImport(env: FixtureEnv): ImportFixture {
         tier = p.tier
         platforms = picked.map((row) => row.platform)
         phase = undefined
+        phases = undefined
         for (let step = 1; step <= STEPS; step += 1) {
           when((RUN_MS * step) / STEPS, () => {
             for (const c of Object.values(by)) c.submitted = Math.max(c.submitted, Math.round((c.total * step) / STEPS))
@@ -94,11 +97,13 @@ export function createImport(env: FixtureEnv): ImportFixture {
             }
           })
         }
-        when(RUN_MS + PHASE_MS * 0.5, () => { phase = { kind: 'profile', current: 1, total: 3 } })
+        /* The phases behind the pass: pending on file while they run, done when
+           they end; a stop during them leaves the file saying cancelled. */
+        when(RUN_MS + PHASE_MS * 0.5, () => { phases = { status: 'pending', errors: [] }; phase = { kind: 'profile', current: 1, total: 3 } })
         when(RUN_MS + PHASE_MS * 1.0, () => { phase = { kind: 'profile', current: 3, total: 3 } })
         when(RUN_MS + PHASE_MS * 1.5, () => { phase = { kind: 'skills', current: 0, total: 2 } })
         when(RUN_MS + PHASE_MS * 2.0, () => { phase = { kind: 'skills', current: 2, total: 2 } })
-        when(RUN_MS + PHASE_MS * 2.5, () => { phase = undefined; running = false })
+        when(RUN_MS + PHASE_MS * 2.5, () => { phase = undefined; phases = { status: 'done', errors: [] }; running = false })
         return { started: true, total, detail: '' }
       },
       'import.status': () => ({
@@ -106,12 +111,14 @@ export function createImport(env: FixtureEnv): ImportFixture {
         ...totals(),
         by_platform: Object.fromEntries(Object.entries(by).map(([k, v]) => [k, { ...v }])),
         phase: phase ? { ...phase } : null,
+        phases: phases ? { ...phases, errors: [...phases.errors] } : null,
         tier: tier ?? null,
         platforms: [...platforms],
       }),
       'import.stop': () => {
         const was = running
         running = false
+        if (phase) phases = { status: 'cancelled', errors: [] }
         phase = undefined
         return { stopped: was }
       },

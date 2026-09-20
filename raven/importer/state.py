@@ -96,6 +96,22 @@ class ImportState:
             meta.pop("tier", None)
         else:
             meta["tier"] = tier
+        # A new run's phases have not happened yet; the previous run's verdict
+        # must not read as this one's.
+        meta.pop("phases", None)
+        self._flush()
+
+    def set_phases(self, status: str, errors: Iterable[str] = ()) -> None:
+        """Record how the post-import phases stand for the run on file.
+
+        ``pending`` while they run, then ``done``, ``failed`` (with what went
+        wrong) or ``cancelled``. The message counts alone cannot tell a run
+        whose phases finished from one the gateway lost halfway through them,
+        since every source is already settled by the time the phases begin.
+        """
+        data = self._ensure_loaded()
+        meta = data.setdefault("meta", {})
+        meta["phases"] = {"status": status, "errors": list(errors)}
         self._flush()
 
     def get_summary(self) -> dict[str, int]:

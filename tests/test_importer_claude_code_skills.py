@@ -79,3 +79,26 @@ async def test_install_reports_progress_before_each_copy_and_once_at_the_end(tmp
     )
 
     assert seen == [(0, 2), (1, 2), (2, 2)]
+
+
+async def test_a_stop_between_skills_leaves_the_rest_for_the_next_run(tmp_path: Path) -> None:
+    claude = tmp_path / ".claude"
+    _skill(claude / "skills", "a", frontmatter_name="a")
+    _skill(claude / "skills", "b", frontmatter_name="b")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    state = ImportState(path=tmp_path / "state.json")
+    landed = workspace / "skills" / "claude_code"
+
+    summary = await install_skills(
+        ClaudeCodeSkillSource(claude),
+        workspace,
+        state,
+        cancelled=lambda: (landed / "a" / "SKILL.md").is_file(),
+    )
+
+    assert (summary.installed, summary.skipped, summary.failed) == (1, 1, 0)
+    assert (landed / "a" / "SKILL.md").is_file()
+    assert not (landed / "b").exists()
+    assert state.is_submitted(Platform.CLAUDE_CODE, "skill-a")
+    assert not state.is_submitted(Platform.CLAUDE_CODE, "skill-b")

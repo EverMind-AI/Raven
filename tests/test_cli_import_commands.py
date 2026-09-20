@@ -20,6 +20,8 @@ from raven.cli.import_commands import (
     _build_and_run,
     _format_skill_summary,
     _make_profile_provider,
+    _pick_platform,
+    _platform_choice_label,
     _print_summary,
     import_app,
 )
@@ -982,3 +984,50 @@ class TestImportRefusesToRunWithoutMemory:
         from raven.cli import import_commands
 
         assert "_require_memory_service_ready" in inspect.getsource(import_commands._build_and_run)
+
+
+class TestSkillCountsFollowThePlatform:
+    """The count shown before consent has to be the count of the directories the
+    run then copies: each platform's own, not Hermes' for everyone."""
+
+    def test_a_platform_row_names_its_own_skills(self) -> None:
+        results = _make_scan_results()
+        assert "2 skills" in _platform_choice_label(Platform.CLAUDE_CODE, 11, results, 2)
+        assert "skills" not in _platform_choice_label(Platform.CLAUDE_CODE, 11, results, 0)
+
+    async def test_the_platform_picker_shows_each_platforms_count(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        results = _make_scan_results() + [_scan_result("h1", platform=Platform.HERMES, kind=SourceKind.MEMORY_FILE)]
+        offered: list[str] = []
+
+        class _Select:
+            def __init__(self, _q: str, *, choices: list[dict[str, Any]], **_k: Any) -> None:
+                offered.extend(c["name"] for c in choices)
+
+            async def ask_async(self) -> Platform:
+                return Platform.HERMES
+
+        monkeypatch.setattr("raven.cli.import_commands.die_if_not_tty", lambda *_a, **_k: None)
+        monkeypatch.setattr("raven.cli.import_commands._require_questionary", lambda: SimpleNamespace(select=_Select))
+
+        picked = await _pick_platform(results, {Platform.CLAUDE_CODE: 2, Platform.HERMES: 5})
+
+        assert picked is Platform.HERMES
+        claude_row = next(row for row in offered if row.startswith("Claude Code"))
+        hermes_row = next(row for row in offered if row.startswith("Hermes"))
+        assert "2 skills" in claude_row
+        assert "5 skills" in hermes_row
+
+    def test_the_consent_line_counts_the_selected_platforms_skills(self) -> None:
+        async def _count(platform: Platform | None) -> int:
+            return {Platform.CLAUDE_CODE: 2, Platform.HERMES: 5}.get(platform, 0)  # type: ignore[arg-type]
+
+        with (
+            patch("raven.importer.scanners.scan_all", new=AsyncMock(return_value=_make_scan_results())),
+            patch("raven.cli.import_commands._importable_skill_count", new=_count),
+        ):
+            result = runner.invoke(
+                import_app, ["run", "--platform", "claude_code", "--tier", "memory_files"], input="n\n"
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "About to import 4 items (2 memory files, 2 skills, 0 conversations)" in result.stdout

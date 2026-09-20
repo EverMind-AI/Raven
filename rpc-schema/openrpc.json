@@ -8552,7 +8552,8 @@
                   "scannable",
                   "memory_files",
                   "conversations",
-                  "estimated_size"
+                  "estimated_size",
+                  "skills"
                 ],
                 "properties": {
                   "platform": {
@@ -8568,6 +8569,9 @@
                     "type": "integer"
                   },
                   "estimated_size": {
+                    "type": "integer"
+                  },
+                  "skills": {
                     "type": "integer"
                   }
                 }
@@ -8708,6 +8712,31 @@
                 },
                 "total": {
                   "type": "integer"
+                }
+              }
+            },
+            "phases": {
+              "type": ["object", "null"],
+              "additionalProperties": false,
+              "required": [
+                "status",
+                "errors"
+              ],
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "done",
+                    "failed",
+                    "cancelled"
+                  ]
+                },
+                "errors": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
                 }
               }
             },

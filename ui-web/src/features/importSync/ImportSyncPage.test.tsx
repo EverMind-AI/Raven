@@ -12,7 +12,7 @@ import type { ImportStatus, ImportSyncSource, ImportTier } from './types'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const status = (patch: Partial<ImportStatus> = {}): ImportStatus => ({
-  running: false, total: 0, submitted: 0, failed: 0, by_platform: {}, phase: null, tier: null, platforms: [], ...patch,
+  running: false, total: 0, submitted: 0, failed: 0, by_platform: {}, phase: null, phases: null, tier: null, platforms: [], ...patch,
 })
 
 const runs: [string[], ImportTier][] = []
@@ -85,7 +85,7 @@ describe('the import row', () => {
   })
 
   it('says how many did not make it and offers a retry, with nothing to dismiss', () => {
-    draw(status({ total: 18, submitted: 15, failed: 3 }))
+    draw(status({ total: 18, submitted: 15, failed: 3, tier: 'full', platforms: ['claude_code'], phases: { status: 'done', errors: [] } }))
     expect(row()?.className).toContain('importSync-done')
     expect(row()?.className).toContain('importSync-warn')
     expect(row()?.textContent).toContain('gui.importSync.failed_n:{"n":3}')
@@ -94,8 +94,22 @@ describe('the import row', () => {
     expect(x()).toBeNull()
   })
 
+  it('shows a stopped run it cannot ask for again as paused with nothing to click', () => {
+    draw(status({ total: 18, submitted: 11 }))
+    expect(row()?.className).toContain('importSync-paused')
+    expect(main().disabled).toBe(true)
+    expect(main().getAttribute('aria-label')).toBeNull()
+    expect(x()).toBeNull()
+  })
+
+  it('counts a failed phase among what did not make it', () => {
+    draw(status({ total: 2, submitted: 2, tier: 'full', platforms: ['hermes'], phases: { status: 'failed', errors: ['profile: bad byte'] } }))
+    expect(row()?.textContent).toContain('gui.importSync.failed_n:{"n":1}')
+    expect(main().getAttribute('aria-label')).toBe('gui.importSync.retry')
+  })
+
   it('a clean finish carries a dismiss that takes the row down', async () => {
-    draw(status({ total: 4, submitted: 4, tier: 'full', platforms: ['hermes'] }))
+    draw(status({ total: 4, submitted: 4, tier: 'full', platforms: ['hermes'], phases: { status: 'done', errors: [] } }))
     expect(row()?.textContent).toContain('gui.importSync.done')
     expect(x()?.getAttribute('aria-label')).toBe('gui.importSync.dismiss')
 

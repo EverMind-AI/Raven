@@ -24,7 +24,7 @@ const source = (scan: ImportScan): OnboardSource => ({
 const READY: ImportScan = {
   ready: true,
   reason: '',
-  platforms: [{ platform: 'hermes', scannable: true, memory_files: 8, conversations: 52, estimated_size: 0 }],
+  platforms: [{ platform: 'hermes', scannable: true, memory_files: 8, conversations: 52, estimated_size: 0, skills: 0 }],
 }
 
 afterEach(() => {

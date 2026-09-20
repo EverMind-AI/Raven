@@ -51,8 +51,8 @@ const SCAN_CLAUDE: ImportScan = {
   ready: true,
   reason: '',
   platforms: [
-    { platform: 'claude_code', scannable: true, memory_files: 31, conversations: 284, estimated_size: 1 },
-    { platform: 'codex', scannable: false, memory_files: 0, conversations: 0, estimated_size: 0 },
+    { platform: 'claude_code', scannable: true, memory_files: 31, conversations: 284, estimated_size: 1, skills: 2 },
+    { platform: 'codex', scannable: false, memory_files: 0, conversations: 0, estimated_size: 0, skills: 0 },
   ],
 }
 
@@ -229,6 +229,7 @@ describe('the onboarding wizard', () => {
     const rows = [...document.querySelectorAll('.ob-row:not(.ob-tier)')]
     expect(rows.length).toBe(2)
     expect(rows[0]!.textContent).toContain('gui.onb.sync_counts:{"files":31,"convs":284}')
+    expect(rows[0]!.textContent).toContain('gui.onb.sync_skills:{"n":2}')
     expect(rows[0]!.querySelector('[role=switch]')).not.toBeNull()
     expect(rows[1]!.textContent).toContain('gui.onb.sync_unsupported')
     expect(rows[1]!.querySelector('[role=switch]')).toBeNull()

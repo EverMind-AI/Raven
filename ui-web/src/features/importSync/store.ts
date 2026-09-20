@@ -64,10 +64,16 @@ export function set(patch: Partial<ImportSyncState>): void {
 
 const source = (): ImportSyncSource => ds('importSync')
 
-/* One run's identity: its request plus its final counts. Two runs of the same
-   request that ended the same way are the same row to a reader. */
+/* One run's identity: its request, its final counts and how its phases ended.
+   Two runs of the same request that ended the same way are the same row to a
+   reader. */
 export const signature = (st: ImportStatus): string =>
-  `${st.tier ?? ''}|${(st.platforms ?? []).join(',')}|${st.total}|${st.submitted}|${st.failed}`
+  `${st.tier ?? ''}|${(st.platforms ?? []).join(',')}|${st.total}|${st.submitted}|${st.failed}|${st.phases?.status ?? ''}`
+
+/* Whether the run on file can be asked for again: only when the file says
+   exactly what was asked. A run the CLI started records no request, and a
+   guess at one (say, "full") could turn a minutes-long import into hours. */
+export const resumable = (st: ImportStatus): boolean => !!st.tier && (st.platforms?.length ?? 0) > 0
 
 export function view(s: ImportSyncState): RowView {
   const st = s.status
@@ -75,15 +81,25 @@ export function view(s: ImportSyncState): RowView {
   const settled = st ? st.submitted + st.failed : 0
   const pct = total ? Math.min(100, Math.round((settled / total) * 100)) : 0
   if (s.starting && !st?.running) return { ...HIDDEN, kind: 'scan' }
-  if (!st || !total) return HIDDEN
+  if (!st) return HIDDEN
   const phase = st.phase ?? null
+  const phases = st.phases ?? null
+  const again = resumable(st)
   if (st.running) {
     const phasePct = phase && phase.total ? Math.min(100, Math.round((phase.current / phase.total) * 100)) : pct
     return { kind: phase ? 'wrap' : 'run', pct: phase ? phasePct : pct, failed: st.failed, phase, clickable: false }
   }
-  if (settled < total) return { kind: 'paused', pct, failed: st.failed, phase: null, clickable: true }
+  if (!total && !phases) return HIDDEN
+  /* Short of the total: the message pass was stopped, or the gateway lost it. */
+  if (settled < total) return { kind: 'paused', pct, failed: st.failed, phase: null, clickable: again }
+  /* Settled, but the phases behind the pass never finished: no verdict on file
+     for a run that recorded its request (lost before the phases began), or a
+     verdict that says they were still running or were stopped. */
+  const unfinished = phases === null ? again : phases.status === 'pending' || phases.status === 'cancelled'
+  if (unfinished) return { kind: 'paused', pct: 100, failed: st.failed, phase: null, clickable: again }
+  const failed = st.failed + (phases?.status === 'failed' ? phases.errors.length : 0)
   if (s.dismissed === signature(st)) return HIDDEN
-  return { kind: 'done', pct: 100, failed: st.failed, phase: null, clickable: st.failed > 0 }
+  return { kind: 'done', pct: 100, failed, phase: null, clickable: failed > 0 && again }
 }
 
 const failure = (e: unknown): string => {
@@ -135,8 +151,8 @@ export async function start(platforms: string[], tier: ImportTier): Promise<Impo
    "resume" and "retry" with nothing to choose between. */
 export async function resume(): Promise<void> {
   const st = get().status
-  if (!st || st.running) return
-  await start(st.platforms ?? [], st.tier ?? 'full')
+  if (!st || st.running || !resumable(st)) return
+  await start(st.platforms ?? [], st.tier as ImportTier)
 }
 
 export async function stop(): Promise<void> {

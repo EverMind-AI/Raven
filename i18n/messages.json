@@ -2111,6 +2111,10 @@
       "en": "Not supported",
       "zh": "暂不支持"
     },
+    "gui.onb.sync_skills": {
+      "en": "{n} skills",
+      "zh": "{n} 个技能"
+    },
     "gui.onb.tier": {
       "en": "What to import",
       "zh": "导入范围"

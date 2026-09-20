@@ -172,6 +172,7 @@ async def _build_and_run(
                 provider=_make_profile_provider(config),
                 model=config.agents.defaults.model,
                 on_phase=_phase_progress(on_phase),
+                cancel_path=cancel_path,
             )
         return ImportRunResult(
             summary=summary,
@@ -545,22 +546,21 @@ async def _run_async(
         return
 
     # Skills never travel as ScanResults, so every count derived from them omits
-    # skills. Discovered once here and narrowed after the platform is known,
-    # because discovery walks the whole Hermes skill tree.
-    skill_count = await _importable_skill_count(platform_filter)
+    # skills. Counted per platform, because the platform picked below decides
+    # which skills the run installs, and the consent line has to name those.
+    platforms_found = sorted({r.platform for r in all_results})
+    skill_counts = {p: await _importable_skill_count(p) for p in platforms_found}
 
     if platform_filter is None:
-        platforms_found = sorted({r.platform for r in all_results})
         if len(platforms_found) == 1:
             platform_filter = platforms_found[0]
         else:
-            picked = await _pick_platform(all_results, skill_count)
+            picked = await _pick_platform(all_results, skill_counts)
             if picked is None:
                 return
             platform_filter = picked
             all_results = [r for r in all_results if r.platform == platform_filter]
-    if platform_filter is not Platform.HERMES:
-        skill_count = 0
+    skill_count = skill_counts.get(platform_filter, 0)
 
     if tier is not None:
         try:
@@ -671,7 +671,7 @@ def _platform_choice_label(platform: Platform, width: int, results: list[ScanRes
     return f"{name:<{width}} · {', '.join(parts)}"
 
 
-async def _pick_platform(results: list[ScanResult], skill_count: int) -> Platform | None:
+async def _pick_platform(results: list[ScanResult], skill_counts: dict[Platform, int]) -> Platform | None:
     die_if_not_tty("raven import run --platform <platform> --tier <tier> --yes")
     try:
         questionary = _require_questionary()
@@ -683,7 +683,7 @@ async def _pick_platform(results: list[ScanResult], skill_count: int) -> Platfor
     width = max(len(PLATFORM_DISPLAY_NAMES.get(p.value, p.value)) for p in platforms)
     choices = [
         {
-            "name": _platform_choice_label(p, width, results, skill_count if p is Platform.HERMES else 0),
+            "name": _platform_choice_label(p, width, results, skill_counts.get(p, 0)),
             "value": p,
         }
         for p in platforms

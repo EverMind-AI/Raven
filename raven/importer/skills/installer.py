@@ -53,12 +53,15 @@ async def install_skills(
     state: ImportState,
     *,
     on_progress: Callable[[int, int], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> SkillImportSummary:
     """Copy the source's skills into the pool under the platform's own source label.
 
     ``on_progress(done, total)`` is called before each copy and once more at the
     end, the way the profile mirror reports: a copy of a large skill tree is
-    the one step here a caller cannot otherwise tell from a hang.
+    the one step here a caller cannot otherwise tell from a hang. ``cancelled``
+    is asked before each copy; a stop leaves the rest for the next run, which
+    finds them absent from the state and copies them then.
     """
     discovered = await source.discover()
     wanted = [s for s in discovered if s.origin not in _SKIP_ORIGINS]
@@ -69,6 +72,9 @@ async def install_skills(
     claimed: set[str] = set()
     claimed_registry_names: set[str] = set()
     for index, skill in enumerate(wanted):
+        if cancelled is not None and cancelled():
+            skipped += len(wanted) - index
+            break
         if on_progress is not None:
             on_progress(index, len(wanted))
         target = _target_for(skill, dest_root, claimed)

@@ -93,14 +93,13 @@ class TestProfileEntries:
 
 
 class TestSkillSources:
-    def test_follow_the_platforms_present_in_the_run(self) -> None:
-        both = [_item(_result(Platform.HERMES, "user-md")), _item(_result(Platform.CLAUDE_CODE, "m"))]
-        claude_only = [_item(_result(Platform.CLAUDE_CODE, "m"))]
-        codex_only = [_item(_result(Platform.CODEX, "m"))]
+    def test_follow_the_platforms_in_scope(self) -> None:
+        both = {Platform.HERMES, Platform.CLAUDE_CODE}
 
         assert [type(s) for s in skill_sources(both)] == [HermesSkillSource, ClaudeCodeSkillSource]
-        assert [type(s) for s in skill_sources(claude_only)] == [ClaudeCodeSkillSource]
-        assert skill_sources(codex_only) == []
+        assert [type(s) for s in skill_sources({Platform.CLAUDE_CODE})] == [ClaudeCodeSkillSource]
+        assert skill_sources({Platform.CODEX}) == []
+        assert skill_sources([]) == []
 
 
 class TestRunPhases:
@@ -189,8 +188,97 @@ class TestRunPhases:
 
         monkeypatch.setattr(phases, "install_skills", _boom)
         items = [_item(_result(Platform.CLAUDE_CODE, "proj-memory"))]
+        state = ImportState(path=tmp_path / "state.json")
 
-        outcome = await run_phases(items, tmp_path, ImportState(path=tmp_path / "state.json"), provider=None, model="")
+        outcome = await run_phases(items, tmp_path, state, provider=None, model="")
 
         assert outcome.skills is None
         assert outcome.skill_error == "claude_code: disk full"
+        assert state.get_progress()["meta"]["phases"] == {"status": "failed", "errors": ["claude_code: disk full"]}
+
+    async def test_how_the_phases_ended_is_written_to_the_state(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The counts alone cannot tell a finished run from one the gateway lost
+        during its phases; the verdict on file is what can."""
+        monkeypatch.setitem(
+            phases._SKILL_SOURCES, Platform.CLAUDE_CODE, lambda: ClaudeCodeSkillSource(tmp_path / "none")
+        )
+        state = ImportState(path=tmp_path / "state.json")
+        during: list[dict] = []
+
+        async def _spy_install(*_a: object, **_k: object) -> SkillImportSummary:
+            during.append(dict(state.get_progress()["meta"]["phases"]))
+            return SkillImportSummary(total=0)
+
+        monkeypatch.setattr(phases, "install_skills", _spy_install)
+
+        await run_phases([_item(_result(Platform.CLAUDE_CODE, "m"))], tmp_path, state, provider=None, model="")
+
+        assert during == [{"status": "pending", "errors": []}]
+        assert state.get_progress()["meta"]["phases"] == {"status": "done", "errors": []}
+
+    async def test_the_scope_is_the_platforms_asked_for_not_the_items(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A platform whose only importable data is skills has no items, and its
+        skills still have to land when it was asked for."""
+        claude = tmp_path / ".claude"
+        skill = claude / "skills" / "archify"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("---\nname: archify\n---\n", encoding="utf-8")
+        monkeypatch.setitem(phases._SKILL_SOURCES, Platform.CLAUDE_CODE, lambda: ClaudeCodeSkillSource(claude))
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+
+        outcome = await run_phases(
+            [],
+            workspace,
+            ImportState(path=tmp_path / "state.json"),
+            provider=None,
+            model="",
+            platforms={Platform.CLAUDE_CODE},
+        )
+
+        assert outcome.skills == SkillImportSummary(total=1, installed=1)
+        assert (workspace / "skills" / "claude_code" / "archify" / "SKILL.md").is_file()
+
+    async def test_a_stop_between_entries_ends_the_phases_as_cancelled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The rail offers a stop while the phases run; the stop file the message
+        pass polls is polled here too, between profile entries and skills."""
+        paths = _claude_memory_dir(tmp_path / "mem")
+        claude = tmp_path / ".claude"
+        skill = claude / "skills" / "archify"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("---\nname: archify\n---\n", encoding="utf-8")
+        monkeypatch.setitem(phases._SKILL_SOURCES, Platform.CLAUDE_CODE, lambda: ClaudeCodeSkillSource(claude))
+        cancel = tmp_path / "import_cancel"
+        classified: list[str] = []
+
+        async def _pick_then_stop(entry: str, **_k: object) -> str:
+            classified.append(entry)
+            cancel.touch()
+            return "## Notes"
+
+        monkeypatch.setattr("raven.importer.hermes_user_md._pick_heading", _pick_then_stop)
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        state = ImportState(path=tmp_path / "state.json")
+
+        outcome = await run_phases(
+            [_item(_result(Platform.CLAUDE_CODE, "proj-memory", paths))],
+            workspace,
+            state,
+            provider=None,
+            model="",
+            cancel_path=cancel,
+        )
+
+        assert outcome.cancelled is True
+        assert len(classified) == 1
+        assert outcome.profile is not None and len(outcome.profile.written) == 1
+        assert outcome.skills is None
+        assert not (workspace / "skills" / "claude_code").exists()
+        assert state.get_progress()["meta"]["phases"] == {"status": "cancelled", "errors": []}

@@ -7,7 +7,7 @@ import * as store from './store'
 import type { ImportStatus, ImportSyncSource, ImportTier } from './types'
 
 const status = (patch: Partial<ImportStatus> = {}): ImportStatus => ({
-  running: false, total: 0, submitted: 0, failed: 0, by_platform: {}, phase: null, tier: null, platforms: [], ...patch,
+  running: false, total: 0, submitted: 0, failed: 0, by_platform: {}, phase: null, phases: null, tier: null, platforms: [], ...patch,
 })
 
 const state = (st: ImportStatus | null, patch: Partial<store.ImportSyncState> = {}): store.ImportSyncState => ({
@@ -63,17 +63,52 @@ describe('what the row shows', () => {
   })
 
   it('paused when nothing runs and the counts fall short of the total -- the gateway lost the run', () => {
-    const v = store.view(state(status({ running: false, total: 18, submitted: 11, failed: 1 })))
+    const v = store.view(state(status({ running: false, total: 18, submitted: 11, failed: 1, tier: 'full', platforms: ['hermes'] })))
     expect(v).toMatchObject({ kind: 'paused', pct: 67, clickable: true })
   })
 
-  it('done, and clickable exactly when something failed', () => {
-    expect(store.view(state(status({ total: 4, submitted: 4 })))).toMatchObject({ kind: 'done', pct: 100, failed: 0, clickable: false })
-    expect(store.view(state(status({ total: 4, submitted: 3, failed: 1 })))).toMatchObject({ kind: 'done', failed: 1, clickable: true })
+  it('done, and clickable exactly when something failed and the request is on file', () => {
+    const asked = { tier: 'full' as const, platforms: ['hermes'], phases: { status: 'done' as const, errors: [] } }
+    expect(store.view(state(status({ total: 4, submitted: 4, ...asked })))).toMatchObject({ kind: 'done', pct: 100, failed: 0, clickable: false })
+    expect(store.view(state(status({ total: 4, submitted: 3, failed: 1, ...asked })))).toMatchObject({ kind: 'done', failed: 1, clickable: true })
+    expect(store.view(state(status({ total: 4, submitted: 3, failed: 1 })))).toMatchObject({ kind: 'done', failed: 1, clickable: false })
+  })
+
+  it('paused, but not clickable, when the file does not say what was asked', () => {
+    /* A run the CLI started records no tier; a guess ("full") could turn a
+       minutes-long import into hours, so the row shows it and offers nothing. */
+    expect(store.view(state(status({ total: 4, submitted: 2 })))).toMatchObject({ kind: 'paused', clickable: false })
+  })
+
+  it('paused while the phases behind a settled pass are pending, cancelled, or never recorded for a run that asked', () => {
+    const settled = status({ total: 2, submitted: 2, tier: 'memory_files', platforms: ['claude_code'] })
+    expect(store.view(state({ ...settled, phases: { status: 'pending', errors: [] } }))).toMatchObject({ kind: 'paused', pct: 100, clickable: true })
+    expect(store.view(state({ ...settled, phases: { status: 'cancelled', errors: [] } })).kind).toBe('paused')
+    expect(store.view(state(settled)).kind).toBe('paused')
+    expect(store.view(state({ ...settled, phases: { status: 'done', errors: [] } })).kind).toBe('done')
+  })
+
+  it('a run with no request and no phase verdict is simply finished', () => {
+    expect(store.view(state(status({ total: 2, submitted: 2 }))).kind).toBe('done')
+  })
+
+  it('a failed phase is something that did not make it, and can be retried', () => {
+    const v = store.view(state(status({
+      total: 2, submitted: 2, tier: 'full', platforms: ['hermes'], phases: { status: 'failed', errors: ['profile: bad byte'] },
+    })))
+    expect(v).toMatchObject({ kind: 'done', failed: 1, clickable: true })
+  })
+
+  it('a skills-only run has no counts and still shows its phases', () => {
+    const only = status({ total: 0, tier: 'memory_files', platforms: ['claude_code'] })
+    expect(store.view(state({ ...only, phases: { status: 'pending', errors: [] } })).kind).toBe('paused')
+    expect(store.view(state({ ...only, phases: { status: 'done', errors: [] } })).kind).toBe('done')
   })
 
   it('hidden again once that finished run was dismissed, but not for a different one', () => {
-    const finished = status({ total: 4, submitted: 4, tier: 'memory_files', platforms: ['claude_code'] })
+    const finished = status({
+      total: 4, submitted: 4, tier: 'memory_files', platforms: ['claude_code'], phases: { status: 'done', errors: [] },
+    })
     const dismissed = store.signature(finished)
     expect(store.view(state(finished, { dismissed })).kind).toBe('hidden')
     expect(store.view(state({ ...finished, total: 5, submitted: 5 }, { dismissed })).kind).toBe('done')
@@ -113,6 +148,16 @@ describe('following a run', () => {
     expect(store.get().starting).toBe(false)
   })
 
+  it('resume does nothing when the file does not say what was asked', async () => {
+    const f = fake([status({ running: false, total: 18, submitted: 11 })])
+    setSources({ importSync: f.src })
+    await store.refresh()
+
+    await store.resume()
+
+    expect(f.runs).toEqual([])
+  })
+
   it('resume does nothing while a run is on', async () => {
     const f = fake([status({ running: true, total: 2, submitted: 1, platforms: ['hermes'] })])
     setSources({ importSync: f.src })
@@ -146,7 +191,7 @@ describe('following a run', () => {
   })
 
   it('dismiss remembers the finished run across a reload', async () => {
-    const finished = status({ total: 4, submitted: 4, tier: 'full', platforms: ['hermes'] })
+    const finished = status({ total: 4, submitted: 4, tier: 'full', platforms: ['hermes'], phases: { status: 'done', errors: [] } })
     const f = fake([finished])
     setSources({ importSync: f.src })
     await store.refresh()

@@ -12,6 +12,9 @@ export interface ImportPlatform {
   memory_files: number
   conversations: number
   estimated_size: number
+  /* Skills never travel as scan results, so they are counted apart: a platform
+     can have only these to import, and the run still installs them. */
+  skills: number
 }
 
 export interface ImportScan {

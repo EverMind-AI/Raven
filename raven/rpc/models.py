@@ -1994,6 +1994,9 @@ class ImportPlatformScan(_Strict):
     memory_files: int
     conversations: int
     estimated_size: int
+    # Skills are directories, not message sources: counted here because a
+    # platform can have only these to import, and the run still installs them.
+    skills: int
 
 
 class ImportScanResult(_Strict):
@@ -2029,6 +2032,11 @@ class ImportPhase(_Strict):
     total: int
 
 
+class ImportPhases(_Strict):
+    status: Literal["pending", "done", "failed", "cancelled"]
+    errors: list[str]
+
+
 class ImportStatusResult(_Strict):
     running: bool
     total: int
@@ -2038,6 +2046,10 @@ class ImportStatusResult(_Strict):
     # The post-import phase in flight, when one is: the message pass reports
     # through the counts above, the profile mirror and skill install through this.
     phase: ImportPhase | None = None
+    # How the last run's phases stand on disk. The counts above are settled
+    # before the phases begin, so without this a run the gateway lost during
+    # them, or one whose phase failed, would read as finished.
+    phases: ImportPhases | None = None
     # The last run's own request, so a client that finds it stopped short can
     # start the same one again without having remembered what was asked.
     tier: Literal["memory_files", "full"] | None = None
