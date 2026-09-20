@@ -1,4 +1,4 @@
-# Proactivity Guide
+# Proactivity Guide { #proactivity-reference }
 
 For users and operators who want Raven to offer reminders and follow-up work
 without a new request each time. This page covers enabling, configuring,
@@ -234,3 +234,50 @@ stop a currently running stack, cancel an already-dispatched task, remove
 state, or disable Cron and Heartbeat. If you need an immediate stop, stop the
 running gateway and inspect any remaining external agent processes separately.
 Persisted queues are not cleared by disabling; inspect them before re-enabling.
+
+## Implementation reference
+
+The implementation sections formerly on this page now live in
+[Proactivity Design and Implementation](proactivity-design.md). Older section
+links land on the matching entry below:
+
+- <span id="architecture-overview"></span>
+  [Architecture and assembly](proactivity-design.md#components-and-assembly)
+- <span id="1-data-types-sentineltypespy"></span>
+  <span id="plannerdecision"></span>
+  <span id="plannercontext"></span>
+  <span id="3-context-assembly-contextassembler-sentinelpredictorcontext_assemblerpy"></span>
+  <span id="4-decision-layer-proactiveplanner-sentinelplannerpy"></span>
+  [Data types, context assembly, and Planner decisions](proactivity-design.md#context-and-decision-contracts)
+- <span id="2-orchestration-sentinelrunner-sentinelexecutorrunnerpy"></span>
+  <span id="one-tick"></span>
+  <span id="fast-path-rules-skip-only"></span>
+  <span id="scheduled-fire-fast-path"></span>
+  <span id="drive-modes"></span>
+  <span id="tickoutcome"></span>
+  [Runner lifecycle, fast paths, and tick outcomes](proactivity-design.md#tick-lifecycle)
+- <span id="action"></span>
+  <span id="degradation"></span>
+  <span id="6-the-three-nudge-execution-paths"></span>
+  <span id="nudgedispatcher-sentinelexecutordispatcherpy"></span>
+  <span id="nudgeinjector-sentinelexecutorinjectorpy"></span>
+  <span id="defermanager-sentinelexecutordefer_managerpy"></span>
+  <span id="7-the-spawn_agent-path-proactivespawn-sentinelexecutorspawnpy"></span>
+  [Actions, nudge execution, and proactive spawning](proactivity-design.md#action-routing)
+- <span id="5-the-gate-nudgepolicy-sentineltrigger_policypolicypy"></span>
+  <span id="layered-checks"></span>
+  <span id="adaptive-multiplier"></span>
+  <span id="readwrite-split"></span>
+  <span id="personalization-and-persistence"></span>
+  [Policy checks, adaptation, and accounting](proactivity-design.md#policy-boundaries)
+- <span id="8-feedback-loop-nudgefeedbacktracker-the-nudge-feedback-tool"></span>
+  <span id="9-state-files"></span>
+  [State files and feedback](proactivity-design.md#state-and-feedback)
+- <span id="12-task-discovery-anticipatory-menus"></span>
+  [Routines and task discovery](proactivity-design.md#routines-and-task-discovery)
+- <span id="10-cron-schedulerscron"></span>
+  <span id="11-heartbeat-and-event-driven-wake"></span>
+  <span id="13-spine-integration-and-the-user-inbound-gates"></span>
+  <span id="mid-turn-user-input-busypolicyinject"></span>
+  <span id="ask_user-pausing-a-turn-to-ask-the-user"></span>
+  [Cron, Heartbeat, Spine integration, and turn controls](proactivity-design.md#cron-heartbeat-and-the-spine)

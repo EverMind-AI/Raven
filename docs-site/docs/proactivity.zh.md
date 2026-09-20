@@ -199,3 +199,49 @@ uv run raven sentinel disable
 重启网关后，其 Sentinel 栈才会停止。单独执行该命令不会停止运行中的栈、取消已经派发的任务、
 删除状态，或关闭 Cron 与 Heartbeat。需要立即停止时，请停止运行中的网关，并单独检查残留的
 外部 Agent 进程。关闭开关不会清空持久化队列，再次启用前应检查它们。
+
+## 实现参考 { #implementation-reference }
+
+本页原有的实现章节已移至[主动性设计与实现](proactivity-design.md)。旧章节链接会定位到
+下面的对应入口：
+
+- <span id="architecture-overview"></span>
+  [架构与组装](proactivity-design.md#components-and-assembly)
+- <span id="1-data-types-sentineltypespy"></span>
+  <span id="plannerdecision"></span>
+  <span id="plannercontext"></span>
+  <span id="3-context-assembly-contextassembler-sentinelpredictorcontext_assemblerpy"></span>
+  <span id="4-decision-layer-proactiveplanner-sentinelplannerpy"></span>
+  [数据类型、上下文组装与 Planner 决策](proactivity-design.md#context-and-decision-contracts)
+- <span id="2-orchestration-sentinelrunner-sentinelexecutorrunnerpy"></span>
+  <span id="one-tick"></span>
+  <span id="fast-path-rules-skip-only"></span>
+  <span id="scheduled-fire-fast-path"></span>
+  <span id="drive-modes"></span>
+  <span id="tickoutcome"></span>
+  [Runner 生命周期、快路径与节拍结果](proactivity-design.md#tick-lifecycle)
+- <span id="action"></span>
+  <span id="degradation"></span>
+  <span id="6-the-three-nudge-execution-paths"></span>
+  <span id="nudgedispatcher-sentinelexecutordispatcherpy"></span>
+  <span id="nudgeinjector-sentinelexecutorinjectorpy"></span>
+  <span id="defermanager-sentinelexecutordefer_managerpy"></span>
+  <span id="7-the-spawn_agent-path-proactivespawn-sentinelexecutorspawnpy"></span>
+  [动作、提醒执行与主动派发](proactivity-design.md#action-routing)
+- <span id="5-the-gate-nudgepolicy-sentineltrigger_policypolicypy"></span>
+  <span id="layered-checks"></span>
+  <span id="adaptive-multiplier"></span>
+  <span id="readwrite-split"></span>
+  <span id="personalization-and-persistence"></span>
+  [策略检查、自适应与配额记录](proactivity-design.md#policy-boundaries)
+- <span id="8-feedback-loop-nudgefeedbacktracker-the-nudge-feedback-tool"></span>
+  <span id="9-state-files"></span>
+  [状态文件与反馈](proactivity-design.md#state-and-feedback)
+- <span id="12-task-discovery-anticipatory-menus"></span>
+  [例行学习与任务发现](proactivity-design.md#routines-and-task-discovery)
+- <span id="10-cron-schedulerscron"></span>
+  <span id="11-heartbeat-and-event-driven-wake"></span>
+  <span id="13-spine-integration-and-the-user-inbound-gates"></span>
+  <span id="mid-turn-user-input-busypolicyinject"></span>
+  <span id="ask_user-pausing-a-turn-to-ask-the-user"></span>
+  [Cron、Heartbeat、Spine 集成与轮次控制](proactivity-design.md#cron-heartbeat-and-the-spine)

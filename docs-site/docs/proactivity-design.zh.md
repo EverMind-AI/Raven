@@ -6,6 +6,14 @@
 除非另有说明，以下路径均相对于 `raven/proactive_engine/`。配置类型定义在
 `raven/config/raven.py`，运行时规范术语定义在 `CONTEXT.md`。
 
+<span id="1-three-layers-of-proactivity"></span>
+<span id="2-the-core-idea-periodic-planner-plus-on-demand-spawn"></span>
+<span id="7-scenarios"></span>
+<span id="l2-routine-automation"></span>
+<span id="l3-memory-linked-reminder"></span>
+<span id="l3-context-aware-resumption"></span>
+<span id="l3-proactive-status-check"></span>
+
 ## 设计理由 { #design-rationale }
 
 目标是在合适时提供有用的后续工作，而不是把每条观察都视为可以打扰用户或采取行动的授权。
@@ -21,6 +29,8 @@
 基于例行的辅助与上下文感知的前瞻行为是预期用途，不是保证兑现的能力。例如，记忆中的截止期
 可用于判断是否提醒，近期部署记录可用于提出状态检查。是否实际发生取决于可用上下文、模型
 输出、策略与工具。学习到一个模式，并不等于用户已经创建了 Cron 计划。
+
+<span id="3-components"></span>
 
 ## 组件与组装 { #components-and-assembly }
 
@@ -46,6 +56,10 @@ Planner 默认使用主 Agent 模型，可通过 `evaluator_model` 覆盖；`eva
 `evaluator_api_key_env` 可选择独立服务商。如果指定的 API key 环境变量为空，组装过程会告警
 并回退到主服务商。系统提示词通过 `raven.i18n` 加载；工具 schema 与上下文渲染器仍位于
 `trigger_policy/prompts.py`。
+
+<span id="proactiveplanner-periodic-reasoner"></span>
+<span id="contextassembler-input-packaging"></span>
+<span id="planner-decision-quality"></span>
 
 ## 上下文与决策契约 { #context-and-decision-contracts }
 
@@ -93,6 +107,9 @@ Planner 不会自行搜索其他数据源。
 触发器消费者按短周期轮询独立的文件存储，不等待下一个 Planner 节拍。runner 会记录意外的
 后台异常并继续运行。`TickOutcome` 为诊断提供决策、执行结果、路由、可选的提醒标识与备注。
 
+<span id="4-action-space"></span>
+<span id="proactivespawn-multi-step-execution-bridge"></span>
+
 ## 动作路由 { #action-routing }
 
 | 动作 | 路径 | 何时视为已派发 |
@@ -112,10 +129,20 @@ NudgeInjector 通过响应修饰钩子，将待发文字追加到符合条件的
 
 ProactiveSpawn 校验任务，以任务文字作为去重内容检查共享策略，然后调用 SubagentManager。
 完成结果以 `SUBAGENT` 来源轮次返回发起会话，不经过 NudgeDispatcher。它不增加独立配额
-或整体任务超时。后端执行与隔离限制见[使用指南](proactivity.md#costs-and-safety-limits)。
+或整体任务超时。
+
+<span id="8-cost"></span>
+<span id="spawn-safety"></span>
+成本与派发安全说明已移至使用指南的[成本与安全限制](proactivity.md#costs-and-safety-limits)
+一节，包括模型调用、后端执行与隔离限制。
 
 执行器未接入时，返回降级、未投递结果。尤其是关闭 inject 或 defer，不会把对应决策转换为
 普通提醒。
+
+<span id="nudgepolicy-the-shared-anti-spam-gate"></span>
+<span id="5-anti-spam-the-nudgepolicy-gate"></span>
+<span id="9-risks-and-mitigations"></span>
+<span id="over-notification"></span>
 
 ## 策略边界 { #policy-boundaries }
 
@@ -163,6 +190,10 @@ ProactiveSpawn 校验任务，以任务文字作为去重内容检查共享策�
 中性，不会自动视为接受。任务发现的选择与确认分别记录反馈；长期未获回应的提醒可以形成
 忽略信号。
 
+<span id="routinelearner-behavior-pattern-learning"></span>
+<span id="task-discovery-anticipatory-menus"></span>
+<span id="history-format-drift"></span>
+
 ## 例行学习与任务发现 { #routines-and-task-discovery }
 
 RoutineLearner 按星期与时间段对带时间戳的历史分组，不调用 LLM，仅提取关键词。
@@ -183,6 +214,8 @@ PendingDecisionStore 管理过期、取代与确认状态。DecisionRouter 确�
 - `routine_confirm`：提升例行任务状态；载荷有要求且接入 CronService 时，可创建 Cron 任务。
 
 确定性选择避开的是普通对话的 LLM 路径；分类、确认或所选任务本身仍可能调用模型。
+
+<span id="6-delivery-and-turn-transport-the-spine"></span>
 
 ## Cron、Heartbeat 与 Spine { #cron-heartbeat-and-the-spine }
 

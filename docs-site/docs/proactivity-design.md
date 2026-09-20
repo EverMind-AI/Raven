@@ -1,4 +1,4 @@
-# Proactivity Design and Implementation
+# Proactivity Design and Implementation { #proactivity-design }
 
 For developers extending or debugging the Proactive Engine. This is the site's
 implementation reference, with the design rationale kept alongside the
@@ -8,6 +8,14 @@ the [Proactivity Guide](proactivity.md).
 Paths below are relative to `raven/proactive_engine/` unless stated otherwise.
 Configuration types live in `raven/config/raven.py`; canonical runtime terms
 live in `CONTEXT.md`.
+
+<span id="1-three-layers-of-proactivity"></span>
+<span id="2-the-core-idea-periodic-planner-plus-on-demand-spawn"></span>
+<span id="7-scenarios"></span>
+<span id="l2-routine-automation"></span>
+<span id="l3-memory-linked-reminder"></span>
+<span id="l3-context-aware-resumption"></span>
+<span id="l3-proactive-status-check"></span>
 
 ## Design rationale
 
@@ -29,6 +37,8 @@ not guaranteed capabilities. For example, a remembered deadline can inform a
 reminder and a recent deployment can inform a status-check proposal. Whether
 either happens depends on available context, model output, policy, and tools.
 A learned pattern alone is not a user-created Cron schedule.
+
+<span id="3-components"></span>
 
 ## Components and assembly
 
@@ -58,6 +68,10 @@ separate provider. If the named API-key environment variable is empty, assembly
 warns and falls back to the main provider. The system prompt is loaded through
 `raven.i18n`; the tool schema and context renderer remain in
 `trigger_policy/prompts.py`.
+
+<span id="proactiveplanner-periodic-reasoner"></span>
+<span id="contextassembler-input-packaging"></span>
+<span id="planner-decision-quality"></span>
 
 ## Context and decision contracts
 
@@ -118,6 +132,9 @@ tick. The runner logs unexpected background exceptions and continues.
 `TickOutcome` exposes the decision, execution result, route, optional nudge
 identifier, and notes for diagnostics.
 
+<span id="4-action-space"></span>
+<span id="proactivespawn-multi-step-execution-bridge"></span>
+
 ## Action routing
 
 | Action | Path | When work is considered dispatched |
@@ -142,11 +159,21 @@ by an LLM: settlement is time-based.
 ProactiveSpawn validates the task, checks the shared policy using the task text
 for deduplication, and calls SubagentManager. Completion returns through a
 `SUBAGENT`-origin turn in the originating session, not NudgeDispatcher. It adds
-neither a private quota nor a task-wide timeout. Backend execution and isolation
-limits are described in the [guide](proactivity.md#costs-and-safety-limits).
+neither a private quota nor a task-wide timeout.
+
+<span id="8-cost"></span>
+<span id="spawn-safety"></span>
+Cost and spawn-safety guidance now lives in the guide's
+[Costs and safety limits](proactivity.md#costs-and-safety-limits) section,
+including model calls, backend execution, and isolation limits.
 
 An unwired executor returns a degraded, non-delivered result. In particular,
 disabling inject or defer does not convert those decisions into plain nudges.
+
+<span id="nudgepolicy-the-shared-anti-spam-gate"></span>
+<span id="5-anti-spam-the-nudgepolicy-gate"></span>
+<span id="9-risks-and-mitigations"></span>
+<span id="over-notification"></span>
 
 ## Policy boundaries
 
@@ -208,6 +235,10 @@ dismissal and session cooldown. An unclassified reply is neutral, not
 automatically accepted. Discovery choices and confirmations record their own
 feedback; unattended nudges can contribute ignored signals.
 
+<span id="routinelearner-behavior-pattern-learning"></span>
+<span id="task-discovery-anticipatory-menus"></span>
+<span id="history-format-drift"></span>
+
 ## Routines and task discovery
 
 RoutineLearner bins timestamped history by weekday and time slot and extracts
@@ -236,6 +267,8 @@ After the configured confirmation step, ActionExecutor dispatches by kind:
 
 A deterministic selection avoids the normal conversational LLM path, but
 classification, confirmation, or the selected work may still call a model.
+
+<span id="6-delivery-and-turn-transport-the-spine"></span>
 
 ## Cron, Heartbeat, and the Spine
 
