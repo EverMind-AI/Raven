@@ -216,14 +216,15 @@ export function describe(row: ExtAgentRow, text: string): void {
   else set({ drafts: { ...get().drafts, [row.name]: text } })
 }
 
-/* The row's own model, or back to the agent's default. A refusal is toasted
-   rather than held on the row: the row is not broken, the pick was. */
-export function setModel(row: ExtAgentRow, model: string, provider?: string): Promise<string | null> {
-  return run('model', row, provider ? { model, provider } : { model })
+/* The row's own model, or back to the agent's default. Held on the row like
+   every other write: a refused pick stays in red with the pick to retry, which
+   is also the one place the reader can see it did not land. */
+export function setModel(row: ExtAgentRow, model: string, provider?: string): Promise<void> {
+  return act(row, 'model', provider ? { model, provider } : { model })
 }
 
-export function clearModel(row: ExtAgentRow): Promise<string | null> {
-  return run('model', row, { clear_model: true })
+export function clearModel(row: ExtAgentRow): Promise<void> {
+  return act(row, 'model', { clear_model: true })
 }
 
 /* What the reader typed for a preset, or nothing. */

@@ -45,6 +45,16 @@ describe('the agent catalogue', () => {
     expect(installOf(r)).toEqual({ site: undefined, cmd: undefined })
   })
 
+  it("trusts the wire's own flag for a Raven row this catalogue does not know", () => {
+    /* A configured acp row whose handshake named Raven, renamed by its owner:
+       the server says it is Raven's, and the page must not sort it with the
+       third parties or word its unset model as the agent's own default. */
+    const r = row({ name: 'my research helper', preset: undefined, kind: 'acp', own: true, configured: true })
+    expect(isOwnRow(r)).toBe(true)
+    expect(byOf(r)).toBe('gui.agent.by_raven')
+    expect(shortOf(r)).toBe('')
+  })
+
   it('translates a vendor whose name is in the catalogue and prints an ASCII brand verbatim', () => {
     expect(byOf(row({ preset: 'qwen_code' }))).toBe('gui.agent.by_qwen_code')
     expect(byOf(row({ preset: 'grok' }))).toBe('xAI')

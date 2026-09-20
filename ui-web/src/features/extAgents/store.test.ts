@@ -188,12 +188,12 @@ describe('the model verbs', () => {
     ])
   })
 
-  it('toasts a refused pick and leaves the row unmarked: the pick was wrong, not the row', async () => {
+  it('holds a refused pick on the row with the pick to retry, like every other write', async () => {
     const r = row()
     install([r], (op) => (op === 'model' ? 'it offers 3' : null))
     await store.setModel(r, 'v/bogus')
-    expect(toastWriter.items).toEqual(['gui.agent.failed {"detail":"it offers 3"}'])
-    expect(store.get().failed).toEqual({})
+    expect(toastWriter.items).toEqual([])
+    expect(store.get().failed.claude_code).toEqual({ op: 'model', args: { model: 'v/bogus' }, detail: 'it offers 3' })
     expect(store.get().joining).toEqual([])
   })
 })

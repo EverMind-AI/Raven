@@ -339,9 +339,15 @@ function shownModel(row: ExtAgentRow): { id: string; by: string; provider: strin
   }
   const cut = row.model.indexOf('/')
   const head = cut > 0 ? row.model.slice(0, cut) : ''
-  const known = hostProviders().find((p) => p.id === head)
-  return { id: cut > 0 ? row.model.slice(cut + 1) : row.model, by: known ? known.name : head, provider: head }
+  /* The stored head is the provider's public spelling (`openai-codex`); the
+     host list keys it by config slug (`openai_codex`). The two differ by the
+     separator alone, so the lookup compares them in one spelling and the
+     picker gets the slug back, which is what its tick matches. */
+  const known = hostProviders().find((p) => slugOf(p.id) === slugOf(head))
+  return { id: cut > 0 ? row.model.slice(cut + 1) : row.model, by: known ? known.name : head, provider: known ? known.id : head }
 }
+
+const slugOf = (name: string): string => name.toLowerCase().replace(/-/g, '_')
 
 /* The model a row answers with, and the picker that changes it. Unset reads by
    ownership: one of Raven's own follows the main Raven, a third party runs on
@@ -423,6 +429,7 @@ function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Elem
             void store.setModel(row, model, row.model_source === 'raven' ? provider : undefined)
           }}
           providers={provs}
+          allowTyped={false}
           title={t('gui.agent.model_label')}
         />
       ) : null}
@@ -509,10 +516,14 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
         <button className="mini danger" onClick={() => store.disconnectRow(row)}>
           {t('gui.agent.disconnect')}
         </button>
-        {canTest(row) ? (
-          <button className="mini" disabled={testing} onClick={() => void store.runTest(row)}>
-            {testing ? <Spin /> : null}
-            {t(testing ? 'gui.agent.testing_chip' : 'gui.agent.test_label')}
+        {canTest(row) && testing ? (
+          <button className="mini danger" onClick={() => store.stopTest(row)}>
+            <Spin />
+            {t('gui.stop')}
+          </button>
+        ) : canTest(row) ? (
+          <button className="mini" onClick={() => void store.runTest(row)}>
+            {t('gui.agent.test_label')}
           </button>
         ) : null}
       </>

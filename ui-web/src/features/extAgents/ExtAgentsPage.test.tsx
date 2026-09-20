@@ -423,7 +423,7 @@ describe('the sheet', () => {
     expect(sheet()!.querySelector('.extAgents-by')!.className).toContain('extAgents-by-bad')
   })
 
-  it('runs a test from its action bar and says so while it runs', async () => {
+  it('runs a test from its action bar, says so while it runs, and offers to stop it', async () => {
     let release: () => void = () => {}
     const gate = new Promise<void>((resolve) => {
       release = resolve
@@ -440,13 +440,16 @@ describe('the sheet', () => {
     await openSheet('claude_code')
     await click(sheet()!.querySelectorAll('.extAgents-act button')[1])
     expect(sheetStatus()).toBe('gui.agent.testing_head')
-    expect(sheetActs()).toEqual(['gui.agent.disconnect', 'gui.agent.testing_chip'])
-    expect((sheet()!.querySelectorAll('.extAgents-act button')[1] as HTMLButtonElement).disabled).toBe(true)
+    /* A cli test can run for two minutes on the agent's own quota, so the
+       running state keeps a control: Stop, in place of the Test that started it. */
+    expect(sheetActs()).toEqual(['gui.agent.disconnect', 'gui.stop'])
+    expect((sheet()!.querySelectorAll('.extAgents-act button')[1] as HTMLButtonElement).disabled).toBe(false)
+    await click(sheet()!.querySelectorAll('.extAgents-act button')[1])
+    expect(acts.map((a) => a[0])).toEqual(['test', 'test_cancel'])
     await act(async () => {
       release()
       await gate
     })
-    expect(acts.map((a) => a[0])).toEqual(['test'])
     expect(sheetActs()).toEqual(['gui.agent.disconnect', 'gui.agent.test_label'])
   })
 
@@ -610,6 +613,29 @@ describe('the model pill', () => {
     expect(pill()!.querySelector('.extAgents-mid')!.textContent).toBe('anthropic/claude-sonnet-5')
     expect(pill()!.querySelector('.extAgents-mpv')!.textContent).toBe('OpenRouter')
     expect(sheet()!.querySelector('.extAgents-mx')).not.toBeNull()
+  })
+
+  it('matches a stored prefix to the host provider it spells with a hyphen', async () => {
+    /* `stored_model_id` writes the public spelling (`openai-codex`); `model.options`
+       keys the same provider by its config slug (`openai_codex`). */
+    hostModels.providers = [{ id: 'openai_codex', name: 'OpenAI Codex', models: ['gpt-5-codex'], on: true }]
+    install([builtin({ model: 'openai-codex/gpt-5-codex' })])
+    await mount()
+    await openSheet('Raven')
+    expect(pill()!.querySelector('.extAgents-mid')!.textContent).toBe('gpt-5-codex')
+    expect(pill()!.querySelector('.extAgents-mpv')!.textContent).toBe('OpenAI Codex')
+    await click(pill())
+    const current = picker()!.querySelector('.model-picker-model[aria-pressed="true"]')
+    expect(current?.textContent).toContain('gpt-5-codex')
+  })
+
+  it('offers no typed id: the write takes the menu exactly, and adds to nothing', async () => {
+    install([row({ model_source: 'agent', model_choices: choices })])
+    await mount()
+    await openSheet('claude_code')
+    await click(pill())
+    await typeInto(picker()!.querySelector('input'), 'brand-new-model')
+    expect(picker()!.querySelector('.model-picker-add')).toBeNull()
   })
 
   it('asks for the host list once when it has not landed yet', async () => {

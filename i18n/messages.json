@@ -4847,10 +4847,6 @@
       "en": "Test",
       "zh": "测试"
     },
-    "gui.agent.testing_chip": {
-      "en": "Testing",
-      "zh": "测试中"
-    },
     "gui.agent.testing_head": {
       "en": "Testing",
       "zh": "正在测试"

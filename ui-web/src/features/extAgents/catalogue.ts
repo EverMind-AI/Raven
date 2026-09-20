@@ -101,12 +101,15 @@ function entryOf(row: ExtAgentRow): CatalogueEntry | undefined {
   return Object.hasOwn(CATALOGUE, row.name) ? CATALOGUE[row.name] : undefined
 }
 
-/* One of Raven's own, whichever way this install registered it. The wire flags
-   cover a built-in row and a folder discovered under `agents/`; an install that
-   registered a shipped product as a config row (its `install.py` does that)
-   carries neither flag, and the row is still Raven's. */
+/* One of Raven's own, whichever way this install registered it. The wire says
+   so for a built-in row, a folder discovered under `agents/`, and a configured
+   acp row whose handshake named Raven (`own`) -- the last is the server's to
+   know, whatever the row is called here. The catalogue is the fallback for a
+   server that predates `own`: an install that registered a shipped product as
+   a config row (its `install.py` does that) carries no flag there, and the row
+   is still Raven's. */
 export function isOwnRow(row: ExtAgentRow): boolean {
-  return !!row.builtin || !!row.vendored || entryOf(row)?.by === OWN_BY
+  return !!row.own || !!row.builtin || !!row.vendored || entryOf(row)?.by === OWN_BY
 }
 
 /* The one line under the name, or '' when the catalogue has nothing to say. */
