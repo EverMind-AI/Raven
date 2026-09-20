@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
+from raven.a2a_client.tool import A2aTool
 from raven.acp_client.asker import held_question
 from raven.agent.loop._shared import (
     SEARCH_PROVIDERS,
@@ -1006,10 +1007,24 @@ class WiringMixin:
         """Every tool that hands work to another agent, or steers a hand-off already running.
 
         Grouped into one method so the sub-agent gate has a single place to
-        refuse, rather than a condition repeated over five registrations that a
-        sixth would quietly not get.
+        refuse, rather than a condition repeated over six registrations that a
+        seventh would quietly not get.
         """
         self.tools.register(SpawnTool(manager=self.subagents))
+        # Outbound A2A: hands work to an external agent rather than one this
+        # process manages, but it is still a hand-off this method's gate must
+        # cover -- see raven.agent.subagent.role.WITHHELD_FROM_SUBAGENT.
+        #
+        # Only with a peer configured. This one schema costs about 157 tokens in
+        # the `tools` array of every turn of every conversation -- measured off a
+        # captured provider call, not estimated; the total is pinned by
+        # tests/test_agent_loop_token_budget.py -- and a host with no peers has
+        # nowhere to send a message. Reaching an agent that needs no credential
+        # still means listing its origin with `credential` empty, which
+        # `a2a_client.peers.auth_headers` sends no header for -- so nothing
+        # becomes unreachable, it only has to be declared.
+        if self.a2a_config.peers:
+            self.tools.register(A2aTool(self.a2a_config))
         # Sub-agent DAG orchestration. Registered unconditionally now that
         # the agent table always holds the package's built-in rows: the tool used
         # to be gated on an enabled third-party entry existing, because without one

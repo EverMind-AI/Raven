@@ -2463,24 +2463,11 @@ function ExecPage({ s }: { s: SettingsState }): JSX.Element {
 function ChannelPage({ s }: { s: SettingsState }): JSX.Element {
   const sh = shell()
   const raw = s.snap.raw
-  const fwd = (V(raw, 'cron.forwardChannels', []) as string[]) || []
   return (
     <>
       <Scard title={t('gui.set.chn.card')}>
         <SwiRow label={t('gui.set.chn.progress')} k="channels.sendProgress" on={V(raw, 'channels.sendProgress', true) === true} />
         <SwiRow label={t('gui.set.chn.hints')} k="channels.sendToolHints" on={V(raw, 'channels.sendToolHints', false) === true} />
-        <TextRow
-          label={t('gui.set.chn.cron_to')}
-          k="cron.forwardChannels"
-          val={fwd.join(', ')}
-          ph={t('gui.set.chn.cron_ph')}
-          norm={(v) =>
-            v
-              .split(',')
-              .map((x) => x.trim())
-              .filter(Boolean)
-          }
-        />
         <TextRow
           label={t('gui.set.chn.tz')}
           k="cron.defaultTimezone"

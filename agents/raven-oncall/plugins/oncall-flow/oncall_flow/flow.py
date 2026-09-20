@@ -14,24 +14,24 @@ plugin contributes them as ONE hook running them in a fixed order:
   through ``metadata["observers"]`` at the send fire.
 - **the work-to-watch judgement** (fork ``_note_watched_path`` + ops/watched.py):
   one sidecar model call per turn that touches a subject, the verdict cached on
-  the turn's conduct instance, and the provenance line delivered where a
+  the turn's participant instance, and the provenance line delivered where a
   failure would be -- on the tool result, via the ``append_note`` grant, the
   only channel measured to change behaviour.
 - **the turn close** (fork ``Tool.ends_turn`` on ops_check_later): a successful
   ops_check_later ends the turn; the fork's primitive does not exist on the
-  trunk, so the close is the conduct's ``End`` verdict, keyed on the call's
+  trunk, so the close is the participant's ``End`` verdict, keyed on the call's
   name plus its result's own first words ("Scheduled a wake" -- every refusal
   branch deliberately starts otherwise).
 
 The judgements (work-to-watch, the cap-kill note, the close) are one
-``OncallConduct`` -- one instance per turn, seated in the axis order through
-``ConductHook`` -- so the verdict cache and the counters they file are
+``OncallParticipant`` -- one instance per turn, seated in the axis order through
+``ParticipantHook`` -- so the verdict cache and the counters they file are
 attributes that die with the turn. The two mechanism axes (context,
 accounting) stay hooks: their state rides the turn's ONE metadata dict
 (seeded at the inbound fire, same dict through the iterations and the send --
 the trunk pins this) under the freight keys below, and ``after_send`` pops
 every key, so nothing can leak into a later turn even on a host that skips a
-phase. The conduct's counters reach the same ``observers`` stamp through its
+phase. The participant's counters reach the same ``observers`` stamp through its
 ``archive`` verb, merged after the accounting axis wrote the stamp.
 
 The axes are composed here rather than as manifest rows because the
@@ -56,9 +56,9 @@ from oncall_flow.escalation import append_note, unanswered_question
 from oncall_flow.instrument import is_concluded, log_event
 from oncall_flow.tools import base as tools_base
 from oncall_flow.window import campaign_for_window, task_fingerprint
-from raven.agent.hook.conduct import ConductHook
-from raven.contracts.agent_conduct import Accept, AgentConduct, End, StepView, Verdict
+from raven.agent.hook.participant import ParticipantHook
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.participant import Accept, AgentParticipant, Answer, End, StepView
 
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider
@@ -71,7 +71,7 @@ if TYPE_CHECKING:
 # skipped for some turn origins, and a value that survived by accident would
 # stamp one turn's judgement on the next (the research-flow freight-key
 # discipline). The judgements' own state (the work-to-watch verdict, their
-# counters) lives on the turn's ``OncallConduct`` instance instead.
+# counters) lives on the turn's ``OncallParticipant`` instance instead.
 
 # The window's identity as the inbound fire saw it: channel, chat_id, task
 # fingerprint. Its absence at iteration 1 is how the context axis knows the
@@ -304,7 +304,7 @@ class TurnAccountingHook(AgentHook):
         return HookDecision()
 
 
-# ── The turn's judgements: one conduct, one instance per turn ───────
+# ── The turn's judgements: one participant, one instance per turn ───────
 
 # The looking tools and the argument that names what they looked at (the
 # fork's table, loop/main.py). The machine face rides trunk exec's own
@@ -335,7 +335,7 @@ _TRANSFER_SHAPE = re.compile(r"\b(scp|rsync|sftp|curl|wget)\b")
 _WAKE_NOTE_PREFIX = "Scheduled a wake"
 
 
-class OncallConduct(AgentConduct):
+class OncallParticipant(AgentParticipant):
     """The flow's three judgements, one instance per turn.
 
     * **work-to-watch** (fork ``_note_watched_path``): one sidecar judgement per
@@ -354,7 +354,7 @@ class OncallConduct(AgentConduct):
       command into the same wall. The kill is a routing signal, and the note
       names the door this plugin itself contributes. Said as a note under the
       result rather than a rewrite of it: the result belongs to the trunk's
-      exec tool, and ``advise`` is the conduct's grant for exactly this line.
+      exec tool, and ``advise`` is the participant's grant for exactly this line.
     * **the turn close** (fork ``Tool.ends_turn``): a successful ops_check_later
       means the next decision belongs to the wake it scheduled; the fork took
       the tools away and let the model write one closing reply, the rebuilt
@@ -478,7 +478,7 @@ class OncallConduct(AgentConduct):
             )
         return None
 
-    async def review(self, step: StepView) -> Verdict:
+    async def review(self, step: StepView) -> Answer:
         if not step.tools_ran:
             # The close reads the ops_check_later result, so it waits for the
             # iteration's tools to have run.
@@ -507,8 +507,8 @@ class OncallFlowHook(AgentHook):
     """The one manifest hook: three axes, fixed order, composite semantics.
 
     Order is the contract: context first (everything downstream reads what it
-    set), accounting before the conduct (the closing call is still counted,
-    and the stamp the conduct's ``archive`` merges into is already written).
+    set), accounting before the participant (the closing call is still counted,
+    and the stamp the participant's ``archive`` merges into is already written).
     ``_run_phase`` mirrors the kernel CompositeHook's
     documented behaviour -- first halting state halts and carries the trail,
     notes chain joined by a blank line, content and tool modifications chain
@@ -519,10 +519,10 @@ class OncallFlowHook(AgentHook):
         self._axes: tuple[AgentHook, ...] = (
             TurnContextHook(),
             TurnAccountingHook(),
-            # ``rolls_back=False``: this conduct closes a turn, which the loop
+            # ``rolls_back=False``: this participant closes a turn, which the loop
             # takes as a short circuit; it never resamples, so holding the
             # reply's tokens would buy nothing.
-            ConductHook("oncall_flow", lambda: OncallConduct(provider, judge_model), rolls_back=False),
+            ParticipantHook("oncall_flow", lambda: OncallParticipant(provider, judge_model), rolls_back=False),
         )
 
     @property
@@ -602,7 +602,7 @@ def make_flow_hook(ctx: "PluginContext") -> OncallFlowHook | None:
 
 
 __all__ = [
-    "OncallConduct",
+    "OncallParticipant",
     "OncallFlowHook",
     "TurnAccountingHook",
     "TurnContextHook",

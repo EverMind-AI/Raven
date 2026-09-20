@@ -189,6 +189,106 @@ async def test_a_stall_after_streamed_output_is_not_retried_by_the_outer_ladder_
     assert seen == ["partial", "answer"]
 
 
+class _ThinksThenStalls(LLMProvider):
+    """Streams a long thought and a half-built tool call, then stalls; answers next time."""
+
+    def __init__(self):
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, *args, **kwargs):  # pragma: no cover - the stream path is under test
+        raise NotImplementedError
+
+    async def chat_stream(self, *args, **kwargs):
+        from raven.providers.base import ChatDelta
+
+        self.calls += 1
+        if self.calls == 1:
+            yield ChatDelta(content=None, reasoning_content="weighing the layout")
+            yield ChatDelta(
+                content=None,
+                tool_call_delta={
+                    "tool_calls": [{"index": 0, "id": "c1", "function": {"name": "write_file", "arguments": '{"pa'}}]
+                },
+            )
+            raise TimeoutError
+        yield ChatDelta(content="answer")
+
+
+@pytest.mark.asyncio
+async def test_a_stall_during_a_silent_think_is_asked_again(workspace):
+    """Nothing reached the caller, so asking again repeats nothing. A thought is not
+    the reply unless the caller wired `on_reasoning_delta`, and the fragments of a
+    tool call are never rendered as one -- counting either as output made the long
+    quiet round, the one that writes a whole build script, the one round a dropped
+    stream could always end."""
+    provider = _ThinksThenStalls()
+    seen: list[str] = []
+
+    out = await _streamed_turn(_streaming_agent(workspace, provider, retry_after_output=False), seen)
+
+    assert out is not None and out[0] == "answer"
+    assert provider.calls == 2
+    assert seen == ["answer"], "the watcher saw the reply once"
+    assert "weighing" not in (out[0] or ""), "the abandoned thought is not part of the reply"
+
+
+@pytest.mark.asyncio
+async def test_what_the_failed_attempt_left_behind_is_dropped():
+    """`stream_llm_call` directly, for the invariant the loop cannot show: every
+    retry starts from empty buffers. While a retry was only possible with all three
+    empty, the paths that ask again did not have to clear them; once a silent think
+    retries, a slot left standing merges with the next attempt's fragments into a
+    call the model never made, and a thinking block keeps the signature of a
+    generation that no longer exists."""
+    from raven.providers.base import ChatDelta
+    from raven.providers.streaming import stream_llm_call
+
+    class _HalfCallThenAnswers(LLMProvider):
+        def __init__(self):
+            super().__init__(api_key="test")
+            self.calls = 0
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+        async def chat(self, *args, **kwargs):  # pragma: no cover - the stream path is under test
+            raise NotImplementedError
+
+        async def chat_stream(self, *args, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                yield ChatDelta(content=None, reasoning_content="first thought")
+                yield ChatDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [{"index": 0, "id": "c1", "function": {"name": "exec", "arguments": '{"comm'}}]
+                    },
+                    thinking_blocks=[{"type": "thinking", "thinking": "A", "signature": "sigA"}],
+                )
+                raise ConnectionError("upstream went away")
+            yield ChatDelta(content="here is the plan")
+
+    provider = _HalfCallThenAnswers()
+    out = await stream_llm_call(
+        provider,
+        messages=[{"role": "user", "content": "go"}],
+        tools=None,
+        model="stub",
+        on_token_delta=None,
+        max_reconnects=1,
+    )
+
+    assert provider.calls == 2
+    assert out.content == "here is the plan"
+    assert not out.tool_calls, "no call the second attempt did not make"
+    assert "first thought" not in (out.reasoning_content or "")
+    assert not out.thinking_blocks, "no signed block from a generation that is gone"
+
+
 @pytest.mark.production_timing
 def test_the_ladder_comes_from_agents_defaults():
     class _Defaults:
@@ -769,3 +869,100 @@ async def test_an_image_refusal_with_nothing_to_withdraw_is_not_waited_out(works
 
     assert provider.calls == 1
     assert out is not None and "Error calling LLM" in (out[0] or "")
+
+
+async def _watch(text: str) -> None:
+    """A caller watching the reply form: what puts a spawn on the streamed path."""
+
+
+class _DropsTwiceThenAnswers(LLMProvider):
+    """The connection drops before the first delta twice, then the stream answers
+    whole: one failure more than the single reconnect the helper grants on its own,
+    so only a ladder handed down from the deployment reaches the answer."""
+
+    def __init__(self):
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, *args, **kwargs):  # pragma: no cover - the fallback this test must not take
+        raise AssertionError("the spawn fell back to the waited-for call")
+
+    async def chat_stream(self, *args, **kwargs):
+        from raven.providers.base import ChatDelta
+
+        self.calls += 1
+        if self.calls <= 2:
+            raise ConnectionError("connection reset by peer")
+        yield ChatDelta(content="answer")
+
+
+class _ShowsThenDrops(LLMProvider):
+    """Streams a word, then the connection drops; answers whole next time."""
+
+    def __init__(self):
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, *args, **kwargs):  # pragma: no cover - the fallback this test must not take
+        raise AssertionError("the spawn fell back to the waited-for call")
+
+    async def chat_stream(self, *args, **kwargs):
+        from raven.providers.base import ChatDelta
+
+        self.calls += 1
+        if self.calls == 1:
+            yield ChatDelta(content="partial")
+            raise ConnectionError("connection reset by peer")
+        yield ChatDelta(content="answer")
+
+
+@pytest.mark.asyncio
+async def test_a_spawned_subagents_dropped_stream_is_asked_again_on_the_deployments_ladder(workspace):
+    """The subagent half of the wiring: `RavenLoopBackend` hands the ladder it was built
+    with to `stream_llm_call`. Left to that call's own defaults a spawn reconnects once
+    and waits never, so a stream dropped twice ended the run; with the ladder handed
+    over, the third call answers and its answer is the run's result."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    provider = _DropsTwiceThenAnswers()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=workspace / "home", retry_delays=(0.0,))
+
+    out = await backend.run("build the deck", task_id="t1", workspace=workspace, executor=None, on_delta=_watch)
+
+    assert provider.calls == 3
+    assert "answer" in (out or "")
+
+
+@pytest.mark.asyncio
+async def test_a_spawned_subagents_rendered_stream_is_retried_only_when_the_deployment_says_so(workspace):
+    """`llmRetryAfterOutput` reaches a spawn the same way. Built with it on, a stream
+    that showed a word and then dropped is asked again and the retry's word is the
+    answer; built without it, the default, the drop ends the run as the rule has
+    always read."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    seen: list[str] = []
+
+    async def watch(text: str) -> None:
+        seen.append(text)
+
+    provider = _ShowsThenDrops()
+    backend = RavenLoopBackend(
+        provider=provider, model="stub", agent_home=workspace / "home", retry_delays=(0.0,), retry_after_output=True
+    )
+    out = await backend.run("build the deck", task_id="t1", workspace=workspace, executor=None, on_delta=watch)
+    assert provider.calls == 2
+    assert "answer" in (out or "")
+    assert seen == ["partial", "answer"]
+
+    provider = _ShowsThenDrops()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=workspace / "home", retry_delays=(0.0,))
+    with pytest.raises(ConnectionError):
+        await backend.run("build the deck", task_id="t1", workspace=workspace, executor=None, on_delta=_watch)
+    assert provider.calls == 1

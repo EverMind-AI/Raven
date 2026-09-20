@@ -275,7 +275,7 @@ def test_a_well_typed_slice_never_meets_the_sentinel(tmp_path: Path) -> None:
         tmp_path,
     )
     hook = plugin_module.make_hook(ctx)
-    assert type(hook).__name__ == "ConductHook"
+    assert type(hook).__name__ == "ParticipantHook"
 
 
 def test_a_tool_call_outside_a_turn_is_refused_with_the_reason(tmp_path: Path) -> None:

@@ -598,6 +598,12 @@ async def _run_rpc_server_until_done(
             from loguru import logger as _logger
 
             _logger.exception("tui: acp pool close failed; continuing shutdown")
+        # The loop's skill watcher is a daemon thread parked inside watchfiles'
+        # Rust watch(). Daemon status does not make exit safe while it sits in
+        # native code: Py_FinalizeEx tears the interpreter down under that call
+        # and the process dies of SIGSEGV once this teardown has succeeded.
+        if agent_loop is not None:
+            agent_loop.context.skills.stop_file_watcher()
         # A backend start still in flight (an EverOS spawn takes up to 30s)
         # must not race the drain and stop below: settle it first.
         if backend_start_task is not None and not backend_start_task.done():

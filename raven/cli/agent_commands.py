@@ -358,6 +358,11 @@ def register(app: typer.Typer) -> None:
                 await teardown()
                 await agent_loop.close_mcp()
             finally:
+                # The loop's skill watcher is a daemon thread parked inside
+                # watchfiles' Rust watch(); left running, Py_FinalizeEx tears
+                # the interpreter down under that call and a one-shot that
+                # rendered its whole turn still exits 139.
+                agent_loop.context.skills.stop_file_watcher()
                 if backend is not None:
                     try:
                         # Drain queued writes first: stopping the backend
@@ -372,10 +377,6 @@ def register(app: typer.Typer) -> None:
 
         _ONE_SHOT_EXIT["code"] = 0
         asyncio.run(run_once())
-        # Native runtimes loaded by the agent loop (lancedb's Rust/tokio
-        # thread, torch) segfault during interpreter finalization. The exit
-        # chokepoint in raven.cli.commands.run hard-exits past finalization
-        # when that hazard is live, so this path just returns normally.
         if _ONE_SHOT_EXIT["code"]:
             raise typer.Exit(_ONE_SHOT_EXIT["code"])
 

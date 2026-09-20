@@ -33,7 +33,9 @@ async def test_rejects_url_resolving_to_private_ip(monkeypatch):
     out = await WebFetchTool().execute(url="http://totally-public.example.com/x")
     parsed = json.loads(out)
     assert "validation failed" in parsed["error"]
-    assert "private/internal" in parsed["error"]
+    # The reason sits in ``detail``: ``error`` is the tool-failure streak's
+    # classification key, so it carries the class and never the address.
+    assert "private/internal" in parsed["detail"]
 
 
 async def test_rejects_loopback(monkeypatch):

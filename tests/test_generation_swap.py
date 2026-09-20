@@ -29,7 +29,18 @@ class _StubSubagents:
         self._rec.calls.append("subagents.cancel_all")
 
 
+class _StubSkills:
+    def stop_file_watcher(self) -> None:
+        pass
+
+
+class _StubContext:
+    skills = _StubSkills()
+
+
 class _StubLoop:
+    context = _StubContext()
+
     def __init__(self, rec: _Recorder) -> None:
         self._rec = rec
         self.subagents = _StubSubagents(rec)
@@ -248,6 +259,7 @@ def test_every_generation_organ_has_a_dispose_call() -> None:
         "sub-agents": "self.loop.subagents.cancel_all",
         "mcp connections": "self.loop.close_mcp",
         "the loop itself": "self.loop.stop",
+        "the skill watcher": "self.loop.context.skills.stop_file_watcher",
         "in-flight store writes": "self.loop.drain_backend_stores",
         "the memory backend": "self.backend.stop",
     }

@@ -171,6 +171,10 @@ def test_cron_list_body_does_not_crash(tmp_config: Path) -> None:
 # Full set of top-level commands + subcommand groups registered on the root
 # app (superset of TOP_LEVEL_COMMANDS, which only lists the --help-probed ones).
 REGISTERED_COMMAND_NAMES = {
+    # The A2A protocol face (`raven a2a serve`): refuses to start in a
+    # sub-agent process, since serving a port does not ride the tool
+    # registry the way outbound `a2a_send` does.
+    "a2a",
     # The ACP agent server: an editor spawns `raven acp` and speaks
     # JSON-RPC to its stdio. Distinct from the client direction, which is
     # not a command -- raven spawns those agents itself.

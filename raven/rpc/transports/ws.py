@@ -110,6 +110,7 @@ class WsGateway:
         self._sockets: set[web.WebSocketResponse] = set()
         self.dispatcher: Any = None
         self.agent_loop_factory: Any = None
+        self.a2a_handler: Any = None
         self.port: int = DEFAULT_PORT
 
     def mint_nonce(self) -> str:
@@ -558,6 +559,14 @@ def build_app(
     app.router.add_get("/knowledge/crop", gateway.handle_knowledge_crop)
     app.router.add_get("/rpc", gateway.handle_ws)
     app.router.add_get("/oauth/callback", handle_oauth_callback)
+
+    from raven.a2a.gate import mount_gateway_face
+    from raven.config import load_config
+
+    # The gate is the only module this surface may import out of raven/a2a/ -- it
+    # assembles the handler behind its own enabled/sub-agent checks. None here means
+    # the face did not mount.
+    gateway.a2a_handler = mount_gateway_face(app, load_config().a2a, agent_loop_factory=gateway.agent_loop_factory)
 
     def guard_delivery(request: web.Request) -> None:
         if not gateway._origin_ok(request):

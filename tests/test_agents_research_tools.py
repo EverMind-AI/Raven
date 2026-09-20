@@ -41,6 +41,7 @@ from research_flow.tools.web import (  # noqa: E402
     set_current_session,
 )
 
+from raven.agent.loop.failure_streak import failure_class, is_hard_tool_failure  # noqa: E402
 from raven.agent.tools.params import cast_params, validate_params  # noqa: E402
 from raven.plugins.context import PluginContext, ServiceLocator  # noqa: E402
 from raven.security.network import validate_url_target  # noqa: E402
@@ -127,6 +128,69 @@ async def test_a_fetch_status_error_names_the_reader_and_status_only(monkeypatch
 
     assert json.loads(answer)["error"] == "Jina Reader answered HTTP 402"
     assert "SECRET-KEY-123" not in answer and "r.jina.ai" not in answer
+
+
+class _DeadTransport(httpx.AsyncBaseTransport):
+    """A transport that dies the same way whatever host it is pointed at."""
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        host = request.url.params.get("__host") or str(request.url)
+        raise httpx.ConnectError(f"[SSL: CERTIFICATE_VERIFY_FAILED] hostname '{host}' does not match")
+
+
+@pytest.mark.asyncio
+async def test_one_transport_fault_on_two_hosts_is_one_streak_class(monkeypatch):
+    """The reader's envelope decides the loop's streak class, so it may not carry a host.
+
+    ``failure_class`` keys a JSON envelope on its ``error`` string alone. An exception
+    interpolated there carries the host into the key, so one dead reader walked across
+    hosts becomes a class per host, the streak never reaches ``_LOOP_BREAK_THRESHOLD``,
+    and the nudge that exists for a model repeating one dead call never fires. The host
+    stays in the envelope for the model to read; it just does not decide the class.
+    """
+    _patch_client(monkeypatch, _DeadTransport())
+    monkeypatch.setattr(web_mod, "validate_url_target", lambda url: (True, ""))
+    # A dead transport is retried with a backoff, and what this pins is the envelope
+    # the last attempt writes rather than the waiting on the way to it.
+    monkeypatch.setattr(web_mod, "_RETRY_BACKOFF_S", (0.0, 0.0))
+    set_current_session("t")
+
+    envelopes = [
+        await WebFetchTool(api_key="k").execute(url=f"https://{host}/a?__host={host}")
+        for host in ("alpha.example.com", "beta.example.org")
+    ]
+
+    assert all(is_hard_tool_failure(raw) for raw in envelopes)
+    assert len({failure_class(raw) for raw in envelopes}) == 1
+    assert "alpha.example.com" in envelopes[0] and "beta.example.org" in envelopes[1]
+
+
+@pytest.mark.asyncio
+async def test_a_vendor_that_answered_without_a_page_keeps_its_own_class(monkeypatch):
+    """The other direction, which the fix above must not trade away.
+
+    A vendor's refusal composes its message here from a fixed set of phrases, so two
+    different refusals stay two causes. Folding them onto the exception type would make
+    a drained key and a blocked page one streak -- the failure ``failure_class`` exists
+    to avoid.
+    """
+
+    class _NoPage(httpx.AsyncBaseTransport):
+        def __init__(self, payload: dict) -> None:
+            self._payload = payload
+
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, request=request, json=self._payload)
+
+    monkeypatch.setattr(web_mod, "validate_url_target", lambda url: (True, ""))
+    set_current_session("t")
+
+    _patch_client(monkeypatch, _NoPage({"code": 401, "message": "bad key"}))
+    spent = await WebFetchTool(api_key="k", provider="anysearch").execute(url="https://a.example/a")
+    _patch_client(monkeypatch, _NoPage({"results": [], "failed_results": [{"error": "blocked"}]}))
+    blocked = await WebFetchTool(api_key="k", provider="tavily").execute(url="https://a.example/a")
+
+    assert failure_class(spent) != failure_class(blocked)
 
 
 # --------------------------------------------------------------------------
@@ -291,9 +355,9 @@ def test_the_digest_follows_the_sessions_mode_not_the_base_config(tmp_path):
     async def run():
         set_current_session("s-deep")
         _shared_for(ctx).session_gear["s-deep"] = SessionGear(digest_model="deep/strong", digest_verbatim_head_chars=0)
-        deep = await tool._try_digest(page, "the founding date", "https://a.example/one")
+        deep, _ = await tool._try_digest(page, "the founding date", "https://a.example/one")
         set_current_session("s-ungeared")
-        base = await tool._try_digest(page, "the founding date", "https://a.example/two")
+        base, _ = await tool._try_digest(page, "the founding date", "https://a.example/two")
         return deep, base
 
     deep, base = asyncio.run(run())
@@ -407,6 +471,23 @@ async def test_a_private_address_is_still_refused(monkeypatch):
     answer = await WebFetchTool().execute(url="http://127.0.0.1:8080/admin")
 
     assert "URL validation failed" in answer
+
+
+@pytest.mark.asyncio
+async def test_one_blocked_reason_on_two_hosts_is_one_streak_class(monkeypatch):
+    """This copy of the reader carries the same gate, and drifting from the host's
+    is what let the envelope fix land on one of them last time. Every reason the
+    gate composes names the address, so the reason in the classification key gave
+    a model walking an internal range one class per address and the stop-repeating
+    nudge never came."""
+    _patch_client(monkeypatch, _PageTransport())
+    set_current_session("t")
+
+    envelopes = [await WebFetchTool().execute(url=u) for u in ("http://10.0.0.1/p", "http://192.168.1.1/p")]
+
+    assert all(is_hard_tool_failure(raw) for raw in envelopes)
+    assert len({failure_class(raw) for raw in envelopes}) == 1
+    assert "10.0.0.1" in json.loads(envelopes[0])["detail"]
 
 
 @pytest.mark.asyncio

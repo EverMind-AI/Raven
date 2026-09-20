@@ -150,3 +150,6 @@ agents/raven-ppt/materials/
 # `make install` and the image build download them instead.
 raven/core/res/
 raven/knowledge/res/
+# MkDocs build output. The site is published from CI; HTML is never committed
+# (AGENTS.md section 7).
+docs-site/site/

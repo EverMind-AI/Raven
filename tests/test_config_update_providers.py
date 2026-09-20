@@ -1812,6 +1812,45 @@ def test_borrow_copies_the_key_and_the_address(monkeypatch: pytest.MonkeyPatch) 
     assert borrowed["base_url"] == "https://api.example.test/v1"
 
 
+def test_borrow_answers_with_the_address_raven_knows_for_the_lender(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A lender with no address in its section still has one Raven knows.
+
+    The borrowing section is being pointed at this provider, and what is in its
+    `base_url` belongs to whoever it pointed at before. An EverOS role moved
+    from an OpenRouter model to a DeepSeek one ended up with DeepSeek's key at
+    OpenRouter's address, which the far end refuses -- and answering "" instead
+    trades that for no address at all, which the section's reader refuses just
+    as flatly. DeepSeek and the other LiteLLM-routed vendors carry no
+    `default_api_base`, which is what `_PROVIDER_BASE_URL_FALLBACK` is for.
+    """
+    import raven.config
+
+    monkeypatch.setattr(raven.config, "load_config", lambda: _config_with_provider("deepseek", "sk-lend"))
+
+    assert lend_provider_credentials("deepseek") == {
+        "api_key": "sk-lend",
+        "base_url": "https://api.deepseek.com/v1",
+    }
+
+
+def test_borrow_hands_back_an_empty_address_for_a_vendor_no_table_knows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ "" is left where no table can hold an address, not where one is missing.
+
+    What remains after the fallback table covers the keyed OpenAI-protocol
+    vendors is two kinds, and neither is an oversight: a vendor on another
+    protocol, and a deployment whose address only its operator knows.
+    `gpustack` is the second kind. The delete that follows is the lesser of
+    two wrongs rather than a good outcome -- the section's readers ask
+    `model and api_key`, so nothing reports the gap until the role is called
+    -- so a vendor turning up here wants a table entry, not this branch.
+    """
+    import raven.config
+
+    monkeypatch.setattr(raven.config, "load_config", lambda: _config_with_provider("gpustack", "gs-lend"))
+
+    assert lend_provider_credentials("gpustack") == {"api_key": "gs-lend", "base_url": ""}
+
+
 class TestWhatABorrowedCredentialMustCarry:
     """A url/key/header group is reachable only whole, and an everos section
     holds a model, an api_key and a base_url. Anything the section cannot hold

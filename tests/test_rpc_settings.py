@@ -501,9 +501,12 @@ async def test_a_borrowed_key_beats_the_redaction_the_page_echoes(everos_toml, l
     assert data["rerank"]["base_url"] == "https://lender.example/v1"
 
 
-async def test_borrowing_keeps_the_section_url_when_the_lender_has_none(everos_toml, lender):
-    """A provider with no address of its own must not blank an address the
-    reader typed: only the key is certain to be worth copying."""
+async def test_a_borrow_hands_over_an_address_as_well_as_a_key(everos_toml, lender):
+    """The lender's address wins, whichever tier it comes from.
+
+    Named for what it pins now: `custom` carries a registry default, so what
+    this asserts is that the borrow supplies an address -- not that the
+    section kept its own, which this PR deliberately stopped doing."""
     lender({"apiKey": "sk-lent"}, name="custom")
     await rpc_console.settings_everos_set(
         {"section": "rerank", "fields": {"base_url": "https://mine/v1"}, "borrow_from": "custom"}
@@ -515,6 +518,53 @@ async def test_borrowing_keeps_the_section_url_when_the_lender_has_none(everos_t
     # section keeps on its own is covered by the endpoints case above, where the
     # entry supplies the address.
     assert data["rerank"]["base_url"]
+
+
+async def test_the_borrowed_address_replaces_the_lenders_predecessor(everos_toml, lender):
+    """The incident, end to end: a role moved from an OpenRouter model to a
+    DeepSeek one kept DeepSeek's key at OpenRouter's address, which the far end
+    refuses. What the section must end up with is DeepSeek's own address -- not
+    the one it was reached at before, and not nothing, which the reader refuses
+    just as flatly."""
+    everos_toml.write_text(
+        '[llm]\nmodel = "openrouter/anthropic/claude-3.5-sonnet"\n'
+        'api_key = "sk-openrouter"\nbase_url = "https://openrouter.ai/api/v1"\n',
+        encoding="utf-8",
+    )
+    lender({"apiKey": "sk-deepseek"}, name="deepseek")
+    await rpc_console.settings_everos_set(
+        {"section": "llm", "fields": {"model": "deepseek/deepseek-chat"}, "borrow_from": "deepseek"}
+    )
+    data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
+    assert data["llm"] == {
+        "model": "deepseek/deepseek-chat",
+        "api_key": "sk-deepseek",
+        "base_url": "https://api.deepseek.com/v1",
+    }
+
+
+async def test_a_vendor_the_table_knows_only_by_its_shown_address_still_lends_one(everos_toml, lender):
+    """groq and zai were the remainder, and the remainder deleted the address.
+
+    The earlier fix carried the fallback table through the lend, which closed
+    deepseek, openai and openrouter and left every other keyed vendor
+    answering "" -- a delete, on a section whose reader cannot tell it from a
+    working one: `role_configured_in` and the page's LED both ask
+    `model and api_key`, so a role with no address went on reporting itself
+    set up until something called it.
+    """
+    everos_toml.write_text(
+        '[llm]\nmodel = "openrouter/anthropic/claude-3.5-sonnet"\n'
+        'api_key = "sk-openrouter"\nbase_url = "https://gateway.internal/v1"\n',
+        encoding="utf-8",
+    )
+    lender({"apiKey": "gsk-groq"}, name="groq")
+    await rpc_console.settings_everos_set(
+        {"section": "llm", "fields": {"model": "groq/llama-3.3-70b"}, "borrow_from": "groq"}
+    )
+    data = tomllib.loads(everos_toml.read_text(encoding="utf-8"))
+    assert data["llm"]["api_key"] == "gsk-groq"
+    assert data["llm"]["base_url"] == "https://api.groq.com/openai/v1"
 
 
 async def test_borrowing_finds_a_provider_stored_under_another_spelling(everos_toml, lender):
@@ -574,6 +624,59 @@ async def test_default_permission_mode_is_a_settings_key(cfg):
     assert _read(cfg)["permissions"]["mode"] == "smart"
     with pytest.raises(ConfigValidationError):
         await rpc_console.settings_set({"key": "permissions.mode", "value": "yolo"})
+
+
+class TestTheCronTimezoneControl:
+    """The settings page's timezone box, from the wire spelling to the loader.
+
+    ``settings.set`` is handed the key as the page sends it -- the JSON
+    spelling ``cron.defaultTimezone`` -- while ``update_cron_config`` validates
+    against ``CronConfig.model_fields``, which holds Python field names. This
+    branch is the only place in the endpoint where the two conventions meet, so
+    a missing conversion here is a save that raises instead of writing.
+    """
+
+    async def test_the_timezone_round_trips_through_the_writer_and_the_loader(self, cfg):
+        from raven.config.loader import load_config
+
+        r = await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": "Asia/Tokyo"})
+
+        assert r["applied"] is True
+        assert _read(cfg)["cron"]["defaultTimezone"] == "Asia/Tokyo"
+        # Landing in the file is half of it: the writer spells the key one way
+        # and the loader has to read that same spelling back. Deliberately not a
+        # claim about scheduling -- ``CronConfig.default_timezone`` has exactly
+        # one consumer today, the ``raven cron config get`` display path, and
+        # ``_compute_next_run`` falls back to the machine's local zone rather
+        # than to this field.
+        assert load_config(cfg).cron.default_timezone == "Asia/Tokyo"
+
+    async def test_the_previous_timezone_comes_back(self, cfg):
+        await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": "Asia/Tokyo"})
+        r = await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": "UTC"})
+        assert r["previous"] == "Asia/Tokyo"
+
+    async def test_an_unknown_zone_is_refused_before_anything_is_written(self, cfg):
+        with pytest.raises(ConfigValidationError, match="unknown timezone"):
+            await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": "Mars/Olympus"})
+        assert "cron" not in _read(cfg)
+
+    async def test_an_empty_timezone_is_refused(self, cfg):
+        with pytest.raises(ConfigValidationError):
+            await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": ""})
+
+
+async def test_the_retired_forward_channels_key_is_not_writable(cfg):
+    """``forward_channels`` left ``CronConfig`` when delivery became fire-at-origin.
+
+    The loader strips both spellings out of a config file on the way in, so no
+    field stands behind this key any more. It has to be refused the way every
+    other unwritable key is -- typed, and naming itself -- rather than reaching
+    a writer whose only possible answer is to raise.
+    """
+    with pytest.raises(ConfigValidationError, match="not writable"):
+        await rpc_console.settings_set({"key": "cron.forwardChannels", "value": ["telegram"]})
+    assert "cron" not in _read(cfg)
 
 
 async def test_extension_pin_writes_roundtrip_through_raven_loader(cfg):

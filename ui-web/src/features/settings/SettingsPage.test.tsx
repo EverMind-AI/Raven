@@ -454,6 +454,17 @@ describe('settings island', () => {
     expect(calls).toContainEqual(['set', { key: 'cron.defaultTimezone', value: 'UTC' }])
   })
 
+  it('offers no row for the retired cron forward-channels key', async () => {
+    install()
+    await mount()
+    await act(async () => {
+      screen.getByText('gui.set.pg.channel').click()
+    })
+    // The field left CronConfig when delivery became fire-at-origin, and
+    // settings.set refuses the key outright, so a row here could only error.
+    expect(screen.queryByText('gui.set.chn.cron_to')).toBeNull()
+  })
+
   it('resets an out-of-range number without writing, and writes a valid one', async () => {
     const { calls } = install()
     await mount()
