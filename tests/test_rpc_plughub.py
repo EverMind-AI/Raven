@@ -611,6 +611,27 @@ async def test_the_connection_verbs_translate_a_refusal_into_the_rpc_vocabulary(
     assert excinfo.value.data == {"field": "name", "name": "ghost"}
 
 
+async def test_a_refusal_with_structured_data_still_carries_its_sentence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The page reads ``error.data.detail``. A refusal that also named its field
+    arrived without the sentence, so every toast on the plugins page read
+    ``config_validation_error`` and nothing else."""
+    from raven.market import connect
+    from raven.market.connect import PlugConnectError
+    from raven.rpc.dispatcher import Dispatcher
+
+    async def refuse(*args, **kwargs):
+        raise PlugConnectError("this plugin takes no credential", data={"field": "name", "name": "ctx"})
+
+    monkeypatch.setattr(connect, "configure", refuse)
+    d = Dispatcher()
+    rpc_plughub.register_plughub_methods(d, agent_loop_factory=lambda: None)
+    resp = await d.dispatch(
+        {"jsonrpc": "2.0", "id": 1, "method": "plug.configure", "params": {"name": "ctx", "form": {}}}
+    )
+    assert resp["error"]["message"] == "config_validation_error"
+    assert resp["error"]["data"] == {"field": "name", "name": "ctx", "detail": "this plugin takes no credential"}
+
+
 async def test_configure_refuses_a_form_that_is_not_an_object() -> None:
     with pytest.raises(ConfigValidationError, match="form must be an object"):
         await rpc_plughub.plug_configure({"name": "svc", "form": "token=x"})
