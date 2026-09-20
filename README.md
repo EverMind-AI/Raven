@@ -18,7 +18,7 @@
 # What is Raven
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/4ae8ac91-2f0c-4c81-aa7c-c15526bd77af"><img src="https://github.com/user-attachments/assets/4ae8ac91-2f0c-4c81-aa7c-c15526bd77af" alt="Raven one surface, all agents workflow" width="100%"></a>
+  <a href="https://github.com/user-attachments/assets/f400d693-d8cf-46eb-b846-6948f66f6fed"><img src="https://github.com/user-attachments/assets/f400d693-d8cf-46eb-b846-6948f66f6fed" alt="Raven one surface, all agents workflow" width="100%"></a>
 </p>
 
 <p align="center"><em>One Surface, All Agents: Raven generates DAGs and orchestrates multiple specialized agents for complex tasks.</em></p>
