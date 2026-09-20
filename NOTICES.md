@@ -46,6 +46,9 @@ retained in `LICENSES/`.
   `rag/nlp/delim.py`, `common/token_utils.py`): the delimiter field syntax, the
   build-then-merge arrangement, the rule that a table or a figure stands as its
   own chunk, and the tokenizer the sizes are counted with.
+  `raven/knowledge/parser/_tables.py` carries `__compose_table_content` and the
+  cell taxonomy from `deepdoc.parser.docx_parser`, and composes a grid as an
+  HTML table the way `TableStructureRecognizer.construct_table` does.
   `raven/knowledge/parser/excel_parser.py` follows `deepdoc.parser.excel_parser`
   in shape: a row labelled by its header is the unit, the sheet name travels
   with a row when it names something, and the same file renders whole as HTML
@@ -58,8 +61,18 @@ retained in `LICENSES/`.
   `deepdoc.parser.ppt_parser.RAGFlowPptParser`: shapes read in the order they
   sit on the slide rather than the order the file lists them, bulleted
   paragraphs marked by their indent, group shapes walked through, and one
-  string per slide. The parser package's layout follows `deepdoc.parser` the
-  same way; each module names its origin in its own docstring.
+  string per slide. `raven/knowledge/parser/deepdoc/` is a port of RAGFlow's
+  `deepdoc.vision` package -- the preparation operators and the detector
+  postprocessing (`operators.py`, `postprocess.py`), the ONNX wrapper and its
+  box sorting and overlap arithmetic (`recognizer.py`), the layout classifier
+  and its garbage filter (`layout_recognizer.py`), the text detector and
+  recognizer (`ocr.py`), and the table-structure model with the row, column and
+  span reconstruction around it (`table_structure_recognizer.py`). The parser
+  package's layout follows `deepdoc.parser` the same way; each module names its
+  origin in its own docstring. `raven/knowledge/_crops.py` follows
+  `RAGFlowPdfParser.crop` in what it produces: one image a chunk, with the
+  regions that chunk covers cut out of the rendered pages and stacked top to
+  bottom.
 - Modifications: rewritten rather than vendored -- it carries no RAGFlow
   import, is written against this package's Section and Chunk shapes, keeps the
   positional metadata RAGFlow discards, and answers a tokenizer failure with an
@@ -67,14 +80,86 @@ retained in `LICENSES/`.
   the standard library and LibreOffice instead of openpyxl and pandas, which
   this install does not carry, and renders every sheet where RAGFlow's markdown
   renders the first. The figure path drops the OCR ladder RAGFlow puts in front
-  of the vision model -- there is no OCR engine in this tree -- and the two
+  of the vision model: a figure is a picture, and reading the words printed on
+  one instead of describing it is the wrong answer however cheap. The two
   prompts are merged into one template whose context sections are omitted when
-  there is no context, rather than rendered empty. The slide parser reads the
+  there is no context, rather than rendered empty. The vision package drops the
+  remote-inference client, the Ascend NPU variant and the CUDA branch that
+  pip-installs torch at import to ask whether a GPU exists; it holds one session
+  per model for the process rather than one per device behind a semaphore, runs
+  on the CPU unless an operator opts in, retries a failed inference three times
+  rather than a hundred thousand, and carries the label order the published
+  weights actually answer with -- RAGFlow's own list is for an older export and
+  disagrees on every index. `deepdoc/_pipeline.py` arranges the three models the
+  way `deepdoc.parser.pdf_parser.RAGFlowPdfParser` does, with one difference:
+  where RAGFlow detects text boxes on every page, this uses the file's own text
+  layer wherever there is one and runs the detector and recognizer only on the
+  pages that have nothing to read. The crops differ in two ways as well. RAGFlow
+  writes each region's coordinates into the chunk's own text as `@@...##` markers
+  and parses them back out with a regex, because its chunk is a bare string with
+  nowhere else to keep them; here they are already structured in the parser's
+  `elements` spans, so the markers would only put text nobody wrote into the
+  thing being embedded. And RAGFlow renders every page of a document up front
+  and holds them while it is processed, where this visits the pages once each
+  and releases each before the next, so the peak is one page however long the
+  document. Two things about the table HTML differ as well. Every cell's text
+  and every caption is escaped, where upstream interpolates them raw -- the text
+  comes off a page, and the string is indexed, handed to a model and rendered in
+  a panel, so a cell holding a `<` otherwise produces markup that is no longer a
+  table. And the span attributes are quoted and written only where there is a
+  span, where upstream emits `<td  >` for every ordinary cell. The Word parser
+  reaches the same HTML through `_tables.html_table` rather than through the
+  vision stack, and states its merges as `colspan` and `rowspan`: the flat form
+  it used to produce had to repeat a straddling cell across the columns it
+  covered, because there was nowhere to record a span. The slide parser reads the
   OOXML package with the standard library instead of python-pptx, which this
   package does not carry, and reads slide order through the presentation's own
   relationships -- python-pptx resolves that, and the part names do not. Its
   sections are marked atomic, so one slide is one chunk; RAGFlow returns the
   slides as strings and leaves the merging to its caller.
+
+## Infinity (rag tokenizer)
+- Upstream source: https://github.com/infiniflow/infinity
+- Copyright (c) 2025 InfiniFlow and Infinity contributors
+- License: Apache-2.0
+- Scope: `raven/core/tokenizer.py` is a port of `infinity/rag_tokenizer.py`
+  from the Infinity python SDK -- the dictionary trie, the forward and backward
+  maximum-matching passes, the scored resolution of ambiguous spans, and the
+  latin path's stemming and lemmatisation. It is the tokenizer RAGFlow indexes
+  Chinese with.
+- Modifications: ported rather than depended on -- the package it ships in is a
+  vector database's client, and a knowledge base that segments Chinese should
+  not need a second vector store installed. The class is renamed `Tokenizer`,
+  the dictionary is resolved under `raven/core/res/` and a missing one raises
+  with the command that fetches it rather than calling `exit(1)`, nltk reads
+  the corpora fetched beside it rather than a machine-wide path, the CLI demo
+  is dropped, and the full-width punctuation class is written as escapes for
+  the source-language gate.
+
+## Infinity resource files (word dictionary)
+- Upstream source: https://github.com/infiniflow/resource
+- Copyright (c) 2023 InfiniFlow
+- License: MIT
+- Scope: `rag/huqie.txt`, the word-and-frequency dictionary the tokenizer
+  segments against. Not vendored: it is 8 MB, and `scripts/fetch_resources.py`
+  downloads it into `raven/core/res/` at install time.
+- Modifications: none. The file is used as published; the trie beside it is
+  built locally because the published one is serialised against a different
+  libdatrie and does not load.
+
+## deepdoc models (document vision)
+- Upstream source: https://huggingface.co/InfiniFlow/deepdoc
+- Copyright (c) 2025 InfiniFlow
+- License: Apache-2.0
+- Scope: the ONNX weights the PDF parser runs -- text detection (`det.onnx`),
+  text recognition (`rec.onnx`) with its character set (`ocr.res`), page layout
+  (`layout.onnx`) and table structure (`tsr.onnx`). Not vendored: together they
+  are about 103 MB, and `scripts/fetch_resources.py` downloads them into
+  `raven/knowledge/res/`.
+- Modifications: none to the weights. The three genre-specific layout variants
+  published beside them are not fetched, and neither are the `.ort`
+  serialisations, because nothing here selects between the first or reads the
+  second.
 
 ## agentscope (web-service framework)
 - Upstream source: https://github.com/agentscope-ai/agentscope

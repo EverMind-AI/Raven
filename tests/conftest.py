@@ -508,6 +508,24 @@ def _console_socket_registered():
 
 
 @pytest.fixture(autouse=True)
+def _no_configured_vision_model(monkeypatch):
+    """No test reaches a real vision endpoint by default.
+
+    The parsers resolve the configured ``vision`` pin when they are handed no
+    model -- which is right in production and a trap here: a developer who has
+    configured one, on the machine the suite runs on, pays for a describe call
+    every time a test parses a picture, a figure or a page with no text layer.
+    It happened: a PDF fixture short enough to read as scanned sent its page to
+    a live model, and the test failed on the answer.
+
+    A test that wants the path passes its own stub, which is what every test
+    here does. One that wants to prove the unconfigured behaviour gets it for
+    free.
+    """
+    monkeypatch.setattr("raven.knowledge._vision.load_vision_model", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def _restore_i18n_language():
     """Undo any ``raven.i18n.set_language`` left over from a prior test.
 

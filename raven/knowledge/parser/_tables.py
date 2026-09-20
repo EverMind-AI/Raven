@@ -1,20 +1,32 @@
 """Composing a table into the text an index can match against.
 
-RAGFlow's ``__compose_table_content``: header rows are not emitted on their
-own, they are lifted onto each body row as ``header: cell``, so a row survives
-being read without the grid around it. That is the property a chunk boundary
-destroys otherwise -- cut a grid anywhere below its first line and every row
-under the cut has lost its column names.
+A table goes in as a table. `<table>` is the only shape that keeps all of what
+a grid states -- which column a cell stood under, which cells are merged, which
+row is the header -- and it is the shape a language model reads a table in,
+which is what these chunks are for.
+
+The flat form that used to live here was RAGFlow's ``__compose_table_content``:
+one line per body row, each cell titled by its column (``Region: EU;Q1: 1.2M``).
+It exists because a chunk boundary can render a grid meaningless -- cut one
+below its first line and every row under the cut has lost its column names --
+and a self-describing row survives that cut. The answer here is to not cut: a
+table is one element and one unit to the chunker, so it is never split, and the
+grid survives whole. What the flat form could never express is a merge. A
+header standing over two columns had to be repeated across both, a cell running
+down three rows was repeated or lost, and every format this reads -- Word,
+PowerPoint, PDF -- states its merges exactly.
 
 Here rather than inside one parser because every format with tables wants the
-same composition and the same answer: a Word table, a slide's table, and the
-rows a PDF's table finder returns are three readers of one grid.
+same answer: a Word table, a slide's table, and the rows a PDF's table finder
+returns are three readers of one grid.
 """
 
 from __future__ import annotations
 
 import re
 from collections import Counter
+from dataclasses import dataclass
+from html import escape
 
 #: RAGFlow's cell taxonomy, ported pattern for pattern from
 #: `deepdoc.parser.docx_parser`. Only one label carries a decision -- `Nu`, a
@@ -67,72 +79,88 @@ def pad_grid(grid: list[list[str]]) -> list[list[str]]:
     return [row + [""] * (width - len(row)) for row in grid]
 
 
-def compose_table(grid: list[list[str]]) -> str:
-    """One line per body row, each cell titled by the headers above it.
+@dataclass(frozen=True)
+class Cell:
+    """One cell of a grid, with what it spans.
 
-    RAGFlow's `__compose_table_content`, kept: header rows are not emitted on
-    their own, they are lifted onto each body row as `header: cell`, cells are
-    joined with `;`, and a table of fewer than two rows composes to nothing at
-    all -- a single row has no header to compose against.
-
-    A table whose body is mostly numeric can carry headers further down as
-    well (a rate table restating its columns per quarter), and RAGFlow finds
-    them by looking for rows that break the numeric pattern. That test is why
-    :func:`cell_type` exists.
-
-    Not kept: RAGFlow returns the rows as a list when the table has more than
-    three columns and as one joined string otherwise, which is a chunking
-    decision -- how much of a table lands in one retrievable piece. Here the
-    chunker owns that, and this returns the text either way.
+    A plain string is a cell spanning one of each, which is why every caller
+    that has no merges to report passes strings and never sees this.
     """
-    if len(grid) < 2:
+
+    text: str
+    colspan: int = 1
+    rowspan: int = 1
+
+
+def _cells(row: "list[str | Cell]") -> list[Cell]:
+    return [cell if isinstance(cell, Cell) else Cell(cell) for cell in row]
+
+
+def html_table(grid: "list[list[str | Cell]]", caption: str = "") -> str:
+    """One grid as an HTML table, its header rows marked.
+
+    The shape a table keeps rather than one of the two it survives. Flattened
+    to prose a cell loses the column it stood under; flattened by
+    :func:`compose_table` it keeps the column name and loses the grid, which is
+    the right trade for a format that has no cell boundaries to begin with and
+    the wrong one for a PDF, where the boundaries are exactly what was
+    measured. `<table>` keeps both, and it is the shape a language model reads
+    a table in -- which is what these chunks are for.
+
+    Which rows are headers is decided the way :func:`compose_table` decides it,
+    off the same :func:`cell_type` vote, so a document's tables do not disagree
+    about where their headers are depending on which path read them.
+
+    A row may be given as plain strings or as :class:`Cell` values. The
+    difference is merges: the flat form has to repeat a cell across the columns
+    it straddles, because there is nowhere else to say so, and repeating it
+    here would put the same value in two cells of a grid that has `colspan` to
+    say it once. A caller that knows its merges passes cells; a caller reading
+    a format that does not state them passes strings. Nothing squares the rows
+    off: a row of three cells where one spans two columns is three cells.
+    """
+    rows = [_cells(row) for row in grid]
+    rows = [row for row in rows if any(cell.text.strip() for cell in row)]
+    if not rows:
         return ""
 
+    header_rows = _header_rows([[cell.text for cell in row] for row in rows])
+    out = ["<table>"]
+    if caption.strip():
+        out.append(f"<caption>{escape(caption.strip())}</caption>")
+    for index, row in enumerate(rows):
+        tag = "th" if index in header_rows else "td"
+        built = []
+        for cell in row:
+            spans = ""
+            if cell.colspan > 1:
+                spans += f' colspan="{cell.colspan}"'
+            if cell.rowspan > 1:
+                spans += f' rowspan="{cell.rowspan}"'
+            built.append(f"<{tag}{spans}>{escape(cell.text.strip())}</{tag}>")
+        out.append(f"<tr>{''.join(built)}</tr>")
+    out.append("</table>")
+    return "\n".join(out)
+
+
+def _header_rows(grid: list[list[str]]) -> list[int]:
+    """Which rows of a grid read as headers rather than as body.
+
+    The first always, and after it any row that breaks the body's dominant
+    kind -- a rate table restating its columns per quarter carries headers
+    further down, and RAGFlow finds them the same way.
+    """
+    if len(grid) < 2:
+        return [0]
     body = Counter(cell_type(cell) for row in grid[1:] for cell in row)
     dominant = max(body.items(), key=lambda item: item[1])[0]
-
     header_rows = [0]
     if dominant == "Nu":
         for index, row in enumerate(grid[1:], start=1):
             types = Counter(cell_type(cell) for cell in row)
             if max(types.items(), key=lambda item: item[1])[0] != dominant:
                 header_rows.append(index)
-
-    lines: list[str] = []
-    for index, row in enumerate(grid):
-        if index in header_rows:
-            continue
-        above = _headers_above(header_rows, index)
-        cells: list[str] = []
-        for column, cell in enumerate(row):
-            if not cell:
-                continue
-            titles: list[str] = []
-            for offset in above:
-                title = grid[index + offset][column].strip()
-                if title and title not in titles:
-                    titles.append(title)
-            prefix = ",".join(titles)
-            cells.append(f"{prefix}: {cell}" if prefix else cell)
-        if cells:
-            lines.append(";".join(cells))
-    return "\n".join(lines)
+    return header_rows
 
 
-def _headers_above(header_rows: list[int], index: int) -> list[int]:
-    """Offsets of the header rows a body row answers to, nearest block only.
-
-    Where several header rows stand apart, only the run of consecutive ones
-    closest above the body row titles it -- an earlier block belongs to the
-    rows that followed it, not to this one.
-    """
-    offsets = [row - index for row in header_rows if row < index]
-    position = len(offsets) - 1
-    while position > 0:
-        if offsets[position] - offsets[position - 1] > 1:
-            return offsets[position:]
-        position -= 1
-    return offsets
-
-
-__all__ = ["cell_type", "compose_table", "pad_grid"]
+__all__ = ["Cell", "cell_type", "html_table", "pad_grid"]

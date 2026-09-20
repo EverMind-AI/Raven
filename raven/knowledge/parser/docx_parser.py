@@ -16,12 +16,13 @@ Paragraphs, tables and figures are elements *inside* a section, each recorded
 in ``metadata["elements"]`` with the character range it occupies, so a hit in
 the middle of a long section still resolves to the page and box it came from.
 
-Tables are composed the way RAGFlow's docx parser composes them: the header
-rows are lifted onto every body row (``Region: EU;Revenue: 1.2M``) instead of
-being stated once at the top. A table is the one structure a chunk boundary can
-render meaningless -- cut a grid anywhere below its first line and the rows
-below have no column names -- and a self-describing row survives the cut. See
-:func:`raven.knowledge.parser._tables.compose_table`.
+Tables are kept as grids, written out as HTML. Word states where its cell
+boundaries are and which cells are merged, and that is exactly what a flattened
+table throws away: a header standing over two columns has nowhere to go, and a
+cell running down three rows is either repeated or lost. A table is also the
+one structure a chunk boundary can render meaningless, so it is never split --
+it is one element, and the chunker treats it as one piece. See
+:func:`raven.knowledge.parser._tables.html_table`.
 
 What is not read: headers, footers, footnotes and comments. They are not in the
 body, they repeat on every page, and indexing them puts a running title in
@@ -47,7 +48,7 @@ import os
 import posixpath
 import zipfile
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from io import BytesIO
 from typing import TYPE_CHECKING, Any
 from xml.etree import ElementTree as ET
@@ -55,10 +56,10 @@ from xml.etree import ElementTree as ET
 from loguru import logger
 
 from raven.knowledge._notes import note
-from raven.knowledge._sections import SECTION_ORDINAL
-from raven.knowledge._types import Section, TextBlock
-from raven.knowledge.parser import BBox, ElementSpan, LayoutType, ParserBase, section_metadata
-from raven.knowledge.parser._tables import compose_table, pad_grid
+from raven.knowledge._types import Section
+from raven.knowledge.parser import BBox, LayoutType, ParserBase
+from raven.knowledge.parser._layout import Element, sections_from
+from raven.knowledge.parser._tables import Cell, html_table
 
 if TYPE_CHECKING:
     from raven.knowledge._vision import VisionModel
@@ -191,31 +192,6 @@ class _Style:
     based_on: str | None = None
 
 
-@dataclass
-class _Element:
-    """One paragraph, table or figure, with where it sits."""
-
-    layout: LayoutType
-    text: str
-    page_number: int
-    page_end: int
-    bbox: BBox
-    heading_level: int | None = None
-    #: For a figure, the relationship id of the picture it draws. Carried
-    #: rather than the bytes because the walk runs over the XML alone, and the
-    #: package is what resolves an id to a part.
-    rel_id: str = ""
-
-
-@dataclass
-class _Block:
-    """A heading and the elements running up to the next heading."""
-
-    level: int | None = None
-    title: str = ""
-    elements: list[_Element] = field(default_factory=list)
-
-
 class DocxParser(ParserBase):
     """Parse a Word document into heading-bounded sections.
 
@@ -293,7 +269,7 @@ class DocxParser(ParserBase):
             raise ValueError(f"Failed to read {filename!r} as a Word document: {error}") from error
 
         await _describe_figures(elements, pictures, filename, model=self._model)
-        return _sections_from(elements, filename)
+        return sections_from(elements, filename)
 
 
 def _read_styles(package: zipfile.ZipFile) -> dict[str, _Style]:
@@ -414,7 +390,7 @@ class _Reader:
         self._page = 1
         self._geometry = _DEFAULT_PAGE
 
-    def read(self, body: ET.Element) -> Iterator[_Element]:
+    def read(self, body: ET.Element) -> Iterator[Element]:
         children = list(_flatten(body))
         geometries = _geometry_per_child(children)
         for index, child in enumerate(children):
@@ -429,7 +405,7 @@ class _Reader:
             if _starts_new_page(child):
                 self._page += 1
 
-    def _paragraph(self, node: ET.Element) -> list[_Element]:
+    def _paragraph(self, node: ET.Element) -> list[Element]:
         """A paragraph as zero or more elements: its text, then its figures.
 
         Figures come after the paragraph's own text rather than at the exact
@@ -459,12 +435,12 @@ class _Reader:
                 if not pieces:
                     start_page = self._page
 
-        elements: list[_Element] = []
+        elements: list[Element] = []
         text = "".join(pieces).strip()
         if text:
             layout = _layout_for(name, level, numbered)
             elements.append(
-                _Element(
+                Element(
                     layout=layout,
                     text=f"- {text}" if layout is LayoutType.LIST_ITEM else text,
                     page_number=start_page,
@@ -476,7 +452,7 @@ class _Reader:
         elements.extend(self._figure(figure, bbox) for figure in figures)
         return elements
 
-    def _figure(self, node: ET.Element, band: BBox) -> _Element:
+    def _figure(self, node: ET.Element, band: BBox) -> Element:
         """A drawing as an element, with whatever geometry it declares.
 
         An anchored drawing states its own offset and size and gets a complete
@@ -485,28 +461,36 @@ class _Reader:
         wrote, or the contents of a text box -- never a placeholder, because a
         placeholder would embed and then match queries about nothing.
         """
-        return _Element(
+        return Element(
             layout=LayoutType.FIGURE,
             text=_figure_text(node),
             page_number=self._page,
             page_end=self._page,
             bbox=_figure_bbox(node, band, self._geometry),
-            rel_id=_figure_rel_id(node),
+            ref=_figure_rel_id(node),
         )
 
-    def _table(self, node: ET.Element) -> _Element | None:
-        """A table as one element, its rows composed against their headers.
+    def _table(self, node: ET.Element) -> Element | None:
+        """A table as one element, kept as a grid.
 
         One element and not one per row: the section is the unit that gets
-        embedded, and every row already names its own columns, so a chunk
-        boundary inside the table costs nothing.
+        embedded, and a chunk boundary inside a table would cut a grid in half.
+
+        A single-row table is not a table. Word documents use one-row tables as
+        layout boxes -- a bordered callout, a header band -- far more often than
+        as data, and indexing those as tables puts furniture in the index
+        wearing a grid's clothes. That rule came from `compose_table`, which
+        answered nothing for a table it could find no header in; it is stated
+        here now, because HTML would happily render one.
         """
         start_page = self._page
-        grid = pad_grid([self._row(row) for row in _findall(node, "tr")])
-        text = compose_table(grid)
+        rows = [self._row(row) for row in _findall(node, "tr")]
+        if len(rows) < 2:
+            return None
+        text = html_table(_spanned(rows))
         if not text:
             return None
-        return _Element(
+        return Element(
             layout=LayoutType.TABLE,
             text=text,
             page_number=start_page,
@@ -514,17 +498,19 @@ class _Reader:
             bbox=self._band(None),
         )
 
-    def _row(self, node: ET.Element) -> list[str]:
-        """One row as one cell per grid column.
+    def _row(self, node: ET.Element) -> "list[_TableCell]":
+        """One row, each cell carrying what it spans and whether it continues.
 
-        A horizontally merged cell is repeated across the columns it spans, so
-        a header that straddles two columns titles both of them and every row
-        below still lines up with it.
+        Not one entry per grid column: a cell that straddles two columns is one
+        cell with a `colspan` of two, because HTML can say that. The flat form
+        this used to produce had to repeat it instead -- there was nowhere to
+        record a span -- and repeating it into a grid that can say it once
+        would put the same value in two cells.
         """
-        cells: list[str] = []
-        for cell in _findall(node, "tc"):
-            cells.extend([self._cell(cell)] * _grid_span(cell))
-        return cells
+        return [
+            _TableCell(text=self._cell(cell), colspan=_grid_span(cell), continues=_merges_up(cell))
+            for cell in _findall(node, "tc")
+        ]
 
     def _cell(self, node: ET.Element) -> str:
         """One cell, paragraphs joined -- and page breaks inside it still counted.
@@ -571,6 +557,60 @@ class _Reader:
             if end is not None:
                 right -= end / _TWIPS_PER_POINT
         return BBox(x0=round(left, 2), x1=round(right, 2))
+
+
+@dataclass(frozen=True)
+class _TableCell:
+    """One cell as the reader found it, before the rows are stitched together.
+
+    ``continues`` is a vertical merge that is not its own start: Word writes
+    the text once, in the cell that begins the merge, and marks every cell
+    below it as a continuation carrying nothing. Which is why it cannot be
+    resolved a row at a time -- the row underneath has to reach the row above.
+    """
+
+    text: str
+    colspan: int = 1
+    continues: bool = False
+
+
+def _spanned(rows: "list[list[_TableCell]]") -> "list[list[Cell]]":
+    """The rows with vertical merges folded into the cell that begins them.
+
+    A continuation cell is dropped and the cell it continues grows a
+    ``rowspan``. Matched by grid column rather than by position in the row,
+    because a row with a merge in it has fewer cells than the grid has columns
+    and counting cells would drift one column further right on every row.
+    """
+    out: list[list[Cell]] = []
+    started: dict[int, tuple[int, int]] = {}
+    for row in rows:
+        built: list[Cell] = []
+        column = 0
+        for cell in row:
+            if cell.continues and column in started:
+                at, index = started[column]
+                held = out[at][index]
+                out[at][index] = Cell(held.text, held.colspan, held.rowspan + 1)
+            else:
+                started[column] = (len(out), len(built))
+                built.append(Cell(cell.text, cell.colspan))
+            column += cell.colspan
+        out.append(built)
+    return out
+
+
+def _merges_up(cell: ET.Element) -> bool:
+    """Whether this cell continues a vertical merge begun above it.
+
+    ``w:vMerge`` with no ``w:val``, or with ``continue``, is a continuation;
+    ``restart`` begins one and is an ordinary cell as far as this is concerned.
+    """
+    properties = _find(cell, "tcPr")
+    merge = _find(properties, "vMerge") if properties is not None else None
+    if merge is None:
+        return False
+    return (_attr(merge, "val") or "continue").lower() != "restart"
 
 
 def _grid_span(cell: ET.Element) -> int:
@@ -685,14 +725,14 @@ def _read_relationships(package: zipfile.ZipFile) -> dict[str, str]:
     return targets
 
 
-def _pictures(package: zipfile.ZipFile, elements: list[_Element]) -> dict[int, bytes]:
+def _pictures(package: zipfile.ZipFile, elements: list[Element]) -> dict[int, bytes]:
     """The bytes behind each figure, keyed by its index in ``elements``.
 
     Read eagerly for the figures the walk actually found, rather than for every
     image part in the package: a Word file carries the header logo and every
     icon a theme ships, and none of them is in the body.
     """
-    wanted = [(index, element.rel_id) for index, element in enumerate(elements) if element.rel_id]
+    wanted = [(index, element.ref) for index, element in enumerate(elements) if element.ref]
     if not wanted:
         return {}
     targets = _read_relationships(package)
@@ -711,7 +751,7 @@ def _pictures(package: zipfile.ZipFile, elements: list[_Element]) -> dict[int, b
 
 
 async def _describe_figures(
-    elements: list[_Element],
+    elements: list[Element],
     pictures: dict[int, bytes],
     filename: str,
     *,
@@ -791,7 +831,7 @@ async def _describe_figures(
         note(f"{len(refusals)} of {len(ordered)} pictures in this file could not be read: {refusals[0]}")
 
 
-def _text_around(elements: list[_Element], index: int, step: int) -> str:
+def _text_around(elements: list[Element], index: int, step: int) -> str:
     """The nearest prose on one side of a figure, bounded.
 
     Nearest rather than everything in the section: the paragraph beside a
@@ -930,102 +970,3 @@ def _starts_new_page(child: ET.Element) -> bool:
         return False
     kind = _find(section, "type")
     return kind is None or _attr(kind, "val") != "continuous"
-
-
-def _sections_from(elements: list[_Element], filename: str) -> list[Section]:
-    """Group elements into heading-bounded sections, in document order."""
-    blocks: list[_Block] = [_Block()]
-    for element in elements:
-        if element.heading_level is not None:
-            blocks.append(_Block(level=element.heading_level, title=element.text))
-        blocks[-1].elements.append(element)
-
-    stack: list[tuple[int, str]] = []
-    sections: list[Section] = []
-    for block in blocks:
-        if block.level is not None:
-            while stack and stack[-1][0] >= block.level:
-                stack.pop()
-            stack.append((block.level, block.title))
-
-        body = block.elements[1:] if block.level is not None else block.elements
-        # A heading whose only content is itself -- a parent holding nothing
-        # but subheadings -- would index as a chunk of its own title. The name
-        # is not lost: its children carry it in their heading path.
-        if not block.elements or (block.level is not None and not body):
-            continue
-
-        text, spans = _lay_out(block.elements)
-        if not text.strip():
-            continue
-
-        path = [title for _, title in stack]
-        box = BBox()
-        for element in block.elements:
-            box = box.union(element.bbox)
-        lead = block.elements[0]
-        sections.append(
-            Section(
-                content=TextBlock(text=text),
-                source=filename,
-                metadata=section_metadata(
-                    reading_order=len(sections),
-                    layout_type=lead.layout,
-                    page_number=lead.page_number,
-                    page_end=block.elements[-1].page_end,
-                    bbox=box,
-                    elements=spans,
-                    heading=path[-1] if path else None,
-                    heading_path=path or None,
-                    heading_level=block.level,
-                    **{SECTION_ORDINAL: len(sections)},
-                ),
-            )
-        )
-    return sections
-
-
-def _lay_out(elements: list[_Element]) -> tuple[str, list[ElementSpan]]:
-    """Join a section's elements and record where each one landed.
-
-    Consecutive list items are kept one line apart so a list reads as a list;
-    everything else is separated by a blank line. ``reading_order`` on a span
-    is the element's place in the section, not in the document -- the section's
-    own reading order says where the section is, and the two together locate
-    the element.
-
-    An element with no text of its own -- an unlabelled image -- still gets a
-    span, an empty one at the offset it sat at. Its page and box are what the
-    span was for; giving it a placeholder to occupy would put words into the
-    document that nobody wrote.
-    """
-    parts: list[str] = []
-    spans: list[ElementSpan] = []
-    cursor = 0
-    previous: _Element | None = None
-    for index, element in enumerate(elements):
-        if cursor and element.text:
-            separator = (
-                "\n"
-                if previous is not None
-                and previous.layout is LayoutType.LIST_ITEM
-                and element.layout is LayoutType.LIST_ITEM
-                else "\n\n"
-            )
-            parts.append(separator)
-            cursor += len(separator)
-        parts.append(element.text)
-        spans.append(
-            ElementSpan(
-                reading_order=index,
-                layout_type=element.layout,
-                char_start=cursor,
-                char_end=cursor + len(element.text),
-                page_number=element.page_number,
-                page_end=element.page_end,
-                bbox=element.bbox if not element.bbox.is_empty else None,
-            )
-        )
-        cursor += len(element.text)
-        previous = element
-    return "".join(parts), spans

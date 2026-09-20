@@ -72,15 +72,29 @@ def _p(text: str, style: str | None = None, properties: str = "", runs: str = ""
     return f"<w:p>{pPr}<w:r><w:t>{text}</w:t></w:r>{runs}</w:p>"
 
 
-def _table(rows: list[list[str]], spans: dict[tuple[int, int], int] | None = None) -> str:
-    """A table from its cell texts, with optional horizontal merges."""
+def _table(
+    rows: list[list[str]],
+    spans: dict[tuple[int, int], int] | None = None,
+    merged: dict[tuple[int, int], str] | None = None,
+) -> str:
+    """A table from its cell texts, with optional merges.
+
+    ``spans`` gives a cell a ``gridSpan``; ``merged`` gives it a ``vMerge``,
+    valued "restart" where the merge begins and "continue" below it, which is
+    how Word writes a cell that runs down several rows.
+    """
     spans = spans or {}
+    merged = merged or {}
     xml = []
     for r, row in enumerate(rows):
         cells = []
         for c, cell in enumerate(row):
-            span = spans.get((r, c))
-            properties = f'<w:tcPr><w:gridSpan w:val="{span}"/></w:tcPr>' if span else ""
+            marks = ""
+            if (span := spans.get((r, c))) is not None:
+                marks += f'<w:gridSpan w:val="{span}"/>'
+            if (merge := merged.get((r, c))) is not None:
+                marks += f'<w:vMerge w:val="{merge}"/>'
+            properties = f"<w:tcPr>{marks}</w:tcPr>" if marks else ""
             cells.append(f"<w:tc>{properties}{_p(cell)}</w:tc>")
         xml.append(f"<w:tr>{''.join(cells)}</w:tr>")
     return f"<w:tbl>{''.join(xml)}</w:tbl>"
@@ -250,16 +264,22 @@ def test_a_figure_carries_its_alt_text_and_never_a_placeholder():
     assert _texts(_parse(without + _p("Body.")))[0] == "Body."
 
 
-def test_a_table_lifts_its_headers_onto_every_row():
-    """RAGFlow's composition: the header row is not emitted on its own, it
-    titles each cell below it, so a row cut out of the table still reads."""
+def test_a_table_is_kept_as_a_grid():
+    """Word states where its cell boundaries are, so the grid survives into the
+    index rather than being flattened into lines that lose it."""
     body = _table([["Region", "Revenue"], ["EU", "1.2M"], ["APAC", ""]])
     sections = _parse(body)
     elements = sections[0].metadata["elements"]
 
     assert len(elements) == 1
     assert elements[0]["layout_type"] == "table"
-    assert sections[0].content.text == "Region: EU;Revenue: 1.2M\nRegion: APAC"
+    assert sections[0].content.text == (
+        "<table>\n"
+        "<tr><th>Region</th><th>Revenue</th></tr>\n"
+        "<tr><td>EU</td><td>1.2M</td></tr>\n"
+        "<tr><td>APAC</td><td></td></tr>\n"
+        "</table>"
+    )
 
 
 def test_a_numeric_table_finds_the_headers_further_down_it():
@@ -278,25 +298,57 @@ def test_a_numeric_table_finds_the_headers_further_down_it():
         ]
     )
 
-    assert _texts(_parse(body))[0] == "Metric: Latency;Q1: 120;Q2: 118\nRegion EU: Latency;140;131"
+    text = _texts(_parse(body))[0]
+
+    # The row that breaks the numeric pattern is a header for the rows under
+    # it -- a table restating its columns partway down is one table, not two.
+    assert "<tr><th>Metric</th><th>Q1</th><th>Q2</th></tr>" in text
+    assert "<tr><th>Region EU</th><th></th><th></th></tr>" in text
+    assert "<tr><td>Latency</td><td>120</td><td>118</td></tr>" in text
 
 
 def test_a_table_with_no_numeric_body_keeps_only_its_first_row_as_the_header():
     body = _table([["Period", "Revenue"], ["Q1", "EU"], ["2024", "1.2M"]])
 
-    assert _texts(_parse(body))[0] == "Period: Q1;Revenue: EU\nPeriod: 2024;Revenue: 1.2M"
+    text = _texts(_parse(body))[0]
+
+    assert text.count("<th>") == 2, "the first row, and no other"
 
 
-def test_a_merged_header_titles_every_column_it_spans():
-    """A header across two columns is repeated over both, so the rows below
-    line up with it instead of sliding one column left."""
+def test_a_merged_header_spans_its_columns_rather_than_repeating():
+    """A header across two columns is one cell that says so. The flat form had
+    to repeat it -- there was nowhere to record a span -- and repeating it into
+    a grid that has `colspan` would put the same value in two cells."""
     body = _table([["Region", "Revenue", ""], ["EU", "1.2M", "0.9M"]], spans={(0, 1): 2})
 
-    assert _texts(_parse(body))[0] == "Region: EU;Revenue: 1.2M;Revenue: 0.9M"
+    text = _texts(_parse(body))[0]
+
+    assert '<th colspan="2">Revenue</th>' in text
+    assert text.count("Revenue") == 1
+    assert "<tr><td>EU</td><td>1.2M</td><td>0.9M</td></tr>" in text
 
 
-def test_a_single_row_table_composes_to_nothing():
-    """RAGFlow drops it: one row has no header row to compose against."""
+def test_a_cell_running_down_several_rows_spans_them():
+    """Word writes the text once, in the cell that begins the merge, and marks
+    every cell below it as a continuation carrying nothing. Read a row at a
+    time those continuations are empty cells, and the grid says a region has a
+    name on its first row and none on its second."""
+    body = _table(
+        [["Region", "Quarter", "Revenue"], ["EU", "Q1", "1.2M"], ["", "Q2", "1.4M"], ["US", "Q1", "2.4M"]],
+        merged={(1, 0): "restart", (2, 0): "continue"},
+    )
+
+    text = _texts(_parse(body))[0]
+
+    assert '<td rowspan="2">EU</td>' in text
+    assert "<tr><td>Q2</td><td>1.4M</td></tr>" in text, "the continuation is gone, not empty"
+    assert "<tr><td>US</td><td>Q1</td><td>2.4M</td></tr>" in text
+
+
+def test_a_single_row_table_is_not_a_table():
+    """Word documents use one-row tables as layout boxes -- a bordered callout,
+    a header band -- far more often than as data, and indexing one as a table
+    puts furniture in the index wearing a grid's clothes."""
     sections = _parse(_table([["Just a layout box"]]) + _p("Body."))
 
     assert _texts(sections) == ["Body."]

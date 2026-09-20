@@ -32,13 +32,16 @@ def _text_shape(text: str, *, x: int = 0, y: int = 0, placeholder: str = "", bul
     return f"<p:sp>{ph}{frame}<p:txBody>{paragraphs}</p:txBody></p:sp>"
 
 
-def _table_shape(rows: list[list[str]], *, x: int = 0, y: int = 0) -> str:
-    grid = "".join(
-        "<a:tr>"
-        + "".join(f"<a:tc><p:txBody><a:p><a:r><a:t>{cell}</a:t></a:r></a:p></p:txBody></a:tc>" for cell in row)
-        + "</a:tr>"
-        for row in rows
-    )
+def _table_shape(rows: "list[list[str | tuple[str, str]]]", *, x: int = 0, y: int = 0) -> str:
+    """A table shape. A cell given as a pair carries that raw attribute string,
+    which is how a merge is written: `gridSpan="2"` on the cell that begins it
+    and `hMerge="1"` on each cell it covers."""
+
+    def one(cell: "str | tuple[str, str]") -> str:
+        text, marks = cell if isinstance(cell, tuple) else (cell, "")
+        return f"<a:tc {marks}><p:txBody><a:p><a:r><a:t>{text}</a:t></a:r></a:p></p:txBody></a:tc>"
+
+    grid = "".join("<a:tr>" + "".join(one(cell) for cell in row) + "</a:tr>" for row in rows)
     return (
         f'<p:graphicFrame><p:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="100000" cy="50000"/></p:xfrm>'
         f"<a:graphic><a:graphicData><a:tbl>{grid}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>"
@@ -203,12 +206,38 @@ def test_a_bulleted_paragraph_is_marked_and_indented() -> None:
     assert sections[0].content.text == "  .first\n  .second"
 
 
-def test_a_table_is_composed_header_onto_row() -> None:
-    """The same composition the Word and spreadsheet parsers use: a row that
-    survives being read without the grid around it."""
+def test_a_table_is_kept_as_a_grid() -> None:
+    """The shape the Word and PDF parsers keep too: a slide states where its
+    cell boundaries are, and that is what a flattened table throws away."""
     body = _table_shape([["Region", "Revenue"], ["EU", "1.2M"], ["US", "3.4M"]])
 
-    assert _texts(_parse(_deck([body]))) == ["Region: EU;Revenue: 1.2M\nRegion: US;Revenue: 3.4M"]
+    assert _texts(_parse(_deck([body]))) == [
+        "<table>\n"
+        "<tr><th>Region</th><th>Revenue</th></tr>\n"
+        "<tr><td>EU</td><td>1.2M</td></tr>\n"
+        "<tr><td>US</td><td>3.4M</td></tr>\n"
+        "</table>"
+    ]
+
+
+def test_a_merged_cell_spans_instead_of_leaving_a_blank() -> None:
+    """DrawingML puts the span on the cell that begins the merge and marks the
+    cells it covers as carrying nothing. Read straight through, those covered
+    cells come out as blanks -- a grid saying the slide left a cell empty,
+    which is a different claim from a cell being part of its neighbour."""
+    body = _table_shape(
+        [
+            [("Revenue", 'gridSpan="2"'), ("", 'hMerge="1"')],
+            [("EU", 'rowSpan="2"'), "1.2M"],
+            [("", 'vMerge="1"'), "1.4M"],
+        ]
+    )
+
+    text = _texts(_parse(_deck([body])))[0]
+
+    assert '<th colspan="2">Revenue</th>' in text
+    assert '<td rowspan="2">EU</td>' in text
+    assert "<tr><td>1.4M</td></tr>" in text, "the covered cell is gone, not blank"
 
 
 def test_a_group_is_read_through() -> None:

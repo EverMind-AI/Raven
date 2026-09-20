@@ -49,7 +49,7 @@ from raven.knowledge.parser import (
     ParserBase,
     section_metadata,
 )
-from raven.knowledge.parser._tables import compose_table, pad_grid
+from raven.knowledge.parser._tables import Cell, html_table
 
 _PRESENTATION_PART = "ppt/presentation.xml"
 _PRESENTATION_RELS = "ppt/_rels/presentation.xml.rels"
@@ -382,7 +382,7 @@ def _read_shape(node: ET.Element, layout: dict[str, tuple[float, float]]) -> _Sh
 
     table = _descend(node, "tbl")
     if table is not None:
-        text = compose_table(pad_grid(_table_rows(table)))
+        text = html_table(_table_rows(table))
         return _Shape(text=text, layout=LayoutType.TABLE, x=x, y=y, bbox=box) if text else None
 
     body = _descend(node, "txBody")
@@ -430,16 +430,48 @@ def _box(x: float | None, y: float | None, extent: tuple[float, float] | None) -
     )
 
 
-def _table_rows(table: ET.Element) -> list[list[str]]:
-    """A slide table as a grid of cell text."""
-    grid: list[list[str]] = []
+def _table_rows(table: ET.Element) -> "list[list[Cell]]":
+    """A slide table as a grid of cells, each carrying what it spans.
+
+    DrawingML says this more directly than Word does: the cell that begins a
+    merge carries ``gridSpan`` and ``rowSpan`` itself, and the cells it covers
+    are marked ``hMerge`` or ``vMerge`` and hold nothing. So the covered ones
+    are dropped rather than emitted empty -- an empty cell in the grid says the
+    slide left one blank, which is a different thing from a cell that is part
+    of its neighbour.
+    """
+    grid: list[list[Cell]] = []
     for row in _findall(table, "tr"):
-        cells: list[str] = []
+        cells: list[Cell] = []
         for cell in _findall(row, "tc"):
+            if _flag(cell, "hMerge") or _flag(cell, "vMerge"):
+                continue
             body = _descend(cell, "txBody")
-            cells.append(_body_text(body).replace("\n", " ").strip() if body is not None else "")
+            cells.append(
+                Cell(
+                    text=_body_text(body).replace("\n", " ").strip() if body is not None else "",
+                    colspan=_span(cell, "gridSpan"),
+                    rowspan=_span(cell, "rowSpan"),
+                )
+            )
         grid.append(cells)
     return grid
+
+
+def _span(cell: ET.Element, name: str) -> int:
+    """How many columns or rows a cell covers. One unless it says otherwise."""
+    value = cell.get(name)
+    if value is None:
+        return 1
+    try:
+        return max(1, int(value))
+    except ValueError:
+        return 1
+
+
+def _flag(cell: ET.Element, name: str) -> bool:
+    """Whether a boolean cell attribute is set. OOXML writes these as 1/0."""
+    return (cell.get(name) or "0").strip().lower() in {"1", "true"}
 
 
 def _body_text(body: ET.Element) -> str:
