@@ -10,6 +10,7 @@
 import { useState } from 'react'
 
 import { t } from '../i18n/t'
+import { ProviderIcon } from './ProviderMark'
 
 import type { JSX } from 'react'
 
@@ -77,6 +78,7 @@ export function ModelPicker({ title, providers, current, onPick, onClose, emptyN
         <div className="model-picker-left">
           {shown.map((p) => (
             <button key={p.id} type="button" className="model-picker-prov" aria-current={p.id === selId} onClick={() => setProv(p.id)}>
+              <ProviderIcon id={p.id} name={p.name} />
               <span>{p.name}</span><span className="model-picker-count">{hits(p).length}</span>
               {current && current.provider === p.id && <span className="model-picker-dot" />}
             </button>

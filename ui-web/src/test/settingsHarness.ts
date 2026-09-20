@@ -127,7 +127,8 @@ export function install(data: SettingsSnapshot = snap(), over: Partial<SettingsS
     configureServer: async (name, form) => rec('configureServer', { name, form }),
     authServer: async (name) => rec('authServer', name),
     version: () => '0.2.1',
-    checkUpdate: (btn) => { calls.push(['checkUpdate', btn.textContent]) },
+    checkUpdate: async (btn) => { calls.push(['checkUpdate', btn.textContent]); return null },
+    upgrade: () => { calls.push(['upgrade', '']) },
     setLang: (lang) => { calls.push(['setLang', lang]) },
     ...over,
   }

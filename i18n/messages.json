@@ -6219,6 +6219,10 @@
       "en": "Check failed",
       "zh": "检查失败"
     },
+    "gui.settings.about.upgrade": {
+      "en": "Upgrade to",
+      "zh": "升级到"
+    },
     "gui.settings.about.config": {
       "en": "Config file",
       "zh": "配置文件"

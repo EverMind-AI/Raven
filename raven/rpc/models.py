@@ -3024,9 +3024,10 @@ class ExtToolRow(_Strict):
     builtin: bool | None = Field(
         default=None,
         description=(
-            "True for a tool no person switches: the two meta tools and every schema-hidden one, "
-            "which the model reaches through tool_call. The page draws it as built in wherever it "
-            "is grouped."
+            "True for a tool whose off switch the loop would not honour: the two tool-search "
+            "meta-tools, and the MCP resource and prompt meta-tools the loop registers and "
+            "withdraws on its own. Not the schema-hidden set: hidden from the schema and withheld "
+            "from the model are different mechanisms, and the DAG controls answer to the switch."
         ),
     )
 

@@ -221,17 +221,27 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
                 mcp.append(row)
         except Exception:
             logger.exception("ext.list: config mcp merge failed")
-        # Which tools carry no switch is the registry's fact, not the page's,
-        # and it is the union `tool_search.py` already applies: a schema-hidden
-        # tool is reached only through `tool_call`, and the two meta tools are
-        # the doorway itself -- `tool_call` is in the schema by necessity and
-        # is no more switchable for it. A switch on any of them would write a
-        # preference nothing reads. The page used to infer this from which card
-        # a tool sat in, which tied the grouping to the answer and kept the DAG
-        # controls in the meta-tool card rather than beside `run_subagent_dag`.
+        # Which tools carry no switch, asked as the question the switch
+        # actually answers: would the loop honour an entry naming this tool in
+        # `tools.disabledTools`? Two groups would not. The MCP resource and
+        # prompt meta-tools are registered and withdrawn by the loop itself as
+        # servers come and go, so an entry naming one is a preference nothing
+        # can act on -- `_report_reserved_disabled_tools` says so in those
+        # words. The two tool-search meta-tools are fixed by product decision:
+        # they are the doorway every hidden tool is reached through.
+        #
+        # NOT the schema-hidden set, which is what this asked before. Hidden
+        # from the schema and withheld from the model are different mechanisms:
+        # `offers()` consults `withheld_names()`, which reads the off switch,
+        # whatever the schema shows. Measured on a real gateway -- putting
+        # `cancel_dag` in `tools.disabledTools` flips its `enabled` to false --
+        # so the DAG controls were being drawn as fixed while their switch
+        # worked.
         from raven.agent.tools.tool_search import META_TOOL_NAMES
+        from raven.mcp.prompts import PROMPT_TOOL_NAMES
+        from raven.mcp.resources import RESOURCE_TOOL_NAMES
 
-        fixed = META_TOOL_NAMES | loop.tools.schema_hidden_names()
+        fixed = META_TOOL_NAMES | RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES
         for name in loop.tools.tool_names:
             tool = loop.tools.get(name)
             # Asked, not inferred from membership: a tool the operator switched
