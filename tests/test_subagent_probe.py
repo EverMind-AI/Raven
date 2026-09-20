@@ -856,7 +856,7 @@ class TestAutomaticSnapshotVerification:
         # This one pins the registry half. The preset half reads the machine's
         # own PATH, so leaving it live would make the assertions below depend on
         # which agents happen to be installed here.
-        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured: [])
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
 
         manager = _FakeManager([fresh, missing, stale], with_refresh=True)
@@ -899,7 +899,7 @@ class TestAutomaticSnapshotVerification:
             "raven.acp_client.capabilities.SnapshotStore",
             lambda: type("S", (), {"record": staticmethod(lambda s: recorded.append(s.status))})(),
         )
-        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured: [])
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
 
         await schedule_snapshot_verification(_FakeManager([_FakeRow("refused"), _FakeRow("wedged"), _FakeRow("fine")]))
@@ -928,7 +928,9 @@ class TestAutomaticSnapshotVerification:
             lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
         )
         monkeypatch.setattr(
-            probe_mod, "_unconfigured_acp_preset_rows", lambda configured: [_FakeRow("a-preset")] if configured else []
+            probe_mod,
+            "_unconfigured_acp_preset_rows",
+            lambda configured, path=None: [_FakeRow("a-preset")] if configured else [],
         )
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
 
@@ -960,7 +962,7 @@ class TestAutomaticSnapshotVerification:
         # This one pins the registry half. The preset half reads the machine's
         # own PATH, so leaving it live would make the assertions below depend on
         # which agents happen to be installed here.
-        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured: [])
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
 
         task = schedule_snapshot_verification(_FakeManager([make("boom"), make("after")]))
@@ -1019,7 +1021,7 @@ class TestAutomaticSnapshotVerification:
         # This one pins the registry half. The preset half reads the machine's
         # own PATH, so leaving it live would make the assertions below depend on
         # which agents happen to be installed here.
-        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured: [])
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
         monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
 
         rows = [
@@ -1052,10 +1054,20 @@ def test_only_resolvable_unconfigured_acp_presets_are_offered_for_verification(
         {"name": "Mine", "preset": "opencode", "kind": "acp", "command": "present-agent acp"},
         {"name": "Http", "preset": "mirothinker", "kind": "openai", "baseUrl": "https://x/v1", "model": "m"},
     ]
-    monkeypatch.setattr(probe_mod, "third_party_subagent_presets", lambda: presets)
-    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: "/bin/x" if exe == "present-agent" else None)
+    seen_paths: list[str | None] = []
 
-    rows = probe_mod._unconfigured_acp_preset_rows({"Mine"})
+    def fake_which(exe: str, path: str | None = None) -> str | None:
+        seen_paths.append(path)
+        return "/bin/x" if exe == "present-agent" else None
+
+    monkeypatch.setattr(probe_mod, "third_party_subagent_presets", lambda: presets)
+    monkeypatch.setattr(probe_mod.shutil, "which", fake_which)
+
+    rows = probe_mod._unconfigured_acp_preset_rows({"Mine"}, path="/login/shell/bin")
 
     assert [row.name for row in rows] == ["Here"]
     assert isinstance(rows[0].config, ThirdPartyAcpSubagentConfig)
+    # Resolved against the caller's PATH, not this process's. `_probe_acp` answers
+    # the row on screen from the login shell's, so reading a different one here
+    # would skip an agent the page is reporting as installed.
+    assert set(seen_paths) == {"/login/shell/bin"}

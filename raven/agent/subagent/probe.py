@@ -559,7 +559,7 @@ class _PresetRow:
         self.enabled = False
 
 
-def _unconfigured_acp_preset_rows(configured: set[str]) -> list[Any]:
+def _unconfigured_acp_preset_rows(configured: set[str], *, path: str | None) -> list[Any]:
     """Shipped acp presets this machine could actually answer for.
 
     Three filters, each for its own reason. A configured name is the registry
@@ -568,6 +568,11 @@ def _unconfigured_acp_preset_rows(configured: set[str]) -> list[Any]:
     never handshaken at all. And a command that does not resolve is one whose
     verdict the free probe already reached for nothing: launching it to learn
     the same thing is the cost this filter exists to refuse.
+
+    ``path`` is the login shell's, captured once by the caller -- the same PATH
+    ``_probe_acp`` resolves against. Reading this process's instead would answer
+    a different question from the one the row on screen was answered with, and
+    skip an agent the page is reporting as installed.
     """
     from raven.config.schema import SubagentsConfig
 
@@ -582,7 +587,7 @@ def _unconfigured_acp_preset_rows(configured: set[str]) -> list[Any]:
             argv = shlex.split((preset.get("command") or "").strip())
         except ValueError:
             continue
-        if argv and shutil.which(argv[0]) is not None:
+        if argv and shutil.which(argv[0], path=path or None) is not None:
             here.append(preset)
     if not here:
         return []
@@ -620,20 +625,19 @@ def schedule_snapshot_verification(manager: Any) -> asyncio.Task | None:
     _SCHEDULED = True
     live = list(registry.rows())
     rows = [row for row in live if getattr(row, "kind", None) == "acp" and getattr(row, "enabled", False)]
-    # After the configured rows, never before: those are the ones a run can
-    # dispatch to this minute, and a slow preset adapter ahead of them would
-    # hold the roster's own capabilities back behind an agent nobody has asked
-    # for yet.
-    rows += _unconfigured_acp_preset_rows({getattr(row, "name", "") for row in live})
-    if not rows:
-        return None
-    task = asyncio.create_task(_verify_missing_snapshots(manager, rows))
+    # No early return on an empty list any more: the shipped presets are the
+    # other half of the work, and whether any of them is on this machine cannot
+    # be answered here -- that needs the login shell's PATH, and this is the
+    # synchronous side.
+    task = asyncio.create_task(
+        _verify_missing_snapshots(manager, rows, configured={getattr(row, "name", "") for row in live})
+    )
     _VERIFY_TASKS.add(task)
     task.add_done_callback(_VERIFY_TASKS.discard)
     return task
 
 
-async def _verify_missing_snapshots(manager: Any, rows: list[Any]) -> None:
+async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured: set[str] | None = None) -> None:
     """One verification per missing or stale row, sequentially, never raising.
 
     Sequential, not concurrent: every acp verify spawns a child process, and a
@@ -645,6 +649,11 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any]) -> None:
     """
     from raven.acp_client.capabilities import SnapshotStore, verify_agent
 
+    # After the configured rows, never before: those are the ones a run can
+    # dispatch to this minute, and a slow preset adapter ahead of them would hold
+    # the roster's own capabilities back behind an agent nobody has asked for yet.
+    if configured is not None:
+        rows = [*rows, *_unconfigured_acp_preset_rows(configured, path=await _captured_login_path())]
     store = SnapshotStore()
     recorded = False
     for row in rows:
