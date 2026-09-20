@@ -103,6 +103,29 @@ async def test_grep_walk_deadline_preserves_partial_matches(tmp_path, monkeypatc
     assert "No matches found" not in result
 
 
+@pytest.mark.asyncio
+async def test_grep_fallback_walk_runs_off_the_event_loop(tmp_path, monkeypatch):
+    monkeypatch.setattr(file_search, "_resolve_rg", lambda: None)
+    (tmp_path / "a.txt").write_text("needle\n", encoding="utf-8")
+    release = threading.Event()
+
+    def blocking_walk(base, **_):
+        release.wait(2.0)
+        yield str(base), [], ["a.txt"]
+
+    monkeypatch.setattr(tree_walk, "walk", blocking_walk)
+    started = time.monotonic()
+    search = asyncio.ensure_future(GrepTool().execute(pattern="needle", path=str(tmp_path)))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    turnaround = time.monotonic() - started
+    release.set()
+    result = await search
+
+    assert "a.txt:1:needle" in result
+    assert turnaround < 1.0, f"the event loop was held for {turnaround:.2f}s"
+
+
 # --- find ----------------------------------------------------------------------------
 
 
