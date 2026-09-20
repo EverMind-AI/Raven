@@ -28,6 +28,7 @@ from raven.agent.harness.participants import (
     compose_addendum,
     compose_advice,
     compose_intake,
+    compose_outbound,
     compose_record,
     compose_review,
     compose_salvage,
@@ -478,11 +479,7 @@ class ParticipantHook(AgentHook):
         participants = tuple(seat.participant for seat in seats)
         step = self._step(ctx, phase="sent")
         reply = getattr(ctx, "outbound_content", None) or ""
-        sending = reply
-        for participant in participants:
-            changed = await participant.outbound(sending, step)
-            if changed is not None:
-                sending = changed
+        sending = await compose_outbound(reply, step, participants)
         filed = await self._record(step, reply or None, participants)
         if filed:
             meta = getattr(ctx, "metadata", None)

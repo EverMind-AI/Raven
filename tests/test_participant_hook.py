@@ -876,3 +876,31 @@ async def test_an_interleaved_hook_runs_before_the_roster_short_circuits():
 
     assert decision.short_circuit_result == "closed"
     assert events == ["middle", "review:a"]
+
+
+@pytest.mark.asyncio
+async def test_a_raised_participant_answer_is_silence_for_the_rest_of_the_roster():
+    from raven.agent.hook.composite import CompositeHook
+
+    events: list[str] = []
+
+    class Broken(AgentParticipant):
+        async def review(self, step):
+            events.append("broken")
+            raise RuntimeError("review failed")
+
+    class Later(AgentParticipant):
+        async def review(self, step):
+            events.append("later")
+            return End("closed")
+
+    chain = CompositeHook(
+        [
+            ParticipantHook("broken", Broken),
+            ParticipantHook("later", Later),
+        ]
+    )
+    decision = await chain.before_execute_tools(_ctx(iteration=1))
+
+    assert events == ["broken", "later"]
+    assert decision.short_circuit_result == "closed"
