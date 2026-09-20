@@ -45,6 +45,11 @@ let upLatest: string | null = null
 /** Which of the two notices is up, for the reconnect that has to explain itself. */
 export const upgradeKind = (): UpKind | null => upKind
 
+/* The version the last notice named, retained here since `showUpNote` wrote
+   it: the settings About row reads it to offer the upgrade, and it has to
+   outlive that row, which the settings panel replaces on every redraw. */
+export const upgradeLatest = (): string | null => upLatest
+
 export function showUpNote(kind: UpKind, latest?: string | null): void {
   const note = document.getElementById('upnote')
   if (!note) return
