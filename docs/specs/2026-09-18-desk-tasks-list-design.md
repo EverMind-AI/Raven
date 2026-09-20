@@ -116,7 +116,11 @@ dispatch leaves no record and is withdrawn by the `subagent.status{cancelled}` f
 
 `dag.node(run_id, node, session_key)` and `subagent.context(id, session_id)` return
 `messages[]` in the `session.resume` shape; the tab draws them with the transcript's own
-renderer, including the synthetic `role=console` row an in-flight `cli` lane emits.
+renderer, including the synthetic `role=console` row an in-flight `cli` lane emits. The
+record is re-read on every status transition and, for a dag node, on each `dag.node_updated`
+frame; a spawn gets no per-step frame, so its record is re-read on a one-second beat while it
+runs (a beat is skipped while a read is still out), the cadence the transcript's spawn card
+already reads on.
 
 ### 5. Live updates
 

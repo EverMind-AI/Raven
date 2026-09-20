@@ -385,7 +385,9 @@ function useNodeRecord(row: TaskRow, node: TaskNode): RecordLoad {
     return () => { alive = false; reading.current = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [row.kind, row.id, node.node_id, node.status, version, nonce])
-  const beating = row.kind === 'spawn' && node.status === 'running'
+  /* No source, no beat: with nothing to read from, a beat would only re-run
+     the effect into its failed branch once a second. */
+  const beating = row.kind === 'spawn' && node.status === 'running' && !!store.source()
   useEffect(() => {
     if (!beating) return
     const beat = setInterval(() => { if (!reading.current) setNonce((n) => n + 1) }, SPAWN_READ_BEAT_MS)
@@ -402,7 +404,8 @@ const fmtN = (n: number): string => n.toLocaleString('en-US')
    its own `<b>`): status word, duration, tokens -- each pushed only when the
    fact is there to push. A lane that never reported usage is a fact this
    line says nothing about, not a line that says "not reported"; the tool
-   count is the board card's and the process fold's, not this line's. */
+   count is the board card's, and the calls themselves are the process
+   fold's, so neither is this line's. */
 function nodeSubtitleRest(node: TaskNode): string[] {
   const parts = [nodeStatusWord(node.status)]
   const dur = node.started_at ? formatDuration((node.ended_at ?? Date.now()) - node.started_at) : ''

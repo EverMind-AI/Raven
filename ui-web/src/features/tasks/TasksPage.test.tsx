@@ -582,13 +582,24 @@ describe('the node panel', () => {
     expect(document.querySelector('.tksub')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1s')
   })
 
+  /* A settled node: every lane writes its usage into the record when the run
+     finishes, so that is the shape the server sends the fragment on. */
   it('subtitle adds the token total, grouped by thousands, when the lane reported usage', () => {
     const done = task({
-      id: 'a', kind: 'spawn', status: 'running',
-      nodes: [node({ node_id: 'n1', status: 'running', started_at: Date.now() - 110_000, tokens_in: 4000, tokens_out: 910 })],
+      id: 'a', kind: 'spawn', status: 'completed',
+      nodes: [node({ node_id: 'n1', status: 'completed', started_at: 1000, ended_at: 111_000, tokens_in: 4000, tokens_out: 910 })],
     })
     pick(done)
-    expect(document.querySelector('.tksub')?.textContent).toBe('raven · gui.tasks.node_st_running · 1m50s · gui.tasks.tokens_n {"n":"4,910"}')
+    expect(document.querySelector('.tksub')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1m50s · gui.tasks.tokens_n {"n":"4,910"}')
+  })
+
+  it('subtitle counts usage a lane reported on one side only', () => {
+    const done = task({
+      id: 'a', kind: 'spawn', status: 'completed',
+      nodes: [node({ node_id: 'n1', status: 'completed', started_at: 1000, ended_at: 2000, tokens_in: 500, tokens_out: null })],
+    })
+    pick(done)
+    expect(document.querySelector('.tksub')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1s · gui.tasks.tokens_n {"n":"500"}')
   })
 
   it('sets the agent apart in its own <b>, without the handle', () => {
@@ -760,29 +771,61 @@ describe('the node panel', () => {
       }
     })
 
-    it("is re-read once when the spawn settles, so the answer lands without reopening the node", async () => {
-      const calls: string[] = []
-      record = { dispatch: 'go', steps: [], answer: null, outputTruncated: false }
-      setSources({
-        tasks: { ...source(), node: async () => { calls.push('fetch'); return record } },
-        workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
-      })
-      const running = task({
-        id: 's1', kind: 'spawn', status: 'running', agent: 'raven', handle: 'h1',
-        nodes: [node({ node_id: 's1', status: 'running', instance: 'h1', started_at: 1000 })],
-      })
-      store.set((prev) => ({ ...prev, rows: [running], loaded: true }))
-      pick(running)
-      await act(async () => {})
-      expect(calls).toEqual(['fetch'])
+    it('is re-read once when the spawn settles, so the answer lands without reopening the node, and the beat stops', async () => {
+      vi.useFakeTimers()
+      try {
+        const calls: string[] = []
+        record = { dispatch: 'go', steps: [], answer: null, outputTruncated: false }
+        setSources({
+          tasks: { ...source(), node: async () => { calls.push('fetch'); return record } },
+          workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
+        })
+        const running = task({
+          id: 's1', kind: 'spawn', status: 'running', agent: 'raven', handle: 'h1',
+          nodes: [node({ node_id: 's1', status: 'running', instance: 'h1', started_at: 1000 })],
+        })
+        store.set((prev) => ({ ...prev, rows: [running], loaded: true }))
+        pick(running)
+        await act(async () => {})
+        expect(calls).toEqual(['fetch'])
 
-      record = { dispatch: 'go', steps: [], answer: 'the answer', outputTruncated: false }
-      await act(async () => {
-        store.onSubagentStatus({ task_id: 't1', call_id: 's1', agent: 'raven', label: 'x', status: 'completed', ended_at: 2000 })
-      })
-      expect(calls).toEqual(['fetch', 'fetch'])
-      expect(document.querySelector('.tkanswer .tkans')?.textContent).toBe('the answer')
-      expect(document.querySelector('.tksub')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1s')
+        record = { dispatch: 'go', steps: [], answer: 'the answer', outputTruncated: false }
+        await act(async () => {
+          store.onSubagentStatus({ task_id: 't1', call_id: 's1', agent: 'raven', label: 'x', status: 'completed', ended_at: 2000 })
+        })
+        expect(calls).toEqual(['fetch', 'fetch'])
+        expect(document.querySelector('.tkanswer .tkans')?.textContent).toBe('the answer')
+        expect(document.querySelector('.tksub')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1s')
+
+        /* Settled: the beat has nothing left to follow. */
+        await act(async () => { vi.advanceTimersByTime(3000) })
+        expect(calls).toEqual(['fetch', 'fetch'])
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('stops the beat when the node panel closes', async () => {
+      vi.useFakeTimers()
+      try {
+        const calls: string[] = []
+        setSources({
+          tasks: { ...source(), node: async () => { calls.push('fetch'); return record } },
+          workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
+        })
+        const running = task({
+          id: 's1', kind: 'spawn', status: 'running', nodes: [node({ node_id: 's1', status: 'running' })],
+        })
+        const mounted = pick(running)
+        await act(async () => {})
+        await act(async () => { vi.advanceTimersByTime(1000) })
+        expect(calls).toEqual(['fetch', 'fetch'])
+        mounted.unmount()
+        await act(async () => { vi.advanceTimersByTime(3000) })
+        expect(calls).toEqual(['fetch', 'fetch'])
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 
