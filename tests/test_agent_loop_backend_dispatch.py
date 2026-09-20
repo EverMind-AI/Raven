@@ -959,14 +959,19 @@ class TestABurstOfNewSessionsInOneTickIsBounded:
             task.cancel()
 
 
-class TestTheDrainTellsAHandedOverWriteFromALostOne:
-    """A record the worker had already handed to the memory service is not a
-    lost turn.
+class TestTheDrainTellsAnUnsettledWriteFromALostOne:
+    """A record still inside the backend call is not a lost turn.
 
-    Cancelling this client does not cancel that request: the service finishes
-    it, and on a one-shot run the extraction was measured landing 34-48s after
-    the drain gave up. Counting it with the records that never left the queue
+    Cancelling this client does not cancel a request the service already has:
+    on a one-shot run an EverOS extraction was measured landing 34-48s after
+    the drain gave up. Counting that with the records that never left the queue
     told the user their turn was gone while it was being written.
+
+    It is not a written turn either. Entering the call is not delivery, and a
+    backend that persists only after an await writes nothing when the drain
+    cancels it mid-await. Both outcomes wear the same mark here, which is why
+    the mark means unsettled and the tests below check what is *claimed* about
+    it, not only which bucket it lands in.
     """
 
     async def test_a_handed_over_write_is_in_flight_not_lost(self, tmp_path: Path) -> None:
@@ -1006,6 +1011,58 @@ class TestTheDrainTellsAHandedOverWriteFromALostOne:
         outcome = await agent.drain_backend_stores(timeout=0.2)
 
         assert (outcome.in_flight, outcome.lost) == (1, 9)
+
+        for task in list(agent._store_pipeline._workers.values()):
+            task.cancel()
+
+    async def test_a_write_cancelled_before_the_service_had_it_claims_no_delivery(self, tmp_path: Path) -> None:
+        """The premise the split rests on, driven rather than assumed.
+
+        A backend that persists only after an await writes nothing when the
+        drain cancels it mid-await. From this side that is indistinguishable
+        from a request the service already holds, so neither the log nor the
+        notice the host renders from this outcome may say the turn landed.
+        """
+        import asyncio
+        import io
+
+        from loguru import logger
+        from rich.console import Console
+
+        from raven.cli._helpers import report_memory_write_outcome
+
+        # A sink of our own: loguru binds the real ``sys.stderr`` when its
+        # handler is added, so ``capsys`` replacing that object captures none
+        # of this and every assertion against it would pass unread.
+        logged = io.StringIO()
+        sink = logger.add(logged, format="{message}", level="INFO")
+
+        persisted: list[str] = []
+
+        class _PersistsAfterAnAwait:
+            async def store(self, session_id, messages, **kw):
+                await asyncio.sleep(30)
+                persisted.append(session_id)
+                return True
+
+        agent = _make_loop(tmp_path, backend=_PersistsAfterAnAwait())
+        agent._dispatch_backend_store("s", [{"role": "user", "content": "x"}])
+        await asyncio.sleep(0.05)
+
+        try:
+            outcome = await agent.drain_backend_stores(timeout=0.2)
+        finally:
+            logger.remove(sink)
+
+        assert persisted == []
+        assert (outcome.in_flight, outcome.lost) == (1, 0)
+
+        buf = io.StringIO()
+        report_memory_write_outcome(outcome, Console(file=buf, force_terminal=False, width=200))
+        told = logged.getvalue() + buf.getvalue()
+        assert "1 turn(s)" in told
+        assert "turn(s)" in logged.getvalue()
+        assert "reached" not in told
 
         for task in list(agent._store_pipeline._workers.values()):
             task.cancel()

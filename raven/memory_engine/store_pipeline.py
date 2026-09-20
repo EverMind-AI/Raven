@@ -55,14 +55,24 @@ class _Record(NamedTuple):
 
 
 class DrainOutcome(NamedTuple):
-    """What a teardown drain leaves behind, split by whether the service saw it.
+    """What a teardown drain leaves behind, split by whether its fate is known.
 
     ``lost`` will never be indexed: shed at admission, given up on after every
-    retry, or still queued when the budget ran out. ``in_flight`` had already
-    been handed to the service when the drain cancelled its worker, and
-    cancelling this client does not cancel that request -- the service finishes
-    the write on its own. Counting the two together told the user a turn was
-    gone while it was being indexed, so a host reports them apart.
+    retry, or still queued when the budget ran out. Every one of those was
+    refused or never offered, so the loss is observed rather than inferred.
+
+    ``in_flight`` was inside the backend call when the drain cancelled its
+    worker, and how far it got is not observable from here: the request may
+    have been transmitted and be finishing at the service, or the cancellation
+    may have unwound it before anything left. Both happen. An EverOS extraction
+    was measured landing 34-48s after the drain gave up, which is the first
+    case; a backend that persists only after an await, cancelled mid-await, is
+    the second and writes nothing.
+
+    They are reported apart because they are different claims, not because one
+    is success. Counting ``in_flight`` as lost told the user a turn was gone
+    while it was being indexed; counting it as landed tells them it is safe
+    when it may not be. Callers must say neither.
     """
 
     lost: int
@@ -303,8 +313,9 @@ class StorePipeline:
                     task.exception()
         # Anything still queued, plus whatever each cancelled worker had
         # already taken off its queue, was never going to be written -- except
-        # the records the service had already been handed, which it finishes
-        # whether or not this process is still listening.
+        # the records that were inside the backend call, whose fate this side
+        # cannot see. Those are held out of the count rather than reported as
+        # written: an unobserved outcome is not a loss, and it is not a win.
         abandoned = sum(len(q) for q in self._queues.values()) + len(self._active)
         if abandoned:
             self._dropped += max(0, abandoned - in_flight)

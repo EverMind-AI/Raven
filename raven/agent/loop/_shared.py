@@ -92,8 +92,9 @@ from raven.utils.tokens import estimate_prompt_tokens
 # as long and buy nothing, because the service finishes the request whether or
 # not this process is still listening (one extraction landed 32s after the
 # drain gave up) and nothing needs to recall the turn that just ended. What a
-# ceiling this short costs is honesty, and that is paid where the outcome is
-# reported: a request still running here is in flight, not lost.
+# ceiling this short costs is certainty, and that is paid where the outcome is
+# reported: a request still running here is reported as unsettled -- neither
+# lost nor written, because from here it is not knowable which.
 _STORE_DRAIN_BUDGET_S: float = 2.0
 # Runtime prose, not the model's: written here and shown to the model so it
 # stops, and carried to the client as a notice rather than as an answer. It

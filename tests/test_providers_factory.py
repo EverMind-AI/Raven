@@ -659,15 +659,35 @@ def test_report_memory_write_outcome_names_the_turns_that_never_reached_the_serv
     assert "2 turn(s) were not written to long-term memory" in _notice(DrainOutcome(lost=2, in_flight=0))
 
 
-def test_a_handed_over_turn_is_not_announced_as_unwritten() -> None:
-    """The write reached the service and is being indexed there. Saying it was
-    not written -- and blaming a service that answered -- was false twice."""
+def test_an_unsettled_turn_is_not_announced_as_unwritten() -> None:
+    """The drain stopped waiting; it did not watch a write fail.
+
+    Saying the turn was not written -- and blaming a service that may well
+    have answered -- asserts the failure this side never observed. The other
+    direction is ``test_an_unsettled_turn_is_not_announced_as_landed``; between
+    them the notice is pinned to the only honest claim, which is neither.
+    """
     from raven.memory_engine import DrainOutcome
 
     text = _notice(DrainOutcome(lost=0, in_flight=1))
+    assert "1 turn(s)" in text
     assert "were not written" not in text
     assert "unavailable" not in text
-    assert "still finishing in the background" in text
+    assert "not known" in text
+
+
+def test_an_unsettled_turn_is_not_announced_as_landed() -> None:
+    """Being inside ``backend.store()`` when the drain cancelled is not delivery.
+
+    A backend that persists after an await is cancelled mid-await and writes
+    nothing. From this side that is indistinguishable from a request the
+    service already holds, so the notice may claim neither outcome.
+    """
+    from raven.memory_engine import DrainOutcome
+
+    text = _notice(DrainOutcome(lost=0, in_flight=1))
+    assert "1 turn(s)" in text
+    assert "reached long-term memory" not in text
 
 
 # --- generation settings reach the provider the ordinary assembly paths build ---

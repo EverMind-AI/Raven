@@ -334,9 +334,11 @@ class OrganGlueMixin:
         host's (see ``cli._helpers.report_memory_write_outcome``), and the
         return value is what it tells them with.
 
-        A write the service was already handed is reported apart from one that
-        never reached it: this process cancelling its own request does not
-        cancel the service's work, so calling that turn lost is a false alarm.
+        A write that was inside the backend call is reported apart from one
+        this side watched fail. Cancelling our own request does not cancel the
+        service's work, so calling the first lost is a false alarm -- but
+        entering the call is not delivery either, so calling it written is the
+        opposite false alarm. Both are reported as unsettled.
         """
         outcome = await self._store_pipeline.drain(timeout)
         if outcome.lost:
@@ -346,7 +348,8 @@ class OrganGlueMixin:
             )
         if outcome.in_flight:
             logger.info(
-                "{} turn(s) reached the memory service before shutdown; it finishes the indexing without us",
+                "{} turn(s) were mid-write when the drain stopped waiting; "
+                "this side cannot see whether the service finished them",
                 outcome.in_flight,
             )
         return outcome
