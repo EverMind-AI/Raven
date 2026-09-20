@@ -369,6 +369,53 @@ def test_a_chinese_reader_finds_a_page_by_typing_one_word(page: Page, site: str)
     )
 
 
+DIALOG_RIGHT_EDGE = """() => {
+  const form = document.querySelector('.md-header .md-search__form');
+  const button = document.querySelector('.md-header .md-search__options .md-icon');
+  if (!form || !button) return null;
+  const frame = form.getBoundingClientRect();
+  const chip = getComputedStyle(form, '::after');
+  const hidden = chip.content === 'none';
+  const right = hidden ? 0 : frame.right - parseFloat(chip.right);
+  const box = button.getBoundingClientRect();
+  const glyph = document.querySelector('.md-header .md-search__icon[for]').getBoundingClientRect();
+  return {
+    chip: hidden ? null : [Math.round(right - parseFloat(chip.width)), Math.round(right)],
+    button: [Math.round(box.left), Math.round(box.right)],
+    buttonMid: +(box.top + box.height / 2).toFixed(1),
+    glyphMid: +(glyph.top + glyph.height / 2).toFixed(1),
+  };
+}"""
+
+
+def test_the_dialogs_clear_button_sits_alone_on_its_centre_line(page: Page, site: str) -> None:
+    """The field carries a chip naming the key that opens search, and the open
+    dialog puts its clear button in that same corner. The chip is still true
+    while the field sits in the rail and says nothing a reader in the dialog
+    can act on, so it belongs to the closed state alone. Clicking still lands
+    on the button either way, which is why this measures the boxes: the fault
+    is what a reader sees, not what the click does."""
+    _open(page, site)
+    page.click(".md-search__input")
+    page.fill(".md-search__input", "sandbox")
+    _await_results(page, "sandbox")
+
+    edge = page.evaluate(DIALOG_RIGHT_EDGE)
+    assert edge is not None, "the open dialog has no clear button to sit beside"
+    if edge["chip"] is not None:
+        chip, button = edge["chip"], edge["button"]
+        overlap = min(chip[1], button[1]) - max(chip[0], button[0])
+        assert overlap <= 0, f"the key chip at {chip} and the clear button at {button} overlap by {overlap}px"
+
+    # the theme seats that button at a fixed offset from the form's top, which
+    # centres it only in a form of the theme's own height
+    drift = round(edge["buttonMid"] - edge["glyphMid"], 1)
+    assert abs(drift) <= 1, (
+        f"the clear button's centre is {drift}px off the magnifier's, so it does not sit"
+        " on the line the query is typed on"
+    )
+
+
 TOC_FOLLOW = """() => {
   const wrap = document.querySelector('.md-sidebar--secondary .md-sidebar__scrollwrap');
   const links = [...wrap.querySelectorAll('a.md-nav__link')];
