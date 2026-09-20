@@ -103,13 +103,13 @@ describe('the sheet rack', () => {
 
   it('drops one class in one conversation and leaves the other alone', () => {
     const here = sheet('csheet')
-    const alsoHere = sheet('dagsheet')
+    const alsoHere = sheet('gsheet')
     add(here)
     add(alsoHere)
     add(sheet('csheet'), 'b')
 
     dropClass('csheet')
-    expect([...rack().children].map((n) => (n as HTMLElement).className)).toEqual(['dagsheet'])
+    expect([...rack().children].map((n) => (n as HTMLElement).className)).toEqual(['gsheet'])
     /* The other conversation still has its pending question. */
     setCurrent('b')
     sync()
@@ -174,7 +174,9 @@ describe('the sheet rack', () => {
   it('hands out the same list of interiors until one changes', () => {
     const first = get()
     add(sheet())
-    /* A sheet with no interior of its own -- the graph's kind -- is not in it. */
+    /* A sheet handed over with no interior is not in it. No tenant does that
+       today -- the graph that did no longer docks -- so this pins the contract
+       `add` still offers rather than a caller. */
     expect(get()).toBe(first)
 
     const withView = sheet()
@@ -303,8 +305,6 @@ describe('who counts as asking', () => {
   const DOCKS: Record<string, boolean> = {
     'features/composer/approve.ts': true,
     'features/composer/clarify.ts': true,
-    // The graph sheet is what steps aside for the two above; it asks nothing.
-    'features/dag/mount.tsx': false,
   }
 
   const sources = (): Array<[string, string]> => {

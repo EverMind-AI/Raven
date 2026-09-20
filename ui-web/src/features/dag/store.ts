@@ -1,9 +1,12 @@
 /* The graphs the page is watching, one per conversation.
  *
- * A `run_subagent_dag` call is the whole picture of a turn's work, so it gets a
- * sheet above the composer rather than one clamped line in the scrollback. The
- * live layer feeds the three `dag.*` events in through mount.tsx; what the sheet
- * draws is decided here and in DagSheet.tsx.
+ * A `run_subagent_dag` call is the whole picture of a turn's work, and this is
+ * where that picture is kept while it moves. The live layer feeds the three
+ * `dag.*` events in through mount.ts. Nothing here renders: the trail's
+ * delegation card holds its own copy of the same frames, and the graph a
+ * reader opens is drawn by the desk's task pane from `tasks.list`. What this
+ * answers is `openDagRun` -- which node a receipt in that card points at --
+ * and what session resume puts back.
  *
  * The runs are shared objects, not copies: the pipeline mutates a node's
  * status and times in place and then calls `touch()`. That keeps the event

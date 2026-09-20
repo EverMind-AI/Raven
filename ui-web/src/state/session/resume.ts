@@ -132,7 +132,7 @@ async function resumeDesk(key: string): Promise<void> {
  *   express a preference, and new: it is what survives a run the reader never saw
  *   start, where no live event reached this page and so nothing was written down.
  *
- * The newest of those ids rather than the first: a sheet shows one graph per
+ * The newest of those ids rather than the first: one run is held per
  * conversation, and with nothing to say which the reader wanted, the newest is
  * the one whose nodes may still be moving. */
 const dagToRead = (key: string, runIds?: readonly string[]): string | null =>

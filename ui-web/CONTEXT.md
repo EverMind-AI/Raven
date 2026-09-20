@@ -265,10 +265,11 @@ _Avoid_: "pane" for this -- a pane is a resizable column.
 
 **Sheet**:
 A card that docks above the composer for as long as one turn needs it: a
-clarifying question, an approval request, a dag graph
+clarifying question, or an approval request
 (`src/features/composer/ClarifySheet.tsx`, `GateSheet.tsx`,
-`AskApproveSheet.tsx`, `src/features/dag/DagSheet.tsx`). Filed under the session
-it was raised in and mounted only while that session is open -- see Sheet rack.
+`AskApproveSheet.tsx`). Filed under the session it was raised in and mounted
+only while that session is open -- see Sheet rack. A delegated graph used to
+dock here too and no longer does -- see Task strip.
 _Avoid_: "dialog" for this -- a dialog is the settings or channel one, which is
 not docked and is not about a turn.
 
@@ -350,10 +351,24 @@ it rebuilds the conversation from disk.
 
 **Sheet rack**:
 `src/state/sheetRack.ts` plus `src/chrome/SheetRack.tsx` -- what docks above the
-composer (a clarify question, an approval request, a dag graph), filed under the
-session it was raised in and mounted only while that session is open. A parked
-sheet keeps its element and loses its interior, which is why what the reader
-typed into one lives in `src/state/sheetDrafts.ts` rather than in the input.
+composer (a clarify question, an approval request), filed under the session it
+was raised in and mounted only while that session is open. A parked sheet keeps
+its element and loses its interior, which is why what the reader typed into one
+lives in `src/state/sheetDrafts.ts` rather than in the input.
+
+**Task strip**:
+`TaskRuns` in `src/features/tasks/TasksPage.tsx`, rendered by
+`src/chrome/Dock.tsx` directly below the Sheet rack -- one chip per running
+task, name only, at most three. This is where a delegated run is named while it
+runs, whether it was spawned or dispatched as a graph; the chip opens that
+task's own pane on the Desk, which is where the graph itself is drawn and
+panned. Nothing about a run docks in the rack: a graph there was the whole of
+itself between the transcript and the box you type in, for as long as the run
+lasted.
+_Avoid_: "dag sheet" -- there is no longer one. The run's durable record in the
+conversation is the trail's delegation card
+(`src/features/transcript/store.ts`'s `dagFeed`); `src/features/dag/mount.ts`
+keeps the run's state for the pane and for resume, and renders nothing.
 
 **Global listeners**:
 `src/state/globalListeners.ts` -- every listener the page holds on the document

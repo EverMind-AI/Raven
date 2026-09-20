@@ -33,7 +33,6 @@ const NOT_COMPONENTS = {
   'main.tsx': 'the entry point: it mounts the roots the manifests declare and exports nothing',
   'features/browser/mount.tsx': 'the browser view\'s root handling -- it holds JSX but exports verbs',
   'features/composer/mount.tsx': 'the dock\'s four roots and the verbs the page\'s machinery calls',
-  'features/dag/mount.tsx': 'the graph sheet\'s root, mounted per run rather than per page',
   'features/subagents/mount.tsx': 'the agents view\'s root handling, the browser view\'s twin',
   'features/transcript/mount.tsx': 'one root per conversation lane, and the lane bookkeeping',
 }
