@@ -17,7 +17,7 @@ from raven.agent import workdir
 from raven.contracts.tool import STOP_RETRY_INSTRUCTION, Continuation, Tool, ToolOutput, ToolResult
 from raven.permissions.shell_policy import (
     _MAX_EMBEDDED_SHELL_DEPTH,
-    _command_segments,
+    _command_segments_with_separators,
     _embedded_shell_command,
     _unwrap_command_wrappers,
     executable_text,
@@ -359,21 +359,14 @@ class ExecTool(Tool):
             return f"Error: Command blocked by safety guard (unsupported shell expansion: {unresolved.construct})"
 
         try:
-            segments = list(_command_segments(readable))
+            segments = list(_command_segments_with_separators(readable))
         except ValueError:
             # Quoting the lexer cannot close. The permission gate reads the
             # same text through the same lexer and refuses it there, so
             # answering here would only duplicate that refusal.
             segments = []
 
-        # A `cd` inside a subshell does not outlive it, and the splitter has
-        # already dropped the bracket that said so. Carrying the directory
-        # forward past one would read a walk back as returning to the
-        # workspace while the shell sits a level above it, so a bracket
-        # anywhere puts every `cd` back on the starting directory. Crude on
-        # purpose: a literal bracket in an argument only costs strictness.
-        carry_forward = "(" not in readable and "{" not in readable
-        if self._steps_outside(segments, cwd_path, roots, env, carry_forward=carry_forward):
+        if self._steps_outside(segments, cwd_path, roots, env):
             return "Error: Command blocked by safety guard (directory change outside working dir)"
 
         for raw in self._extract_absolute_paths(readable):
@@ -396,7 +389,7 @@ class ExecTool(Tool):
         # the policy's own bound, which is what decides the same question for
         # the deny list.
         if _depth < _MAX_EMBEDDED_SHELL_DEPTH:
-            for segment in segments:
+            for segment, _ in segments:
                 # Unwrapped first, the way the policy reads a segment before
                 # asking what it runs. Reusing the payload helper without the
                 # unwrap that precedes it there reused half the agreement:
@@ -459,12 +452,10 @@ class ExecTool(Tool):
     @classmethod
     def _steps_outside(
         cls,
-        segments: list[list[str]],
+        segments: list[tuple[list[str], str]],
         cwd: Path,
         roots: list[Path],
         env: dict[str, str],
-        *,
-        carry_forward: bool,
     ) -> bool:
         """Whether the command leaves the workspace before doing its work.
 
@@ -477,17 +468,28 @@ class ExecTool(Tool):
         nothing -- and after any of them, every relative path in the rest of
         the command resolves somewhere the operator did not allow.
 
-        Each `cd` starts from where the last one landed, so `cd subdir; cd ..`
-        ends where it began rather than being read as leaving. ``carry_forward``
-        turns that off where the structure cannot be seen; see the caller.
+        Each `cd` starts from where the last one landed, so
+        `cd subdir && cd ..` ends where it began rather than being read as
+        leaving. Which is knowable only where the separator says so: `&&` runs
+        its right side *because* the left one returned zero, so after one of
+        those the shell is at the destination and nowhere else. After every
+        other separator the move may not have happened -- the directory may
+        not exist, the operator may have skipped it, a pipe or a bracket may
+        have run it in a subshell that took its directory with it -- so both
+        readings stay in view and a later step that leaves the workspace from
+        either one is refused.
         """
-        here = cwd
-        for segment in segments:
-            # A subshell or brace group needs no unwrapping here: the splitter
-            # treats `(`, `)` and a standalone `{` as operators, so `(cd /; x)`
-            # arrives as its own segment with the bracket already gone. A
-            # wrapper does, though -- `command cd /` names the same builtin.
-            tokens = _unwrap_command_wrappers(segment)
+        # Where the shell can be standing. More than one entry because a `cd`
+        # the separator after it does not prove may or may not have moved it,
+        # and both readings have to stay in view until one of them leaves.
+        here = [cwd]
+        for raw_tokens, separator in segments:
+            # A wrapper needs unwrapping here -- `command cd /` names the same
+            # builtin. A subshell does not: the splitter treats `(`, `)` and a
+            # standalone `{` as operators, so `(cd /; x)` arrives as its own
+            # segment with the bracket already gone, and the bracket is now
+            # one more separator that proves nothing.
+            tokens = _unwrap_command_wrappers(raw_tokens)
             if not tokens or tokens[0] != "cd":
                 continue
             arguments = list(tokens[1:])
@@ -504,15 +506,37 @@ class ExecTool(Tool):
             target = arguments[0] if arguments else env.get("HOME", "")
             if not target:
                 continue
-            try:
-                destination = (here / Path(target).expanduser()).resolve()
-            except Exception:
+            landings: list[Path] = []
+            for start in here:
+                try:
+                    destination = (start / Path(target).expanduser()).resolve()
+                except Exception:
+                    return True
+                if not any(root == destination or root in destination.parents for root in roots):
+                    return True
+                landings.append(destination)
+            here = landings if separator == "&&" else cls._either(here, landings)
+            if len(here) > cls._MAX_WALK_POSITIONS:
+                # Unreachable for a command a person or a model writes: the
+                # list only grows on a `cd` into a directory no earlier step
+                # named, and repeats collapse. Refusing past the bound keeps
+                # the walk from being a place to spend the caller's time.
                 return True
-            if not any(root == destination or root in destination.parents for root in roots):
-                return True
-            if carry_forward:
-                here = destination
         return False
+
+    #: How many places the walk will hold at once; see the walk for why the
+    #: list grows and why nothing real reaches this.
+    _MAX_WALK_POSITIONS = 64
+
+    @staticmethod
+    def _either(*groups: list[Path]) -> list[Path]:
+        """The places from every group, each once, in the order first seen."""
+
+        seen: dict[Path, None] = {}
+        for group in groups:
+            for path in group:
+                seen.setdefault(path, None)
+        return list(seen)
 
     @staticmethod
     def _windows_value(env: dict[str, str], name: str) -> str | None:

@@ -647,13 +647,20 @@ def test_a_brace_this_cannot_parse_is_refused(fenced: ExecTool) -> None:
 
 @pytest.mark.parametrize(
     "command",
-    ["cd subdir; cd ..; ls", "cd subdir && cd .. && ls", "cd a; cd b; cd ..; cd ..; ls"],
-    ids=["up-once", "and-chained", "down-two-up-two"],
+    ["cd subdir && cd .. && ls", "cd a && cd b && cd .. && cd .. && ls"],
+    ids=["up-once", "down-two-up-two"],
 )
 def test_a_cd_that_returns_to_the_workspace_still_runs(fenced: ExecTool, command: str) -> None:
     """Each `cd` was resolved from the directory the command started in, so a
     second one was read as if the first had not happened and a walk back was
     refused for leaving. The sequence ends where it began.
+
+    Spelled with `&&` rather than `;`: the semicolon versions of these were
+    here first and were wrong, because a `cd` into a directory that does not
+    exist fails and the shell carries on from where it stood, so the `cd ..`
+    after it leaves the workspace. `&&` is what makes the walk knowable -- it
+    runs its right side only when the left one returned zero. Those spellings
+    now sit under ``test_a_cd_that_may_not_have_run_leaves_the_walk_where_it_was``.
 
     Spelled as repeated `cd ..` rather than `cd ../..` on purpose: a literal
     `../` anywhere is refused by the traversal rule before any of this runs, so
@@ -664,11 +671,67 @@ def test_a_cd_that_returns_to_the_workspace_still_runs(fenced: ExecTool, command
 
 @pytest.mark.parametrize(
     "command",
-    ["cd subdir; cd ..; cd ..; ls", "cd a; cd b; cd ..; cd ..; cd ..; cat etc/shadow"],
-    ids=["one-past", "two-past"],
+    [
+        "cd subdir; cd ..; cd ..; ls",
+        "cd a; cd b; cd ..; cd ..; cd ..; cat etc/shadow",
+        "cd subdir && cd .. && cd .. && ls",
+        "cd a && cd b && cd .. && cd .. && cd .. && cat etc/shadow",
+    ],
+    ids=["one-past", "two-past", "one-past-chained", "two-past-chained"],
 )
 def test_a_cd_sequence_that_ends_outside_is_still_refused(fenced: ExecTool, command: str) -> None:
     assert refusal(fenced, command) is not None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd subdir; cd ..; ls",
+        "false && cd subdir; cd ..; ls",
+        "cd subdir || cd ..; ls",
+        "cd subdir | cat; cd ..; ls",
+        "cd subdir & cd ..; ls",
+    ],
+    ids=["semicolon", "skipped-by-and", "or", "pipe", "background"],
+)
+def test_a_cd_that_may_not_have_run_leaves_the_walk_where_it_was(fenced: ExecTool, command: str) -> None:
+    """Carrying a destination forward claims the `cd` ran and succeeded.
+
+    Only `&&` proves that: it is the one separator whose right side runs
+    *because* the left side returned zero. After every other one the shell may
+    still be standing where it started -- `;` continues from there when the
+    `cd` fails, `||` runs its right side only when it failed, and `|`, `&` and
+    a bracket each put the `cd` in a subshell whose directory dies with it.
+    The walk then reads the following `cd ..` as a return to the workspace
+    while the real shell takes it one level above.
+
+    None of these directories exists, which is the point: `cd subdir` fails
+    here exactly as it would on an operator's machine.
+    """
+    assert refusal(fenced, command) is not None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd sub && cd ..; ls",
+        "cd sub && cd .. && ls | head",
+        "cd a && cd b && cd .. && cd ..; ls",
+        "cd sub && cd .. ; cd sub && cd .. ; ls",
+    ],
+    ids=["trailing-semicolon", "trailing-pipe", "two-deep-then-semicolon", "twice-over"],
+)
+def test_a_proven_walk_survives_a_separator_later_in_the_command(fenced: ExecTool, command: str) -> None:
+    """A separator that cannot prove one `cd` must not unprove an earlier one.
+
+    Each `cd` here is chained to the one before it with `&&`, so every step of
+    the walk is known: the chain stops at the first failure, and nothing after
+    a failed `cd` runs. What follows the walk -- a `;`, a pipe, a second
+    chain -- says nothing about where the walk ended. Reading the whole
+    command as unproven because of a separator standing somewhere else refuses
+    a command that cannot leave the workspace in either branch.
+    """
+    assert refusal(fenced, command) is None
 
 
 def test_a_subshell_makes_the_walk_strict_again(fenced: ExecTool) -> None:
