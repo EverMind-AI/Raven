@@ -463,43 +463,65 @@ def test_a_construct_that_yields_a_number_is_left_alone(fenced: ExecTool, comman
 # ---------- the spelling cmd.exe actually runs --------------------------------
 
 
-def test_a_percent_name_the_child_has_is_expanded(fenced: ExecTool, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_percent_name_is_expanded_where_cmd_would_expand_it(
+    fenced: ExecTool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """``DirectExecutor`` runs the platform shell, so on Windows the ordinary
     spelling of this defect is ``%USERPROFILE%\\.ssh\\id_rsa`` rather than
     ``$HOME/...``. The name pattern knew only the POSIX form, and the Windows
     path pattern wants a drive prefix the unexpanded text does not have, so
     both halves of the scan looked straight past it.
     """
+    monkeypatch.setattr(ExecTool, "_WINDOWS_SHELL", True)
     monkeypatch.setenv("USERPROFILE", "/home/victim")
 
     assert refusal(fenced, "type %USERPROFILE%/.ssh/id_rsa") is not None
 
 
-def test_a_percent_name_the_child_does_not_have_is_left_alone(
-    fenced: ExecTool, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``cmd.exe`` leaves an undefined name standing as written, so this pass
-    does too. It is also what keeps a POSIX box out of the way of this rule:
-    the Windows names are absent there, so nothing is substituted, and
-    ``date +%Y%m%d`` is not quietly rewritten."""
-    monkeypatch.delenv("Y", raising=False)
-    monkeypatch.delenv("m", raising=False)
-
-    assert refusal(fenced, "date +%Y%m%d") is None
-
-
-def test_the_windows_expansion_is_what_the_scan_reads(
+def test_a_percent_name_is_read_case_insensitively_as_cmd_reads_it(
     fenced: ExecTool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Asserted on the text rather than the verdict, because a Windows path is
-    not absolute to a POSIX ``Path`` and the verdict would turn on the host
-    rather than on the expansion this adds."""
+    """``cmd.exe`` resolves an environment name without regard to case, so an
+    exact-key lookup leaves the ordinary spelling standing and the path scan
+    sees no drive prefix. Asserted on the text rather than the verdict, because
+    a Windows path is not absolute to a POSIX ``Path`` and the verdict would
+    turn on the host running the suite."""
+    monkeypatch.setattr(ExecTool, "_WINDOWS_SHELL", True)
     monkeypatch.setenv("USERPROFILE", r"C:\Users\victim")
     env = fenced._child_env(tmp_path)
 
-    assert fenced._as_the_shell_reads_it(r"type %USERPROFILE%\.ssh\id_rsa", env) == (
+    assert fenced._as_the_shell_reads_it(r"type %UserProfile%\.ssh\id_rsa", env) == (
         r"type C:\Users\victim\.ssh\id_rsa"
     )
+
+
+def test_a_percent_name_cmd_does_not_have_is_left_standing(
+    fenced: ExecTool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``cmd.exe`` leaves an undefined name as written, so this pass does too."""
+    monkeypatch.setattr(ExecTool, "_WINDOWS_SHELL", True)
+    monkeypatch.delenv("NOT_A_REAL_VARIABLE", raising=False)
+    env = fenced._child_env(tmp_path)
+
+    assert fenced._as_the_shell_reads_it("type %NOT_A_REAL_VARIABLE%/x", env) == "type %NOT_A_REAL_VARIABLE%/x"
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["echo '%HOME%/notes'", "echo %HOME%/notes", "date +%Y%m%d", "printf '%s%s' a b"],
+    ids=["quoted", "bare", "date-format", "printf-format"],
+)
+def test_no_percent_is_expanded_where_the_shell_is_not_cmd(
+    fenced: ExecTool, monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    """The regression this pass introduced. `%VAR%` means nothing to `sh`,
+    which prints these literally -- but HOME, PWD, USER and TMPDIR are all on
+    the executor's allowlist on POSIX too, so running the pass unconditionally
+    refused text that names no path at all. It is cmd.exe syntax, and it is
+    read only where cmd.exe is the shell."""
+    monkeypatch.setenv("HOME", "/tmp/outside-home")
+
+    assert refusal(fenced, command) is None
 
 
 # ---------- the branches a reader would otherwise have to take on trust -------

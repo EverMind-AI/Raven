@@ -418,10 +418,17 @@ class ExecTool(Tool):
 
     # How cmd.exe spells a variable, and ``DirectExecutor`` runs the platform
     # shell, so on Windows this is the ordinary spelling of an outside path.
-    # Substituted only for a name the child is actually given: that is cmd's
-    # own rule for an undefined one, and it is what keeps a POSIX host out of
-    # the way, where these names do not exist and `date +%Y%m%d` must survive.
+    # Substituted only for a name the child is actually given, which is cmd's
+    # own rule for an undefined one.
     _WINDOWS_VARIABLE = re.compile(r"%([A-Za-z_]\w*)%")
+
+    # Whether the shell that will run the command reads that spelling at all.
+    # `%VAR%` is cmd.exe syntax and means nothing to `sh`, which prints it --
+    # and HOME, PWD, USER and TMPDIR are on the executor's allowlist on POSIX
+    # too, so reading it there refused `echo '%HOME%/notes'`, which names no
+    # path. A class attribute rather than a call to `os.name`, so the Windows
+    # branch can be driven from a POSIX host.
+    _WINDOWS_SHELL = os.name == "nt"
 
     # A `${` the name pattern does not accept. `${#NAME}` counts characters, so
     # whatever it yields is a number and cannot name a path; anything else here
@@ -484,6 +491,20 @@ class ExecTool(Tool):
             if not any(root == destination or root in destination.parents for root in roots):
                 return True
         return False
+
+    @staticmethod
+    def _windows_value(env: dict[str, str], name: str) -> str | None:
+        """``env``'s value for ``name`` the way cmd.exe finds it, or ``None``.
+
+        cmd.exe resolves an environment name without regard to case, so an
+        exact-key lookup leaves `%UserProfile%` standing and the path scan then
+        sees no drive prefix. ``None`` means the child has no such name, which
+        cmd answers by leaving the text as written.
+        """
+        if name in env:
+            return env[name]
+        folded = name.casefold()
+        return next((value for key, value in env.items() if key.casefold() == folded), None)
 
     @classmethod
     def _resolve_brace(cls, value: str, body: str, construct: str) -> str:
@@ -567,15 +588,17 @@ class ExecTool(Tool):
         index = 0
         while index < len(command):
             char = command[index]
-            if char == "%":
+            if char == "%" and cls._WINDOWS_SHELL:
                 # Ahead of the quote branches on purpose: cmd.exe has no
                 # quoting that suppresses this, so a run it would expand must
                 # not be hidden here by POSIX quoting rules.
                 windows_match = cls._WINDOWS_VARIABLE.match(command, index)
-                if windows_match is not None and windows_match.group(1) in env:
-                    out.append(env[windows_match.group(1)])
-                    index = windows_match.end()
-                    continue
+                if windows_match is not None:
+                    value = cls._windows_value(env, windows_match.group(1))
+                    if value is not None:
+                        out.append(value)
+                        index = windows_match.end()
+                        continue
             if quote == "'":
                 out.append(char)
                 if char == "'":
