@@ -28,8 +28,8 @@ from raven.core.plugin_stack import (
     maybe_build_memory_backend,
 )
 from raven.importer.orchestrator import ImportSummary, ProgressEvent, run_import
-from raven.importer.skills import SkillOrigin
-from raven.importer.skills.hermes import HermesSkillSource
+from raven.importer.phases import PhaseKind, PhaseOutcome, run_phases, skill_source_for
+from raven.importer.skills import SkillOrigin, SkillSource
 from raven.importer.skills.installer import SkillImportSummary, install_skills
 from raven.importer.state import ImportState
 from raven.importer.types import Platform, Scanner, ScanResult, SourceKind, Tier, filter_by_tier
@@ -159,37 +159,41 @@ async def _build_and_run(
         # ``finally`` still stops the backend when the check exits.
         await _require_memory_service_ready(backend)
         summary = await run_import(items, backend, state, on_progress=on_progress, cancel_path=cancel_path)
-        # Both phases below are additive and run after the EverOS pass, so a
-        # failure in either is reported without reversing an import that has
-        # already succeeded.
-        profile: "ImportedSections | None" = None
-        profile_error = ""
-        skills: SkillImportSummary | None = None
-        skill_error = ""
         # `run_import` returns normally on cancellation rather than raising, and
-        # these two phases are the expensive ones: one LLM call per USER.md entry,
-        # and a copy of the whole skill tree. `raven import stop` has to stop the
-        # run, not hand it its two longest steps.
+        # the phases are the expensive steps: one LLM call per profile entry, and
+        # a copy of every skill tree. `raven import stop` has to stop the run,
+        # not hand it its two longest steps.
+        phases = PhaseOutcome()
         if not summary.cancelled:
-            try:
-                profile = await _land_hermes_user_md(items, workspace, config, on_phase=on_phase)
-            except Exception as exc:
-                logger.warning("hermes user.md mirror failed: {}", exc)
-                profile_error = str(exc)
-            try:
-                skills = await _install_hermes_skills(items, workspace, state)
-            except Exception as exc:
-                logger.warning("hermes skill import failed: {}", exc)
-                skill_error = str(exc)
+            phases = await run_phases(
+                items,
+                workspace,
+                state,
+                provider=_make_profile_provider(config),
+                model=config.agents.defaults.model,
+                on_phase=_phase_progress(on_phase),
+            )
         return ImportRunResult(
             summary=summary,
-            profile=profile,
-            profile_error=profile_error,
-            skills=skills,
-            skill_error=skill_error,
+            profile=phases.profile,
+            profile_error=phases.profile_error,
+            skills=phases.skills,
+            skill_error=phases.skill_error,
         )
     finally:
         await backend.stop()
+
+
+_PHASE_LABELS: dict[PhaseKind, str] = {"profile": "Mirroring profile", "skills": "Installing skills"}
+
+
+def _phase_progress(
+    on_phase: Callable[[str, int, int], None] | None,
+) -> Callable[[PhaseKind, int, int], None] | None:
+    """The importer names a phase by kind; the progress display wants a bar label."""
+    if on_phase is None:
+        return None
+    return lambda kind, done, total: on_phase(_PHASE_LABELS[kind], done, total)
 
 
 def _report_scan_error(platform: Platform, error: BaseException) -> None:
@@ -205,8 +209,14 @@ def _report_scan_error(platform: Platform, error: BaseException) -> None:
     console.print("[dim]Other platforms were scanned normally.[/dim]")
 
 
+def _skill_sources_for(platform: Platform | None) -> list[SkillSource]:
+    """The skill sources a platform filter selects; ``None`` means every platform."""
+    wanted = list(Platform) if platform is None else [platform]
+    return [source for source in map(skill_source_for, wanted) if source is not None]
+
+
 async def _install_skills_without_a_scan(platform_filter: Platform | None, *, assume_yes: bool) -> bool:
-    """Install Hermes skills on the paths where no ScanResult survived.
+    """Install skills on the paths where no ScanResult survived.
 
     Skills are directories rather than message sources, so they never appear as
     ScanResults and the tier filter has nothing of theirs to keep. An install
@@ -225,83 +235,28 @@ async def _install_skills_without_a_scan(platform_filter: Platform | None, *, as
     This path has no summary block to join, so the line has to name its own
     subject rather than borrow that block's ``Label:`` column.
     """
-    if platform_filter not in (None, Platform.HERMES):
+    sources = _skill_sources_for(platform_filter)
+    if not sources:
         return False
     count = await _importable_skill_count(platform_filter)
     if not count:
         return False
-    console.print(f"\nAbout to import {count} Hermes skills.")
+    console.print(f"\nAbout to import {count} skills.")
     if not assume_yes and not typer.confirm("Proceed?", default=True):
         return True
-    summary = await install_skills(HermesSkillSource(), load_config().workspace_path, _default_state())
-    if summary.total == 0:
-        return False
-    console.print(f"Hermes skills: {_format_skill_summary(summary)}")
-    return True
-
-
-async def _install_hermes_skills(
-    items: list[tuple[Scanner, ScanResult]],
-    workspace: Path,
-    state: ImportState,
-) -> SkillImportSummary | None:
-    """Install Hermes skills once per run, only when Hermes is in scope.
-
-    Skills are directories, not message sources, so they never travel as a
-    ScanResult; Hermes' presence among the scanned items is what "in scope"
-    means here, mirroring how ``_land_hermes_user_md`` detects it.
-    """
-    if not any(result.platform is Platform.HERMES for _scanner, result in items):
-        return None
-    return await install_skills(HermesSkillSource(), workspace, state)
-
-
-async def _land_hermes_user_md(
-    items: list[tuple[Scanner, ScanResult]],
-    workspace: Path,
-    config: Config,
-    on_phase: Callable[[str, int, int], None] | None = None,
-) -> "ImportedSections | None":
-    """Mirror the Hermes ``user-md`` source into the native ``user.md`` profile.
-
-    EverOS storage alone does not reach every consumer: Curator, Personalizer,
-    and the Sentinel producers read ``user_memory/profile/user.md`` directly
-    and never see EverOS-only content.
-
-    Returns what landed, or ``None`` when there was nothing to mirror -- the
-    caller renders it, because loguru is file-only during ``run`` and a silent
-    mirror looks like one that never ran.
-    """
-    from raven.importer.hermes_user_md import import_user_md_sections
-    from raven.importer.scanners.hermes import split_memory_entries
-    from raven.memory_engine import MemoryStore
-
-    for _scanner, result in items:
-        if result.platform is not Platform.HERMES or result.source_key != "user-md":
+    handled = False
+    for source in sources:
+        summary = await install_skills(source, load_config().workspace_path, _default_state())
+        if summary.total == 0:
             continue
-        (path,) = result.file_paths
-        try:
-            raw = path.read_text(encoding="utf-8")
-        except OSError as exc:
-            logger.warning("hermes user.md mirror skipped: {}", exc)
-            return None
-        entries = split_memory_entries(raw)
-        if not entries:
-            return None
-        written = await import_user_md_sections(
-            entries,
-            MemoryStore(workspace),
-            provider=_make_hermes_provider(config),
-            model=config.agents.defaults.model,
-            on_progress=(lambda i, n: on_phase("Mirroring USER.md", i, n)) if on_phase else None,
-        )
-        logger.info("hermes user.md mirror: {} entries landed", len(written))
-        return written
-    return None
+        name = PLATFORM_DISPLAY_NAMES.get(source.platform.value, source.platform.value)
+        console.print(f"{name} skills: {_format_skill_summary(summary)}")
+        handled = True
+    return handled
 
 
-def _make_hermes_provider(config: Config) -> "LLMProvider | None":
-    """Best-effort provider for the USER.md heading classifier.
+def _make_profile_provider(config: Config) -> "LLMProvider | None":
+    """Best-effort provider for the profile heading classifier.
 
     ``check_provider_credentials`` (called inside ``make_provider``) raises when
     no LLM credentials are configured; import cold-start must still succeed in
@@ -320,7 +275,7 @@ def _make_hermes_provider(config: Config) -> "LLMProvider | None":
     try:
         provider = make_provider(config)
     except Exception as exc:
-        logger.info("hermes user.md mirror: no LLM provider available ({}); using fallback heading", exc)
+        logger.info("profile mirror: no LLM provider available ({}); using fallback heading", exc)
         return None
     _strip_tty_stream_handlers()
     return provider
@@ -345,10 +300,9 @@ def scan_cmd(
         from raven.importer.scanners import scan_all
 
         results = await scan_all(platform_filter=platform_filter, on_error=_report_scan_error)
-        skill_count = None
-        if platform_filter is None or platform_filter is Platform.HERMES:
-            skills = await HermesSkillSource().discover()
-            skill_count = sum(1 for s in skills if s.origin is not SkillOrigin.BUNDLED_PRISTINE)
+        # None when no platform in the filter has skills to offer: the line is
+        # then left out rather than showing a count that can never move.
+        skill_count = await _importable_skill_count(platform_filter) if _skill_sources_for(platform_filter) else None
         return results, skill_count
 
     try:
@@ -362,7 +316,7 @@ def scan_cmd(
         # unconditionally told such a user there was nothing to import while
         # a dozen of their own skills were waiting.
         if skill_count:
-            console.print(f"Hermes skills: {skill_count} importable")
+            console.print(f"Skills: {skill_count} importable")
             console.print("No memory files or conversations found.")
         else:
             console.print("No importable data found.")
@@ -394,7 +348,7 @@ def scan_cmd(
     conv = sum(1 for r in results if r.kind == SourceKind.CONVERSATION)
     console.print(f"\nTotal: {len(results)} items ({mem} memory files, {conv} conversations)")
     if skill_count is not None:
-        console.print(f"Hermes skills: {skill_count} importable")
+        console.print(f"Skills: {skill_count} importable")
 
 
 # ---------------------------------------------------------------------------
@@ -687,18 +641,19 @@ async def _run_async(
 async def _importable_skill_count(platform: Platform | None) -> int:
     """How many skills the import would install, or 0 when none apply.
 
-    Only Hermes contributes skills today, so every other platform gets 0 and
-    the caller drops the skill wording entirely rather than showing a count
-    that can never move. ``None`` means every platform, which includes Hermes.
+    A platform without a skill source contributes 0, so the caller drops the
+    skill wording entirely rather than showing a count that can never move.
+    ``None`` means every platform.
     """
-    if platform not in (None, Platform.HERMES):
-        return 0
-    try:
-        discovered = await HermesSkillSource().discover()
-    except Exception as exc:
-        logger.warning("skill preview unavailable: {}", exc)
-        return 0
-    return sum(1 for skill in discovered if skill.origin is not SkillOrigin.BUNDLED_PRISTINE)
+    count = 0
+    for source in _skill_sources_for(platform):
+        try:
+            discovered = await source.discover()
+        except Exception as exc:
+            logger.warning("skill preview unavailable for {}: {}", source.platform.value, exc)
+            continue
+        count += sum(1 for skill in discovered if skill.origin is not SkillOrigin.BUNDLED_PRISTINE)
+    return count
 
 
 def _platform_choice_label(platform: Platform, width: int, results: list[ScanResult], skills: int) -> str:

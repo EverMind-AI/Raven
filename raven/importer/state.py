@@ -62,7 +62,14 @@ class ImportState:
     def mark_failed(self, platform: str, source_key: str, error: str) -> None:
         self._mark(platform, source_key, "failed", error=error)
 
-    def set_total(self, total: int, *, keys: Iterable[str] | None = None) -> None:
+    def set_total(
+        self,
+        total: int,
+        *,
+        keys: Iterable[str] | None = None,
+        tier: str | None = None,
+        platforms: Iterable[str] | None = None,
+    ) -> None:
         """Record the units of a run: how many, and -- when given -- which.
 
         Entries outlive the run that wrote them (they are what lets a later
@@ -71,15 +78,24 @@ class ImportState:
         names the run's ``platform:source_key`` keys scopes that read to them;
         one that does not (``raven import run``) leaves every entry in scope,
         which is how ``raven import status`` has always counted.
+
+        ``tier`` and ``platforms`` are the run's own request, kept so a client
+        that finds a run stopped short (the gateway restarted under it) can
+        start the same one again without having remembered what was asked.
         """
         data = self._ensure_loaded()
         data.setdefault("entries", {})
         meta = data.setdefault("meta", {})
         meta["total"] = total
-        if keys is None:
-            meta.pop("keys", None)
+        for name, value in (("keys", keys), ("platforms", platforms)):
+            if value is None:
+                meta.pop(name, None)
+            else:
+                meta[name] = sorted(value)
+        if tier is None:
+            meta.pop("tier", None)
         else:
-            meta["keys"] = sorted(keys)
+            meta["tier"] = tier
         self._flush()
 
     def get_summary(self) -> dict[str, int]:

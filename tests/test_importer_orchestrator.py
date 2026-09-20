@@ -474,6 +474,34 @@ class TestCancel:
         assert summary.total == 2
 
     @pytest.mark.asyncio
+    async def test_cancel_between_batches_leaves_the_source_unsent_and_unmarked(self, tmp_path: Path) -> None:
+        """A long conversation is many batches, and a stop that waited for the
+        whole source was not a stop. The interrupted source keeps no entry, so
+        a later run sends it whole rather than skipping it half-landed."""
+        cancel = tmp_path / "import_cancel"
+        state = ImportState(path=tmp_path / "state.json")
+        backend = FakeBackend()
+        scanner = FakeScanner({"a": _session(n_msgs=250, session_id="sa"), "b": _session(n_msgs=1, session_id="sb")})
+        items = [(scanner, _scan_result("a")), (scanner, _scan_result("b"))]
+
+        original_store = backend.store
+
+        async def _store_then_cancel(*args: Any, **kwargs: Any) -> bool:
+            landed = await original_store(*args, **kwargs)
+            cancel.touch()
+            return landed
+
+        backend.store = _store_then_cancel
+
+        summary = await run_import(items, backend, state, cancel_path=cancel)
+
+        assert summary.cancelled is True
+        assert summary.submitted == 0
+        assert len(backend.calls) == 1
+        assert not state.is_submitted("claude_code", "a")
+        assert "claude_code:a" not in state.get_progress()["entries"]
+
+    @pytest.mark.asyncio
     async def test_no_cancel_path_runs_normally(self, tmp_path: Path) -> None:
         """Without cancel_path, import runs all items to completion."""
         state = ImportState(path=tmp_path / "state.json")

@@ -9,18 +9,16 @@ progress bar. Only one import runs at a time inside this process: the slot is
 claimed before ``import.run`` awaits anything, so two frames dispatched together
 cannot both pass the guard and submit the same source twice.
 
-Unlike the CLI's ``run`` command, ``import.run`` never lands the Hermes
-``user.md`` mirror or installs Hermes skills: those are CLI-only extras
-(``raven.cli.import_commands._land_hermes_user_md`` /
-``_install_hermes_skills``), and the wizard's sync step covers memory files
-and conversations only.
+After the message pass the run lands the same two phases the CLI does
+(``raven.importer.phases``): the profile mirror and the skill install. Their
+progress is this process's own knowledge, reported through ``import.status``
+beside the counts the state file holds.
 """
 
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -32,6 +30,7 @@ from raven.core.plugin_stack import (
     memory_enabled,
 )
 from raven.importer.orchestrator import run_import
+from raven.importer.phases import run_phases
 from raven.importer.scanners import build_scanners, scan_all
 from raven.importer.state import ImportState
 from raven.importer.types import Platform, Scanner, ScanResult, SourceKind, Tier, filter_by_tier
@@ -39,6 +38,8 @@ from raven.rpc.errors import ConfigValidationError
 
 if TYPE_CHECKING:
     from raven.config.raven import RavenConfig
+    from raven.config.schema import Config
+    from raven.contracts.llm_provider import LLMProvider
     from raven.contracts.memory import MemoryBackend
     from raven.rpc.dispatcher import Dispatcher
 
@@ -49,6 +50,10 @@ if TYPE_CHECKING:
 # its own ``finally``.
 _TASK: asyncio.Task | None = None
 _STARTING = False
+# The post-import phase in flight, as ``import.status`` reports it. Set by the
+# running task's progress callback and cleared with the slot: the state file
+# knows nothing of the phases, so this is the only place their progress lives.
+_PHASE: dict[str, Any] | None = None
 
 
 def _busy() -> bool:
@@ -72,18 +77,33 @@ def _no_backend_reason(ec_config: "RavenConfig") -> str:
     return "no memory backend is configured; finish the memory step of onboarding first"
 
 
-def _load_workspace_and_config() -> tuple[Path, "RavenConfig"]:
+def _load_configs() -> tuple["Config", "RavenConfig"]:
     from raven.config.loader import load_config
     from raven.config.raven import load_raven_config
 
-    workspace = load_config().workspace_path
-    return workspace, load_raven_config()
+    return load_config(), load_raven_config()
+
+
+def _profile_provider(config: "Config") -> "LLMProvider | None":
+    """Best-effort provider for the profile heading classifier.
+
+    ``make_provider`` raises when no LLM credentials are configured; the
+    import must still land in that case, under the mirror's fallback heading.
+    """
+    from raven.providers.factory import make_provider
+
+    try:
+        return make_provider(config)
+    except Exception as exc:
+        logger.info("import.run: no LLM provider for the profile mirror ({}); using the fallback heading", exc)
+        return None
 
 
 async def import_scan(params: dict) -> dict:
     """``import.scan`` -- what each platform holds, and whether import can run."""
     del params
-    workspace, ec_config = _load_workspace_and_config()
+    config, ec_config = _load_configs()
+    workspace = config.workspace_path
 
     def _on_scan_error(platform: Platform, error: BaseException) -> None:
         logger.warning("import.scan: {} scan failed: {}", platform.value, error)
@@ -129,7 +149,8 @@ async def import_run(params: dict) -> dict:
         # still starting is then seen by the run's first poll rather than lost.
         state.cancel_path.unlink(missing_ok=True)
 
-        workspace, ec_config = _load_workspace_and_config()
+        config, ec_config = _load_configs()
+        workspace = config.workspace_path
         from raven.core.plugin_stack import build_plugin_registry
 
         registry = build_plugin_registry(ec_config)
@@ -155,12 +176,31 @@ async def import_run(params: dict) -> dict:
             detail = "; ".join(hints) or "memory service is not ready"
             return {"started": False, "total": 0, "detail": detail}
 
-        state.set_total(len(items), keys=[f"{r.platform.value}:{r.source_key}" for _, r in items])
+        state.set_total(
+            len(items),
+            keys=[f"{r.platform.value}:{r.source_key}" for _, r in items],
+            tier=tier.value,
+            platforms=[p.value for p in requested],
+        )
+
+        def _on_phase(kind: str, current: int, total: int) -> None:
+            global _PHASE
+            _PHASE = {"kind": kind, "current": current, "total": total}
 
         async def _run(backend: "MemoryBackend") -> None:
-            global _TASK
+            global _TASK, _PHASE
             try:
-                await run_import(items, backend, state, cancel_path=state.cancel_path)
+                summary = await run_import(items, backend, state, cancel_path=state.cancel_path)
+                # A stop has to stop the run, not hand it its two longest steps.
+                if not summary.cancelled:
+                    await run_phases(
+                        items,
+                        workspace,
+                        state,
+                        provider=_profile_provider(config),
+                        model=config.agents.defaults.model,
+                        on_phase=_on_phase,
+                    )
             except Exception:
                 logger.exception("import.run: the background import failed")
             finally:
@@ -168,6 +208,7 @@ async def import_run(params: dict) -> dict:
                     await backend.stop()
                 except Exception:
                     logger.exception("import.run: the memory backend did not stop cleanly")
+                _PHASE = None
                 _TASK = None
 
         _TASK = asyncio.create_task(_run(backend))
@@ -214,6 +255,9 @@ async def import_status(params: dict) -> dict:
         "submitted": submitted,
         "failed": failed,
         "by_platform": by_platform,
+        "phase": dict(_PHASE) if running and _PHASE is not None else None,
+        "tier": meta.get("tier"),
+        "platforms": list(meta.get("platforms") or sorted(by_platform)),
     }
 
 

@@ -2023,12 +2023,25 @@ class ImportPlatformCounts(_Strict):
     failed: int
 
 
+class ImportPhase(_Strict):
+    kind: Literal["profile", "skills"]
+    current: int
+    total: int
+
+
 class ImportStatusResult(_Strict):
     running: bool
     total: int
     submitted: int
     failed: int
     by_platform: dict[str, ImportPlatformCounts]
+    # The post-import phase in flight, when one is: the message pass reports
+    # through the counts above, the profile mirror and skill install through this.
+    phase: ImportPhase | None = None
+    # The last run's own request, so a client that finds it stopped short can
+    # start the same one again without having remembered what was asked.
+    tier: Literal["memory_files", "full"] | None = None
+    platforms: list[str] = []
 
 
 class ImportStopParams(_Strict):

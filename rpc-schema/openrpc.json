@@ -8686,6 +8686,44 @@
                   }
                 }
               }
+            },
+            "phase": {
+              "type": ["object", "null"],
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "current",
+                "total"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "profile",
+                    "skills"
+                  ]
+                },
+                "current": {
+                  "type": "integer"
+                },
+                "total": {
+                  "type": "integer"
+                }
+              }
+            },
+            "tier": {
+              "type": ["string", "null"],
+              "enum": [
+                "memory_files",
+                "full",
+                null
+              ]
+            },
+            "platforms": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           }
         }

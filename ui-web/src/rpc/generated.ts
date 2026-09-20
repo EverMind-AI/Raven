@@ -4394,6 +4394,13 @@ export interface ImportStatusResult {
       failed: number;
     };
   };
+  phase?: {
+    kind: 'profile' | 'skills';
+    current: number;
+    total: number;
+  } | null;
+  tier?: 'memory_files' | 'full' | null;
+  platforms?: string[];
 }
 export interface ImportStopParams {}
 export interface ImportStopResult {
