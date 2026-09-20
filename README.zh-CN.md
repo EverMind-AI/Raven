@@ -18,7 +18,7 @@
 # Raven 是什么
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/ef64cd3b-a48f-4516-9a30-47fe47a750be"><img src="https://github.com/user-attachments/assets/ef64cd3b-a48f-4516-9a30-47fe47a750be" alt="Raven unified surface and agent workflow" width="100%"></a>
+  <a href="https://github.com/user-attachments/assets/ed33ed0f-1f28-45cf-bbf5-7de49785def8"><img src="https://github.com/user-attachments/assets/ed33ed0f-1f28-45cf-bbf5-7de49785def8" alt="Raven unified surface and agent workflow" width="100%"></a>
 </p>
 
 <p align="center"><em>一个入口，全领域 Agent 协同：Raven 生成并编排任务 DAG，驱动多个专业 Agent 协作完成复杂任务。</em></p>
