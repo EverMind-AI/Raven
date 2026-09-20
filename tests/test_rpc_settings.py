@@ -1100,11 +1100,32 @@ async def test_settings_set_nullable_keys_accept_null(cfg, key):
     assert node[key.split(".")[-1]] is None
 
 
-async def test_settings_set_warns_only_for_reload_only_keys(cfg):
-    warned = await rpc_console.settings_set({"key": "context.curatorModel", "value": "m"})
-    assert "reload" in warned["warning"].lower()
-    live = await rpc_console.settings_set({"key": "sessionTitle.model", "value": "m"})
-    assert "warning" not in live
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("context.curatorModel", "m"),
+        ("context", {"curatorModel": "m", "curatorProvider": "deepseek"}),
+        ("skillForge.llmGateModel", "m"),
+        ("skillForge", {"llmGateModel": "m", "llmGateProvider": "deepseek"}),
+        ("agents.defaults.maxToolIterations", 40),
+        ("agents.defaults.contextWindowTokens", 4096),
+        ("sessionTitle.model", "m"),
+    ],
+)
+async def test_no_settings_write_asks_for_a_reload_any_more(cfg, key, value):
+    """Every one of these is read where it is used, so the write is the whole
+    change.
+
+    The first five were reload-only because the value was copied onto the
+    objects the loop was built with: the curator's and the gate's pins are
+    resolved per call now, the cap and the window are read per turn. Telling
+    the operator to restart would be telling them to do nothing, so the whole
+    reload-only set is gone -- ``warning`` now belongs to the one writer that
+    still has something to say (an embedding model change).
+    """
+    r = await rpc_console.settings_set({"key": key, "value": value})
+    assert r["applied"] is True
+    assert "warning" not in r
 
 
 async def test_settings_set_blocklist_is_a_raw_list(cfg):
@@ -1131,7 +1152,7 @@ async def test_settings_set_pin_pairs_write_as_one_merged_object(cfg, parent, mo
     r = await rpc_console.settings_set(
         {"key": parent, "value": {model_field: "deepseek-chat", provider_field: "deepseek"}}
     )
-    assert "reload" in r["warning"].lower()
+    assert r["applied"] is True
     block = _read(cfg)[parent]
     assert block == {"keep": True, model_field: "deepseek-chat", provider_field: "deepseek"}
     await rpc_console.settings_set({"key": parent, "value": {model_field: None, provider_field: None}})
