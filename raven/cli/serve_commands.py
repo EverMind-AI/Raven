@@ -42,7 +42,7 @@ import webbrowser
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 
@@ -282,13 +282,72 @@ async def _announce_updates(broadcast, stop: asyncio.Event) -> None:
             announced = None
 
 
+class _ServedStack:
+    """The RPC stack this process serves, and the one build a loop-less start owes.
+
+    A gateway that came up with no model configured has no agent loop, and the
+    wiring a turn needs is assembled with it -- so the process is not serving
+    turns and cannot until something builds what was skipped. ``config.set``
+    asks for that through :meth:`ensure` once the config on disk can support it.
+
+    Only that state is reachable here. Such a process owns no cron, no plugin
+    services, no memory backend and no MCP transports, so there is nothing
+    running to preserve and no process-global singleton for a second assembly
+    to collide with. That is what makes this a one-shot build rather than the
+    gateway's generation swap (``gateway_commands._request_swap``), which has
+    to keep generation N serving while N+1 comes up.
+    """
+
+    def __init__(self, gateway: Any) -> None:
+        self._gateway = gateway
+        self._building = asyncio.Lock()
+        self.current: Any = None
+
+    async def start(self) -> Any:
+        """Assemble the first stack and bind it to the transport."""
+        from raven.rpc.bootstrap import build_rpc_stack
+
+        self.current = await build_rpc_stack(self._gateway.broadcast, ensure_stack=self.ensure)
+        self._gateway.dispatcher = self.current.dispatcher
+        return self.current
+
+    async def ensure(self) -> bool:
+        """Build the stack this process started without; True when it has one.
+
+        The stack left behind is dropped rather than torn down: its teardown
+        ends by closing the browser and the ACP pool, and both are
+        process-global -- the new stack's now. A first-run stack owns nothing
+        else, so there is nothing else to release.
+
+        The replacement is handed the emitter it replaces: a subscription lives
+        there, and the page re-subscribes only when its socket reconnects.
+        """
+        from raven.rpc.bootstrap import build_rpc_stack
+
+        if self.current.agent_loop is not None:
+            return True
+        async with self._building:
+            # Asked again under the lock: two writes can both find no loop.
+            if self.current.agent_loop is not None:
+                return True
+            nxt = await build_rpc_stack(
+                self._gateway.broadcast,
+                emitter=self.current.emitter,
+                ensure_stack=self.ensure,
+            )
+            if nxt.agent_loop is None:
+                return False
+            self.current = nxt
+            self._gateway.dispatcher = nxt.dispatcher
+            return True
+
+
 async def _serve_main(port: int, open_browser: bool) -> None:
 
     from aiohttp import web
     from loguru import logger
 
     from raven.cli._console_feature import register_console_feature
-    from raven.rpc.bootstrap import build_rpc_stack
     from raven.rpc.transports.ws import WsGateway, build_app, pick_port
 
     register_console_feature()
@@ -323,43 +382,8 @@ async def _serve_main(port: int, open_browser: bool) -> None:
     # the /oauth/callback route below stays for registrations made under the
     # old scheme, which still point at a gateway port.
 
-    building = asyncio.Lock()
-
-    async def _ensure_stack() -> bool:
-        """Assemble the stack this process started without; True when it has one.
-
-        Reached only by a process whose loop failed to build for want of
-        credentials, which is the one state a later assembly can still resolve:
-        such a process owns no cron, no plugin services, no memory backend and
-        no MCP transports, so there is nothing running to preserve and no
-        process-global singleton for a second assembly to collide with. That is
-        what makes this a one-shot build rather than the gateway's generation
-        swap (``gateway_commands._request_swap``), which has to keep generation
-        N serving while N+1 comes up.
-
-        The stack left behind is dropped rather than torn down: its teardown
-        ends by closing the browser and the ACP pool, and both are
-        process-global -- the new stack's now.
-        """
-        nonlocal stack
-        if stack.agent_loop is not None:
-            return True
-        async with building:
-            if stack.agent_loop is not None:
-                return True
-            nxt = await build_rpc_stack(
-                gateway.broadcast,
-                emitter=stack.emitter,
-                ensure_stack=_ensure_stack,
-            )
-            if nxt.agent_loop is None:
-                return False
-            stack = nxt
-            gateway.dispatcher = nxt.dispatcher
-            return True
-
-    stack = await build_rpc_stack(gateway.broadcast, ensure_stack=_ensure_stack)
-    gateway.dispatcher = stack.dispatcher
+    served = _ServedStack(gateway)
+    stack = await served.start()
 
     app = build_app(
         gateway,
@@ -367,8 +391,8 @@ async def _serve_main(port: int, open_browser: bool) -> None:
         # Read per request, not once: a first run assembles its stack after the
         # app is built, and a store captured here would leave that process with
         # no download surface for the rest of its life.
-        deliverables=lambda: stack.deliverables,
-        agent_loop_factory=lambda: stack.agent_loop,
+        deliverables=lambda: served.current.deliverables,
+        agent_loop_factory=lambda: served.current.agent_loop,
     )
     runner = web.AppRunner(app)
     await runner.setup()
@@ -413,7 +437,7 @@ async def _serve_main(port: int, open_browser: bool) -> None:
         if state_path is not None:
             state_path.unlink(missing_ok=True)
         try:
-            await stack.teardown()
+            await served.current.teardown()
         finally:
             await runner.cleanup()
 
