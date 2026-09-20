@@ -4460,7 +4460,7 @@ async def test_a_session_open_behind_a_running_turn_says_busy_not_broken(tmp_pat
     assert "Wait for the" in message and "re-dispatching" in message.lower() or "re-dispatching" in message
 
 
-async def test_a_session_open_timeout_with_no_turn_in_flight_drops_the_connection(tmp_path: Path, monkeypatch) -> None:
+async def test_a_session_open_timeout_with_no_turn_in_flight_drops_the_connection(tmp_path: Path) -> None:
     """No pending prompt means the silence is not queueing -- the agent really
     did not answer. The connection is dropped on the spot, so a retry launches
     a fresh process instead of waiting out the same budget against the same
@@ -4469,12 +4469,23 @@ async def test_a_session_open_timeout_with_no_turn_in_flight_drops_the_connectio
     from raven.acp_client.protocol import AcpTimeoutError
 
     cfg = stub_config("a")
+    dropped: list[str] = []
+
+    class _Pool:
+        async def drop(self, name: str) -> None:
+            dropped.append(name)
+
+    # Handed in rather than patched over the module: the backend takes the pool
+    # it serves turns from, so the drop is asserted on the one this backend was
+    # actually given -- which for a caller running on a pool of its own (see
+    # ``ping_agent``) is the only one it may touch.
     backend = AcpAgentBackend(
         name="a",
         command=cfg.command,
         env=dict(cfg.env),
         snapshot=_snapshot("a", cfg, can_resume=False),
         registry=InstanceRegistry(path=tmp_path / "instances.json"),
+        pool=_Pool(),
     )
 
     class _DeafClient:
@@ -4482,14 +4493,6 @@ async def test_a_session_open_timeout_with_no_turn_in_flight_drops_the_connectio
 
         async def request(self, method: str, params: dict[str, Any], *, timeout: float):
             raise AcpTimeoutError(f"acp agent 'a': {method} timed out after {timeout}s")
-
-    dropped: list[str] = []
-
-    class _Pool:
-        async def drop(self, name: str) -> None:
-            dropped.append(name)
-
-    monkeypatch.setattr("raven.acp_client.pool.get_pool", lambda: _Pool())
 
     with pytest.raises(AcpTimeoutError, match="fresh agent process"):
         await backend._open_session(_DeafClient(), cwd=str(tmp_path), skey="s", handle="w", budget=5, mcp_servers=[])
@@ -4706,3 +4709,34 @@ async def test_response_meta_alone_never_records_an_output_limit(tmp_path: Path)
 
     assert did.response_meta, "the table still reaches the record verbatim"
     assert did.output_limited is False
+
+
+async def test_a_dispatch_goes_to_the_backend_s_own_pool(tmp_path: Path) -> None:
+    """The pool is an argument, so a caller that must not disturb the roster can
+    hand in one of its own.
+
+    ``ping_agent`` is that caller: its workspace is a fresh temporary directory
+    per call, which never matches a held connection's launch key, so on the
+    shared pool every ping retires that agent's live connections before opening
+    its own. Reading the field back off the backend cannot show where a turn
+    actually goes -- only running one can -- so both pools answer here and the
+    exception that escapes names the one that was asked.
+    """
+
+    class _Marker(Exception):
+        pass
+
+    class _Shared(Exception):
+        pass
+
+    class _Mine:
+        async def acquire(self, **kwargs: Any) -> Any:
+            raise _Marker
+
+    backend = AcpAgentBackend(name="a", command="true", pool=_Mine())
+
+    def _never() -> Any:
+        raise _Shared
+
+    with patch("raven.acp_client.acp_agent.get_pool", _never), pytest.raises(_Marker):
+        await backend.run("hello", task_id="t1", workspace=tmp_path, executor=None)

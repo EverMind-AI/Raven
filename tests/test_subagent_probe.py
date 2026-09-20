@@ -685,6 +685,100 @@ async def test_ping_hands_the_backend_the_same_bound_it_waits_for(monkeypatch: p
     assert seen["ready_timeout_ms"] == 4000
 
 
+async def test_ping_runs_on_a_connection_pool_of_its_own(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ping must not reach the pool the running roster dispatches on.
+
+    The pool keys a connection on its launch arguments, and ``cwd`` falls back
+    to the caller's workspace -- which for a ping is a fresh temporary directory
+    every time. So a ping on the shared pool always computes a launch key no
+    held connection matches, and ``acquire`` retires every connection of that
+    agent before launching its own. Two consequences, both measured against a
+    live adapter on 2026-09-20: a second Connect pressed while the first was
+    still running killed the first one's connection, and the first came back
+    "did not answer a test message" for a failure raven had caused; and a ping
+    fired while that agent was serving a real run would have taken that run's
+    connection down with it.
+
+    This half asserts what ``ping_agent`` asks the factory for. The other half
+    is ``test_the_factory_honours_the_pool_its_caller_overrides``.
+    """
+    from raven.acp_client.pool import AcpConnectionPool, get_pool
+
+    seen: dict = {}
+
+    class _Answers:
+        async def run(self, prompt, **kwargs):
+            return "PONG"
+
+    def _capture(cfg, **kw):
+        seen.update(kw)
+        return _Answers()
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", _capture)
+
+    await probe_mod.ping_agent(ThirdPartyAcpSubagentConfig(name="ping-acp", kind="acp", command="fake-agent acp"))
+
+    assert isinstance(seen["pool"], AcpConnectionPool)
+    assert seen["pool"] is not get_pool()
+
+
+async def test_ping_closes_the_pool_it_opened(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Or every press leaks the agent process it launched.
+
+    The private pool above is per-ping, so nothing else will ever close it: a
+    pool left open holds a live child process for the rest of the gateway's
+    life, and the roster would accumulate one per Connect pressed.
+    """
+    import raven.acp_client.pool as pool_mod
+
+    closed: list[int] = []
+
+    class _Counting(pool_mod.AcpConnectionPool):
+        async def close_all(self) -> None:
+            closed.append(1)
+            await super().close_all()
+
+    monkeypatch.setattr(pool_mod, "AcpConnectionPool", _Counting)
+
+    class _Answers:
+        async def run(self, prompt, **kwargs):
+            return "PONG"
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", lambda cfg, **kw: _Answers())
+
+    await probe_mod.ping_agent(ThirdPartyAcpSubagentConfig(name="ping-acp", kind="acp", command="fake-agent acp"))
+    assert closed == [1]
+
+    # And on the failing path too, which is the one that runs when an agent is
+    # the reason the press is happening at all.
+    class _Refuses:
+        async def run(self, prompt, **kwargs):
+            raise RuntimeError("Internal error: You need to sign in to use this model.")
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", lambda cfg, **kw: _Refuses())
+
+    result = await probe_mod.ping_agent(
+        ThirdPartyAcpSubagentConfig(name="ping-acp", kind="acp", command="fake-agent acp")
+    )
+    assert result.ok is False
+    assert closed == [1, 1]
+
+
+def test_the_factory_honours_the_pool_its_caller_overrides() -> None:
+    """Read off a real build, for the reason the bounds test states: a request
+    recorded by a replaced builder proves nothing about what the backend then
+    dispatches on."""
+    from raven.acp_client.pool import AcpConnectionPool, get_pool
+    from raven.agent.subagent.backends import build_third_party_backend
+
+    cfg = ThirdPartyAcpSubagentConfig(name="factory-pool", kind="acp", command="fake-agent acp")
+    private = AcpConnectionPool()
+
+    assert build_third_party_backend(cfg, pool=private).pool is private
+    # Omitted, and a dispatch goes where every other dispatch goes.
+    assert build_third_party_backend(cfg).pool is get_pool()
+
+
 def test_the_factory_honours_the_bounds_its_caller_overrides() -> None:
     """Both overrides exist for one caller, so both are read off a real build.
 

@@ -120,8 +120,14 @@ export function stageOf(row: XaRow): Stage {
  *
  * `key` is the one stage whose write cannot be done from here: only the reader
  * has the credential. In the row it opens the card, where the field is; in the
- * card it is the field's own button, which is why the card passes `onKey`. */
-function AgentAct({ row, onKey }: { row: XaRow; onKey?: () => void }): JSX.Element | null {
+ * card it is the field's own button, which is why the card passes `onKey`.
+ *
+ * `busy` is this row's own write being awaited. Both verbs take it, because the
+ * store drops a second call for a name already in flight and a live control that
+ * does nothing is worse than a disabled one -- but only connect renames itself,
+ * since it is the one that holds: the server proves the agent before it writes,
+ * which is a real prompt through that agent's backend. */
+function AgentAct({ row, busy, onKey }: { row: XaRow; busy?: boolean; onKey?: () => void }): JSX.Element | null {
   const stage = stageOf(row)
   if (stage === 'builtin') return null
   if (stage === 'building') {
@@ -136,7 +142,7 @@ function AgentAct({ row, onKey }: { row: XaRow; onKey?: () => void }): JSX.Eleme
        the folder and the sessions it already ran all stay, and connect puts it
        back. A dialog would be asking permission for a switch. */
     return (
-      <button className="mini ghost" onClick={() => void store.run('toggle', row, { enabled: false })}>
+      <button className="mini ghost" disabled={busy} onClick={() => void store.run('toggle', row, { enabled: false })}>
         {t('gui.agent.disconnect')}
       </button>
     )
@@ -163,12 +169,13 @@ function AgentAct({ row, onKey }: { row: XaRow; onKey?: () => void }): JSX.Eleme
   return (
     <button
       className="mini"
+      disabled={busy}
       /* The one connect that costs the reader something to know about before
          they click it. */
       title={stage === 'install' ? t('gui.agent.install_note') : undefined}
       onClick={connect}
     >
-      {t('gui.agent.connect')}
+      {busy ? t('gui.agent.connecting') : t('gui.agent.connect')}
     </button>
   )
 }
@@ -269,7 +276,7 @@ function testVerdict(row: XaRow): { cls: string; text: string } {
    reader learns to ignore the warning. */
 const testCosts = (row: XaRow): boolean => row.kind === 'cli'
 
-function AgentRow({ row, sel }: { row: XaRow; sel: boolean }): JSX.Element {
+function AgentRow({ row, busy, sel }: { row: XaRow; busy: boolean; sel: boolean }): JSX.Element {
   /* Health is only a question about an agent that is supposed to be working.
      Outside the connected group not-dispatchable is what every row is, so a red
      dot and the clay stripe that comes with it were an alarm about the group's
@@ -295,7 +302,7 @@ function AgentRow({ row, sel }: { row: XaRow; sel: boolean }): JSX.Element {
           {stageOf(row) === 'stale' ? <span className="kd warn">{t('gui.agent.tag_stale')}</span> : null}
         </>
       }
-      act={<AgentAct row={row} />}
+      act={<AgentAct busy={busy} row={row} />}
       sel={sel}
       onOpen={() => store.sheetOpen(row)}
     />
@@ -396,7 +403,7 @@ function Editable({
  * before the one thing to do. The verdict is back, but as a section of its own
  * with the button that renews it: it was noise as a line in a form nobody had
  * asked a question of, and it is the answer once somebody asks. */
-function AgentCard({ row, testing }: { row: XaRow; testing: boolean }): JSX.Element {
+function AgentCard({ row, busy, testing }: { row: XaRow; busy: boolean; testing: boolean }): JSX.Element {
   const dHost = store.detailHost()
   const keyRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
@@ -472,7 +479,7 @@ function AgentCard({ row, testing }: { row: XaRow; testing: boolean }): JSX.Elem
         </div>
         {/* The key stage's button belongs beside its field, not up here where
             there is nothing to type into. */}
-        <div className="dact">{stage === 'key' ? null : <AgentAct row={row} />}</div>
+        <div className="dact">{stage === 'key' ? null : <AgentAct busy={busy} row={row} />}</div>
       </div>
       {/* An owned agent gets the section whether or not it has a description:
           the empty one is where the reader writes the first. An unowned row
@@ -580,7 +587,7 @@ export function XaApp(): JSX.Element {
   const rows = (list: XaRow[]): JSX.Element => (
     <div className="sulist">
       {list.map((row) => (
-        <AgentRow key={row.name} row={row} sel={s.sheet === row.name} />
+        <AgentRow busy={s.busy.includes(row.name)} key={row.name} row={row} sel={s.sheet === row.name} />
       ))}
     </div>
   )
@@ -610,7 +617,12 @@ export function XaApp(): JSX.Element {
         ) : null
       })}
       {sheetRow ? (
-        <AgentCard key={`${s.sheet}:${s.epoch}`} row={sheetRow} testing={s.testing.includes(sheetRow.name)} />
+        <AgentCard
+          busy={s.busy.includes(sheetRow.name)}
+          key={`${s.sheet}:${s.epoch}`}
+          row={sheetRow}
+          testing={s.testing.includes(sheetRow.name)}
+        />
       ) : null}
     </>
   )

@@ -751,6 +751,10 @@
       "en": "Connect",
       "zh": "连接"
     },
+    "gui.agent.connecting": {
+      "en": "Connecting...",
+      "zh": "连接中..."
+    },
     "gui.agent.disconnect": {
       "en": "Disconnect",
       "zh": "断开"

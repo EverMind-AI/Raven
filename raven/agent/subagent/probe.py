@@ -450,7 +450,22 @@ async def ping_agent(cfg: Any) -> PingResult:
 
     So this spends one call on the agent's own quota, which is why it is reached
     only from an explicit switch-on and never from a listing.
+
+    It runs on a pool of its own, closed on the way out. The shared pool keys a
+    connection on its launch arguments and ``cwd`` falls back to the caller's
+    workspace, which here is a fresh temporary directory per call -- so a ping on
+    the shared pool never matches a held connection and ``acquire`` retires every
+    connection of that agent before opening its own. Measured 2026-09-20 against
+    a live adapter: a second Connect pressed while the first was still running
+    took the first one's connection down, and the first came back "did not answer
+    a test message" for a failure raven had caused; a ping fired while that agent
+    was serving a real run would have taken that run's connection with it.
     """
+    # Function-level like the rest of this module's acp imports: the client family
+    # is future shelf cargo and must not be named at import time.
+    from raven.acp_client import pool as acp_pool
+
+    pool = acp_pool.AcpConnectionPool()
     try:
         with tempfile.TemporaryDirectory(prefix="raven_subagent_ping_") as tmp:
             backend = build_third_party_backend(
@@ -466,6 +481,7 @@ async def ping_agent(cfg: Any) -> PingResult:
                     getattr(cfg, "ready_timeout_ms", None) or _ENABLE_PING_TIMEOUT_SECONDS * 1000,
                     _ENABLE_PING_TIMEOUT_SECONDS * 1000,
                 ),
+                pool=pool,
             )
             reply = await asyncio.wait_for(
                 backend.run(PROBE_PROMPT, task_id=f"ping-{uuid.uuid4().hex[:8]}", workspace=Path(tmp), executor=None),
@@ -475,6 +491,11 @@ async def ping_agent(cfg: Any) -> PingResult:
         return PingResult(False, f"it did not answer within {_ENABLE_PING_TIMEOUT_SECONDS}s")
     except Exception as exc:  # noqa: BLE001 - every failure is the answer, not a crash
         return PingResult(False, str(exc)[:_DETAIL_CAP])
+    finally:
+        # The pool is this call's alone, so nothing else will ever close it, and a
+        # pool left open holds the child process it launched for the rest of the
+        # gateway's life -- one per press.
+        await pool.close_all()
 
     text = (reply or "").strip()
     if not text:
