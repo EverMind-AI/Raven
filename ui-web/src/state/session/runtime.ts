@@ -449,7 +449,14 @@ export async function applyStagedModel(rt: SessionRuntime, sessionId: string, ge
   if (!rt.staged.model) return
   const pm = rt.staged.model; rt.staged.model = null
   try {
-    await gateway().call('config.set', { key: 'model', value: pm.model, provider: pm.provider, session_id: sessionId })
+    const r = await gateway().call('config.set', { key: 'model', value: pm.model, provider: pm.provider, session_id: sessionId })
+    /* A refusal RESOLVES. Watching only for a raise is how a first run went
+       quiet here: with no loop to bind to, the server answers applied:false,
+       and the chip kept a model the session does not have. */
+    if (r && r.applied === false) {
+      toast(t('gui.op.switch_failed', { detail: t('gui.model.refused') }))
+      void loadProviders(sessionId, gen)
+    }
   } catch (e) {
     // Said out loud, not just reversed: the pick was announced as staged, so a
     // silent chip flip back would be an unexplained contradiction.

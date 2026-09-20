@@ -1806,6 +1806,10 @@
             },
             "applies_to_session": {
               "type": "boolean"
+            },
+            "needs_restart": {
+              "type": "boolean",
+              "description": "True when the write landed in a process that has no agent loop: the config is right and this gateway still cannot run a turn on it."
             }
           }
         }
