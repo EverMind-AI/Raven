@@ -1369,3 +1369,36 @@ def test_offline_fetch_entry_is_cache_only(monkeypatch):
         # The real implementation (conftest's autouse guard stubs the name).
         table = _REAL_FETCH()
     assert table == {"m": {"pricing": {}}}
+
+
+def test_a_huggingface_id_is_never_handed_to_litellm_for_its_window(monkeypatch):
+    """The lookup that was supposed to read a table went to the network.
+
+    LiteLLM resolves a huggingface id's window by fetching the repo's
+    `config.json`, on every call and cached nowhere, and `allow_fetch=False`
+    does not reach it. `model.options` resolves a window per configured vendor,
+    so the settings page paid six sequential round trips for answers that were
+    404 anyway -- the id still carries its routing prefix, so the address is
+    `huggingface.co/huggingface/<repo>`, which is not a repo.
+    """
+    from raven.providers import rates
+    from raven.providers.wire import metadata_candidates
+
+    model = "huggingface/deepseek-ai/DeepSeek-V4-Pro"
+    assert any("huggingface" in c for c in metadata_candidates(model)), "the case needs a huggingface candidate"
+
+    asked: list[str] = []
+
+    class _Fake:
+        @staticmethod
+        def get_model_info(candidate: str) -> dict:
+            asked.append(candidate)
+            return {"max_input_tokens": 4096}
+
+    monkeypatch.setattr(rates, "import_litellm", lambda: _Fake, raising=False)
+    monkeypatch.setattr("raven.providers.litellm_setup.import_litellm", lambda: _Fake)
+    monkeypatch.setattr(rates, "_table_entry", lambda _c: None)
+
+    rates.resolve_context_window(model, allow_fetch=False)
+
+    assert not [c for c in asked if "huggingface" in c], f"handed over: {asked}"
