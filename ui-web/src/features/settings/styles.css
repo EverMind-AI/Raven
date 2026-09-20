@@ -250,7 +250,11 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
 .settings-mlf {display:flex; align-items:center; gap:8px; padding:9px 15px; border-top:1px solid var(--line-soft)}
 .settings-mini[disabled] {opacity:.45; cursor:not-allowed}
 .settings-ctl {position:relative}
-.settings-ctl .model-picker {position:absolute; top:calc(100% + 6px); right:0; z-index:30; width:min(560px, calc(100vw - 32px)); height:400px}
+/* Placed by lib/popover.ts, which sets position, top, left and z-index: the
+   row it hangs off lives inside .spanels, whose overflow clips an absolutely
+   positioned child, so the panel resolves against .smodal instead and the
+   dialog is what bounds it. Only the size is CSS's to say. */
+.settings-ctl .model-picker {width:min(560px, calc(100vw - 32px)); height:400px}
 .settings-ctl .model-picker-search {padding:10px 14px}
 .settings-ctl .model-picker-search input {font-size:14px}
 .settings-ctl .model-picker-body {grid-template-columns:170px 1fr}
