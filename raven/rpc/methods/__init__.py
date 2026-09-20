@@ -11,6 +11,7 @@ the declared names that answer -32601.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from raven.rpc.methods._stubs import register_stub_methods
@@ -124,6 +125,7 @@ def register_aligned_methods_except_system(
     build_error: "RpcError | None" = None,
     send_frame: "Any" = None,
     default_channel: str = "tui",
+    ensure_stack: "Callable[[], Awaitable[bool]] | None" = None,
 ) -> None:
     """Register every aligned RPC handler EXCEPT system.* on a dispatcher.
 
@@ -140,7 +142,7 @@ def register_aligned_methods_except_system(
     register_setup_methods(dispatcher)
     register_import_methods(dispatcher)
     register_reload_methods(dispatcher, agent_loop_factory=agent_loop_factory)
-    register_config_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    register_config_methods(dispatcher, agent_loop_factory=agent_loop_factory, ensure_stack=ensure_stack)
     register_subagent_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_subagents_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_instance_methods(dispatcher, agent_loop_factory=agent_loop_factory)

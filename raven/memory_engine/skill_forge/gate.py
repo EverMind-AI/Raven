@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from raven.memory_engine.skill_forge.types import RouterHit
@@ -50,22 +51,20 @@ class LLMGateFilter:
         *,
         max_select: int = 2,
         legacy_top_k: int = 5,
-        model: str | None = None,
         temperature: float = 0.0,
         max_tokens: int = 8192,
-        pin: "ModelBinding | None" = None,
+        pin_resolver: "Callable[[], ModelBinding | None] | None" = None,
     ) -> None:
         self._fallback_provider = provider
         self._max_select = max_select
         self._legacy_top_k = legacy_top_k
-        self._model = model
         self._temperature = temperature
         self._max_tokens = max_tokens
-        # A pinned model paired with its own credential. Built by the caller
-        # from ``skill_forge.llm_gate_model``; None when unset or when that
-        # vendor has no credentials, in which case the gate follows the turn.
-        self._pin = pin
-        self._pin_warned = False
+        # ``skill_forge.llm_gate_model`` paired with its own credential, asked
+        # for per call so that repointing it applies to the next filter rather
+        # than the next restart. None -- unset, or a vendor with no credentials
+        # -- means the gate follows the turn (see providers.pool.live_pin_resolver).
+        self._pin_resolver = pin_resolver
 
     def set_provider(self, provider: "LLMProvider", model: str) -> None:
         """Move the out-of-turn fallback.
@@ -81,20 +80,14 @@ class LLMGateFilter:
 
         Unpinned is the common case and the configured intent: the gate reads
         the same model the conversation is on, whichever session that is. A
-        pin that named a vendor with no credentials never became a pair, so
+        pin that named a vendor with no credentials never becomes a pair, so
         it is reported once and then ignored rather than sent on the turn's
         key -- that combination 401s every call and is swallowed by the top-N
         fallback below, which is how it stayed invisible.
         """
-        if self._model and self._pin is None and not self._pin_warned:
-            self._pin_warned = True
-            log.warning(
-                "skill_forge.llm_gate_model=%r has no usable credentials of its own; "
-                "the gate follows the conversation's model instead",
-                self._model,
-            )
-        if self._pin is not None:
-            return self._pin.provider, self._pin.model
+        pin = self._pin_resolver() if self._pin_resolver is not None else None
+        if pin is not None:
+            return pin.provider, pin.model
         turn = active_binding()
         if turn is not None:
             return turn.provider, turn.model

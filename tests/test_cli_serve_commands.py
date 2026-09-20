@@ -10,6 +10,7 @@ indistinguishable from a developer who simply never ran the build.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -1394,3 +1395,128 @@ def test_serve_starts_the_litellm_warm_up_at_boot() -> None:
     import inspect
 
     assert "warm_up_in_background()" in inspect.getsource(serve_commands._serve_main)
+
+
+# ---------------------------------------------------------------------------
+# _ServedStack -- the stack a loop-less start still owes
+# ---------------------------------------------------------------------------
+
+
+class _FakeGateway:
+    """The two things the holder touches on the transport."""
+
+    def __init__(self) -> None:
+        self.dispatcher = None
+
+    async def broadcast(self, frame: dict) -> None:  # pragma: no cover - never called here
+        pass
+
+
+def _stack(*, loop: object | None, emitter: object | None = None):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        agent_loop=loop,
+        dispatcher=object(),
+        emitter=emitter if emitter is not None else object(),
+        deliverables=None,
+        build_error=None,
+    )
+
+
+def _stub_builds(monkeypatch, *stacks):
+    """Hand ``build_rpc_stack`` out one stack per call, recording the kwargs."""
+    calls: list[dict] = []
+    remaining = list(stacks)
+
+    async def _build(send_frame, **kwargs):
+        # A real assembly suspends; without that the two callers in
+        # ``test_two_writes_at_once_assemble_once`` never overlap and the
+        # second check under the lock is never the one that answers.
+        await asyncio.sleep(0)
+        calls.append(kwargs)
+        return remaining.pop(0)
+
+    monkeypatch.setattr("raven.rpc.bootstrap.build_rpc_stack", _build)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_the_first_stack_is_bound_to_the_transport(monkeypatch) -> None:
+    first = _stack(loop=None)
+    _stub_builds(monkeypatch, first)
+    gateway = _FakeGateway()
+    served = serve_commands._ServedStack(gateway)
+
+    assert await served.start() is first
+    assert served.current is first
+    assert gateway.dispatcher is first.dispatcher
+
+
+@pytest.mark.asyncio
+async def test_a_process_that_has_a_loop_does_not_build_a_second(monkeypatch) -> None:
+    """The seam is reached through the answer that says this process has none,
+    so an ordinary settings write must not pay for an assembly."""
+    running = _stack(loop=object())
+    calls = _stub_builds(monkeypatch, running)
+    served = serve_commands._ServedStack(_FakeGateway())
+    await served.start()
+
+    assert await served.ensure() is True
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_loop_less_process_assembles_and_rebinds(monkeypatch) -> None:
+    """The dispatcher has to move with the stack: the registered handlers hold
+    the build error and the scheduler by value, so the old one keeps answering
+    with the state that had no loop."""
+    first = _stack(loop=None)
+    second = _stack(loop=object())
+    calls = _stub_builds(monkeypatch, first, second)
+    gateway = _FakeGateway()
+    served = serve_commands._ServedStack(gateway)
+    await served.start()
+
+    assert await served.ensure() is True
+    assert served.current is second
+    assert gateway.dispatcher is second.dispatcher
+    # The emitter is carried: a subscription lives there and the page
+    # re-subscribes only when its socket reconnects.
+    assert calls[1]["emitter"] is first.emitter
+    # The replacement can assemble again in turn.
+    assert calls[1]["ensure_stack"] == served.ensure
+
+
+@pytest.mark.asyncio
+async def test_a_build_that_still_has_no_loop_leaves_the_old_one_serving(monkeypatch) -> None:
+    """The config was written and still does not support a loop. Nothing is
+    torn down: a first-run stack's teardown ends by closing the browser and the
+    ACP pool, which the next attempt still needs."""
+    first = _stack(loop=None)
+    second = _stack(loop=None)
+    _stub_builds(monkeypatch, first, second)
+    gateway = _FakeGateway()
+    served = serve_commands._ServedStack(gateway)
+    await served.start()
+
+    assert await served.ensure() is False
+    assert served.current is first
+    assert gateway.dispatcher is first.dispatcher
+
+
+@pytest.mark.asyncio
+async def test_two_writes_at_once_assemble_once(monkeypatch) -> None:
+    """Two callers can both see no loop. Only one build may happen, or the
+    process ends up with two cron services on one partition."""
+    first = _stack(loop=None)
+    second = _stack(loop=object())
+    calls = _stub_builds(monkeypatch, first, second)
+    served = serve_commands._ServedStack(_FakeGateway())
+    await served.start()
+
+    both = await asyncio.gather(served.ensure(), served.ensure())
+
+    assert both == [True, True]
+    assert len(calls) == 2  # the first start, then one assembly
+    assert served.current is second

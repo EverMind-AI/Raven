@@ -818,7 +818,9 @@ def test_each_host_declares_before_it_can_emit_a_span():
 
     serve_src = inspect.getsource(serve_commands._serve_main)
     assert "set_surface(SERVED_PAGE_SURFACE)" in serve_src
-    assert serve_src.index("set_surface") < serve_src.index("await build_rpc_stack(")
+    # The stack is assembled by ``_ServedStack``, which this awaits: the
+    # ordering the declaration has to beat is that call, not the build inside it.
+    assert serve_src.index("set_surface") < serve_src.index("await served.start()")
 
     tui_src = inspect.getsource(tui_commands._run_rpc_server_until_done)
     assert "set_surface(TERMINAL_SURFACE)" in tui_src

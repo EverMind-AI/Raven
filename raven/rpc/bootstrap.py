@@ -142,6 +142,8 @@ async def build_rpc_stack(
     agent_loop: Any = None,
     channel: str = "tui",
     approval_responder: Any = None,
+    emitter: Any = None,
+    ensure_stack: Callable[[], Awaitable[bool]] | None = None,
 ) -> RpcStack:
     """Assemble dispatcher + engine wired to ``send_frame``.
 
@@ -183,6 +185,15 @@ async def build_rpc_stack(
     classification, the one-command scope and the absence of any always-allow
     state all stay where they are. ``None`` keeps this stack's own broker, so
     existing callers are unchanged.
+
+    ``emitter`` and ``ensure_stack`` belong to a host that can assemble this
+    stack a second time -- ``raven serve``, whose first run comes up without a
+    loop because no model is configured yet and builds one once the page writes
+    the config. ``ensure_stack`` is what ``config.set`` asks to do that: the
+    handler decides whether the moment calls for it, the host owns the
+    assembly. ``emitter`` hands the replacement stack the subscriptions the
+    live one already holds; built fresh, every stream open on the socket would
+    go quiet.
     """
     from raven.rpc.approval_broker import ApprovalBroker
     from raven.rpc.confirm_broker import ConfirmBroker
@@ -202,7 +213,11 @@ async def build_rpc_stack(
     from raven.rpc.subscriptions import SubscriptionEmitter
 
     dispatcher = Dispatcher()
-    emitter = SubscriptionEmitter(send_frame=send_frame)
+    # Carried across a rebuild rather than re-created: a subscription lives in
+    # the emitter, and the page re-subscribes only when the socket reconnects
+    # (ui-web state/session/registry.ts). A fresh emitter under a live socket
+    # would leave every open stream silently unfed.
+    emitter = emitter if emitter is not None else SubscriptionEmitter(send_frame=send_frame)
     # ``confirm.request`` now names the conversation the dispatch was asked for
     # (slash.exec threads its session_id down; see cli_dispatch), so the same
     # scoping as the question broker applies: a destructive command's yes/no
@@ -361,6 +376,7 @@ async def build_rpc_stack(
         build_error=build_error,
         send_frame=send_frame,
         default_channel=channel,
+        ensure_stack=ensure_stack,
     )
 
     if owns_loop and agent_loop is not None:

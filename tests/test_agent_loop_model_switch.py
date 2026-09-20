@@ -116,7 +116,6 @@ def test_set_provider_reaches_every_holder() -> None:
     loop._provider_pool = None
     loop._default_binding = ModelBinding(_Provider("old"), "old-model")
     loop._session_bindings = {}
-    loop._configured_window = None
     loop._image_tool_result_ok = {}
     loop._vision_ok = {}
 
@@ -252,9 +251,13 @@ def test_assembler_forwards_to_llm_backed_builders_only() -> None:
 
 
 def test_pinned_gate_model_survives_the_switch() -> None:
-    gate = LLMGateFilter("old-provider", model="openai/gpt-5-mini")
+    """A switch moves the out-of-turn fallback; the pin is not the switch's to move."""
+    from raven.providers.binding import ModelBinding
+
+    pinned = SimpleNamespace(name="pinned-provider")
+    gate = LLMGateFilter("old-provider", pin_resolver=lambda: ModelBinding(pinned, "openai/gpt-5-mini"))
     gate.set_provider(SimpleNamespace(name="new-provider"), NEW_MODEL)
-    assert gate._model == "openai/gpt-5-mini"
+    assert gate._binding() == (pinned, "openai/gpt-5-mini")
 
 
 def test_an_empty_curator_model_follows_the_agent_model_both_times(tmp_path) -> None:
