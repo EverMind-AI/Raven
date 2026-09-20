@@ -80,7 +80,10 @@ stores it uncapped; a spawn's is the head of `.error.md`, or of `.out.md` when `
 `tokens_in` / `tokens_out` (null = the lane cannot report; never zero), `tool_call_count`
 (null = zero or unreported, an acknowledged ambiguity of `as_meta`), `tool_failure_count`,
 `has_output`, `prompt_template`, `inputs`, `skills`, `mcps`, `files[]`
-(`{path, op: write|edit, add, del, size}`).
+(`{path, op: write|edit, add, del, size}`). While a node runs, the usage, the tool counts and
+the files are read off the activity being collected for it in this process (the same
+in-memory account `subagent.context` and `dag.node` serve a transcript from), since the record
+on disk carries them only once the run finishes; what the lane has not reported yet stays null.
 
 ### 2. Status derivation
 
@@ -120,7 +123,8 @@ renderer, including the synthetic `role=console` row an in-flight `cli` lane emi
 record is re-read on every status transition and, for a dag node, on each `dag.node_updated`
 frame; a spawn gets no per-step frame, so its record is re-read on a one-second beat while it
 runs (a beat is skipped while a read is still out), the cadence the transcript's spawn card
-already reads on.
+already reads on. Each such read of a running node also re-reads its row through
+`tasks.list(kind, id)`, which is how the panel's token total moves during the run.
 
 ### 5. Live updates
 

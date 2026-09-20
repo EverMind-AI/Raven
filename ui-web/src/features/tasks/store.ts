@@ -213,18 +213,26 @@ export function setFold(nodeKey: string, fold: string, open: boolean): void {
 }
 
 /* The server's own read for one row, folded back over whatever a live event
-   already guessed. Used after every terminal live event and after a stop: a
-   frame carries no tokens, no files and no final error text, and a stop's own
-   answer is a bare `found` flag. */
-async function reconcile(kind: TaskKind, id: string): Promise<void> {
+   already guessed. Used after every terminal live event, after a stop, and on
+   each read of a running node's record (`TasksPage.tsx`'s `useNodeRecord`):
+   a frame carries no tokens, no files and no final error text, a stop's own
+   answer is a bare `found` flag, and a running node's usage and counts grow
+   on the server with no frame to carry them. */
+export async function reconcile(kind: TaskKind, id: string): Promise<void> {
   const src = source()
   if (!src) return
   const key = sessionCurrent()
+  const tick = liveTick
   const row = await src.one(kind, id).catch(() => null)
   /* Same guard as refresh: a row read for the conversation the reader has
      since left does not belong in the one they are looking at now, and a
      stop reconciled after the switch must not re-insert it either. */
   if (!row || key !== sessionCurrent()) return
+  /* And the same rule as refresh for a frame that landed while the read was
+     out: the answer is then the older copy of this row, and the frame's own
+     reconcile brings the newer one a moment later. Without this a read
+     started on the beat could put a settled row back to running. */
+  if ((liveAt.get(rowKey(row)) ?? 0) > tick) return
   const now = store.get().rows
   const at = now.findIndex((r) => r.kind === kind && r.id === id)
   patch({ rows: at >= 0 ? now.map((r, i) => (i === at ? row : r)) : [row, ...now] })

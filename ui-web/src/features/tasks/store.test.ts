@@ -250,6 +250,32 @@ describe('live event consumers', () => {
 
     expect(store.byKey('dag', 'r1')?.task_summary).not.toBe('reconciled')
   })
+
+  /* A row read started on a running node's beat can be answered after a
+     terminal frame has already moved the row; that answer is the older copy
+     and must not put the row back to running. */
+  it('reconcile keeps a frame that landed while its read was out', async () => {
+    store.set((prev) => ({ ...prev, rows: [row({ id: 's1', kind: 'spawn', status: 'running' })], loaded: true }))
+    let release: (r: TaskRow | null) => void = () => {}
+    let reads = 0
+    source.one = () => {
+      reads += 1
+      /* The first read (the beat's) hangs; the frame's own reconcile, which
+         comes second, answers the settled row at once. */
+      if (reads === 1) return new Promise((res) => { release = res })
+      return Promise.resolve(row({ id: 's1', kind: 'spawn', status: 'completed', task_summary: 'settled' }))
+    }
+
+    const onBeat = store.reconcile('spawn', 's1')
+    store.onSubagentStatus({ task_id: 't1', call_id: 's1', agent: 'raven', label: 'x', status: 'completed', ended_at: 2000 })
+    await Promise.resolve()
+    await Promise.resolve()
+    release(row({ id: 's1', kind: 'spawn', status: 'running' }))
+    await onBeat
+
+    expect(store.byKey('spawn', 's1')?.status).toBe('completed')
+    expect(store.byKey('spawn', 's1')?.task_summary).toBe('settled')
+  })
 })
 
 /* The read that fills the panel and the frames that move it race: the server

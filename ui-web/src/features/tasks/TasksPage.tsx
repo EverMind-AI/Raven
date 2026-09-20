@@ -378,6 +378,12 @@ function useNodeRecord(row: TaskRow, node: TaskNode): RecordLoad {
     const src = store.source()
     if (!src) { setState((prev) => ({ loading: false, record: prev.record, failed: true })); return }
     reading.current = true
+    /* The row too, while the node runs: its usage and tool counts grow on the
+       server as the lane reports them (`tasks.list` reads the live activity),
+       and no frame carries them -- so the subtitle's token total moves with
+       the record. Once the node settles, the terminal frame's own reconcile
+       brings the final copy. */
+    if (node.status === 'running') void store.reconcile(row.kind, row.id)
     src.node(row, node)
       .then((r) => { if (alive) setState({ loading: false, record: r, failed: false }) })
       .catch(() => { if (alive) setState((prev) => ({ loading: false, record: prev.record, failed: true })) })

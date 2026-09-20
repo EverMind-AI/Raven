@@ -20,8 +20,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent.activity import merge_file_change
-from raven.agent.subagent.dag_store import REGISTRY_FILENAME, RUNNING, UNRECORDED
+from raven.agent.subagent.dag_store import REGISTRY_FILENAME, RUNNING, UNRECORDED, node_live_key
 from raven.agent.subagent.history import dag_root, nodes_root, session_history_root
 from raven.agent.subagent.instances import get_registry
 from raven.rpc.methods.instances import _graph_of
@@ -112,6 +113,28 @@ def _files_of(source: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(entry, dict) and isinstance(entry.get("path"), str):
             merge_file_change(folded, dict(entry))
     return folded
+
+
+def _overlay_live(node: dict[str, Any], live: Any) -> None:
+    """Fill a running node's usage, tool counts and files from the activity
+    being collected for it in this process.
+
+    The record on disk carries those only once the run finishes (``as_meta``
+    is written by ``finish``), so without this a node reads as reporting
+    nothing for the whole of its run. Only what the lane has said so far is
+    taken: a lane that has not spoken keeps its null.
+    """
+    if live is None:
+        return
+    for key in ("tokens_in", "tokens_out"):
+        if node[key] is None:
+            node[key] = _int_or_none(getattr(live, key, None))
+    calls = getattr(live, "tool_calls", None)
+    if node["tool_call_count"] is None and calls:
+        node["tool_call_count"] = len(calls)
+        node["tool_failure_count"] = len(getattr(live, "tool_failures", None) or [])
+    if not node["files"]:
+        node["files"] = _files_of({"files": list(getattr(live, "files", None) or [])})
 
 
 def _counts(statuses: list[str]) -> dict[str, int]:
@@ -262,6 +285,7 @@ def _spawn_row(files: "_NodeFiles", agent_loop_factory: "AgentLoopFactory | None
         "prompt_template": None,
         "files": _files_of(meta),
     }
+    _overlay_live(node, run_activity.live(files.node_id))
     task_summary = meta.get("task_summary") or meta.get("label") or _label_from_prompt(files) or None
     return {
         "id": files.node_id,
@@ -422,6 +446,7 @@ def _dag_row(
             node["skills"] = list(gnode["skills"])
         if gnode.get("mcps") is not None:
             node["mcps"] = list(gnode["mcps"])
+        _overlay_live(node, run_activity.live(node_live_key(run_dir.name, nid)))
         nodes.append(node)
         statuses.append(status)
         if isinstance(started, int):

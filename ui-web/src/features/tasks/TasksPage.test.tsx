@@ -827,6 +827,29 @@ describe('the node panel', () => {
         vi.useRealTimers()
       }
     })
+
+    /* The row rides the same beat: a running node's usage grows on the
+       server with no frame to carry it, so the subtitle's token total is
+       read again with the record. */
+    it("re-reads a running spawn's row on the beat, so its usage reaches the subtitle", async () => {
+      vi.useFakeTimers()
+      try {
+        const running = task({
+          id: 's1', kind: 'spawn', status: 'running', nodes: [node({ node_id: 's1', status: 'running', started_at: 1000 })],
+        })
+        rows = [running]
+        store.set((prev) => ({ ...prev, rows: [running], loaded: true }))
+        pick(running)
+        await act(async () => {})
+        expect(document.querySelector('.tksub')?.textContent).not.toContain('gui.tasks.tokens_n')
+
+        rows = [{ ...running, nodes: [node({ node_id: 's1', status: 'running', started_at: 1000, tokens_in: 1200, tokens_out: 34 })] }]
+        await act(async () => { vi.advanceTimersByTime(1000) })
+        expect(document.querySelector('.tksub')?.textContent).toContain('gui.tasks.tokens_n {"n":"1,234"}')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
   })
 
   describe('the context tab while the record is loading or failed', () => {
