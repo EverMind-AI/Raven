@@ -37,10 +37,14 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+from pydantic.alias_generators import to_camel
 
 __all__ = [
     "LiveConfig",
+    "context_window_tokens",
+    "curator_pin",
     "default_model",
+    "max_tool_iterations",
     "disabled_playbook_names",
     "disabled_tool_names",
     "exec_extra_deny_patterns",
@@ -48,6 +52,7 @@ __all__ = [
     "media_tool_config",
     "permissions_config",
     "routing_profile",
+    "skill_gate_pin",
     "web_search_key",
 ]
 
@@ -308,6 +313,84 @@ def default_model(live: LiveConfig) -> str | None:
     """``agents.defaults.model`` as the file has it, or None for "no answer"."""
     value = live.get("agents.defaults.model")
     return value if isinstance(value, str) and value else None
+
+
+def context_window_tokens(live: LiveConfig) -> int | None:
+    """``agents.defaults.contextWindowTokens`` as the file has it, or None.
+
+    None means "no override": the model's own window from the rates ladder
+    answers instead. Read live, but consumed once per turn rather than per
+    read -- see ``AgentLoop._with_live_window``, which is what holds one
+    turn's budget still while it runs.
+
+    Both spellings, like :func:`disabled_tool_names`: ``settings.set`` writes
+    whichever one the file already uses.
+    """
+    for key in ("agents.defaults.contextWindowTokens", "agents.defaults.context_window_tokens"):
+        value = live.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return None
+
+
+def max_tool_iterations(live: LiveConfig) -> int | None:
+    """``agents.defaults.maxToolIterations`` as the file has it, or None for "no answer".
+
+    A cap is a sentence about the next turn, not work to redo, so it belongs
+    here rather than behind a reload. Both spellings, like
+    :func:`disabled_tool_names`: ``settings.set`` writes whichever one the file
+    already uses.
+    """
+    for key in ("agents.defaults.maxToolIterations", "agents.defaults.max_tool_iterations"):
+        value = live.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return None
+
+
+def _block_pin(live: LiveConfig, blocks: tuple[str, ...], model_field: str, provider_field: str):
+    """One block's ``(model, provider)`` pin, under either spelling of both.
+
+    Both spellings because ``settings.set`` writes whichever one the file
+    already uses (see ``console._as_written``) and a hand-written config may
+    hold either; the config models accept both by alias, so a reader that knew
+    only one would answer None for half the configs on disk.
+    """
+    node: dict[str, Any] = {}
+    for name in blocks:
+        candidate = live.raw().get(name)
+        if isinstance(candidate, dict):
+            node = candidate
+            break
+
+    def field(name: str) -> str | None:
+        value = node.get(to_camel(name), node.get(name))
+        return value if isinstance(value, str) and value else None
+
+    return field(model_field), field(provider_field)
+
+
+def curator_pin(live: LiveConfig) -> tuple[str | None, str | None]:
+    """``context.curatorModel`` and the provider serving it, read live.
+
+    Read per curation rather than resolved once when the context engine is
+    built, so that repointing the curator on a settings surface reaches the
+    next turn instead of the next restart. ``permissions.judgeModel`` and
+    ``sessionTitle.model`` are already read this way; this pair and the skill
+    gate's were the subsystem pins that still owed a reload.
+
+    Turning the pair into a binding stays with the caller: that goes through
+    the provider pool, which is where the cost of building one is visible.
+    """
+    return _block_pin(live, ("context",), "curator_model", "curator_provider")
+
+
+def skill_gate_pin(live: LiveConfig) -> tuple[str | None, str | None]:
+    """``skillForge.llmGateModel`` and the provider serving it, read live.
+
+    Same reasoning as :func:`curator_pin`.
+    """
+    return _block_pin(live, ("skillForge", "skill_forge"), "llm_gate_model", "llm_gate_provider")
 
 
 def disabled_tool_names(live: LiveConfig) -> frozenset[str]:

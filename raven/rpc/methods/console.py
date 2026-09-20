@@ -642,10 +642,6 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
             # to follow the write or they keep running on the key this call
             # just replaced.
             refresh_env_file()
-        if key in _RELOAD_ONLY_KEYS:
-            from raven.i18n import t
-
-            written["warning"] = t(_APPLIES_AFTER_RELOAD)
         return written
 
     raise ConfigValidationError(f"key not writable via settings.set: {key}")
@@ -883,23 +879,6 @@ def _chk_int_or_null(key: str, lo: int, hi: int):
         return None if v is None else inner(v)
 
     return chk
-
-
-#: Bound when the agent loop is built, so a write lands in the file but the
-#: running gateway keeps the old value until it reloads. The reply says so.
-_RELOAD_ONLY_KEYS = frozenset(
-    {
-        "agents.defaults.maxToolIterations",
-        "agents.defaults.contextWindowTokens",
-        "context.curatorModel",
-        "context.curatorProvider",
-        "skillForge.llmGateModel",
-        "skillForge.llmGateProvider",
-        "context",
-        "skillForge",
-    }
-)
-_APPLIES_AFTER_RELOAD = "Saved. Applies after the next gateway reload or restart."
 
 
 _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {

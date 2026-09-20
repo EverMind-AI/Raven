@@ -1291,8 +1291,11 @@ class TurnPathMixin:
                 # when LiteLLM lags) answers instead; unknown to that table
                 # too, 0 tells the UI to show its empty state rather than a
                 # number that isn't this model's.
-                if self._configured_window:
-                    context_max = self._configured_window
+                from raven.providers.binding import active_binding
+
+                configured = (active_binding() or self._default_binding).configured_window
+                if configured:
+                    context_max = configured
                 else:
                     # Off the event loop: allow_fetch=True here can hit the
                     # network for up to 10s on an OpenRouter model with both

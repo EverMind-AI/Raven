@@ -202,7 +202,8 @@ async def test_an_unpaired_gate_model_is_never_sent() -> None:
     is the mis-pairing the pool exists to prevent; the gate follows the turn
     instead and names no model."""
     provider = _StubProvider(json.dumps({"plan": "p", "skills": []}))
-    gate = LLMGateFilter(provider, model="gpt-4o")
+    # What the resolver answers for a configured id the pool could not pair.
+    gate = LLMGateFilter(provider, pin_resolver=lambda: None)
     await gate.filter("task", [_hit("local/a", "a")])
     assert provider.calls[0]["model"] is None
 
@@ -213,7 +214,7 @@ async def test_a_paired_gate_pin_is_used_as_given() -> None:
 
     provider = _StubProvider(json.dumps({"plan": "p", "skills": []}))
     pinned = _StubProvider(json.dumps({"plan": "p", "skills": []}))
-    gate = LLMGateFilter(provider, model="gpt-4o", pin=ModelBinding(pinned, "gpt-4o"))
+    gate = LLMGateFilter(provider, pin_resolver=lambda: ModelBinding(pinned, "gpt-4o"))
     await gate.filter("task", [_hit("local/a", "a")])
     assert provider.calls == []
     assert pinned.calls[0]["model"] == "gpt-4o"

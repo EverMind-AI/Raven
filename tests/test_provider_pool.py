@@ -433,3 +433,72 @@ def test_a_pin_that_cannot_be_built_at_all_does_not_stop_the_agent(monkeypatch) 
 
     monkeypatch.setattr(helpers, "make_provider", _boom)
     assert ProviderPool(cfg).bind_pin("claude-haiku-4-5", "anthropic") is None
+
+
+# ---------------------------------------------------------------------------
+# live_pin_resolver: the pin as a question asked per call
+# ---------------------------------------------------------------------------
+
+
+class _AskedPool:
+    """Records what it was asked for; pairs everything but ``"unpaired"``."""
+
+    def __init__(self) -> None:
+        self.asked: list[tuple[str | None, str | None]] = []
+
+    def bind_pin(self, model, provider_name=None):
+        self.asked.append((model, provider_name))
+        return None if model == "unpaired" else ModelBinding(object(), model)
+
+
+def test_a_pin_is_re_read_on_every_call() -> None:
+    """The whole point: a subsystem repointed on a settings surface runs on the
+    new pair from its next call, not from the next restart."""
+    from raven.providers.pool import live_pin_resolver
+
+    pool = _AskedPool()
+    configured = {"pin": ("first", "deepseek")}
+    resolve_pin = live_pin_resolver(
+        pool, lambda: configured["pin"], key="context.curator_model", follower="the curator"
+    )
+
+    assert resolve_pin().model == "first"
+    configured["pin"] = ("second", "gemini")
+    assert resolve_pin().model == "second"
+    assert pool.asked == [("first", "deepseek"), ("second", "gemini")]
+
+
+def test_an_unset_pin_asks_the_pool_nothing() -> None:
+    """Unset is the common case and the configured intent -- follow the
+    conversation -- so it must not cost a resolution per call."""
+    from raven.providers.pool import live_pin_resolver
+
+    pool = _AskedPool()
+    resolve_pin = live_pin_resolver(pool, lambda: (None, None), key="k", follower="the curator")
+
+    assert resolve_pin() is None
+    assert pool.asked == []
+
+
+def test_an_unusable_pin_is_reported_once() -> None:
+    """Configured and unusable is a config error the operator can fix, and
+    silence is how a pinned subsystem stayed inert. Once, because the
+    alternative is a line per call for as long as the config stays wrong."""
+    from loguru import logger
+
+    from raven.providers.pool import live_pin_resolver
+
+    said: list[str] = []
+    sink_id = logger.add(lambda message: said.append(message.record["message"]), level="WARNING")
+    try:
+        resolve_pin = live_pin_resolver(
+            _AskedPool(), lambda: ("unpaired", None), key="context.curator_model", follower="the curator"
+        )
+        assert resolve_pin() is None
+        assert resolve_pin() is None
+    finally:
+        logger.remove(sink_id)
+
+    mine = [m for m in said if "context.curator_model" in m]
+    assert len(mine) == 1
+    assert "the curator follows the conversation's model instead" in mine[0]

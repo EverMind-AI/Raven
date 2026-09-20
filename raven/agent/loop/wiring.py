@@ -393,6 +393,42 @@ class WiringMixin:
         binding = active_binding() or self._default_binding
         return binding.context_window
 
+    def _with_live_window(self, binding: ModelBinding) -> ModelBinding:
+        """This turn's binding, carrying the window the config has right now.
+
+        Resolved once per turn and then held, like the pair it rides on: the
+        budget is read several times while a turn runs -- history trimming, the
+        compaction check, the usage report -- and a number that moved between
+        those reads would leave one turn disagreeing with itself. Re-read at the
+        next turn, which is what makes a window set on a settings surface apply
+        without bringing the gateway back.
+
+        The same object comes back when the number has not changed, so the
+        binding keeps the window it already resolved from the rates catalogue
+        rather than resolving it again every turn.
+        """
+        from dataclasses import replace
+
+        from raven.config.live import context_window_tokens
+
+        configured = context_window_tokens(self._live_config)
+        if configured == binding.configured_window:
+            return binding
+        return replace(binding, configured_window=configured)
+
+    @property
+    def max_iterations(self) -> int:
+        """The ReAct cap a turn runs under when its session pinned none.
+
+        Read live rather than frozen at build for the reason the permission
+        mode is: a cap is a sentence about the next turn, not work to redo.
+        The turn reads it once at its start, so a change lands on the next
+        turn rather than halfway through one.
+        """
+        from raven.config.live import max_tool_iterations
+
+        return max_tool_iterations(self._live_config) or self._default_max_iterations
+
     @property
     def provider_pool(self) -> "ProviderPool | None":
         """Where a model id becomes a model id plus the credential for it."""
@@ -758,11 +794,14 @@ class WiringMixin:
         No production caller today -- every switch path goes through the pool
         and lands on ``set_default_binding`` or ``set_session_binding``. Kept as
         the pair-free entry point for an embedder that has a provider in hand,
-        which is why it carries ``_configured_window`` forward: a window the
-        user pinned belongs to whatever they run, and building the binding
-        without it here would drop it the day this grows a caller.
+        which is why it carries the current default's window forward: a window
+        the user pinned belongs to whatever they run, and building the binding
+        without it here would drop it the day this grows a caller. Taken from
+        the binding rather than re-read from the file, because a caller holding
+        a provider of its own need not be one this process loaded a config for;
+        a turn re-reads the file anyway (see ``_with_live_window``).
         """
-        self.set_default_binding(ModelBinding(provider, model, self._configured_window))
+        self.set_default_binding(ModelBinding(provider, model, self._default_binding.configured_window))
 
     def configure_personalization(self, enable: bool) -> None:
         """Global switch for the 4-step personalization flow (PAHF-inspired).
