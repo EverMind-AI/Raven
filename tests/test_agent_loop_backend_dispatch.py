@@ -567,8 +567,9 @@ class TestShutdownDoesNotBlockTheUser:
         """A wedged first write parks the worker mid-attempt, so it never gets
         back to the nine records behind it in the queue. Those nine were
         neither indexed nor reported: ``_store_dropped`` stayed at 0 while the
-        queue silently held onto them. The tenth is the one the worker had
-        already taken off the queue, which counting the queues alone missed.
+        queue silently held onto them, and they are a genuine loss. The tenth
+        is the one the worker had already handed to the backend, which counting
+        the queues alone missed and which is not lost -- it is in flight.
         """
         import asyncio
         import time
@@ -583,10 +584,10 @@ class TestShutdownDoesNotBlockTheUser:
             agent._dispatch_backend_store("s", [{"role": "user", "content": str(i)}])
 
         t0 = time.monotonic()
-        await agent.drain_backend_stores(timeout=0.2)
+        outcome = await agent.drain_backend_stores(timeout=0.2)
         assert time.monotonic() - t0 < 1.0
 
-        assert agent._store_pipeline.dropped == 10
+        assert (outcome.lost, outcome.in_flight) == (9, 1)
 
 
 class TestTheGiveUpMessageIsHonest:
@@ -610,10 +611,12 @@ class TestTheGiveUpMessageIsHonest:
         agent = _make_loop(tmp_path, backend=_Never())
         agent._dispatch_backend_store("s", [{"role": "user", "content": "x"}])
 
-        dropped = await agent.drain_backend_stores(timeout=5.0)
+        outcome = await agent.drain_backend_stores(timeout=5.0)
 
         assert agent._store_pipeline.dropped == 1
-        assert dropped == 1  # the host renders the notice from this count; the loop prints nothing
+        # The host renders the notice from this outcome; the loop prints nothing.
+        # A give-up is a real loss: every retry was answered, so nothing is in flight.
+        assert (outcome.lost, outcome.in_flight) == (1, 0)
         assert "were not written" not in capsys.readouterr().err
 
     async def test_a_turn_that_succeeds_on_retry_is_not_counted(
@@ -736,6 +739,10 @@ class TestShutdownAccountsForEveryTurnItLoses:
     """A worker has already taken its current record off the queue, so counting
     only the queues under-reports by one per worker -- and leaving that worker
     running lets it race the HTTP client the caller closes next.
+
+    The accounting is split between ``lost`` and ``in_flight`` now, but the
+    invariant is the same one: every admitted turn lands in exactly one of the
+    two columns, and none of them goes missing.
     """
 
     async def test_every_enqueued_turn_is_accounted_for(self, tmp_path: Path) -> None:
@@ -750,8 +757,8 @@ class TestShutdownAccountsForEveryTurnItLoses:
             agent._dispatch_backend_store("s", [{"role": "user", "content": str(i)}])
         await asyncio.sleep(0.05)
 
-        await agent.drain_backend_stores(timeout=0.2)
-        assert agent._store_pipeline.dropped == 10, f"reported {agent._store_pipeline.dropped} of 10 lost turns"
+        outcome = await agent.drain_backend_stores(timeout=0.2)
+        assert outcome.lost + outcome.in_flight == 10, f"reported {outcome} of 10 admitted turns"
 
     async def test_no_worker_outlives_the_drain(self, tmp_path: Path) -> None:
         import asyncio
@@ -950,3 +957,71 @@ class TestABurstOfNewSessionsInOneTickIsBounded:
 
         for task in list(pipe._workers.values()):
             task.cancel()
+
+
+class TestTheDrainTellsAHandedOverWriteFromALostOne:
+    """A record the worker had already handed to the memory service is not a
+    lost turn.
+
+    Cancelling this client does not cancel that request: the service finishes
+    it, and on a one-shot run the extraction was measured landing 34-48s after
+    the drain gave up. Counting it with the records that never left the queue
+    told the user their turn was gone while it was being written.
+    """
+
+    async def test_a_handed_over_write_is_in_flight_not_lost(self, tmp_path: Path) -> None:
+        import asyncio
+
+        class _Wedged:
+            async def store(self, session_id, messages, **kw):
+                await asyncio.sleep(30)
+                return True
+
+        agent = _make_loop(tmp_path, backend=_Wedged())
+        agent._dispatch_backend_store("s", [{"role": "user", "content": "x"}])
+        await asyncio.sleep(0.05)
+
+        outcome = await agent.drain_backend_stores(timeout=0.2)
+
+        assert (outcome.in_flight, outcome.lost) == (1, 0)
+
+        for task in list(agent._store_pipeline._workers.values()):
+            task.cancel()
+
+    async def test_records_still_queued_behind_it_are_lost(self, tmp_path: Path) -> None:
+        """Only the record the worker took off the queue reached the service.
+        The nine behind it never did, and stay a genuine loss."""
+        import asyncio
+
+        class _Wedged:
+            async def store(self, session_id, messages, **kw):
+                await asyncio.sleep(30)
+                return True
+
+        agent = _make_loop(tmp_path, backend=_Wedged())
+        for i in range(10):
+            agent._dispatch_backend_store("s", [{"role": "user", "content": str(i)}])
+        await asyncio.sleep(0.05)
+
+        outcome = await agent.drain_backend_stores(timeout=0.2)
+
+        assert (outcome.in_flight, outcome.lost) == (1, 9)
+
+        for task in list(agent._store_pipeline._workers.values()):
+            task.cancel()
+
+    async def test_a_write_that_never_reached_the_service_is_not_in_flight(self, tmp_path: Path) -> None:
+        """A backend that keeps answering False exhausts its retries and is
+        given up on. Nothing is in flight at that point -- the give-up is the
+        old, honest meaning of a lost turn, and it must survive the split."""
+
+        class _Never:
+            async def store(self, session_id, messages, **kw):
+                return False
+
+        agent = _make_loop(tmp_path, backend=_Never())
+        agent._dispatch_backend_store("s", [{"role": "user", "content": "x"}])
+
+        outcome = await agent.drain_backend_stores(timeout=5.0)
+
+        assert (outcome.in_flight, outcome.lost) == (0, 1)

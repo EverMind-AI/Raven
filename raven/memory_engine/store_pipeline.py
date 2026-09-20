@@ -54,6 +54,21 @@ class _Record(NamedTuple):
     trace_ctx: Any
 
 
+class DrainOutcome(NamedTuple):
+    """What a teardown drain leaves behind, split by whether the service saw it.
+
+    ``lost`` will never be indexed: shed at admission, given up on after every
+    retry, or still queued when the budget ran out. ``in_flight`` had already
+    been handed to the service when the drain cancelled its worker, and
+    cancelling this client does not cancel that request -- the service finishes
+    the write on its own. Counting the two together told the user a turn was
+    gone while it was being indexed, so a host reports them apart.
+    """
+
+    lost: int
+    in_flight: int
+
+
 class StorePipeline:
     """Per-session serial delivery of turns to a :class:`MemoryBackend`.
 
@@ -85,6 +100,10 @@ class StorePipeline:
         # teardown that times out under-reports what it lost by one per worker.
         self._active: dict[str, _Record] = {}
         self._slots = asyncio.Semaphore(MAX_CONCURRENCY)
+        # Sessions whose record is inside the backend call right now. ``drain``
+        # reads this before it cancels anything: the cancellation unwinds that
+        # call, and the unwinding clears the very marks it needs to count.
+        self._in_flight: set[str] = set()
         self._dropped = 0
 
     @property
@@ -190,7 +209,11 @@ class StorePipeline:
                         # other one out of the global budget.
                         async with self._slots:
                             with trace.use_context(record.trace_ctx):
-                                landed = await self._store_once(session_key, record.messages, attempt=attempt)
+                                self._in_flight.add(session_key)
+                                try:
+                                    landed = await self._store_once(session_key, record.messages, attempt=attempt)
+                                finally:
+                                    self._in_flight.discard(session_key)
                     except Exception as e:  # noqa: BLE001 - the turn must survive a failed index
                         reason = str(e)
                         logger.exception(
@@ -244,8 +267,8 @@ class StorePipeline:
         # never claimed the write was lost.
         return await backend.store(session_key, messages_slice, metadata={"attempt": attempt}) is not False
 
-    async def drain(self, timeout: float) -> int:
-        """Settle what is outstanding and report how many turns were lost.
+    async def drain(self, timeout: float) -> DrainOutcome:
+        """Settle what is outstanding and report what is left behind.
 
         Retries are cut short first: a worker parked in a backoff is doing
         nothing, and would otherwise spend the whole budget asleep while the
@@ -260,6 +283,9 @@ class StorePipeline:
         # closes the backend's HTTP client next, and a request still in flight
         # against a closed client fails as a transport error nobody reads.
         leftover = {t for t in self._workers.values() if not t.done()}
+        # Counted before the cancellation, which unwinds the backend call and
+        # clears these marks on its way out.
+        in_flight = len(self._in_flight)
         for task in leftover:
             task.cancel()
         if leftover:
@@ -274,9 +300,11 @@ class StorePipeline:
                 if not task.cancelled():
                     task.exception()
         # Anything still queued, plus whatever each cancelled worker had
-        # already taken off its queue, was never going to be written.
+        # already taken off its queue, was never going to be written -- except
+        # the records the service had already been handed, which it finishes
+        # whether or not this process is still listening.
         abandoned = sum(len(q) for q in self._queues.values()) + len(self._active)
         if abandoned:
-            self._dropped += abandoned
+            self._dropped += max(0, abandoned - in_flight)
             self._active.clear()
-        return self._dropped
+        return DrainOutcome(lost=self._dropped, in_flight=in_flight)

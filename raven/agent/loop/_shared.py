@@ -86,6 +86,14 @@ from raven.utils.tokens import estimate_prompt_tokens
 # Teardown's budget for letting outstanding writes finish. See
 # ``drain_backend_stores``: the pipeline cuts retries short first, so this only
 # ever covers a request already on the wire, not a worker asleep in backoff.
+# Deliberately shorter than the write it waits on rather than sized to it: an
+# EverOS turn store is a final flush, and a flush is an extraction -- measured
+# at 16.98s end to end. Sizing this to cover that would park every CLI exit for
+# as long and buy nothing, because the service finishes the request whether or
+# not this process is still listening (one extraction landed 32s after the
+# drain gave up) and nothing needs to recall the turn that just ended. What a
+# ceiling this short costs is honesty, and that is paid where the outcome is
+# reported: a request still running here is in flight, not lost.
 _STORE_DRAIN_BUDGET_S: float = 2.0
 # Runtime prose, not the model's: written here and shown to the model so it
 # stops, and carried to the client as a notice rather than as an answer. It

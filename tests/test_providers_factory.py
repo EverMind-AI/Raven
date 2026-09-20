@@ -635,19 +635,39 @@ def test_no_notice_prints_nothing_at_all(capsys, monkeypatch) -> None:
     assert (captured.out, captured.err) == ("", "")
 
 
-def test_report_dropped_memory_writes_renders_on_the_given_console_only_when_something_was_lost() -> None:
+def _notice(outcome) -> str:
     import io
 
     from rich.console import Console
 
-    from raven.cli._helpers import report_dropped_memory_writes
+    from raven.cli._helpers import report_memory_write_outcome
 
     buf = io.StringIO()
-    out = Console(file=buf, force_terminal=False, width=200)
-    report_dropped_memory_writes(0, out)
-    assert buf.getvalue() == ""
-    report_dropped_memory_writes(2, out)
-    assert "2 turn(s) were not written to long-term memory" in buf.getvalue()
+    report_memory_write_outcome(outcome, Console(file=buf, force_terminal=False, width=200))
+    return buf.getvalue()
+
+
+def test_report_memory_write_outcome_says_nothing_when_every_write_landed() -> None:
+    from raven.memory_engine.store_pipeline import DrainOutcome
+
+    assert _notice(DrainOutcome(lost=0, in_flight=0)) == ""
+
+
+def test_report_memory_write_outcome_names_the_turns_that_never_reached_the_service() -> None:
+    from raven.memory_engine.store_pipeline import DrainOutcome
+
+    assert "2 turn(s) were not written to long-term memory" in _notice(DrainOutcome(lost=2, in_flight=0))
+
+
+def test_a_handed_over_turn_is_not_announced_as_unwritten() -> None:
+    """The write reached the service and is being indexed there. Saying it was
+    not written -- and blaming a service that answered -- was false twice."""
+    from raven.memory_engine.store_pipeline import DrainOutcome
+
+    text = _notice(DrainOutcome(lost=0, in_flight=1))
+    assert "were not written" not in text
+    assert "unavailable" not in text
+    assert "still finishing in the background" in text
 
 
 # --- generation settings reach the provider the ordinary assembly paths build ---

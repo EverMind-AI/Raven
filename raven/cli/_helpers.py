@@ -12,21 +12,34 @@ from rich.console import Console
 
 from raven.config.schema import Config
 from raven.core import config_stack
+from raven.memory_engine.store_pipeline import DrainOutcome
 
 console = Console()
 
 
-def report_dropped_memory_writes(dropped: int, out: Console | None = None) -> None:
-    """Tell the user how many turns never reached long-term memory at shutdown.
+def report_memory_write_outcome(outcome: DrainOutcome, out: Console | None = None) -> None:
+    """Tell the user what shutdown did to the turns still being indexed.
 
     The loop counts (``AgentLoop.drain_backend_stores``); the host renders, on
-    its own console or stderr, because this is the last moment the loss is
-    still actionable and the loop does not own a terminal.
+    its own console or stderr, because this is the last moment a loss is still
+    actionable and the loop does not own a terminal.
+
+    Two outcomes, two sentences. A turn that never reached the service is gone
+    and is worth a warning. A turn the service was already handed is not: this
+    process stopped waiting for the reply, which neither cancels the request
+    nor unwrites it, and announcing it as lost sent the user looking for
+    content that was being indexed as they read.
     """
-    if dropped:
-        (out or Console(stderr=True)).print(
-            f"[yellow]{dropped} turn(s) were not written to long-term memory "
+    console = out or Console(stderr=True)
+    if outcome.lost:
+        console.print(
+            f"[yellow]{outcome.lost} turn(s) were not written to long-term memory "
             "because the memory service was unavailable.[/yellow]"
+        )
+    if outcome.in_flight:
+        console.print(
+            f"[dim]{outcome.in_flight} turn(s) reached long-term memory; "
+            "indexing is still finishing in the background.[/dim]"
         )
 
 

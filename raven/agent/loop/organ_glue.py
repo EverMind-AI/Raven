@@ -18,6 +18,7 @@ from raven.agent.loop._shared import (
     trace,
     vision_verdict,
 )
+from raven.memory_engine.store_pipeline import DrainOutcome
 
 
 class OrganGlueMixin:
@@ -327,18 +328,28 @@ class OrganGlueMixin:
         """
         self._store_pipeline.enqueue(session_key, messages_slice)
 
-    async def drain_backend_stores(self, timeout: float = _STORE_DRAIN_BUDGET_S) -> int:
-        """Let queued writes finish before the process goes away and return how
-        many turns were lost. The counting is the pipeline's; telling the user
-        is the host's (see ``cli._helpers.report_dropped_memory_writes``), and
-        the return value is what it tells them with."""
-        dropped = await self._store_pipeline.drain(timeout)
-        if dropped:
+    async def drain_backend_stores(self, timeout: float = _STORE_DRAIN_BUDGET_S) -> DrainOutcome:
+        """Let queued writes finish before the process goes away and return what
+        is left behind. The counting is the pipeline's; telling the user is the
+        host's (see ``cli._helpers.report_memory_write_outcome``), and the
+        return value is what it tells them with.
+
+        A write the service was already handed is reported apart from one that
+        never reached it: this process cancelling its own request does not
+        cancel the service's work, so calling that turn lost is a false alarm.
+        """
+        outcome = await self._store_pipeline.drain(timeout)
+        if outcome.lost:
             logger.warning(
                 "{} turn(s) were not indexed: the memory service never caught up",
-                dropped,
+                outcome.lost,
             )
-        return dropped
+        if outcome.in_flight:
+            logger.info(
+                "{} turn(s) reached the memory service before shutdown; it finishes the indexing without us",
+                outcome.in_flight,
+            )
+        return outcome
 
     def _note_memory_ok(self) -> None:
         """A successful store clears a standing fault, and says so once."""
