@@ -169,7 +169,12 @@ export function Tools(): JSX.Element {
           ? <Rov>{t('gui.settings.tools.builtin')}</Rov>
           : blk ? <Chip state="warn">{t('gui.settings.tools.setup')}</Chip> : null}
         ctl={meta
-          ? <span className="settings-swi settings-swi-fixed" role="switch" aria-checked aria-disabled="true" aria-label={id} />
+          /* The state is the row's, not the branch's. A fixed control used to
+             hard-code checked, which was true while every meta-tool the page
+             saw was a registered one; `tool_search` with the fold off is
+             reported here precisely because it is not, and drawing it on said
+             the opposite of the note beside it. */
+          ? <span className="settings-swi settings-swi-fixed" role="switch" aria-checked={!!known_.on} aria-disabled="true" aria-label={id} />
           : <Switch on={isOn} label={id} onChange={(v) => flip(id, v)} />}
         panel={!meta && hasPanel(id) ? <Panel id={id} raw={raw} /> : undefined}
         open={s.toolOpen === id}
