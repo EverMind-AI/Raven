@@ -389,7 +389,7 @@ class DefaultMemory:
 
     async def ask_archive(
         self, step: StepView, reply: str | None, participants: Sequence[AgentParticipant]
-    ) -> dict[str, dict[str, Any]] | None:
+    ) -> dict[str, Any] | None:
         return await compose_record(step, reply, participants)
 
 

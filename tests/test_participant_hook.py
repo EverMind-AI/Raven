@@ -119,7 +119,7 @@ async def test_a_participants_addendum_is_replaced_rather_than_stacked():
 
 @pytest.mark.asyncio
 async def test_what_a_participant_archives_is_merged_into_the_turns_observers():
-    """Two participants stamping the same observer name keep both sets of counters."""
+    """Mapping observers merge while scalar observer values remain intact."""
 
     class Filing(AgentParticipant):
         def __init__(self, name, counters):
@@ -131,7 +131,12 @@ async def test_what_a_participant_archives_is_merged_into_the_turns_observers():
     ctx = SimpleNamespace(outbound_content="done", metadata={"observers": {"flow": {"kept": 1}}})
     await ParticipantHook("a", lambda: Filing("flow", {"added": 2})).after_send(ctx)
     await ParticipantHook("b", lambda: Filing("other", {"own": 3})).after_send(ctx)
-    assert ctx.metadata["observers"] == {"flow": {"kept": 1, "added": 2}, "other": {"own": 3}}
+    await ParticipantHook("c", lambda: Filing("trail", "rendered trail")).after_send(ctx)
+    assert ctx.metadata["observers"] == {
+        "flow": {"kept": 1, "added": 2},
+        "other": {"own": 3},
+        "trail": "rendered trail",
+    }
 
 
 @pytest.mark.asyncio

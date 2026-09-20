@@ -208,18 +208,24 @@ async def compose_addendum(step: StepView, participants: Sequence[AgentParticipa
 
 async def compose_record(
     step: StepView, reply: str | None, participants: Sequence[AgentParticipant]
-) -> dict[str, dict[str, Any]] | None:
+) -> dict[str, Any] | None:
     """What every participant files on the turn's record, merged by observer
     name: a later one's counters join an earlier one's rather than replacing
     them, so two participants stamping the same name both survive."""
-    filed: dict[str, dict[str, Any]] = {}
+    filed: dict[str, Any] = {}
     for participant in participants:
         stamped = await participant.archive(step, reply)
         if not isinstance(stamped, Mapping):
             continue
         for name, counters in stamped.items():
             if isinstance(counters, Mapping):
-                filed.setdefault(str(name), {}).update(dict(counters))
+                current = filed.get(str(name))
+                if isinstance(current, dict):
+                    current.update(dict(counters))
+                else:
+                    filed[str(name)] = dict(counters)
+            else:
+                filed[str(name)] = counters
     return filed or None
 
 

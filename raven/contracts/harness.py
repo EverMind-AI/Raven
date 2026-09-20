@@ -208,10 +208,10 @@ class MemoryModule(Protocol):
 
     async def ask_archive(
         self, step: "StepView", reply: str | None, participants: "Sequence[AgentParticipant]"
-    ) -> "Mapping[str, Mapping[str, Any]] | None":
+    ) -> "Mapping[str, Any] | None":
         """What the turn's record is stamped with, merged from each participant's
-        ``archive``: observer name to counters, later participants merging into
-        earlier ones rather than replacing them.
+        ``archive``: observer name to its value, with mapping values from later
+        participants merging into earlier mapping values.
 
         Memory's because it is the turn's own account of itself, filed where the
         window's other bookkeeping is filed."""

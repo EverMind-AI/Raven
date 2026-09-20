@@ -226,9 +226,9 @@ class AgentParticipant:
         with and nothing to vet it."""
         return None
 
-    async def archive(self, step: StepView, reply: str | None) -> Mapping[str, Mapping[str, Any]] | None:
+    async def archive(self, step: StepView, reply: str | None) -> Mapping[str, Any] | None:
         """The turn is over; file what this participant keeps across turns, and hand
-        back what it stamps on the turn's record -- observer name to counters --
+        back what it stamps on the turn's record -- observer name to its value --
         for the host to file with the reply."""
         return None
 
