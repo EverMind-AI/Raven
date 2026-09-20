@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from raven.importer.skills import SkillOrigin
+import pytest
+
+from raven.importer.skills import SkillOrigin, installer
 from raven.importer.skills.claude_code import ClaudeCodeSkillSource
-from raven.importer.skills.installer import install_skills
+from raven.importer.skills.installer import SkillImportSummary, install_skills
 from raven.importer.state import ImportState
 from raven.importer.types import Platform
 
@@ -102,3 +104,35 @@ async def test_a_stop_between_skills_leaves_the_rest_for_the_next_run(tmp_path: 
     assert not (landed / "b").exists()
     assert state.is_submitted(Platform.CLAUDE_CODE, "skill-a")
     assert not state.is_submitted(Platform.CLAUDE_CODE, "skill-b")
+
+
+async def test_a_copy_that_fails_is_named_in_the_summary_and_retried_next_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    claude = tmp_path / ".claude"
+    _skill(claude / "skills", "a", frontmatter_name="a")
+    _skill(claude / "skills", "b", frontmatter_name="b")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    state = ImportState(path=tmp_path / "state.json")
+    real_copytree = installer.shutil.copytree
+    broken = {"b"}
+
+    def _copytree(src: Path, dst: Path, **kwargs: object) -> object:
+        if src.name in broken:
+            raise OSError("disk full")
+        return real_copytree(src, dst, **kwargs)
+
+    monkeypatch.setattr(installer.shutil, "copytree", _copytree)
+
+    first = await install_skills(ClaudeCodeSkillSource(claude), workspace, state)
+
+    assert first == SkillImportSummary(total=2, installed=1, failed=1, errors=("b: disk full",))
+    assert not (workspace / "skills" / "claude_code" / "b").exists()
+    assert not state.is_submitted(Platform.CLAUDE_CODE, "skill-b")
+
+    broken.clear()
+    second = await install_skills(ClaudeCodeSkillSource(claude), workspace, state)
+
+    assert second == SkillImportSummary(total=2, installed=1, skipped=1)
+    assert state.is_submitted(Platform.CLAUDE_CODE, "skill-b")

@@ -196,6 +196,29 @@ class TestRunPhases:
         assert outcome.skill_error == "claude_code: disk full"
         assert state.get_progress()["meta"]["phases"] == {"status": "failed", "errors": ["claude_code: disk full"]}
 
+    async def test_a_skill_that_failed_to_copy_fails_the_phases_under_its_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The installer survives a copy failure and counts it; the verdict on
+        file must still say the run did not finish clean, naming the skill so
+        the row can count it and a retry can find it."""
+
+        async def _one_broken(*_a: object, **_k: object) -> SkillImportSummary:
+            return SkillImportSummary(total=2, installed=1, failed=1, errors=("broken: disk full",))
+
+        monkeypatch.setattr(phases, "install_skills", _one_broken)
+        items = [_item(_result(Platform.CLAUDE_CODE, "proj-memory"))]
+        state = ImportState(path=tmp_path / "state.json")
+
+        outcome = await run_phases(items, tmp_path, state, provider=None, model="")
+
+        assert outcome.skills is not None and outcome.skills.failed == 1
+        assert outcome.skill_error == "claude_code: skill broken: disk full"
+        assert state.get_progress()["meta"]["phases"] == {
+            "status": "failed",
+            "errors": ["claude_code: skill broken: disk full"],
+        }
+
     async def test_how_the_phases_ended_is_written_to_the_state(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

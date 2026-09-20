@@ -45,6 +45,9 @@ class SkillImportSummary:
     pristine: int = 0
     skipped: int = 0
     failed: int = 0
+    # One entry per skill that failed to copy, "<name>: <reason>", so a phase
+    # verdict can name them; the count alone cannot be retried by name.
+    errors: tuple[str, ...] = ()
 
 
 async def install_skills(
@@ -68,6 +71,7 @@ async def install_skills(
     dest_root = workspace / "skills" / source.platform.value
 
     installed = skipped = failed = 0
+    errors: list[str] = []
     pristine = len(discovered) - len(wanted)
     claimed: set[str] = set()
     claimed_registry_names: set[str] = set()
@@ -121,6 +125,7 @@ async def install_skills(
             logger.warning("skill import failed for {}: {}", skill.name, exc)
             state.mark_failed(source.platform, key, str(exc))
             failed += 1
+            errors.append(f"{skill.name}: {exc}")
             continue
         state.mark_submitted(source.platform, key)
         claimed_registry_names.add(skill.registry_name)
@@ -143,6 +148,7 @@ async def install_skills(
         pristine=pristine,
         skipped=skipped,
         failed=failed,
+        errors=tuple(errors),
     )
 
 

@@ -187,15 +187,17 @@ async def run_phases(
         if cancelled():
             break
         try:
-            summaries.append(
-                await install_skills(
-                    source,
-                    workspace,
-                    state,
-                    on_progress=(lambda done, total: on_phase("skills", done, total)) if on_phase else None,
-                    cancelled=cancelled,
-                )
+            summary = await install_skills(
+                source,
+                workspace,
+                state,
+                on_progress=(lambda done, total: on_phase("skills", done, total)) if on_phase else None,
+                cancelled=cancelled,
             )
+            summaries.append(summary)
+            # A copy the installer survived is still a skill that did not land;
+            # the verdict names each so the row can count them and offer a retry.
+            skill_errors.extend(f"{source.platform.value}: skill {error}" for error in summary.errors)
         except Exception as exc:
             logger.warning("{} skill import failed: {}", source.platform.value, exc)
             skill_errors.append(f"{source.platform.value}: {exc}")
@@ -219,6 +221,7 @@ def _total(summaries: Sequence[SkillImportSummary]) -> SkillImportSummary:
         pristine=sum(s.pristine for s in summaries),
         skipped=sum(s.skipped for s in summaries),
         failed=sum(s.failed for s in summaries),
+        errors=tuple(error for s in summaries for error in s.errors),
     )
 
 
