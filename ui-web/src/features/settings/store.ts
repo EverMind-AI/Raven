@@ -43,11 +43,6 @@ export type ProvFilter = 'all' | 'on' | 'direct' | 'gateway' | 'oauth' | 'local'
 export interface Sheet {
   slug: string
   q: string
-  /* Kept for the batch controls -- "add all" and "add a whole vendor group" --
-     which are the only two that still collect before writing. A click on one
-     row writes that row, because a list you tick and then confirm asks twice
-     for one decision. */
-  sel: string[]
   state: 'loading' | 'ready' | 'failed'
   items: ModelCandidate[]
   /* The kind tab in force, or every kind. */
@@ -328,7 +323,7 @@ export async function skillOpen(name: string): Promise<void> {
    with no list endpoint answers a status other than ok, and the sheet then
    takes a typed id alone. */
 export async function sheetOpen(slug: string): Promise<void> {
-  set({ sheet: { slug, q: '', sel: [], state: 'loading', items: [], kind: 'all', folded: {}, typed: null } })
+  set({ sheet: { slug, q: '', state: 'loading', items: [], kind: 'all', folded: {}, typed: null } })
   let items: ModelCandidate[] = []
   let ok = false
   try {
@@ -344,18 +339,15 @@ export async function sheetOpen(slug: string): Promise<void> {
 
 /* One row, one write. `add_model` states the kind for a typed id the
    catalogues cannot describe; a listed row states nothing, because the reply
-   that listed it already carried one. Removing is refused where a role is on
-   it -- the same guard the tag list uses, in the one place that can now add
-   and remove without leaving the pane. */
+   that listed it already carried one.
+   The "a role runs on this model" refusal belongs to the caller, not here: the
+   roles table lives in a component that reads this store, so reaching it from
+   this side closes a cycle -- and hiding that behind a dynamic import only
+   hides it from the gate that checks for one. The tag list beside the popover
+   refuses the same way, in the same place. */
 export async function sheetToggleModel(slug: string, id: string, listed: boolean, kind?: Kind): Promise<void> {
   const src = source()
   if (listed) {
-    const { rolesUsing, roleName } = await import('./providers/Roles')
-    const used = rolesUsing(get().snap, slug, id)
-    if (used.length) {
-      refuse(t('gui.settings.providers.model_in_use', { roles: used.map(roleName).join(', '), model: id }))
-      return
-    }
     await run(`prov:${slug}`, () => src.provider('remove_model', { slug, model: id }))
     return
   }
@@ -366,13 +358,6 @@ export async function sheetToggleModel(slug: string, id: string, listed: boolean
 export function sheetPatch(patch: Partial<Sheet>): void {
   const sheet = get().sheet
   if (sheet) set({ sheet: { ...sheet, ...patch } })
-}
-
-export function sheetToggle(id: string): void {
-  const sheet = get().sheet
-  if (!sheet) return
-  const sel = sheet.sel.includes(id) ? sheet.sel.filter((m) => m !== id) : [...sheet.sel, id]
-  set({ sheet: { ...sheet, sel } })
 }
 
 /* Start a device flow and watch for it to land: the provider turns connected

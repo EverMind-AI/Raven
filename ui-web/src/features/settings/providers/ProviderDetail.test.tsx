@@ -40,7 +40,7 @@ describe('provider detail', () => {
   it('refuses to disconnect a provider a role runs on, naming the roles, and writes nothing', async () => {
     const { calls } = install()
     await open('anthropic')
-    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.disconnect')) })
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.disconnect_key')) })
     expect(calls).toEqual([])
     expect(screen.getByRole('alert').textContent)
       .toBe('gui.settings.providers.in_use {"roles":"gui.settings.roles.chat, gui.settings.roles.title, gui.settings.roles.gate"}')
@@ -52,7 +52,7 @@ describe('provider detail', () => {
     data.everos = { available: true, sections: {} }
     const { calls } = install(data)
     await open('openrouter')
-    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.disconnect')) })
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.disconnect_key')) })
     expect(calls).toEqual([['provider', { op: 'disconnect', slug: 'openrouter' }]])
   })
 
@@ -64,6 +64,20 @@ describe('provider detail', () => {
     expect(screen.getByRole('alert').textContent).toContain('gui.settings.roles.chat')
     await act(async () => { fireEvent.click(screen.getByLabelText('gui.settings.providers.remove_model {"model":"claude-sonnet-4-5"}')) })
     expect(calls).toEqual([['provider', { op: 'remove_model', slug: 'anthropic', model: 'claude-sonnet-4-5' }]])
+  })
+
+  it('words the disconnect by shape, so it says what it is about to drop', async () => {
+    const data = snap()
+    data.providers = data.providers.map((p) => (
+      p.id === 'minimax_global' || p.id === 'ollama' ? { ...p, on: true } : p
+    ))
+    install(data)
+    await open('minimax_global')
+    expect(screen.getByText('gui.settings.providers.disconnect_auth')).toBeTruthy()
+    await open('ollama')
+    expect(screen.getByText('gui.settings.providers.disconnect_local')).toBeTruthy()
+    await open('anthropic')
+    expect(screen.getByText('gui.settings.providers.disconnect_key')).toBeTruthy()
   })
 
   it('re-entering a key connects with the key alone, and an empty key on a new provider is refused first', async () => {

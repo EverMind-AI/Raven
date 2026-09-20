@@ -25,9 +25,9 @@ import { createPortal } from 'react-dom'
 
 import { ModelTags, TagGlyph } from '../../../components/ModelTags'
 import { t } from '../../../i18n/t'
-import { KIND_GLYPH, KIND_LABEL, guessKind } from '../../model/types'
-import { KIND_ORDER, nextKind } from '../../model/types'
+import { KIND_GLYPH, KIND_LABEL, KIND_ORDER, guessKind, modelKind, nextKind } from '../../model/types'
 import { Rov } from '../Fields'
+import { roleName, rolesUsing } from './Roles'
 import * as store from '../store'
 
 import type { Kind } from '../../model/types'
@@ -38,19 +38,23 @@ import type { JSX } from 'react'
 /* Every row the popover may draw: what the vendor named, plus what is already
    configured -- a model added by hand is in the second and not the first, and
    leaving it out would make it unremovable from here. */
-export function allRows(sheet: Sheet, configured: string[]): ModelCandidate[] {
+export function allRows(sheet: Sheet, configured: string[], labels?: ProviderRow['labels']): ModelCandidate[] {
   const seen = new Set(sheet.items.map((m) => m.id))
+  /* A model somebody added by hand is not in the vendor's list, and its kind is
+     not text just because the list did not name it -- the provider row carries
+     one, and filing it under Text would hide a hand-added embedding model from
+     the tab that exists to find it. */
   const extra = configured.filter((m) => !seen.has(m))
-    .map((id): ModelCandidate => ({ id, label: id, kind: 'text', added: true }))
+    .map((id): ModelCandidate => ({ id, label: id, kind: modelKind(labels?.[id]), added: true }))
   return [...sheet.items, ...extra]
 }
 
 const matches = (m: ModelCandidate, q: string): boolean =>
   !q || m.id.toLowerCase().includes(q) || (m.label || '').toLowerCase().includes(q)
 
-export function shownRows(sheet: Sheet, configured: string[]): ModelCandidate[] {
+export function shownRows(sheet: Sheet, configured: string[], labels?: ProviderRow['labels']): ModelCandidate[] {
   const q = sheet.q.trim().toLowerCase()
-  return allRows(sheet, configured)
+  return allRows(sheet, configured, labels)
     .filter((m) => matches(m, q))
     .filter((m) => sheet.kind === 'all' || m.kind === sheet.kind)
 }
@@ -58,9 +62,9 @@ export function shownRows(sheet: Sheet, configured: string[]): ModelCandidate[] 
 /* 'all' first, then every kind present, in the order a reader meets them
    elsewhere. A kind with nothing in it has no tab: a zero to press is a
    promise of nothing. */
-export function kindCounts(sheet: Sheet, configured: string[]): Array<['all' | Kind, number]> {
+export function kindCounts(sheet: Sheet, configured: string[], labels?: ProviderRow['labels']): Array<['all' | Kind, number]> {
   const q = sheet.q.trim().toLowerCase()
-  const matched = allRows(sheet, configured).filter((m) => matches(m, q))
+  const matched = allRows(sheet, configured, labels).filter((m) => matches(m, q))
   const out: Array<['all' | Kind, number]> = [['all', matched.length]]
   for (const kind of KIND_ORDER) {
     const n = matched.filter((m) => m.kind === kind).length
@@ -79,7 +83,10 @@ export function groups(rows: ModelCandidate[]): Array<[string, ModelCandidate[]]
     if (!by.has(g)) by.set(g, [])
     by.get(g)!.push(m)
   }
-  if (by.size === 1) return [['', [...by.values()][0]!]]
+  /* One group means a flat list only when that group is the unprefixed one: a
+     gateway whose search narrows to a single vendor keeps its head, and with it
+     the control that adds the whole vendor. */
+  if (by.size === 1 && [...by.keys()][0] === '') return [['', [...by.values()][0]!]]
   return [...by.entries()].sort((a, b) => (a[0] === '' ? 1 : b[0] === '' ? -1 : a[0].localeCompare(b[0])))
 }
 
@@ -107,10 +114,10 @@ export function AddModelPop({ p }: { p: ProviderRow }): JSX.Element {
   const sheet = store.get().sheet!
   const box = useRef<HTMLDivElement>(null)
   const configured = p.configured || []
-  const rows = shownRows(sheet, configured)
-  const counts = kindCounts(sheet, configured)
+  const rows = shownRows(sheet, configured, p.labels)
+  const counts = kindCounts(sheet, configured, p.labels)
   const q = sheet.q.trim()
-  const exact = allRows(sheet, configured).some((m) => m.id.toLowerCase() === q.toLowerCase())
+  const exact = allRows(sheet, configured, p.labels).some((m) => m.id.toLowerCase() === q.toLowerCase())
   const typedKind = sheet.typed ?? guessKind(q)
   const pending = rows.filter((m) => !configured.includes(m.id))
 
@@ -153,7 +160,17 @@ export function AddModelPop({ p }: { p: ProviderRow }): JSX.Element {
   }, [p.id])
 
   const toggle = (m: ModelCandidate): void => {
-    void store.sheetToggleModel(p.id, m.id, configured.includes(m.id))
+    const listed = configured.includes(m.id)
+    if (listed) {
+      /* The same refusal the tag list beside this popover makes: a model a role
+         runs on does not come off by a click here either. */
+      const used = rolesUsing(store.get().snap, p.id, m.id)
+      if (used.length) {
+        store.refuse(t('gui.settings.providers.model_in_use', { roles: used.map(roleName).join(', '), model: m.id }))
+        return
+      }
+    }
+    void store.sheetToggleModel(p.id, m.id, listed)
   }
   const addTyped = (): void => {
     void store.sheetToggleModel(p.id, q, false, typedKind)

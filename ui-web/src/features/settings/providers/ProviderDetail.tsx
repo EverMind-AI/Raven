@@ -17,6 +17,43 @@ import type { JSX } from 'react'
 
 const busy = (slug: string): string => `prov:${slug}`
 
+/* The address a provider is reached at, wherever it is drawn.
+ *
+ * An aggregator's address is a first-class field -- you point one at a proxy or
+ * a regional host the way you would type a key -- so it sits in the body beside
+ * the key. Every other vendor has one address that works, and a box for
+ * overriding it belongs under Advanced with the other things few people touch.
+ * Both need the same control, and the same way back: a reset appears once the
+ * value differs from what the registry ships, because an address typed by hand
+ * is not one you can retype from memory. */
+function AddressRow({ p, sub, placeholder }: { p: ProviderRow; sub?: string; placeholder: string }): JSX.Element {
+  const [base, setBase] = useState(p.apiBase || '')
+  const write = (value: string): void => {
+    void store.run(busy(p.id), () => store.source().setFields(p.id, { api_base: value }))
+  }
+  const commit = (): void => {
+    const b = base.trim()
+    if (b === (p.apiBase || '')) return
+    write(b)
+  }
+  const shipped = p.defaultApiBase || ''
+  const resettable = !!shipped && (p.apiBase || '') !== '' && (p.apiBase || '') !== shipped
+  return (
+    <Row label={t('gui.settings.providers.base')} sub={sub}>
+      <span className="settings-taglist">
+        <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')} placeholder={placeholder}
+          onChange={(e) => setBase(e.currentTarget.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === 'Enter') commit() }} />
+        {resettable && (
+          <button type="button" className="mini ghost" aria-label={t('gui.settings.providers.base_reset')}
+            onClick={() => { setBase(''); write('') }}>
+            {t('gui.settings.providers.base_reset')}
+          </button>
+        )}
+      </span>
+    </Row>
+  )
+}
+
 function Connection({ p }: { p: ProviderRow }): JSX.Element {
   const [key, setKey] = useState('')
   const [base, setBase] = useState(p.apiBase || rawStr(store.get().snap.raw, p.id, 'apiBase') || p.defaultApiBase || '')
@@ -36,13 +73,14 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
     if (b) params.api_base = b
     void store.run(busy(p.id), () => store.source().provider('save_key', params)).then((ok) => { if (ok) setKey('') })
   }
-  const setBaseField = (): void => {
-    const b = base.trim()
-    if (b === (p.apiBase || '')) return
-    void store.run(busy(p.id), () => store.source().setFields(p.id, { api_base: b }))
-  }
   const btn = p.on ? t('gui.settings.update') : t('gui.settings.providers.connect')
-  const off = p.on && <button type="button" className="mini ghost" onClick={disconnect}>{t('gui.settings.providers.disconnect')}</button>
+  const off = p.on && (
+    <button type="button" className="mini ghost" onClick={disconnect}>
+      {t(kind === 'oauth' ? 'gui.settings.providers.disconnect_auth'
+        : kind === 'local' ? 'gui.settings.providers.disconnect_local'
+        : 'gui.settings.providers.disconnect_key')}
+    </button>
+  )
   return (
     <Card title={t('gui.settings.providers.connection')}>
       {kind === 'oauth' && (
@@ -92,12 +130,8 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
           </span>
         </Row>
       )}
-      {kind !== 'oauth' && needsKey(p) && (takesBase(p) || p.kind === 'endpoint') && (
-        <Row label={t('gui.settings.providers.base')}>
-          <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')}
-            placeholder={p.needsBase ? 'https://' : t('gui.settings.providers.base_default')}
-            onChange={(e) => setBase(e.currentTarget.value)} onBlur={setBaseField} onKeyDown={(e) => { if (e.key === 'Enter') setBaseField() }} />
-        </Row>
+      {kind !== 'oauth' && needsKey(p) && (takesBase(p) || p.gateway || p.kind === 'endpoint') && (
+        <AddressRow p={p} placeholder={p.needsBase ? 'https://' : (p.defaultApiBase || t('gui.settings.providers.base_default'))} />
       )}
       {p.id === AZURE && <AzureFields p={p} />}
     </Card>
@@ -207,13 +241,7 @@ function Advanced({ p }: { p: ProviderRow }): JSX.Element {
   const listed = p.configured || []
   /* The address of a vendor whose connection card has no address row: an
      override of the registry's default, written on its own. */
-  const [base, setBase] = useState(p.apiBase || '')
-  const showBase = takesKey(p) && !takesBase(p) && p.kind !== 'endpoint'
-  const setBaseField = (): void => {
-    const b = base.trim()
-    if (b === (p.apiBase || '')) return
-    void store.run(busy(p.id), () => store.source().setFields(p.id, { api_base: b }))
-  }
+  const showBase = takesKey(p) && !takesBase(p) && !p.gateway && p.kind !== 'endpoint'
   const setHeader = (name: string, value: string | null): void => {
     void store.run(busy(p.id), () => store.source().setFields(p.id, { extra_headers: { [name]: value } }))
   }
@@ -236,10 +264,8 @@ function Advanced({ p }: { p: ProviderRow }): JSX.Element {
   return (
     <Card title={t('gui.settings.providers.advanced')}>
       {showBase && (
-        <Row label={t('gui.settings.providers.base')} sub={t('gui.settings.providers.base_override')}>
-          <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')} placeholder={p.defaultApiBase || t('gui.settings.providers.base_default')}
-            onChange={(e) => setBase(e.currentTarget.value)} onBlur={setBaseField} onKeyDown={(e) => { if (e.key === 'Enter') setBaseField() }} />
-        </Row>
+        <AddressRow p={p} sub={t('gui.settings.providers.base_override')}
+          placeholder={p.defaultApiBase || t('gui.settings.providers.base_default')} />
       )}
       <Row stack label={t('gui.settings.providers.headers')}>
         <div style={{ width: '100%' }}>

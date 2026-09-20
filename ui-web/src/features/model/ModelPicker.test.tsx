@@ -612,15 +612,48 @@ describe('what the picker offers', () => {
     expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual(['opus'])
   })
 
-  it('lists a provider that has an account but nothing added yet, with a count of zero', () => {
+  it('lists a provider that has an account but nothing added yet', () => {
+    /* Counted 1 and 1: the first has nothing added, so a text opening offers
+       the registry's shortlist (see the wizard case above); the second offers
+       what was added. Zero is for a provider with neither. */
     install({}, [
       { id: 'anthropic', name: 'Anthropic', on: true, models: ['opus'], configured: [] },
       { id: 'openai', name: 'OpenAI', on: true, models: ['gpt'], configured: ['gpt'] },
+      { id: 'empty', name: 'Nothing', on: true, models: [], configured: [] },
     ])
     mount()
     openIt()
-    expect(rows('provs').map((b) => b.querySelector('.nm')!.textContent)).toEqual(['Anthropic', 'OpenAI'])
-    expect(rows('provs').map((b) => b.querySelector('.ct')!.textContent)).toEqual(['0', '1'])
+    expect(rows('provs').map((b) => b.querySelector('.nm')!.textContent)).toEqual(['Anthropic', 'OpenAI', 'NNothing'])
+    expect(rows('provs').map((b) => b.querySelector('.ct')!.textContent)).toEqual(['1', '1', '0'])
+  })
+
+  it('offers the registry shortlist for a text opening on a provider with nothing added', () => {
+    /* The first-run wizard's whole model step: a vendor is connected and a
+       chat model picked before anyone has built a list. An empty column there
+       is the step. */
+    install({}, [{ id: 'anthropic', name: 'Anthropic', on: true, models: ['opus', 'sonnet'], configured: [] }])
+    mount()
+    openIt()
+    expect(rows('models').map((b) => b.querySelector('.nm')!.textContent)).toEqual(['opus', 'sonnet'])
+  })
+
+  it('does not fall back for a kind the wizard never asks for', () => {
+    /* An embedding slot on a provider with nothing added should say so, not
+       offer the vendor's whole catalogue filtered to whatever happens to be
+       tagged -- "nothing here yet, type an id" is the honest answer. */
+    install({}, [{
+      id: 'anthropic', name: 'Anthropic', on: true, configured: [],
+      models: ['emb-1'], labels: { 'emb-1': { kind: 'embedding' } },
+    }])
+    mount()
+    act(() => {
+      store.open(document.getElementById('modelChip'), undefined, undefined,
+        { kind: 'embedding', title: 'Embedding', pick: async () => {} })
+    })
+    expect(rows('models')).toHaveLength(0)
+    expect(document.querySelector('.mpick .models .empty')!.textContent).toBe(
+      'gui.picker.empty_kind {"kind":"gui.model.type.embedding"}',
+    )
   })
 
   it('falls back to the offer for a source that never learned the difference', () => {
@@ -638,7 +671,7 @@ describe('the picker with nothing to offer', () => {
     /* Reversed 2026-09-20 with the rule above: "go and build a list" is now
        answered inside the picker -- an empty column that says so, and a row to
        type an id into -- so it is no longer a dead end. */
-    const h = install({}, [{ id: 'anthropic', name: 'Anthropic', on: true, models: ['opus'], configured: [] }])
+    const h = install({}, [{ id: 'anthropic', name: 'Anthropic', on: true, models: [], configured: [] }])
     mount()
     openIt()
     expect(pick()).not.toBeNull()

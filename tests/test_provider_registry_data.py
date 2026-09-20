@@ -440,7 +440,7 @@ def test_a_model_tagged_from_its_endpoint_reaches_the_same_bucket_as_a_catalogue
     assert kind_of(["image-recognition"], ["text"]) == "text"
 
 
-# The same nine rows, with the same kinds, sit in ui-web/src/features/model/kinds.test.ts:
+# The same nine rows, with the same kinds, sit in ui-web/src/features/model/types.test.ts:
 # the page copies inferred_tags' two patterns for a typed id's chip, and this
 # table is what keeps the copy honest.
 NAME_GUESSES = [

@@ -6627,6 +6627,18 @@
       "en": "Disconnect",
       "zh": "断开"
     },
+    "gui.settings.providers.disconnect_key": {
+      "en": "Disconnect and clear the key",
+      "zh": "断开并清除密钥"
+    },
+    "gui.settings.providers.disconnect_auth": {
+      "en": "Disconnect authorisation",
+      "zh": "断开授权"
+    },
+    "gui.settings.providers.disconnect_local": {
+      "en": "Disconnect this server",
+      "zh": "断开这台服务"
+    },
     "gui.settings.providers.connection": {
       "en": "Connection",
       "zh": "连接"
@@ -7206,6 +7218,10 @@
     "gui.settings.providers.base_override": {
       "en": "Overrides the default",
       "zh": "覆盖默认"
+    },
+    "gui.settings.providers.base_reset": {
+      "en": "Reset",
+      "zh": "恢复默认"
     },
     "gui.settings.providers.key_optional_ph": {
       "en": "API key, if the server wants one",

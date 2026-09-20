@@ -134,11 +134,6 @@ const providerName = (snap: SettingsSnapshot, id: string): string => {
   return p ? p.name : id
 }
 
-/* A provider with nothing added yet offers the registry's own list: the
-   first-run wizard connects a vendor and picks a chat model in one step,
-   before anyone has visited the provider's page to add one, and an empty
-   column there is a dead end. Once something is added, the added list is
-   what the picker offers, as before. */
 /* The write a pick makes, by role. The typed id is added to the provider
    first, so the role never names a model the provider does not list. */
 async function setRole(r: Role, model: string, provider: string, typed: boolean, kind?: Kind): Promise<SettingsSnapshot | void> {

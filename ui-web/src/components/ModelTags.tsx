@@ -196,7 +196,7 @@ export interface ModelTagFacts {
   /* Which bucket a model list files this under, straight off the wire
      (`registry_data.kind_of`). A string rather than the model domain's `Kind`
      union: this is `src/components/`, which may not import a feature, and the
-     one reader that cares validates it (`features/model/kinds.ts`). */
+     one reader that cares validates it (`features/model/types.ts`). */
   kind?: string
 }
 

@@ -135,7 +135,17 @@ export const listed = (offer: Offer = at.offer): Provider[] =>
    `providers.<slug>.models`, and a model the page is showing as current has to
    be somewhere the reader can see it marked. */
 export const column = (p: Provider, offer: Offer = at.offer): string[] => {
-  const rows = offered(p).filter((m) => modelKind(p.labels?.[m]) === offer.kind)
+  /* A provider with nothing added yet offers the registry's own shortlist,
+     for text and text only. The first-run wizard connects a vendor and picks a
+     chat model in one step, before anyone has visited the providers page to
+     build a list, and an empty column there is the whole of that step. Once
+     something is added, the added list is what is offered, as before -- and
+     the fallback is never taken for a kind the wizard does not ask for, where
+     the vendor's whole catalogue would be a worse answer than "nothing here
+     yet, type an id". */
+  const listed = offered(p)
+  const source = listed.length || offer.kind !== 'text' ? listed : p.models
+  const rows = source.filter((m) => modelKind(p.labels?.[m]) === offer.kind)
   /* Whose model to pin. A slot states its own pair or holds none -- an unset
      slot has nothing to pin, and borrowing the conversation's model would put
      a chat model at the top of the embedding column. Only the composer falls
