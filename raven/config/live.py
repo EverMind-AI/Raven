@@ -267,6 +267,12 @@ def web_provider_keys(live: LiveConfig) -> dict[str, str]:
 
     The singular reader answers one vendor a caller already named; a spawn has
     to hand the whole set down, because the sub-agent picks its own vendor.
+
+    A cleared vendor is present with an empty value, not absent: the caller
+    merges this over what it booted with, and dropping the empty would restore
+    the credential the settings surface just removed. Absent still means "the
+    file says nothing about this vendor", which is the only case the boot value
+    may answer -- the same distinction the singular reader draws.
     """
     raw = live.get("tools.web.providers")
     if not isinstance(raw, dict):
@@ -276,7 +282,7 @@ def web_provider_keys(live: LiveConfig) -> dict[str, str]:
         # Through the singular reader, which is schema-backed and memoised:
         # the key's spelling belongs to the schema, not to every reader of it.
         value = web_provider_key(live, str(vendor))
-        if value:
+        if value is not None:
             out[str(vendor)] = value
     return out
 

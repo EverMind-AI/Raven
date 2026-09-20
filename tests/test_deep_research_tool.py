@@ -733,6 +733,8 @@ def test_clearing_the_key_takes_the_working_tool_away(tmp_path: Path, monkeypatc
 
     monkeypatch.delenv("MIROTHINKER_API_KEY", raising=False)
     loop = _offer_loop(tmp_path)
+    broker = object()
+    loop.set_deep_research_broker(broker)
     monkeypatch.setattr(ut, "get_deep_research", lambda **_kw: {"api_key": "sk-old", "api_base": "", "model": ""})
     loop._maybe_promote_deep_research()
     assert isinstance(loop.tools.get("deep_research"), DeepResearchTool)
@@ -740,9 +742,14 @@ def test_clearing_the_key_takes_the_working_tool_away(tmp_path: Path, monkeypatc
     monkeypatch.setattr(ut, "get_deep_research", lambda **_kw: {"api_key": "", "api_base": "", "model": ""})
     loop._maybe_promote_deep_research()
 
-    assert isinstance(loop.tools.get("deep_research"), DeepResearchOfferTool)
+    back = loop.tools.get("deep_research")
+    assert isinstance(back, DeepResearchOfferTool)
     assert loop.deep_research_config.api_key == ""
     assert loop.deep_research_manager is None
+    # The host wires the broker once, after construction, so a stand-in
+    # registered later is past that call: without this it answers None and the
+    # offer degrades to regular search silently for the rest of the process.
+    assert back._broker is broker
 
 
 def test_an_unconfigured_process_stays_on_the_offer_tool(tmp_path: Path, monkeypatch):

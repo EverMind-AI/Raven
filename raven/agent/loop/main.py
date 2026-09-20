@@ -768,6 +768,21 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             except Exception as exc:  # noqa: BLE001 -- teardown must not die on bookkeeping
                 logger.warning("Error marking MCP servers after executor close: %s", exc)
 
+    def _register_deep_research_offer(self) -> None:
+        """Register the offer stand-in with the broker this host wired.
+
+        The broker arrives after construction (``set_deep_research_broker``),
+        which applies it to whatever is registered at that moment. A stand-in
+        registered later -- when a credential is cleared mid-session -- is past
+        that call, so it has to be handed the stored one here. Without it
+        ``_ask_search_mode`` answers None and the offer degrades to regular
+        search silently, for the rest of the process.
+        """
+        offer = DeepResearchOfferTool()
+        if self._deep_research_broker is not None:
+            offer.set_broker(self._deep_research_broker)
+        self.tools.register(offer)
+
     def _register_real_deep_research(self, cfg: DeepResearchToolConfig) -> None:
         """Build the working deep_research tool (+ async manager) and register it.
         Shared by initial registration and mid-session promotion."""
@@ -843,7 +858,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             self.tools.unregister("deep_research")
             self.deep_research_config = cfg
             self.deep_research_manager = None
-            self.tools.register(DeepResearchOfferTool())
+            self._register_deep_research_offer()
             logger.info("deep_research: credential cleared; the offer stand-in is back")
             return
         # The whole section, not the credential alone: an endpoint or a model

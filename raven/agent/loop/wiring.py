@@ -15,7 +15,6 @@ from raven.agent.loop._shared import (
     AskUserTool,
     Callable,
     DeepResearchManager,
-    DeepResearchOfferTool,
     EditFileTool,
     ExecTool,
     FindTool,
@@ -1014,7 +1013,7 @@ class WiringMixin:
         if deep_research_mode(self.deep_research_config) == "real":
             self._register_real_deep_research(self.deep_research_config)
         else:
-            self.tools.register(DeepResearchOfferTool())
+            self._register_deep_research_offer()
         self.tools.register(MessageTool())
         # Not registered at all for a sub-agent, rather than hidden from the
         # schema: hiding leaves the tool in the registry, which is exactly how the

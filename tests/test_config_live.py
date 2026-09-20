@@ -858,3 +858,24 @@ class TestTheRestOfWhatAWriteDidNotReach:
         keys = SubagentManager._web_provider_keys_now(mgr)
 
         assert keys == {"serper": "serper-boot", "exa": "exa-live"}
+
+    def test_a_cleared_vendor_key_revokes_the_one_a_spawn_booted_with(self, tmp_path: Path, monkeypatch) -> None:
+        """Absent and cleared are different answers.
+
+        The caller merges this over what it booted with, so a cleared vendor
+        dropped from the answer would restore the credential the settings
+        surface just removed -- and the next sub-agent would keep spending it.
+        """
+        from types import SimpleNamespace
+
+        from raven.agent.subagent.manager import SubagentManager
+
+        path = tmp_path / "config.json"
+        _write(path, {"tools": {"web": {"providers": {"exa": {"apiKey": ""}}}}})
+        monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+        mgr = SimpleNamespace(web_provider_keys={"exa": "exa-boot", "serper": "serper-boot"})
+
+        keys = SubagentManager._web_provider_keys_now(mgr)
+
+        assert keys["exa"] == "", "the cleared vendor must not fall back to the boot credential"
+        assert keys["serper"] == "serper-boot", "a vendor the file says nothing about keeps its boot value"
