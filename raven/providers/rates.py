@@ -204,6 +204,42 @@ def may_prompt(model: str) -> bool:
     return any((drivers / part / "authenticator.py").exists() for part in model.split("/") if part)
 
 
+# LiteLLM answers a huggingface id's context window by fetching the repo's
+# `config.json` over the network -- `utils.py::_get_max_position_embeddings`,
+# on every call, cached nowhere. `allow_fetch=False` does not reach it: that
+# flag governs this module's own OpenRouter fetch, not LiteLLM's.
+_NETWORK_METADATA_VENDORS = frozenset({"huggingface"})
+
+
+def may_fetch(model: str) -> bool:
+    """Would handing this model to LiteLLM go to the network for its metadata?
+
+    The sibling of ``may_prompt``, and there for the same reason: a lookup that
+    is supposed to read a table instead does something slow, and every entry
+    point that resolves a model reaches it. `model.options` resolves a window
+    per configured vendor, so a settings page paid six sequential round trips
+    -- about 1.5s -- on every call, and the page reloaded it after every write.
+
+    They buy nothing, and this is LiteLLM's bug rather than a bad id on our
+    side. `_get_model_info_helper` computes `split_model` -- the bare repo id --
+    and then passes the caller's original string to
+    `_get_max_position_embeddings` (utils.py:5817 on main, :5678 in 1.85.0), so
+    the address asked for is `huggingface.co/huggingface/<repo>`, which is not
+    a repo and answers 404. Measured both ways: with the routing prefix, 404
+    and an empty answer after 533ms; without it, `get_llm_provider` raises for
+    want of a provider in 1ms. No id from here reaches a working lookup.
+
+    `get_max_tokens` does it correctly one function away -- it reassigns
+    `model` from `get_llm_provider` before the same branch -- which is what the
+    fix upstream looks like.
+
+    Any segment counts, the way it does in ``may_prompt``: the candidate list
+    pairs a bare id with its ``openrouter/`` alias, and both reach the same
+    branch.
+    """
+    return any(part in _NETWORK_METADATA_VENDORS for part in model.split("/") if part)
+
+
 def _numeric(entry: dict | None, *fields: str) -> float | None:
     """First numeric value among ``fields``, or None.
 
@@ -254,7 +290,7 @@ def _try_litellm_rates(model: str, input_tokens: int, output_tokens: int) -> tup
     probe_out = output_tokens if output_tokens else 1
 
     for candidate in _candidates(model):
-        if may_prompt(candidate):
+        if may_prompt(candidate) or may_fetch(candidate):
             # Skipped, not read from the table: the rows these families have are
             # priced at zero, which this function already treats as unknown, so
             # reading them would add a branch that cannot fire. The caller falls
@@ -741,7 +777,7 @@ def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | N
         ceiling = _trustworthy_ceiling(_table_entry(candidate))
         if ceiling:
             return ceiling
-        if may_prompt(candidate):
+        if may_prompt(candidate) or may_fetch(candidate):
             continue
         try:
             info = litellm.get_model_info(candidate)
@@ -897,7 +933,7 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int
         window = _numeric(_table_entry(candidate), "max_input_tokens", "max_tokens")
         if window:
             return int(window)
-        if may_prompt(candidate):
+        if may_prompt(candidate) or may_fetch(candidate):
             continue
         try:
             info = litellm.get_model_info(candidate)

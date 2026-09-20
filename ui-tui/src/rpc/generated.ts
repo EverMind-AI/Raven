@@ -347,6 +347,10 @@ export interface ExtToolRow {
    */
   mcp_server?: string;
   needs?: ToolSetupNeed;
+  /**
+   * True for a tool no person switches: the two meta tools and every schema-hidden one, which the model reaches through tool_call. The page draws it as built in wherever it is grouped.
+   */
+  builtin?: boolean;
 }
 /**
  * Set when the tool exists but is withheld for want of a key. The model cannot call it; the row is here so the page can offer the field instead of the tool simply being absent.
@@ -2987,6 +2991,10 @@ export interface ConfigSetResult {
   scope?: 'session' | 'default';
   session_id?: string;
   applies_to_session?: boolean;
+  /**
+   * True when the write landed in a process that has no agent loop: the config is right and this gateway still cannot run a turn on it.
+   */
+  needs_restart?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

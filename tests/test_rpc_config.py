@@ -21,6 +21,7 @@ import raven.home as raven_home_module
 from raven.rpc.errors import (
     ConfigFieldReadonlyError,
     ConfigValidationError,
+    InternalError,
     ModelNotAvailableError,
 )
 from raven.rpc.methods.config import (
@@ -244,6 +245,188 @@ async def test_config_set_model_with_a_provider_writes_the_pair(fake_home: Path)
     cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
     assert cfg["agents"]["defaults"]["provider"] == "anthropic"
     assert cfg["agents"]["defaults"]["model"] == "anthropic/claude-opus-4-8"
+
+
+def _first_run_factory():
+    """The factory as a brand-new install answers it.
+
+    ``build_agent_loop`` builds from the config on disk, so before a model is
+    chosen it has no provider to resolve and refuses -- which is the state the
+    call being made is about to end.
+    """
+    raise InternalError(
+        "no provider is configured yet -- run `raven onboard` for guided setup",
+        data={"reason": "missing_credentials", "provider": "", "remedy": "raven provider set <name> --api-key <key>"},
+    )
+
+
+async def test_config_set_model_completes_a_first_run(fake_home: Path) -> None:
+    """The first model choice lands even though no loop can be built yet.
+
+    Onboarding and the settings page both write a key and then ask for a model.
+    While the loop is what validates the pair, asking it first made the two
+    requirements circular: the model could not be set because no model was set,
+    so a new install could not be finished from either surface.
+    """
+    cfg = fake_home / ".raven"
+    cfg.mkdir(exist_ok=True)
+    (cfg / "config.json").write_text(json.dumps({"providers": {"deepseek": {"apiKey": "sk-deep"}}}), encoding="utf-8")
+
+    result = await config_set(
+        {"key": "model", "value": "deepseek-chat", "provider": "deepseek"},
+        agent_loop_factory=_first_run_factory,
+    )
+
+    assert result["applied"] is True
+    # The write landed in a process that has no loop, and a turn needs one that
+    # is wired at stack build -- so the reply says the process has to come back
+    # rather than leaving the caller to find out on its next send.
+    assert result["needs_restart"] is True
+    written = json.loads((cfg / "config.json").read_text())
+    assert written["agents"]["defaults"]["model"] == "deepseek/deepseek-chat"
+    assert written["agents"]["defaults"]["provider"] == "deepseek"
+
+
+async def test_a_first_run_session_pick_says_why_it_was_refused(fake_home: Path) -> None:
+    """A refused session write carries the reason, because it RESOLVES.
+
+    A model picked while the composer is still a draft is written under the
+    new session when the first message is sent. With no loop there is nothing
+    to bind it to, so the answer is `applied: false` -- which a caller
+    watching for a raise never hears, and the chip stayed on a model the
+    session does not have.
+
+    The refusal carries no `needs_restart`: nothing was persisted, so a
+    restart comes back to a gateway with no model either. Persisting the pick
+    as the default instead would widen a choice made for one conversation.
+    """
+    cfg = fake_home / ".raven"
+    cfg.mkdir(exist_ok=True)
+    (cfg / "config.json").write_text(json.dumps({"providers": {"deepseek": {"apiKey": "sk-deep"}}}), encoding="utf-8")
+
+    result = await config_set(
+        {"key": "model", "value": "deepseek-chat", "provider": "deepseek", "session_id": "s1"},
+        agent_loop_factory=_first_run_factory,
+    )
+
+    assert result["applied"] is False
+    assert result["scope"] == "session"
+    # Deliberately absent: that flag says the write landed and a restart will
+    # apply it, and nothing landed. Sending it here had the page promise a
+    # restart that would come back to a gateway with no model still.
+    assert "needs_restart" not in result
+
+
+async def test_config_set_model_on_a_first_run_still_needs_the_key(fake_home: Path) -> None:
+    """The loop not being there is not a reason to take a provider on trust.
+
+    Nothing validates the pair when there is no loop, so the credential gate
+    every other surface uses is asked directly -- otherwise the fix above would
+    let a keyless provider be written as the default of a fresh install.
+    """
+    cfg = fake_home / ".raven"
+    cfg.mkdir(exist_ok=True)
+    (cfg / "config.json").write_text(json.dumps({"providers": {"deepseek": {}}}), encoding="utf-8")
+
+    with pytest.raises(ModelNotAvailableError):
+        await config_set(
+            {"key": "model", "value": "deepseek-chat", "provider": "deepseek"},
+            agent_loop_factory=_first_run_factory,
+        )
+
+    assert "agents" not in json.loads((cfg / "config.json").read_text())
+
+
+async def test_config_set_model_on_a_first_run_takes_an_oauth_login(fake_home: Path, monkeypatch) -> None:
+    """A provider logged in through OAuth writes no section, and still counts.
+
+    Its credential is a token file, which is what `include_external` asks
+    about. Reading the config first and giving up when the section is missing
+    would refuse exactly the first runs that never write one.
+    """
+    cfg = fake_home / ".raven"
+    cfg.mkdir(exist_ok=True)
+    (cfg / "config.json").write_text(json.dumps({"providers": {}}), encoding="utf-8")
+
+    from raven.providers import auth as auth_module
+
+    seen: dict[str, object] = {}
+
+    def _status(name, section, *, spec=None, include_external=False):
+        seen["name"], seen["external"] = name, include_external
+        return SimpleNamespace(ok=True)
+
+    monkeypatch.setattr(auth_module, "credential_status", _status)
+
+    result = await config_set(
+        {"key": "model", "value": "gpt-5-codex", "provider": "openai_codex"},
+        agent_loop_factory=_first_run_factory,
+    )
+
+    assert result["applied"] is True
+    assert seen == {"name": "openai_codex", "external": True}
+    written = json.loads((cfg / "config.json").read_text())
+    assert written["agents"]["defaults"]["provider"] == "openai_codex"
+
+
+async def test_config_set_model_reraises_an_unrelated_startup_failure(fake_home: Path) -> None:
+    """Only the credential refusal means "no loop yet"; anything else is real."""
+    _pin(fake_home, "anthropic", {"anthropic": {"apiKey": "sk-ant"}})
+
+    def _broken():
+        raise InternalError("engine init crash", data={"reason": "init_crash"})
+
+    with pytest.raises(InternalError):
+        await config_set(
+            {"key": "model", "value": "claude-opus-4-8", "provider": "anthropic"},
+            agent_loop_factory=_broken,
+        )
+
+
+@pytest.mark.parametrize(
+    "providers",
+    [
+        pytest.param(["not", "a", "mapping"], id="not-a-mapping"),
+        pytest.param({"deepseek": "a string where a section belongs"}, id="section-the-schema-refuses"),
+    ],
+)
+async def test_config_set_model_on_a_first_run_survives_an_unreadable_providers_block(
+    fake_home: Path, providers: object
+) -> None:
+    """A providers block nothing can read is no credential, and no crash.
+
+    Both shapes reach the gate: one is not a mapping at all, the other is a
+    mapping whose section the schema refuses. Neither may be taken for a
+    credential, and neither may escape as something other than the refusal
+    this call is about.
+    """
+    cfg = fake_home / ".raven"
+    cfg.mkdir(exist_ok=True)
+    (cfg / "config.json").write_text(json.dumps({"providers": providers}), encoding="utf-8")
+
+    with pytest.raises(ModelNotAvailableError):
+        await config_set(
+            {"key": "model", "value": "deepseek-chat", "provider": "deepseek"},
+            agent_loop_factory=_first_run_factory,
+        )
+
+
+async def test_config_set_model_without_a_factory_persists(fake_home: Path) -> None:
+    """A stack that hands over no factory validates nothing and says nothing.
+
+    The embedded stacks mount an engine somebody else owns; there is no loop
+    to ask and no process of ours to restart, so the reply carries neither a
+    refusal nor the restart note.
+    """
+    _pin(fake_home, "anthropic", {"anthropic": {"apiKey": "sk-ant"}})
+
+    result = await config_set(
+        {"key": "model", "value": "claude-opus-4-8", "provider": "anthropic"},
+        agent_loop_factory=None,
+    )
+
+    assert result["applied"] is True
+    assert "needs_restart" not in result
 
 
 async def test_config_set_model_is_scoped_to_the_session_that_asked(fake_home: Path, monkeypatch) -> None:

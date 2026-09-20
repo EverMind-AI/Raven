@@ -1843,6 +1843,14 @@ class ConfigSetResult(_Strict):
     # moves the sessions that never chose one, so scope alone cannot answer it
     # and a client that guesses shows a model the conversation is not on.
     applies_to_session: bool | None = None
+    needs_restart: bool | None = Field(
+        default=None,
+        description=(
+            "True when the write landed in a process that has no agent loop: the config is right "
+            "and this gateway still cannot run a turn on it, because the wiring a turn needs is "
+            "assembled once at stack build."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -3011,6 +3019,14 @@ class ExtToolRow(_Strict):
         description=(
             "Set when the tool exists but is withheld for want of a key. The model cannot call it; "
             "the row is here so the page can offer the field instead of the tool simply being absent."
+        ),
+    )
+    builtin: bool | None = Field(
+        default=None,
+        description=(
+            "True for a tool no person switches: the two meta tools and every schema-hidden one, "
+            "which the model reaches through tool_call. The page draws it as built in wherever it "
+            "is grouped."
         ),
     )
 
