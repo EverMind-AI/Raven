@@ -3763,6 +3763,10 @@
       "en": "Nothing here yet",
       "zh": "暂无会话"
     },
+    "gui.rail.no_workdir": {
+      "en": "No folder",
+      "zh": "无工作区"
+    },
     "gui.rail.pinned": {
       "en": "Pinned",
       "zh": "已固定"
@@ -3770,6 +3774,10 @@
     "gui.rail.recent": {
       "en": "Recent",
       "zh": "最近"
+    },
+    "gui.rail.workdir": {
+      "en": "With a folder",
+      "zh": "有工作区"
     },
     "gui.rail.search_hits": {
       "en": "Results - {n}",
@@ -5322,6 +5330,62 @@
     "gui.upg.working": {
       "en": "Upgrading Raven...",
       "zh": "正在升级 Raven…"
+    },
+    "gui.wd.back": {
+      "en": "Back",
+      "zh": "返回"
+    },
+    "gui.wd.blocked": {
+      "en": "Raven cannot work here: it is inside its own data",
+      "zh": "这里不能作为工作区：是 Raven 自己的数据目录"
+    },
+    "gui.wd.empty": {
+      "en": "No subfolders",
+      "zh": "没有子文件夹"
+    },
+    "gui.wd.failed": {
+      "en": "Could not read the folder - {detail}",
+      "zh": "读取目录失败 · {detail}"
+    },
+    "gui.wd.home": {
+      "en": "Home",
+      "zh": "主目录"
+    },
+    "gui.wd.locked": {
+      "en": "The workspace is fixed once the conversation starts",
+      "zh": "对话开始后工作区不可更改"
+    },
+    "gui.wd.none": {
+      "en": "No folder",
+      "zh": "无文件夹"
+    },
+    "gui.wd.none_h": {
+      "en": "Work in the default directory",
+      "zh": "在默认目录里工作"
+    },
+    "gui.wd.not_live": {
+      "en": "Browsing folders needs a running gateway",
+      "zh": "离线预览无法浏览文件夹"
+    },
+    "gui.wd.open": {
+      "en": "Open folder...",
+      "zh": "打开文件夹…"
+    },
+    "gui.wd.recent": {
+      "en": "Recent",
+      "zh": "最近"
+    },
+    "gui.wd.title": {
+      "en": "Workspace",
+      "zh": "工作区"
+    },
+    "gui.wd.up": {
+      "en": "Up one level",
+      "zh": "上一级"
+    },
+    "gui.wd.use": {
+      "en": "Use this folder",
+      "zh": "选择此文件夹"
     },
     "gui.workspace": {
       "en": "Workspace",

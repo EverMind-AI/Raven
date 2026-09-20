@@ -57,6 +57,9 @@ function rowFrom(it) {
       : T('gui.sess.n_messages', { n: it.message_count }),
     when, at, run: null, live: true, from: cron ? 'cron' : undefined,
     pin: !!it.pinned, persisted: true,
+    /* The directory the conversation was pinned to at creation, or null for one
+       on the policy default. The rail groups on it and the chip reports it. */
+    workdir: it.workdir || null,
   };
 }
 

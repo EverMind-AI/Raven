@@ -18,6 +18,7 @@ from raven.config import update_tools
 from raven.config.env_file import MIRRORED_KEYS
 from raven.config.schema import WEB_VENDOR_ENV_VARS
 from raven.contracts.tool import Tool
+from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods import console as console_module
 from raven.rpc.methods.console import _SETTINGS_SIMPLE_KEYS, _hub_marker_name
 
@@ -1711,3 +1712,111 @@ async def test_image_selection_leaves_are_writable(settings_cfg, key, value):
 
     await console_module.settings_set({"key": f"tools.media.image.{key}", "value": value})
     assert json.loads(settings_cfg.read_text())["tools"]["media"]["image"][key] == value
+
+
+# ---------------------------------------------------------------------------
+# fs.dirs -- the folder picker's directory walk
+# ---------------------------------------------------------------------------
+
+
+def _agent_home(monkeypatch, home: Path) -> None:
+    from raven.config import loader as config_loader
+
+    monkeypatch.setattr(config_loader, "load_config", lambda: SimpleNamespace(workspace_path=home))
+
+
+async def test_fs_dirs_lists_subdirectories_only_and_marks_agent_home(tmp_path: Path, monkeypatch) -> None:
+    """Directories only, dotfiles omitted, sorted by name; the agent's own home
+    is listed but marked not ok, since `session.create` would refuse it."""
+    root = tmp_path / "root"
+    for name in ("Zeta", "alpha", ".hidden", "agent"):
+        (root / name).mkdir(parents=True)
+    (root / "notes.md").write_text("x")
+    _agent_home(monkeypatch, root / "agent")
+
+    r = await console_module.fs_dirs({"path": str(root / "alpha")})
+    assert r["path"] == str((root / "alpha").resolve())
+    assert r["parent"] == str(root.resolve())
+    assert r["home"] == str(Path.home())
+    assert r["ok"] is True
+
+    r = await console_module.fs_dirs({"path": str(root)})
+    assert [e["name"] for e in r["entries"]] == ["agent", "alpha", "Zeta"]
+    by_name = {e["name"]: e for e in r["entries"]}
+    assert by_name["alpha"]["ok"] is True
+    assert by_name["alpha"]["path"] == str((root / "alpha").resolve())
+    assert by_name["agent"]["ok"] is False
+    # The parent of the agent's home is refused too (see validate_override), so
+    # the listing itself says it cannot be used even though its children can.
+    assert r["ok"] is False
+
+
+async def test_fs_dirs_starts_at_the_user_home_and_stops_at_the_root(tmp_path: Path, monkeypatch) -> None:
+    """No path means the home directory, which is where a person's projects
+    are; the filesystem root has no parent to offer."""
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    _agent_home(monkeypatch, tmp_path / ".raven" / "workspace")
+
+    r = await console_module.fs_dirs({})
+    assert r["path"] == str(tmp_path.resolve())
+
+    top = await console_module.fs_dirs({"path": str(Path(tmp_path.anchor))})
+    assert top["parent"] is None
+
+
+async def test_fs_dirs_marks_the_listed_directory_itself(tmp_path: Path, monkeypatch) -> None:
+    """The picker's "use this folder" button follows `ok` on the listing, so a
+    person standing inside raven's data is told before pressing it."""
+    home = tmp_path / ".raven" / "workspace"
+    (home / "skills").mkdir(parents=True)
+    (tmp_path / "proj").mkdir()
+    _agent_home(monkeypatch, home)
+
+    inside = await console_module.fs_dirs({"path": str(home / "skills")})
+    assert inside["ok"] is False
+    above = await console_module.fs_dirs({"path": str(tmp_path)})
+    assert above["ok"] is False
+    beside = await console_module.fs_dirs({"path": str(tmp_path / "proj")})
+    assert beside["ok"] is True
+
+
+async def test_fs_dirs_refuses_a_relative_path_and_a_file(tmp_path: Path, monkeypatch) -> None:
+    _agent_home(monkeypatch, tmp_path / "home")
+    (tmp_path / "f.txt").write_text("x")
+
+    with pytest.raises(ConfigValidationError):
+        await console_module.fs_dirs({"path": "relative/dir"})
+    with pytest.raises(ConfigValidationError):
+        await console_module.fs_dirs({"path": str(tmp_path / "f.txt")})
+    with pytest.raises(ConfigValidationError):
+        await console_module.fs_dirs({"path": str(tmp_path / "missing")})
+
+
+async def test_fs_dirs_reports_a_directory_it_cannot_read(tmp_path: Path, monkeypatch) -> None:
+    _agent_home(monkeypatch, tmp_path / "home")
+    target = tmp_path / "sealed"
+    target.mkdir()
+
+    def boom(self):
+        raise PermissionError("no")
+
+    monkeypatch.setattr(Path, "iterdir", boom)
+    with pytest.raises(ConfigValidationError):
+        await console_module.fs_dirs({"path": str(target)})
+
+
+async def test_fs_dirs_skips_a_child_that_vanishes_mid_listing(tmp_path: Path, monkeypatch) -> None:
+    _agent_home(monkeypatch, tmp_path / "home")
+    root = tmp_path / "root"
+    (root / "keep").mkdir(parents=True)
+    (root / "gone").mkdir()
+    real_is_dir = Path.is_dir
+
+    def flaky(self):
+        if self.name == "gone":
+            raise OSError("vanished")
+        return real_is_dir(self)
+
+    monkeypatch.setattr(Path, "is_dir", flaky)
+    r = await console_module.fs_dirs({"path": str(root)})
+    assert [e["name"] for e in r["entries"]] == ["keep"]

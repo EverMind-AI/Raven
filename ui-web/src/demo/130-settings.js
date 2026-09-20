@@ -62,7 +62,7 @@ const notLive = () => toast(T('gui.set.not_live'));
    this one is never consulted there. */
 function langPickDemo(v) {
   langSet(v);
-  sessionDraw(); drawSettings(); drawPerm(); drawCtx(); drawFoot();
+  sessionDraw(); drawSettings(); drawPerm(); drawWorkdir(); drawCtx(); drawFoot();
 }
 
 const isMac = () => /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);

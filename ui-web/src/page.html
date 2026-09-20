@@ -212,6 +212,16 @@
                   <path d="M15 7l-6.2 6.2a2.6 2.6 0 0 0 3.7 3.7L19 10a4.4 4.4 0 0 0-6.2-6.2L6 10.5a6.2 6.2 0 0 0 8.8 8.8l3.4-3.4"/>
                 </svg>
               </button>
+              <!-- Where the conversation works. Live on the new-task screen only:
+                   the engine pins a session's directory when it is created, so
+                   once a conversation is open the chip reports and cannot be
+                   pressed (shell/workdir.ts). -->
+              <button class="chip" id="wdChip" aria-expanded="false" aria-haspopup="true">
+                <svg class="pico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                  <path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4.2l1.8 2h9A1.5 1.5 0 0 1 21 9.5v8A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5z"/>
+                </svg>
+                <span id="wdName" data-i18n="gui.wd.none">无文件夹</span>
+              </button>
               <button class="chip" id="permChip" aria-expanded="false" aria-haspopup="true">
                 <svg class="pico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
                   <path d="M12 3.5 19 6v5.5c0 4-2.9 7.4-7 9-4.1-1.6-7-5-7-9V6l7-2.5Z"/>
@@ -245,6 +255,10 @@
               <div id="slashList"></div>
             </div>
 
+            <div class="pop wd" id="wdPop" data-open="false" role="dialog" data-i18n-aria="gui.wd.title">
+              <div class="hd"><span class="lab" data-i18n="gui.wd.title">工作区</span></div>
+              <div id="wdBody"></div>
+            </div>
             <div class="pop" id="permPop" data-open="false" role="dialog" data-i18n-aria="gui.perm.title">
               <div class="hd"><span class="lab" data-i18n="gui.perm.title">权限模式</span></div>
               <div id="permList"></div>

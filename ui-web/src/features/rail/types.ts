@@ -14,6 +14,10 @@ export interface SessRow {
   live?: boolean
   persisted?: boolean
   status?: string | null
+  /* The directory the conversation was pinned to when it was created; null or
+     absent for one that runs where the policy default puts it. The rail groups
+     on it: pinned to a folder, or not. */
+  workdir?: string | null
   /* A title is being generated for this row, so the row shows a placeholder
      where the title goes. Client state only: nothing on the wire carries it,
      and a reload of a session already named simply never sets it. */

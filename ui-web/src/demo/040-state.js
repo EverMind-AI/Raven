@@ -99,6 +99,7 @@ document.addEventListener('contextmenu', (e) => {
 document.addEventListener('pointerdown', (e) => {
   if (!e.target.closest('#permPop') && !e.target.closest('#permChip')) closePermPop();
   if (!e.target.closest('#tierPop') && !e.target.closest('#tierChip')) closeTierPop();
+  if (!e.target.closest('#wdPop') && !e.target.closest('#wdChip')) closeWorkdirPop();
 }, true);
 
 /* ── the hover pill ────────────────────────────────────────────────────

@@ -49,6 +49,8 @@ const NAMES = [
   'SURFACE', 'killStatus', 'showStatus', 'loadExt', 'drawCapsBadge', 'drawCaps', 'sessionRows',
   'loadTier',
   'loadPermMode',
+  /* The folder chip's two state pushes, one per path out of a draft. */
+  'setDraftWorkdir', 'setSessionWorkdir',
 ]
 
 function harness({ rows, deferSubscribe } = {}) {
@@ -109,6 +111,8 @@ function harness({ rows, deferSubscribe } = {}) {
     loadProviders: (sid, gen) => calls.push(['loadProviders', sid, gen]),
     loadTier: () => calls.push(['loadTier']),
     loadPermMode: (sid) => calls.push(['loadPermMode', sid]),
+    setDraftWorkdir: () => calls.push(['setDraftWorkdir']),
+    setSessionWorkdir: (dir) => calls.push(['setSessionWorkdir', dir]),
     plainTitle: (s) => String(s),
     parkedTurns: new Map(),
     restoreTurn: () => calls.push(['restoreTurn']),
