@@ -188,7 +188,7 @@ def _make_stub(error_msg: str, hint: str | None):
         data: dict[str, Any] = {"error": error_msg}
         if hint is not None:
             data["hint"] = hint
-        raise NotSupportedError(error_msg, data=data)
+        raise NotSupportedError(data=data)
 
     return _handler
 

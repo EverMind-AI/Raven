@@ -233,6 +233,7 @@ Numbering is stable once referenced. A withdrawn item keeps its number.
 - A53. Backend suite: every new or changed RPC has a test that fails when its handler is reverted (mutation check per method).
 - A54. Shell untouched: C8's diff check is empty.
 - A55. Onboarding still works: the first-run flow connects a provider and picks a model with the changed `model.options` and `model.save_key`.
+- A56. Refusals speak: a refused write on any settings page shows the server's sentence, never the machine code. The frame that carries such a refusal keeps `data.detail` even when it also names the field it refused on.
 
 ## Design
 
