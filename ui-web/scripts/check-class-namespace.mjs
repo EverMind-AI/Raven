@@ -176,7 +176,7 @@ const LEGACY_SHARED = {
   'ghost-ic': 3, h: 3, hd: 4, ic: 4, k: 3, kd: 2, key: 5, l1: 3, l2: 3, lb: 3,
   mk: 2, n: 5, none: 2, ph: 2,
   pmdhead: 2, pmdmeta: 2, pmhero: 5, pmsec: 2,
-  'provider-choice-action': 2, rm: 2, row: 2, sheet: 2, shot: 3, sk: 3, skel: 3,
+  rm: 2, row: 2, sheet: 2, shot: 3, sk: 3, skel: 3,
   step: 2, sulist: 3, sustate: 2, sz: 2, t: 2,
   tipdn: 3, tm: 2, v: 3, val: 2, w: 3, warn: 2, wkg: 3, wsnote: 2,
 }
@@ -227,7 +227,7 @@ const LEGACY_LOCAL = {
      gone. */
   memory: 11,
   model: 6,
-  onboard: 1,
+  onboard: 0,
   /* Up from 13 for `.tag`, the skills page's other reader. */
   playbooks: 14,
   rail: 11,
@@ -262,8 +262,8 @@ const LEGACY_EXPR = {
   extAgents: 1,
   installed: 0,
   memory: 1,
-  model: 3,
-  onboard: 1,
+  model: 2,
+  onboard: 0,
   playbooks: 7,
   rail: 2,
   settings: 0,

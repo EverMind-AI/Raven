@@ -69,10 +69,10 @@ async def test_setup_status_provider_without_model_returns_false(fake_home: Path
     assert result == {"provider_configured": False}
 
 
-async def test_setup_status_missing_config_falls_back_true(fake_home: Path) -> None:
-    # No file at all → v0.1 fallback true (don't block hermes UI startup).
+async def test_setup_status_missing_config_is_a_first_run(fake_home: Path) -> None:
+    # No file at all is a fresh install: the page opens its wizard on this.
     result = await setup_status({})
-    assert result == {"provider_configured": True}
+    assert result == {"provider_configured": False}
 
 
 async def test_setup_status_malformed_config_falls_back_true(fake_home: Path) -> None:
