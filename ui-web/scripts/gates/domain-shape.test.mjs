@@ -47,7 +47,7 @@ const NAMES = {}
 /* Domains with no root component of their own, one reason each. */
 const NO_ROOT = {
   composer: 'the dock is chrome (src/chrome/Dock.tsx); what this domain renders are the sheets above it',
-  dag: 'a sheet in the rack above the composer, mounted per run (features/dag/mount.tsx)',
+  dag: 'a card in the transcript; the run state behind it renders nothing (features/dag/mount.ts)',
   installed: 'no island at all: the capability tabs and the settings dialog draw its rows',
   transcript: 'one root per conversation lane rather than one per page (features/transcript/mount.tsx)',
 }

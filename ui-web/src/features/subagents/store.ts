@@ -721,8 +721,8 @@ export function openRow(it: AgentRow): void {
   deskPane?.openAgentRecord(it)
 }
 
-/* The dag sheet opens its nodes here (the sheet stays the map, this panel is
-   the territory); a node reached from the trail's card carries no subagent.
+/* A graph opens its nodes here (the graph stays the map, this panel is the
+   territory); a node reached from the trail's card carries no subagent.
 
    A node that ran on an instance opens as that instance, which is the same
    screen this panel's own row for it opens -- one piece of work reached two
@@ -760,7 +760,7 @@ export function back(): void {
   set({ open: null, who: null })
 }
 
-/* What the dag sheet reads to mark the node whose transcript is open. */
+/* Which node's transcript is open, for a graph marking the one it opened. */
 export const sel = (): { run_id: string; node: string } | null =>
   state.open && state.open.kind === 'dag' ? { run_id: state.open.run_id, node: state.open.node } : null
 
