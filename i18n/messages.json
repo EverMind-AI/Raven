@@ -5287,6 +5287,10 @@
       "en": "Could not subscribe - {detail}",
       "zh": "订阅失败：{detail}"
     },
+    "gui.model.refused": {
+      "en": "set a model in Settings first - this gateway started without one",
+      "zh": "先在设置里设一个模型——这个网关启动时还没有"
+    },
     "gui.op.switch_failed": {
       "en": "Could not switch - {detail}",
       "zh": "切换失败：{detail}"
