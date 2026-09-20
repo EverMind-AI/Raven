@@ -416,9 +416,13 @@ goes:
   (`src/test/__golden__/`) hold each element's tag, id, classes and `data-*`
   attributes, and `check-css` holds declaration-level invariants. A migration
   brings its own verification.
-- **`features/extAgents/styles.css` is the exemplar and is empty on purpose.**
-  It establishes the mechanism -- a domain's sheet, imported by its App,
-  collected by Vite -- and says so in its header. No rule has moved yet.
+- **`features/onboard/styles.css` is the worked example of a move.** The
+  onboarding wizard's rules left `page.css` for the domain's own sheet when the
+  wizard was rebuilt, and its two unprefixed classes went with them, so its rows
+  in `LEGACY_LOCAL` and `LEGACY_EXPR` read zero. `features/extAgents/styles.css`
+  established the mechanism -- a domain's sheet, imported by its App, collected by
+  Vite -- and carries the roster's own rules; `features/settings/styles.css` is a
+  domain born on its own sheet.
 
 The two namespaces beyond `features/` carry four more shrink-only lists in the
 same tool: `LEGACY_CHROME` (136 unprefixed classes, 103 in the frame and 33 in

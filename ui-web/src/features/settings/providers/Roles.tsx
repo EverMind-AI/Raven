@@ -120,8 +120,15 @@ const providerName = (snap: SettingsSnapshot, id: string): string => {
   return p ? p.name : id
 }
 
+/* A provider with nothing added yet offers the registry's own list: the
+   first-run wizard connects a vendor and picks a chat model in one step,
+   before anyone has visited the provider's page to add one, and an empty
+   column there is a dead end. Once something is added, the added list is
+   what the picker offers, as before. */
 function pickerProviders(rows: ProviderRow[]): PickerProvider[] {
-  return rows.map((p) => ({ id: p.id, name: p.name, models: p.configured || p.models, labels: p.labels }))
+  return rows.map((p) => ({
+    id: p.id, name: p.name, models: p.configured && p.configured.length ? p.configured : p.models, labels: p.labels,
+  }))
 }
 
 /* The write a pick makes, by role. The typed id is added to the provider
@@ -129,7 +136,10 @@ function pickerProviders(rows: ProviderRow[]): PickerProvider[] {
 async function setRole(r: Role, model: string, provider: string, typed: boolean): Promise<SettingsSnapshot | void> {
   const src = store.source()
   if (typed) await src.provider('add_model', { slug: provider, model })
-  if (r.id === 'chat') { await src.pickModel(model, provider); return src.load() }
+  if (r.id === 'chat') {
+    if (await src.pickModel(model, provider)) store.set({ needsRestart: true })
+    return src.load()
+  }
   if (r.keys) { await src.set(r.keys[0], model); return src.set(r.keys[1], provider) }
   if (r.everos) return src.everosSet(r.everos, { model }, provider)
   if (r.media) {

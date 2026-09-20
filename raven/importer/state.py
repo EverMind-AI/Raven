@@ -6,6 +6,7 @@ import json
 import os
 import time
 from collections import Counter
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -61,11 +62,24 @@ class ImportState:
     def mark_failed(self, platform: str, source_key: str, error: str) -> None:
         self._mark(platform, source_key, "failed", error=error)
 
-    def set_total(self, total: int) -> None:
-        """Record the total number of importable units from a scan."""
+    def set_total(self, total: int, *, keys: Iterable[str] | None = None) -> None:
+        """Record the units of a run: how many, and -- when given -- which.
+
+        Entries outlive the run that wrote them (they are what lets a later
+        run skip a source), so a status read that counts every entry against
+        this run's total contradicts itself after a subset run. A caller that
+        names the run's ``platform:source_key`` keys scopes that read to them;
+        one that does not (``raven import run``) leaves every entry in scope,
+        which is how ``raven import status`` has always counted.
+        """
         data = self._ensure_loaded()
         data.setdefault("entries", {})
-        data.setdefault("meta", {})["total"] = total
+        meta = data.setdefault("meta", {})
+        meta["total"] = total
+        if keys is None:
+            meta.pop("keys", None)
+        else:
+            meta["keys"] = sorted(keys)
         self._flush()
 
     def get_summary(self) -> dict[str, int]:

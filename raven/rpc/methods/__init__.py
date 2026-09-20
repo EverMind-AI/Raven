@@ -25,6 +25,7 @@ from raven.rpc.methods.confirm import register_confirm_methods
 from raven.rpc.methods.console import register_console_methods
 from raven.rpc.methods.dag import register_dag_methods
 from raven.rpc.methods.delegation import register_delegation_methods
+from raven.rpc.methods.import_sync import register_import_methods
 from raven.rpc.methods.input import register_input_methods
 from raven.rpc.methods.instances import register_instance_methods
 from raven.rpc.methods.knowledge import register_knowledge_methods
@@ -137,6 +138,7 @@ def register_aligned_methods_except_system(
     """
     register_cli_methods(dispatcher, confirm_broker=confirm_broker)
     register_setup_methods(dispatcher)
+    register_import_methods(dispatcher)
     register_reload_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_config_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_subagent_methods(dispatcher, agent_loop_factory=agent_loop_factory)
@@ -249,6 +251,7 @@ __all__ = [
     "register_cli_methods",
     "register_commands_methods",
     "register_setup_methods",
+    "register_import_methods",
     "register_reload_methods",
     "register_config_methods",
     "register_subagent_methods",
