@@ -92,6 +92,24 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- Raven serving ACP sends a run of thought tokens as one
+  `agent_thought_chunk` instead of one frame per token: consecutive thought
+  chunks of a session are held for 200ms or 512 characters and go out
+  together, ahead of anything that has to follow them (a chunk of the
+  answer, a tool call, the turn's end). One design run wrote 58,675 thought
+  frames averaging under six characters; each frame is a blocking write on
+  the client's pipe, and a client that stopped reading held the server on
+  that write. The same stream replays to 4,333 frames.
+
+- A failed turn names what failed. The failure event carried only
+  `str(exc)`, which is empty for the bare `TimeoutError` a stalled model
+  stream raises, so an ACP client was told `turn_failed (code -32099)` and
+  nothing else and the parent of a sub-agent read that as a crash of the
+  tool call it saw last. The event now carries the exception's class and
+  message (`ValueError: boom`, `TimeoutError`), and the per-chunk idle
+  stall raises `StreamIdleTimeoutError`, a `TimeoutError` whose message
+  says how long the stream was silent and which bound decided it.
+
 - An on-call campaign bills only its own runs. Campaigns of one task usually
   keep their rounds in one `remote_dir`, and the spend measure walked that
   directory's `jobs/`, so a later campaign was charged for every earlier one's

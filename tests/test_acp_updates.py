@@ -20,6 +20,7 @@ import json
 
 import pytest
 
+from raven.acp import updates as updates_mod
 from raven.acp.tool_kinds import MAX_LOCATIONS, locations, title_for, tool_kind
 from raven.acp.updates import (
     KNOWN_EVENT_TYPES,
@@ -1155,6 +1156,125 @@ class TestTerminationIsExactlyOnce:
         assert await future == "cancelled"
 
 
+class TestThoughtCoalescing:
+    """One frame per thought token is one blocking write per token on the client's
+    pipe. Consecutive thought chunks are held and sent as one chunk when the window
+    closes, the cap is reached, or something that must follow them arrives."""
+
+    @staticmethod
+    def _thought(text: str, session_id: str = "acp:s1", sub: str = "sub-1", meta: dict | None = None):
+        payload: dict = {"text": text}
+        if meta is not None:
+            payload["target"] = meta
+        return {
+            "jsonrpc": "2.0",
+            "method": "event",
+            "params": {"subscription_id": sub, "event": {"type": "thinking.delta", "payload": payload}},
+        }
+
+    async def test_a_run_of_thought_tokens_becomes_one_frame_when_the_window_closes(self, monkeypatch):
+        monkeypatch.setattr(updates_mod, "THOUGHT_COALESCE_WINDOW_S", 0.01)
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+
+        for token in ("th", "ink", "ing"):
+            await translator.send_frame(self._thought(token))
+        assert written == [], "nothing goes out while the window is open"
+        await asyncio.sleep(0.05)
+
+        (frame,) = written
+        validate_def("SessionNotification", frame["params"])
+        assert frame["params"]["update"] == {
+            "sessionUpdate": "agent_thought_chunk",
+            "content": {"type": "text", "text": "thinking"},
+        }
+
+    async def test_the_cap_sends_the_held_text_without_waiting(self):
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+
+        await translator.send_frame(self._thought("a" * 300))
+        assert written == []
+        await translator.send_frame(self._thought("b" * 300))
+
+        assert [u["content"]["text"] for u in _updates(written)] == ["a" * 300 + "b" * 300]
+        assert translator._thoughts == {}
+
+    async def test_anything_that_must_follow_the_thoughts_releases_them_first(self):
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+
+        await translator.send_frame(self._thought("plan"))
+        await translator.send_frame(_event("tool.start", tool_call_id="t", name="exec", arguments={"command": "ls"}))
+
+        assert [u["sessionUpdate"] for u in _updates(written)] == ["agent_thought_chunk", "tool_call"]
+
+    async def test_the_turns_ending_releases_the_thoughts_before_it_settles(self):
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+        future = translator.begin_turn("acp:s1")
+        translator.accept_turn("acp:s1", "t")
+
+        await translator.send_frame(self._thought("almost"))
+        await translator.send_frame(_event("message.complete", turn_id="t", usage={}))
+
+        assert future.done() and future.result() == "end_turn"
+        assert [u["content"]["text"] for u in _updates(written)] == ["almost"]
+
+    async def test_sessions_hold_their_thoughts_apart(self, monkeypatch):
+        monkeypatch.setattr(updates_mod, "THOUGHT_COALESCE_WINDOW_S", 0.01)
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+        translator.add(AcpSession(session_id="acp:s2", session_key="acp:s2", cwd="/w", subscription_id="sub-2"))
+
+        await translator.send_frame(self._thought("one"))
+        await translator.send_frame(self._thought("two", session_id="acp:s2", sub="sub-2"))
+        await asyncio.sleep(0.05)
+
+        by_session = {f["params"]["sessionId"]: f["params"]["update"]["content"]["text"] for f in written}
+        assert by_session == {"acp:s1": "one", "acp:s2": "two"}
+
+    async def test_a_different_speaker_does_not_join_the_held_text(self):
+        """A delegated agent's thought is tagged with its target in ``_meta``;
+        folding it into the main agent's held text would mislabel it."""
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+
+        await translator.send_frame(self._thought("mine"))
+        await translator.send_frame(self._thought("theirs", meta={"agent": "raven-code", "handle": "h1"}))
+        translator.flush_thoughts("acp:s1")
+
+        texts = [(u["content"]["text"], u.get("_meta")) for u in _updates(written)]
+        assert texts == [("mine", None), ("theirs", {"raven.target": {"agent": "raven-code", "handle": "h1"}})]
+
+    async def test_closing_the_connection_releases_every_sessions_thoughts(self):
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+
+        await translator.send_frame(self._thought("last words"))
+        translator.close()
+
+        assert [u["content"]["text"] for u in _updates(written)] == ["last words"]
+        assert translator._thoughts == {}
+
+    async def test_a_released_session_sends_what_it_held(self):
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+
+        await translator.send_frame(self._thought("bye"))
+        translator.release_session("acp:s1")
+
+        assert [u["content"]["text"] for u in _updates(written)] == ["bye"]
+
+
 class TestTheRealOutletPath:
     """The translator against the real emitter and the real outlet.
 
@@ -1237,17 +1357,23 @@ class TestTheRealOutletPath:
         assert updates[0]["locations"] == [{"path": "/work/a.py"}]
         assert updates[0]["kind"] == "read"
 
-    async def test_reasoning_arrives_as_a_thought_chunk(self):
+    async def test_reasoning_arrives_as_a_thought_chunk_ahead_of_the_answer(self):
+        """Thought text is held for a moment so a run of tokens becomes one
+        frame; the answer's first chunk is what releases it, and in order."""
         from raven.spine.events import Reasoning
 
         written, translator, emitter, outlet = await self._wire()
         try:
-            await outlet.deliver(Reasoning(content="thinking", conversation_id="acp:s1"))
+            await outlet.deliver(Reasoning(content="think", conversation_id="acp:s1"))
+            await outlet.deliver(Reasoning(content="ing", conversation_id="acp:s1"))
+            await outlet.send_stream_chunk("chat", "acp:s1", "answer")
             await self._settle()
         finally:
             await emitter.close_session("acp:s1")
 
-        assert _updates(written)[0]["sessionUpdate"] == "agent_thought_chunk"
+        updates = _updates(written)
+        assert [u["sessionUpdate"] for u in updates] == ["agent_thought_chunk", "agent_message_chunk"]
+        assert updates[0]["content"]["text"] == "thinking"
 
     async def test_a_turn_completion_resolves_the_prompt_through_the_real_emitter(self):
         written, translator, emitter, outlet = await self._wire()

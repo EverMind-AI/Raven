@@ -21,6 +21,19 @@ from raven.spine.runner import Emit, TurnOutcome, TurnRunner
 from raven.spine.turn import BusyPolicy, Origin, TurnRequest
 
 
+def describe_failure(exc: BaseException) -> str:
+    """The text a failed turn's event carries: the exception's class, and its message when it has one.
+
+    ``str(exc)`` alone was the whole report, and a bare ``TimeoutError`` --
+    what a stalled model stream raises -- has an empty one, so the client was
+    told ``turn_failed`` and nothing else, and the parent of a sub-agent read
+    that as a crash of whatever tool call it saw last.
+    """
+    text = str(exc).strip()
+    name = type(exc).__name__
+    return f"{name}: {text}" if text else name
+
+
 def conversation_id(req: TurnRequest) -> str:
     """The lane key a request runs on: its explicit conversation, else
     ``<channel>:<chat_id>``.
@@ -472,7 +485,7 @@ class Lane:
             # consult.
             await self._sink(
                 TurnFailed(
-                    error=str(exc),
+                    error=describe_failure(exc),
                     cancelled=False,
                     conversation_id=self._conversation_id,
                     turn_id=turn_id,

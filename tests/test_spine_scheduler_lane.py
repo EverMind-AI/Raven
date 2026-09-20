@@ -301,7 +301,23 @@ async def test_run_exception_yields_turn_failed_and_resolves_future():
     assert result is None
     failed = next(e for e in events if isinstance(e, TurnFailed))
     assert failed.cancelled is False
-    assert "boom" in failed.error
+    assert failed.error == "ValueError: boom"
+
+
+async def test_a_failure_with_no_message_still_names_itself():
+    """A stalled model stream raises a bare TimeoutError, whose str() is empty;
+    the event used to carry that emptiness, and a client was told the turn
+    failed and nothing else."""
+
+    class SilentRunner:
+        async def run(self, req, emit, drain) -> TurnOutcome:
+            raise TimeoutError()
+
+    events, sink = _collector()
+    lane = Lane(runner=SilentRunner(), pools=OriginPools(user=1, system=1), sink=sink, conversation_id="c")
+    await lane.submit(_req())
+    failed = next(e for e in events if isinstance(e, TurnFailed))
+    assert failed.error == "TimeoutError"
 
 
 async def test_run_exception_is_logged_with_a_traceback():

@@ -142,6 +142,18 @@ class Translated:
     stop: str | None = None
 
 
+# One frame per model token is what ``thinking.delta`` arrives as, and one
+# frame is one blocking write on the client's pipe. Consecutive thought
+# chunks of a session are held and sent as one ``agent_thought_chunk`` when
+# the window closes, the text reaches the cap, or anything that has to stay
+# ordered after them (a message chunk, a tool call, the turn's end) arrives.
+# Measured on the 2026-09-20 design run: 58,675 thought frames averaging
+# 5.7 characters, a median 0.34ms apart; this window and cap replay to
+# 4,333 frames. A 100ms window gives 6,210 and a 1,024-character cap
+# changes nothing, so the window is what does the work.
+THOUGHT_COALESCE_WINDOW_S = 0.2
+THOUGHT_COALESCE_MAX_CHARS = 512
+
 MAX_MEDIA_ITEMS = 32
 """How many files one media event may put on the wire.
 
@@ -626,6 +638,16 @@ class _Turn:
 
 
 @dataclass
+class _Thoughts:
+    """Thought text held back for one session, waiting to go out as one chunk."""
+
+    meta: dict[str, Any] | None
+    parts: list[str] = field(default_factory=list)
+    chars: int = 0
+    timer: asyncio.TimerHandle | None = None
+
+
+@dataclass
 class AcpSession:
     """One ACP session: its raven session key, its stream, and its turn."""
 
@@ -662,6 +684,7 @@ class UpdateTranslator:
         self._side_channel = side_channel
         self._by_session_id: dict[str, AcpSession] = {}
         self._by_subscription: dict[str, AcpSession] = {}
+        self._thoughts: dict[str, _Thoughts] = {}
         # Set once the connection is shutting down. A one-way latch, and the
         # reason it exists is a race a single sweep cannot close: a handler task
         # created before EOF may not have *begun* before EOF, so it would open its
@@ -714,6 +737,7 @@ class UpdateTranslator:
         session = self._by_session_id.get(session_id)
         if session is None:
             return None
+        self.flush_thoughts(session_id)
         if session.turn is not None:
             session.turn.settle("cancelled")
         self._mark_stream_dead(session)
@@ -786,17 +810,20 @@ class UpdateTranslator:
         """
         self._closing = True
         for session in self._by_session_id.values():
+            self.flush_thoughts(session.session_id)
             if session.turn is not None:
                 session.turn.settle("cancelled")
 
     def end_turn(self, session_id: str) -> None:
         """Drop the turn slot. Idempotent: the caller runs it from a finally."""
+        self.flush_thoughts(session_id)
         session = self._by_session_id.get(session_id)
         if session is not None:
             session.turn = None
 
     def settle_turn(self, session_id: str, stop: str) -> bool:
         """Resolve a turn from outside the event stream (a teardown, a cancel)."""
+        self.flush_thoughts(session_id)
         session = self._by_session_id.get(session_id)
         if session is None or session.turn is None:
             return False
@@ -846,7 +873,21 @@ class UpdateTranslator:
 
     async def _deliver(self, session: AcpSession, event: Any) -> None:
         result = translate(event, cwd=session.cwd)
+        # Held thoughts go out before anything that has to follow them: a
+        # chunk of the answer, a tool call, a latch or an ending. An event that
+        # carries none of those (a thought, or nothing at all) leaves them held,
+        # which is what lets a run of thought tokens become one frame.
+        if (
+            any(update.get("sessionUpdate") != "agent_thought_chunk" for update in result.updates)
+            or result.stop
+            or result.latch
+            or _ends_the_stream(event)
+        ):
+            self.flush_thoughts(session.session_id)
         for update in result.updates:
+            if update.get("sessionUpdate") == "agent_thought_chunk":
+                self._hold_thought(session, update)
+                continue
             self._emit(protocol.notification("session/update", {"sessionId": session.session_id, "update": update}))
         if _ends_the_stream(event):
             # Answered rather than correlated, and answered as cancelled because
@@ -909,6 +950,48 @@ class UpdateTranslator:
             turn.latched = result.latch
         if result.stop:
             turn.settle(result.stop)
+
+    def _hold_thought(self, session: AcpSession, update: dict[str, Any]) -> None:
+        """Add one thought chunk to the session's held text, sending when the cap is reached."""
+        meta = update.get("_meta")
+        held = self._thoughts.get(session.session_id)
+        # A different ``_meta`` is a different speaker (a delegated agent's
+        # thought tagged with its target); it does not join the held text.
+        if held is not None and held.meta != meta:
+            self.flush_thoughts(session.session_id)
+            held = None
+        if held is None:
+            held = _Thoughts(meta=meta)
+            held.timer = asyncio.get_running_loop().call_later(
+                THOUGHT_COALESCE_WINDOW_S, self._flush_thoughts_on_timer, session.session_id
+            )
+            self._thoughts[session.session_id] = held
+        text = str(update["content"]["text"])
+        held.parts.append(text)
+        held.chars += len(text)
+        if held.chars >= THOUGHT_COALESCE_MAX_CHARS:
+            self.flush_thoughts(session.session_id)
+
+    def flush_thoughts(self, session_id: str) -> None:
+        """Send the session's held thought text as one chunk, if any is held."""
+        held = self._thoughts.pop(session_id, None)
+        if held is None:
+            return
+        if held.timer is not None:
+            held.timer.cancel()
+        if not held.parts:
+            return
+        update = _text_chunk("agent_thought_chunk", "".join(held.parts), held.meta)
+        self._emit(protocol.notification("session/update", {"sessionId": session_id, "update": update}))
+
+    def _flush_thoughts_on_timer(self, session_id: str) -> None:
+        # A write that fails here has no caller to raise to; the next
+        # delivery on this connection meets the same broken pipe and raises
+        # where the handler can see it.
+        try:
+            self.flush_thoughts(session_id)
+        except Exception:
+            logger.debug("acp: held thought text for {} could not be written", session_id, exc_info=True)
 
     def _drop(self, what: str) -> None:
         self.dropped[what] = self.dropped.get(what, 0) + 1
