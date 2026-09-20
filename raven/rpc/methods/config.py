@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -350,6 +350,7 @@ async def config_set(
     params: dict,
     *,
     agent_loop_factory: "AgentLoopFactory | None" = None,
+    ensure_stack: "Callable[[], Awaitable[bool]] | None" = None,
 ) -> dict:
     """Write a single whitelisted key. Returns ``{applied, previous}``.
 
@@ -380,7 +381,19 @@ async def config_set(
     raw_value = params["value"]
 
     if key == "model":
-        return _set_model(params, raw_value, agent_loop_factory)
+        out = _set_model(params, raw_value, agent_loop_factory)
+        if out.get("needs_restart") and ensure_stack is not None:
+            # The write landed on a process that has no loop -- the one state a
+            # late assembly can still resolve, and the config it would build
+            # from is now on disk. Assembling is not this handler's job: it
+            # asks the seam its host supplied, so the wiring stays with
+            # whoever owns the stack. What survives is the narrower claim:
+            # `needs_restart` now means a rebuild was tried and this process
+            # still cannot run a turn.
+            del out["needs_restart"]
+            if not await ensure_stack():
+                out["needs_restart"] = True
+        return out
 
     if key not in _VALIDATORS:
         raise ConfigFieldReadonlyError(
@@ -729,11 +742,12 @@ def register_config_methods(
     dispatcher: "Dispatcher",
     *,
     agent_loop_factory: "AgentLoopFactory | None" = None,
+    ensure_stack: "Callable[[], Awaitable[bool]] | None" = None,
 ) -> None:
     """Register ``config.get`` / ``config.set`` / ``config.unset`` on a dispatcher instance."""
 
     async def _set(params: dict) -> dict:
-        return await config_set(params, agent_loop_factory=agent_loop_factory)
+        return await config_set(params, agent_loop_factory=agent_loop_factory, ensure_stack=ensure_stack)
 
     dispatcher.register("config.get", config_get)
     dispatcher.register("config.set", _set)
