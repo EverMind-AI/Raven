@@ -319,3 +319,49 @@ def test_quoting_the_lexer_cannot_close_does_not_become_a_crash(fenced: ExecTool
     to leave it answering rather than raising. The permission gate reads the
     same text through the same lexer and is what refuses it."""
     assert refusal(fenced, "cat 'unterminated") is None
+
+
+# ---------- the program a nested shell is handed ------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sh -c 'cat $HOME/.ssh/id_rsa'",
+        "bash -c 'cat $HOME/.ssh/id_rsa'",
+        "/bin/sh -c 'cat $HOME/.ssh/id_rsa'",
+        "sh -c 'cd /; cat etc/shadow'",
+        "sh -c \"sh -c 'cat \\$HOME/.ssh/id_rsa'\"",
+    ],
+    ids=["sh", "bash", "by-path", "walks-out-inside", "two-deep"],
+)
+def test_the_program_handed_to_a_nested_shell_is_scanned_in_that_shell(
+    fenced: ExecTool, monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    """Single quotes suppress expansion in the shell that reads them, and the
+    fence is right to leave them alone -- but their contents are the *inner*
+    shell's program, and the name expands there. Reading only the outer shell
+    left every payload unscanned while the outer quoting looked handled.
+    """
+    monkeypatch.setenv("HOME", "/home/victim")
+
+    assert refusal(fenced, command) is not None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sh -c 'cat notes.txt'",
+        "bash -c 'cd src && ls'",
+        "sh -c 'echo building now'",
+        "sh -c 'cat $PWD/notes.txt'",
+    ],
+    ids=["relative-read", "walks-inside", "names-no-path", "pwd-inside"],
+)
+def test_a_nested_payload_that_stays_inside_is_left_alone(
+    fenced: ExecTool, monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    """The payload is scanned, not refused for being a payload."""
+    monkeypatch.setenv("HOME", "/home/victim")
+
+    assert refusal(fenced, command) is None

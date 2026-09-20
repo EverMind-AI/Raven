@@ -14,7 +14,12 @@ from typing import Any
 
 from raven.agent import workdir
 from raven.contracts.tool import STOP_RETRY_INSTRUCTION, Continuation, Tool, ToolOutput, ToolResult
-from raven.permissions.shell_policy import _command_segments, executable_text
+from raven.permissions.shell_policy import (
+    _MAX_EMBEDDED_SHELL_DEPTH,
+    _command_segments,
+    _embedded_shell_command,
+    executable_text,
+)
 from raven.sandbox import DirectExecutor, SandboxExecutor
 
 
@@ -293,7 +298,7 @@ class ExecTool(Tool):
         }
     )
 
-    def _check_workspace_restriction(self, command: str, cwd: str) -> str | None:
+    def _check_workspace_restriction(self, command: str, cwd: str, *, _depth: int = 0) -> str | None:
         """Check only the workspace boundary constraints (no allow-list).
 
         Reads the executable view rather than trusting the caller to strip: the
@@ -315,7 +320,15 @@ class ExecTool(Tool):
         env = self._child_env(cwd_path)
         readable = self._as_the_shell_reads_it(cmd, env)
 
-        if self._steps_outside(readable, cwd_path, roots, env):
+        try:
+            segments = list(_command_segments(readable))
+        except ValueError:
+            # Quoting the lexer cannot close. The permission gate reads the
+            # same text through the same lexer and refuses it there, so
+            # answering here would only duplicate that refusal.
+            segments = []
+
+        if self._steps_outside(segments, cwd_path, roots, env):
             return "Error: Command blocked by safety guard (directory change outside working dir)"
 
         for raw in self._extract_absolute_paths(readable):
@@ -330,6 +343,21 @@ class ExecTool(Tool):
             if any(root == p or root in p.parents for root in roots):
                 continue
             return "Error: Command blocked by safety guard (path outside working dir)"
+
+        # A nested shell's payload is a program, not an argument: the quoting
+        # that stopped this pass expanding it is what hands it to that shell
+        # intact, and the names in it expand there. Scanning it with the same
+        # rules is the only reading that matches what runs. Depth-capped with
+        # the policy's own bound, which is what decides the same question for
+        # the deny list.
+        if _depth < _MAX_EMBEDDED_SHELL_DEPTH:
+            for segment in segments:
+                inner = _embedded_shell_command(segment)
+                if not inner:
+                    continue
+                nested = self._check_workspace_restriction(inner, cwd, _depth=_depth + 1)
+                if nested:
+                    return nested
 
         return None
 
@@ -358,7 +386,7 @@ class ExecTool(Tool):
         return env
 
     @classmethod
-    def _steps_outside(cls, command: str, cwd: Path, roots: list[Path], env: dict[str, str]) -> bool:
+    def _steps_outside(cls, segments: list[list[str]], cwd: Path, roots: list[Path], env: dict[str, str]) -> bool:
         """Whether the command leaves the workspace before doing its work.
 
         Reaching out and stepping out are the same escape, but only the first
@@ -370,14 +398,6 @@ class ExecTool(Tool):
         nothing -- and after any of them, every relative path in the rest of
         the command resolves somewhere the operator did not allow.
         """
-        try:
-            segments = list(_command_segments(command))
-        except ValueError:
-            # Quoting the lexer cannot close. The permission gate reads the
-            # same text through the same lexer and refuses it there, so
-            # answering here would only duplicate that refusal.
-            return False
-
         for segment in segments:
             tokens = list(segment)
             while tokens and tokens[0] in ("(", "{"):
@@ -449,8 +469,15 @@ class ExecTool(Tool):
                 index += 1
                 continue
             if char == "\\" and index + 1 < len(command):
-                out.append(char)
-                out.append(command[index + 1])
+                escaped = command[index + 1]
+                # An escaped `$` is a literal `$` that this level does not
+                # expand -- but the character still travels on, and a nested
+                # shell handed it does expand it. Keeping the backslash here
+                # hid `sh -c "sh -c 'cat \\$HOME/x'"` from the nested scan,
+                # because the payload it was given no longer looked like a
+                # name. Every other escape keeps both characters: only these
+                # two decide whether something expands.
+                out.append(escaped if escaped in "$`" else char + escaped)
                 index += 2
                 continue
             if quote == '"' and char == '"':
