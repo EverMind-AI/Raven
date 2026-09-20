@@ -14,7 +14,8 @@ from raven.playbook.agent_generator import EMIT_TOOL, WorkerTableGenerator
 from raven.playbook.agent_spec import AgentPlaybookSpec, DelegateEntry
 from raven.playbook.runtime import PlaybookRuntime
 from raven.playbook.store import PlaybookStore
-from raven.playbook.unified import PlaybookMatch, UnifiedPlaybookSpec, WorkflowSpec
+from raven.playbook.types import ParamSpec
+from raven.playbook.unified import InputSchema, PlaybookMatch, UnifiedPlaybookSpec, WorkflowSpec
 from raven.playbook.workflow_compiler import EMIT_WORKFLOW, WorkflowCompiler
 from raven.providers.base import LLMResponse, ToolCallRequest
 
@@ -62,8 +63,8 @@ def _workflow() -> WorkflowSpec:
             DagNodeSpec(
                 id="research",
                 subagent="analyst",
-                nodeSummary="Collect evidence",
-                promptTemplate="Research the topic",
+                node_summary="Collect evidence",
+                prompt_template="Research the topic",
             )
         ],
     )
@@ -179,7 +180,7 @@ async def test_harness_only_load_binds_workers_for_the_rest_of_the_turn(tmp_path
 
 @pytest.mark.asyncio
 async def test_workflow_compiler_builds_a_composite_v2_artifact() -> None:
-    dag = SubAgentDagSpec(taskSummary="Research", confirm=False, nodes=_workflow().nodes)
+    dag = SubAgentDagSpec(task_summary="Research", confirm=False, nodes=_workflow().nodes)
     emitted = {
         "name": "research-team",
         "description": "Research a topic with cited evidence",
@@ -241,7 +242,7 @@ def test_v2_file_is_plain_yaml_and_contains_no_run_values(tmp_path: Path) -> Non
 
 @pytest.mark.asyncio
 async def test_workflow_compiler_rejects_semantically_invalid_model_output() -> None:
-    dag = SubAgentDagSpec(taskSummary="Research", confirm=False, nodes=_workflow().nodes)
+    dag = SubAgentDagSpec(task_summary="Research", confirm=False, nodes=_workflow().nodes)
     invalid = {
         "name": "research-team",
         "description": "Research a topic with cited evidence",
@@ -286,7 +287,7 @@ async def test_workflow_compiler_rejects_semantically_invalid_model_output() -> 
 
 @pytest.mark.asyncio
 async def test_workflow_compiler_rejects_a_rewritten_accepted_graph() -> None:
-    dag = SubAgentDagSpec(taskSummary="Research", confirm=False, nodes=_workflow().nodes)
+    dag = SubAgentDagSpec(task_summary="Research", confirm=False, nodes=_workflow().nodes)
     rewritten = {
         "name": "research-team",
         "description": "Research a topic with cited evidence",
@@ -331,13 +332,51 @@ def test_unified_artifact_rejects_an_empty_durable_harness() -> None:
         )
 
 
+def test_input_schema_rejects_undeclared_required_input() -> None:
+    with pytest.raises(ValueError, match="not declared"):
+        InputSchema(required=["topic"])
+
+
+def test_input_schema_rejects_conflicting_required_flags() -> None:
+    with pytest.raises(ValueError, match="required disagree"):
+        InputSchema(properties={"topic": ParamSpec(type="string", required=True, description="Topic")})
+
+
+def test_unified_artifact_requires_a_harness_or_workflow() -> None:
+    with pytest.raises(ValueError, match="must contain a harness, a workflow, or both"):
+        UnifiedPlaybookSpec(
+            name="empty-playbook",
+            description="No reusable dimension",
+            match=PlaybookMatch(summary="Nothing reusable", keywords=["nothing"]),
+        )
+
+
+@pytest.mark.asyncio
+async def test_workflow_compiler_falls_back_when_the_provider_fails() -> None:
+    class _FailingProvider(_Provider):
+        async def chat_with_retry(self, **kwargs):
+            raise RuntimeError("provider unavailable")
+
+    dag = SubAgentDagSpec(task_summary="Research", confirm=False, nodes=_workflow().nodes)
+    compiled = await WorkflowCompiler(_FailingProvider(), "stub").compile(
+        query="Research Acme",
+        dag=dag,
+        run_id="pb-provider-failure",
+        harness=_harness(),
+    )
+
+    assert compiled.workflow is not None
+    assert compiled.workflow.nodes == dag.nodes
+    assert compiled.metadata.source_run_id == "pb-provider-failure"
+
+
 def test_composite_workflow_may_mix_harness_aliases_and_registered_agents() -> None:
     workflow = _workflow()
     mixed = workflow.model_copy(
         update={
             "nodes": [
                 *workflow.nodes,
-                DagNodeSpec(id="report", subagent="Raven", nodeSummary="Write report", promptTemplate="Write report"),
+                DagNodeSpec(id="report", subagent="Raven", node_summary="Write report", prompt_template="Write report"),
             ]
         }
     )
