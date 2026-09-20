@@ -108,59 +108,66 @@ orchestration Raven generates for the task; below it is what the run produced.
 
 <table>
 <tr>
-<td width="50%" valign="top">
-<p align="center"><b>An FPS game, picked, built and judged</b></p>
-<a href="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1"><img src="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1" alt="Task graph: three Raven-Code nodes running in sequence across 42 game rounds" width="100%"></a>
+<td valign="top"><p align="center"><b>An FPS game, picked, built and judged</b></p></td>
+</tr>
+<tr>
+<td valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1"><img src="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1" alt="Task graph: three Raven-Code nodes running in sequence across 42 game rounds" width="100%"></a></p></td>
+</tr>
+<tr>
+<td valign="top">
 
 https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 </td>
-<td width="50%" valign="top"></td>
 </tr>
 </table>
 
 <table>
 <tr>
-<td width="50%" valign="top">
-<p align="center"><b>Song-dynasty domestic aesthetics</b></p>
-<a href="https://github.com/user-attachments/assets/8fa50c96-3d2d-4107-8a8c-7d041d1ac8b4"><img src="https://github.com/user-attachments/assets/8fa50c96-3d2d-4107-8a8c-7d041d1ac8b4" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a>
-<a href="https://github.com/user-attachments/assets/379328ea-e3ee-430f-865d-68ed90dae69f"><img src="https://github.com/user-attachments/assets/379328ea-e3ee-430f-865d-68ed90dae69f" alt="Cover, slides and closing slide of the Song-dynasty aesthetics deck" width="100%"></a>
-</td>
-<td width="50%" valign="top">
-<p align="center"><b>How ancient Greece was whitewashed</b></p>
-<a href="https://github.com/user-attachments/assets/c8e9ac77-0377-487e-9d07-fb4fe51a0257"><img src="https://github.com/user-attachments/assets/c8e9ac77-0377-487e-9d07-fb4fe51a0257" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a>
-<a href="https://github.com/user-attachments/assets/3c5a2a9a-d6d7-40ad-b3dc-70e9f5c095df"><img src="https://github.com/user-attachments/assets/3c5a2a9a-d6d7-40ad-b3dc-70e9f5c095df" alt="Cover, slides and closing slide of the Greek polychromy deck" width="100%"></a>
-</td>
+<td width="50%" valign="top"><p align="center"><b>Song-dynasty domestic aesthetics</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>How ancient Greece was whitewashed</b></p></td>
 </tr>
 <tr>
-<td width="50%" valign="top">
-<p align="center"><b>How pop music is manufactured</b></p>
-<a href="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451"><img src="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a>
-<a href="https://github.com/user-attachments/assets/9ab75945-81ba-4437-aec0-9ef6a633ed55"><img src="https://github.com/user-attachments/assets/9ab75945-81ba-4437-aec0-9ef6a633ed55" alt="Cover, slides and closing slide of the pop music deck" width="100%"></a>
-</td>
-<td width="50%" valign="top">
-<p align="center"><b>A century of abstract art</b></p>
-<a href="https://github.com/user-attachments/assets/4b606bae-667e-4f2f-ae7d-2880b47ddbf6"><img src="https://github.com/user-attachments/assets/4b606bae-667e-4f2f-ae7d-2880b47ddbf6" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a>
-<a href="https://github.com/user-attachments/assets/b3dfce6c-366d-4e31-9a57-7c98df054618"><img src="https://github.com/user-attachments/assets/b3dfce6c-366d-4e31-9a57-7c98df054618" alt="Cover, slides and closing slide of the abstract art deck" width="100%"></a>
-</td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/8fa50c96-3d2d-4107-8a8c-7d041d1ac8b4"><img src="https://github.com/user-attachments/assets/8fa50c96-3d2d-4107-8a8c-7d041d1ac8b4" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/c8e9ac77-0377-487e-9d07-fb4fe51a0257"><img src="https://github.com/user-attachments/assets/c8e9ac77-0377-487e-9d07-fb4fe51a0257" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/379328ea-e3ee-430f-865d-68ed90dae69f"><img src="https://github.com/user-attachments/assets/379328ea-e3ee-430f-865d-68ed90dae69f" alt="Cover, slides and closing slide of the Song-dynasty aesthetics deck" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/3c5a2a9a-d6d7-40ad-b3dc-70e9f5c095df"><img src="https://github.com/user-attachments/assets/3c5a2a9a-d6d7-40ad-b3dc-70e9f5c095df" alt="Cover, slides and closing slide of the Greek polychromy deck" width="100%"></a></p></td>
 </tr>
 </table>
 
-Runs that end in something other than a deck.
+<table>
+<tr>
+<td width="50%" valign="top"><p align="center"><b>How pop music is manufactured</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>A century of abstract art</b></p></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451"><img src="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/4b606bae-667e-4f2f-ae7d-2880b47ddbf6"><img src="https://github.com/user-attachments/assets/4b606bae-667e-4f2f-ae7d-2880b47ddbf6" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="98%"></a></p></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/9ab75945-81ba-4437-aec0-9ef6a633ed55"><img src="https://github.com/user-attachments/assets/9ab75945-81ba-4437-aec0-9ef6a633ed55" alt="Cover, slides and closing slide of the pop music deck" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/b3dfce6c-366d-4e31-9a57-7c98df054618"><img src="https://github.com/user-attachments/assets/b3dfce6c-366d-4e31-9a57-7c98df054618" alt="Cover, slides and closing slide of the abstract art deck" width="100%"></a></p></td>
+</tr>
+</table>
 
 <table>
 <tr>
-<td width="50%" valign="top">
-<p align="center"><b>Six orchestration frameworks, compared</b></p>
-<a href="https://github.com/user-attachments/assets/92ff2c83-3b0f-49eb-9995-c1ad4c298452"><img src="https://github.com/user-attachments/assets/92ff2c83-3b0f-49eb-9995-c1ad4c298452" alt="Task graph: two Raven-Research nodes running in parallel into one Raven-Design node" width="100%"></a>
-<a href="https://github.com/user-attachments/assets/75beba36-a112-46f2-949d-015856dae588"><img src="https://github.com/user-attachments/assets/75beba36-a112-46f2-949d-015856dae588" alt="Comparison board: six orchestration frameworks against four dimensions, colour-coded for explicit-graph versus code-or-model orchestration" width="100%"></a>
-</td>
-<td width="50%" valign="top">
-<p align="center"><b>A parameter sweep, written, run and plotted</b></p>
-<a href="https://github.com/user-attachments/assets/e842677a-8b71-4f1b-ae02-0162a440a1e8"><img src="https://github.com/user-attachments/assets/e842677a-8b71-4f1b-ae02-0162a440a1e8" alt="Task graph: Raven-Code into Raven-Oncall into Raven-Design, run in sequence" width="100%"></a>
-<a href="https://github.com/user-attachments/assets/2b03cc53-e707-4728-8d68-327fcf7d112a"><img src="https://github.com/user-attachments/assets/2b03cc53-e707-4728-8d68-327fcf7d112a" alt="Retrieval sweep: recall@k is set by top_k alone, and latency stays flat across the grid" width="100%"></a>
-</td>
+<td width="50%" valign="top"><p align="center"><b>Six orchestration frameworks, compared</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>A parameter sweep, written, run and plotted</b></p></td>
 </tr>
+<tr>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/92ff2c83-3b0f-49eb-9995-c1ad4c298452"><img src="https://github.com/user-attachments/assets/92ff2c83-3b0f-49eb-9995-c1ad4c298452" alt="Task graph: two Raven-Research nodes running in parallel into one Raven-Design node" width="100%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/e842677a-8b71-4f1b-ae02-0162a440a1e8"><img src="https://github.com/user-attachments/assets/e842677a-8b71-4f1b-ae02-0162a440a1e8" alt="Task graph: Raven-Code into Raven-Oncall into Raven-Design, run in sequence" width="100%"></a></p></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/5120c2c0-9aeb-4224-ac85-df9dc188b5cc"><img src="https://github.com/user-attachments/assets/5120c2c0-9aeb-4224-ac85-df9dc188b5cc" alt="Comparison board: six orchestration frameworks against four dimensions, each tagged explicit graph or canvas, declared task flow, or dynamic at runtime" width="86%"></a></p></td>
+<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/2b03cc53-e707-4728-8d68-327fcf7d112a"><img src="https://github.com/user-attachments/assets/2b03cc53-e707-4728-8d68-327fcf7d112a" alt="Retrieval sweep: recall@k is set by top_k alone, and latency stays flat across the grid" width="100%"></a></p></td>
+</tr>
+</table>
+
+<table>
 <tr>
 <td width="50%" valign="top"><p align="center"><b>A light-pollution poster campaign</b></p></td>
 <td width="50%" valign="top"><p align="center"><b>An interactive explainer and its solver</b></p></td>
