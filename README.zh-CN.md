@@ -93,13 +93,13 @@ Raven 的模块化架构面向 harness 自进化和子 Agent 创建。四个内�
   <a href="https://github.com/user-attachments/assets/bffd0fa2-e750-4f09-b74a-09452765a99d"><img src="https://github.com/user-attachments/assets/bffd0fa2-e750-4f09-b74a-09452765a99d" alt="AI4AI (Nanochat 50M Pretraining): Bits Per Byte (BPB), Runtime, Tokens, and Cost" width="95%"></a>
 </p>
 
-<p align="center"><em>Raven-Oncall 与 Claude Code 在 AI4AI（Nanochat 50M 预训练）基准测试上的对比</em></p>
+<p align="center"><em>在 AI4AI 任务上，Raven-Oncall 的性能与成本均显著优于 Claude Code</em></p>
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9"><img src="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9" alt="AI4S Internal Benchmark: Success Rate, Average Total Runtime, Average Total Tokens, and Average Cost" width="95%"></a>
 </p>
 
-<p align="center"><em>Raven-Oncall 与 Claude Code 在内部 AI4S 基准测试上的对比</em></p>
+<p align="center"><em>在 AI4S 任务上，Raven-Oncall 的成功率与成本均显著优于 Claude Code</em></p>
 
 ## ❯❯ 连接第三方 Agent
 

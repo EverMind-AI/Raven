@@ -93,13 +93,13 @@ Raven's modular architecture is designed for harness self-evolution and subagent
   <a href="https://github.com/user-attachments/assets/bffd0fa2-e750-4f09-b74a-09452765a99d"><img src="https://github.com/user-attachments/assets/bffd0fa2-e750-4f09-b74a-09452765a99d" alt="AI4AI (Nanochat 50M Pretraining): Bits Per Byte (BPB), Runtime, Tokens, and Cost" width="95%"></a>
 </p>
 
-<p align="center"><em>Raven-Oncall vs. Claude Code on AI4AI (Nanochat 50M Pretraining) benchmark</em></p>
+<p align="center"><em>Raven-Oncall significantly outperforms Claude Code on both quality and cost for AI4AI tasks</em></p>
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9"><img src="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9" alt="AI4S Internal Benchmark: Success Rate, Average Total Runtime, Average Total Tokens, and Average Cost" width="95%"></a>
 </p>
 
-<p align="center"><em>Raven-Oncall vs. Claude Code on internal AI4S benchmark</em></p>
+<p align="center"><em>Raven-Oncall significantly outperforms Claude Code on both success rate and cost for AI4S tasks</em></p>
 
 ## ❯❯ Showcase
 
