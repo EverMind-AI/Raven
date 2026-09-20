@@ -17,7 +17,6 @@ import * as settingsDialog from '../../state/settings'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
-
 import { statedTags } from '../model/types'
 
 import type { Kind } from '../model/types'
