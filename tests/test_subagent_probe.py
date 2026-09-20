@@ -1084,6 +1084,43 @@ class TestAutomaticSnapshotVerification:
         assert called == ["on"]
 
 
+def test_a_preset_the_table_cannot_be_read_from_offers_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Three ways the shipped table can fail to answer, and none may reach the boot.
+
+    This runs at startup, before anything a user did: a packaging fault here is
+    not their typo to see, and taking the gateway down over it would trade a
+    stale row for no gateway. Each branch answers with the rows it could build,
+    which for these inputs is none.
+    """
+    # A command no shell could split. `shlex` raises rather than returning, and
+    # the entry is simply not a candidate.
+    monkeypatch.setattr(
+        probe_mod,
+        "third_party_subagent_presets",
+        lambda: [{"name": "Torn", "preset": "claude_code", "kind": "acp", "command": 'x "unclosed'}],
+    )
+    assert probe_mod._unconfigured_acp_preset_rows(set(), path=None) == []
+
+    # Nothing on this machine resolves, so there is nothing to hand back and the
+    # schema is never asked.
+    monkeypatch.setattr(
+        probe_mod,
+        "third_party_subagent_presets",
+        lambda: [{"name": "Gone", "preset": "codex", "kind": "acp", "command": "absent-agent acp"}],
+    )
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: None)
+    assert probe_mod._unconfigured_acp_preset_rows(set(), path=None) == []
+
+    # And a table the schema refuses: logged, and the boot goes on without it.
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: "/bin/x")
+    monkeypatch.setattr(
+        probe_mod,
+        "third_party_subagent_presets",
+        lambda: [{"name": "Bad", "preset": "codex", "kind": "acp", "command": "x acp", "readyTimeoutMs": "soon"}],
+    )
+    assert probe_mod._unconfigured_acp_preset_rows(set(), path=None) == []
+
+
 def test_only_resolvable_unconfigured_acp_presets_are_offered_for_verification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
