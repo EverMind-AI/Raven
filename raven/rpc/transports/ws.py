@@ -365,6 +365,44 @@ class WsGateway:
             },
         )
 
+    async def handle_knowledge_crop(self, request: web.Request) -> web.StreamResponse:
+        """Serve the picture of where one chunk was cut from.
+
+        Two ids and nothing else, for the same reason the route beside this one
+        takes one: the crops sit under raven's state directory, and a request
+        that names no location cannot be pointed at the rest of it. The manager
+        validates the chunk id before it becomes a path segment and answers
+        ``None`` for anything that is not a file it wrote.
+
+        Cached, unlike the document route. A crop is immutable for the life of
+        its chunk id -- the id is derived from the chunk's text, so text that
+        changed is a different id and text that did not is the same picture --
+        and a panel of thirty thumbnails refetching on every scroll is the
+        whole cost of the feature paid again per glance.
+        """
+        from raven.rpc.methods.knowledge import knowledge_manager
+
+        if not self._origin_ok(request):
+            raise web.HTTPForbidden(reason="bad origin")
+        if not self._authorized(request):
+            raise web.HTTPUnauthorized(reason="missing or invalid session")
+
+        path = knowledge_manager().crop_path(request.query.get("document", ""), request.query.get("chunk", ""))
+        if path is None:
+            raise web.HTTPNotFound(reason="no crop for that chunk")
+        return web.FileResponse(
+            path,
+            headers={
+                "Content-Type": "image/webp",
+                "Content-Disposition": "inline",
+                # An image, and only ever an image: the sandbox is the strictest
+                # one there is, because nothing here should ever be a document.
+                "Content-Security-Policy": "sandbox; default-src 'none'; img-src data: blob:",
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "private, max-age=86400, immutable",
+            },
+        )
+
     async def _rendered_knowledge_pdf(self, record: object, blob: Path) -> Path:
         """The PDF for one document, or the HTTP error the page can show.
 
@@ -517,6 +555,7 @@ def build_app(
     app.router.add_post("/auth/nonce", gateway.handle_mint_nonce)
     app.router.add_get("/file", gateway.handle_file)
     app.router.add_get("/knowledge/file", gateway.handle_knowledge_file)
+    app.router.add_get("/knowledge/crop", gateway.handle_knowledge_crop)
     app.router.add_get("/rpc", gateway.handle_ws)
     app.router.add_get("/oauth/callback", handle_oauth_callback)
 

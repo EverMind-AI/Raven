@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import mimetypes
 import os
+import re
+import shutil
 from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
@@ -18,6 +20,7 @@ from typing import Any
 
 from loguru import logger
 
+from raven.knowledge import _crops
 from raven.knowledge._chunker import ChunkerBase
 from raven.knowledge._embedding import (
     EmbeddingClient,
@@ -46,6 +49,7 @@ from raven.knowledge.parser.doc_parser import LegacyDocParser
 from raven.knowledge.parser.docx_parser import DocxParser
 from raven.knowledge.parser.excel_parser import ExcelParser
 from raven.knowledge.parser.image_parser import ImageParser
+from raven.knowledge.parser.pdf_parser import PdfParser
 from raven.knowledge.parser.ppt_parser import PptParser
 from raven.knowledge.parser.text_parser import TextParser
 
@@ -114,6 +118,24 @@ def _serves(endpoint: Any, model: str, provider: str) -> bool:
     if endpoint is None or getattr(endpoint, "model", "") != model:
         return False
     return not provider or getattr(endpoint, "provider", "") == provider
+
+
+#: The media types a chunk can be cut out of a picture of. PDF alone: it is
+#: the only upload whose stored bytes are already the pages a reader sees. A
+#: deck and a Word file are rendered to PDF for the viewer, on demand and by
+#: LibreOffice -- indexing every one of them eagerly to cut thumbnails would
+#: put a conversion nobody asked for in front of every upload.
+_CROPPABLE = frozenset({"application/pdf"})
+
+#: What a chunk id may look like where one is about to become a path segment.
+#: Ids are hex today; the charset is what matters here, and what it excludes is
+#: the separator and the dot that would let a page name a file of its own.
+_SAFE_ID = re.compile(r"[0-9A-Za-z_-]{1,64}")
+
+
+def _clear(directory: Path) -> None:
+    """Remove a directory and everything in it, if it is there at all."""
+    shutil.rmtree(directory, ignore_errors=True)
 
 
 def chunk_id_for(document_id: str, text: str, occurrence: int = 0) -> str:
@@ -205,6 +227,7 @@ def _default_parsers() -> list[ParserBase]:
         ExcelParser(),
         PptParser(),
         ImageParser(),
+        PdfParser(),
         TextParser(),
     ]
 
@@ -238,6 +261,7 @@ class KnowledgeManager:
     ) -> None:
         self._root = Path(root)
         self._blobs = self._root / "blobs"
+        self._crops = self._root / "crops"
         self._records = records or RecordStore(self._root / "records.json")
         self._parsers = parsers if parsers is not None else _default_parsers()
         # None means "whatever each base is configured for"; a chunker passed
@@ -630,6 +654,7 @@ class KnowledgeManager:
             return False
         for document in self._records.list_documents(base_id):
             self._blob_path(document.id).unlink(missing_ok=True)
+            _clear(self._crops_dir(document.id))
         await self._store.delete_collection(base_id)
         return self._records.delete_base(base_id)
 
@@ -637,6 +662,55 @@ class KnowledgeManager:
 
     def _blob_path(self, document_id: str) -> Path:
         return self._blobs / document_id
+
+    def _crops_dir(self, document_id: str) -> Path:
+        return self._crops / document_id
+
+    def crop_path(self, document_id: str, chunk_id: str) -> Path | None:
+        """The picture of where one chunk came from, when there is one.
+
+        By the two ids and nothing else, so a caller reaching this from a
+        request never names a location. ``chunk_id`` is checked rather than
+        trusted: it arrives from the page, and it is about to be a path
+        segment.
+        """
+        if not chunk_id or not document_id or not _SAFE_ID.fullmatch(chunk_id):
+            return None
+        path = self._crops_dir(document_id) / f"{chunk_id}{_crops.SUFFIX}"
+        return path if path.is_file() else None
+
+    def _write_crops(self, record: KnowledgeDocumentRecord, chunks: list[Chunk], ids: list[str]) -> None:
+        """Cut each chunk's own regions out of the document it came from.
+
+        Only where the stored bytes are a page: the crop is a picture of a
+        place on paper, and a format that has no paper has no place to cut. A
+        Word file goes through here with nothing to show rather than with a
+        rendering invented for it -- its chunks carry a horizontal band and no
+        vertical one, because that position exists only once Word has laid the
+        text out.
+
+        Never the reason an index fails. A document whose pages could not be
+        rendered is still parsed, chunked, embedded and searchable; what it
+        lacks is a thumbnail beside each piece, which is worth a line in the
+        log and nothing more.
+        """
+        directory = self._crops_dir(record.id)
+        _clear(directory)
+        if record.media_type not in _CROPPABLE:
+            return
+        source = self.read_document(record.id)
+        if source is None:
+            return
+        try:
+            cut = _crops.crops_for(source, chunks, ids)
+        except Exception as exc:  # noqa: BLE001 - a picture, not the document
+            logger.warning("knowledge: could not cut crops for {}: {}", record.source, exc)
+            return
+        if not cut:
+            return
+        directory.mkdir(parents=True, exist_ok=True)
+        for chunk_id, image in cut.items():
+            (directory / f"{chunk_id}{_crops.SUFFIX}").write_bytes(image)
 
     def _parser_for(self, media_type: str) -> ParserBase | None:
         for parser in self._parsers:
@@ -760,6 +834,7 @@ class KnowledgeManager:
             return False
         await self._store.delete(record.base_id, document_id)
         self._blob_path(document_id).unlink(missing_ok=True)
+        _clear(self._crops_dir(document_id))
         return self._records.delete_document(document_id)
 
     # ── indexing ──────────────────────────────────────────────────
@@ -798,6 +873,9 @@ class KnowledgeManager:
             texts = [chunk.text for chunk in chunks]
             vectors = await client.embed(texts)
             ids = chunk_ids_for(document_id, texts)
+            # After the ids and before the store, because the id is the
+            # crop's filename: nothing else addresses a picture of one piece.
+            self._write_crops(record, chunks, ids)
             # Replaces rather than appends: a reindex of the same document
             # would otherwise leave the previous run's chunks in the
             # collection, and every hit would come back twice. Everything the

@@ -205,6 +205,10 @@ export interface KbChunk {
   /* Whether a person wrote it rather than a parser cutting it. It goes with
      every other piece when the document is reindexed. */
   manual?: boolean
+  /* Whether a picture of the region this piece was cut from is stored for it.
+     False for a format with no pages, for a piece a person wrote, and for one
+     whose parser knew the page but not the position on it. */
+  has_crop?: boolean
 }
 
 /* One piece of a chunk that merged several, and where it came from. */

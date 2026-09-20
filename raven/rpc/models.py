@@ -3941,6 +3941,11 @@ class KnowledgeChunk(_Strict):
     enabled: bool = True
     #: Whether a person wrote this piece rather than a parser cutting it.
     manual: bool = False
+    #: Whether a picture of the region this piece was cut from is stored for
+    #: it, at ``/knowledge/crop?document=<id>&chunk=<chunk_id>``. False for a
+    #: format with no pages, for a piece a person wrote, and for one whose
+    #: parser knew the page but not the position on it.
+    has_crop: bool = False
 
 
 class KnowledgeDocumentsChunksParams(_Strict):

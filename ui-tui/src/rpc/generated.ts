@@ -2091,6 +2091,10 @@ export interface KnowledgeChunk {
    * Whether a person wrote this piece. It is deleted with every other piece when the document is reindexed.
    */
   manual?: boolean;
+  /**
+   * Whether a picture of the region this piece was cut from is stored for it. Fetch it from `/knowledge/crop?document=<id>&chunk=<chunk_id>`. False for a format with no pages, for a piece a person wrote, and for one whose parser knew the page but not the position.
+   */
+  has_crop?: boolean;
 }
 /**
  * One piece of a chunk that merged several, and where it came from. The naive strategy merges across section boundaries, so a chunk can hold two pages, two headings and two sections; the flattened fields on the chunk can only carry the first of each.

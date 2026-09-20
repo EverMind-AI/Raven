@@ -562,7 +562,8 @@ async def knowledge_documents_chunks(params: dict[str, Any]) -> dict[str, Any]:
             # asked for -- the limit is the page size, and a reader who wants
             # more narrows the query.
             found = await manager.search_document(document_id, query, limit=size)
-            return {"chunks": [_chunk_row(piece) for piece in found], "total": len(found)}
+            cropped = _cropped(manager, document_id, found)
+            return {"chunks": [_chunk_row(piece, cropped) for piece in found], "total": len(found)}
         held, total = await manager.document_chunks(
             document_id,
             offset=(page - 1) * size,
@@ -571,7 +572,8 @@ async def knowledge_documents_chunks(params: dict[str, Any]) -> dict[str, Any]:
         )
     except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
         raise InternalError(f"reading chunks failed: {exc}") from exc
-    return {"chunks": [_chunk_row(piece) for piece in held], "total": total}
+    cropped = _cropped(manager, document_id, held)
+    return {"chunks": [_chunk_row(piece, cropped) for piece in held], "total": total}
 
 
 async def knowledge_chunks_switch(params: dict[str, Any]) -> dict[str, Any]:
@@ -698,7 +700,22 @@ def _chunk_parts(metadata: dict[str, Any]) -> list[dict[str, Any]]:
     return parts
 
 
-def _chunk_row(held: Any) -> dict[str, Any]:
+def _cropped(manager: Any, document_id: str, held: "list[Any]") -> "set[str]":
+    """Which of these pieces have a picture of their region stored.
+
+    One pass over the rows rather than a lookup inside each: this is a stat per
+    piece either way, and doing it here keeps the row builder a pure function
+    of what it is handed.
+    """
+    found = set()
+    for piece in held:
+        chunk_id = str(getattr(piece, "chunk_id", "") or "")
+        if chunk_id and manager.crop_path(document_id, chunk_id):
+            found.add(chunk_id)
+    return found
+
+
+def _chunk_row(held: Any, cropped: "frozenset[str] | set[str]" = frozenset()) -> dict[str, Any]:
     """One stored piece as the page reads it, positional metadata flattened.
 
     The flattened fields describe where the chunk *starts*, which is all they
@@ -708,9 +725,15 @@ def _chunk_row(held: Any) -> dict[str, Any]:
     the other one: the box and the character ranges stay in the metadata, but
     which page, which heading and which section each piece came from is exactly
     what a person scanning this list is using.
+
+    ``cropped`` is which of the pieces being rendered have a picture stored
+    for them, worked out once by :func:`_cropped` rather than per row. What the
+    row needs is only whether there is one to ask for; the picture itself is
+    fetched from the crop route when the page decides to show it.
     """
     chunk = getattr(held, "chunk", held)
     metadata = getattr(chunk, "metadata", None) or {}
+    chunk_id = str(getattr(held, "chunk_id", "") or "")
     return {
         "chunk_index": int(getattr(chunk, "chunk_index", 0) or 0),
         "total_chunks": int(getattr(chunk, "total_chunks", 0) or 0),
@@ -722,9 +745,10 @@ def _chunk_row(held: Any) -> dict[str, Any]:
         "page_end": _page(metadata.get("page_end")),
         "heading_path": _path(metadata.get("heading_path")),
         "parts": _chunk_parts(metadata),
-        "chunk_id": str(getattr(held, "chunk_id", "") or ""),
+        "chunk_id": chunk_id,
         "enabled": bool(getattr(held, "enabled", True)),
         "manual": bool(getattr(held, "manual", False)),
+        "has_crop": chunk_id in cropped,
     }
 
 

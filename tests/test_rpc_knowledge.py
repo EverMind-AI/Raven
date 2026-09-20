@@ -1337,6 +1337,9 @@ async def test_chunks_answer_carries_what_the_parser_found(monkeypatch) -> None:
             assert document_id == "d1"
             return [_Held()], 1
 
+        def crop_path(self, document_id: str, chunk_id: str):
+            return None
+
     monkeypatch.setattr(kb, "knowledge_manager", lambda: _Manager())
 
     out = await kb.knowledge_documents_chunks({"document_id": "d1"})
@@ -1358,10 +1361,41 @@ async def test_chunks_answer_carries_what_the_parser_found(monkeypatch) -> None:
                 "chunk_id": "abc123",
                 "enabled": True,
                 "manual": False,
+                # No picture of its region: nothing has been cut for it. A
+                # format with no pages never gets one at all.
+                "has_crop": False,
             }
         ],
         "total": 1,
     }
+
+
+async def test_a_piece_with_a_picture_of_its_region_says_so(monkeypatch) -> None:
+    """A flag rather than the bytes: the page fetches the picture from the crop
+    route when it decides to show it, and what the row needs to know is only
+    whether there is one to ask for. Without it the page would have to probe
+    and hide, which is a broken image on every piece that has none."""
+
+    class _Held:
+        def __init__(self, chunk_id: str) -> None:
+            self.chunk_id = chunk_id
+            self.chunk = type("C", (), {"chunk_index": 0, "total_chunks": 2, "text": "x", "metadata": {}})()
+            self.enabled = True
+            self.manual = False
+
+    class _Manager:
+        async def document_chunks(self, document_id: str, **kw):
+            return [_Held("cut"), _Held("uncut")], 2
+
+        def crop_path(self, document_id: str, chunk_id: str):
+            assert document_id == "d1"
+            return "/somewhere/cut.webp" if chunk_id == "cut" else None
+
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: _Manager())
+
+    rows = (await kb.knowledge_documents_chunks({"document_id": "d1"}))["chunks"]
+
+    assert [row["has_crop"] for row in rows] == [True, False]
 
 
 async def test_chunks_of_a_text_file_carry_no_page(monkeypatch) -> None:
@@ -1383,6 +1417,9 @@ async def test_chunks_of_a_text_file_carry_no_page(monkeypatch) -> None:
     class _Manager:
         async def document_chunks(self, document_id: str, **kw):
             return [_Held()], 1
+
+        def crop_path(self, document_id: str, chunk_id: str):
+            return None
 
     monkeypatch.setattr(kb, "knowledge_manager", lambda: _Manager())
 
@@ -1438,6 +1475,9 @@ async def test_a_query_searches_the_document_instead_of_paging_it(monkeypatch) -
 
         async def document_chunks(self, *a, **kw):  # pragma: no cover - must not be reached
             raise AssertionError("a query searches rather than pages")
+
+        def crop_path(self, document_id: str, chunk_id: str):
+            return None
 
     monkeypatch.setattr(kb, "knowledge_manager", lambda: _Manager())
 

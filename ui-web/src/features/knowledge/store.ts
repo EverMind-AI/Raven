@@ -1004,6 +1004,16 @@ export function previewUrl(doc: KbDoc, page?: number | null): string {
   return typeof page === 'number' && page > 1 && previewKind(doc) === 'converted' ? `${url}#page=${page}` : url
 }
 
+/* The picture of the region a piece was cut from. Addressed by the two ids and
+   nothing else, the way the preview route is: the crops sit beside the blobs in
+   raven's state directory, and a request that names no location cannot be
+   pointed at the rest of it. Only ever called for a chunk whose `has_crop` is
+   true -- the route answers 404 otherwise, and a broken image is worse than
+   none. */
+export function cropUrl(documentId: string, chunkId: string): string {
+  return `/knowledge/crop?document=${encodeURIComponent(documentId)}&chunk=${encodeURIComponent(chunkId)}`
+}
+
 /* How many pieces a page holds. Twenty is what a reader scans without the page
    becoming a scroll of its own; the engine caps what it will answer with. */
 export const CHUNK_PAGE = 20

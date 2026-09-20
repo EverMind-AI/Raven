@@ -1351,6 +1351,84 @@ describe('viewing the original file', () => {
     await act(async () => {})
   }
 
+  it('draws a table a piece carries as a table', async () => {
+    /* A PDF's and a Word file's tables are indexed as HTML, because a grid
+       flattened to lines loses the column a cell stood under. Shown as markup
+       it would be worse to read than the lines were. */
+    const html = '<table>\n<tr><th>Region</th><th>Q1</th></tr>\n<tr><td>EU</td><td>1.2M</td></tr>\n</table>'
+    await openWithChunks([chunk({ chunk_id: 'c1', text: `Before it.\n${html}\nAfter it.` })])
+
+    const table = document.querySelector('.kbchunktbl table') as HTMLTableElement
+    expect(table.querySelectorAll('th')).toHaveLength(2)
+    expect(table.querySelectorAll('tr')).toHaveLength(2)
+    expect(table.textContent).toContain('1.2M')
+    /* The prose either side is the chunker's lifted context, and it is text. */
+    expect((document.querySelector('.kbchunktx') as HTMLElement).textContent).toContain('Before it.')
+  })
+
+  it('carries a cell that spans columns across as one cell', async () => {
+    const html = '<table>\n<tr><th colspan="2">Revenue</th></tr>\n<tr><td>EU</td><td>US</td></tr>\n</table>'
+    await openWithChunks([chunk({ chunk_id: 'c1', text: html })])
+
+    const head = document.querySelector('.kbchunktbl th') as HTMLTableCellElement
+    expect(head.colSpan).toBe(2)
+  })
+
+  it('never lets a piece of text become markup', async () => {
+    /* A person can rewrite any piece from this panel, so what comes back from
+       the store is user input however it got there. Nothing here is injected:
+       the table is parsed and rebuilt, and only the text of each cell lives. */
+    const html = '<table><tr><td><img src=x onerror="window.__x=1"></td></tr><tr><td>b</td></tr></table>'
+    await openWithChunks([chunk({ chunk_id: 'c1', text: html })])
+
+    expect(document.querySelector('.kbchunktbl img')).toBeNull()
+    expect((window as unknown as { __x?: number }).__x).toBeUndefined()
+  })
+
+  it('shows text that only looks like a table as the text it is', async () => {
+    await openWithChunks([chunk({ chunk_id: 'c1', text: '<table>not really</table>' })])
+
+    expect(document.querySelector('.kbchunktbl')).toBeNull()
+    expect((document.querySelector('.kbchunktx') as HTMLElement).textContent).toContain('not really')
+  })
+
+  it('shows the region a piece was cut from, addressed by both ids', async () => {
+    /* The text is what the search matches; this is the only thing on the page
+       that can answer whether the parser read the region correctly. */
+    await openWithChunks([chunk({ chunk_id: 'c1', has_crop: true, page_number: 4 })])
+
+    const crop = document.querySelector('.kbchunkcrop') as HTMLImageElement
+    expect(crop.getAttribute('src')).toBe('/knowledge/crop?document=d1&chunk=c1')
+    /* Lazily, because a page of twenty would otherwise pull twenty images
+       before the reader has scrolled to the second one. */
+    expect(crop.getAttribute('loading')).toBe('lazy')
+  })
+
+  it('asks for no picture where there is none', async () => {
+    /* A format with no pages, a piece a person wrote, a parser that knew the
+       page but not the position. A broken image is worse than no image. */
+    await openWithChunks([chunk({ chunk_id: 'c1', has_crop: false })])
+
+    expect(document.querySelector('.kbchunkcrop')).toBeNull()
+  })
+
+  it('keeps the picture in the cut-down view, shorter', async () => {
+    /* The panel opens in the cut-down view, so leaving the picture out of it
+       would hide the feature behind a control nobody has a reason to press.
+       It is shortened instead, so a row stays a row. */
+    await openWithChunks([chunk({ chunk_id: 'c1', has_crop: true })])
+    await act(async () => {
+      store.setChunkView('ellipse')
+    })
+
+    expect(document.querySelector('.kbchunkcrop')?.className).toContain('small')
+
+    await act(async () => {
+      store.setChunkView('full')
+    })
+    expect(document.querySelector('.kbchunkcrop')?.className).not.toContain('small')
+  })
+
   it('turns one chunk off from its own switch', async () => {
     /* Disabled is not a ranking penalty: the engine drops it from retrieval
        entirely, so the switch is worth showing on the row itself. */

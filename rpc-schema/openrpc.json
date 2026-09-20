@@ -12552,6 +12552,10 @@
           "manual": {
             "type": "boolean",
             "description": "Whether a person wrote this piece. It is deleted with every other piece when the document is reindexed."
+          },
+          "has_crop": {
+            "type": "boolean",
+            "description": "Whether a picture of the region this piece was cut from is stored for it. Fetch it from `/knowledge/crop?document=<id>&chunk=<chunk_id>`. False for a format with no pages, for a piece a person wrote, and for one whose parser knew the page but not the position."
           }
         },
         "required": [

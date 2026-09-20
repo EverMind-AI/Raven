@@ -916,3 +916,80 @@ async def test_only_the_kinds_that_can_need_it_may_be_asked_to_run(client: TestC
     r = await client.get("/file", params={"path": str(notes), "run": "1"}, headers=auth())
 
     assert r.headers["Content-Security-Policy"] == "sandbox"
+
+
+# ---------------------------------------------------------------------------
+# /knowledge/crop -- the picture of the region a chunk was cut from
+# ---------------------------------------------------------------------------
+
+
+def _crop(kb, document_id: str, chunk_id: str = "a" * 32) -> str:
+    """Put one crop on disk the way indexing would, and answer its id."""
+    directory = kb._crops_dir(document_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{chunk_id}.webp").write_bytes(b"RIFF0000WEBPVP8 ")
+    return chunk_id
+
+
+async def _cropped(kb) -> "tuple[str, str]":
+    base = await _base(kb)
+    doc = kb.add_document(base.id, filename="report.pdf", content=b"%PDF-1.4\n")
+    return doc.id, _crop(kb, doc.id)
+
+
+async def test_knowledge_crop_serves_the_picture_by_its_two_ids(client: TestClient, kb) -> None:
+    document, chunk = await _cropped(kb)
+
+    r = await client.get("/knowledge/crop", params={"document": document, "chunk": chunk}, headers=auth())
+
+    assert r.status == 200
+    assert r.headers["Content-Type"] == "image/webp"
+    assert r.headers["X-Content-Type-Options"] == "nosniff"
+
+
+async def test_knowledge_crop_is_never_a_document(client: TestClient, kb) -> None:
+    """The strictest sandbox there is. This route answers with an image and
+    nothing it serves may fetch, script or frame anything."""
+    document, chunk = await _cropped(kb)
+
+    r = await client.get("/knowledge/crop", params={"document": document, "chunk": chunk}, headers=auth())
+
+    policy = r.headers["Content-Security-Policy"]
+    assert policy.startswith("sandbox")
+    assert "default-src 'none'" in policy
+    assert "allow-scripts" not in policy and "allow-same-origin" not in policy
+
+
+async def test_knowledge_crop_is_cached(client: TestClient, kb) -> None:
+    """A crop is immutable for the life of its chunk id -- the id is derived
+    from the chunk's text -- and a panel of thumbnails refetching on every
+    scroll pays the whole cost of the feature again per glance."""
+    document, chunk = await _cropped(kb)
+
+    r = await client.get("/knowledge/crop", params={"document": document, "chunk": chunk}, headers=auth())
+
+    assert "immutable" in r.headers["Cache-Control"]
+
+
+async def test_knowledge_crop_refuses_without_a_token(client: TestClient, kb) -> None:
+    document, chunk = await _cropped(kb)
+
+    r = await client.get("/knowledge/crop", params={"document": document, "chunk": chunk})
+
+    assert r.status == 401
+
+
+@pytest.mark.parametrize(
+    "chunk",
+    ["", "nosuchchunk", "../../../records.json", "..", "a/b"],
+    ids=["nothing", "not written", "traversal", "parent", "separator"],
+)
+async def test_knowledge_crop_answers_404_for_anything_it_did_not_write(client: TestClient, kb, chunk: str) -> None:
+    """The chunk id arrives from the page and becomes a path segment, so it is
+    checked rather than trusted -- and anything that is not a crop this base
+    wrote is simply not there."""
+    document, _ = await _cropped(kb)
+
+    r = await client.get("/knowledge/crop", params={"document": document, "chunk": chunk}, headers=auth())
+
+    assert r.status == 404

@@ -1399,6 +1399,114 @@ function MarkdownView({ doc }: { doc: KbDoc }): JSX.Element {
    arrives under a CSP sandbox, which is what gives it an opaque origin; the
    attribute as well would stop the browser's own PDF viewer, which is
    script-driven, from drawing anything at all. */
+/* The table blocks a chunk's text carries, and the prose between them.
+
+   A PDF's tables are indexed as HTML, because a grid flattened to lines loses
+   the column a cell stood under and a cell that spans three columns has
+   nowhere to go. A chunk holding one is therefore prose, a table, and more
+   prose -- the chunker lifts the sentences either side of a table into its
+   chunk -- so the text is split rather than rendered whole. */
+const TABLE_BLOCK = /<table>[\s\S]*?<\/table>/g
+
+interface TextPart {
+  table: boolean
+  value: string
+}
+
+function splitTables(text: string): TextPart[] {
+  const parts: TextPart[] = []
+  let at = 0
+  for (const found of text.matchAll(TABLE_BLOCK)) {
+    const start = found.index ?? 0
+    if (start > at) parts.push({ table: false, value: text.slice(at, start) })
+    parts.push({ table: true, value: found[0] })
+    at = start + found[0].length
+  }
+  if (at < text.length) parts.push({ table: false, value: text.slice(at) })
+  return parts
+}
+
+interface Cell {
+  head: boolean
+  text: string
+  colSpan: number
+  rowSpan: number
+}
+
+/* One HTML table as rows of cells, or null when it is not one.
+
+   Parsed and rebuilt rather than injected. A chunk's text is not ours: a
+   person can rewrite any piece from this very panel (`knowledge.chunks.update`),
+   so what comes back from the store is user input however it got there, and
+   handing it to `dangerouslySetInnerHTML` would be an injection hole a reader
+   could open on themselves. Only the text of each cell survives this, which is
+   all a table is -- and the parser is the browser's own, so nothing here has to
+   be right about HTML for the result to be safe. */
+function tableRows(html: string): { caption: string; rows: Cell[][] } | null {
+  let parsed: Document
+  try {
+    parsed = new DOMParser().parseFromString(html, 'text/html')
+  } catch {
+    return null
+  }
+  const table = parsed.querySelector('table')
+  if (!table) return null
+  const span = (el: Element, name: string): number => {
+    const raw = Number.parseInt(el.getAttribute(name) ?? '1', 10)
+    /* Clamped: a span of a thousand is a table the browser lays out as a
+       thousand columns, and the number came off a page. */
+    return Number.isFinite(raw) && raw > 1 ? Math.min(raw, 64) : 1
+  }
+  const rows: Cell[][] = []
+  for (const tr of Array.from(table.querySelectorAll('tr'))) {
+    const cells: Cell[] = []
+    for (const cell of Array.from(tr.children)) {
+      const tag = cell.tagName.toLowerCase()
+      if (tag !== 'td' && tag !== 'th') continue
+      cells.push({
+        head: tag === 'th',
+        text: cell.textContent ?? '',
+        colSpan: span(cell, 'colspan'),
+        rowSpan: span(cell, 'rowspan'),
+      })
+    }
+    if (cells.length) rows.push(cells)
+  }
+  if (!rows.length) return null
+  return { caption: table.querySelector('caption')?.textContent ?? '', rows }
+}
+
+function ChunkTable({ html }: { html: string }): JSX.Element {
+  const built = tableRows(html)
+  /* Not a table after all -- a person rewrote the piece and left the markup
+     broken, or it was never one. Shown as what it is rather than swallowed. */
+  if (!built) return <>{html}</>
+  return (
+    <div className="kbchunktbl">
+      <table>
+        {built.caption && <caption>{built.caption}</caption>}
+        <tbody>
+          {built.rows.map((row, r) => (
+            <tr key={r}>
+              {row.map((cell, c) =>
+                cell.head ? (
+                  <th key={c} colSpan={cell.colSpan} rowSpan={cell.rowSpan}>
+                    {cell.text}
+                  </th>
+                ) : (
+                  <td key={c} colSpan={cell.colSpan} rowSpan={cell.rowSpan}>
+                    {cell.text}
+                  </td>
+                ),
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 /* One indexed piece, as the search sees it.
 
    Numbered from 1 the way the recall panel numbers its hits, so the same piece
@@ -1411,6 +1519,7 @@ function ChunkRow({
   picked,
   busy,
   at,
+  docId,
 }: {
   chunk: KbChunk
   view: 'full' | 'ellipse'
@@ -1418,6 +1527,9 @@ function ChunkRow({
   busy: boolean
   /* Whether the preview is currently showing this chunk's page. */
   at: boolean
+  /* Which document this piece belongs to, for the crop route. Passed rather
+     than read off the store so a row renders from its props alone. */
+  docId: string
 }): JSX.Element {
   const path = chunk.heading_path ?? []
   const id = chunk.chunk_id || ''
@@ -1521,8 +1633,38 @@ function ChunkRow({
         onDoubleClick={() => id && store.openChunkDialog(chunk)}
         title={id ? t('gui.kb.chunk_edit_hint') : undefined}
       >
-        {chunk.text}
+        {splitTables(chunk.text).map((part, index) =>
+          part.table ? <ChunkTable key={index} html={part.value} /> : <span key={index}>{part.value}</span>,
+        )}
       </div>
+      {/* What the piece looked like on paper. The text above is what the search
+          matches and what the agent reads; this is the only thing on the page
+          that can answer whether the parser read the region correctly -- a
+          table whose columns came out interleaved, a caption swallowed into
+          the paragraph above it, and a two-column page read straight across
+          all produce text that reads as prose and is not what the page says.
+
+          In both views, shorter in the cut-down one. That view is for finding
+          a piece rather than checking it, and a full-height thumbnail per row
+          would make the list it exists to shorten longer than the one it
+          replaced -- but leaving it out entirely would hide the feature behind
+          a control nobody has a reason to press, because the cut-down view is
+          the one the panel opens in.
+
+          Lazily fetched, because a page of twenty would otherwise pull twenty
+          images before the reader has scrolled to the second one. Clicking it
+          does what clicking the badge does: this is a picture of a page, and
+          the thing a reader wants next is the page. */}
+      {chunk.has_crop && id && (
+        <img
+          className={`kbchunkcrop${view === 'ellipse' ? ' small' : ''}`}
+          src={store.cropUrl(docId, id)}
+          alt={t('gui.kb.chunk_crop_alt', { n: chunk.chunk_index + 1 })}
+          title={page !== null ? t('gui.kb.chunk_show_page', { n: page }) : undefined}
+          loading="lazy"
+          decoding="async"
+        />
+      )}
     </div>
   )
 }
@@ -1715,6 +1857,7 @@ function ChunkList({ s }: { s: ReturnType<typeof store.getState> }): JSX.Element
               picked={s.chunkPicked.includes(chunk.chunk_id || '')}
               busy={s.chunkBusy}
               at={!!chunk.chunk_id && chunk.chunk_id === s.previewChunk}
+              docId={s.viewing?.id ?? ''}
             />
           ))}
         </div>
