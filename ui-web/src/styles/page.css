@@ -145,7 +145,6 @@
   --z-menu: 42;
   --z-palette: 45;
   --z-picker: 46;
-  --z-toast: 50;
   --z-takeover: 60;
   --z-scrollbars: 88;
   --z-shade: 90;
@@ -153,6 +152,11 @@
   --z-lightbox: 95;
   --z-failbar: 99;
   --z-onboarding: 110;
+  /* A toast is the page's one transient notice, and it has to reach the
+     reader over whatever surface they are on -- the first-run wizard included,
+     whose provider and key writes report their refusals this way. Only the
+     splash, which nothing happens under, stands above it. */
+  --z-toast: 115;
   --z-splash: 120;
 }
 
@@ -642,7 +646,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    shadows give it a near, mid and far penumbra. A flat grey slab with one
    blob shadow is exactly the look this replaces -- panel-specific blocks
    below keep geometry only, never their own background. */
-.menu, .pop, .mpick, .csheet, .dsheet {
+.menu, .pop, .mpick, .csheet {
   background: linear-gradient(
     color-mix(in oklab, var(--ink) 86%, transparent),
     color-mix(in oklab, var(--ink) 76%, transparent));
@@ -793,10 +797,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .provider-link::after { content: '↗'; flex: none; color: var(--faint); font-size: .78em; font-weight: 500; }
 .provider-link:hover > span:first-child { text-decoration: underline; text-underline-offset: 3px; }
 .provider-link:focus-visible { outline: 1px solid var(--amber); outline-offset: 3px; border-radius: 2px; }
-.provider-choice-row { position: relative; }
-.provider-choice-row > :not(.provider-choice-action) { position: relative; z-index: 1; pointer-events: none; }
-.provider-choice-row .provider-link { pointer-events: auto; }
-.provider-choice-action { position: absolute; z-index: 0; inset: 0; width: 100%; border: 0;
+.model-provider-row { position: relative; }
+.model-provider-row > :not(.model-provider-action) { position: relative; z-index: 1; pointer-events: none; }
+.model-provider-row .provider-link { pointer-events: auto; }
+.model-provider-action { position: absolute; z-index: 0; inset: 0; width: 100%; border: 0;
   border-radius: inherit; background: transparent; cursor: pointer; }
 
 /* What a model can do, one 13px stroke drawing per capability. Faint by
@@ -809,7 +813,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .row:hover .model-tag, [aria-selected="true"] ~ .model-tags .model-tag { color: var(--muted); }
 .model-window { flex: none; padding: 0 4px; border: 1px solid var(--line); border-radius: 4px;
   color: var(--faint); font-family: var(--mono); font-size: 10px; line-height: 15px; }
-.provider-choice-row:has(> .provider-choice-action:focus-visible) { outline: 1px solid var(--amber);
+.model-provider-row:has(> .model-provider-action:focus-visible) { outline: 1px solid var(--amber);
   outline-offset: 1px; }
 /* Only ever drawn for a connected provider -- see `ProviderStatus`, which
    renders nothing for the rest. The `.on` class is kept on the element so the
@@ -2388,7 +2392,7 @@ textarea:focus, textarea:focus-visible,
 .mpick .row:hover { background: color-mix(in oklab, var(--text) 7%, transparent); }
 .mpick .provs .row.dim { opacity: .35; }
 .mpick .provs .row.dim:hover { background: none; }
-.mpick .row:has(> .provider-choice-action[aria-selected="true"]) {
+.mpick .row:has(> .model-provider-action[aria-selected="true"]) {
   background: color-mix(in oklab, var(--text) 9%, transparent); }
 .mpick .row .nm { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
 .mpick .row .nm > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -4168,7 +4172,7 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
    take the same room. */
 .keyfield { position: relative; display: block; min-width: 0; }
 .keyrow .keyfield, .sukey .keyfield, .tkrow .keyfield { flex: 1 1 auto; }
-.mrole .ff .keyfield, .ob-form .keyfield { width: 100%; }
+.mrole .ff .keyfield { width: 100%; }
 /* `[type]` only to outrank the container rules that set the input's padding --
    `.sukey input` and `.ob-in` are as specific as a bare `.keyfield > input`,
    and the gutter has to win or the eye sits on top of the text. */
@@ -4568,17 +4572,18 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
 /* Drawn, not typed: as text glyphs these two sat on different baselines inside
    equal boxes, so the caret read as sagging next to the cross.
 
-   Shared with the dag sheet, which wears the same two controls in the same
-   corner. It had none of this: an unstyled button in a flex row with a growing
+   Written when the graph sheet wore the same two controls in the same corner
+   and had none of this: an unstyled button in a flex row with a growing
    sibling, so the close cross was squeezed to half a box and neither control
-   took a hover or turned its caret over on fold. */
-.csheet .ic, .dsheet .ic { border: 0; background: none; color: var(--faint);
+   took a hover or turned its caret over on fold. That sheet is gone; these are
+   the clarify and approval sheets' own rules now. */
+.csheet .ic { border: 0; background: none; color: var(--faint);
   border-radius: 6px; width: 24px; height: 24px; flex: none; cursor: pointer;
   display: grid; place-items: center; }
-.csheet .ic svg, .dsheet .ic svg { width: 13px; height: 13px;
+.csheet .ic svg { width: 13px; height: 13px;
   stroke-linecap: round; stroke-linejoin: round; transition: transform .15s; }
-.csheet[data-fold="true"] .ic .cv, .dsheet[data-fold="true"] .ic .cv { transform: rotate(180deg); }
-.csheet .ic:hover, .dsheet .ic:hover { color: var(--text); background: var(--raised); }
+.csheet[data-fold="true"] .ic .cv { transform: rotate(180deg); }
+.csheet .ic:hover { color: var(--text); background: var(--raised); }
 .csheet .body { display: grid; gap: 4px; margin-top: 8px; }
 .csheet[data-fold="true"] .body, .csheet[data-fold="true"] .foot { display: none; }
 .csheet .opt { display: flex; gap: 10px; align-items: center; width: 100%; text-align: left;
@@ -4604,32 +4609,6 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
   overflow-wrap: anywhere; max-height: 168px; overflow-y: auto;
 }
 .csheet.perm .opt.go .n { background: var(--amber-dp); color: var(--amber); }
-
-/* dag sheet: the orchestration a `run_subagent_dag` call is executing, on the
-   same axis as the clarify sheet and for the same reason -- it belongs to the
-   turn being composed against, not to the transcript, which only ever sees the
-   tool call's one-line result. Runs live; collapses to its summary when done. */
-.dsheet {
-  border-radius: 12px; padding: 12px 14px;
-  animation: sheetUp .2s ease; max-height: 420px; overflow-y: auto;
-}
-.dsheet .hd { display: flex; align-items: center; gap: 8px; }
-/* Takes the room and gives way last. It was `flex: none` while it held one
-   fixed word; it now holds the line the graph was dispatched with, which is a
-   sentence, and the tally beside it is the part a reader can spare. */
-.dsheet .ttl { font-weight: 600; font-size: 13px; flex: 1 1 auto; min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dsheet[data-fold="true"] .canvas { display: none; }
-.dsheet .canvas { margin-top: 10px; overflow-x: auto; }
-/* Centred, not left-packed. The graph is usually narrower than the sheet, and
-   pinned to one edge it read as something that had failed to lay itself out.
-   `margin:auto` rather than flex centring: an over-wide graph inside a flex
-   centred box overflows on both sides and the left half cannot be scrolled to.
-   Scoped to .canvas -- the header's own buttons are svg too, and centring those
-   moved the fold and close controls into the middle of the title row. */
-.dsheet .canvas > svg { display: block; margin: 0 auto; }
-.dsheet .sum { font-size: 11.5px; color: var(--muted); font-family: var(--mono); flex: 0 1 auto; min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .veil { position: fixed; inset: 0; background: var(--scrim); display: none; place-items: center; z-index: var(--z-veil); }
 .veil[data-open="true"] { display: grid; }
@@ -4864,65 +4843,9 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
   transition: opacity .45s ease;
 }
 #onb[data-off] { opacity: 0; pointer-events: none; }
-.ob { width: min(420px, calc(100vw - 48px)); }
-/* Each step replaces the previous one wholesale; the entry animation is on
-   the step, so every swap breathes the same way. */
-.ob-step { animation: obin .3s cubic-bezier(.2, .7, .3, 1) backwards; }
-@keyframes obin { from { opacity: 0; transform: translateY(10px); } }
-@media (prefers-reduced-motion: reduce) { .ob-step { animation: none; } }
-.ob-rv { width: 96px; height: auto; display: block; margin: 0 auto 26px;
-  user-select: none;
-  filter: drop-shadow(0 10px 9px rgba(17, 21, 30, .24)); }
-.ob-t { font-family: var(--serif); font-size: 28px; font-weight: 400;
-  letter-spacing: -.008em; color: var(--text); line-height: 1.2; }
-.ob-s { margin-top: 10px; font-size: 13.5px; line-height: 1.6; color: var(--muted); }
-.ob-step[data-center] .ob-t, .ob-step[data-center] .ob-s { text-align: center; }
-.ob-list { margin-top: 22px; display: flex; flex-direction: column; gap: 6px;
-  max-height: 320px; overflow: auto; overscroll-behavior: contain; }
-.ob-row { display: flex; align-items: center; gap: 10px; padding: 11px 14px;
-  border: 1px solid var(--line); border-radius: 12px; cursor: pointer;
-  background: var(--ink); text-align: left; font: inherit; width: 100%;
-  transition: background .15s ease, border-color .15s ease; }
-.ob-row:hover { background: var(--surface); }
-.ob-row[data-sel] { border-color: var(--text); background: var(--surface); }
-.ob-row .nm { min-width: 0; display: flex; align-items: center; gap: 9px;
-  font-size: 14px; font-weight: 500; color: var(--text); }
-.ob-row .nm > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ob-row .model-tags { margin-left: auto; }
-.ob-row .bd { margin-left: auto; flex: none; font-family: var(--mono);
-  font-size: 10px; letter-spacing: .04em; color: var(--faint); }
-.ob-row .bd.on { color: var(--moss); }
-.ob-in { width: 100%; padding: 11px 14px; border: 1px solid var(--line);
-  border-radius: 12px; background: var(--ink); outline: none;
-  font: 400 14.5px/1.5 var(--sans); color: var(--text); }
-.ob-in::placeholder { color: var(--faint); }
-.ob-in:focus { border-color: var(--text); }
-.ob-form { margin-top: 22px; display: flex; flex-direction: column; gap: 10px; }
-.ob-btn { margin-top: 22px; width: 100%; padding: 12px 16px; border: 0;
-  border-radius: 12px; background: var(--text); color: var(--ink);
-  font: 500 14.5px var(--sans); cursor: pointer;
-  transition: opacity .15s ease; }
-.ob-btn:hover { opacity: .88; }
-.ob-btn[disabled] { opacity: .35; cursor: default; }
-.ob-ghost { margin-top: 10px; width: 100%; padding: 10px; border: 0;
-  background: none; border-radius: 10px; color: var(--muted);
-  font: 400 13px var(--sans); cursor: pointer; }
-.ob-ghost:hover { color: var(--text); }
-.ob-err { margin-top: 12px; font-size: 13px; line-height: 1.5; color: var(--clay); }
-.ob-err:empty { display: none; }
-/* The one command the GUI cannot run for the user (OAuth sign-in happens in
-   a terminal): shown as a copyable line, not paraphrased. */
-.ob-cmd { margin-top: 22px; display: flex; align-items: center; gap: 12px;
-  padding: 12px 14px; border-radius: 12px; background: var(--surface);
-  font-family: var(--mono); font-size: 12.5px; color: var(--text); }
-.ob-cmd code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ob-cmd button { margin-left: auto; flex: none; border: 0; background: none;
-  font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em;
-  color: var(--link); cursor: pointer; padding: 2px 4px; }
-.ob-dots { margin-top: 36px; display: flex; gap: 7px; justify-content: center; }
-.ob-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--line);
-  transition: background .2s ease; }
-.ob-dots i.on { background: var(--text); }
+/* The confirm veil stacks under the page's layers (40); a question the wizard
+   asks -- a stale agent's migrate -- has to stand above the wizard instead. */
+body:has(#onb:not([hidden])) #veil { z-index: calc(var(--z-onboarding) + 1); }
 
 /* Floating workspace desk and the four-pane surface. */
 .desk-ready .ws > .ws-top,

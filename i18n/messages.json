@@ -2047,6 +2047,70 @@
       "en": "[missing]",
       "zh": "【已丢失】"
     },
+    "gui.onb.step_model": {
+      "en": "Model",
+      "zh": "模型"
+    },
+    "gui.onb.step_search": {
+      "en": "Search",
+      "zh": "搜索"
+    },
+    "gui.onb.step_agents": {
+      "en": "Agents",
+      "zh": "Agent 接入"
+    },
+    "gui.onb.step_sync": {
+      "en": "Data sync",
+      "zh": "数据同步"
+    },
+    "gui.onb.steps": {
+      "en": "Setup steps",
+      "zh": "设置步骤"
+    },
+    "gui.onb.back": {
+      "en": "Back",
+      "zh": "上一步"
+    },
+    "gui.onb.next": {
+      "en": "Next",
+      "zh": "下一步"
+    },
+    "gui.onb.skip": {
+      "en": "Skip",
+      "zh": "跳过"
+    },
+    "gui.onb.enter": {
+      "en": "Start chatting",
+      "zh": "进入会话"
+    },
+    "gui.onb.start_sync": {
+      "en": "Start sync",
+      "zh": "开始同步"
+    },
+    "gui.onb.lang_zh": {
+      "en": "中文",
+      "zh": "中文"
+    },
+    "gui.onb.lang_en": {
+      "en": "EN",
+      "zh": "EN"
+    },
+    "gui.onb.loading": {
+      "en": "Loading...",
+      "zh": "正在加载..."
+    },
+    "gui.onb.sync_title": {
+      "en": "Import agent data",
+      "zh": "导入 Agent 数据"
+    },
+    "gui.onb.sync_counts": {
+      "en": "{files} memory files, {convs} conversations",
+      "zh": "{files} 个记忆文件 · {convs} 段对话"
+    },
+    "gui.onb.sync_unsupported": {
+      "en": "Not supported",
+      "zh": "暂不支持"
+    },
     "gui.turn_died": {
       "en": "Turn failed - {e}",
       "zh": "回合中断 · {e}"
@@ -3134,106 +3198,6 @@
     "gui.new_task": {
       "en": "New task",
       "zh": "新任务"
-    },
-    "gui.onb.back": {
-      "en": "Back",
-      "zh": "返回"
-    },
-    "gui.onb.base_ph": {
-      "en": "API Base URL",
-      "zh": "API Base URL"
-    },
-    "gui.onb.connected": {
-      "en": "Connected",
-      "zh": "已连接"
-    },
-    "gui.onb.copied": {
-      "en": "Copied",
-      "zh": "已复制"
-    },
-    "gui.onb.copy": {
-      "en": "Copy",
-      "zh": "复制"
-    },
-    "gui.onb.done_s": {
-      "en": "Raven is ready. Enjoy.",
-      "zh": "Raven 已经准备好了。"
-    },
-    "gui.onb.done_t": {
-      "en": "All set",
-      "zh": "一切就绪"
-    },
-    "gui.onb.err_generic": {
-      "en": "Something went wrong: {err}",
-      "zh": "出了点问题：{err}"
-    },
-    "gui.onb.finish": {
-      "en": "Finish",
-      "zh": "完成"
-    },
-    "gui.onb.key_ph": {
-      "en": "API key",
-      "zh": "API key"
-    },
-    "gui.onb.key_s": {
-      "en": "The key is stored locally in ~/.raven/config.json and never leaves this machine.",
-      "zh": "密钥只保存在本机 ~/.raven/config.json，不会上传。"
-    },
-    "gui.onb.key_t": {
-      "en": "Connect {name}",
-      "zh": "连接 {name}"
-    },
-    "gui.onb.local_s": {
-      "en": "Point Raven at your local deployment.",
-      "zh": "填写你本地部署的服务地址。"
-    },
-    "gui.onb.model_s": {
-      "en": "You can switch anytime with /model.",
-      "zh": "之后随时可以用 /model 更换。"
-    },
-    "gui.onb.model_t": {
-      "en": "Pick a model",
-      "zh": "选择模型"
-    },
-    "gui.onb.next": {
-      "en": "Continue",
-      "zh": "继续"
-    },
-    "gui.onb.oauth_check": {
-      "en": "I have signed in",
-      "zh": "我已登录，检测"
-    },
-    "gui.onb.oauth_s": {
-      "en": "Run this in a terminal to sign in, then come back:",
-      "zh": "在终端里运行这条命令完成登录，然后回来："
-    },
-    "gui.onb.oauth_wait": {
-      "en": "Not signed in yet - run the command, then try again.",
-      "zh": "还没检测到登录，运行命令后再试一次。"
-    },
-    "gui.onb.provider_s": {
-      "en": "Raven speaks to any of these. Pick one to start with.",
-      "zh": "Raven 支持这些服务商，先选一个开始。"
-    },
-    "gui.onb.provider_t": {
-      "en": "Choose a provider",
-      "zh": "选择服务商"
-    },
-    "gui.onb.search_ph": {
-      "en": "Filter",
-      "zh": "筛选"
-    },
-    "gui.onb.start": {
-      "en": "Get started",
-      "zh": "开始设置"
-    },
-    "gui.onb.welcome_s": {
-      "en": "Connect a model provider and you are ready to go.",
-      "zh": "连接一个模型服务商，马上就能开始。"
-    },
-    "gui.onb.welcome_t": {
-      "en": "Welcome to Raven",
-      "zh": "欢迎使用 Raven"
     },
     "gui.page.agents": {
       "en": "Subagents",
@@ -4878,6 +4842,22 @@
     "gui.agent.tag_stale": {
       "en": "moved",
       "zh": "需迁移"
+    },
+    "gui.agent.setup_available": {
+      "en": "Available",
+      "zh": "可以接入"
+    },
+    "gui.agent.setup_connected": {
+      "en": "Connected",
+      "zh": "已接入"
+    },
+    "gui.agent.setup_scanning": {
+      "en": "Scanning",
+      "zh": "检测中"
+    },
+    "gui.agent.setup_connecting": {
+      "en": "Connecting",
+      "zh": "接入中"
     },
     "gui.pb.back": {
       "en": "Playbooks",
@@ -6930,6 +6910,26 @@
     "gui.settings.tools.grp_search": {
       "en": "Tool search",
       "zh": "工具检索"
+    },
+    "gui.settings.setup.web_search": {
+      "en": "Web search",
+      "zh": "联网搜索"
+    },
+    "gui.settings.setup.web_fetch": {
+      "en": "Page reading",
+      "zh": "网页抓取"
+    },
+    "gui.settings.setup.ready": {
+      "en": "On",
+      "zh": "已开启"
+    },
+    "gui.settings.setup.unset": {
+      "en": "Not set up",
+      "zh": "待配置"
+    },
+    "gui.settings.setup.keyless_hint": {
+      "en": "Works without one; a key raises the rate limit",
+      "zh": "不配也能用，配了速率限制更宽松"
     },
     "gui.settings.plugins.counter": {
       "en": "Connected {on} / {total}",

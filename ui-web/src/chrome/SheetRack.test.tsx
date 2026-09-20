@@ -117,25 +117,32 @@ describe('the sheet rack', () => {
     expect(captures).toBe(0)
   })
 
-  /* The rack's child list is mixed: the graph sheet is a host element with a
-     React root of its own, and a question raised while one is running belongs
-     above it -- the graph folds itself for exactly that reason
-     (features/dag/mount.tsx). A portal into the rack would append instead, which
-     puts the question the reader has to answer under the graph. */
-  it('stacks a question raised over a running graph on top of it', () => {
-    const graph = document.createElement('div')
-    graph.className = 'dsheet'
-    add(graph)
+  /* Newest on top, and that is the portals' doing rather than the rack's. A
+     portal appends its children to the container it is given, so one into
+     `#sheetRack` would put the question the reader has to answer UNDER
+     whatever docked before it; each sheet gets its own host instead.
+
+     The second tenant here is a bare host rather than a real one, and says so.
+     The rack holds any number, but the only two that dock today are the
+     clarify question and the approval, and both call `dropClass('csheet')`
+     before they dock -- so no pair of real tenants is ever on screen together
+     to order. The graph used to be that pair's other half and no longer docks
+     at all. What is pinned is the rack's own contract, which is what would
+     break if the portals ever moved to `#sheetRack`. */
+  it('stacks a question raised over an already-docked sheet on top of it', () => {
+    const earlier = document.createElement('div')
+    earlier.className = 'othersheet'
+    add(earlier)
     clarifyOpen({ question: 'q', request_id: 'q1' }, () => {})
 
-    expect([...rack().children].map((n) => n.className)).toEqual(['csheet', 'dsheet'])
+    expect([...rack().children].map((n) => n.className)).toEqual(['csheet', 'othersheet'])
 
     /* And the same order comes back on a return, where both are re-docked. */
     setCurrent('b')
     sync()
     setCurrent('a')
     sync()
-    expect([...rack().children].map((n) => n.className)).toEqual(['csheet', 'dsheet'])
+    expect([...rack().children].map((n) => n.className)).toEqual(['csheet', 'othersheet'])
   })
 
   /* The question is still pending on the server, so coming back has to be the
@@ -174,9 +181,9 @@ describe('the sheet rack', () => {
   })
 
   /* Who blocks the reader, as the rack reads it off the sheets themselves. The
-     permission sheet does NOT mark itself -- so a graph docked beside it does
-     not step aside, which is today's behaviour and is recorded as such in the
-     plan's findings rather than fixed here. */
+     permission sheet does NOT mark itself -- so a tenant docked beside it is
+     told nobody is waiting, which is today's behaviour and is recorded as such
+     in the plan's findings rather than fixed here. */
   it('marks the clarify question and the preview as asking, and the approval not', () => {
     clarifyOpen({ question: 'q', request_id: 'q1' }, () => {})
     expect((rack().firstElementChild as HTMLElement).dataset.asks).toBe('1')

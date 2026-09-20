@@ -60,9 +60,9 @@ export function SendGlyph(): JSX.Element {
    difference between them would show up as an icon 1.8px off its twin.
 
    The transcript keeps a local copy of this (`Ico` in TranscriptPage.tsx). It
-   goes when the dag card and the dag sheet become one renderer -- that change
-   touches both files, and moving it before then would be a rename in a file
-   nobody needs to open. */
+   goes when the dag card and the task pane's board become one renderer -- that
+   change touches both files, and moving it before then would be a rename in a
+   file nobody needs to open. */
 export function Glyph({ d, cls }: { d: string; cls?: string }): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"

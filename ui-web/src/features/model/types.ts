@@ -53,7 +53,7 @@ export interface ModelSource {
      meaningful: the picker rolls the local pick back. Resolving to ``'staged'``
      means the pick was held rather than applied (a draft has no session yet),
      and the picker words its toast accordingly. */
-  persist(m: string, provider: string, scope: 'session' | 'default'): Promise<void | 'staged'>
+  persist(m: string, provider: string, scope: 'session' | 'default'): Promise<void | 'staged' | 'needs_restart'>
   setProtocol?(m: string, provider: string, protocol: ApiProtocol): Promise<void>
   /* The settings door, for the picker's own footer. Only offered when the
      picker was opened from the composer chip, since the settings page opening

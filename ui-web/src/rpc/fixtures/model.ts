@@ -148,30 +148,25 @@ export function createModel(_env: FixtureEnv): ModelFixture {
 }
 
 /**
- * The `?onboard=demo` group: the first-run flow on canned providers, so it
- * writes nothing.
+ * The `?onboard=demo` group: the first-run wizard on a machine that has
+ * nothing set up, so it writes nothing.
  *
- * `setup.status` rides with the two model calls because the flow's last step
- * asks it whether a provider landed, and answering that from the real gateway
- * while the rows came from here would end the canned flow on the install's own
- * verdict.
+ * The base library describes a configured install -- two providers signed in,
+ * a chat model chosen -- which is the one thing a first-run canvas cannot
+ * show. So the provider list is this file's own unauthenticated rows, the
+ * default model is withheld until the canvas sees it chosen, and
+ * `setup.status` answers first-run; the roster, the web tools and the
+ * importer keep the base library's answers, which already carry the scan
+ * states the agents step and the sync step draw.
  */
 export function onboardDemoOverrides(schedule: (ms: number, fn: () => void) => void): Overrides {
   const rows = ONBOARD.map((p) => ({ ...p, models: [...p.models] }))
-  let pokes = 0
+  let picked: { model: string; provider: string } | null = null
   const wait = <T>(v: T, ms = 420): Promise<T> => new Promise((resolve) => { schedule(ms, () => resolve(v)) })
+  const current = (): string => picked?.provider ?? ''
 
   return {
-    'model.options': () => {
-      /* Second re-probe flips the OAuth row to signed-in, so the preview can
-         walk the "not yet -> try again -> through" path once. */
-      pokes += 1
-      if (pokes > 2) {
-        const oauth = rows.find((p) => p.slug === 'minimax_global')
-        if (oauth) oauth.authenticated = true
-      }
-      return wait({ model: '', provider: '', providers: rows.map((p) => wire(p, '')) })
-    },
+    'model.options': () => wait({ model: picked?.model ?? '', provider: current(), providers: rows.map((p) => wire(p, current())) }),
     'model.save_key': (p) => {
       const row = rows.find((x) => x.slug === p.slug)
       /* The contract's answer is a provider, so a slug this library does not
@@ -179,8 +174,45 @@ export function onboardDemoOverrides(schedule: (ms: number, fn: () => void) => v
          answer, behind a cast, for a shape the contract forbids. */
       if (!row) throw new Error(`no provider ${p.slug}`)
       row.authenticated = true
-      return wait({ provider: wire(row, '') })
+      return wait({ provider: wire(row, current()) })
     },
-    'setup.status': () => wait({ provider_configured: false }, 300),
+    'model.disconnect': (p) => {
+      const row = rows.find((x) => x.slug === p.slug)
+      if (row) row.authenticated = false
+      if (picked?.provider === p.slug) picked = null
+      return wait({ disconnected: true })
+    },
+    /* A device flow that lands on the next read, so the canvas can walk the
+       browser sign-in path through to a connected row. */
+    'model.oauth_login': (p) => {
+      schedule(3000, () => {
+        const row = rows.find((x) => x.slug === p.slug)
+        if (row) row.authenticated = true
+      })
+      return wait({ verification_uri: 'https://example.com/device', user_code: 'ABCD-1234', expires_in: 900 })
+    },
+    'config.set': async (p, next) => {
+      if (p.key === 'model' && typeof p.value === 'string') picked = { model: p.value, provider: p.provider ?? '' }
+      return next()
+    },
+    /* The base library's config, minus the default pair until one is picked
+       here: a first run has no model until the reader chooses one. */
+    'settings.get': async (_p, next) => {
+      const r = await next()
+      const settings = { ...(r.settings as Record<string, unknown>) }
+      const agents = { ...((settings.agents as Record<string, unknown> | undefined) ?? {}) }
+      const defaults = { ...((agents.defaults as Record<string, unknown> | undefined) ?? {}) }
+      if (picked) {
+        defaults.model = picked.model
+        defaults.provider = picked.provider
+      } else {
+        delete defaults.model
+        delete defaults.provider
+      }
+      agents.defaults = defaults
+      settings.agents = agents
+      return { ...r, settings: settings as typeof r.settings }
+    },
+    'setup.status': () => wait({ provider_configured: !!picked }, 300),
   }
 }

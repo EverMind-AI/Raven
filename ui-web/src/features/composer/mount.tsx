@@ -127,9 +127,8 @@ export function setLiveAnchor(ms: number): void {
   store.setLiveAnchor(ms)
 }
 
-/* Its svg twin, for a node drawn inside a graph (the dag sheet still draws
-   itself). Same three dots, same shared keyframes; only the element type
-   differs. `y` is the baseline the bars used to stand on, so the dots are
+/* Its svg twin, for a node drawn inside a graph. Same three dots, same shared
+   keyframes; only the element type differs. `y` is the baseline the bars used to stand on, so the dots are
    centred a glyph-height above it and the call sites keep the coordinates they
    already pass. */
 export function workGlyphSvg(x: number, y: number): SVGGElement {

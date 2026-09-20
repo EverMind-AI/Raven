@@ -2639,7 +2639,9 @@ under `agent_memory/profile/` (soul.md, agent.md) and `user_memory/profile/` (us
 
 **Onboarding** (`raven onboard` → `run_wizard`):
 The first-run wizard (LLM provider → sandbox → channel → EverOS memory → web access → sub-agents → cold-start import) that also seeds
-Agent home via `sync_workspace_templates()`; gated at startup by `ensure_configured_or_onboard()`.
+Agent home via `sync_workspace_templates()`; gated at startup by `ensure_configured_or_onboard()`. The web page has its own
+four-step wizard (model → search → agents → data sync, `ui-web/src/features/onboard/`) that opens when `setup.status` reports no
+provider; its data-sync step drives the same cold-start import over `import.*` (`raven/rpc/methods/import_sync.py`).
 
 **Bootstrap Files**:
 The identity files concatenated into every prompt — `soul.md` + `agent.md` + `TOOLS.md` —

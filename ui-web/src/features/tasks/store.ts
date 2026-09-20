@@ -67,6 +67,10 @@ export const source = (): TasksSource | null => sources.tasks ?? null
    would attribute one conversation's background work to another. */
 export function reset(): void {
   store.set(initial)
+  /* The stamps go with the rows they were about. Left behind they would only
+     waste room -- the tick is monotonic, so an entry from the conversation
+     just left can never out-rank a read taken in the one arrived at. */
+  liveAt.clear()
 }
 
 export const rows = (): TaskRow[] => store.get().rows
@@ -76,6 +80,41 @@ export const rowKey = (row: TaskRow): string => `${row.kind}:${row.id}`
 export const byKey = (kind: TaskKind, id: string): TaskRow | null =>
   store.get().rows.find((r) => r.kind === kind && r.id === id) || null
 
+/* Bumped by every live frame this store applies, and stamped per row so the
+   one read that replaces the whole list can tell which rows it is allowed to
+   speak for.
+ *
+ * The read is the problem this exists for. `tasks.list` answers from the state
+ * the server held when it was asked, so a frame that lands during the round
+ * trip describes a row the answer cannot: a run dispatched in that window is
+ * missing from it entirely, and a node the frame moved is stale in it. Neither
+ * is recoverable afterwards -- `dag.run_started` fires once per run, and
+ * `applyNodeUpdated` schedules no reconcile, so whatever the answer writes
+ * stands until the next frame or the next read.
+ *
+ * A key stamped later than the tick a read captured is a row that read must
+ * leave alone. A key stamped with no row behind it is one a frame RETIRED (a
+ * spawn cancelled before it ran), and the answer must not put it back. */
+let liveTick = 0
+const liveAt = new Map<string, number>()
+
+/* Every live frame lands through here rather than `patch` directly, so no
+   consumer can add a sixth and forget the stamp. Which rows moved is read off
+   object identity rather than asked of the reducers: each one rebuilds only
+   the row it touches and passes the rest through by reference (live.ts), so
+   the diff is exact and the reducers stay pure. */
+function liveRows(next: TaskRow[]): void {
+  liveTick += 1
+  const was = new Map(store.get().rows.map((r) => [rowKey(r), r]))
+  for (const r of next) {
+    const k = rowKey(r)
+    if (was.get(k) !== r) liveAt.set(k, liveTick)
+    was.delete(k)
+  }
+  for (const k of was.keys()) liveAt.set(k, liveTick)
+  patch({ rows: next })
+}
+
 export async function refresh(): Promise<void> {
   const src = source()
   const key = sessionCurrent()
@@ -83,12 +122,42 @@ export async function refresh(): Promise<void> {
      strip above the composer is in the first frame, before the wiring runs,
      and a draft has no session for a task to be filed under. */
   if (!src || !key) { patch({ rows: [], loaded: true }); return }
+  const tick = liveTick
   const got = await src.list(key)
   /* Asked for one conversation, answered into whichever is open now: the
      reader can switch sessions while this is in flight. The same guard the
      agents lists, the deliveries shelf and the desk replay use. */
   if (key !== sessionCurrent()) return
-  patch({ rows: Array.isArray(got) ? got : [], loaded: true })
+  const answered = Array.isArray(got) ? got : []
+  if (tick === liveTick) { patch({ rows: answered, loaded: true }); return }
+  /* A frame landed while the read was out, so the answer is no longer the
+     whole truth -- but only about the rows those frames named. Row by row:
+     the answer speaks for everything it has not been overtaken on, and a
+     frame speaks for what it moved after this read was asked.
+     Preferring the frame there rather than the answer is the safe way round.
+     The answer is the richer copy -- it alone carries the tokens, the output
+     files and the final error text -- but it may also be describing a node
+     the reader has already watched finish, and nothing would correct that:
+     `dag.node_updated` schedules no reconcile. The other way costs nothing
+     for long, because every terminal frame DOES schedule one (`apply`'s
+     refetch), so the richer copy lands a moment later of its own accord. */
+  const fresher = (k: string): boolean => (liveAt.get(k) ?? 0) > tick
+  const held = new Map(store.get().rows.map((r) => [rowKey(r), r]))
+  const merged: TaskRow[] = []
+  for (const r of answered) {
+    const k = rowKey(r)
+    if (!fresher(k)) { merged.push(r); continue }
+    /* Held, or retired by that frame and deliberately not put back. */
+    const live = held.get(k)
+    if (live) merged.push(live)
+  }
+  /* And the rows the answer has not caught up to at all, which is the case
+     this whole branch was written for. Only the ones a frame actually put
+     there: a row the answer dropped that no frame touched is a row that is
+     gone, and the plain path above would have dropped it too. */
+  const named = new Set(answered.map(rowKey))
+  const missed = store.get().rows.filter((r) => !named.has(rowKey(r)) && fresher(rowKey(r)))
+  patch({ rows: [...missed, ...merged], loaded: true })
 }
 
 /* The two groups the panel shows. A row is finished when it is not running --
@@ -162,7 +231,7 @@ async function reconcile(kind: TaskKind, id: string): Promise<void> {
 }
 
 function apply(next: live.LiveResult): void {
-  patch({ rows: next.rows })
+  liveRows(next.rows)
   if (next.refetch) void reconcile(next.refetch.kind, next.refetch.id)
 }
 
@@ -170,10 +239,10 @@ function apply(next: live.LiveResult): void {
    state/session/stages.ts beside the transcript's own calls for the same
    frames. Each wraps its reducer in `live.ts` -- pure there, applied here. */
 export function onRunStarted(p: live.RunStartedPayload): void {
-  patch({ rows: live.applyRunStarted(store.get().rows, p) })
+  liveRows(live.applyRunStarted(store.get().rows, p))
 }
 export function onNodeUpdated(p: live.NodeUpdatedPayload): void {
-  patch({ rows: live.applyNodeUpdated(store.get().rows, p) })
+  liveRows(live.applyNodeUpdated(store.get().rows, p))
   bumpNodeVersion('dag', p.run_id, p.node)
 }
 export function onRunCompleted(p: live.RunCompletedPayload): void {

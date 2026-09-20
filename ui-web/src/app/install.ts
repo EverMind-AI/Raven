@@ -18,15 +18,20 @@ import { closeDialog as closeConnDialog } from '../features/connections/store'
 import { cronSource } from '../features/cron/source'
 import { closeSheet as closeCronSheet } from '../features/cron/store'
 import { openDeskTask } from '../features/desk/store'
+import { AgentsStepBody } from '../features/extAgents/AgentsBody'
 import { extAgentsSource } from '../features/extAgents/source'
+import * as extAgentsStore from '../features/extAgents/store'
 import { capabilitiesSource, loadExt } from '../features/installed/source'
 import { memorySource } from '../features/memory/source'
 import { modelSource, openModelsForMissingProvider, tierSource } from '../features/model/source'
 import { onboardSource } from '../features/onboard/source'
+import { setBodies as setOnboardBodies } from '../features/onboard/store'
 import { playbooksSource } from '../features/playbooks/source'
 import { markNew } from '../features/rail/store'
 import { installSessionActions } from '../features/rail/wire'
-import { bannerSource, settingsSource } from '../features/settings/source'
+import { ModelStepBody, WebStepBody } from '../features/settings/SetupBodies'
+import { bannerSource, modelStepDone, settingsSource, webStepDone } from '../features/settings/source'
+import * as settingsStore from '../features/settings/store'
 import { agentsSource, startAgentHeartbeat } from '../features/subagents/source'
 import { tasksSource } from '../features/tasks/source'
 import {
@@ -149,6 +154,38 @@ export function installSources(): void {
   sources.memory = memorySource
   sources.playbooks = playbooksSource
   sources.onboard = onboardSource
+  /* The onboarding wizard draws the owning domains' own bodies for its three
+     configured steps -- the settings dialog's model page and web controls,
+     the sub-agents roster -- and asks each domain's store whether the step is
+     loaded and done. Handed over here rather than imported by the wizard,
+     which would make it a reader of two sibling domains' private files. */
+  setOnboardBodies({
+    model: {
+      Body: ModelStepBody,
+      load: () => settingsStore.refresh(),
+      subscribe: settingsStore.subscribe,
+      loaded: () => settingsStore.get().loaded,
+      done: modelStepDone,
+      needsRestart: () => settingsStore.get().needsRestart,
+    },
+    search: {
+      Body: WebStepBody,
+      load: () => settingsStore.refresh(),
+      subscribe: settingsStore.subscribe,
+      loaded: () => settingsStore.get().loaded,
+      done: webStepDone,
+    },
+    agents: {
+      Body: AgentsStepBody,
+      load: () => extAgentsStore.load(true),
+      subscribe: extAgentsStore.subscribe,
+      /* The roster body draws its own scanning state, so the frame never
+         stands in front of it with a loading line. */
+      loaded: () => true,
+      done: extAgentsStore.stepDone,
+      found: () => extAgentsStore.found().map((row) => ({ id: row.preset ?? row.name, name: row.name })),
+    },
+  })
   sources.browser = browserSource
   sources.subagents = agentsSource
   /* One source either way: `tasks.list` is a real gateway method now, so the

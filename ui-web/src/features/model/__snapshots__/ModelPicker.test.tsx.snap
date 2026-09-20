@@ -55,8 +55,8 @@ exports[`the capability icons > keeps its rendered shape 1`] = `
     input
   div.cols
     div.provs
-      div.row.provider-choice-row
-        button.provider-choice-action
+      div.row.model-provider-row
+        button.model-provider-action
         span.nm
           img.provider-icon[data-provider=anthropic][data-tone=hybrid]
           span
@@ -138,8 +138,8 @@ exports[`the model picker > keeps its rendered shape 1`] = `
     input
   div.cols
     div.provs
-      div.row.provider-choice-row
-        button.provider-choice-action
+      div.row.model-provider-row
+        button.model-provider-action
         span.nm
           img.provider-icon.mark-light[data-provider=minimax]
           img.provider-icon.mark-dark[data-provider=minimax]
@@ -147,8 +147,8 @@ exports[`the model picker > keeps its rendered shape 1`] = `
         span.ct
         span.tick
         span.provider-status.on
-      div.row.provider-choice-row
-        button.provider-choice-action
+      div.row.model-provider-row
+        button.model-provider-action
         span.nm
           img.provider-icon[data-provider=anthropic][data-tone=hybrid]
           span
