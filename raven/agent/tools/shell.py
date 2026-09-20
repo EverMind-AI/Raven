@@ -6,6 +6,7 @@ dispatched. What stays here is the tool's own integrity boundary -- the
 operator's allowlist and the workspace fence -- and the execution itself.
 """
 
+import fnmatch
 import os
 import re
 import shlex
@@ -21,6 +22,23 @@ from raven.permissions.shell_policy import (
     executable_text,
 )
 from raven.sandbox import DirectExecutor, SandboxExecutor
+
+
+class _UnmodelledExpansion(Exception):
+    """A parameter expansion the fence cannot resolve to the text the shell runs.
+
+    The fence's promise is that it reads what will run. Where it cannot, the
+    honest answer is a refusal rather than a scan of text the shell will
+    replace: an expansion it does not model can hand the command any path at
+    all, and every spelling that reached this point before was a silent bypass.
+    Command substitution is not this case -- it holds an arbitrary program,
+    which no textual guard can resolve, and it is a declared limit of the fence
+    rather than a gap in it.
+    """
+
+    def __init__(self, construct: str) -> None:
+        super().__init__(construct)
+        self.construct = construct
 
 
 class ExecTool(Tool):
@@ -306,6 +324,22 @@ class ExecTool(Tool):
         discards, and there are two call sites -- the guard and the sandboxed
         path -- so doing it here is what keeps them from diverging. Reading the
         raw text refused ``ls -la  # see ../notes for why`` as path traversal.
+
+        The contract, because the fence is a reader of shell and a reader can
+        always meet syntax it does not know:
+
+        **A parameter expansion is resolved faithfully or the command is
+        refused.** The set of spellings is finite, so the residue is closed:
+        there is no further form that quietly passes. Refusing is visible and
+        arguable; the failure it replaces was silent, and silence is what let
+        four spellings through at once.
+
+        **Command substitution is a declared limit, not a gap.** It holds an
+        arbitrary program, so no textual guard can resolve it, and refusing it
+        would refuse ``echo "built at $(date)"`` along with everything else.
+        Paths written literally inside one are still scanned; a path the
+        substitution computes is beyond this fence, as a symlink inside the
+        workspace is, and the sandbox executor is the boundary for both.
         """
         if not self.restrict_to_workspace:
             return None
@@ -318,7 +352,10 @@ class ExecTool(Tool):
         cwd_path = Path(cwd).resolve()
         roots = [cwd_path, *(Path(d).resolve() for d in self.extra_allowed_dirs)]
         env = self._child_env(cwd_path)
-        readable = self._as_the_shell_reads_it(cmd, env)
+        try:
+            readable = self._as_the_shell_reads_it(cmd, env)
+        except _UnmodelledExpansion as unresolved:
+            return f"Error: Command blocked by safety guard (unsupported shell expansion: {unresolved.construct})"
 
         try:
             segments = list(_command_segments(readable))
@@ -367,9 +404,17 @@ class ExecTool(Tool):
 
     # The brace bodies that offer a second word the shell may substitute
     # instead of the value (`:-`, `:=`, `:?`, `:+` and their colon-less forms).
-    # `%`, `#` and `/` reshape the value rather than naming a word, so they are
-    # not here and are left standing.
     _BRACE_WORD_OPERATOR = re.compile(r"^:?[-=?+]")
+
+    # Suffix and prefix removal. These shorten a path, which walks it UP and
+    # out of the workspace, so reading them as decoration beside an in-root
+    # value is what let `${PWD%/*}/outside.txt` open the parent directory.
+    _BRACE_TRIM = re.compile(r"^(##?|%%?)(.*)$", re.DOTALL)
+
+    # A `${` the name pattern does not accept. `${#NAME}` counts characters, so
+    # whatever it yields is a number and cannot name a path; anything else here
+    # is indirection, an array or a form not modelled, and gets refused.
+    _BRACE_OTHER = re.compile(r"\$\{(#[A-Za-z_]\w*|[^}]*)\}")
 
     @staticmethod
     def _child_env(cwd: Path) -> dict[str, str]:
@@ -427,6 +472,54 @@ class ExecTool(Tool):
             if not any(root == destination or root in destination.parents for root in roots):
                 return True
         return False
+
+    @classmethod
+    def _resolve_brace(cls, value: str, body: str, construct: str) -> str:
+        """The value a ``${...}`` yields, or a refusal when that cannot be known.
+
+        Two bodies are resolved. A word operator offers a second word the shell
+        may substitute instead of the value, and which one it picks depends on a
+        value this cannot read -- so both are emitted, the operator becoming a
+        space so the word it introduces starts on a boundary the scan can take.
+        A trim shortens the value, which is the case that matters: it walks a
+        path UP, so reading it as decoration beside an in-root value is what let
+        ``${PWD%/*}/outside.txt`` open the parent.
+
+        Every other body is refused. Substitution, case folding and indirection
+        can each hand the command a path this cannot compute, and allowing them
+        would make the fence's promise depend on which spellings happen to be
+        implemented -- which is the defect, not a smaller version of it.
+        """
+        if not body:
+            return value
+        if cls._BRACE_WORD_OPERATOR.match(body):
+            return f"{value} {cls._BRACE_WORD_OPERATOR.sub(' ', body)}"
+        trim = cls._BRACE_TRIM.match(body)
+        if trim is not None:
+            return cls._trim(value, trim.group(1), trim.group(2))
+        raise _UnmodelledExpansion(construct)
+
+    @staticmethod
+    def _trim(value: str, operator: str, pattern: str) -> str:
+        """``value`` with the matching prefix or suffix removed, as the shell does.
+
+        A doubled operator takes the longest match and a single one the
+        shortest, which is why each direction is walked from its own end. No
+        match leaves the value alone, exactly as the shell leaves it.
+        """
+        from_end = operator.startswith("%")
+        longest = len(operator) == 2
+        if from_end:
+            cuts = range(0, len(value) + 1) if longest else range(len(value), -1, -1)
+            for cut in cuts:
+                if fnmatch.fnmatchcase(value[cut:], pattern):
+                    return value[:cut]
+            return value
+        cuts = range(len(value), -1, -1) if longest else range(0, len(value) + 1)
+        for cut in cuts:
+            if fnmatch.fnmatchcase(value[:cut], pattern):
+                return value[cut:]
+        return value
 
     @classmethod
     def _as_the_shell_reads_it(cls, command: str, env: dict[str, str]) -> str:
@@ -494,15 +587,17 @@ class ExecTool(Tool):
                 name_match = cls._VARIABLE.match(command, index)
                 if name_match is not None:
                     value = env.get(name_match.group(1) or name_match.group(3), "")
-                    # A brace body stands beside the value rather than being
-                    # applied to it: both are candidates, because which one the
-                    # shell uses depends on a value this cannot read. The word
-                    # operator becomes a space so its word starts on a
-                    # boundary -- `${NOPE:-/etc/shadow}` is that path whenever
-                    # the name is unset, and nothing else would put it in view.
-                    remainder = cls._BRACE_WORD_OPERATOR.sub(" ", name_match.group(2) or "")
-                    out.append(f"{value} {remainder}" if remainder else value)
+                    out.append(cls._resolve_brace(value, name_match.group(2) or "", name_match.group(0)))
                     index = name_match.end()
+                    continue
+                other = cls._BRACE_OTHER.match(command, index)
+                if other is not None:
+                    if not other.group(1).startswith("#"):
+                        raise _UnmodelledExpansion(other.group(0))
+                    # A character count. Whatever it yields is a number, and a
+                    # number cannot name a path, so it needs no value here.
+                    out.append("0")
+                    index = other.end()
                     continue
             out.append(char)
             index += 1

@@ -365,3 +365,86 @@ def test_a_nested_payload_that_stays_inside_is_left_alone(
     monkeypatch.setenv("HOME", "/home/victim")
 
     assert refusal(fenced, command) is None
+
+
+# ---------- a brace body that moves the path ---------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'cat "${PWD%/*}/outside.txt"',
+        "cat ${PWD%/*}/outside.txt",
+        "cat ${PWD%%/*}/etc/shadow",
+        "cat ${HOME#/home}/outside.txt",
+    ],
+    ids=["quoted", "bare", "longest-suffix", "shortest-prefix"],
+)
+def test_a_brace_body_that_shortens_a_path_is_resolved_not_ignored(
+    fenced: ExecTool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    """Removing a suffix walks a path UP, which is how it leaves the root.
+
+    These were read as inert text beside an in-root value, so the scan saw the
+    workspace and never the parent the shell would open. A trim is not a
+    decoration on the value; it is the value.
+    """
+    monkeypatch.setenv("HOME", "/home/victim")
+
+    assert refusal(fenced, command) is not None
+
+
+def test_a_trim_that_matches_nothing_leaves_the_value_alone(fenced: ExecTool) -> None:
+    """The other half of resolving them: a pattern with no match must not
+    become a refusal, or every trim would be refused and nothing was resolved."""
+    assert refusal(fenced, "cat ${PWD%/}/notes.txt") is None
+
+
+def test_a_longest_prefix_trim_yields_a_basename_and_stays_inside(
+    fenced: ExecTool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sharper half. ``${HOME##*/}`` is ``victim`` -- a bare name, so the
+    command reads inside the workspace and must run. Before the trim was
+    resolved this was refused, because the unresolved body left the whole of
+    ``$HOME`` standing beside it for the scan to find. Getting this one right
+    is what separates resolving a trim from refusing everything shaped like one.
+    """
+    monkeypatch.setenv("HOME", "/home/victim")
+
+    assert refusal(fenced, "cat ${HOME##*/}/notes.txt") is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat ${PWD/workspace/elsewhere}/x",
+        "cat ${PWD^^}/x",
+        "cat ${PWD,,}/x",
+        "cat ${!HOME}/x",
+        "cat ${PWD:1}/x",
+    ],
+    ids=["substitution", "upper", "lower", "indirection", "offset"],
+)
+def test_a_brace_body_the_fence_cannot_resolve_is_refused(fenced: ExecTool, command: str) -> None:
+    """The posture. Each of these can hand the shell a path this cannot
+    compute, so allowing them makes the fence's promise depend on which
+    spellings happened to be implemented. Refusing is visible and arguable;
+    the alternative is silent and was the whole defect.
+    """
+    error = refusal(fenced, command)
+
+    assert error is not None
+    assert "unsupported shell expansion" in error
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["echo ${#HOME}", "echo ${#PWD} chars", "cat $((1 + 1))/notes.txt"],
+    ids=["length", "length-in-a-sentence", "arithmetic"],
+)
+def test_a_construct_that_yields_a_number_is_left_alone(fenced: ExecTool, command: str) -> None:
+    """The exceptions to the refusal, and the reason they are exceptions: a
+    count and an arithmetic result are numbers, and a number cannot name an
+    absolute path. Pinned so neither is later swept into the refusal for
+    looking unresolved -- they are resolved, to something harmless."""
+    assert refusal(fenced, command) is None
