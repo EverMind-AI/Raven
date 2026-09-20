@@ -213,6 +213,7 @@ titles "arch-1..3".
 | T9.5 <- A53 | command | For each new or changed RPC: revert its handler body (`git stash` is not used; a scripted patch), run its test, restore, `git diff` clean. | Each test red on the revert, in the assertion it names, and green after restore. | a test green on the revert, or red in an import/fixture error | R | |
 | T9.6 <- A54 | command | The C8 diff command. | Empty output; `main.tsx` diff at most three lines. | any line | R | |
 | T9.7 <- A55 | yes | A fresh `$RV` with no provider; open the served page. | The onboarding flow appears, connects a provider through `model.save_key`, picks a model through `config.set`, and the main page opens; `config.json` holds the pair. | onboarding broken by the changed `model.options` shape | T E V R | |
+| T9.8 <- A56 | yes | Write a `github` stanza by hand into `config.json` (a catalog name with no ledger entry), restart; Plugins > `github` > type a token > update; then clear. | The toast reads the server's sentence ("not installed from the catalog; edit the config file instead") and carries no `config_validation_error`; the same call over the socket answers with `data` holding both `field` and `detail`. | a toast showing the code; a refusal frame whose `data` has no `detail` | T E V R | |
 
 A52, A53 and A54 are gate items: their subject is the branch, not the running page, so they have command cases only. Their link to the host is chapter 0's build step, which serves the very branch the gates ran on.
 
