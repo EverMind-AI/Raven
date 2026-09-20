@@ -29,6 +29,7 @@ operator turns the fence off, which costs more than the hole did.
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,15 @@ from raven.agent.tools.shell import ExecTool
 @pytest.fixture
 def fenced(tmp_path: Path) -> ExecTool:
     return ExecTool(working_dir=str(tmp_path), restrict_to_workspace=True)
+
+
+#: Every refusal the fence can answer with, for the cases that assert only
+#: that it answers at all rather than which way.
+_REFUSALS = (
+    "Error: Command blocked by safety guard (path traversal detected)",
+    "Error: Command blocked by safety guard (directory change outside working dir)",
+    "Error: Command blocked by safety guard (path outside working dir)",
+)
 
 
 def refusal(tool: ExecTool, command: str) -> str | None:
@@ -490,3 +500,38 @@ def test_the_windows_expansion_is_what_the_scan_reads(
     assert fenced._as_the_shell_reads_it(r"type %USERPROFILE%\.ssh\id_rsa", env) == (
         r"type C:\Users\victim\.ssh\id_rsa"
     )
+
+
+# ---------- the branches a reader would otherwise have to take on trust -------
+
+
+def test_a_brace_group_that_walks_out_is_refused(fenced: ExecTool) -> None:
+    """The sibling of the subshell case. Both arrive with the bracket already
+    removed, which is why neither needs unwrapping here."""
+    assert refusal(fenced, "{ cd /; cat etc/shadow; }") is not None
+
+
+@pytest.mark.parametrize("command", ["cd -", 'cd ""'], ids=["oldpwd", "empty-operand"])
+def test_a_destination_this_cannot_name_is_not_guessed_at(fenced: ExecTool, command: str) -> None:
+    """``$OLDPWD`` can only hold a directory an earlier ``cd`` already passed,
+    and an empty operand moves nowhere. Refusing either would refuse a command
+    that cannot leave."""
+    assert refusal(fenced, command) is None
+
+
+def test_a_destination_that_cannot_be_resolved_at_all_is_refused(fenced: ExecTool) -> None:
+    """``~nosuchuser`` has no home to resolve to, so the fence cannot say where
+    the command lands. Under the same rule as an unresolved expansion, not
+    knowing is a refusal rather than a pass."""
+    assert refusal(fenced, "cd ~nosuchuserxyz") is not None
+
+
+def test_a_nesting_deeper_than_the_cap_still_answers(fenced: ExecTool, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The cap is there so a crafted command cannot drive the scan down
+    forever. What it must not do is fail to answer."""
+    monkeypatch.setenv("HOME", "/home/victim")
+    command = "cat $HOME/.ssh/id_rsa"
+    for _ in range(6):
+        command = f"sh -c {shlex.quote(command)}"
+
+    assert refusal(fenced, command) in (None, *_REFUSALS)

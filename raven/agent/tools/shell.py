@@ -451,11 +451,10 @@ class ExecTool(Tool):
         the command resolves somewhere the operator did not allow.
         """
         for segment in segments:
+            # A subshell or brace group needs no unwrapping here: the splitter
+            # treats `(`, `)` and a standalone `{` as operators, so `(cd /; x)`
+            # arrives as its own segment with the bracket already gone.
             tokens = list(segment)
-            while tokens and tokens[0] in ("(", "{"):
-                tokens.pop(0)
-            if tokens and tokens[0].startswith("("):
-                tokens[0] = tokens[0].lstrip("(")
             if not tokens or tokens[0] != "cd":
                 continue
             arguments = list(tokens[1:])
