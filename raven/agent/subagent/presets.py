@@ -44,9 +44,11 @@ The **agent itself** is never fetched. Its row names the bare executable
 (``hermes acp``, ``opencode acp``), so the agent that answers is the one the user
 installed, at the version they chose, holding the login they already granted --
 and a machine without it says so, because ``_probe_acp`` resolves ``argv[0]`` and
-an ``npx`` command always resolves whether the agent is there or not.
-:data:`SHIM_LAUNCHED_PRESETS` is that split, declared; a test holds every
-command to it.
+an ``npx`` command always resolves whether the agent is there or not. For a shim
+the probe therefore asks after the agent the shim drives instead
+(:data:`SHIM_REQUIRED_EXECUTABLES`), so a machine without ``pi`` reads Pi as
+absent rather than as connectable. :data:`SHIM_LAUNCHED_PRESETS` is that split,
+declared; a test holds every command to it.
 
 Every preset runs unattended, so none of them may stop to ask permission: raven
 answers whatever an ACP agent asks (``raven/acp_client/permissions.py``), and the
@@ -129,6 +131,21 @@ docstring. Every other acp preset must name an executable the user installed.
 Spelled with the preset key, not the row's ``name``: what a package is cannot
 depend on what the row is called, and a configured row's name is the user's to
 change (``test_provenance_survives_a_rename``).
+"""
+
+SHIM_REQUIRED_EXECUTABLES: dict[str, tuple[str, str]] = {
+    "claude_code": ("claude", "npm install -g @anthropic-ai/claude-code"),
+    "pi": ("pi", "npm install -g @earendil-works/pi-coding-agent"),
+}
+"""The local agent a shim drives, as ``(executable, install command)``, by preset key.
+
+A shim is plumbing in front of an agent the user installs themselves, and its
+``npx`` command resolves whether that agent is there or not. ``_probe_acp`` asks
+after this executable as well, so a machine without it reports the row absent
+with the install beside it, instead of offering a connect that fails a minute
+later inside the adapter with the same sentence. Codex is absent on purpose:
+``codex-acp`` ships the agent as its own binary and wants a login, not an
+install.
 """
 
 
@@ -292,9 +309,22 @@ def install_hint_for(cfg: Any) -> str | None:
     return ACP_REGISTRY_INSTALL_HINTS.get(preset) if preset else None
 
 
+def shim_requirement_for(cfg: Any) -> tuple[str, str] | None:
+    """The agent a shim-launched row needs installed, with its install, or ``None``.
+
+    By provenance, like :func:`install_hint_for`, and for the same reason: the
+    row's name is its owner's to change, and a hand-written row that merely
+    wears a preset's name runs whatever command it wrote.
+    """
+    preset = getattr(cfg, "preset", None)
+    return SHIM_REQUIRED_EXECUTABLES.get(preset) if preset else None
+
+
 __all__ = [
     "SHIM_LAUNCHED_PRESETS",
+    "SHIM_REQUIRED_EXECUTABLES",
     "install_hint_for",
+    "shim_requirement_for",
     "THIRD_PARTY_SUBAGENT_PRESETS",
     "session_mcp_for",
     "third_party_subagent_presets",

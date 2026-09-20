@@ -94,6 +94,78 @@ async def test_a_missing_executable_invents_no_install_it_does_not_know(tmp_path
     assert "npm" not in res.detail
 
 
+def _fake_executable(tmp_path: Path, name: str) -> Path:
+    exe = tmp_path / name
+    exe.write_text("#!/bin/sh\nexit 0\n")
+    exe.chmod(0o755)
+    return exe
+
+
+async def test_a_shim_row_is_missing_when_the_agent_it_drives_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``npx`` resolving says nothing about whether ``pi`` is installed.
+
+    The shim is fetched on connect and fails a minute later with "executable not
+    found" when the agent it drives is absent. That is the sentence the probe can
+    say up front, with the install beside it, so the row reads absent rather
+    than connectable -- the same reading a local-executable row gets.
+    """
+    _fake_executable(tmp_path, "npx")
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+    cfg = ThirdPartyAcpSubagentConfig(name="Pi", preset="pi", command="npx -y pi-acp@0.0.33")
+
+    res = await probe_one(cfg, source="preset", path=str(tmp_path))
+
+    assert res.status == "missing"
+    assert res.target == "pi"
+    assert res.detail == (
+        "pi is not on the login shell PATH; install with npm install -g @earendil-works/pi-coding-agent"
+    )
+
+
+async def test_a_shim_row_whose_agent_is_installed_goes_on_to_the_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    npx = _fake_executable(tmp_path, "npx")
+    _fake_executable(tmp_path, "pi")
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+    cfg = ThirdPartyAcpSubagentConfig(name="Pi", preset="pi", command="npx -y pi-acp@0.0.33")
+
+    res = await probe_one(cfg, source="preset", path=str(tmp_path))
+
+    assert res.status == "attention"
+    assert res.target == str(npx)
+
+
+async def test_a_shim_that_ships_its_own_agent_asks_after_nothing_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``codex-acp`` bundles the agent as its own binary; what it wants is a login, not an install."""
+    _fake_executable(tmp_path, "npx")
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+    cfg = ThirdPartyAcpSubagentConfig(
+        name="Codex", preset="codex", command="npx -y @agentclientprotocol/codex-acp@1.1.14"
+    )
+
+    res = await probe_one(cfg, source="preset", path=str(tmp_path))
+
+    assert res.status == "attention"
+
+
+async def test_a_hand_written_npx_row_is_not_held_to_a_shims_requirement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The requirement rides on provenance: a row that merely wears the preset's name runs its own command."""
+    _fake_executable(tmp_path, "npx")
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+    cfg = ThirdPartyAcpSubagentConfig(name="Pi", command="npx -y my-own-acp-shim@1.0.0")
+
+    res = await probe_one(cfg, source="config", path=str(tmp_path))
+
+    assert res.status == "attention"
+
+
 async def test_cli_probe_reports_missing_and_still_names_what_it_looked_for(tmp_path: Path) -> None:
     res = await probe_one(_cli("definitely-not-installed {prompt}"), source="config", path=str(tmp_path))
     assert res.status == "missing"

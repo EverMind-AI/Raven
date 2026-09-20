@@ -27,7 +27,7 @@ from loguru import logger
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
-from raven.agent.subagent.presets import install_hint_for
+from raven.agent.subagent.presets import install_hint_for, shim_requirement_for
 from raven.agent.subagent.probe_state import LastTest
 
 ProbeStatus = Literal["ready", "attention", "missing", "unknown"]
@@ -165,8 +165,11 @@ def _missing_exe_detail(cfg: Any, exe: str) -> str:
     them growing the hint alone is the shape a reader would trust and be wrong
     about on the other.
     """
+    return _missing_detail(exe, install_hint_for(cfg))
+
+
+def _missing_detail(exe: str, hint: str | None) -> str:
     detail = f"{exe} is not on the login shell PATH"
-    hint = install_hint_for(cfg)
     return f"{detail}; install with {hint}" if hint else detail
 
 
@@ -208,6 +211,12 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     ``which`` alone would be a green light for an agent that cannot run a task --
     so an unverified entry is ``attention``, with the recorded verdict taking over
     once one exists.
+
+    For a shim-launched preset the executable asked after is the agent the shim
+    drives, not ``argv[0]``: an ``npx`` command resolves on any machine with
+    node, so on its own it would report Pi installed wherever ``pi`` is not, and
+    the connect that follows would fail a minute later inside the adapter with
+    the sentence this probe can say up front.
     """
     name = getattr(cfg, "name", "") or ""
 
@@ -228,6 +237,11 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     resolved = shutil.which(exe, path=cfg_path or path)
     if resolved is None:
         return done("missing", _missing_exe_detail(cfg, exe), exe)
+    requirement = shim_requirement_for(cfg)
+    if requirement is not None:
+        agent_exe, install = requirement
+        if shutil.which(agent_exe, path=cfg_path or path) is None:
+            return done("missing", _missing_detail(agent_exe, install), agent_exe)
 
     snapshot = acp_snapshot_for(cfg)
     if snapshot is None:

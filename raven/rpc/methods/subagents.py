@@ -9,8 +9,9 @@ means or which fields a write is allowed to touch.
 The install group is computed here rather than in the client because a client
 that computes it is how the rule drifts: a second copy in the TUI, or in the
 page, would be one more place for it to go stale. For `kind == "acp"` the rule
-is whether the executable is on the login shell's PATH, which is the same
-question `ui-web/`'s agent rows gate on (`probe_status === "missing"`).
+is whether the executable -- and, for a shim-launched preset, the agent the shim
+drives -- is on the login shell's PATH, which is the same question `ui-web/`'s
+agent rows gate on (`probe_status === "missing"`).
 """
 
 from __future__ import annotations
