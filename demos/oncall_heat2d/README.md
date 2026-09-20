@@ -71,11 +71,11 @@ Tool call: read_file(arena/run_heat.sh)          <- looks at the case
 Tool call: spawn(subagent="Raven-Oncall", ...)
   -> "Subagent [...] started"
   ... the on-call agent's first call is ops_connections, which answers
-      "No machine is set up in this instance ... Hand this to the owner as
-       it stands. Ask them to run `raven ops connection add`" and lists the
-       seven things that command asks for
-$ raven ops connection add --transport local        <- you, once
-  -> probed the machine, wrote the registry row
+      "No machine is set up in this instance ... Ask the owner for these"
+      and lists seven things; the question reaches you through the host
+  (you answer in the conversation: this computer, what is installed, ...)
+Tool call: ops_connection_add(name=..., transport="local", ...)
+  -> reached this computer, read its cores and memory, wrote the registry row
   ... the on-call agent declares a campaign, submits trials, takes readings,
       and concludes with the best stable configuration and its L2 error
 ```
