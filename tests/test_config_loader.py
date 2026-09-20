@@ -897,95 +897,10 @@ def test_a_stamped_seven_config_keeps_its_transition_row(tmp_path: Path) -> None
     assert drain_migration_notices() == []
 
 
-def test_the_research_output_cap_migration_raises_the_retired_thirty_thousand(tmp_path: Path) -> None:
-    """The cap ``install.py`` copied out of the old manifest is ours, not the
-    user's: a stored row wins over the discovered manifest, so shipping 60000
-    reaches fresh installs only. Floor ten lifts the registered one, tells once,
-    and leaves the neighbouring lanes alone."""
-    p = tmp_path / "config.json"
-    _write(
-        p,
-        {
-            "subagents": {
-                "agents": [
-                    {"name": "Raven-Research", "kind": "acp", "command": "/opt/a/run.py", "maxOutputChars": 30000},
-                    {"name": "Raven-Code", "kind": "acp", "command": "/opt/b/run.py", "maxOutputChars": 60000},
-                ]
-            }
-        },
-    )
-    _stamp_path(p).write_text(json.dumps({"version": 9}), encoding="utf-8")
-
-    drain_migration_notices()
-    load_config(p)
-
-    rows = json.loads(p.read_text(encoding="utf-8"))["subagents"]["agents"]
-    assert rows[0]["maxOutputChars"] == 60000
-    assert rows[1]["maxOutputChars"] == 60000
-    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
-    notices = [n for n in drain_migration_notices() if "reply cap" in n]
-    assert len(notices) == 1, notices
-
-    load_config(p)
-    assert drain_migration_notices() == []
-
-
-def test_a_research_cap_the_user_chose_is_left_alone(tmp_path: Path) -> None:
-    """Only the value we planted moves. Any other number was somebody's
-    decision, and the file is not rewritten for it."""
-    p = tmp_path / "config.json"
-    _write(
-        p,
-        {
-            "subagents": {
-                "agents": [
-                    {"name": "Raven-Research", "kind": "acp", "command": "/opt/a/run.py", "maxOutputChars": 45000}
-                ]
-            }
-        },
-    )
-    _stamp_path(p).write_text(json.dumps({"version": 9}), encoding="utf-8")
-    before = p.read_bytes()
-
-    drain_migration_notices()
-    load_config(p)
-
-    assert p.read_bytes() == before
-    assert drain_migration_notices() == []
-
-
-def test_a_research_cap_of_thirty_thousand_survives_once_stamped(tmp_path: Path) -> None:
-    """30000 written by the old manifest and 30000 chosen by a user are the same
-    five bytes. A config already past floor ten has had its one pass, so the
-    number is the user's from then on -- the lesson
-    test_context_window_pin_survives_once_stamped records, which is why the stamp
-    here is a literal."""
-    p = tmp_path / "config.json"
-    _write(
-        p,
-        {
-            "subagents": {
-                "agents": [
-                    {"name": "Raven-Research", "kind": "acp", "command": "/opt/a/run.py", "maxOutputChars": 30000}
-                ]
-            }
-        },
-    )
-    _stamp_path(p).write_text(json.dumps({"version": 10}), encoding="utf-8")
-    before = p.read_bytes()
-
-    drain_migration_notices()
-    load_config(p)
-
-    assert p.read_bytes() == before
-    assert drain_migration_notices() == []
-
-
 def test_the_roster_migrations_skip_mangled_sections_instead_of_crashing() -> None:
     """A stamped config can still be hand-mangled afterwards; the migrations
     must leave the shape complaint to the schema rather than crash the load."""
     from raven.config.loader import (
-        _migrate_research_output_cap,
         _migrate_research_rename,
         _migrate_vendored_tree_rows,
         _research_rename_pending,
@@ -998,7 +913,6 @@ def test_the_roster_migrations_skip_mangled_sections_instead_of_crashing() -> No
         {},
     ):
         assert _migrate_research_rename(bad) is False
-        assert _migrate_research_output_cap(bad) is False
         assert _migrate_vendored_tree_rows(bad) is False
         assert _research_rename_pending(bad) is False
 

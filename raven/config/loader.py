@@ -19,7 +19,7 @@ from raven.utils.atomic_io import atomic_replace, atomic_update
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 10
+CURRENT_CONFIG_VERSION = 9
 
 # The generation that introduced each run-once migration. Each is gated on its
 # own floor rather than on "is this config current", because those are not the
@@ -42,7 +42,6 @@ _VENDORED_TREE_MIGRATION = 6
 _RESEARCH_RENAME_MIGRATION = 7
 _EMBEDDING_HOME_MIGRATION = 8
 _EMBEDDING_SHAPE_MIGRATION = 9
-_RESEARCH_OUTPUT_CAP_MIGRATION = 10
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -50,17 +49,6 @@ _RESEARCH_OUTPUT_CAP_MIGRATION = 10
 # window by design, so on an upgraded install this exact value silently caps
 # every model at 64k -- see ``_migrate_legacy_context_window``.
 LEGACY_CONTEXT_WINDOW_TOKENS = 65_536
-
-# The reply cap every Raven-Research registration carried before the manifest
-# joined the other four lanes at 60000. A stored row wins over the discovered
-# manifest (``merge_product_seeds``), so on an upgraded install this exact value
-# keeps clipping the longest replies raven produces -- see
-# ``_migrate_research_output_cap``.
-LEGACY_RESEARCH_OUTPUT_CHARS = 30_000
-SHIPPED_RESEARCH_OUTPUT_CHARS = 60_000
-# Both spellings the row can be filed under while the rename of floor seven is
-# still pending.
-_RESEARCH_ROW_NAMES = ("Raven-Research", "Raven-Research-NG")
 
 # Single source of truth for Raven extension block keys.
 # Both _migrate_config (pop before base Config validates) and
@@ -390,8 +378,6 @@ def _persist_migrations(path: Path, from_version: int = 0) -> None:
                 changed = _migrate_embedding_home(raw, config_path=path) or changed
             if from_version < _EMBEDDING_SHAPE_MIGRATION:
                 changed = _migrate_embedding_shape(raw, config_path=path) or changed
-            if from_version < _RESEARCH_OUTPUT_CAP_MIGRATION:
-                changed = _migrate_research_output_cap(raw) or changed
         if not changed:
             return None, True
         return json.dumps(raw, indent=2, ensure_ascii=False), True
@@ -847,53 +833,6 @@ def _migrate_research_rename(data: dict[str, Any], *, notify: bool = False) -> b
     return changed
 
 
-def _migrate_research_output_cap(data: dict[str, Any], *, notify: bool = False) -> bool:
-    """Raise a stored Raven-Research reply cap off the retired 30000.
-
-    ``install.py`` copies the folder's manifest into ``subagents.agents[]``
-    wholesale, and ``merge_product_seeds`` lets that stored row win over the
-    discovered manifest, so an install registered before the manifest moved to
-    60000 keeps the old number for good: shipping a new manifest reaches fresh
-    installs only. The same shape as the retired context-window pin above, and
-    fixed the same way -- once, through a floor, on the exact value we planted.
-
-    Only that value moves. 30000 written by the old manifest and 30000 chosen by
-    a user are the same five bytes, so this runs once and from then on the number
-    is the user's; any other value was never ours and is left alone. Silent when
-    it changes nothing, which is what keeps it honest on the loads where the
-    stamp sits below its floor for an unrelated reason (see the note on the
-    scalar stamp above).
-    """
-    changed = False
-    for alias, rows in _subagent_alias_rows(data):
-        for row in rows:
-            if not isinstance(row, dict) or row.get("name") not in _RESEARCH_ROW_NAMES:
-                continue
-            for cap_key in ("maxOutputChars", "max_output_chars"):
-                if row.get(cap_key) != LEGACY_RESEARCH_OUTPUT_CHARS:
-                    continue
-                row[cap_key] = SHIPPED_RESEARCH_OUTPUT_CHARS
-                changed = True
-                logging.getLogger(__name__).info(
-                    "Migrated: subagents.%s[%s].%s %s -> %s",
-                    alias,
-                    row.get("name"),
-                    cap_key,
-                    LEGACY_RESEARCH_OUTPUT_CHARS,
-                    SHIPPED_RESEARCH_OUTPUT_CHARS,
-                )
-    if not changed:
-        return False
-    notice = (
-        f"Raised the research agent's reply cap from {LEGACY_RESEARCH_OUTPUT_CHARS} to "
-        f"{SHIPPED_RESEARCH_OUTPUT_CHARS} characters, the number every other agent already "
-        "carried. Set it back in your config if you wanted the shorter one."
-    )
-    if notify and notice not in _migration_notices:
-        _migration_notices.append(notice)
-    return True
-
-
 def _migrate_legacy_leaves(data: dict[str, Any], *, notify: bool = False) -> bool:
     """Retire the three leaves the schema kept accepting after their meaning left.
 
@@ -1166,8 +1105,6 @@ def _migrate_config(  # noqa: C901 (cc 42: pre-existing, above the ceiling)
         _migrate_embedding_home(data, notify=True, config_path=config_path)
     if from_version < _EMBEDDING_SHAPE_MIGRATION:
         _migrate_embedding_shape(data, notify=True, config_path=config_path)
-    if from_version < _RESEARCH_OUTPUT_CAP_MIGRATION:
-        _migrate_research_output_cap(data, notify=True)
 
     # Same for the session-title gate, which changed both name and unit:
     # ``min_input_chars`` counted code points, ``min_input_width`` counts
