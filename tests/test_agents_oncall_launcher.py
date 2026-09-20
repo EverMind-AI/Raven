@@ -46,14 +46,43 @@ def grounded(launcher, tmp_path, monkeypatch):
 # --- byte parity: the one prompt asset and the roster identity --------------
 
 
+#: Where this product's guide deliberately says more than the frozen twin's, as
+#: ``(the fork's text, what stands here instead)``. Applied to the fork's copy
+#: before the comparison, so the guard still reads byte for byte everywhere else:
+#: an addition quietly dropped, reworded, or landing on a fork line that has since
+#: moved fails exactly as a silent drift would. The A side is a record and is never
+#: edited to make this green (tests/fixtures/vendored_fork/README.md).
+#:
+#: ops_connection_add is this side's own tool. The fork never had it: its host
+#: filled the connection registry from the owner's answer before dispatching, and
+#: that step was removed on 2026-09-06, so the ask now has to name the tool that
+#: consumes the answer.
+B_SIDE_ADDITIONS = (
+    (
+        "for you. A task statement that names no machine is normal.\n",
+        "for you. A task statement that names no machine is normal. When it lists none\n"
+        "that fits, ask the owner what it says to ask -- is it this computer or another,\n"
+        "what they call it, and an address if another -- and hand the answer to\n"
+        "`ops_connection_add`; ssh's own config fills a port, user or key they left out,\n"
+        "and the machine is reached before anything is written.\n",
+    ),
+)
+
+
 def test_the_oncall_section_is_the_vendored_twins():
-    """Byte parity, no exception list.
+    """Byte parity, with every divergence named in B_SIDE_ADDITIONS.
 
     The respelling table this test used to carry existed because the fork's
     exec(machine=...) face was contributed under its own name (ops_exec).
-    Trunk exec now carries the machine parameter itself, so the fork's
-    wording is simply true again and the guide is the twin's, byte for byte."""
-    assert PRODUCT_SECTION.read_text(encoding="utf-8") == FORK_SECTION.read_text(encoding="utf-8")
+    Trunk exec now carries the machine parameter itself, so that entry is gone
+    and the guide is the twin's, byte for byte -- except where this side has
+    deliberately grown a tool the fork never had, which is listed above rather
+    than written into the frozen record."""
+    expected = FORK_SECTION.read_text(encoding="utf-8")
+    for fork_text, product_text in B_SIDE_ADDITIONS:
+        assert fork_text in expected, f"the fork text this addition extends has moved: {fork_text!r}"
+        expected = expected.replace(fork_text, product_text, 1)
+    assert PRODUCT_SECTION.read_text(encoding="utf-8") == expected
 
 
 def test_the_seeded_guide_is_the_trunk_template_plus_the_section(grounded, tmp_path):
@@ -243,6 +272,12 @@ def test_a_preexisting_own_registry_stays(grounded, tmp_path):
 #: be disabled by the product config, not by luck. The two playbook tools and
 #: the everos understand_media only register outside this hermetic fixture;
 #: their disable rows are pinned below instead.
+#:
+#: ops_connection_add is the one row here the fork never had. Its host filled the
+#: connection registry from the owner's answer before dispatching a spawn; that
+#: step was removed on 2026-09-06, so the instance that needs the machine now
+#: writes the row itself. Listed explicitly, not folded in: a tool reaching this
+#: face without a line saying why is the drift this guard exists to catch.
 VENDORED_TOOL_FACE = {
     "ask_user",
     "edit_file",
@@ -255,6 +290,7 @@ VENDORED_TOOL_FACE = {
     "ops_campaigns",
     "ops_case_changes",
     "ops_check_later",
+    "ops_connection_add",
     "ops_connections",
     "ops_declare",
     "ops_edit_case_dict",

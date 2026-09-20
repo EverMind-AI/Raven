@@ -26,12 +26,17 @@ wait until there is a platform that needs them (2026-08-17, deliberate): storing
 one means a keychain or a master password, and neither is worth building before
 something asks for it.
 
-Read-only here: the file is written by hand or by the host's
-``raven ops connection add``. This module is the plugin's own reader over the
-same store the trunk module reads (RAVEN_CONNECTIONS, else the owner's
-``~/.raven/connections.json``): the trunk module is deliberately not a
-contracts paper, so the plugin cannot import it at runtime -- behaviour is
-aligned to the trunk version and any drift is a parity-ledger entry (C2).
+The file is written by hand, by the host's ``raven ops connection add``, or --
+since 2026-09-20 -- by this instance's own ``ops_connection_add`` once the owner
+has answered what that command asks (the host stopped gating a spawn on the
+registry on 2026-09-06, and with it went the step that ran the
+command on the owner's behalf; the ask survived, the write did not). This module
+is the plugin's own reader and writer over the same store the trunk module
+reads (RAVEN_CONNECTIONS, else the owner's ``~/.raven/connections.json``): the
+trunk module is deliberately not a contracts paper, so the plugin cannot import
+it at runtime -- behaviour is aligned to the trunk version and any drift is a
+parity-ledger entry (C2). ``probe``, ``write`` and ``write_ssh_alias`` mirror
+``raven/cli/ops_connection_commands.py`` for the same reason.
 """
 
 from __future__ import annotations
@@ -425,23 +430,27 @@ def resolve_into(meta: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
-# What the owner has to be asked for, when there is nobody to ask it of here. The
-# loop cannot fill any of it in: the address and the key are deliberately outside
-# what it can see, and the rest -- what is installed, how the budget is metered,
-# which directories are the owner's -- is not on the machine to be discovered
-# before there is a way onto the machine.
+# What the owner has to be asked for, when there is nobody to ask it of here.
+# Kept to what only they know: the address and the key are deliberately outside
+# what the loop can see, and a name is theirs to give. Everything a machine can
+# say about itself -- cores, memory, devices -- is read off it once reached, and
+# ssh's own config resolves a port, a user or a key the owner left out. Once
+# they have answered, the write is the loop's own: ops_connection_add.
 _REQUEST = """\
-Hand this to the owner as it stands. Ask them to run `raven ops connection add`,
-which asks for, and checks:
-  - what they call this machine
-  - whether it is reached over ssh or is this very computer
-  - for ssh: address, port, username, and the path to the private key
-  - what is installed on it, with paths -- "CalculiX 2.17 (/opt/calculix)"
-  - whether its budget is counted in minutes, core-minutes or gpu-minutes
-  - how many jobs it will run at once
-  - which directories on it hold the owner's work
+Ask the owner, in one message, and stop there until they answer (there is no
+campaign yet, so end the turn with the question; whoever called you relays the
+answer):
+  - is the machine this very computer, or another one reached over ssh?
+  - what do they call it?
+  - if another one: its address -- and port, username and private-key path
+    only if they know them; left out, ssh's own config is tried and whatever
+    connects is kept
+Optional, only if they care to say: what is installed on it (with paths),
+which directories on it hold their work, and how its budget is counted.
 
-Until one exists there is no machine to run on. Do not submit anything,
+With the answers, call ops_connection_add: it reaches the machine before
+writing anything, and what the machine says about itself is read off it.
+Until a machine is listed there is nothing to run on. Do not submit anything,
 and do not look for a way in with exec or ssh."""
 
 
@@ -472,9 +481,8 @@ def describe() -> str:
             f"The machine registry for this instance cannot be read.\n{found.detail}\n\n"
             "This is NOT the same as having no machines: the file may well list "
             "several, and this instance cannot see any of them. Say exactly this "
-            "to the owner -- the file needs fixing, or rewriting with "
-            "`raven ops connection add`. Do not submit anything and do not look "
-            "for a way in yourself."
+            "to the owner -- the file needs fixing by hand. Do not submit anything "
+            "and do not look for a way in yourself."
         )
     rows = load()
     if not rows:
@@ -532,6 +540,181 @@ def describe() -> str:
         "machine time, and coming back is ops_check_later. A cron job and a file "
         "of your own do the same arithmetic with none of the record."
     )
+
+
+# What a machine is asked about itself, the moment it is reached. Read off the
+# box rather than typed by the owner, so the row cannot say 64 cores about a
+# machine with 32. Mirrors the CLI's probe line.
+_PROBE = (
+    "echo CORES=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null); "
+    "echo MEM=$(free -g 2>/dev/null | awk '/^Mem:/{print $2}'); "
+    "echo GPU=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | paste -sd'|' -); "
+    "echo LIBC=$(ldd --version 2>/dev/null | head -1)"
+)
+
+
+def ssh_defaults(host: str, *, port: int = 0, user: str = "") -> dict[str, Any]:
+    """What ssh itself would use for this host: ``port``, ``user``, ``keys``.
+
+    ``ssh -G`` prints the resolved configuration -- ``~/.ssh/config`` blocks
+    included -- so an owner who left the port, the user or the key path out
+    gets the values their own ssh would pick, not a guess. ``keys`` lists only
+    identity files that exist here, in ssh's own order; the caller probes each
+    and keeps the one that connects. Empty when ssh is not on this computer.
+    """
+    import subprocess
+
+    argv = ["ssh", "-G"] + (["-p", str(port)] if port else []) + [f"{user}@{host}" if user else host]
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, timeout=10, check=False)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return {}
+    if done.returncode != 0:
+        return {}
+    out: dict[str, Any] = {"keys": []}
+    for line in done.stdout.splitlines():
+        key, _, value = line.partition(" ")
+        if key == "port" and value.strip().isdigit():
+            out["port"] = int(value)
+        elif key == "user" and value.strip():
+            out["user"] = value.strip()
+        elif key == "identityfile" and value.strip():
+            if Path(os.path.expanduser(value.strip())).exists():
+                out["keys"].append(value.strip())
+    return out
+
+
+def probe(row: dict[str, Any], *, timeout: float = 30.0, isolate_key: bool = False) -> tuple[bool, str, dict[str, Any]]:
+    """Reach the machine and read what it is. ``(reached, message, detected)``.
+
+    The reaching is the point and the reading is the bonus. A row that cannot be
+    reached is not written, because an unreachable row in the registry is worse
+    than an absent one: absent is a question the loop knows to ask, unreachable
+    is a fact it acts on. Rides the plugin's own transport seam, so the way a
+    machine is reached here is the way its jobs will be reached.
+
+    ``isolate_key`` is for the one caller that has to say WHICH key opened the
+    session rather than merely that one opened: trying the keys ssh named when
+    the owner gave no path. Without it, ``-i`` is a preference and not a
+    restriction -- the other configured identities and the agent are offered too
+    -- so the first candidate could be credited with a session a different key
+    authenticated, and the registry would then hold a path that stops working
+    the day that agent or config changes.
+    """
+    from oncall_flow.backend import JobBackendError
+    from oncall_flow.transport import runner_from
+
+    where = "this computer" if transport_of(row) == LOCAL else f"{row.get('user')}@{row.get('host')}:{row.get('port')}"
+    try:
+        if isolate_key and transport_of(row) == SSH:
+            from oncall_flow.docker_backend import make_ssh_runner
+
+            runner = make_ssh_runner(
+                str(row.get("host") or ""),
+                int(row.get("port") or 22),
+                os.path.expanduser(str(row.get("key") or "")),
+                user=str(row.get("user") or "root"),
+                identities_only=True,
+            )
+        else:
+            runner = runner_from(row, what="connection", cap_seconds=timeout)
+        code, out = runner(_PROBE)
+    except JobBackendError as exc:
+        return False, f"could not reach {where}: {exc}", {}
+    if code != 0:
+        return False, f"could not reach {where}: {out.strip() or f'exit {code}'}", {}
+    return True, f"reached {where}", _parse_probe(out)
+
+
+def _parse_probe(out: str) -> dict[str, Any]:
+    seen: dict[str, str] = {}
+    for line in out.splitlines():
+        key, _, value = line.partition("=")
+        if value.strip():
+            seen[key.strip()] = value.strip()
+    found: dict[str, Any] = {}
+    if seen.get("CORES", "").isdigit():
+        found["cores"] = int(seen["CORES"])
+    if seen.get("MEM", "").isdigit() and int(seen["MEM"]) > 0:
+        found["memory"] = f"{seen['MEM']} GB"
+    gpu = seen.get("GPU", "")
+    if gpu:
+        cards = [c.strip() for c in gpu.split("|") if c.strip()]
+        found["gpus"] = len(cards)
+        found["device"] = f"{len(cards)} x {cards[0]}" if len(set(cards)) == 1 else " + ".join(cards)
+        found["kind"] = "gpu"
+    elif "cores" in found:
+        found["kind"] = "cpu"
+    if seen.get("LIBC"):
+        found["note"] = seen["LIBC"]
+    return found
+
+
+def write(row: dict[str, Any]) -> Path:
+    """Append one machine, keeping whatever shape the file already had.
+
+    Refuses rather than rewrites when the file holds entries this reader skips:
+    serialising the survivors would erase rows the owner wrote by hand, and a
+    recoverable typo is theirs to fix, not ours to delete on the way past.
+    """
+    path = store_path()
+    found = read()
+    if found.state == UNREADABLE:
+        raise ValueError(f"{found.detail}\nFix or move that file before adding to it.")
+    if found.detail:
+        raise ValueError(
+            f"{found.detail}\nAdding a machine here would rewrite the file without them. "
+            "Give those entries an id (or remove them) first, then add this machine."
+        )
+    rows = list(found.rows)
+    if any(str(r.get("id")).strip() == row["id"] for r in rows):
+        raise ValueError(f"a machine with id {row['id']!r} is already listed in {path}")
+    rows.append(row)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"connections": rows}, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return path
+
+
+_ALIAS_MARK = "# raven connection {conn_id} (managed; rewritten on every add)"
+
+
+def write_ssh_alias(row: dict[str, Any]) -> str | None:
+    """Keep a ``Host <id>`` alias in ``~/.ssh/config`` for an ssh row.
+
+    Transfers cannot ride the exec machine channel -- rsync and scp run their
+    client HERE and only address the machine -- so without an alias every
+    transfer carries the raw address into the model's context. One managed
+    block per id, replaced in full on re-add; everything outside the markers
+    is the owner's and is never touched. Returns the alias, or None for a
+    local row. A failure is the caller's to report as a warning, never as a
+    refusal: the alias is a convenience beside the registry, not part of it.
+    """
+    if transport_of(row) == LOCAL:
+        return None
+    conn_id = str(row["id"])
+    mark = _ALIAS_MARK.format(conn_id=conn_id)
+    block = "\n".join(
+        [
+            mark,
+            f"Host {conn_id}",
+            f"  HostName {row.get('host')}",
+            f"  Port {int(row.get('port') or 22)}",
+            f"  User {row.get('user') or 'root'}",
+            f"  IdentityFile {row.get('key') or '~/.ssh/id_rsa'}",
+            mark,
+        ]
+    )
+    path = Path(os.path.expanduser("~/.ssh/config"))
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    if mark in text:
+        head, _, rest = text.partition(mark)
+        _, _, tail = rest.partition(mark)
+        text = head.rstrip("\n") + ("\n" if head.strip() else "") + tail.lstrip("\n")
+    text = (text.rstrip("\n") + "\n\n" if text.strip() else "") + block + "\n"
+    path.write_text(text, encoding="utf-8")
+    path.chmod(0o600)
+    return conn_id
 
 
 # A claim shallower than this is a whole filesystem, not a case: "/", "/opt",
