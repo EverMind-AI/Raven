@@ -646,7 +646,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    shadows give it a near, mid and far penumbra. A flat grey slab with one
    blob shadow is exactly the look this replaces -- panel-specific blocks
    below keep geometry only, never their own background. */
-.menu, .pop, .mpick, .csheet, .dsheet {
+.menu, .pop, .mpick, .csheet {
   background: linear-gradient(
     color-mix(in oklab, var(--ink) 86%, transparent),
     color-mix(in oklab, var(--ink) 76%, transparent));
@@ -4576,13 +4576,13 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
    corner. It had none of this: an unstyled button in a flex row with a growing
    sibling, so the close cross was squeezed to half a box and neither control
    took a hover or turned its caret over on fold. */
-.csheet .ic, .dsheet .ic { border: 0; background: none; color: var(--faint);
+.csheet .ic { border: 0; background: none; color: var(--faint);
   border-radius: 6px; width: 24px; height: 24px; flex: none; cursor: pointer;
   display: grid; place-items: center; }
-.csheet .ic svg, .dsheet .ic svg { width: 13px; height: 13px;
+.csheet .ic svg { width: 13px; height: 13px;
   stroke-linecap: round; stroke-linejoin: round; transition: transform .15s; }
-.csheet[data-fold="true"] .ic .cv, .dsheet[data-fold="true"] .ic .cv { transform: rotate(180deg); }
-.csheet .ic:hover, .dsheet .ic:hover { color: var(--text); background: var(--raised); }
+.csheet[data-fold="true"] .ic .cv { transform: rotate(180deg); }
+.csheet .ic:hover { color: var(--text); background: var(--raised); }
 .csheet .body { display: grid; gap: 4px; margin-top: 8px; }
 .csheet[data-fold="true"] .body, .csheet[data-fold="true"] .foot { display: none; }
 .csheet .opt { display: flex; gap: 10px; align-items: center; width: 100%; text-align: left;
@@ -4608,32 +4608,6 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
   overflow-wrap: anywhere; max-height: 168px; overflow-y: auto;
 }
 .csheet.perm .opt.go .n { background: var(--amber-dp); color: var(--amber); }
-
-/* dag sheet: the orchestration a `run_subagent_dag` call is executing, on the
-   same axis as the clarify sheet and for the same reason -- it belongs to the
-   turn being composed against, not to the transcript, which only ever sees the
-   tool call's one-line result. Runs live; collapses to its summary when done. */
-.dsheet {
-  border-radius: 12px; padding: 12px 14px;
-  animation: sheetUp .2s ease; max-height: 420px; overflow-y: auto;
-}
-.dsheet .hd { display: flex; align-items: center; gap: 8px; }
-/* Takes the room and gives way last. It was `flex: none` while it held one
-   fixed word; it now holds the line the graph was dispatched with, which is a
-   sentence, and the tally beside it is the part a reader can spare. */
-.dsheet .ttl { font-weight: 600; font-size: 13px; flex: 1 1 auto; min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dsheet[data-fold="true"] .canvas { display: none; }
-.dsheet .canvas { margin-top: 10px; overflow-x: auto; }
-/* Centred, not left-packed. The graph is usually narrower than the sheet, and
-   pinned to one edge it read as something that had failed to lay itself out.
-   `margin:auto` rather than flex centring: an over-wide graph inside a flex
-   centred box overflows on both sides and the left half cannot be scrolled to.
-   Scoped to .canvas -- the header's own buttons are svg too, and centring those
-   moved the fold and close controls into the middle of the title row. */
-.dsheet .canvas > svg { display: block; margin: 0 auto; }
-.dsheet .sum { font-size: 11.5px; color: var(--muted); font-family: var(--mono); flex: 0 1 auto; min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .veil { position: fixed; inset: 0; background: var(--scrim); display: none; place-items: center; z-index: var(--z-veil); }
 .veil[data-open="true"] { display: grid; }

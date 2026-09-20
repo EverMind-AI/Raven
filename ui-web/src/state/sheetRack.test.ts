@@ -303,8 +303,6 @@ describe('who counts as asking', () => {
   const DOCKS: Record<string, boolean> = {
     'features/composer/approve.ts': true,
     'features/composer/clarify.ts': true,
-    // The graph sheet is what steps aside for the two above; it asks nothing.
-    'features/dag/mount.tsx': false,
   }
 
   const sources = (): Array<[string, string]> => {

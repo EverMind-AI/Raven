@@ -97,7 +97,6 @@ function reload(): void {
 }
 
 const paneIds = (): string[] => deskState().panes.map((pane) => pane.id)
-const sheets = (): number => document.querySelectorAll('#sheetRack .dsheet').length
 
 beforeEach(() => {
   sessionStorage.clear()
@@ -211,14 +210,13 @@ describe('opening a conversation after a reload', () => {
     expect(paneIds()).toEqual([])
   })
 
-  it('raises the sheet on the run the gateway reports now', async () => {
+  it('puts back the run the gateway reports now', async () => {
     dagStart('s1', graph('r1'))
     reload()
 
     await resume('s1')
 
     expect(readRuns).toEqual(['r1'])
-    expect(sheets()).toBe(1)
     /* The statuses are the read's, not the note's: the node was pending when
        the page went away and had finished by the time it came back. */
     const back = dagOpen('s1')!
@@ -237,7 +235,7 @@ describe('opening a conversation after a reload', () => {
     await resume('s1')
 
     expect(paneIds()).toEqual(['file:/workspace/a.ts'])
-    expect(sheets()).toBe(0)
+    expect(dagOpen('s1')).toBeNull()
   })
 
   it('asks for nothing when the conversation had nothing open', async () => {
@@ -245,7 +243,7 @@ describe('opening a conversation after a reload', () => {
 
     expect(readRuns).toEqual([])
     expect(paneIds()).toEqual([])
-    expect(sheets()).toBe(0)
+    expect(dagOpen('s1')).toBeNull()
   })
 
   /* The run started while the reader was in another conversation, so no live
@@ -253,13 +251,12 @@ describe('opening a conversation after a reload', () => {
      run either way, and the ids the transcript carries are how this learns of
      it -- without them a graph that ran entirely off-screen could never be
      drawn, however long it kept running. */
-  it('raises the sheet on a run the reader never saw start', async () => {
+  it('puts back a run the reader never saw start', async () => {
     reload()
 
     await resume('s1', ['r1'])
 
     expect(readRuns).toEqual(['r1'])
-    expect(sheets()).toBe(1)
     expect(dagOpen('s1')!.run_id).toBe('r1')
   })
 

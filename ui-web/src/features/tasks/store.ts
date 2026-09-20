@@ -76,6 +76,19 @@ export const rowKey = (row: TaskRow): string => `${row.kind}:${row.id}`
 export const byKey = (kind: TaskKind, id: string): TaskRow | null =>
   store.get().rows.find((r) => r.kind === kind && r.id === id) || null
 
+/* Bumped by every live frame this store applies. Read around the one read
+   that replaces the whole row list, because the server answers from the state
+   it held when asked: a run that starts DURING that round trip is on screen
+   before the answer arrives, and the answer does not know about it yet. */
+let liveTick = 0
+
+/* Every live frame lands through here rather than `patch` directly, so no
+   consumer can add a sixth and forget the tick. */
+function liveRows(rows: TaskRow[]): void {
+  liveTick += 1
+  patch({ rows })
+}
+
 export async function refresh(): Promise<void> {
   const src = source()
   const key = sessionCurrent()
@@ -83,12 +96,25 @@ export async function refresh(): Promise<void> {
      strip above the composer is in the first frame, before the wiring runs,
      and a draft has no session for a task to be filed under. */
   if (!src || !key) { patch({ rows: [], loaded: true }); return }
+  const tick = liveTick
   const got = await src.list(key)
   /* Asked for one conversation, answered into whichever is open now: the
      reader can switch sessions while this is in flight. The same guard the
      agents lists, the deliveries shelf and the desk replay use. */
   if (key !== sessionCurrent()) return
-  patch({ rows: Array.isArray(got) ? got : [], loaded: true })
+  const answered = Array.isArray(got) ? got : []
+  if (tick === liveTick) { patch({ rows: answered, loaded: true }); return }
+  /* A frame landed while the read was out. Replacing the list wholesale here
+     drops the row that frame inserted, and only two of the five reducers can
+     ever insert one -- `dag.run_started` fires exactly once per run, and
+     `applyNodeUpdated` / `applyRunCompleted` only ever map over rows that
+     already exist. So a dag run clobbered here is invisible for the whole of
+     its life, which is what this merge is for: the server wins on every row
+     it answered, and a row it has not caught up to yet survives until the
+     next read. */
+  const named = new Set(answered.map(rowKey))
+  const missed = store.get().rows.filter((r) => !named.has(rowKey(r)))
+  patch({ rows: [...missed, ...answered], loaded: true })
 }
 
 /* The two groups the panel shows. A row is finished when it is not running --
@@ -162,7 +188,7 @@ async function reconcile(kind: TaskKind, id: string): Promise<void> {
 }
 
 function apply(next: live.LiveResult): void {
-  patch({ rows: next.rows })
+  liveRows(next.rows)
   if (next.refetch) void reconcile(next.refetch.kind, next.refetch.id)
 }
 
@@ -170,10 +196,10 @@ function apply(next: live.LiveResult): void {
    state/session/stages.ts beside the transcript's own calls for the same
    frames. Each wraps its reducer in `live.ts` -- pure there, applied here. */
 export function onRunStarted(p: live.RunStartedPayload): void {
-  patch({ rows: live.applyRunStarted(store.get().rows, p) })
+  liveRows(live.applyRunStarted(store.get().rows, p))
 }
 export function onNodeUpdated(p: live.NodeUpdatedPayload): void {
-  patch({ rows: live.applyNodeUpdated(store.get().rows, p) })
+  liveRows(live.applyNodeUpdated(store.get().rows, p))
   bumpNodeVersion('dag', p.run_id, p.node)
 }
 export function onRunCompleted(p: live.RunCompletedPayload): void {
