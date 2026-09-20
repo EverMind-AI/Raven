@@ -574,9 +574,7 @@ def test_a_nesting_deeper_than_the_cap_still_answers(fenced: ExecTool, monkeypat
     ],
     ids=["command", "env", "env-with-assignment", "sudo", "bare-assignment", "wrapped-cd"],
 )
-def test_a_wrapper_does_not_hide_what_it_wraps(
-    fenced: ExecTool, monkeypatch: pytest.MonkeyPatch, command: str
-) -> None:
+def test_a_wrapper_does_not_hide_what_it_wraps(fenced: ExecTool, monkeypatch: pytest.MonkeyPatch, command: str) -> None:
     """The payload search read the segment as written, while the permission
     policy unwraps `env`, `sudo`, `command` and leading assignments first. Half
     the machinery was reused and half was not, so a wrapper in front of the
@@ -642,3 +640,42 @@ def test_a_brace_this_cannot_parse_is_refused(fenced: ExecTool) -> None:
     error = refusal(fenced, "cat ${UNSET:-${X:-/etc/shadow}}")
 
     assert error is not None and "unsupported shell expansion" in error
+
+
+# ---------- where a second cd starts from ------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["cd subdir; cd ..; ls", "cd subdir && cd .. && ls", "cd a; cd b; cd ..; cd ..; ls"],
+    ids=["up-once", "and-chained", "down-two-up-two"],
+)
+def test_a_cd_that_returns_to_the_workspace_still_runs(fenced: ExecTool, command: str) -> None:
+    """Each `cd` was resolved from the directory the command started in, so a
+    second one was read as if the first had not happened and a walk back was
+    refused for leaving. The sequence ends where it began.
+
+    Spelled as repeated `cd ..` rather than `cd ../..` on purpose: a literal
+    `../` anywhere is refused by the traversal rule before any of this runs, so
+    the shorter spelling would pass for a reason that has nothing to do with
+    where the walk starts from."""
+    assert refusal(fenced, command) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["cd subdir; cd ..; cd ..; ls", "cd a; cd b; cd ..; cd ..; cd ..; cat etc/shadow"],
+    ids=["one-past", "two-past"],
+)
+def test_a_cd_sequence_that_ends_outside_is_still_refused(fenced: ExecTool, command: str) -> None:
+    assert refusal(fenced, command) is not None
+
+
+def test_a_subshell_makes_the_walk_strict_again(fenced: ExecTool) -> None:
+    """A `cd` inside a subshell does not outlive it, and the splitter has
+    already dropped the bracket that said so. Carrying the directory forward
+    would read this as returning to the workspace when the shell is one level
+    above it, so where the structure cannot be seen the stricter reading holds
+    -- each `cd` from the starting directory, as before.
+    """
+    assert refusal(fenced, "(cd subdir); cd ..; ls") is not None

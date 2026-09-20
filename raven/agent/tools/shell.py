@@ -366,7 +366,14 @@ class ExecTool(Tool):
             # answering here would only duplicate that refusal.
             segments = []
 
-        if self._steps_outside(segments, cwd_path, roots, env):
+        # A `cd` inside a subshell does not outlive it, and the splitter has
+        # already dropped the bracket that said so. Carrying the directory
+        # forward past one would read a walk back as returning to the
+        # workspace while the shell sits a level above it, so a bracket
+        # anywhere puts every `cd` back on the starting directory. Crude on
+        # purpose: a literal bracket in an argument only costs strictness.
+        carry_forward = "(" not in readable and "{" not in readable
+        if self._steps_outside(segments, cwd_path, roots, env, carry_forward=carry_forward):
             return "Error: Command blocked by safety guard (directory change outside working dir)"
 
         for raw in self._extract_absolute_paths(readable):
@@ -450,7 +457,15 @@ class ExecTool(Tool):
         return env
 
     @classmethod
-    def _steps_outside(cls, segments: list[list[str]], cwd: Path, roots: list[Path], env: dict[str, str]) -> bool:
+    def _steps_outside(
+        cls,
+        segments: list[list[str]],
+        cwd: Path,
+        roots: list[Path],
+        env: dict[str, str],
+        *,
+        carry_forward: bool,
+    ) -> bool:
         """Whether the command leaves the workspace before doing its work.
 
         Reaching out and stepping out are the same escape, but only the first
@@ -461,7 +476,12 @@ class ExecTool(Tool):
         absolute, and a ``cd`` with no argument names ``$HOME`` by saying
         nothing -- and after any of them, every relative path in the rest of
         the command resolves somewhere the operator did not allow.
+
+        Each `cd` starts from where the last one landed, so `cd subdir; cd ..`
+        ends where it began rather than being read as leaving. ``carry_forward``
+        turns that off where the structure cannot be seen; see the caller.
         """
+        here = cwd
         for segment in segments:
             # A subshell or brace group needs no unwrapping here: the splitter
             # treats `(`, `)` and a standalone `{` as operators, so `(cd /; x)`
@@ -485,11 +505,13 @@ class ExecTool(Tool):
             if not target:
                 continue
             try:
-                destination = (cwd / Path(target).expanduser()).resolve()
+                destination = (here / Path(target).expanduser()).resolve()
             except Exception:
                 return True
             if not any(root == destination or root in destination.parents for root in roots):
                 return True
+            if carry_forward:
+                here = destination
         return False
 
     @staticmethod
