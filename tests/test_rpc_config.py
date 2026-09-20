@@ -1183,6 +1183,8 @@ async def test_config_set_model_surfaces_a_build_crash_instead_of_persisting(fak
         )
     cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
     assert "model" not in cfg.get("agents", {}).get("defaults", {})
+
+
 async def test_a_first_run_assembles_the_stack_it_started_without(fake_home: Path) -> None:
     """The write that completes a first run also gets this process a loop.
 
