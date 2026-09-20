@@ -30,10 +30,8 @@ import { busy as turnBusy } from '../features/composer/turn'
 import * as connections from '../features/connections/store'
 import * as cron from '../features/cron/store'
 import * as extAgents from '../features/extAgents/store'
-import * as knowledge from '../features/knowledge/store'
 import * as memory from '../features/memory/store'
 import * as playbooks from '../features/playbooks/store'
-import * as caps from './caps'
 import * as detail from './detail'
 import { close as closeImage, isOpen as imageOpen } from './lightbox'
 import { byEscape } from './pages'
@@ -67,12 +65,10 @@ const cancels = (id: string) => (): void => { document.getElementById(id)?.click
    back -- which was one of the six registrations a new page could miss in
    silence. The verb is the domain's; the order is the table's. */
 const CLOSERS: Record<PageId, () => void> = {
-  capsPage: caps.close,
   extAgentsPage: () => extAgents.close(),
   connectionsPage: () => connections.close(),
   memoryPage: () => memory.close(),
   playbooksPage: () => playbooks.closePage(),
-  kbPage: () => knowledge.close(),
   cronPage: () => cron.close(),
 }
 

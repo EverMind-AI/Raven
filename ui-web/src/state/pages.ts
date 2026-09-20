@@ -28,7 +28,7 @@ export interface ModulePage {
   readonly id: string
   /** The empty box inside it that an island root fills. */
   readonly bodyId: string
-  /** Which rail button lights up while it is open; two means its own two tabs. */
+  /** Which rail button lights up while it is open. */
   readonly navButtons: readonly string[]
   /** Its place in the Escape chain, low first (state/escapeOrder.ts). */
   readonly escapeRank: number
@@ -36,8 +36,6 @@ export interface ModulePage {
   readonly head?: string
   /** The key its accessible name speaks, which can differ from the heading's. */
   readonly aria?: string
-  /** The page whose interior is a file of its own (src/chrome/CapsPage.tsx). */
-  readonly own?: true
 }
 
 /* The seven, in the order they sit among the body's children. `as const` so
@@ -46,18 +44,16 @@ export interface ModulePage {
    from it. Read through `PAGES`, which is the same rows with the shape above
    rather than seven shapes of one row each. */
 const DECLARED = [
-  { id: 'capsPage', bodyId: 'capsBody', navButtons: ['skillBtn', 'plugBtn'], escapeRank: 5, own: true },
-  { id: 'extAgentsPage', bodyId: 'extAgentsBody', navButtons: ['moreBtn'], escapeRank: 6, head: 'gui.page.agents', aria: 'gui.page.agents' },
+  { id: 'extAgentsPage', bodyId: 'extAgentsBody', navButtons: ['agentsBtn'], escapeRank: 6, head: 'gui.page.agents', aria: 'gui.page.agents' },
   { id: 'connectionsPage', bodyId: 'connectionsBody', navButtons: ['moreBtn'], escapeRank: 7, head: 'gui.page.conn', aria: 'gui.page.conn' },
   /* The memory page is announced by its hero's phrase rather than by its
      heading, which is why the two keys differ. */
-  { id: 'memoryPage', bodyId: 'memoryBody', navButtons: ['memoryBtn'], escapeRank: 2, head: 'gui.nav.mem', aria: 'gui.mem.hero' },
+  { id: 'memoryPage', bodyId: 'memoryBody', navButtons: ['moreBtn'], escapeRank: 2, head: 'gui.nav.mem', aria: 'gui.mem.hero' },
   { id: 'playbooksPage', bodyId: 'playbooksBody', navButtons: ['playbooksBtn'], escapeRank: 3, head: 'gui.nav.pb', aria: 'gui.nav.pb' },
-  { id: 'kbPage', bodyId: 'kbBody', navButtons: ['kbBtn'], escapeRank: 4, head: 'gui.nav.kb', aria: 'gui.nav.kb' },
   { id: 'cronPage', bodyId: 'cronBody', navButtons: ['moreBtn'], escapeRank: 1, head: 'gui.page.cron', aria: 'gui.page.cron' },
 ] as const satisfies readonly ModulePage[]
 
-/** The seven module pages, keyed as their `<section>` ids. */
+/** The module pages, keyed as their `<section>` ids. */
 export type PageId = (typeof DECLARED)[number]['id']
 
 /** Every rail button a page can light, as the table declares them. */
@@ -68,7 +64,7 @@ export interface Page extends ModulePage {
   readonly id: PageId
 }
 
-/** The seven, in the order they sit among the body's children. */
+/** In the order they sit among the body's children. */
 export const PAGES: readonly Page[] = DECLARED
 
 /** A page, by the id every table keys it under. */

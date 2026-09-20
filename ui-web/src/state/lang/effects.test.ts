@@ -14,12 +14,10 @@ import { loadPart } from '../../../scripts/module-harness.mjs'
    itself (scripts/gates/island-lang.test.mjs). */
 const ORDER = [
   'sessionDraw',
-  'drawFoot',
   'modelLabel',
   'drawPerm',
   'drawCtx',
   'settings.redraw',
-  'caps.draw',
   'nav.draw',
   'detail.close',
   'transcript.redraw',
@@ -65,7 +63,6 @@ async function harness(
         sess: (id: string) => ({ id }),
         open: step('sessionOpen'),
       },
-      'src/state/foot': { draw: step('drawFoot') },
       'src/state/perm': { draw: step('drawPerm') },
       'src/state/ctxChip': { draw: step('drawCtx') },
       'src/lib/session': { current: () => session },
@@ -73,7 +70,6 @@ async function harness(
       'src/features/composer/mount': { drawQueue: step('queueDraw'),
         turn: { busy: () => busy },
       },
-      'src/state/caps': { draw: step('caps.draw') },
       'src/state/detail': { close: step('detail.close') },
       'src/state/session/registry': { isDraft: () => draft },
     },
@@ -86,15 +82,6 @@ describe('the language repaint', () => {
     const h = await harness()
     h.repaint()
     expect(h.order).toEqual(ORDER)
-  })
-
-  /* A page whose island has not loaded throws instead of drawing, and the
-     redraw carries on: the capabilities page is the one step still guarded
-     that way, because its two tabs register their renderers on first open. */
-  it('carries on past a page whose island has not loaded', async () => {
-    const h = await harness({ throwing: ['caps.draw'] })
-    h.repaint()
-    expect(h.order).toEqual(ORDER.filter((name) => name !== 'caps.draw'))
   })
 
   /* The reload rebuilds the conversation from disk, which would cut a streaming

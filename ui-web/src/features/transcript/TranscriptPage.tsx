@@ -1029,7 +1029,7 @@ const AskView = memo(function AskView({ lane, seg }: { lane: Lane; seg: AskData 
   }
   const showClip = seg.clipped && !seg.clipOpen
   return (
-    <div className="ask in">
+    <div className="turn me in">
       {seg.atts.length ? (
         <div className={'abox' + (imgs.length > 1 ? ' set' : '')}>
           {imgs.length && (seg.expanded || imgs.length <= 3)
@@ -1054,7 +1054,7 @@ const AskView = memo(function AskView({ lane, seg }: { lane: Lane; seg: AskData 
         </div>
       ) : null}
       {seg.body.trim() ? (
-        <div ref={bRef} className={'b' + (showClip ? ' clip' : '')}>{seg.body}</div>
+        <div ref={bRef} className={'msg me' + (showClip ? ' clip' : '')}>{seg.body}</div>
       ) : null}
       {seg.body.trim() && seg.clipped ? (
         <button className="qfold" aria-expanded={String(seg.clipOpen) as 'true' | 'false'}
@@ -1519,30 +1519,39 @@ function SegView({ lane, seg }: { lane: Lane; seg: Seg }): ReactElement | null {
   }
 }
 
+/* What one AI turn's card holds: the work it did, folded, and what it said.
+   Everything else is a row of its own -- the reader's own message, a delegation
+   coming back, and the page's annotations are not things this turn produced,
+   and a card drawn around them would claim they were. */
+const CARDED = new Set(['fold', 'step', 'answer', 'arts'])
+
 function stageRows(lane: Lane): ReactElement[] {
   const rows: ReactElement[] = []
-  for (let i = 0; i < lane.segs.length; i += 1) {
+  let i = 0
+  while (i < lane.segs.length) {
     const seg = lane.segs[i] as Seg
-    if (seg.kind === 'answer') {
-      let end = i + 1
-      while (end < lane.segs.length && !['ask', 'answer', 'arts'].includes(lane.segs[end]!.kind)) end += 1
-      const close = lane.segs[end]
-      if (close?.kind === 'arts') {
-        rows.push(
-          <div className="answer-turn" key={`${lane.epoch}:${seg.id}`}>
-            <AnswerView lane={lane} seg={seg} showFoot={false} />
-            {lane.segs.slice(i + 1, end).map((middle) => (
-              <SegView key={`${lane.epoch}:${middle.id}`} lane={lane} seg={middle} />
-            ))}
-            <ArtsView lane={lane} seg={close} />
-            <AnswerFoot lane={lane} seg={seg} />
-          </div>,
-        )
-        i = end
-        continue
-      }
+    if (!CARDED.has(seg.kind)) {
+      rows.push(<SegView key={`${lane.epoch}:${seg.id}`} lane={lane} seg={seg} />)
+      i += 1
+      continue
     }
-    rows.push(<SegView key={`${lane.epoch}:${seg.id}`} lane={lane} seg={seg} />)
+    let end = i
+    while (end < lane.segs.length && CARDED.has(lane.segs[end]!.kind)) end += 1
+    const group = lane.segs.slice(i, end)
+    /* The footer belongs to the answer but sits under the whole card, so what
+       a turn delivered is above its own copy button rather than below it. */
+    const answer = group.find((part) => part.kind === 'answer') as AnswerData | undefined
+    rows.push(
+      <div className="turn ai" key={`${lane.epoch}:${seg.id}`}>
+        <div className="msg ai">
+          {group.map((part) => (part.kind === 'answer'
+            ? <AnswerView key={`${lane.epoch}:${part.id}`} lane={lane} seg={part} showFoot={false} />
+            : <SegView key={`${lane.epoch}:${part.id}`} lane={lane} seg={part} />))}
+        </div>
+        {answer ? <AnswerFoot lane={lane} seg={answer} /> : null}
+      </div>,
+    )
+    i = end
   }
   return rows
 }

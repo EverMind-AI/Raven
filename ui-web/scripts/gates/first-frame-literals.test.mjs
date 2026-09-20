@@ -62,11 +62,13 @@
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { basename, join, relative } from 'node:path'
+import { basename, join } from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
-const SRC = new URL('../../src/', import.meta.url).pathname
+import { relPath, root } from './paths.mjs'
+
+const SRC = root(new URL('../../src/', import.meta.url))
 
 /* Han (unified + extension A + compatibility), kana, hangul, CJK punctuation
    and full-width forms. Kept character-for-character the same as
@@ -82,7 +84,6 @@ const PINNED = {
   'page.html': 6,
   /* a fallback the served frame carries, until a language is picked */
   'App.tsx': 3,
-  'chrome/CapsPage.tsx': 5,
   'chrome/ChatTop.tsx': 1,
   'chrome/Dock.tsx': 1,
   'chrome/PermChip.tsx': 1,
@@ -90,7 +91,6 @@ const PINNED = {
   /* a message the page writes itself, with no key behind it yet */
   'app/install.ts': 1,
   'features/memory/MemoryPage.tsx': 2,
-  'features/plugins/wire.ts': 1,
   /* a mark rather than a word */
   'features/cron/humanize.ts': 2,
   'lib/prose.ts': 12,
@@ -121,10 +121,10 @@ const READ = /\.(ts|tsx|js|jsx|mjs|cjs|css|html|json)$/
 
 /* A floor rather than a count: a scan that lost a root would otherwise pass
    forever, which is how the seven calls in app/ once dropped out of rpc-names
-   unnoticed. 265 files today, so five files of slack -- room to delete a
+   unnoticed. 245 files today, so five files of slack -- room to delete a
    module without a second edit here, and not room to lose a directory. Re-raise
    it when the count moves. */
-const FLOOR = 260
+const FLOOR = 240
 
 /* Where a run can sit and still be part of the program. Everything else in a
    module -- and a comment is the only everything else that can hold a word --
@@ -158,10 +158,10 @@ function* files(dir) {
   for (const name of readdirSync(dir).sort()) {
     const path = join(dir, name)
     if (statSync(path).isDirectory()) {
-      if (!NOT_SOURCE.test(relative(SRC, path))) yield* files(path)
+      if (!NOT_SOURCE.test(relPath(SRC, path))) yield* files(path)
       continue
     }
-    const rel = relative(SRC, path)
+    const rel = relPath(SRC, path)
     if (A_TEST.test(basename(rel)) || rel.startsWith(NOT_THE_PAGE)) continue
     if (READ.test(rel)) yield rel
   }

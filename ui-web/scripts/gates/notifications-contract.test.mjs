@@ -108,7 +108,7 @@ describe('the names the page registers', () => {
   const sites = registered()
 
   it('reaches the registration sites at all', () => {
-    expect(sites.length).toBeGreaterThanOrEqual(11)
+    expect(sites.length).toBeGreaterThanOrEqual(8)
   })
 
   it('are all in the table, or the subscription envelope', () => {
