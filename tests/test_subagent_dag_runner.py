@@ -8618,3 +8618,65 @@ async def test_a_judge_with_a_stale_signature_does_not_read_as_accomplished(tmp_
 
     assert result.summary["completed"] == 0, "an unjudgeable node must not pass"
     assert result.summary["failed"] == 1
+
+
+class _SettledPeeker(_FakeExec):
+    """Node a reports usage; node b, which runs after it, reads the account a
+    set aside at its end -- the manifest that will carry it is not written yet."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.run_id = ""
+        self.seen_settled: list[object] = []
+
+    async def run(self, task: str, **kw) -> str:
+        from raven.agent.subagent import activity
+        from raven.agent.subagent.dag_store import node_live_key
+
+        if kw["task_id"] == "a":
+            activity.note_usage({"prompt_tokens": 5, "completion_tokens": 1})
+        else:
+            self.seen_settled.append(activity.settled(node_live_key(self.run_id, "a")))
+        return await super().run(task, **kw)
+
+
+async def test_a_finished_nodes_account_is_set_aside_until_the_manifest_is_written() -> None:
+    """Between a node's end and the run's manifest a reader has nowhere else to
+    find the node's usage; the runner sets it aside, and the manifest takes it
+    over."""
+    import raven.agent.subagent.dag_runner as runner_mod
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.dag_store import node_live_key
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "run the graph under test",
+            "nodes": [
+                {"id": "a", "subagent": "x", "node_summary": "node a", "prompt_template": "hello"},
+                {"id": "b", "subagent": "x", "node_summary": "node b", "prompt_template": "then", "depends_on": ["a"]},
+            ],
+        }
+    )
+    exec_ = _SettledPeeker()
+    mint = runner_mod.make_run_id
+
+    def _mint() -> str:
+        exec_.run_id = mint()
+        return exec_.run_id
+
+    runner_mod.make_run_id = _mint
+    try:
+        result = await run_dag(
+            spec,
+            resolve=_by_name({"x": exec_}),
+            backend=_InMemBackend(),
+            workdir="/w",
+            run_root="/hist/mas_dag",
+            nodes_root="/hist/nodes",
+            history_root="/hist",
+        )
+    finally:
+        runner_mod.make_run_id = mint
+
+    assert exec_.seen_settled == [{"tokens_in": 5, "tokens_out": 1}], "b saw a's account while the run was going"
+    assert activity.settled(node_live_key(result.run_id, "a")) is None, "and the manifest took it over"

@@ -27,7 +27,7 @@ rather than raising into a backend's happy path.
 from __future__ import annotations
 
 import time
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -203,6 +203,33 @@ only account of it lives in the ``RunActivity`` being collected. This index is
 what lets ``subagent.context`` serve that account to a panel watching the run,
 instead of a prompt and nothing until the end. Entries live exactly as long as
 their ``collecting`` block."""
+
+
+_settled: dict[str, dict[str, Any]] = {}
+"""The account of a run's node that has finished while its run has not.
+
+A dag node's account reaches disk with the run's manifest, written once the
+whole run is over; between the node's own end (when ``collecting`` drops it from
+``_live``) and that write, nothing else holds it, and a reader that showed the
+node's usage while it ran would show nothing the moment it finished. The runner
+records the account here as the node settles and forgets the run's entries once
+the manifest is written."""
+
+
+def record_settled(key: str, meta: dict[str, Any]) -> None:
+    """Set aside a finished node's account under its live key."""
+    _settled[key] = dict(meta)
+
+
+def settled(key: str) -> dict[str, Any] | None:
+    """The account of a node that finished while its run has not, or None."""
+    return _settled.get(key)
+
+
+def forget_settled(keys: Iterable[str]) -> None:
+    """Drop the accounts a run set aside, once its manifest carries them."""
+    for key in keys:
+        _settled.pop(key, None)
 
 
 _live_instances: dict[tuple[str, str, str], RunActivity] = {}
@@ -595,9 +622,12 @@ __all__ = [
     "RunActivity",
     "collecting",
     "current",
+    "forget_settled",
     "set_transcript",
     "live",
     "live_instance",
+    "record_settled",
+    "settled",
     "merge_file_change",
     "note_alive",
     "note_closing",

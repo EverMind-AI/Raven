@@ -124,7 +124,10 @@ def _overlay_live(node: dict[str, Any], live: Any) -> None:
     nothing for the whole of its run. Only what the lane has said so far is
     taken: a lane that has not spoken keeps its null.
     """
-    if live is None:
+    # A node that is not running has an account of its own on disk (or none),
+    # and the live index is keyed by a record id that is unique per conversation
+    # only: another conversation's run under the same id must not fill it.
+    if live is None or node["status"] != "running":
         return
     for key in ("tokens_in", "tokens_out"):
         if node[key] is None:
@@ -414,6 +417,10 @@ def _dag_row(
             continue
         nid = gnode["id"]
         entry = manifest.get(nid) if isinstance(manifest.get(nid), dict) else None
+        live_key = node_live_key(run_dir.name, nid)
+        # A node that finished while its run has not has no manifest entry yet;
+        # its account is what the runner set aside at the node's end.
+        account = entry if entry is not None else (run_activity.settled(live_key) or {})
         status, started, ended = _dag_node_state(run_dir.name, nid, entry, registry_nodes, by_node)
         if status in _NOT_LIVE_PENDING and not live:
             status = "interrupted"
@@ -421,7 +428,7 @@ def _dag_row(
             # Never ran: the registry stamps it with the moment the run was
             # finalized, which is not a clock this node ever had.
             started = ended = None
-        call_count, failure_count = _tool_counts(entry or {})
+        call_count, failure_count = _tool_counts(account)
         node: dict[str, Any] = {
             "node_id": nid,
             "node_summary": gnode.get("node_summary") or None,
@@ -432,13 +439,13 @@ def _dag_row(
             "started_at": started,
             "ended_at": ended,
             "error": _clip((entry or {}).get("error")),
-            "tokens_in": _int_or_none((entry or {}).get("tokens_in")),
-            "tokens_out": _int_or_none((entry or {}).get("tokens_out")),
+            "tokens_in": _int_or_none(account.get("tokens_in")),
+            "tokens_out": _int_or_none(account.get("tokens_out")),
             "tool_call_count": call_count,
             "tool_failure_count": failure_count,
             "has_output": _dag_has_output(nid, entry, registry_nodes.get(nid), nodes_dir),
             "prompt_template": gnode.get("prompt_template") or None,
-            "files": _files_of(entry or {}),
+            "files": _files_of(account),
         }
         if gnode.get("inputs") is not None:
             node["inputs"] = gnode["inputs"]
@@ -446,7 +453,7 @@ def _dag_row(
             node["skills"] = list(gnode["skills"])
         if gnode.get("mcps") is not None:
             node["mcps"] = list(gnode["mcps"])
-        _overlay_live(node, run_activity.live(node_live_key(run_dir.name, nid)))
+        _overlay_live(node, run_activity.live(live_key))
         nodes.append(node)
         statuses.append(status)
         if isinstance(started, int):

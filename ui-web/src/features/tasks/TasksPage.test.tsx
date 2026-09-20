@@ -850,6 +850,44 @@ describe('the node panel', () => {
         vi.useRealTimers()
       }
     })
+
+    it("re-reads a running dag node's row on node_updated, so its usage reaches the subtitle", async () => {
+      const running = task({
+        id: 'r1', kind: 'dag', status: 'running', nodes: [node({ node_id: 'n1', status: 'running', started_at: 1000 })],
+      })
+      rows = [running]
+      store.set((prev) => ({ ...prev, rows: [running], loaded: true }))
+      pick(running)
+      await act(async () => {})
+      expect(document.querySelector('.tksub')?.textContent).not.toContain('gui.tasks.tokens_n')
+
+      rows = [{ ...running, nodes: [node({ node_id: 'n1', status: 'running', started_at: 1000, tokens_in: 4000, tokens_out: 910 })] }]
+      await act(async () => { store.onNodeUpdated({ run_id: 'r1', node: 'n1', status: 'running', tool_call_id: 'c1' }) })
+      expect(document.querySelector('.tksub')?.textContent).toContain('gui.tasks.tokens_n {"n":"4,910"}')
+    })
+
+    it('keeps one row read out at a time across node_updated frames', async () => {
+      let reads = 0
+      let release: ((r: TaskRow | null) => void) | null = null
+      const running = task({
+        id: 'r1', kind: 'dag', status: 'running', nodes: [node({ node_id: 'n1', status: 'running' })],
+      })
+      setSources({
+        tasks: { ...source(), one: () => { reads += 1; return new Promise((res) => { release = res }) } },
+        workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
+      })
+      store.set((prev) => ({ ...prev, rows: [running], loaded: true }))
+      pick(running)
+      await act(async () => {})
+      expect(reads).toBe(1)
+      await act(async () => { store.onNodeUpdated({ run_id: 'r1', node: 'n1', status: 'running', tool_call_id: 'c1' }) })
+      await act(async () => { store.onNodeUpdated({ run_id: 'r1', node: 'n1', status: 'running', tool_call_id: 'c2' }) })
+      /* Two frames while the first row read is still out: no second read. */
+      expect(reads).toBe(1)
+      await act(async () => { release?.(null) })
+      await act(async () => { store.onNodeUpdated({ run_id: 'r1', node: 'n1', status: 'running', tool_call_id: 'c3' }) })
+      expect(reads).toBe(2)
+    })
   })
 
   describe('the context tab while the record is loading or failed', () => {

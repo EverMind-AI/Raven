@@ -1011,3 +1011,69 @@ async def test_a_running_dag_node_reads_usage_off_the_live_activity(workspace: P
     assert n1["status"] == "running" and n1["tokens_in"] == 7 and n1["tokens_out"] == 1
     assert n1["tool_call_count"] == 1 and n1["tool_failure_count"] == 0
     assert n2["tokens_in"] is None and n2["tool_call_count"] is None
+
+
+async def test_a_dag_node_that_finished_mid_run_reads_the_account_the_runner_set_aside(workspace: Path) -> None:
+    """Between a node's end and the run's manifest, the node's account lives in
+    the settled index; the row reads it there, and reads nothing once the run
+    has forgotten it (the manifest carries it by then)."""
+    from raven.agent.subagent import activity as activity_mod
+    from raven.agent.subagent.dag_store import node_live_key
+    from raven.agent.subagent.instances import get_registry
+
+    session_dir = _session_dir(workspace)
+    await _make_run(session_dir, RUN_ID, _GRAPH, ["n1", "n2"])
+    await get_registry().upsert_dag_node(SESSION, RUN_ID, "n1", "Raven", "completed")
+    await get_registry().upsert_dag_node(SESSION, RUN_ID, "n2", "Raven", "running")
+    loop = _loop_stub(live_run_ids=frozenset({RUN_ID}))
+    key = node_live_key(RUN_ID, "n1")
+    activity_mod.record_settled(
+        key,
+        {
+            "tokens_in": 7,
+            "tokens_out": 1,
+            "tool_calls": ["read_file"],
+            "tool_failures": ["read_file"],
+            "files": [{"path": "a.md", "op": "write", "add": 1, "del": 0, "size": 5}],
+        },
+    )
+    try:
+        row = (await tasks_list({"session_key": SESSION}, agent_loop_factory=_factory(loop)))["tasks"][0]
+    finally:
+        activity_mod.forget_settled([key])
+
+    n1, n2 = row["nodes"]
+    assert n1["status"] == "completed"
+    assert n1["tokens_in"] == 7 and n1["tokens_out"] == 1
+    assert n1["tool_call_count"] == 1 and n1["tool_failure_count"] == 1
+    assert n1["files"] == [{"path": "a.md", "op": "write", "add": 1, "del": 0, "size": 5}]
+    assert n2["tokens_in"] is None and n2["tool_call_count"] is None
+
+    after = (await tasks_list({"session_key": SESSION}, agent_loop_factory=_factory(loop)))["tasks"][0]["nodes"][0]
+    assert after["tokens_in"] is None and after["tool_call_count"] is None and after["files"] == []
+
+
+async def test_a_settled_spawn_ignores_a_live_activity_under_its_key(workspace: Path) -> None:
+    """The live index is keyed by a record id that is unique per conversation
+    only: a finished spawn must not take the numbers of another run collected
+    under the same id."""
+    from raven.agent.subagent import activity as activity_mod
+
+    session_dir = _session_dir(workspace)
+    await _claim_spawn_node(session_dir, "shared")
+    record = SpawnRecord.open(
+        session_dir,
+        task_id="shared",
+        task="done already",
+        meta=_spawn_meta(agent="Raven", handle="shared", task_summary="Shared"),
+        node_id="shared",
+    )
+    record.finish(status="completed", output="done")
+
+    with activity_mod.collecting(live_key="shared"):
+        activity_mod.note_usage({"prompt_tokens": 40, "completion_tokens": 2})
+        activity_mod.note_tool_call("exec")
+        node = (await tasks_list({"session_key": SESSION}))["tasks"][0]["nodes"][0]
+
+    assert node["status"] == "completed"
+    assert node["tokens_in"] is None and node["tool_call_count"] is None and node["files"] == []

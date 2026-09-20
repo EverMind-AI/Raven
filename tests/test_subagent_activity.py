@@ -150,3 +150,16 @@ def test_note_file_change_needs_a_collector_and_a_path() -> None:
         activity.note_file_change("", "write", 1, 0, 0)
         activity.note_file_change("kept.md", "edit", 2, 1, 9)
     assert did.files == [{"path": "kept.md", "op": "edit", "add": 2, "del": 1, "size": 9}]
+
+
+def test_a_settled_account_is_kept_until_its_run_forgets_it():
+    """A node's account outlives its collecting block only through this index:
+    the manifest that carries it is written when the whole run ends."""
+    meta = {"tokens_in": 7, "tool_calls": ["read_file"]}
+    activity.record_settled("dag:r1:a", meta)
+    meta["tokens_in"] = 99
+    assert activity.settled("dag:r1:a") == {"tokens_in": 7, "tool_calls": ["read_file"]}, (
+        "a copy, not the runner's dict"
+    )
+    activity.forget_settled(["dag:r1:a", "dag:r1:never-recorded"])
+    assert activity.settled("dag:r1:a") is None

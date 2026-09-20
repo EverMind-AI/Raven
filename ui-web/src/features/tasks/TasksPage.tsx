@@ -371,6 +371,7 @@ function useNodeRecord(row: TaskRow, node: TaskNode): RecordLoad {
     { loading: dispatched, record: null, failed: false },
   )
   const reading = useRef(false)
+  const reconciling = useRef(false)
   useEffect(() => {
     if (!dispatched) { setState({ loading: false, record: null, failed: false }); return }
     setState((prev) => ({ loading: true, record: prev.record, failed: false }))
@@ -381,9 +382,14 @@ function useNodeRecord(row: TaskRow, node: TaskNode): RecordLoad {
     /* The row too, while the node runs: its usage and tool counts grow on the
        server as the lane reports them (`tasks.list` reads the live activity),
        and no frame carries them -- so the subtitle's token total moves with
-       the record. Once the node settles, the terminal frame's own reconcile
-       brings the final copy. */
-    if (node.status === 'running') void store.reconcile(row.kind, row.id)
+       the record. One row read out at a time: a dag node's frames arrive once
+       per tool call, and stacking a read per frame would multiply requests
+       the way the record's own `reading` guard exists to prevent. Once the
+       node settles, the terminal frame's own reconcile brings the final copy. */
+    if (node.status === 'running' && !reconciling.current) {
+      reconciling.current = true
+      void store.reconcile(row.kind, row.id).finally(() => { reconciling.current = false })
+    }
     src.node(row, node)
       .then((r) => { if (alive) setState({ loading: false, record: r, failed: false }) })
       .catch(() => { if (alive) setState((prev) => ({ loading: false, record: prev.record, failed: true })) })

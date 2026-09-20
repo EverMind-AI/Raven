@@ -83,7 +83,11 @@ stores it uncapped; a spawn's is the head of `.error.md`, or of `.out.md` when `
 (`{path, op: write|edit, add, del, size}`). While a node runs, the usage, the tool counts and
 the files are read off the activity being collected for it in this process (the same
 in-memory account `subagent.context` and `dag.node` serve a transcript from), since the record
-on disk carries them only once the run finishes; what the lane has not reported yet stays null.
+on disk carries them only once the run finishes; what the lane has not reported yet stays null,
+and a node that is not running takes nothing from that index (its key is a record id unique per
+conversation only). A dag node that has finished while its run has not keeps the account the
+runner set aside for it at its end (`activity.record_settled`) until the manifest is written,
+so its usage does not vanish between the two.
 
 ### 2. Status derivation
 
