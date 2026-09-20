@@ -648,13 +648,13 @@ def _notice(outcome) -> str:
 
 
 def test_report_memory_write_outcome_says_nothing_when_every_write_landed() -> None:
-    from raven.memory_engine.store_pipeline import DrainOutcome
+    from raven.memory_engine import DrainOutcome
 
     assert _notice(DrainOutcome(lost=0, in_flight=0)) == ""
 
 
 def test_report_memory_write_outcome_names_the_turns_that_never_reached_the_service() -> None:
-    from raven.memory_engine.store_pipeline import DrainOutcome
+    from raven.memory_engine import DrainOutcome
 
     assert "2 turn(s) were not written to long-term memory" in _notice(DrainOutcome(lost=2, in_flight=0))
 
@@ -662,7 +662,7 @@ def test_report_memory_write_outcome_names_the_turns_that_never_reached_the_serv
 def test_a_handed_over_turn_is_not_announced_as_unwritten() -> None:
     """The write reached the service and is being indexed there. Saying it was
     not written -- and blaming a service that answered -- was false twice."""
-    from raven.memory_engine.store_pipeline import DrainOutcome
+    from raven.memory_engine import DrainOutcome
 
     text = _notice(DrainOutcome(lost=0, in_flight=1))
     assert "were not written" not in text

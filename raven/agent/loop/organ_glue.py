@@ -18,7 +18,7 @@ from raven.agent.loop._shared import (
     trace,
     vision_verdict,
 )
-from raven.memory_engine.store_pipeline import DrainOutcome
+from raven.memory_engine import DrainOutcome
 
 
 class OrganGlueMixin:

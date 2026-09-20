@@ -12,7 +12,7 @@ from rich.console import Console
 
 from raven.config.schema import Config
 from raven.core import config_stack
-from raven.memory_engine.store_pipeline import DrainOutcome
+from raven.memory_engine import DrainOutcome
 
 console = Console()
 
