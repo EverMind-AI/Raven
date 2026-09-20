@@ -386,8 +386,15 @@ class ExecTool(Tool):
                 tokens[0] = tokens[0].lstrip("(")
             if not tokens or tokens[0] != "cd":
                 continue
-            arguments = [token for token in tokens[1:] if token not in ("-L", "-P")]
-            if arguments and arguments[0] == "-":
+            arguments = list(tokens[1:])
+            while arguments and arguments[0] in ("-L", "-P"):
+                arguments.pop(0)
+            if arguments and arguments[0] == "--":
+                # The option terminator is not a destination. Past it every
+                # word is an operand, so a `-` there names a directory rather
+                # than $OLDPWD, and nothing there means what a bare `cd` means.
+                arguments.pop(0)
+            elif arguments and arguments[0] == "-":
                 # ``$OLDPWD`` is a directory some earlier ``cd`` already passed.
                 continue
             target = arguments[0] if arguments else env.get("HOME", "")

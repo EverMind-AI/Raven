@@ -240,8 +240,21 @@ def test_a_brace_body_that_only_edits_a_value_is_left_alone(fenced: ExecTool, co
         "cd ..; cat outside.txt",
         "cd && cat .ssh/id_rsa",
         "(cd /; cat etc/shadow)",
+        "cd -- /; cat etc/passwd",
+        "cd -- ..; cat outside.txt",
+        "cd -L -- /; cat etc/passwd",
+        "cd --; cat .ssh/id_rsa",
     ],
-    ids=["root", "parent", "bare-cd-is-home", "subshell"],
+    ids=[
+        "root",
+        "parent",
+        "bare-cd-is-home",
+        "subshell",
+        "after-option-terminator",
+        "parent-after-option-terminator",
+        "flag-then-option-terminator",
+        "option-terminator-alone-is-home",
+    ],
 )
 def test_a_command_that_walks_out_first_is_refused(
     fenced: ExecTool, monkeypatch: pytest.MonkeyPatch, command: str
@@ -267,10 +280,18 @@ def test_a_command_that_walks_out_first_is_refused(
         "cd subdir && ls",
         "cd . && ls",
         "cd ./src; grep -rn TODO .",
+        "cd -- subdir && ls",
         'echo "cd / is how you would leave"',
         "grep -rn cd notes.txt",
     ],
-    ids=["into-a-subdir", "into-itself", "relative-prefix", "cd-as-text", "cd-as-an-argument"],
+    ids=[
+        "into-a-subdir",
+        "into-itself",
+        "relative-prefix",
+        "subdir-after-option-terminator",
+        "cd-as-text",
+        "cd-as-an-argument",
+    ],
 )
 def test_moving_around_inside_the_workspace_is_left_alone(fenced: ExecTool, command: str) -> None:
     """The fence is a boundary, not a ban on ``cd``. The last two are the ones
