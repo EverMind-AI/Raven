@@ -3171,6 +3171,10 @@
       "en": "section {section}, page {page} -- {path}",
       "zh": "第 {section} 个小节，第 {page} 页 -- {path}"
     },
+    "gui.kb.preview_loading": {
+      "en": "Opening the document",
+      "zh": "\u6b63\u5728\u6253\u5f00\u6587\u6863"
+    },
     "gui.kb.chunk_crop_alt": {
       "en": "The region piece {n} was cut from",
       "zh": "第 {n} 个分片所在的页面区域"

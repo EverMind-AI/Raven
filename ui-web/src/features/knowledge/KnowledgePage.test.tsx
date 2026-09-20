@@ -8,6 +8,57 @@ import * as store from './store'
 import type { KbBase, KbChunk, KbDoc, KbSearch, KnowledgeSource } from './types'
 import type { Shell } from '../../shell/bridge'
 
+/* pdf.js, stubbed at the seam that loads it. The real one is not bundled -- it
+   is two files copied beside the page and imported at run time -- so there is
+   no module specifier here to intercept, which is the point of the loader
+   having its own module. What these tests are about is the rest: which pages
+   are laid out, where a clicked piece is marked, and where the column is
+   scrolled to, none of which needs a renderer, and happy-dom has no canvas to
+   give one. */
+const PDF_PAGE_WIDTH = 600
+const PDF_PAGE_HEIGHT = 800
+
+/* What the viewer last asked pdf.js to open. The url is how a test says which
+   document is being shown and whether the gateway was asked to convert it --
+   the question the iframe's `src` used to answer. */
+const pdfAsked = vi.hoisted(() => ({ url: '', broken: false }))
+
+vi.mock('./pdfjs', () => ({
+  loadPdfjs: async () => {
+    if (pdfAsked.broken) throw new Error('pdf.js was not served')
+    return {
+      GlobalWorkerOptions: { workerSrc: '' },
+      getDocument: ({ url }: { url: string }) => {
+        pdfAsked.url = url
+        return {
+          promise: Promise.resolve({
+            numPages: 8,
+            getPage: async () => ({
+              getViewport: ({ scale }: { scale: number }) => ({
+                width: PDF_PAGE_WIDTH * scale,
+                height: PDF_PAGE_HEIGHT * scale
+              }),
+              render: () => ({ promise: Promise.resolve() })
+            })
+          })
+        }
+      }
+    }
+  }
+}))
+
+/* Where the viewer asked to be scrolled. happy-dom has no layout, so a
+   scroller's `scrollTop` never moves however it is told to; what a test can
+   see is the ask. */
+function recordScrolls(): { tops: number[]; restore: () => void } {
+  const tops: number[] = []
+  const before = HTMLElement.prototype.scrollTo
+  HTMLElement.prototype.scrollTo = function (options?: unknown): void {
+    tops.push(Math.round((options as { top?: number } | undefined)?.top ?? 0))
+  } as typeof HTMLElement.prototype.scrollTo
+  return { tops, restore: () => (HTMLElement.prototype.scrollTo = before) }
+}
+
 function base(over: Partial<KbBase> & { id: string }): KbBase {
   return {
     name: 'handbook',
@@ -17,7 +68,7 @@ function base(over: Partial<KbBase> & { id: string }): KbBase {
     created_at: '2026-08-24T00:00:00',
     updated_at: '2026-08-24T00:00:00',
     documents: 0,
-    ...over,
+    ...over
   }
 }
 
@@ -38,8 +89,7 @@ function toastHost(): HTMLElement {
   }
   return host
 }
-const toasts = (): string[] =>
-  Array.from(toastHost().querySelectorAll('.toast .t')).map((e) => e.textContent || '')
+const toasts = (): string[] => Array.from(toastHost().querySelectorAll('.toast .t')).map(e => e.textContent || '')
 const confirms: string[] = []
 
 function doc(over: Partial<KbDoc> & { id: string }): KbDoc {
@@ -53,7 +103,7 @@ function doc(over: Partial<KbDoc> & { id: string }): KbDoc {
     error: '',
     created_at: '',
     updated_at: '',
-    ...over,
+    ...over
   }
 }
 
@@ -67,7 +117,7 @@ function source(over: Partial<KnowledgeSource> = {}): void {
     },
     showPage: (id: string | null) => pages.push(id),
     openSet: () => opened.push(1),
-    closeDetail: () => {},
+    closeDetail: () => {}
   } as unknown as Shell
   window.RavenShell = fakeShell
   window.DS = {
@@ -84,15 +134,20 @@ function source(over: Partial<KnowledgeSource> = {}): void {
       chunks: async () => ({ chunks: [], total: 0 }),
       embeddingModels: async () => [
         { id: 'siliconflow', name: 'SiliconFlow', models: ['BAAI/bge-large-zh-v1.5', 'BAAI/bge-m3'] },
-        { id: 'dashscope', name: 'DashScope', models: ['text-embedding-v4'] },
+        { id: 'dashscope', name: 'DashScope', models: ['text-embedding-v4'] }
       ],
       switchChunks: async () => 0,
       deleteChunks: async () => 0,
       createChunk: async (_d: string, text: string) => ({ chunk_index: 9, total_chunks: 10, text, manual: true }),
-      updateChunk: async (_d: string, _c: string, text: string) => ({ chunk_index: 0, total_chunks: 1, text, manual: true }),
+      updateChunk: async (_d: string, _c: string, text: string) => ({
+        chunk_index: 0,
+        total_chunks: 1,
+        text,
+        manual: true
+      }),
       removeDoc: async () => {},
-      ...over,
-    },
+      ...over
+    }
   }
 }
 
@@ -124,7 +179,7 @@ async function openRowMenu(name: string): Promise<void> {
      the first one in the whole table, which is the right answer only when
      there is one row. */
   const names = [...document.querySelectorAll('.kbtable .td.nm')]
-  const at = names.findIndex((c) => c.textContent === name)
+  const at = names.findIndex(c => c.textContent === name)
   const dots = [...document.querySelectorAll('.kbtable .kbops .dots')][at] as HTMLButtonElement
   await act(async () => {
     dots.click()
@@ -166,7 +221,7 @@ describe('the knowledge page', () => {
     source({
       bases: async () => [base({ id: 'b1' })],
       documents: async () => [doc({ id: 'd1', status: 'ready' })],
-      search: () => new Promise((r) => gates.push(r as never)),
+      search: () => new Promise(r => gates.push(r as never))
     })
     await mount()
     await act(async () => {
@@ -181,7 +236,7 @@ describe('the knowledge page', () => {
       gates[0]!({ hits: [{ score: 0.4, document_id: 'd1', text: 'the stale answer' }], search_ms: 9, embed_ms: 90 })
       await first
     })
-    const texts = (store.getState().hits ?? []).map((h) => h.text)
+    const texts = (store.getState().hits ?? []).map(h => h.text)
     expect(texts).toEqual(['the newest answer'])
   })
 
@@ -196,7 +251,7 @@ describe('the knowledge page', () => {
       search: async () => {
         calls += 1
         return { hits: [{ score: 0.8, document_id: 'd1', text: 'the answer' }], search_ms: 6, embed_ms: 180 }
-      },
+      }
     })
     await mount()
     await act(async () => {
@@ -212,7 +267,7 @@ describe('the knowledge page', () => {
       await store.searchNow('quarterly')
     })
     expect(calls).toBe(1)
-    expect((store.getState().hits ?? []).map((h) => h.text)).toEqual(['the answer'])
+    expect((store.getState().hits ?? []).map(h => h.text)).toEqual(['the answer'])
 
     await act(async () => {
       await store.searchNow('   ')
@@ -222,8 +277,6 @@ describe('the knowledge page', () => {
     expect(calls).toBe(1)
     expect(store.getState().hits).toBeNull()
   })
-
-
 
   it('lists the bases with their document counts', async () => {
     source({ bases: async () => [base({ id: 'b1', name: 'handbook', documents: 3 })] })
@@ -237,7 +290,7 @@ describe('the knowledge page', () => {
        mismatch rather than search against it silently. */
     source({
       status: async () => ({ configured: true, model: 'text-embedding-3' }),
-      bases: async () => [base({ id: 'b1', embedding_model: 'bge-m3' })],
+      bases: async () => [base({ id: 'b1', embedding_model: 'bge-m3' })]
     })
     await mount()
     await act(async () => {
@@ -266,7 +319,7 @@ describe('the knowledge page', () => {
     source({
       bases: async () => {
         throw new Error('socket dropped')
-      },
+      }
     })
     await mount()
     expect(screen.getByText('socket dropped')).toBeTruthy()
@@ -277,7 +330,7 @@ describe('the knowledge page', () => {
     /* Without this the first paint says "no bases" while the call is still in
        flight. */
     let release: (v: KbBase[]) => void = () => {}
-    source({ bases: () => new Promise<KbBase[]>((r) => (release = r)) })
+    source({ bases: () => new Promise<KbBase[]>(r => (release = r)) })
     render(<KnowledgeApp />)
     const loading = store.load()
     expect(screen.queryByText('gui.kb.none')).toBeNull()
@@ -300,7 +353,7 @@ describe('the knowledge page', () => {
       bases: async () => {
         asked.push('bases')
         return []
-      },
+      }
     })
     await mount()
     expect(asked.sort()).toEqual(['bases', 'status'])
@@ -325,7 +378,6 @@ describe('opening the page', () => {
   })
 })
 
-
 describe('the write surface', () => {
   it('creates a base and reloads, so the new row is the served one', async () => {
     /* Not spliced in locally: the row the engine answers carries the model and
@@ -338,7 +390,7 @@ describe('the write surface', () => {
         listed = [base({ id: 'b1', name })]
         return listed[0]!
       },
-      bases: async () => listed,
+      bases: async () => listed
     })
     await mount()
     await act(async () => {
@@ -352,7 +404,7 @@ describe('the write surface', () => {
     source({
       create: async () => {
         throw new Error('connection refused')
-      },
+      }
     })
     await mount()
     await act(async () => {
@@ -375,9 +427,9 @@ describe('the write surface', () => {
         throw {
           code: -32603,
           message: 'internal_error',
-          data: { detail: 'could not create the base: embedding endpoint returned 402' },
+          data: { detail: 'could not create the base: embedding endpoint returned 402' }
         }
-      },
+      }
     })
     await mount()
     await act(async () => {
@@ -392,8 +444,8 @@ describe('the write surface', () => {
     source({
       create: (name: string) => {
         calls += 1
-        return new Promise<KbBase>((r) => (release = r))
-      },
+        return new Promise<KbBase>(r => (release = r))
+      }
     })
     await mount()
     await act(async () => {
@@ -416,7 +468,7 @@ describe('the write surface', () => {
       remove: async (id: string) => {
         removed.push(id)
         return {}
-      },
+      }
     })
     await mount()
     await act(async () => {
@@ -440,9 +492,9 @@ describe('the write surface', () => {
           chunk_count: 3,
           error: '',
           created_at: '',
-          updated_at: '',
-        },
-      ],
+          updated_at: ''
+        }
+      ]
     })
     await mount()
     await act(async () => {
@@ -456,7 +508,7 @@ describe('the write surface', () => {
        search answers with less than they expected, and opening every file to
        find out is a poor way to compare them. */
     expect(screen.getByText('gui.kb.col_chunks')).toBeTruthy()
-    const cells = [...document.querySelectorAll('.kbtable .td')].map((c) => c.textContent)
+    const cells = [...document.querySelectorAll('.kbtable .td')].map(c => c.textContent)
     expect(cells).toContain('3')
   })
 
@@ -468,16 +520,16 @@ describe('the write surface', () => {
       bases: async () => [base({ id: 'b1' })],
       documents: async () => [
         doc({ id: 'd1', source: 'broken.pdf', status: 'failed', chunk_count: 0 }),
-        doc({ id: 'd2', source: 'queued.md', status: 'pending', chunk_count: 0 }),
-      ],
+        doc({ id: 'd2', source: 'queued.md', status: 'pending', chunk_count: 0 })
+      ]
     })
     await mount()
     await act(async () => {
       await store.open_('b1')
     })
 
-    const cells = [...document.querySelectorAll('.kbtable .td')].map((c) => c.textContent)
-    expect(cells.filter((text) => text === '\u2014').length).toBe(2)
+    const cells = [...document.querySelectorAll('.kbtable .td')].map(c => c.textContent)
+    expect(cells.filter(text => text === '\u2014').length).toBe(2)
     expect(cells).not.toContain('0')
   })
 
@@ -497,9 +549,9 @@ describe('the write surface', () => {
           chunk_count: 0,
           error: 'no parser for application/pdf',
           created_at: '',
-          updated_at: '',
-        },
-      ],
+          updated_at: ''
+        }
+      ]
     })
     await mount()
     await act(async () => {
@@ -525,9 +577,9 @@ describe('the write surface', () => {
           source: 'report.docx',
           status: 'ready',
           chunk_count: 7,
-          warning: '2 of 5 pictures in this file could not be read: rate limited',
-        }),
-      ],
+          warning: '2 of 5 pictures in this file could not be read: rate limited'
+        })
+      ]
     })
     await mount()
     await act(async () => {
@@ -544,7 +596,7 @@ describe('the write surface', () => {
   it('leaves an unwarned row unmarked', async () => {
     source({
       bases: async () => [base({ id: 'b1' })],
-      documents: async () => [doc({ id: 'd1', status: 'ready', chunk_count: 7 })],
+      documents: async () => [doc({ id: 'd1', status: 'ready', chunk_count: 7 })]
     })
     await mount()
     await act(async () => {
@@ -562,8 +614,8 @@ describe('the write surface', () => {
     source({
       bases: async () => [base({ id: 'b1' })],
       documents: async () => [
-        doc({ id: 'd1', status: 'failed', error: 'embedding endpoint returned 404', warning: 'a picture' }),
-      ],
+        doc({ id: 'd1', status: 'failed', error: 'embedding endpoint returned 404', warning: 'a picture' })
+      ]
     })
     await mount()
     await act(async () => {
@@ -586,8 +638,8 @@ describe('the write surface', () => {
         hits: [{ score: 8.42, retrieval: 'keyword' as const, document_id: 'd1', text: 'alpha' }],
         by_keyword: [{ base_id: 'b1', reason: "the model 'bge-m3' could not be reached" }],
         search_ms: 3,
-        embed_ms: 0,
-      }),
+        embed_ms: 0
+      })
     })
     await mount()
     await act(async () => {
@@ -598,7 +650,7 @@ describe('the write surface', () => {
     })
     await act(async () => {
       fireEvent.change(document.querySelector('.kbask .kbname') as HTMLInputElement, {
-        target: { value: 'alpha' },
+        target: { value: 'alpha' }
       })
     })
     await act(async () => {
@@ -623,8 +675,8 @@ describe('the write surface', () => {
         hits: [{ score: 0.83, document_id: 'd1', text: 'alpha' }],
         by_keyword: [],
         search_ms: 3,
-        embed_ms: 12,
-      }),
+        embed_ms: 12
+      })
     })
     await mount()
     await act(async () => {
@@ -635,7 +687,7 @@ describe('the write surface', () => {
     })
     await act(async () => {
       fireEvent.change(document.querySelector('.kbask .kbname') as HTMLInputElement, {
-        target: { value: 'alpha' },
+        target: { value: 'alpha' }
       })
     })
     await act(async () => {
@@ -653,8 +705,7 @@ describe('the write surface', () => {
     let release: (d: never[]) => void = () => {}
     source({
       bases: async () => [base({ id: 'b1', name: 'one' }), base({ id: 'b2', name: 'two' })],
-      documents: (id: string) =>
-        id === 'b1' ? new Promise((r) => (release = r as never)) : Promise.resolve([]),
+      documents: (id: string) => (id === 'b1' ? new Promise(r => (release = r as never)) : Promise.resolve([]))
     })
     await mount()
     const slow = store.open_('b1')
@@ -673,7 +724,6 @@ describe('the write surface', () => {
   })
 })
 
-
 describe('documents and search', () => {
   it('queues a document, then shows it indexed', async () => {
     /* Two states on purpose: embedding outlives a request, and a panel that
@@ -688,7 +738,7 @@ describe('documents and search', () => {
       index: async (id: string) => {
         seen.push('index')
         return doc({ id, status: 'ready', chunk_count: 2 })
-      },
+      }
     })
     await mount()
     await act(async () => {
@@ -708,7 +758,7 @@ describe('documents and search', () => {
       bases: async () => [base({ id: 'b1' })],
       upload: async () => {
         throw new Error('file exceeds 20 MB limit')
-      },
+      }
     })
     await mount()
     await act(async () => {
@@ -730,8 +780,8 @@ describe('documents and search', () => {
       bases: async () => [base({ id: 'b1' })],
       documents: async () => [
         doc({ id: 'd1', source: 'done.md', status: 'ready', chunk_count: 2 }),
-        doc({ id: 'd3', source: 'broke.md', status: 'failed', error: 'endpoint said 400' }),
-      ],
+        doc({ id: 'd3', source: 'broke.md', status: 'failed', error: 'endpoint said 400' })
+      ]
     })
     await mount()
     await act(async () => {
@@ -741,9 +791,9 @@ describe('documents and search', () => {
     await openRowMenu('done.md')
     expect(screen.getByText('gui.kb.doc_reindex')).toBeTruthy()
     expect(screen.getByText('gui.kb.delete')).toBeTruthy()
-    expect(
-      (document.querySelector('.kbtable .td.s-failed') as HTMLElement).getAttribute('title'),
-    ).toBe('endpoint said 400')
+    expect((document.querySelector('.kbtable .td.s-failed') as HTMLElement).getAttribute('title')).toBe(
+      'endpoint said 400'
+    )
   })
 
   it('indexes a stuck row again, and shows the answer', async () => {
@@ -754,7 +804,7 @@ describe('documents and search', () => {
       index: async (id: string) => {
         asked.push(id)
         return doc({ id, source: 'stuck.md', status: 'ready', chunk_count: 4 })
-      },
+      }
     })
     await mount()
     await act(async () => {
@@ -776,7 +826,7 @@ describe('documents and search', () => {
       documents: async () => [doc({ id: 'd2', source: 'stuck.md', status: 'failed', error: 'was 400' })],
       index: async () => {
         throw new Error('still 400')
-      },
+      }
     })
     await mount()
     await act(async () => {
@@ -789,7 +839,7 @@ describe('documents and search', () => {
     /* The optimistic `indexing` was a promise the call did not keep; leaving it
        there is a row saying it is working when nothing is. */
     expect(screen.getByText('gui.kb.doc_failed')).toBeTruthy()
-    expect(toasts().some((m) => m.includes('still 400'))).toBe(true)
+    expect(toasts().some(m => m.includes('still 400'))).toBe(true)
   })
 
   it('will not remove a document while its index is still running', async () => {
@@ -803,10 +853,10 @@ describe('documents and search', () => {
     source({
       bases: async () => [base({ id: 'b1' })],
       documents: async () => [doc({ id: 'd2', source: 'stuck.md', status: 'failed' })],
-      index: () => new Promise<KbDoc>((r) => (release = r)),
+      index: () => new Promise<KbDoc>(r => (release = r)),
       removeDoc: async (id: string) => {
         gone.push(id)
-      },
+      }
     })
     await mount()
     await act(async () => {
@@ -842,7 +892,7 @@ describe('documents and search', () => {
       },
       removeDoc: async (id: string) => {
         gone.push(id)
-      },
+      }
     })
     await mount()
     await act(async () => {
@@ -857,7 +907,7 @@ describe('documents and search', () => {
     })
     /* Asked first: the chunks and the stored copy go with it, and an upload is
        not always still on the reader's disk. */
-    expect(confirms.some((c) => c.includes('gui.kb.doc_delete_body'))).toBe(true)
+    expect(confirms.some(c => c.includes('gui.kb.doc_delete_body'))).toBe(true)
     expect(gone).toEqual(['d2'])
     expect(screen.queryByText('stuck.md')).toBeNull()
   })
@@ -865,7 +915,7 @@ describe('documents and search', () => {
   it('tells an empty result apart from not having asked', async () => {
     source({
       bases: async () => [base({ id: 'b1' })],
-      search: async () => ({ hits: [], search_ms: 4, embed_ms: 120 }),
+      search: async () => ({ hits: [], search_ms: 4, embed_ms: 120 })
     })
     await mount()
     await act(async () => {
@@ -884,7 +934,7 @@ describe('documents and search', () => {
     let release: (h: never[]) => void = () => {}
     source({
       bases: async () => [base({ id: 'b1', name: 'one' }), base({ id: 'b2', name: 'two' })],
-      search: () => new Promise((r) => (release = r as never)),
+      search: () => new Promise(r => (release = r as never))
     })
     await mount()
     await act(async () => {
@@ -909,19 +959,19 @@ describe('the two-panel layout', () => {
        both panels staying on screen is the behaviour, not decoration. */
     source({
       bases: async () => [base({ id: 'b1', name: 'handbook' }), base({ id: 'b2', name: 'policies' })],
-      documents: async () => [doc({ id: 'd1', source: 'onboarding.md', status: 'ready' })],
+      documents: async () => [doc({ id: 'd1', source: 'onboarding.md', status: 'ready' })]
     })
     await mount()
     await act(async () => {
       await store.open_('b1')
     })
 
-    const rail = [...document.querySelectorAll('.kbrail .kbrow .nm')].map((n) => n.textContent)
+    const rail = [...document.querySelectorAll('.kbrail .kbrow .nm')].map(n => n.textContent)
     expect(rail).toEqual(['handbook', 'policies'])
     expect(document.querySelector('.kbhd b')!.textContent).toBe('handbook')
     /* And the open one is marked, since the rail is what says which base the
        panel belongs to. */
-    const on = [...document.querySelectorAll('.kbrail .kbrow')].filter((r) => r.hasAttribute('aria-current'))
+    const on = [...document.querySelectorAll('.kbrail .kbrow')].filter(r => r.hasAttribute('aria-current'))
     expect(on.length).toBe(1)
     expect(on[0]!.textContent).toContain('handbook')
   })
@@ -940,7 +990,7 @@ describe('the two-panel layout', () => {
        nothing when pressed is worse than one that says it is not ready. */
     source({
       bases: async () => [base({ id: 'b1' })],
-      documents: async () => [doc({ id: 'd1', source: 'onboarding.md', status: 'ready' })],
+      documents: async () => [doc({ id: 'd1', source: 'onboarding.md', status: 'ready' })]
     })
     await mount()
     await act(async () => {
@@ -953,9 +1003,7 @@ describe('the two-panel layout', () => {
     }
     /* View Chunks is wired now: it opens the same panel clicking the name
        does. */
-    expect(
-      (screen.getByText('gui.kb.doc_view_chunks').closest('button') as HTMLButtonElement).disabled,
-    ).toBe(false)
+    expect((screen.getByText('gui.kb.doc_view_chunks').closest('button') as HTMLButtonElement).disabled).toBe(false)
     /* Every data source in the menu is wired, so the button that opens it is
        not one of the stubs. */
     const add = screen.getByText('+ gui.kb.add_source').closest('button') as HTMLButtonElement
@@ -987,7 +1035,7 @@ describe('the create dialog', () => {
       create: async (name: string, _d: string, embedding?: boolean, model?: string, provider?: string) => {
         made.push([name, embedding, model, provider])
         return base({ id: 'b1', name })
-      },
+      }
     })
     await mount()
     await openDialog()
@@ -997,11 +1045,11 @@ describe('the create dialog', () => {
        absence of one. */
     const picker = document.getElementById('kbembed') as HTMLSelectElement
     expect(picker.value).toBe('siliconflow::BAAI/bge-m3')
-    expect([...picker.options].map((o) => o.value)).toEqual([
+    expect([...picker.options].map(o => o.value)).toEqual([
       '',
       'siliconflow::BAAI/bge-large-zh-v1.5',
       'siliconflow::BAAI/bge-m3',
-      'dashscope::text-embedding-v4',
+      'dashscope::text-embedding-v4'
     ])
 
     const field = document.getElementById('kbname') as HTMLInputElement
@@ -1028,7 +1076,7 @@ describe('the create dialog', () => {
 
     const picker = document.getElementById('kbembed') as HTMLSelectElement
     expect(picker.value).toBe('custom::house-embed')
-    expect([...picker.options].map((o) => o.textContent)).toContain('house-embed')
+    expect([...picker.options].map(o => o.textContent)).toContain('house-embed')
   })
 
   it('makes a base with no vectors when the model is left Disabled', async () => {
@@ -1041,7 +1089,7 @@ describe('the create dialog', () => {
       create: async (name: string, _d: string, embedding?: boolean) => {
         made.push([name, embedding])
         return base({ id: 'b1', name, embedding_model: '' })
-      },
+      }
     })
     await mount()
     await openDialog()
@@ -1071,7 +1119,7 @@ describe('the create dialog', () => {
       create: async (_n: string, _d: string, embedding?: boolean, model?: string) => {
         made.push([embedding, model])
         return base({ id: 'b1', name: 't3', embedding_model: '' })
-      },
+      }
     })
     await mount()
     await openDialog()
@@ -1092,7 +1140,7 @@ describe('the create dialog', () => {
   it('says Disabled on a base that has no model of its own', async () => {
     source({
       status: async () => ({ configured: true, model: 'bge-m3' }),
-      bases: async () => [base({ id: 'b1', name: 't3', embedding_model: '' })],
+      bases: async () => [base({ id: 'b1', name: 't3', embedding_model: '' })]
     })
     await mount()
     await act(async () => {
@@ -1117,7 +1165,7 @@ describe('the create dialog', () => {
       create: async (name: string) => {
         made.push(name)
         return base({ id: 'b1', name })
-      },
+      }
     })
     await mount()
     await openDialog()
@@ -1149,24 +1197,64 @@ describe('viewing the original file', () => {
     })
   }
 
-  it('frames the file when its name is clicked, and goes back', async () => {
+  it('draws the file when its name is clicked, and goes back', async () => {
+    /* A PDF is drawn here rather than framed, which is what lets a piece be
+       marked on the page it came from: a framed viewer is sandboxed to an
+       opaque origin and can only be told a page number. */
     await openBase([doc({ id: 'd1', source: 'contract.pdf', status: 'ready' })])
 
     await clickName('contract.pdf')
+    await act(async () => {})
 
-    const frame = document.querySelector('.kbframe') as HTMLIFrameElement
-    expect(frame).not.toBeNull()
-    expect(frame.getAttribute('src')).toBe('/knowledge/file?document=d1')
-    /* No sandbox attribute: the response already carries a CSP sandbox, and the
-       attribute as well stops the browser's own PDF viewer drawing anything. */
-    expect(frame.hasAttribute('sandbox')).toBe(false)
+    expect(document.querySelector('.kbpdf')).not.toBeNull()
+    expect(pdfAsked.url).toBe('/knowledge/file?document=d1')
     expect(document.querySelector('.kbtable')).toBeNull()
 
     await act(async () => {
       ;(document.querySelector('.kbback') as HTMLButtonElement).click()
     })
-    expect(document.querySelector('.kbframe')).toBeNull()
+    expect(document.querySelector('.kbpdf')).toBeNull()
     expect(document.querySelector('.kbtable')).not.toBeNull()
+  })
+
+  it('frames the document when pdf.js is not there to draw it', async () => {
+    /* The library is copied beside the page at build time rather than bundled,
+       so a build that skipped it -- no node_modules, an older wheel -- has to
+       degrade to what this did before rather than to an empty panel. */
+    pdfAsked.broken = true
+    try {
+      await openBase([doc({ id: 'd1', source: 'contract.pdf', status: 'ready' })])
+      await clickName('contract.pdf')
+      await act(async () => {})
+
+      const frame = document.querySelector('.kbframe') as HTMLIFrameElement
+      expect(frame).not.toBeNull()
+      expect(frame.getAttribute('src')).toBe('/knowledge/file?document=d1')
+
+      /* And a clicked piece still moves it, by the one control a sandboxed
+         viewer has. Losing that as well would make a build without pdf.js
+         worse than the one this replaced. */
+      await act(async () => {
+        store.focusChunk({ chunk_index: 0, total_chunks: 1, text: 'x', chunk_id: 'c1', page_number: 5 })
+      })
+      expect((document.querySelector('.kbframe') as HTMLIFrameElement).getAttribute('src')).toBe(
+        '/knowledge/file?document=d1#page=5',
+      )
+    } finally {
+      pdfAsked.broken = false
+    }
+  })
+
+  it('frames the kinds that have no regions to point at, without a sandbox attribute', async () => {
+    /* The response already carries a CSP sandbox; the attribute as well would
+       stop the browser drawing anything at all. */
+    await openBase([doc({ id: 'd1', source: 'diagram.png', status: 'ready' })])
+
+    await clickName('diagram.png')
+
+    const frame = document.querySelector('.kbframe') as HTMLIFrameElement
+    expect(frame.getAttribute('src')).toBe('/knowledge/file?document=d1')
+    expect(frame.hasAttribute('sandbox')).toBe(false)
   })
 
   it('takes the whole page while a file is open, rail and all', async () => {
@@ -1203,7 +1291,7 @@ describe('viewing the original file', () => {
             text: 'Second piece.',
             layout_type: 'text',
             page_number: 2,
-            chunk_id: 'c2',
+            chunk_id: 'c2'
           },
           {
             chunk_index: 0,
@@ -1212,11 +1300,11 @@ describe('viewing the original file', () => {
             layout_type: 'heading',
             page_number: 1,
             heading_path: ['Terms'],
-            chunk_id: 'c1',
-          },
+            chunk_id: 'c1'
+          }
         ],
-        total: 2,
-      }),
+        total: 2
+      })
     })
     await mount()
     await act(async () => {
@@ -1226,8 +1314,8 @@ describe('viewing the original file', () => {
     await clickName('contract.pdf')
     await act(async () => {})
 
-    expect(document.querySelector('.kborig .kbframe')).not.toBeNull()
-    const rows = [...document.querySelectorAll('.kbchunk .kbchunktx')].map((n) => n.textContent)
+    expect(document.querySelector('.kborig .kbpdf')).not.toBeNull()
+    const rows = [...document.querySelectorAll('.kbchunk .kbchunktx')].map(n => n.textContent)
     /* Answered out of order on purpose: the panel shows the document's order,
        not the transport's. */
     expect(rows).toEqual(['First piece.', 'Second piece.'])
@@ -1261,21 +1349,21 @@ describe('viewing the original file', () => {
                 char_end: 6,
                 page_number: 4,
                 heading_path: ['Handbook', 'Part 3'],
-                section_ordinal: 3,
+                section_ordinal: 3
               },
               {
                 char_start: 7,
                 char_end: 15,
                 page_number: 9,
                 heading_path: ['Handbook', 'Part 7'],
-                section_ordinal: 7,
-              },
+                section_ordinal: 7
+              }
             ],
-            chunk_id: 'c1',
-          },
+            chunk_id: 'c1'
+          }
         ],
-        total: 1,
-      }),
+        total: 1
+      })
     })
     await mount()
     await act(async () => {
@@ -1308,11 +1396,11 @@ describe('viewing the original file', () => {
             text: 'Alone.',
             page_number: 4,
             heading_path: ['Handbook'],
-            chunk_id: 'c1',
-          },
+            chunk_id: 'c1'
+          }
         ],
-        total: 1,
-      }),
+        total: 1
+      })
     })
     await mount()
     await act(async () => {
@@ -1333,7 +1421,7 @@ describe('viewing the original file', () => {
     chunk_id: 'c1',
     enabled: true,
     manual: false,
-    ...over,
+    ...over
   })
 
   const openWithChunks = async (chunks: KbChunk[], total = chunks.length, over = {}) => {
@@ -1341,7 +1429,7 @@ describe('viewing the original file', () => {
       bases: async () => [base({ id: 'b1' })],
       documents: async () => [doc({ id: 'd1', source: 'contract.pdf', status: 'ready' })],
       chunks: async () => ({ chunks, total }),
-      ...over,
+      ...over
     })
     await mount()
     await act(async () => {
@@ -1392,6 +1480,96 @@ describe('viewing the original file', () => {
     expect((document.querySelector('.kbchunktx') as HTMLElement).textContent).toContain('not really')
   })
 
+  it('marks a clicked piece on the page it was cut from, and scrolls to it', async () => {
+    /* The whole point of drawing the document rather than framing it. A chunk
+       is not a page -- it is a paragraph or a table on one -- and the question
+       a reader has when a retrieved passage looks wrong is which part of the
+       page it came from. */
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd1', source: 'report.pdf', status: 'ready' })],
+      chunks: async () => ({
+        chunks: [
+          {
+            chunk_index: 0,
+            total_chunks: 1,
+            text: 'On page three.',
+            chunk_id: 'c1',
+            page_number: 3,
+            regions: [{ page_number: 3, x0: 60, top: 100, x1: 400, bottom: 220 }]
+          }
+        ],
+        total: 1
+      })
+    })
+    const scrolled = recordScrolls()
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await clickName('report.pdf')
+    await act(async () => {})
+
+    await act(async () => {
+      ;(document.querySelector('.kbchunkpg') as HTMLButtonElement).click()
+    })
+
+    const mark = document.querySelector('.kbpdfmark') as HTMLElement
+    expect(mark).not.toBeNull()
+    /* Points to pixels at the fitted scale, which is 1 where the panel has no
+       measurable width -- so the numbers are the region's own. */
+    expect(mark.style.left).toBe('60px')
+    expect(mark.style.top).toBe('100px')
+    expect(mark.style.width).toBe('340px')
+    expect(mark.style.height).toBe('120px')
+
+    /* Two pages of 800 and the 8px between them sit above page three, and the
+       region is parked below the top of the scroller rather than against it. */
+    expect(scrolled.tops.at(-1)).toBe(2 * (PDF_PAGE_HEIGHT + 8) + 100 - 64)
+    scrolled.restore()
+  })
+
+  it('marks every region of a piece that crossed a page boundary', async () => {
+    /* The flattened fields say where a merged chunk *starts*. Marking only
+       that one would say the piece stopped at the page break. */
+    source({
+      bases: async () => [base({ id: 'b1' })],
+      documents: async () => [doc({ id: 'd1', source: 'report.pdf', status: 'ready' })],
+      chunks: async () => ({
+        chunks: [
+          {
+            chunk_index: 0,
+            total_chunks: 1,
+            text: 'Across the break.',
+            chunk_id: 'c1',
+            page_number: 1,
+            regions: [
+              { page_number: 1, x0: 60, top: 600, x1: 400, bottom: 740 },
+              { page_number: 2, x0: 60, top: 80, x1: 400, bottom: 160 }
+            ]
+          }
+        ],
+        total: 1
+      })
+    })
+    const scrolled = recordScrolls()
+    await mount()
+    await act(async () => {
+      await store.open_('b1')
+    })
+    await clickName('report.pdf')
+    await act(async () => {})
+
+    await act(async () => {
+      ;(document.querySelector('.kbchunkpg') as HTMLButtonElement).click()
+    })
+
+    expect(document.querySelectorAll('.kbpdfmark')).toHaveLength(2)
+    /* Scrolled to the first of them, which is the one on page one. */
+    expect(scrolled.tops.at(-1)).toBe(600 - 64)
+    scrolled.restore()
+  })
+
   it('shows the region a piece was cut from, addressed by both ids', async () => {
     /* The text is what the search matches; this is the only thing on the page
        that can answer whether the parser read the region correctly. */
@@ -1437,7 +1615,7 @@ describe('viewing the original file', () => {
       switchChunks: async (d: string, ids: string[], on: boolean) => {
         asked.push([d, ids, on])
         return 1
-      },
+      }
     })
 
     const box = document.querySelector('.kbswitch input') as HTMLInputElement
@@ -1457,7 +1635,7 @@ describe('viewing the original file', () => {
       switchChunks: async (_d: string, ids: string[], on: boolean) => {
         asked.push([ids, on])
         return ids.length
-      },
+      }
     })
 
     expect(screen.queryByText('gui.kb.chunk_disable')).toBeNull()
@@ -1481,7 +1659,7 @@ describe('viewing the original file', () => {
       chunks: async (_d: string, opts: { page?: number; page_size?: number }) => {
         asked.push(opts)
         return { chunks: [chunk()], total: 45 }
-      },
+      }
     })
 
     expect(asked[0]).toMatchObject({ page: 1, page_size: 20 })
@@ -1504,7 +1682,7 @@ describe('viewing the original file', () => {
       chunks: async (_d: string, opts: { query?: string }) => {
         asked.push(opts)
         return { chunks: [chunk({ text: 'the matching piece' })], total: 1 }
-      },
+      }
     })
     const before = asked.length
 
@@ -1533,7 +1711,7 @@ describe('viewing the original file', () => {
         chunks: async (_d: string, opts: { query?: string }) => {
           asked.push(opts)
           return { chunks: [chunk()], total: 1 }
-        },
+        }
       })
       const before = asked.length
       const box = document.querySelector('.kbchunksearch') as HTMLInputElement
@@ -1565,7 +1743,7 @@ describe('viewing the original file', () => {
       chunks: async (_d: string, opts: { query?: string; page?: number }) => {
         asked.push(opts)
         return { chunks: [chunk()], total: 40 }
-      },
+      }
     })
     const box = document.querySelector('.kbchunksearch') as HTMLInputElement
     await act(async () => {
@@ -1599,7 +1777,7 @@ describe('viewing the original file', () => {
       createChunk: async (_d: string, text: string) => {
         written.push(text)
         return chunk({ chunk_index: 1, chunk_id: 'c2', text, manual: true })
-      },
+      }
     })
 
     await act(async () => {
@@ -1625,7 +1803,7 @@ describe('viewing the original file', () => {
       updateChunk: async (d: string, id: string, text: string) => {
         saved.push([d, id, text])
         return chunk({ chunk_id: 'c9', text, manual: true })
-      },
+      }
     })
 
     await act(async () => {
@@ -1662,7 +1840,7 @@ describe('viewing the original file', () => {
       chunks: async (_d: string, opts: { available?: boolean | null }) => {
         asked.push(opts)
         return { chunks: [chunk({ enabled: false })], total: 1 }
-      },
+      }
     })
 
     await act(async () => {
@@ -1688,7 +1866,7 @@ describe('viewing the original file', () => {
     source({
       bases: async () => [base({ id: 'b1' })],
       documents: async () => [doc({ id: 'd1', source: 'notes.md', status: 'failed' })],
-      chunks: async () => ({ chunks: [], total: 0 }),
+      chunks: async () => ({ chunks: [], total: 0 })
     })
     await mount()
     await act(async () => {
@@ -1705,7 +1883,10 @@ describe('viewing the original file', () => {
     source({
       bases: async () => [base({ id: 'b1' })],
       documents: async () => [doc({ id: 'd1', source: 'onboarding.md', status: 'ready' })],
-      chunks: async () => ({ chunks: [{ chunk_index: 0, total_chunks: 1, text: 'Only piece.', chunk_id: 'c1' }], total: 1 }),
+      chunks: async () => ({
+        chunks: [{ chunk_index: 0, total_chunks: 1, text: 'Only piece.', chunk_id: 'c1' }],
+        total: 1
+      })
     })
     await mount()
     await act(async () => {
@@ -1729,16 +1910,13 @@ describe('viewing the original file', () => {
 
     /* A legacy .doc has no reader in the browser and no pure-Python one worth
        trusting, so the gateway renders it with LibreOffice first. */
-    expect((document.querySelector('.kbframe') as HTMLIFrameElement).getAttribute('src')).toBe(
-      '/knowledge/file?document=d2&render=pdf',
-    )
+    expect(pdfAsked.url).toBe('/knowledge/file?document=d2&render=pdf')
   })
 
-  it('takes the preview to the page a chunk came from', async () => {
-    /* What a deck's chunk list can do that a document's cannot: a slide is a
-       page, the preview is that deck rendered to PDF, and the two agree page
-       for page -- so a piece can put the slide it was cut from in front of the
-       reader rather than describing it. */
+  it('takes the preview to the page a slide came from', async () => {
+    /* A slide is a page: the preview is that deck rendered to PDF and the two
+       agree page for page, so a piece can put the slide it was cut from in
+       front of the reader rather than describing it. */
     await openBase([doc({ id: 'd9', source: 'deck.pptx', status: 'ready', chunk_count: 3 })])
     source({
       bases: async () => [base({ id: 'b1', name: 'handbook' })],
@@ -1746,24 +1924,27 @@ describe('viewing the original file', () => {
       chunks: async () => ({
         chunks: [
           { chunk_index: 0, total_chunks: 2, text: 'Opening', chunk_id: 'c1', page_number: 1 },
-          { chunk_index: 1, total_chunks: 2, text: 'Closing', chunk_id: 'c2', page_number: 7 },
+          { chunk_index: 1, total_chunks: 2, text: 'Closing', chunk_id: 'c2', page_number: 7 }
         ],
-        total: 2,
-      }),
+        total: 2
+      })
     })
+    const scrolled = recordScrolls()
     await clickName('deck.pptx')
+    await act(async () => {})
 
-    const frame = () => document.querySelector('.kbframe') as HTMLIFrameElement
-    expect(frame().getAttribute('src')).toBe('/knowledge/file?document=d9&render=pdf')
+    expect(pdfAsked.url).toBe('/knowledge/file?document=d9&render=pdf')
 
     await act(async () => {
       ;(document.querySelectorAll('.kbchunk')[1] as HTMLElement).click()
     })
 
-    /* `#page=` is the PDF fragment every built-in viewer reads, and the only
-       way to move this frame: the response is sandboxed to an opaque origin,
-       so the page cannot reach in and scroll it. */
-    expect(frame().getAttribute('src')).toBe('/knowledge/file?document=d9&render=pdf#page=7')
+    /* A slide knows its page and not a place on it, so the top of page seven
+       is the whole of the right answer -- and six pages plus the gaps between
+       them sit above it. */
+    expect(scrolled.tops.at(-1)).toBe(6 * (PDF_PAGE_HEIGHT + 8))
+    expect(document.querySelector('.kbpdfmark')).toBeNull()
+    scrolled.restore()
     /* And the list says which piece the preview is answering to. */
     expect(document.querySelectorAll('.kbchunk')[1]?.classList.contains('at')).toBe(true)
     expect(document.querySelectorAll('.kbchunk')[0]?.classList.contains('at')).toBe(false)
@@ -1779,8 +1960,8 @@ describe('viewing the original file', () => {
       documents: async () => [doc({ id: 'd9', source: 'deck.pptx', status: 'ready', chunk_count: 1 })],
       chunks: async () => ({
         chunks: [{ chunk_index: 0, total_chunks: 1, text: 'Opening', chunk_id: 'c1', page_number: 4 }],
-        total: 1,
-      }),
+        total: 1
+      })
     })
     await clickName('deck.pptx')
     const selection = { toString: () => '  some selected words  ' } as Selection
@@ -1790,9 +1971,8 @@ describe('viewing the original file', () => {
       ;(document.querySelector('.kbchunk') as HTMLElement).click()
     })
 
-    expect((document.querySelector('.kbframe') as HTMLIFrameElement).getAttribute('src')).toBe(
-      '/knowledge/file?document=d9&render=pdf',
-    )
+    expect(document.querySelector('.kbpdfmark')).toBeNull()
+    expect(store.getState().previewFocus).toBe(0)
     spy.mockRestore()
   })
 
@@ -1805,8 +1985,8 @@ describe('viewing the original file', () => {
       documents: async () => [doc({ id: 'd8', source: 'notes.txt', status: 'ready', chunk_count: 1 })],
       chunks: async () => ({
         chunks: [{ chunk_index: 0, total_chunks: 1, text: 'Just text', chunk_id: 'c1' }],
-        total: 1,
-      }),
+        total: 1
+      })
     })
     await clickName('notes.txt')
 
@@ -1815,7 +1995,7 @@ describe('viewing the original file', () => {
     })
 
     expect((document.querySelector('.kbframe') as HTMLIFrameElement).getAttribute('src')).toBe(
-      '/knowledge/file?document=d8',
+      '/knowledge/file?document=d8'
     )
     expect(document.querySelector('.kbchunk')?.classList.contains('at')).toBe(false)
   })
@@ -1837,15 +2017,15 @@ describe('viewing the original file', () => {
        on is the panel lying about what it belongs to. */
     source({
       bases: async () => [base({ id: 'b1', name: 'handbook' }), base({ id: 'b2', name: 'policies' })],
-      documents: async (id: string) =>
-        id === 'b1' ? [doc({ id: 'd1', source: 'contract.pdf', status: 'ready' })] : [],
+      documents: async (id: string) => (id === 'b1' ? [doc({ id: 'd1', source: 'contract.pdf', status: 'ready' })] : [])
     })
     await mount()
     await act(async () => {
       await store.open_('b1')
     })
     await clickName('contract.pdf')
-    expect(document.querySelector('.kbframe')).not.toBeNull()
+    await act(async () => {})
+    expect(document.querySelector('.kbpdf')).not.toBeNull()
 
     await act(async () => {
       await store.open_('b2')
@@ -1862,7 +2042,7 @@ describe('viewing the original file', () => {
       ok: true,
       status: 200,
       statusText: 'OK',
-      text: async () => '# Onboarding\n\nRead **this** first.\n',
+      text: async () => '# Onboarding\n\nRead **this** first.\n'
     }))
     await openBase([doc({ id: 'd4', source: 'onboarding.md', status: 'ready' })])
 
@@ -1888,7 +2068,7 @@ describe('viewing the original file', () => {
       ok: true,
       status: 200,
       statusText: 'OK',
-      text: async () => '# Hi\n\n<img src=x onerror="alert(1)">\n',
+      text: async () => '# Hi\n\n<img src=x onerror="alert(1)">\n'
     }))
     await openBase([doc({ id: 'd5', source: 'evil.md', status: 'ready' })])
 
@@ -1929,7 +2109,7 @@ describe('viewing the original file', () => {
     await act(async () => {
       ;(opener.querySelector('svg.kbico') as SVGElement).closest('button')!.click()
     })
-    expect(document.querySelector('.kbframe')).not.toBeNull()
+    expect(document.querySelector('.kbpdf')).not.toBeNull()
   })
 
   it('badges a lettered file with its own extension, not its family name', async () => {
@@ -1948,7 +2128,7 @@ describe('viewing the original file', () => {
     await openBase([
       doc({ id: 'd1', source: 'report.docx', status: 'ready' }),
       doc({ id: 'd2', source: 'notes.md', status: 'ready' }),
-      doc({ id: 'd3', source: 'photo.png', status: 'ready' }),
+      doc({ id: 'd3', source: 'photo.png', status: 'ready' })
     ])
 
     const marks = [...document.querySelectorAll('.kbtable .kbico')]
@@ -1967,14 +2147,11 @@ describe('viewing the original file', () => {
        identical grey pages down the column. */
     await openBase([
       doc({ id: 'd1', source: 'budget.xlsx', status: 'ready' }),
-      doc({ id: 'd2', source: 'scan.pdf', status: 'ready' }),
+      doc({ id: 'd2', source: 'scan.pdf', status: 'ready' })
     ])
 
     const marks = [...document.querySelectorAll('.kbtable .kbico')]
-    expect(marks.map((m) => m.getAttribute('class'))).toEqual([
-      'kbico kbf-sheet',
-      'kbico kbf-pdf',
-    ])
+    expect(marks.map(m => m.getAttribute('class'))).toEqual(['kbico kbf-sheet', 'kbico kbf-pdf'])
   })
 
   it('sorts every offered format into framed, converted or neither', () => {
@@ -1997,7 +2174,7 @@ describe('adding a data source', () => {
       bases: async () => [base({ id: 'b1', name: 'handbook' })],
       documents: async () => docs,
       status: async () => ({ configured: true, model: 'bge-m3', extensions: ['.md', '.txt'] }),
-      ...over,
+      ...over
     })
     await mount()
     await act(async () => {
@@ -2018,11 +2195,11 @@ describe('adding a data source', () => {
     await openSourceMenu()
 
     const items = [...document.querySelectorAll('.kbsrc .kbmenu .mi')]
-    expect(items.map((b) => b.textContent)).toEqual([
+    expect(items.map(b => b.textContent)).toEqual([
       'gui.kb.src_file',
       'gui.kb.src_note',
       'gui.kb.src_folder',
-      'gui.kb.src_url',
+      'gui.kb.src_url'
     ])
     /* One drawing each, and hidden from a screen reader: the word beside it is
        already the name, and an icon read aloud after it says it twice. */
@@ -2039,8 +2216,8 @@ describe('adding a data source', () => {
     await openBase()
 
     const inputs = [...document.querySelectorAll('.kbsrc input[type="file"]')]
-    expect(inputs.map((i) => i.hasAttribute('webkitdirectory'))).toEqual([false, true])
-    expect(inputs.every((i) => i.hasAttribute('multiple'))).toBe(true)
+    expect(inputs.map(i => i.hasAttribute('webkitdirectory'))).toEqual([false, true])
+    expect(inputs.every(i => i.hasAttribute('multiple'))).toBe(true)
   })
 
   it('uploads several files one after another, not all at once', async () => {
@@ -2059,7 +2236,7 @@ describe('adding a data source', () => {
         live -= 1
         return doc({ id: f.name, source: f.name })
       },
-      index: async (id: string) => doc({ id, source: id, status: 'ready' }),
+      index: async (id: string) => doc({ id, source: id, status: 'ready' })
     })
 
     await act(async () => {
@@ -2078,14 +2255,14 @@ describe('adding a data source', () => {
         if (f.name === 'bad.md') throw new Error('nope')
         return doc({ id: f.name, source: f.name })
       },
-      index: async (id: string) => doc({ id, source: id, status: 'ready' }),
+      index: async (id: string) => doc({ id, source: id, status: 'ready' })
     })
 
     await act(async () => {
       await store.uploadAll([file('a.md'), file('bad.md'), file('c.md')])
     })
 
-    expect(store.getState().docs.map((d) => d.source)).toEqual(['a.md', 'c.md'])
+    expect(store.getState().docs.map(d => d.source)).toEqual(['a.md', 'c.md'])
     expect(toasts()).toEqual(['nope'])
   })
 
@@ -2096,7 +2273,7 @@ describe('adding a data source', () => {
 
     const kept = store.indexable([file('notes.md'), file('logo.png'), file('readme.TXT'), file('Makefile')])
 
-    expect(kept.map((f) => f.name)).toEqual(['notes.md', 'readme.TXT'])
+    expect(kept.map(f => f.name)).toEqual(['notes.md', 'readme.TXT'])
   })
 
   it('takes any file into a base that was made without an embedding model', async () => {
@@ -2106,7 +2283,7 @@ describe('adding a data source', () => {
     source({
       bases: async () => [base({ id: 'b1', name: 'scratch', embedding_model: '', dimensions: 0 })],
       documents: async () => [],
-      status: async () => ({ configured: true, model: 'bge-m3', extensions: ['.md'] }),
+      status: async () => ({ configured: true, model: 'bge-m3', extensions: ['.md'] })
     })
     await mount()
     await act(async () => {
@@ -2115,7 +2292,7 @@ describe('adding a data source', () => {
 
     const kept = store.indexable([file('notes.md'), file('scan.pdf'), file('logo.png')])
 
-    expect(kept.map((f) => f.name)).toEqual(['notes.md', 'scan.pdf', 'logo.png'])
+    expect(kept.map(f => f.name)).toEqual(['notes.md', 'scan.pdf', 'logo.png'])
   })
 
   it('says so rather than starting when a folder holds nothing indexable', async () => {
@@ -2124,7 +2301,7 @@ describe('adding a data source', () => {
       upload: async (_b: string, f: File) => {
         tried.push(f.name)
         return doc({ id: f.name })
-      },
+      }
     })
 
     await act(async () => {
@@ -2144,7 +2321,7 @@ describe('adding a data source', () => {
       upload: async (_b: string, f: File) => {
         tried.push(f.name)
         return doc({ id: f.name })
-      },
+      }
     })
 
     const many = Array.from({ length: store.FOLDER_MAX + 1 }, (_, i) => file(`f${i}.md`))
@@ -2163,7 +2340,7 @@ describe('adding a data source', () => {
         wrote.push([title, text])
         return doc({ id: 'n1', source: `${title}.md`, origin: 'note' })
       },
-      index: async (id: string) => doc({ id, source: 'Plan.md', origin: 'note', status: 'ready' }),
+      index: async (id: string) => doc({ id, source: 'Plan.md', origin: 'note', status: 'ready' })
     })
     await openSourceMenu()
     await act(async () => {
@@ -2207,9 +2384,9 @@ describe('adding a data source', () => {
           saved.push([id, title, text])
           return { ...note, source: `${title}.md` }
         },
-        index: async (id: string) => ({ ...note, id, status: 'ready' }),
+        index: async (id: string) => ({ ...note, id, status: 'ready' })
       },
-      [note],
+      [note]
     )
     const read = vi.spyOn(store, 'readText').mockResolvedValue('# Plan\n\nship it')
 
@@ -2242,7 +2419,7 @@ describe('adding a data source', () => {
        editing it here would make this base the only place the change exists. */
     await openBase({}, [
       doc({ id: 'd1', source: 'handbook.md', status: 'ready' }),
-      doc({ id: 'n1', source: 'Plan.md', origin: 'note', status: 'ready' }),
+      doc({ id: 'n1', source: 'Plan.md', origin: 'note', status: 'ready' })
     ])
 
     await openRowMenu('handbook.md')
@@ -2259,7 +2436,7 @@ describe('adding a data source', () => {
         asked.push(url)
         return doc({ id: 'u1', source: 'Raven Docs.md', origin: 'url', origin_ref: url })
       },
-      index: async (id: string) => doc({ id, source: 'Raven Docs.md', origin: 'url', status: 'ready' }),
+      index: async (id: string) => doc({ id, source: 'Raven Docs.md', origin: 'url', status: 'ready' })
     })
     await openSourceMenu()
     await act(async () => {
@@ -2268,7 +2445,7 @@ describe('adding a data source', () => {
 
     await act(async () => {
       fireEvent.change(document.getElementById('kburl') as HTMLInputElement, {
-        target: { value: '  https://example.com/docs  ' },
+        target: { value: '  https://example.com/docs  ' }
       })
     })
     await act(async () => {
@@ -2284,8 +2461,8 @@ describe('adding a data source', () => {
        out for that long reads as one that ignored the click. */
     let release: (d: KbDoc) => void = () => {}
     await openBase({
-      addUrl: () => new Promise<KbDoc>((resolve) => (release = resolve)),
-      index: async (id: string) => doc({ id, origin: 'url', status: 'ready' }),
+      addUrl: () => new Promise<KbDoc>(resolve => (release = resolve)),
+      index: async (id: string) => doc({ id, origin: 'url', status: 'ready' })
     })
     await openSourceMenu()
     await act(async () => {
@@ -2293,7 +2470,7 @@ describe('adding a data source', () => {
     })
     await act(async () => {
       fireEvent.change(document.getElementById('kburl') as HTMLInputElement, {
-        target: { value: 'https://example.com/docs' },
+        target: { value: 'https://example.com/docs' }
       })
     })
 
@@ -2324,7 +2501,7 @@ describe('adding a data source', () => {
     let finishIndex: (d: KbDoc) => void = () => {}
     await openBase({
       addUrl: async () => doc({ id: 'u1', source: 'Docs.md', origin: 'url', status: 'pending' }),
-      index: () => new Promise<KbDoc>((resolve) => (finishIndex = resolve)),
+      index: () => new Promise<KbDoc>(resolve => (finishIndex = resolve))
     })
     await openSourceMenu()
     await act(async () => {
@@ -2332,7 +2509,7 @@ describe('adding a data source', () => {
     })
     await act(async () => {
       fireEvent.change(document.getElementById('kburl') as HTMLInputElement, {
-        target: { value: 'https://example.com/docs' },
+        target: { value: 'https://example.com/docs' }
       })
     })
     await act(async () => {
@@ -2341,13 +2518,13 @@ describe('adding a data source', () => {
     })
 
     expect(document.getElementById('kburl')).toBeNull()
-    expect(store.getState().docs.map((d) => d.status)).toEqual(['pending'])
+    expect(store.getState().docs.map(d => d.status)).toEqual(['pending'])
 
     await act(async () => {
       finishIndex(doc({ id: 'u1', source: 'Docs.md', origin: 'url', status: 'ready' }))
       await Promise.resolve()
     })
-    expect(store.getState().docs.map((d) => d.status)).toEqual(['ready'])
+    expect(store.getState().docs.map(d => d.status)).toEqual(['ready'])
   })
 
   it('leaves the url dialog open when the page could not be read', async () => {
@@ -2356,7 +2533,7 @@ describe('adding a data source', () => {
     await openBase({
       addUrl: async () => {
         throw new Error('the reader answered HTTP 404')
-      },
+      }
     })
     await openSourceMenu()
     await act(async () => {
@@ -2364,7 +2541,7 @@ describe('adding a data source', () => {
     })
     await act(async () => {
       fireEvent.change(document.getElementById('kburl') as HTMLInputElement, {
-        target: { value: 'https://example.com/gone' },
+        target: { value: 'https://example.com/gone' }
       })
     })
     await act(async () => {
@@ -2381,14 +2558,14 @@ describe('adding a data source', () => {
     await openBase({}, [
       doc({ id: 'd1', source: 'handbook.md', status: 'ready' }),
       doc({ id: 'n1', source: 'Plan.md', origin: 'note', status: 'ready' }),
-      doc({ id: 'u1', source: 'Docs.md', origin: 'url', origin_ref: 'https://x', status: 'ready' }),
+      doc({ id: 'u1', source: 'Docs.md', origin: 'url', origin_ref: 'https://x', status: 'ready' })
     ])
 
     const rows = [...document.querySelectorAll('.kbtable .td.nm')]
-    const types = rows.map((r) => r.nextElementSibling?.textContent)
+    const types = rows.map(r => r.nextElementSibling?.textContent)
     expect(types).toEqual(['gui.kb.doc_type_file', 'gui.kb.doc_type_note', 'gui.kb.doc_type_url'])
     /* And each gets its own glyph, for the same reason. */
-    const marks = [...document.querySelectorAll('.kbtable .kbico')].map((m) => m.getAttribute('class'))
+    const marks = [...document.querySelectorAll('.kbtable .kbico')].map(m => m.getAttribute('class'))
     expect(marks).toEqual(['kbico kbf-md', 'kbico kbf-note', 'kbico kbf-link'])
   })
 
@@ -2400,7 +2577,7 @@ describe('adding a data source', () => {
       source: 'Docs.md',
       origin: 'url',
       origin_ref: 'https://example.com/docs',
-      status: 'ready',
+      status: 'ready'
     })
     await openBase({}, [page])
     const read = vi.spyOn(store, 'readText').mockResolvedValue('# Docs')
@@ -2449,7 +2626,7 @@ describe('adding a data source', () => {
         tried.push(f.name)
         return doc({ id: f.name, source: f.name })
       },
-      index: async (id: string) => doc({ id, source: id, status: 'ready' }),
+      index: async (id: string) => doc({ id, source: id, status: 'ready' })
     })
 
     const pane = document.querySelector('.kbpane') as HTMLElement
@@ -2468,18 +2645,32 @@ describe('adding a data source', () => {
 describe('the recall test', () => {
   const HITS: KbSearch = {
     hits: [
-      { score: 0.8123, document_id: 'd1', text: 'the nearest passage', chunk_index: 7, total_chunks: 12, source: 'handbook.md' },
-      { score: 0.4011, document_id: 'gone', text: 'from a deleted row', chunk_index: 0, total_chunks: 3, source: 'old.md' },
+      {
+        score: 0.8123,
+        document_id: 'd1',
+        text: 'the nearest passage',
+        chunk_index: 7,
+        total_chunks: 12,
+        source: 'handbook.md'
+      },
+      {
+        score: 0.4011,
+        document_id: 'gone',
+        text: 'from a deleted row',
+        chunk_index: 0,
+        total_chunks: 3,
+        source: 'old.md'
+      }
     ],
     search_ms: 6,
-    embed_ms: 182.4,
+    embed_ms: 182.4
   }
 
   const openPanel = async (over: Partial<KnowledgeSource> = {}, over2: Partial<KbBase> = {}) => {
     source({
       bases: async () => [base({ id: 'b1', name: 'handbook', ...over2 })],
       documents: async () => [doc({ id: 'd1', source: 'handbook.md', status: 'ready' })],
-      ...over,
+      ...over
     })
     await mount()
     await act(async () => {
@@ -2520,9 +2711,7 @@ describe('the recall test', () => {
     expect((document.querySelector('.kbstats b') as HTMLElement).textContent).toBe('gui.kb.recall_n {"n":2}')
     /* The index's own time, not the round trip to the embedding endpoint --
        that one is an order of magnitude larger and describes the provider. */
-    expect((document.querySelector('.kbstats span') as HTMLElement).textContent).toBe(
-      'gui.kb.recall_ms {"ms":6}',
-    )
+    expect((document.querySelector('.kbstats span') as HTMLElement).textContent).toBe('gui.kb.recall_ms {"ms":6}')
     expect((document.querySelector('.kbstats span') as HTMLElement).title).toContain('182.4')
   })
 
@@ -2533,9 +2722,9 @@ describe('the recall test', () => {
         search: async (_b: string[], _q: string, topK?: number) => {
           asked.push(topK)
           return HITS
-        },
+        }
       },
-      { top_k: 9 },
+      { top_k: 9 }
     )
     await ask('anything')
 
@@ -2578,7 +2767,7 @@ describe('the recall test', () => {
     await openPanel({ search: async () => HITS })
     await ask('what is the leave policy')
 
-    const names = [...document.querySelectorAll('.kbhitnm')].map((e) => e.textContent)
+    const names = [...document.querySelectorAll('.kbhitnm')].map(e => e.textContent)
     expect(names).toEqual(['handbook.md', 'old.md'])
   })
 
@@ -2616,7 +2805,7 @@ describe('the recall test', () => {
       search: async () => {
         if (fail) throw new Error('endpoint said 401')
         return HITS
-      },
+      }
     })
     await ask('a question that failed')
     expect(toasts()).toEqual(['endpoint said 401'])
@@ -2633,7 +2822,7 @@ describe('the recall test', () => {
       search: async (_b: string[], q: string) => {
         asked.push(q)
         return HITS
-      },
+      }
     })
     await ask('what is the leave policy')
 
@@ -2646,9 +2835,7 @@ describe('the recall test', () => {
     })
 
     expect(asked).toEqual(['what is the leave policy', 'what is the leave policy'])
-    expect((document.querySelector('.kbask .kbname') as HTMLInputElement).value).toBe(
-      'what is the leave policy',
-    )
+    expect((document.querySelector('.kbask .kbname') as HTMLInputElement).value).toBe('what is the leave policy')
   })
 
   it('forgets the history when asked to', async () => {
@@ -2687,7 +2874,7 @@ describe('the knowledge base settings', () => {
         saved.push(values as Record<string, unknown>)
         return base({ id: 'b1', name: 'handbook', ...on, ...values })
       },
-      ...over,
+      ...over
     })
     await mount()
     await act(async () => {
@@ -2699,13 +2886,20 @@ describe('the knowledge base settings', () => {
     return saved
   }
 
-  const field = (label: string): HTMLElement =>
-    (screen.getByText(label).closest('.kbset') as HTMLElement)
+  const field = (label: string): HTMLElement => screen.getByText(label).closest('.kbset') as HTMLElement
 
   it('shows the fields the design asks for, and no rerank model', async () => {
     await openSettings()
 
-    for (const label of ['gui.kb.set_proc', 'gui.kb.set_embed', 'gui.kb.set_topk', 'gui.kb.set_smart', 'gui.kb.set_sep', 'gui.kb.set_size', 'gui.kb.set_lap']) {
+    for (const label of [
+      'gui.kb.set_proc',
+      'gui.kb.set_embed',
+      'gui.kb.set_topk',
+      'gui.kb.set_smart',
+      'gui.kb.set_sep',
+      'gui.kb.set_size',
+      'gui.kb.set_lap'
+    ]) {
       expect(screen.getByText(label)).toBeTruthy()
     }
     expect(screen.queryByText('gui.kb.set_rerank')).toBeNull()
@@ -2734,9 +2928,9 @@ describe('the knowledge base settings', () => {
        the person who can fix that is looking. */
     source({
       bases: async () => [
-        base({ id: 'b1', embedding_model: 'BAAI/bge-large-zh-v1.5', embedding_reach: 'no_provider' }),
+        base({ id: 'b1', embedding_model: 'BAAI/bge-large-zh-v1.5', embedding_reach: 'no_provider' })
       ],
-      documents: async () => [],
+      documents: async () => []
     })
     await mount()
     await act(async () => {
@@ -2774,7 +2968,7 @@ describe('the knowledge base settings', () => {
 
     const picker = field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement
     expect(picker.value).toBe('siliconflow::BAAI/bge-large-zh-v1.5')
-    const offered = [...picker.options].map((o) => o.value)
+    const offered = [...picker.options].map(o => o.value)
     expect(offered).toContain('')
     expect(offered).toContain('dashscope::text-embedding-v4')
   })
@@ -2787,7 +2981,7 @@ describe('the knowledge base settings', () => {
 
     const picker = field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement
     expect(picker.value).toBe('')
-    expect([...picker.options].map((o) => o.value)).toContain('siliconflow::BAAI/bge-m3')
+    expect([...picker.options].map(o => o.value)).toContain('siliconflow::BAAI/bge-m3')
   })
 
   it('keeps a base on its own model when it is served somewhere the list does not offer', async () => {
@@ -2797,7 +2991,7 @@ describe('the knowledge base settings', () => {
 
     const picker = field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement
     expect(picker.value).toBe('custom::house-embed')
-    expect([...picker.options].map((o) => o.textContent)).toContain('house-embed')
+    expect([...picker.options].map(o => o.textContent)).toContain('house-embed')
   })
 
   it('reads a prefixed id and the recorded spelling as one model', async () => {
@@ -2808,16 +3002,14 @@ describe('the knowledge base settings', () => {
        counts as a rebuild. */
     const saved = await openSettings(
       {
-        embeddingModels: async () => [
-          { id: 'siliconflow', name: 'SiliconFlow', models: ['siliconflow/BAAI/bge-m3'] },
-        ],
+        embeddingModels: async () => [{ id: 'siliconflow', name: 'SiliconFlow', models: ['siliconflow/BAAI/bge-m3'] }]
       },
-      { embedding_model: 'BAAI/bge-m3', embedding_provider: 'siliconflow', documents: 3 },
+      { embedding_model: 'BAAI/bge-m3', embedding_provider: 'siliconflow', documents: 3 }
     )
 
     const picker = field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement
     expect(picker.value).toBe('siliconflow::siliconflow/BAAI/bge-m3')
-    expect([...picker.options].map((o) => o.value)).toEqual(['', 'siliconflow::siliconflow/BAAI/bge-m3'])
+    expect([...picker.options].map(o => o.value)).toEqual(['', 'siliconflow::siliconflow/BAAI/bge-m3'])
     expect(field('gui.kb.set_embed').textContent).not.toContain('gui.kb.set_embed_moved')
 
     await act(async () => {
@@ -2836,10 +3028,7 @@ describe('the knowledge base settings', () => {
        to serve it, which means "wherever this is configured". Naming one is
        the repair it has always been, not a move -- the vectors are the ones
        that model makes wherever it is reached from. */
-    const saved = await openSettings(
-      {},
-      { embedding_model: 'BAAI/bge-m3', embedding_provider: '', documents: 3 },
-    )
+    const saved = await openSettings({}, { embedding_model: 'BAAI/bge-m3', embedding_provider: '', documents: 3 })
 
     const picker = field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement
     expect(picker.value).toBe('siliconflow::BAAI/bge-m3')
@@ -2862,7 +3051,7 @@ describe('the knowledge base settings', () => {
 
     const picker = field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement
     expect(picker.value).toBe('::bge-m3')
-    expect([...picker.options].map((o) => o.textContent)).toContain('bge-m3')
+    expect([...picker.options].map(o => o.textContent)).toContain('bge-m3')
   })
 
   it('sends the model only when it moved, and asks first', async () => {
@@ -2871,13 +3060,13 @@ describe('the knowledge base settings', () => {
        after. */
     const saved = await openSettings(
       {},
-      { embedding_model: 'BAAI/bge-large-zh-v1.5', embedding_provider: 'siliconflow', documents: 3 },
+      { embedding_model: 'BAAI/bge-large-zh-v1.5', embedding_provider: 'siliconflow', documents: 3 }
     )
 
     await act(async () => {
       ;(document.querySelector('.kbsets input[type="range"]') as HTMLInputElement).value = '9'
       fireEvent.change(document.querySelector('.kbsets input[type="range"]') as HTMLInputElement, {
-        target: { value: '9' },
+        target: { value: '9' }
       })
     })
     await act(async () => {
@@ -2890,7 +3079,7 @@ describe('the knowledge base settings', () => {
   it('rebuilds the base when another model is picked', async () => {
     const saved = await openSettings(
       {},
-      { embedding_model: 'BAAI/bge-large-zh-v1.5', embedding_provider: 'siliconflow', documents: 3 },
+      { embedding_model: 'BAAI/bge-large-zh-v1.5', embedding_provider: 'siliconflow', documents: 3 }
     )
 
     const picker = field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement
@@ -2908,7 +3097,7 @@ describe('the knowledge base settings', () => {
     expect(confirms[0]).toContain('"count":3')
     expect(saved[0]).toMatchObject({
       embedding_model: 'text-embedding-v4',
-      embedding_provider: 'dashscope',
+      embedding_provider: 'dashscope'
     })
   })
 
@@ -2922,14 +3111,14 @@ describe('the knowledge base settings', () => {
         documents: async () => {
           reads += 1
           return [doc({ id: 'd1', status: reads > 1 ? 'pending' : 'ready', chunk_count: reads > 1 ? 0 : 4 })]
-        },
+        }
       },
-      { embedding_model: 'BAAI/bge-m3', embedding_provider: 'siliconflow', documents: 1 },
+      { embedding_model: 'BAAI/bge-m3', embedding_provider: 'siliconflow', documents: 1 }
     )
 
     await act(async () => {
       fireEvent.change(field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement, {
-        target: { value: 'dashscope::text-embedding-v4' },
+        target: { value: 'dashscope::text-embedding-v4' }
       })
     })
     await act(async () => {
@@ -2943,11 +3132,14 @@ describe('the knowledge base settings', () => {
   it('asks nothing of a base with no documents', async () => {
     /* There is no index to lose, and a confirmation nobody needs is one more
        click through a dialog. */
-    const saved = await openSettings({}, { embedding_model: 'BAAI/bge-m3', embedding_provider: 'siliconflow', documents: 0 })
+    const saved = await openSettings(
+      {},
+      { embedding_model: 'BAAI/bge-m3', embedding_provider: 'siliconflow', documents: 0 }
+    )
 
     await act(async () => {
       fireEvent.change(field('gui.kb.set_embed').querySelector('select') as HTMLSelectElement, {
-        target: { value: '' },
+        target: { value: '' }
       })
     })
     await act(async () => {
@@ -2965,23 +3157,23 @@ describe('the knowledge base settings', () => {
     await openSettings()
 
     expect((field('gui.kb.set_proc').querySelector('.kbpick') as HTMLElement).textContent).toContain(
-      'gui.kb.set_proc_off',
+      'gui.kb.set_proc_off'
     )
     await act(async () => {
       ;(document.querySelector('.kbpick') as HTMLButtonElement).click()
     })
 
     const rows = [...document.querySelectorAll('.kbprocr')]
-    expect(rows.map((r) => (r.querySelector('.nm') as HTMLElement).textContent)).toEqual([
+    expect(rows.map(r => (r.querySelector('.nm') as HTMLElement).textContent)).toEqual([
       'gui.kb.proc_local',
       'PaddleOCR',
       'MinerU',
       'Doc2X',
       'Mistral',
       'gui.kb.proc_settings',
-      'gui.kb.set_proc_off',
+      'gui.kb.set_proc_off'
     ])
-    expect(rows.every((r) => r.getAttribute('aria-disabled') === 'true')).toBe(true)
+    expect(rows.every(r => r.getAttribute('aria-disabled') === 'true')).toBe(true)
     /* Ours is a download away; the rest are other people's services and want a key. */
     expect((rows[0]!.querySelector('.st') as HTMLElement).textContent).toBe('gui.kb.proc_notdl')
     expect((rows[1]!.querySelector('.st') as HTMLElement).textContent).toBe('gui.kb.proc_notcfg')
@@ -3030,10 +3222,10 @@ describe('the knowledge base settings', () => {
     await openSettings({}, { top_k: undefined, chunk_size: undefined })
 
     expect((field('gui.kb.set_topk').querySelector('input') as HTMLInputElement).value).toBe(
-      String(store.DEFAULTS.top_k),
+      String(store.DEFAULTS.top_k)
     )
     expect((field('gui.kb.set_size').querySelector('input') as HTMLInputElement).value).toBe(
-      String(store.DEFAULTS.chunk_size),
+      String(store.DEFAULTS.chunk_size)
     )
     expect(store.DEFAULTS.top_k).toBe(6)
   })
@@ -3079,7 +3271,7 @@ describe('the knowledge base settings', () => {
   it('puts the defaults back without saving them', async () => {
     const saved = await openSettings(
       {},
-      { top_k: 40, chunk_size: 2048, chunk_overlap: 400, table_context_size: 10, image_context_size: 10 },
+      { top_k: 40, chunk_size: 2048, chunk_overlap: 400, table_context_size: 10, image_context_size: 10 }
     )
 
     await act(async () => {
@@ -3087,24 +3279,24 @@ describe('the knowledge base settings', () => {
     })
 
     expect((field('gui.kb.set_topk').querySelector('input') as HTMLInputElement).value).toBe(
-      String(store.DEFAULTS.top_k),
+      String(store.DEFAULTS.top_k)
     )
     expect((field('gui.kb.set_size').querySelector('input') as HTMLInputElement).value).toBe(
-      String(store.DEFAULTS.chunk_size),
+      String(store.DEFAULTS.chunk_size)
     )
     expect((field('gui.kb.set_lap').querySelector('input') as HTMLInputElement).value).toBe(
-      String(store.DEFAULTS.chunk_overlap),
+      String(store.DEFAULTS.chunk_overlap)
     )
     /* The two context sizes too, and from DEFAULTS rather than from zero:
        written as zero this button turned the feature off instead of restoring
        it, which is the opposite of what it says. */
     expect((field('gui.kb.set_tablectx').querySelector('input') as HTMLInputElement).value).toBe(
-      String(store.DEFAULTS.table_context_size),
+      String(store.DEFAULTS.table_context_size)
     )
     expect((field('gui.kb.set_imagectx').querySelector('input') as HTMLInputElement).value).toBe(
-      String(store.DEFAULTS.image_context_size),
+      String(store.DEFAULTS.image_context_size)
     )
-    expect(store.DEFAULTS.table_context_size).toBeGreaterThan(0), 'or the check above proves nothing'
+    ;(expect(store.DEFAULTS.table_context_size).toBeGreaterThan(0), 'or the check above proves nothing')
     /* Restoring is an edit like any other: nothing is written until Save. */
     expect(saved).toEqual([])
   })
@@ -3136,7 +3328,7 @@ describe('picking several files at once', () => {
   const THREE = [
     doc({ id: 'd1', source: 'deck.pptx', status: 'ready' }),
     doc({ id: 'd2', source: 'report.docx', status: 'ready' }),
-    doc({ id: 'd3', source: 'notes.md', status: 'failed', error: 'endpoint said 400' }),
+    doc({ id: 'd3', source: 'notes.md', status: 'failed', error: 'endpoint said 400' })
   ]
 
   const openWith = async (over: Partial<KnowledgeSource> = {}, docs: KbDoc[] = THREE) => {
@@ -3146,7 +3338,7 @@ describe('picking several files at once', () => {
     source({
       bases: async () => [base({ id: 'b1', name: 'handbook' })],
       documents: async () => docs,
-      ...over,
+      ...over
     })
     await mount()
     await act(async () => {
@@ -3156,8 +3348,7 @@ describe('picking several files at once', () => {
 
   const ticks = (): HTMLInputElement[] =>
     [...document.querySelectorAll('.kbtable .td.kbtick input')] as HTMLInputElement[]
-  const headTick = (): HTMLInputElement =>
-    document.querySelector('.kbtable .th.kbtick input') as HTMLInputElement
+  const headTick = (): HTMLInputElement => document.querySelector('.kbtable .th.kbtick input') as HTMLInputElement
   const tick = async (at: number) => {
     await act(async () => {
       fireEvent.click(ticks()[at]!)
@@ -3195,7 +3386,7 @@ describe('picking several files at once', () => {
 
     const marked = [...document.querySelectorAll('.kbtable .td.kbsel')]
     expect(marked.length).toBe(7)
-    expect(marked.map((c) => c.textContent).join('')).toContain('report.docx')
+    expect(marked.map(c => c.textContent).join('')).toContain('report.docx')
   })
 
   it('ticks every row from the header, and clears from it', async () => {
@@ -3204,7 +3395,7 @@ describe('picking several files at once', () => {
     await act(async () => {
       fireEvent.click(headTick())
     })
-    expect(ticks().every((t) => t.checked)).toBe(true)
+    expect(ticks().every(t => t.checked)).toBe(true)
     expect(headTick().checked).toBe(true)
 
     /* Pressing it again clears rather than re-picking, which is what every
@@ -3212,7 +3403,7 @@ describe('picking several files at once', () => {
     await act(async () => {
       fireEvent.click(headTick())
     })
-    expect(ticks().some((t) => t.checked)).toBe(false)
+    expect(ticks().some(t => t.checked)).toBe(false)
     expect(document.querySelector('.kbpicked')).toBeNull()
   })
 
@@ -3253,7 +3444,7 @@ describe('picking several files at once', () => {
         live -= 1
         if (id === 'd2') throw new Error('endpoint said 429')
         return doc({ id, status: 'ready', chunk_count: 2 })
-      },
+      }
     })
 
     await act(async () => {
@@ -3268,7 +3459,7 @@ describe('picking several files at once', () => {
     expect(most).toBe(1)
     /* One failing does not stop the rest, and the toast names it. */
     expect(toasts()).toEqual(['endpoint said 429'])
-    const byId = Object.fromEntries(store.getState().docs.map((d) => [d.id, d.status]))
+    const byId = Object.fromEntries(store.getState().docs.map(d => [d.id, d.status]))
     /* d3 was failed and is now ready, which is what a reindex is for. d2's
        row goes back to what it was rather than keeping the optimistic
        `indexing` this started with -- the same thing one row's retry does,
@@ -3283,10 +3474,10 @@ describe('picking several files at once', () => {
     /* The list answers with what is left, the way the engine would: without
        that the reload after the delete puts the rows back. */
     await openWith({
-      documents: async () => THREE.filter((d) => !removed.includes(d.id)),
+      documents: async () => THREE.filter(d => !removed.includes(d.id)),
       removeDoc: async (id: string) => {
         removed.push(id)
-      },
+      }
     })
 
     await tick(0)
@@ -3310,7 +3501,7 @@ describe('picking several files at once', () => {
     let listed = THREE
     await openWith({
       documents: async () => listed,
-      removeDoc: async () => {},
+      removeDoc: async () => {}
     })
 
     await act(async () => {
@@ -3343,7 +3534,7 @@ describe('renaming and deleting a base', () => {
     source({
       bases: async () => [base({ id: 'b1', name: 'handbook', documents: 8 })],
       documents: async () => [],
-      ...over,
+      ...over
     })
     await mount()
   }
@@ -3361,7 +3552,7 @@ describe('renaming and deleting a base', () => {
 
     expect(document.querySelector('.kbrail .kbmenu')).toBeNull()
     await openBaseMenu()
-    const items = [...document.querySelectorAll('.kbrail .kbmenu .mi')].map((b) => b.textContent)
+    const items = [...document.querySelectorAll('.kbrail .kbmenu .mi')].map(b => b.textContent)
     expect(items).toEqual(['gui.kb.rename', 'gui.kb.delete_base'])
   })
 
@@ -3383,7 +3574,7 @@ describe('renaming and deleting a base', () => {
       rename: async (id: string, name: string) => {
         asked.push([id, name])
         return base({ id, name, documents: 8 })
-      },
+      }
     })
 
     await openBaseMenu()
@@ -3413,7 +3604,7 @@ describe('renaming and deleting a base', () => {
       rename: async (id: string, name: string) => {
         calls += 1
         return base({ id, name })
-      },
+      }
     })
 
     await openBaseMenu()
@@ -3436,7 +3627,7 @@ describe('renaming and deleting a base', () => {
     await openRail({
       rename: async () => {
         throw new Error('a knowledge base called staff handbook already exists')
-      },
+      }
     })
 
     await openBaseMenu()
@@ -3445,7 +3636,7 @@ describe('renaming and deleting a base', () => {
     })
     await act(async () => {
       fireEvent.change(document.getElementById('kbrename') as HTMLInputElement, {
-        target: { value: 'staff handbook' },
+        target: { value: 'staff handbook' }
       })
     })
     await act(async () => {
@@ -3463,7 +3654,7 @@ describe('renaming and deleting a base', () => {
       remove: async (id: string) => {
         removed.push(id)
         return {}
-      },
+      }
     })
 
     await openBaseMenu()

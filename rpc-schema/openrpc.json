@@ -12556,6 +12556,13 @@
           "has_crop": {
             "type": "boolean",
             "description": "Whether a picture of the region this piece was cut from is stored for it. Fetch it from `/knowledge/crop?document=<id>&chunk=<chunk_id>`. False for a format with no pages, for a piece a person wrote, and for one whose parser knew the page but not the position."
+          },
+          "regions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeChunkRegion"
+            },
+            "description": "Every place on a page this chunk was cut from, in reading order, for a viewer that draws where a piece came from. Empty for a format with no pages and for a piece a person wrote. A chunk that merged several pieces reports each one's region, so this can cross a page boundary."
           }
         },
         "required": [
@@ -12613,6 +12620,36 @@
           "char_end"
         ],
         "type": "object"
+      },
+      "KnowledgeChunkRegion": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One place on a page that a chunk was cut from. Coordinates are in the page's own points (1/72 inch) with the origin at the top left, which is the frame every parser in this tree records positions in.",
+        "properties": {
+          "page_number": {
+            "type": "integer",
+            "description": "The 1-based page this region sits on."
+          },
+          "x0": {
+            "type": "number"
+          },
+          "top": {
+            "type": "number"
+          },
+          "x1": {
+            "type": "number"
+          },
+          "bottom": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "page_number",
+          "x0",
+          "top",
+          "x1",
+          "bottom"
+        ]
       }
     },
     "errors": {

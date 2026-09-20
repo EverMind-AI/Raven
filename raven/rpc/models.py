@@ -3901,6 +3901,21 @@ class KnowledgeChunkPart(_Strict):
     section_ordinal: int | None = None
 
 
+class KnowledgeChunkRegion(_Strict):
+    """One place on a page that a chunk was cut from.
+
+    Points (1/72 inch) with the origin at the top left, which is the frame
+    every parser here records positions in, so a viewer scales by the page it
+    is drawing and nothing converts twice.
+    """
+
+    page_number: int
+    x0: float
+    top: float
+    x1: float
+    bottom: float
+
+
 class KnowledgeChunk(_Strict):
     """One indexed piece of a document, as the search sees it.
 
@@ -3946,6 +3961,10 @@ class KnowledgeChunk(_Strict):
     #: format with no pages, for a piece a person wrote, and for one whose
     #: parser knew the page but not the position on it.
     has_crop: bool = False
+    #: Every place on a page this piece was cut from, in reading order, for a
+    #: viewer that draws where it came from. A chunk that merged several pieces
+    #: reports each one's region, so this can cross a page boundary.
+    regions: list[KnowledgeChunkRegion] = Field(default_factory=list)
 
 
 class KnowledgeDocumentsChunksParams(_Strict):

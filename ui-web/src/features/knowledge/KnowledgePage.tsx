@@ -3,11 +3,12 @@ import { useSyncExternalStore } from 'react'
 
 import { shell, t } from '../../shell/bridge'
 import { md as mdHtml } from '../../shell/prose'
+import { PdfView } from './PdfView'
 import { ProviderIcon, ravenIconPath } from '../../shell/provider-mark'
 import { open as openSettings, setTab as setSettingsTab } from '../settings/store'
 import * as store from './store'
 
-import type { KbBase, KbChunk, KbDoc, KbHit } from './types'
+import type { KbBase, KbChunk, KbChunkRegion, KbDoc, KbHit } from './types'
 import type { JSX } from 'react'
 
 /* Controls the panel shows because they belong to it, and which nothing is
@@ -1550,11 +1551,11 @@ function ChunkRow({
      usually is and what the editor being on double-click already protects.
      A click that produced a selection is that; it moves nothing. */
   const show = (event: React.MouseEvent): void => {
-    if (page === null) return
+    if (page === null && !(chunk.regions ?? []).length) return
     const target = event.target as HTMLElement
     if (target.closest('input, label, button')) return
     if ((window.getSelection()?.toString() ?? '').trim()) return
-    store.focusPage(page, id)
+    store.focusChunk(chunk)
   }
 
   return (
@@ -1576,7 +1577,7 @@ function ChunkRow({
           <button
             className="kbchunkpg"
             title={t(spread ? 'gui.kb.chunk_show_first_page' : 'gui.kb.chunk_show_page', { n: page })}
-            onClick={() => store.focusPage(page, id)}
+            onClick={() => store.focusChunk(chunk)}
           >
             {spread
               ? t('gui.kb.chunks_pages', { from: page, to: last })
@@ -1942,7 +1943,17 @@ function ChunkDialog({ chunk, busy }: { chunk?: KbChunk; busy: boolean }): JSX.E
   )
 }
 
-function DocViewer({ doc, page }: { doc: KbDoc; page: number | null }): JSX.Element {
+function DocViewer({
+  doc,
+  page,
+  regions,
+  focus,
+}: {
+  doc: KbDoc
+  page: number | null
+  regions: KbChunkRegion[]
+  focus: number
+}): JSX.Element {
   const kind = store.previewKind(doc)
   return (
     <>
@@ -1973,13 +1984,23 @@ function DocViewer({ doc, page }: { doc: KbDoc; page: number | null }): JSX.Elem
               {t('gui.kb.download')}
             </a>
           </div>
+        ) : store.framesPdf(doc) ? (
+          /* Drawn here rather than framed, so the piece a reader clicked can
+             be marked on the page it came from. Everything else the browser
+             can draw is still a frame: a PNG has no regions to point at. */
+          <PdfView
+            url={store.previewUrl(doc)}
+            framed={store.previewUrl(doc, page)}
+            title={doc.source}
+            page={page}
+            regions={regions}
+            focus={focus}
+          />
         ) : (
           /* Keyed on the page so a new one re-navigates the frame. Nothing
              else can move it: the response is sandboxed to an opaque origin,
              so `contentWindow` is out of reach and only the src is ours to
-             set. The cost is a reload, which the gateway answers from its
-             render cache -- a re-click is a file read, not another
-             LibreOffice run. */
+             set. */
           <iframe
             key={page ?? 0}
             className="kbframe"
@@ -2207,7 +2228,7 @@ export function KnowledgeApp(): JSX.Element {
     return (
       <>
         <div className="kbview">
-          <DocViewer doc={s.viewing} page={s.previewPage} />
+          <DocViewer doc={s.viewing} page={s.previewPage} regions={s.previewRegions} focus={s.previewFocus} />
           <ChunkList s={s} />
         </div>
         {/* The overlays belong to the page, not to the panel under them: the

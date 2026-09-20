@@ -208,8 +208,41 @@ def main() -> None:
         shutil.rmtree(out_assets, ignore_errors=True)
         shutil.copytree(src_assets, out_assets)
         shutil.copy2(ROOT / "icon" / "raven.svg", out_assets / "raven.svg")
+        _copy_pdfjs(out_assets)
         total = sum(p.stat().st_size for p in out_assets.rglob("*") if p.is_file())
         print(f"copied dist/assets ({total:,} bytes)")
+
+
+#: What the knowledge panel's PDF viewer loads at run time. Two files out of
+#: node_modules rather than two files in git: together they are 1.6 MiB, which
+#: is over the ceiling AGENTS.md section 7 sets, and they are a published
+#: library rather than source of ours.
+PDFJS_FILES = ("pdf.min.mjs", "pdf.worker.min.mjs")
+
+
+def _copy_pdfjs(out_assets: Path) -> None:
+    """Put pdf.js beside the page, for the viewer to import when it is needed.
+
+    Not bundled, deliberately. This page ships as one classic script inlined
+    into one HTML file, so there is no code splitting to hide a megabyte
+    behind: bundled, pdf.js would roughly double the file that every visit to
+    every part of Raven pays for, to draw a preview on one panel. An IIFE build
+    also emits no worker asset and rewrites the `import.meta.url` pdf.js
+    resolves its own parts with, so it would not run either.
+
+    Absent, the viewer falls back to framing the document, which is what it did
+    before -- so a checkout with no node_modules still builds a working page,
+    and says here what it left out.
+    """
+    source = ROOT / "node_modules" / "pdfjs-dist" / "build"
+    missing = [name for name in PDFJS_FILES if not (source / name).is_file()]
+    if missing:
+        print(f"pdf.js not copied ({', '.join(missing)} missing); the viewer will frame documents instead")
+        return
+    target = out_assets / "pdfjs"
+    target.mkdir(parents=True, exist_ok=True)
+    for name in PDFJS_FILES:
+        shutil.copy2(source / name, target / name)
 
 
 if __name__ == "__main__":

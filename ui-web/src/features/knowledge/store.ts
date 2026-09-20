@@ -5,6 +5,7 @@ import type {
   KbBase,
   KbChunk,
   KbChunkQuery,
+  KbChunkRegion,
   KbDoc,
   KbFallback,
   KbHit,
@@ -68,6 +69,14 @@ interface State {
   /* The chunk that asked for it, so the list can show which one the preview
      answers to. A chunk id, or null. */
   previewChunk: string | null
+  /* Where on its pages that chunk was cut from, for the viewer to draw. Empty
+     for a chunk with no position, which is most formats. */
+  previewRegions: KbChunkRegion[]
+  /* Bumped on every ask, including a second ask for the piece already shown.
+     A reader who scrolled away and clicks the same row again means "take me
+     back", and state that only changed when the *chunk* changed could not tell
+     that from no click at all. */
+  previewFocus: number
   /* The recall panel is up. */
   recall: boolean
   /* The settings panel is up. */
@@ -153,6 +162,8 @@ const EMPTY: State = {
   cost: null,
   previewPage: null,
   previewChunk: null,
+  previewRegions: [],
+  previewFocus: 0,
   searching: false,
   recall: false,
   settings: false,
@@ -993,6 +1004,17 @@ export async function readText(doc: KbDoc): Promise<string> {
   return res.text()
 }
 
+/* Whether what the frame ends up showing is a PDF -- either because the file
+   is one, or because it is an office format the gateway renders to one.
+
+   Asked rather than `kind === 'converted'`, which is what this used to test.
+   That was the deck case and only the deck case: a .pptx is converted, a .pdf
+   is native, and a document uploaded as a PDF is the commonest thing in a
+   knowledge base. Clicking a chunk of one moved nothing at all. */
+export function framesPdf(doc: KbDoc): boolean {
+  return previewKind(doc) === 'converted' || suffixOf(doc) === 'pdf'
+}
+
 export function previewUrl(doc: KbDoc, page?: number | null): string {
   const base = `/knowledge/file?document=${encodeURIComponent(doc.id)}`
   const url = previewKind(doc) === 'converted' ? `${base}&render=pdf` : base
@@ -1001,7 +1023,7 @@ export function previewUrl(doc: KbDoc, page?: number | null): string {
      opaque origin, so the page cannot reach into it and scroll it itself.
      Only for a PDF -- on anything else the fragment would be an anchor name
      that does not exist. */
-  return typeof page === 'number' && page > 1 && previewKind(doc) === 'converted' ? `${url}#page=${page}` : url
+  return typeof page === 'number' && page > 1 && framesPdf(doc) ? `${url}#page=${page}` : url
 }
 
 /* The picture of the region a piece was cut from. Addressed by the two ids and
@@ -1027,6 +1049,7 @@ export function openDoc(doc: KbDoc): void {
     viewing: doc,
     previewPage: null,
     previewChunk: null,
+    previewRegions: [],
     chunks: null,
     chunksFailed: null,
     chunksTotal: 0,
@@ -1039,19 +1062,26 @@ export function openDoc(doc: KbDoc): void {
   void loadChunks(doc)
 }
 
-/* Take the preview to the page a chunk came from.
+/* Take the preview to where a chunk came from, and mark it there.
 
-   The one thing a deck's chunk list can do that a document's cannot: a slide
-   is a page, the preview is that deck rendered to PDF, and the two agree page
-   for page -- so a chunk can put the slide it was cut from in front of the
-   reader instead of describing it.
+   The page is the coarse answer and the regions are the real one: a chunk is
+   not a page, it is a paragraph or a table on one, sometimes two of them
+   either side of a page break. The viewer scrolls to the first and draws all
+   of them; a frame, which is what a format without regions still gets, can
+   only be told the page.
 
-   Called with nothing for a chunk that names no page (a text file, a
-   spreadsheet row), where the right answer is to do nothing at all rather than
-   to scroll somewhere arbitrary. */
-export function focusPage(page: number | null | undefined, chunkId = ''): void {
-  if (typeof page !== 'number' || page < 1) return
-  set({ previewPage: page, previewChunk: chunkId || null })
+   Does nothing for a chunk that names neither (a text file, a spreadsheet
+   row). Scrolling somewhere arbitrary is worse than not moving. */
+export function focusChunk(chunk: KbChunk): void {
+  const regions = chunk.regions ?? []
+  const page = typeof chunk.page_number === 'number' && chunk.page_number > 0 ? chunk.page_number : null
+  if (page === null && !regions.length) return
+  set({
+    previewPage: page,
+    previewChunk: chunk.chunk_id || null,
+    previewRegions: regions,
+    previewFocus: getState().previewFocus + 1,
+  })
 }
 
 export function closeDoc(): void {

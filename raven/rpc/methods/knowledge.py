@@ -700,6 +700,29 @@ def _chunk_parts(metadata: dict[str, Any]) -> list[dict[str, Any]]:
     return parts
 
 
+def _regions(chunk: Any) -> "list[dict[str, Any]]":
+    """Where on its pages a piece was cut from, for a viewer that draws it.
+
+    Through the same reader the crops use rather than a second walk over the
+    metadata. The rule it applies is not obvious -- a merged chunk keeps each
+    piece's page and box in its element spans and drops its own box when the
+    pieces disagree on the page, while an unmerged one has no spans at all and
+    carries one page and one box at the top level -- and two implementations of
+    it would mean the picture and the highlight could disagree about where a
+    piece came from.
+    """
+    from raven.knowledge._crops import regions_of
+
+    try:
+        found = regions_of(chunk)
+    except Exception as exc:  # noqa: BLE001 - a row without boxes is still a row
+        logger.debug("knowledge: cannot read the regions of a chunk ({})", exc)
+        return []
+    return [
+        {"page_number": page, "x0": x0, "top": top, "x1": x1, "bottom": bottom} for page, (x0, top, x1, bottom) in found
+    ]
+
+
 def _cropped(manager: Any, document_id: str, held: "list[Any]") -> "set[str]":
     """Which of these pieces have a picture of their region stored.
 
@@ -749,6 +772,7 @@ def _chunk_row(held: Any, cropped: "frozenset[str] | set[str]" = frozenset()) ->
         "enabled": bool(getattr(held, "enabled", True)),
         "manual": bool(getattr(held, "manual", False)),
         "has_crop": chunk_id in cropped,
+        "regions": _regions(chunk),
     }
 
 

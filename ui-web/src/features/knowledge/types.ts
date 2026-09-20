@@ -209,6 +209,22 @@ export interface KbChunk {
      False for a format with no pages, for a piece a person wrote, and for one
      whose parser knew the page but not the position on it. */
   has_crop?: boolean
+  /* Every place on a page this piece was cut from, in reading order. A chunk
+     that merged several pieces reports each one's region, so this can cross a
+     page boundary. */
+  regions?: KbChunkRegion[]
+}
+
+/* One place on a page a chunk was cut from, in the page's own points (1/72
+   inch) with the origin at the top left -- the frame every parser here records
+   positions in, so a viewer scales by the page it draws and nothing converts
+   twice. */
+export interface KbChunkRegion {
+  page_number: number
+  x0: number
+  top: number
+  x1: number
+  bottom: number
 }
 
 /* One piece of a chunk that merged several, and where it came from. */

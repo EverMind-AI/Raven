@@ -5485,6 +5485,23 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .kbchunktx.cut {
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden;
 }
+/* The document, drawn page by page so a chunk can be marked on it. Scrolls as
+   one column; each page reserves its own height before it is drawn, so a jump
+   to page forty lands on page forty rather than wherever the column had grown
+   to by then. */
+.kbpdf { height: 100%; overflow: auto; background: var(--raised); padding: 12px 0; }
+.kbpdfpage { position: relative; margin: 0 auto 8px; background: var(--ink); box-shadow: var(--elev); }
+.kbpdfpage canvas { display: block; }
+/* Where a piece was cut from. Multiplied over the page rather than laid on top
+   of it, which is what a highlighter does to paper: the tint lands and the
+   words under it stay black. A solid fill at any opacity greys the text it is
+   supposed to be pointing at, and a bare outline makes a reader guess about
+   the words on the line it runs through. */
+.kbpdfmark {
+  position: absolute; pointer-events: none; border-radius: 2px;
+  background: var(--amber-dp); mix-blend-mode: multiply; outline: 1px solid var(--amber);
+}
+
 /* A table a piece carries, drawn as one. Scrolls in its own box rather than
    widening the panel: a table from a landscape page is wider than this column
    will ever be, and a chunk list that scrolls sideways is one nothing else on

@@ -1364,6 +1364,11 @@ async def test_chunks_answer_carries_what_the_parser_found(monkeypatch) -> None:
                 # No picture of its region: nothing has been cut for it. A
                 # format with no pages never gets one at all.
                 "has_crop": False,
+                # This chunk's box has an x band and no y band, which is what a
+                # Word paragraph knows -- its vertical position exists only
+                # once Word has laid the text out. Half a box is not a place to
+                # draw, so there is nothing here for a viewer to highlight.
+                "regions": [],
             }
         ],
         "total": 1,
@@ -1396,6 +1401,54 @@ async def test_a_piece_with_a_picture_of_its_region_says_so(monkeypatch) -> None
     rows = (await kb.knowledge_documents_chunks({"document_id": "d1"}))["chunks"]
 
     assert [row["has_crop"] for row in rows] == [True, False]
+
+
+async def test_a_piece_reports_every_place_it_was_cut_from(monkeypatch) -> None:
+    """What a viewer draws over the page. A merged chunk keeps each piece's
+    page and box in its spans, so this crosses a page boundary where the chunk
+    did -- and it is read through the same helper the crop images use, or the
+    picture and the highlight could disagree about where a piece came from."""
+
+    class _Chunk:
+        chunk_index = 0
+        total_chunks = 1
+        text = "over two pages"
+        metadata = {
+            "elements": [
+                {
+                    "char_start": 0,
+                    "char_end": 4,
+                    "page_number": 1,
+                    "bbox": {"x0": 60.0, "top": 80.0, "x1": 400.0, "bottom": 200.0},
+                },
+                {
+                    "char_start": 5,
+                    "char_end": 9,
+                    "page_number": 2,
+                    "bbox": {"x0": 60.0, "top": 90.0, "x1": 300.0, "bottom": 150.0},
+                },
+            ]
+        }
+
+    class _Held:
+        chunk_id = "c1"
+        chunk = _Chunk()
+        enabled = True
+        manual = False
+
+    class _Manager:
+        async def document_chunks(self, document_id: str, **kw):
+            return [_Held()], 1
+
+        def crop_path(self, document_id: str, chunk_id: str):
+            return None
+
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: _Manager())
+
+    regions = (await kb.knowledge_documents_chunks({"document_id": "d1"}))["chunks"][0]["regions"]
+
+    assert [r["page_number"] for r in regions] == [1, 2]
+    assert regions[0] == {"page_number": 1, "x0": 60.0, "top": 80.0, "x1": 400.0, "bottom": 200.0}
 
 
 async def test_chunks_of_a_text_file_carry_no_page(monkeypatch) -> None:

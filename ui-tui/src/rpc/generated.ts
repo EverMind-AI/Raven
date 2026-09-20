@@ -2095,6 +2095,10 @@ export interface KnowledgeChunk {
    * Whether a picture of the region this piece was cut from is stored for it. Fetch it from `/knowledge/crop?document=<id>&chunk=<chunk_id>`. False for a format with no pages, for a piece a person wrote, and for one whose parser knew the page but not the position.
    */
   has_crop?: boolean;
+  /**
+   * Every place on a page this chunk was cut from, in reading order, for a viewer that draws where a piece came from. Empty for a format with no pages and for a piece a person wrote. A chunk that merged several pieces reports each one's region, so this can cross a page boundary.
+   */
+  regions?: KnowledgeChunkRegion[];
 }
 /**
  * One piece of a chunk that merged several, and where it came from. The naive strategy merges across section boundaries, so a chunk can hold two pages, two headings and two sections; the flattened fields on the chunk can only carry the first of each.
@@ -2112,6 +2116,22 @@ export interface KnowledgeChunkPart {
    * Which section of the document this piece was cut from. The section identity: a heading path is not one, because two same-named children of a parent share it.
    */
   section_ordinal?: number;
+}
+/**
+ * One place on a page that a chunk was cut from. Coordinates are in the page's own points (1/72 inch) with the origin at the top left, which is the frame every parser in this tree records positions in.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "KnowledgeChunkRegion".
+ */
+export interface KnowledgeChunkRegion {
+  /**
+   * The 1-based page this region sits on.
+   */
+  page_number: number;
+  x0: number;
+  top: number;
+  x1: number;
+  bottom: number;
 }
 /**
  * One base that answered by words, and why its vectors were out of reach.
