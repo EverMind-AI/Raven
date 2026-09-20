@@ -193,6 +193,11 @@ def _tool_failure_line(activity: Any) -> str:
     )
 
 
+#: Both vendors under one key: they are read from one section and a turn
+#: that spawns twice must not straddle an edit between the two spawns.
+_WEB_VENDORS_KEY = "tools.web.providers"
+
+
 class SubagentManager:
     """Manages background subagent execution."""
 
@@ -351,6 +356,37 @@ class SubagentManager:
         """
         self.apply_agents(self._configs)
 
+    def _web_search_provider_now(self) -> str:
+        """The search vendor a spawn should use, as the file has it now.
+
+        The keys beside it are already read live (``web_provider_key``), so a
+        vendor copied at construction was the half of the pair that still owed
+        a restart. What this was built with answers when the file does not.
+        """
+        from raven.config.live import default_live, held, web_providers
+
+        configured = held(_WEB_VENDORS_KEY, lambda: web_providers(default_live()))
+        return configured[0] or self.web_search_provider
+
+    def _web_provider_keys_now(self) -> dict[str, str]:
+        """The per-vendor keys a spawn should hand down, as the file has them.
+
+        The vendor a sub-agent runs on is read live; handing it the keys this
+        manager was built with leaves a key added in the same settings flow
+        behind, which is the half of the pair this exists to close.
+        """
+        from raven.config.live import default_live, held, web_provider_keys
+
+        configured = held("tools.web.providers.keys", lambda: web_provider_keys(default_live()))
+        return {**(self.web_provider_keys or {}), **configured}
+
+    def _web_fetch_provider_now(self) -> str:
+        """The fetch vendor a spawn should use. See ``_web_search_provider_now``."""
+        from raven.config.live import default_live, held, web_providers
+
+        configured = held(_WEB_VENDORS_KEY, lambda: web_providers(default_live()))
+        return configured[1] or self.web_fetch_provider
+
     def build_builtin_backend(self, row: "AgentRow", build: Any = None) -> "RavenLoopBackend":
         """An in-process raven loop for one ``builtin`` row, narrowed for one dispatch.
 
@@ -375,9 +411,9 @@ class SubagentManager:
             search_api_key=self.search_api_key,
             jina_api_key=self.jina_api_key,
             web_proxy=self.web_proxy,
-            web_search_provider=self.web_search_provider,
-            web_fetch_provider=self.web_fetch_provider,
-            web_provider_keys=self.web_provider_keys,
+            web_search_provider=self._web_search_provider_now(),
+            web_fetch_provider=self._web_fetch_provider_now(),
+            web_provider_keys=self._web_provider_keys_now(),
             image_search=self.image_search,
             tools_allow=getattr(build, "tools_allow", None),
             skills_allow=getattr(build, "skills_allow", None),
@@ -403,9 +439,9 @@ class SubagentManager:
             search_api_key=self.search_api_key,
             jina_api_key=self.jina_api_key,
             web_proxy=self.web_proxy,
-            web_search_provider=self.web_search_provider,
-            web_fetch_provider=self.web_fetch_provider,
-            web_provider_keys=self.web_provider_keys,
+            web_search_provider=self._web_search_provider_now(),
+            web_fetch_provider=self._web_fetch_provider_now(),
+            web_provider_keys=self._web_provider_keys_now(),
             image_search=self.image_search,
             tools_allow=getattr(build, "tools_allow", None),
             skills_allow=getattr(build, "skills_allow", None),
