@@ -17,9 +17,15 @@ import { moduleText } from '../module-harness.mjs'
 const wiring = moduleText('app/boot.ts') + moduleText('features/settings/source.ts')
 
 describe('the permission chip mirrors every settings load', () => {
-  it('each loadSettings call site pushes the mode afterwards', () => {
-    const callers = [...wiring.matchAll(/(?<!function )loadSettings\(\)/g)].length
-    const pushes = [...wiring.matchAll(/pushPermMode\(\)|\.then\(pushPermMode\)/g)].length
+  it('each settings load call site pushes the mode afterwards', () => {
+    /* Two verbs since the provider catalogue was split out of the load:
+       `loadSettings` is the config, `loadSettingsWithProviders` is that plus
+       `model.options`. The wrapper's own delegation is not a call site -- the
+       caller that invoked the wrapper is the one that pushes -- so its body
+       comes out before counting, or one load would be asked for two pushes. */
+    const sites = wiring.replace(/export async function loadSettingsWithProviders\(\)[\s\S]*?\n}\n/, '')
+    const callers = [...sites.matchAll(/(?<!function )loadSettings(?:WithProviders)?\(\)/g)].length
+    const pushes = [...sites.matchAll(/pushPermMode\(\)|\.then\(pushPermMode\)/g)].length
     expect(callers).toBeGreaterThanOrEqual(3)
     expect(pushes).toBe(callers)
   })

@@ -9059,6 +9059,10 @@
           "needs": {
             "description": "Set when the tool exists but is withheld for want of a key. The model cannot call it; the row is here so the page can offer the field instead of the tool simply being absent.",
             "$ref": "#/components/schemas/ToolSetupNeed"
+          },
+          "builtin": {
+            "type": "boolean",
+            "description": "True for a tool no person switches: the two meta tools and every schema-hidden one, which the model reaches through tool_call. The page draws it as built in wherever it is grouped."
           }
         },
         "required": [

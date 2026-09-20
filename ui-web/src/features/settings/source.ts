@@ -119,6 +119,15 @@ export async function loadSettings(): Promise<void> {
   // model -- and badge the session's provider -- as the default.
   setDefaultPair(defaults.model || '', defaults.provider || '')
   if (defaults.model) showModel(defaults.model)
+}
+
+/* The settings plus the provider catalogue behind `model.options`. Deliberately
+   not one function with the above: that catalogue is a live read of every
+   configured vendor -- seconds on a home with several of them -- and no
+   settings key changes what it answers. Paying it on every write is what made
+   a tools switch sit busy for two seconds while the model list was fetched. */
+export async function loadSettingsWithProviders(): Promise<void> {
+  await loadSettings()
   try { await loadProviders() } catch { /* model options unavailable: keep the rows already shown */ }
 }
 
@@ -167,7 +176,7 @@ async function run<T>(work: Promise<T>): Promise<T> {
    fields are read from the provider's own section, not from model.options. */
 const afterExt = async (): Promise<SettingsSnapshot> => { await loadExt(); return settingsSnapshot() }
 const afterProviders = async (): Promise<SettingsSnapshot> => {
-  await loadSettings()
+  await loadSettingsWithProviders()
   void pushPermMode()
   return settingsSnapshot()
 }
@@ -187,7 +196,7 @@ export const settingsSource: SettingsSource = {
     /* The tool, skill and MCP inventory is part of settings. Loading it here
        keeps every opener on the island's one refresh path. */
     try { await loadExt() } catch (e) { toast(t('gui.op.load_failed', { detail: settingsErr(e) })) }
-    await loadSettings()
+    await loadSettingsWithProviders()
     void pushPermMode()
     await loadEveros()
     return settingsSnapshot()

@@ -3037,6 +3037,14 @@ class ExtToolRow(_Strict):
             "the row is here so the page can offer the field instead of the tool simply being absent."
         ),
     )
+    builtin: bool | None = Field(
+        default=None,
+        description=(
+            "True for a tool no person switches: the two meta tools and every schema-hidden one, "
+            "which the model reaches through tool_call. The page draws it as built in wherever it "
+            "is grouped."
+        ),
+    )
 
 
 class ExtListParams(_Strict):

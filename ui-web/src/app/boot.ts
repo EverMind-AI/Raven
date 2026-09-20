@@ -21,7 +21,7 @@ import { setupState } from '../features/model/source'
 import { open as openOnboard } from '../features/onboard/store'
 import { loadSessions, sessionsSource } from '../features/rail/source'
 import { draw as sessionDraw, hold as holdRail, release as releaseRail } from '../features/rail/store'
-import { loadSettings, pushPermMode } from '../features/settings/source'
+import { loadSettingsWithProviders, pushPermMode } from '../features/settings/source'
 import { redraw as redrawSettings } from '../features/settings/store'
 import { hostPlatformSet } from '../lib/platform'
 import { setCurrent as sessionSet } from '../lib/session'
@@ -153,7 +153,7 @@ async function sequence(): Promise<void> {
     /* pushPermMode after the load, same as the settings island's two callers:
        the chip must reflect the server mode on cold boot, not the localStorage
        cache -- the gate enforces the server's answer either way. */
-    loadSettings().then(pushPermMode).catch(() => {})
+    loadSettingsWithProviders().then(pushPermMode).catch(() => {})
     /* The tier chip's first read. `session.onChange` covers every switch after
        this, but not the state the page boots into: a page with no conversation
        restored never changes session, so the chip would stay hidden on the one
