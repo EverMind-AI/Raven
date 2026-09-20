@@ -825,17 +825,22 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             tool.set_broker(broker)
 
     def _maybe_promote_deep_research(self) -> None:
-        """Swap the offer stand-in for the working tool once a key appears on disk,
-        so a mid-session ``raven deep-research enable`` is picked up on the next
-        turn without a restart. Called from ``run_turn`` before the per-turn tool
-        wiring, so the promoted tool gets this turn's stream callback and routing.
+        """Take the deep-research key the file has now, on the next turn.
+
+        Swaps the offer stand-in for the working tool once a key appears, so a
+        mid-session ``raven deep-research enable`` is picked up without a
+        restart. Called from ``run_turn`` before the per-turn tool wiring, so
+        the tool gets this turn's stream callback and routing.
+
+        A key *replaced* counts too: the working tool holds the key it was built
+        with, so rotating one on the settings page used to leave every call on
+        the old credential until a restart -- the same "saved and nothing
+        happened" the promotion path exists to prevent, one step later.
 
         Re-reads config (the in-memory copy is fixed at startup); a corrupt config
         must not fail the turn, so a read error just skips promotion. The promoted
         manager inherits the gateway's async-delivery handle via
         ``set_deep_research_submit``, so a channel keeps the async path."""
-        if not isinstance(self.tools.get("deep_research"), DeepResearchOfferTool):
-            return
         from raven.config.loader import ConfigReadError
         from raven.config.schema import DeepResearchToolConfig
         from raven.config.update_tools import get_deep_research
@@ -847,9 +852,23 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             return
         if not DeepResearchTool.is_configured(cfg):
             return
+        offered = isinstance(self.tools.get("deep_research"), DeepResearchOfferTool)
+        # The whole section, not the credential alone: an endpoint or a model
+        # moved is the same "saved and nothing happened" one field over, and
+        # comparing the section keeps configuredness where it belongs (it was
+        # settled by ``is_configured`` above).
+        if not offered and cfg == self.deep_research_config:
+            return
         self.deep_research_config = cfg
+        if not offered:
+            # The registry refuses a duplicate name, so the tool this replaces
+            # has to go first.
+            self.tools.unregister("deep_research")
         self._register_real_deep_research(cfg)
-        logger.info("deep_research: promoted offer stand-in to the working tool (key configured mid-session)")
+        logger.info(
+            "deep_research: {} (key configured mid-session)",
+            "promoted offer stand-in to the working tool" if offered else "rebuilt the tool on the new key",
+        )
 
     async def run(self) -> None:
         """Bring the agent runtime up and stay alive.

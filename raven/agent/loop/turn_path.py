@@ -1177,6 +1177,11 @@ class TurnPathMixin:
             # top: a mode that asks for more thinking sets the turn's default,
             # and a gate re-sampling one call may still move that one call.
             gen_overrides = {
+                # The configured default underneath, the session's pin over it,
+                # a hook's rollback override on top. The default is here rather
+                # than left to the provider because the provider's copy is
+                # frozen at construction (see ``default_reasoning_effort``).
+                **({"reasoning_effort": self.default_reasoning_effort} if self.default_reasoning_effort else {}),
                 **({"reasoning_effort": policy.reasoning_effort} if policy.reasoning_effort else {}),
                 **(pending_gen_overrides or {}),
             }
@@ -2223,13 +2228,13 @@ class TurnPathMixin:
         if not self.harness.memory.owns_compaction:
             await self.memory_consolidator.maybe_consolidate_by_tokens(session)
 
-        # ── Personalization flow (global switch: self.enable_personalization) ──
+        # ── Personalization flow (global switch: agents.defaults.enablePersonalization) ──
         # Skip for a subagent result re-injection: its content is a system-generated
         # announce, not user input — personalizing it would pollute the profile or
         # fire a clarification on the announce. Only SUBAGENT skips here (not the
         # wider after-send / user-inbound sets): a Sentinel notice and cron/heartbeat
         # reach this flow today and keep it.
-        if self.enable_personalization and origin is not Origin.SUBAGENT:
+        if self.personalization_enabled and origin is not Origin.SUBAGENT:
             from datetime import datetime as _dt
 
             from raven.agent.personalizer import Personalizer
@@ -2577,7 +2582,7 @@ class TurnPathMixin:
         # ── Step 4: post-action learning (background, non-blocking) ─────────────
         # Skip for a subagent result re-injection (see the pre-turn flow above):
         # its content is a system-generated announce, not user input to learn from.
-        if self.enable_personalization and origin is not Origin.SUBAGENT:
+        if self.personalization_enabled and origin is not Origin.SUBAGENT:
             from raven.agent.personalizer import Personalizer
 
             _p4 = Personalizer(MemoryStore(self.workspace), self.provider, self.model)

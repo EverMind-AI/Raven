@@ -60,6 +60,10 @@ if TYPE_CHECKING:
 
 #: What the iteration cap is held under for the length of a turn.
 _CAP_KEY = "agents.defaults.maxToolIterations"
+#: Same, for the effort every model call of the turn is sent at.
+_EFFORT_KEY = "agents.defaults.reasoningEffort"
+#: Same, for the switch both personalization gates of a turn read.
+_PERSONALIZATION_KEY = "agents.defaults.enablePersonalization"
 
 
 class WiringMixin:
@@ -404,9 +408,14 @@ class WiringMixin:
         reason: one turn, one answer. The cap is resolved here rather than at
         its first read, which happens after context assembly.
         """
-        from raven.config.live import hold_for_this_turn, max_tool_iterations
+        from raven.config.live import hold_for_this_turn, max_tool_iterations, reasoning_effort
 
-        return hold_for_this_turn(**{_CAP_KEY: max_tool_iterations(self._live_config)})
+        return hold_for_this_turn(
+            **{
+                _CAP_KEY: max_tool_iterations(self._live_config),
+                _EFFORT_KEY: reasoning_effort(self._live_config),
+            }
+        )
 
     def _with_live_window(self, binding: ModelBinding) -> ModelBinding:
         """This turn's binding, carrying the window the config has right now.
@@ -430,6 +439,36 @@ class WiringMixin:
         if configured == binding.configured_window:
             return binding
         return replace(binding, configured_window=configured)
+
+    @property
+    def default_reasoning_effort(self) -> str | None:
+        """The effort a call runs at when the session pinned none.
+
+        The provider holds a configured default too, but it is frozen at
+        construction on purpose (see ``ResolvingProvider``: a credentials
+        refresh must not import a live ``agents`` section), so an edit reached
+        it only at a restart. Sent as an explicit argument instead, which is
+        the path a session's pinned effort already takes.
+
+        None passes nothing, which leaves the provider's own default standing
+        -- an explicit None would switch it off instead.
+        """
+        from raven.config.live import held, reasoning_effort
+
+        return held(_EFFORT_KEY, lambda: reasoning_effort(self._live_config))
+
+    @property
+    def personalization_enabled(self) -> bool:
+        """Whether the personalization flow runs, as the file has it now.
+
+        ``configure_personalization`` still sets what a process was built with;
+        the file answers when it has an opinion, so a switch on a settings
+        surface reaches the next turn.
+        """
+        from raven.config.live import held, personalization_enabled
+
+        configured = held(_PERSONALIZATION_KEY, lambda: personalization_enabled(self._live_config))
+        return self.enable_personalization if configured is None else configured
 
     @property
     def max_iterations(self) -> int:

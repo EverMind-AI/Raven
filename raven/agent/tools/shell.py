@@ -37,7 +37,7 @@ class ExecTool(Tool):
         *,
         follow_binding: bool = True,
     ):
-        self.timeout = timeout
+        self._timeout = timeout
         self.working_dir = working_dir
         self.allow_patterns = allow_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
@@ -52,6 +52,20 @@ class ExecTool(Tool):
         self.follow_binding = follow_binding
         self.path_append = path_append
         self._executor: SandboxExecutor = executor if executor is not None else DirectExecutor()
+
+    @property
+    def timeout(self) -> int:
+        """The ceiling a command runs under, as the file has it now.
+
+        Read here rather than copied at construction: a timeout is a preference
+        about the next command, and this tool outlives any number of turns --
+        and a sub-agent's copy outlives the spawn that built it. What it was
+        built with answers when the file has no opinion.
+        """
+        from raven.config.live import default_live, exec_timeout, held
+
+        configured = held("tools.exec.timeout", lambda: exec_timeout(default_live()))
+        return configured or self._timeout
 
     @property
     def name(self) -> str:

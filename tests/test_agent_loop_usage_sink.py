@@ -375,3 +375,75 @@ def test_reading_the_window_for_an_openrouter_model_never_touches_the_network(wo
     with use_binding(switched):
         assert agent.context_window_tokens == rates.DEFAULT_CONTEXT_WINDOW_TOKENS
     assert counter["calls"] == 0
+
+
+class EffortProvider(UsageProvider):
+    """Records the effort each call was sent at."""
+
+    def __init__(self, model: str):
+        super().__init__(model, 10, 5)
+        self.efforts: list = []
+
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):  # noqa: E501
+        self.efforts.append(reasoning_effort)
+        return await super().chat(messages, tools, model, max_tokens, temperature, reasoning_effort, tool_choice)
+
+
+def _point_config(tmp_path: Path, monkeypatch, payload: dict) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+
+
+@pytest.mark.asyncio
+async def test_a_call_runs_at_the_configured_effort(workspace, monkeypatch):
+    """`agents.defaults.reasoningEffort` reaches the wire.
+
+    The provider holds a configured default of its own, but it is frozen when
+    the provider is constructed -- deliberately, so a credentials refresh
+    cannot import a live `agents` section -- so an edit reached it only at a
+    restart. The loop sends it explicitly instead.
+    """
+    _point_config(workspace, monkeypatch, {"agents": {"defaults": {"reasoningEffort": "high"}}})
+    provider = EffortProvider("stub")
+    agent = _make_agent(workspace, provider, model="stub", window=None)
+
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="hi",
+        ),
+        session_key="s1",
+    )
+
+    assert provider.efforts == ["high"]
+
+
+@pytest.mark.asyncio
+async def test_no_configured_effort_sends_none(workspace, monkeypatch):
+    """Nothing passed, so the provider's own default stands. Sending an
+    explicit None would switch that default off instead."""
+    _point_config(workspace, monkeypatch, {})
+    provider = EffortProvider("stub")
+    agent = _make_agent(workspace, provider, model="stub", window=None)
+
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="hi",
+        ),
+        session_key="s1",
+    )
+
+    assert provider.efforts == [None]

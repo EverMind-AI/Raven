@@ -47,7 +47,13 @@ __all__ = [
     "held",
     "context_window_tokens",
     "curator_pin",
+    "default_live",
     "default_model",
+    "exec_timeout",
+    "memory_top_k",
+    "personalization_enabled",
+    "reasoning_effort",
+    "web_providers",
     "max_tool_iterations",
     "disabled_playbook_names",
     "disabled_tool_names",
@@ -324,6 +330,22 @@ def resolve_media_selection(config, kind: str = "image"):
     return _admit(live, f"media_selection:{kind}", present=True, value=value) or MediaToolConfig()
 
 
+@lru_cache(maxsize=1)
+def default_live() -> LiveConfig:
+    """The shared reader for the default config path.
+
+    One instance, because the byte cache is what makes a live read cheap: a
+    fresh ``LiveConfig`` per call has nothing to compare against and parses the
+    file every time, which is the cost this module exists to avoid. Callers
+    that own a long-lived object of their own (the agent loop) keep theirs;
+    this is for the ones that read from a method and have nowhere to put it.
+
+    Safe across a moved config: ``path()`` is resolved per read, and a file
+    whose bytes differ from the cached ones is re-parsed by construction.
+    """
+    return LiveConfig()
+
+
 @lru_cache(maxsize=32)
 def _selection_live(source: str) -> LiveConfig:
     return LiveConfig(Path(source))
@@ -393,6 +415,72 @@ def max_tool_iterations(live: LiveConfig) -> int | None:
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             return value
     return None
+
+
+def reasoning_effort(live: LiveConfig) -> str | None:
+    """``agents.defaults.reasoningEffort`` as the file has it, or None.
+
+    Held for a turn like the cap: it rides every model call the turn makes, and
+    two calls of one turn at different efforts is the same split the subsystem
+    pins were fixed for.
+
+    The provider keeps its own configured default (``GenerationSettings``),
+    which is deliberately frozen at construction -- the comment on
+    ``ResolvingProvider`` explains why a credentials refresh must not import a
+    live ``agents`` section. So the value is sent as an explicit argument
+    instead, the way a session's pinned effort already is.
+    """
+    for key in ("agents.defaults.reasoningEffort", "agents.defaults.reasoning_effort"):
+        value = live.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def personalization_enabled(live: LiveConfig) -> bool | None:
+    """``agents.defaults.enablePersonalization`` as the file has it, or None."""
+    for key in ("agents.defaults.enablePersonalization", "agents.defaults.enable_personalization"):
+        value = live.get(key)
+        if isinstance(value, bool):
+            return value
+    return None
+
+
+def memory_top_k(live: LiveConfig) -> int | None:
+    """``memory.memoryTopK`` as the file has it, or None for "no answer"."""
+    for key in ("memory.memoryTopK", "memory.memory_top_k"):
+        value = live.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return None
+
+
+def exec_timeout(live: LiveConfig) -> int | None:
+    """``tools.exec.timeout`` as the file has it, or None for "no answer"."""
+    # One spelling: ``exec`` and ``timeout`` are the same word either way.
+    value = live.get("tools.exec.timeout")
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def web_providers(live: LiveConfig) -> tuple[str | None, str | None]:
+    """``tools.web.search.provider`` and ``tools.web.fetch.provider``.
+
+    Read where a sub-agent is spawned rather than copied onto the manager at
+    build: the two vendors are a preference about the next spawn, and the keys
+    beside them (``web_provider_key``) have been read live since they landed.
+    """
+
+    def one(*keys: str) -> str | None:
+        for key in keys:
+            value = live.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    return (
+        one("tools.web.search.provider"),
+        one("tools.web.fetch.provider"),
+    )
 
 
 def _block_pin(live: LiveConfig, blocks: tuple[str, ...], model_field: str, provider_field: str):

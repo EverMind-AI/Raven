@@ -677,3 +677,46 @@ async def test_async_report_uses_the_directory_captured_at_start(tmp_path: Path,
 
     assert (session / "deep_research").is_dir()
     assert not (home / "deep_research").exists()
+
+
+def test_a_rotated_key_rebuilds_the_working_tool(tmp_path: Path, monkeypatch):
+    """A key replaced on the settings page reaches the next turn too.
+
+    The working tool holds the key it was built with, so a rotation used to
+    leave every call on the old credential until a restart -- the same "saved
+    and nothing happened" the promotion path exists to prevent, one step later.
+    """
+    import raven.config.update_tools as ut
+
+    monkeypatch.delenv("MIROTHINKER_API_KEY", raising=False)
+    loop = _offer_loop(tmp_path)
+    monkeypatch.setattr(ut, "get_deep_research", lambda **_kw: {"api_key": "sk-old", "api_base": "", "model": ""})
+    loop._maybe_promote_deep_research()
+    first = loop.tools.get("deep_research")
+    assert isinstance(first, DeepResearchTool)
+
+    monkeypatch.setattr(ut, "get_deep_research", lambda **_kw: {"api_key": "sk-new", "api_base": "", "model": ""})
+    loop._maybe_promote_deep_research()
+
+    rebuilt = loop.tools.get("deep_research")
+    assert isinstance(rebuilt, DeepResearchTool)
+    assert rebuilt is not first, "the tool holding the old key must not be the one left registered"
+    assert loop.deep_research_config.api_key == "sk-new"
+
+
+def test_an_unchanged_key_leaves_the_tool_alone(tmp_path: Path, monkeypatch):
+    """Called once per turn, so a rebuild on every turn would throw away the
+    manager -- and with it the async-delivery handle a channel depends on."""
+    import raven.config.update_tools as ut
+
+    monkeypatch.delenv("MIROTHINKER_API_KEY", raising=False)
+    loop = _offer_loop(tmp_path)
+    monkeypatch.setattr(ut, "get_deep_research", lambda **_kw: {"api_key": "sk", "api_base": "", "model": ""})
+    loop._maybe_promote_deep_research()
+    built = loop.tools.get("deep_research")
+    manager = loop.deep_research_manager
+
+    loop._maybe_promote_deep_research()
+
+    assert loop.tools.get("deep_research") is built
+    assert loop.deep_research_manager is manager
