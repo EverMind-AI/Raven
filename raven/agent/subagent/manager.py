@@ -1892,7 +1892,10 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
 
         assert self._submit is not None
         mark = {"kind": "spawn", "label": task_summary, "status": status}
-        self._inject(announce_content, origin, mark)
+        # The delivered marker draws the seam where a result re-entered its
+        # conversation; a refused inject re-entered nothing, so there is none.
+        if not self._inject(announce_content, origin, mark):
+            return
         # `content` is the text that was injected, verbatim. A client draws the
         # reader-facing part of it by dropping everything outside the untrusted
         # fence -- and a client REPLAYING this turn later reads the same string
@@ -1925,7 +1928,8 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
             return
         injected = wrap_untrusted(summary, source="subagent")
         mark = {"kind": "dag", "label": run_id, "status": "ok", "run_id": run_id}
-        self._inject(injected, origin, mark)
+        if not self._inject(injected, origin, mark):
+            return
         # The graph's own tally names the outcome; "ok" here only means the run
         # came back at all, and the marker's job is placement, not verdict.
         self._emit_delivered(origin, {**mark, "content": injected})
@@ -1999,7 +2003,8 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
             )
         injected = f"{ask}\n\n{wrap_untrusted(report, source='subagent')}"
         mark = {"kind": "dag", "label": run_id, "status": status, "run_id": run_id, "node_id": node_id}
-        self._inject(injected, origin, mark)
+        if not self._inject(injected, origin, mark):
+            return
         self._emit_delivered(origin, {**mark, "content": injected})
         logger.debug("DAG run [{}] node [{}] reported an exception to {}", run_id, node_id, origin["session_key"])
 
@@ -2112,37 +2117,55 @@ This instance acted on its own schedule -- an armed wake, a watch round -- and s
 
 Read it against the plan this instance serves. If it reports finished work, results ready to collect, or a decision point, continue that plan now -- dispatch the next round or collect what is ready; do not leave finished work waiting for the owner to notice. If it is routine progress only, no action and no reply to the user are needed."""
         mark = {"kind": "unprompted", "label": f"{agent}/{handle}", "status": "report"}
-        self._inject(content, origin, mark)
+        if not self._inject(content, origin, mark):
+            return
         self._emit_delivered(origin, {**mark, "content": content})
         logger.info("unprompted turn on {}/{} announced to {}", agent, handle, session_key)
 
-    def _inject(self, content: str, origin: dict[str, str], delegated: dict[str, str] | None = None) -> None:
+    def _inject(self, content: str, origin: dict[str, str], delegated: dict[str, str] | None = None) -> bool:
         """Re-inject ``content`` to trigger a main-agent turn in the originating session.
 
         The spine path routes by conversation (= originating session) with
         origin=SUBAGENT; the reply rides emit -> hub -> outlet (source.channel
         is the originating channel). Fire-and-forget — the announce is fixed,
         the turn's output isn't read back.
+
+        False when the spine refused the turn because it is draining. The host
+        is shutting down and no turn is left to carry the words, so they go to
+        the log in full rather than out of the announcing task as an exception
+        nothing awaits -- asyncio's "Task exception was never retrieved" was
+        the only trace a finished run used to leave. A completed run's content
+        names its record, so the result stays recoverable from disk as well.
         """
         from raven.spine import ChatType, Origin, Source, TurnRequest
+        from raven.spine.scheduler import SchedulerDrainingError
 
         # Wired by set_submit before any announce (see __init__); the announce
         # path is the only caller and it runs after the gateway has wired it.
         assert self._submit is not None
-        self._submit(
-            TurnRequest(
-                origin=Origin.SUBAGENT,
-                source=Source(
-                    channel=origin["channel"],
-                    chat_id=origin["chat_id"],
-                    sender_id="subagent",
-                    chat_type=ChatType.DM,
-                ),
-                text=content,
-                conversation=origin["session_key"],
-                delegated=delegated,
-            )
+        request = TurnRequest(
+            origin=Origin.SUBAGENT,
+            source=Source(
+                channel=origin["channel"],
+                chat_id=origin["chat_id"],
+                sender_id="subagent",
+                chat_type=ChatType.DM,
+            ),
+            text=content,
+            conversation=origin["session_key"],
+            delegated=delegated,
         )
+        try:
+            self._submit(request)
+        except SchedulerDrainingError:
+            logger.error(
+                "sub-agent announce to {} dropped: the scheduler is draining and no turn can carry it; "
+                "the undelivered text follows\n{}",
+                origin["session_key"],
+                content,
+            )
+            return False
+        return True
 
     async def cancel_by_session(self, session_key: str) -> int:
         """Cancel all subagents for the given session. Returns count cancelled."""

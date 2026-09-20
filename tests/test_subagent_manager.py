@@ -312,6 +312,127 @@ async def test_announce_dag_result_without_a_submit_does_not_raise() -> None:
     await mgr.announce_dag_result("run-1", "summary", {"channel": "cli", "chat_id": "direct", "session_key": "cli"})
 
 
+_DRAIN_ORIGIN = {"channel": "web", "chat_id": "default", "session_key": "web:sess1"}
+_DELIVERABLE = "the finished 4000-word deliverable the user is waiting for"
+
+
+def _draining_submit(_req: object) -> None:
+    from raven.spine.scheduler import SchedulerDrainingError
+
+    raise SchedulerDrainingError("scheduler is draining; new turns are not accepted")
+
+
+async def _announce_spawn_result(mgr: SubagentManager) -> None:
+    await mgr._announce_result(
+        "t1", "Research", "do it", _DELIVERABLE, _DRAIN_ORIGIN, "ok", record_path="/records/t1/out.md"
+    )
+
+
+async def _announce_dag_result(mgr: SubagentManager) -> None:
+    await mgr.announce_dag_result("r1", _DELIVERABLE, _DRAIN_ORIGIN)
+
+
+async def _announce_dag_exception(mgr: SubagentManager) -> None:
+    await mgr.announce_dag_exception("r1", "n1", _DELIVERABLE, _DRAIN_ORIGIN, awaiting_decision=True)
+
+
+async def _announce_unprompted(mgr: SubagentManager) -> None:
+    mgr._inject_unprompted(("web:sess1", "watch", "h1"), _DRAIN_ORIGIN, _DELIVERABLE)
+
+
+@pytest.mark.parametrize(
+    "announce",
+    [_announce_spawn_result, _announce_dag_result, _announce_dag_exception, _announce_unprompted],
+    ids=["spawn", "dag_result", "dag_exception", "unprompted"],
+)
+async def test_an_announce_into_a_draining_scheduler_is_logged_in_full_not_raised(announce) -> None:
+    """A run that finishes while the host shuts down announces into a submit
+    that refuses new turns. That refusal used to leave the announcing task as
+    an exception nothing awaited -- one asyncio line in the log, the result
+    text nowhere -- so the announce now logs the undelivered text itself and
+    says which conversation lost it. No delivered marker: nothing re-entered
+    the conversation, so there is no seam for a client to draw."""
+    from loguru import logger
+
+    mgr = _make_manager(max_concurrent=1)
+    mgr.set_submit(_draining_submit)
+    events: list[dict[str, Any]] = []
+
+    async def _sink(_session_key: str, event: dict[str, Any]) -> None:
+        events.append(event)
+
+    mgr.set_delivery_sink(_sink)
+    logged: list[str] = []
+    sink_id = logger.add(lambda m: logged.append(m.record["message"]), level="ERROR")
+    try:
+        await announce(mgr)
+        await asyncio.sleep(0)
+    finally:
+        logger.remove(sink_id)
+
+    assert len(logged) == 1
+    assert _DELIVERABLE in logged[0]
+    assert "web:sess1" in logged[0]
+    assert "draining" in logged[0]
+    assert events == []
+
+
+async def test_a_completed_run_s_dropped_announce_names_its_record() -> None:
+    """The log line is the last resort, but not the only copy: a completed
+    run wrote its record before announcing, and the announce text carries that
+    path, so the person reading the log knows where the result still is."""
+    from loguru import logger
+
+    mgr = _make_manager(max_concurrent=1)
+    mgr.set_submit(_draining_submit)
+    logged: list[str] = []
+    sink_id = logger.add(lambda m: logged.append(m.record["message"]), level="ERROR")
+    try:
+        await _announce_spawn_result(mgr)
+    finally:
+        logger.remove(sink_id)
+
+    assert "/records/t1/out.md" in logged[0]
+
+
+async def _inner_that_finishes(mgr: SubagentManager):
+    async def _inner(task_id, task, task_summary, origin, executor, provider, model, **_kw) -> None:
+        await mgr._announce_result(task_id, task_summary, task, _DELIVERABLE, origin, "ok")
+
+    return _inner
+
+
+async def _inner_that_fails(_mgr: SubagentManager):
+    async def _inner(*_a, **_kw) -> None:
+        raise RuntimeError("the run failed")
+
+    return _inner
+
+
+@pytest.mark.parametrize("make_inner", [_inner_that_finishes, _inner_that_fails], ids=["finished", "failed"])
+async def test_a_run_ending_while_the_host_drains_does_not_die_of_its_own_announce(monkeypatch, make_inner) -> None:
+    """The traceback this pins ran `_run_subagent -> _run_subagent_inner ->
+    _announce_result -> _inject` and out of the task as SchedulerDrainingError.
+    The failure path was no better: `_run_subagent`'s own handler announces the
+    error, and that announce raised the same way out of the except block."""
+    from loguru import logger
+
+    mgr = _make_manager(max_concurrent=1)
+    mgr.set_submit(_draining_submit)
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+    monkeypatch.setattr(mgr, "_run_subagent_inner", await make_inner(mgr))
+    sink_id = logger.add(lambda m: None, level="ERROR")
+    try:
+        task = asyncio.create_task(
+            mgr._run_subagent("t1", "do it", "Research", dict(_DRAIN_ORIGIN), mgr.provider, "stub-model")
+        )
+        await asyncio.wait({task})
+    finally:
+        logger.remove(sink_id)
+
+    assert task.exception() is None
+
+
 async def test_subagent_continues_after_a_refused_delete(monkeypatch, tmp_path):
     """A refused command no longer ends the run: the sub-agent reads the
     refusal, neither spelling of the catastrophic delete executes, and the

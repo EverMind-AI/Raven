@@ -417,6 +417,34 @@ async def test_the_channel_defaults_to_the_one_both_sides_already_used() -> None
     assert inspect.signature(bootstrap.build_rpc_stack).parameters["channel"].default == "tui"
 
 
+async def test_the_owning_teardown_cancels_subagents_before_the_spine_seals(monkeypatch) -> None:
+    """Sealing the scheduler is the first thing the spine's teardown does, and a
+    sub-agent that finishes after it announces its result into a submit that
+    refuses new turns -- the only route that result has back. Cancelled first,
+    the run ends as the stop it is instead of as a result nobody received."""
+    from raven.rpc import spine as spine_module
+
+    loop = _FakeLoop(_FakeCron())
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: loop)
+    real_build = spine_module.build_rpc_spine
+
+    def _recording_build(*args, **kwargs):
+        scheduler, hub, ids, teardown = real_build(*args, **kwargs)
+
+        async def _teardown() -> None:
+            loop.order.append("turn_teardown")
+            await teardown()
+
+        return scheduler, hub, ids, _teardown
+
+    monkeypatch.setattr(spine_module, "build_rpc_spine", _recording_build)
+
+    stack = await bootstrap.build_rpc_stack(_sink)
+    await stack.teardown()
+
+    assert loop.order.index("cancel_all") < loop.order.index("turn_teardown")
+
+
 def test_the_served_shutdown_stops_subagents_before_it_stops_the_backend() -> None:
     """Closing the memory adapter while a sub-agent run is still going fails
     that run's next write for a reason the service had no part in."""
