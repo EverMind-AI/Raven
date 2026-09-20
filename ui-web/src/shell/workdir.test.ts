@@ -1,4 +1,10 @@
 // @vitest-environment happy-dom
+/* The working-directory chip and its panel (shell/workdir.ts): the chip's two
+   states (live on a draft, fixed and reporting once a conversation is open),
+   the menu of no folder / recent folders / browse, how a pick is staged for the
+   create and taken back off, the walk through the gateway's directory listing
+   with entries the create would refuse greyed out, and the notes for a page
+   with nothing to browse or a path the gateway refused. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Shell } from './bridge'
