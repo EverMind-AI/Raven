@@ -1264,6 +1264,23 @@ class TestThoughtCoalescing:
         assert [u["content"]["text"] for u in _updates(written)] == ["last words"]
         assert translator._thoughts == {}
 
+    async def test_dropping_the_turn_slot_sends_what_is_still_held(self):
+        """The prompt handler drops the slot in its finally, before the
+        ``session/prompt`` response goes out. Text held past the ending -- a
+        thought that arrived after the turn settled -- has to precede that
+        response rather than trail it by a window."""
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+        translator.begin_turn("acp:s1")
+        translator.accept_turn("acp:s1", "t")
+
+        await translator.send_frame(self._thought("straggler"))
+        translator.end_turn("acp:s1")
+
+        assert [u["content"]["text"] for u in _updates(written)] == ["straggler"]
+        assert translator._thoughts == {}
+
     async def test_a_released_session_sends_what_it_held(self):
         written = []
         translator = UpdateTranslator(emit=written.append)
