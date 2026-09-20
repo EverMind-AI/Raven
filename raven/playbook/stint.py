@@ -33,6 +33,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from loguru import logger
 
+from raven.agent.subagent.prompt_errors import RoundBudgetSpentError
 from raven.playbook.agent_generator import build_payload
 from raven.playbook.stint_prompt import (
     fill_round_slots,
@@ -230,7 +231,7 @@ class StintDriver:
     """Starts stints, and advances one whenever a round of it finishes."""
 
     dag_tool: Any
-    plans_root: Callable[[str | None], Path]
+    stints_root: Callable[[str | None], Path]
     #: The project a stint started here works, asked per session rather than
     #: fixed at construction: one driver serves every conversation on the host,
     #: and a conversation pointed at a repository of its own is the ordinary
@@ -245,7 +246,7 @@ class StintDriver:
     _beats: dict[str, "asyncio.Task[None]"] = field(default_factory=dict, repr=False)
 
     def store_for(self, session_key: str | None) -> StintStore:
-        return StintStore(self.plans_root(session_key))
+        return StintStore(self.stints_root(session_key))
 
     def workspace_at(self, session_key: str | None) -> Path:
         return Path(self.workspace_for(session_key))
@@ -283,7 +284,7 @@ class StintDriver:
         return {
             "on_node_start": context.node_started,
             "judge_node": context.judge,
-            "unanswered": context.record_question,
+            "adjudicate": context.adjudicate,
             "max_continuations": context.max_handbacks,
             "charters": charters_for(spec, ref.round_index, attempt),
         }
@@ -557,6 +558,33 @@ class StintDriver:
             return _summary(record)
         return None
 
+    async def _pause_on_budget(self, record: StintRecord, store: StintStore, index: int, refusal: str) -> str:
+        """Park a stint the hourly dispatch budget turned down, and say so.
+
+        A pause rather than a stop, because nothing is wrong with the stint: the
+        allowance it ran into recovers as earlier dispatches age out, and every
+        round it has done is still on its branch. `stints resume` takes it up at
+        the round that did not start.
+
+        Said out loud, unlike a pause a person asked for: that one is known to
+        whoever asked, and this one would otherwise be a stint that simply
+        stopped advancing with nobody told why.
+        """
+        record.status = PAUSED
+        record.round_index = max(index - 1, 1)
+        record.stop_reason = f"the hourly sub-agent dispatch budget is spent before round {index}"
+        store.write(record)
+        if (say := getattr(self.dag_tool, "say", None)) is not None:
+            await say(
+                record.stint_id,
+                f"Stint {record.stint_id} ({record.playbook}) is paused before round {index}: {refusal}\n\n"
+                f"Nothing is lost. Take it up with `raven playbook stints resume {record.stint_id}` "
+                f"once the hour's dispatches have aged out.",
+                record.origin or None,
+            )
+        logger.info("stint {} paused before round {}: the dispatch budget is spent", record.stint_id, index)
+        return f"Paused: the sub-agent dispatch budget is spent, so round {index} did not start."
+
     def _open_tree(self, spec: PlaybookSpec, record: StintRecord, layout: Layout | None = None) -> str:
         """Give the stint a checkout of its own, or say why it cannot have one.
 
@@ -795,17 +823,19 @@ class StintDriver:
             # Every role of this round already finished, which is what a stint
             # interrupted between its last node and its hand-over looks like.
             return "Error: every role of this round had already finished, so there was nothing left to run."
-        receipt = await self.dag_tool.execute(
-            nodes,
-            task_summary=f"{spec.name}: round {index} of at most {_budget(spec)}",
-            background=True,
-            confirm=confirm,
-            stint=record.ref(index),
-            origin=record.origin or None,
-            # Built when asked rather than now, so a round that is not going to
-            # be asked about does not pay for the text.
-            confirm_question=lambda: approval(spec, record, layout),
-        )
+        try:
+            receipt = await self.dag_tool.run_round(
+                nodes,
+                task_summary=f"{spec.name}: round {index} of at most {_budget(spec)}",
+                confirm=confirm,
+                stint=record.ref(index),
+                origin=record.origin or None,
+                # Built when asked rather than now, so a round that is not going to
+                # be asked about does not pay for the text.
+                confirm_question=lambda: approval(spec, record, layout),
+            )
+        except RoundBudgetSpentError as spent:
+            return await self._pause_on_budget(record, store, index, spent.refusal)
         text = _text_of(receipt)
         record.open_round(index, _run_id_of(text), attempt=attempt)
         store.write(record)

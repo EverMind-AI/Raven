@@ -16,7 +16,7 @@ from raven.playbook.executor import PlaybookExecutor
 from raven.playbook.stint import StintDriver, compile_round, journal_entry
 from raven.playbook.types import PlaybookSpec
 from raven.stint.git import ProjectGit
-from raven.stint.record import StintStore
+from raven.stint.record import StintRef, StintStore
 from raven.stint.verify import CheckSpec
 from tests.test_subagent_dag_runner import draining_dag_runs
 
@@ -200,7 +200,7 @@ class TestRunning:
 
         summary = await self._await_announce(announced, count=2)
 
-        store = StintStore(executor.dag_tool.plans_root("web:stint"))
+        store = StintStore(executor.dag_tool.stints_root("web:stint"))
         record = store.list()[0]
         assert record.status == "finished"
         assert record.stop_reason == "the round budget of 2 is spent"
@@ -227,7 +227,7 @@ class TestRunning:
 
         summary = await self._await_announce(announced)
 
-        record = StintStore(executor.dag_tool.plans_root("web:stint")).list()[0]
+        record = StintStore(executor.dag_tool.stints_root("web:stint")).list()[0]
         assert [entry.index for entry in record.rounds] == [1]
         assert record.stop_reason == "the round budget of 1 is spent"
         assert "ran 1 round(s) and stopped" in summary
@@ -259,7 +259,7 @@ class TestRunning:
         # reading the journal off it would race round two into existence.
         await self._await_announce(announced, count=2)
 
-        record = StintStore(executor.dag_tool.plans_root("web:stint")).list()[0]
+        record = StintStore(executor.dag_tool.stints_root("web:stint")).list()[0]
         journal = (Path(record.workdir) / "JOURNAL.md").read_text(encoding="utf-8")
 
         assert journal.startswith("## Round 01"), journal
@@ -277,7 +277,7 @@ class TestRunning:
         await executor.execute(_spec(confirm=False), {})
         await self._await_announce(announced)
 
-        record = StintStore(executor.dag_tool.plans_root("web:stint")).list()[0]
+        record = StintStore(executor.dag_tool.stints_root("web:stint")).list()[0]
         assert not (Path(record.workdir) / "JOURNAL.md").exists()
 
     async def test_a_round_that_needs_nothing_says_so_rather_than_inviting_a_rescue(self, tmp_path: Path) -> None:
@@ -314,7 +314,7 @@ class TestRunning:
         await executor.execute(_spec(confirm=False), {})
         await self._await_announce(announced)
 
-        record = StintStore(executor.dag_tool.plans_root("web:stint")).list()[0]
+        record = StintStore(executor.dag_tool.stints_root("web:stint")).list()[0]
         assert record.workdir != str(tmp_path)
         assert record.branch == f"stint/{record.stint_id}"
         assert Path(record.workdir).is_dir()
@@ -335,18 +335,51 @@ class TestRunning:
         assert stint.kind == "questions"
         assert "not one" in stint.reply and "owns/appends" in stint.reply
 
-    async def test_the_whole_plan_is_charged_once_not_once_a_round(self, tmp_path: Path) -> None:
-        """The per-hour budget stops an unattended loop nobody asked for. A stint
-        is that loop with an approval on it and a ceiling of its own, so charging
-        every round would spend a session's whole allowance on one authorised run."""
+    async def test_every_round_is_charged_to_the_dispatch_budget(self, tmp_path: Path) -> None:
+        """One approval must not buy an unmetered run.
+
+        The per-hour budget exists to bound an unattended loop, and a stint is
+        that loop: at the declared ceilings one confirmation would otherwise
+        authorise orders of magnitude more sub-agent dispatches than the hourly
+        allowance the budget is there to hold.
+        """
         announced: list[str] = []
         charges: list[str | None] = []
         executor = self._executor(tmp_path, announced, charges)
 
         await executor.execute(_spec(confirm=False), {})
-        await self._await_announce(announced)
+        await self._await_announce(announced, count=2)
 
-        assert charges == ["web:stint"]
+        assert charges == ["web:stint", "web:stint"], "one charge per round, not one per stint"
+
+    async def test_a_round_the_budget_turns_down_pauses_the_stint(self, tmp_path: Path) -> None:
+        """A refused round is a round that will be fine an hour from now.
+
+        Stopping the stint would throw away every round it has done over a
+        limit that recovers by itself, so it is parked where `stints resume`
+        can take it up, and said out loud -- nobody asked for this pause, so
+        nobody would otherwise know to resume it.
+        """
+        announced: list[str] = []
+        charges: list[str | None] = []
+        executor = self._executor(tmp_path, announced, charges)
+        spent = "Error: this session hit its sub-agent dispatch rate limit (30 per hour)."
+
+        def charge(session_key: str | None) -> str | None:
+            charges.append(session_key)
+            return None if len(charges) == 1 else spent
+
+        executor.dag_tool._charge = charge
+
+        await executor.execute(_spec(confirm=False), {})
+        await self._await_announce(announced, count=2)
+
+        record = StintStore(executor.dag_tool.stints_root("web:stint")).list()[0]
+        assert record.status == "paused"
+        assert "dispatch budget is spent before round 2" in record.stop_reason
+        assert [entry.index for entry in record.rounds] == [1], "the refused round opened no entry"
+        assert "paused before round 2" in announced[-1]
+        assert "stints resume" in announced[-1]
 
     async def test_a_marker_a_role_reports_ends_the_plan_early(self, tmp_path: Path) -> None:
         announced: list[str] = []
@@ -359,7 +392,7 @@ class TestRunning:
         await executor.execute(spec, {})
         await self._await_announce(announced)
 
-        record = StintStore(executor.dag_tool.plans_root("web:stint")).list()[0]
+        record = StintStore(executor.dag_tool.stints_root("web:stint")).list()[0]
         assert record.stop_reason == "a role reported 'DONE-FOR-NOW'"
         assert [entry.index for entry in record.rounds] == [1]
         # The echo agent hands the whole prompt back, so this round's output also
@@ -401,7 +434,7 @@ class TestRunning:
         await executor.execute(_spec(confirm=False), {})
         await self._await_announce(announced)
 
-        path = next(Path(executor.dag_tool.plans_root("web:stint")).glob("*.json"))
+        path = next(Path(executor.dag_tool.stints_root("web:stint")).glob("*.json"))
         stored = json.loads(path.read_text(encoding="utf-8"))["spec"]
         assert PlaybookSpec.model_validate(stored).name == "game-dev"
 
@@ -418,7 +451,7 @@ class TestUnwired:
 
 def test_the_driver_keeps_no_plan_in_memory(tmp_path: Path) -> None:
     """What makes "any process can pick this up" true: the state is the file."""
-    driver = StintDriver(object(), plans_root=lambda _key: tmp_path, workspace_for=lambda _key: tmp_path)
+    driver = StintDriver(object(), stints_root=lambda _key: tmp_path, workspace_for=lambda _key: tmp_path)
 
     assert not [name for name in vars(driver) if "record" in name or "plan_" in name]
 
@@ -541,15 +574,34 @@ class TestBoundaries:
         assert self._context(tmp_path, spec).enforcing is False
         assert self._context(tmp_path, _spec()).enforcing is True
 
-    async def test_a_question_nobody_answered_is_filed_rather_than_failing_the_round(self, tmp_path: Path) -> None:
+    async def test_a_question_nobody_answered_is_filed(self, tmp_path: Path) -> None:
         context = self._context(tmp_path, _spec())
 
-        stands = await context.record_question("game-dev-r01-planner", "which of the two should it be?")
+        await context.record_question("game-dev-r01-planner", "which of the two should it be?")
 
-        assert stands is True, "the node stands, so its dependents still run"
         [question] = context.store.read("stint-test").questions
         assert question["role"] == "planner"
         assert question["round"] == 1
+        assert "which of the two" in question["text"]
+
+    async def test_a_suspended_node_is_abandoned_by_the_driver_and_written_down(self, tmp_path: Path) -> None:
+        """A round dispatched between turns has nobody at the desk.
+
+        Left alone the node waits out the whole adjudication timeout and fails
+        anyway, so the stint says the same thing sooner, in the vocabulary the
+        desk already has. The node is `failed` either way -- what the stint adds
+        is the record, which is what the next round and the person reading
+        between rounds actually need.
+        """
+        from raven.agent.subagent.dag_adjudication import ABANDON
+
+        context = self._context(tmp_path, _spec())
+
+        decision, message = await context.adjudicate("game-dev-r01-planner", "which of the two should it be?")
+
+        assert decision == ABANDON
+        assert "recorded the question" in message
+        [question] = context.store.read("stint-test").questions
         assert "which of the two" in question["text"]
 
 
@@ -563,7 +615,7 @@ class _FakeTool:
         self.submitted: list[list[dict[str, Any]]] = []
         self.summaries: list[str] = []
 
-    def plans_root(self, _session_key: str | None = None) -> Path:
+    def stints_root(self, _session_key: str | None = None) -> Path:
         return self.root
 
     def turn_origin(self) -> dict[str, str]:
@@ -581,7 +633,7 @@ class _FakeTool:
             has_output=dict.fromkeys(self.readable, True),
         )
 
-    async def execute(self, nodes: list[dict[str, Any]], **kwargs: Any) -> str:
+    async def run_round(self, nodes: list[dict[str, Any]], **kwargs: Any) -> str:
         self.submitted.append(nodes)
         self.summaries.append(str(kwargs.get("task_summary") or ""))
         return f"DAG run run-{len(self.submitted)} started in the background ({len(nodes)} nodes)."
@@ -906,7 +958,7 @@ class TestAPlanNobodyIsAdvancing:
         tool = _FakeTool(tmp_path / "stints", live=[])
         project = tmp_path / "game"
         project.mkdir()
-        driver = StintDriver(tool, plans_root=tool.plans_root, workspace_for=lambda _k: project)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: project)
         await driver.start(_spec(confirm=False, roles=[{"as": "planner", "name": "echo", "promptTemplate": "hi"}]))
         store = driver.store_for("web:stint")
         self._went_quiet(store, store.list()[0].stint_id)
@@ -924,7 +976,7 @@ class TestAPlanNobodyIsAdvancing:
         tool = _FakeTool(tmp_path / "stints", live=[])
         project = tmp_path / "game"
         project.mkdir()
-        driver = StintDriver(tool, plans_root=tool.plans_root, workspace_for=lambda _k: project)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: project)
         await driver.start(_spec(confirm=False, roles=[{"as": "planner", "name": "echo", "promptTemplate": "hi"}]))
 
         # Nothing backdated: the record was written a moment ago, exactly as a
@@ -938,7 +990,7 @@ class TestAPlanNobodyIsAdvancing:
         project = tmp_path / "game"
         project.mkdir()
         tool = _FakeTool(tmp_path / "stints")
-        driver = StintDriver(tool, plans_root=tool.plans_root, workspace_for=lambda _k: project)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: project)
         await driver.start(_spec(confirm=False, roles=[{"as": "planner", "name": "echo", "promptTemplate": "hi"}]))
         store = driver.store_for("web:stint")
         record = store.list()[0]
@@ -953,7 +1005,7 @@ class TestAPlanNobodyIsAdvancing:
         project = tmp_path / "game"
         project.mkdir()
         tool = _FakeTool(tmp_path / "stints", live=[])
-        driver = StintDriver(tool, plans_root=tool.plans_root, workspace_for=lambda _k: project)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: project)
         await driver.start(_spec(confirm=False, roles=[{"as": "planner", "name": "echo", "promptTemplate": "hi"}]))
         store = driver.store_for("web:stint")
         self._went_quiet(store, store.list()[0].stint_id)
@@ -974,7 +1026,7 @@ class TestWhatAResumedRoundIsStillHeldTo:
         tool = _FakeTool(tmp_path / "stints", live=[])
         project = tmp_path / "game"
         project.mkdir()
-        driver = StintDriver(tool, plans_root=tool.plans_root, workspace_for=lambda _k: project)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: project)
         # A declared boundary needs a repository to undo a stray write in, and
         # the charter is the layer this test is about, so the role declares one.
         subprocess.run(["git", "-C", str(project), "init", "-q"], check=True)
@@ -1012,6 +1064,122 @@ class TestWhatAResumedRoundIsStillHeldTo:
         assert any("x1" in node_id for node_id in ids), "the resumed round did not take an attempt suffix"
 
 
+class TestWhatARoundsHandbackBudgetMeans:
+    """`maxHandbacks: 0` is a number a role may declare, not an absent one."""
+
+    @staticmethod
+    async def _handbacks_reaching_the_runner(tmp_path: Path, monkeypatch, declared: int) -> list[int]:
+        from raven.agent.subagent import dag_tool as tool_mod
+        from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+        seen: list[int] = []
+
+        async def _fake_run_dag(spec, **kwargs):
+            seen.append(kwargs.get("max_continuations"))
+            raise RuntimeError("far enough")
+
+        monkeypatch.setattr(tool_mod, "run_dag", _fake_run_dag)
+
+        class _Driver:
+            async def advance(self, *_args, **_kwargs):
+                return None
+
+            def hooks(self, _ref):
+                return {"max_continuations": declared}
+
+        tool = SubAgentDagTool(
+            workspace=tmp_path,
+            agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")],
+            stint_driver=_Driver(),
+        )
+        tool.set_context("web", "default", "web:stint")
+
+        receipt = await tool.run_round(
+            [{"id": "a", "subagent": "echo", "node_summary": "s", "prompt_template": "p"}],
+            task_summary="one round",
+            stint=StintRef(stint_id="stint-1", round_index=1, session_key="web:stint"),
+        )
+        assert "Error" not in str(receipt), receipt
+        await asyncio.gather(*list(tool._runs.values()), return_exceptions=True)
+        return seen
+
+    async def test_a_declared_zero_is_not_read_as_no_answer_at_all(self, tmp_path: Path, monkeypatch) -> None:
+        """`maxHandbacks` is bounded `ge=0`, so zero is a legal declaration and
+        it means something: record the failed check and carry on, never hand
+        back. Read as absence it becomes the default instead, and the role
+        retries twice -- each retry a real sub-agent dispatch it declared it did
+        not want."""
+        assert await self._handbacks_reaching_the_runner(tmp_path, monkeypatch, 0) == [0]
+
+    async def test_a_declared_budget_is_what_the_round_gets(self, tmp_path: Path, monkeypatch) -> None:
+        assert await self._handbacks_reaching_the_runner(tmp_path, monkeypatch, 3) == [3]
+
+
+class TestWhoAnswersARoundsSuspendedNode:
+    """The desk is the same one a person uses; for a stint the driver is at it."""
+
+    @staticmethod
+    def _tool(tmp_path: Path):
+        from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+        tool = SubAgentDagTool(workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")])
+        tool.set_context("web", "default", "web:stint")
+        return tool
+
+    async def test_the_driver_answers_and_the_host_is_not_woken(self, tmp_path: Path) -> None:
+        from raven.agent.subagent.dag_adjudication import ABANDON, AdjudicationDesk
+
+        woken: list[str] = []
+
+        async def host(run_id, node_id, report, origin, *, awaiting_decision, informational=False):
+            woken.append(node_id)
+
+        async def adjudicate(node_id: str, report: str) -> tuple[str, str]:
+            return ABANDON, f"the stint decided about {node_id}"
+
+        desk = AdjudicationDesk()
+        desk.open("a")
+        announce = self._tool(tmp_path)._answered_by(desk, adjudicate, host)
+
+        await announce("run-1", "a", "a did not do it", {}, awaiting_decision=True)
+
+        assert woken == [], "a round between turns has no main agent to wake"
+        assert desk.take("a").decision == ABANDON
+
+    async def test_a_stall_notice_still_reaches_the_host(self, tmp_path: Path) -> None:
+        """Only the decision is taken over. A notice nothing is waiting on is
+        news for whoever is watching, and the driver has no use for it."""
+        from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+        woken: list[str] = []
+
+        async def host(run_id, node_id, report, origin, *, awaiting_decision, informational=False):
+            woken.append(node_id)
+
+        async def adjudicate(node_id: str, report: str) -> tuple[str, str]:
+            raise AssertionError("a stall notice is not a decision")
+
+        announce = self._tool(tmp_path)._answered_by(AdjudicationDesk(), adjudicate, host)
+
+        await announce("run-1", "a", "no sign of life", {}, awaiting_decision=False, informational=True)
+
+        assert woken == ["a"]
+
+    async def test_a_driver_that_cannot_decide_abandons_rather_than_hanging(self, tmp_path: Path) -> None:
+        from raven.agent.subagent.dag_adjudication import ABANDON, AdjudicationDesk
+
+        async def adjudicate(node_id: str, report: str) -> tuple[str, str]:
+            raise RuntimeError("the record is gone")
+
+        desk = AdjudicationDesk()
+        desk.open("a")
+        announce = self._tool(tmp_path)._answered_by(desk, adjudicate, None)
+
+        await announce("run-1", "a", "a did not do it", {}, awaiting_decision=True)
+
+        assert desk.take("a").decision == ABANDON
+
+
 class TestSayingItIsStillHeld:
     """The beat, and the guard it makes possible."""
 
@@ -1019,7 +1187,7 @@ class TestSayingItIsStillHeld:
     def _driver(tmp_path: Path, tool: "_FakeTool") -> StintDriver:
         project = tmp_path / "game"
         project.mkdir(exist_ok=True)
-        return StintDriver(tool, plans_root=tool.plans_root, workspace_for=lambda _k: project)
+        return StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: project)
 
     @staticmethod
     def _one_role():
@@ -1095,7 +1263,7 @@ class TestASecondPlanOnOneProject:
 
     @staticmethod
     def _driver(tmp_path: Path, tool: "_FakeTool", project: Path) -> StintDriver:
-        return StintDriver(tool, plans_root=tool.plans_root, workspace_for=lambda _key: project)
+        return StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _key: project)
 
     @staticmethod
     def _plain():
@@ -1167,7 +1335,7 @@ class TestASecondPlanOnOneProject:
 
         assert (
             len(
-                StintDriver(tool, plans_root=tool.plans_root, workspace_for=lambda _k: tmp_path)
+                StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
                 .store_for("web:stint")
                 .list()
             )
@@ -1186,7 +1354,7 @@ class TestWhereAPlanWorks:
         tool = _FakeTool(tmp_path / "stints")
         driver = StintDriver(
             tool,
-            plans_root=tool.plans_root,
+            stints_root=tool.stints_root,
             workspace_for=lambda key: projects[key or ""],
         )
 
@@ -1204,7 +1372,7 @@ class TestWhereAPlanWorks:
         project = tmp_path / "game"
         project.mkdir()
         tool = _FakeTool(tmp_path / "stints")
-        driver = StintDriver(tool, plans_root=tool.plans_root, workspace_for=lambda _key: project)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _key: project)
 
         problem = await driver.start(_spec(confirm=False))
 
@@ -1215,7 +1383,7 @@ class TestWhereAPlanWorks:
 class TestResume:
     @staticmethod
     def _driver(tmp_path: Path, tool: _FakeTool) -> StintDriver:
-        return StintDriver(tool, plans_root=tool.plans_root, workspace_for=lambda _key: tmp_path)
+        return StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _key: tmp_path)
 
     @staticmethod
     def _interrupted(tmp_path: Path, tool: _FakeTool, *, attempt: int = 0, quiet_for_sec: float = 3600.0) -> Any:
@@ -1229,7 +1397,7 @@ class TestResume:
 
         from raven.stint.record import StintRecord, StintStore
 
-        store = StintStore(tool.plans_root())
+        store = StintStore(tool.stints_root())
         record = StintRecord(
             stint_id="stint-x",
             playbook="game-dev",
@@ -1404,7 +1572,7 @@ class TestAProjectThatWasNeverSetUp:
 
     @staticmethod
     def _driver(tool: _FakeTool, project: Path) -> StintDriver:
-        return StintDriver(tool, plans_root=tool.plans_root, workspace_for=lambda _key: project)
+        return StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _key: project)
 
     async def test_the_layout_reaches_the_checkout_the_rounds_actually_run_in(self, tmp_path: Path) -> None:
         """The failure this exists to stop. A worktree is cut from HEAD and what
@@ -1562,12 +1730,9 @@ class TestWhatAPersonApproves:
         assert "and 6 more" in asked
         assert "src/8/**" not in asked
 
-    async def test_the_plan_asks_its_own_question_and_an_ordinary_graph_does_not(self, tmp_path: Path) -> None:
-        """The seam: a stint hands the gate a question, an ordinary run leaves it
-        to build the one it always built."""
+    @staticmethod
+    def _asking_tool(tmp_path: Path, asked: list[str]):
         from raven.agent.subagent.dag_tool import SubAgentDagTool
-
-        asked: list[str] = []
 
         async def ask(_conversation: str, question: str) -> bool:
             asked.append(question)
@@ -1577,37 +1742,38 @@ class TestWhatAPersonApproves:
             workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")], ask=ask
         )
         tool.set_context("web", "default", "web:stint")
+        return tool
+
+    async def test_the_plan_asks_its_own_question_and_an_ordinary_graph_does_not(self, tmp_path: Path) -> None:
+        """The seam: a stint hands the gate a question, an ordinary run leaves it
+        to build the one it always built."""
+        asked: list[str] = []
+        tool = self._asking_tool(tmp_path, asked)
         nodes = [{"id": "a", "subagent": "echo", "node_summary": "s", "prompt_template": "p"}]
 
         await tool.execute(nodes, task_summary="ordinary", confirm=True, background=False)
-        await tool.execute(
+        await tool.run_round(
             nodes,
             task_summary="a stint",
             confirm=True,
-            background=False,
+            stint=StintRef(stint_id="stint-1", round_index=1, session_key="web:stint"),
             confirm_question=lambda: "Start a stint? up to 30 rounds",
         )
 
         assert asked[0].startswith("Run this 1 step graph?")
         assert asked[1] == "Start a stint? up to 30 rounds"
 
-    async def test_a_question_the_model_could_have_sent_is_not_the_one_asked(self, tmp_path: Path) -> None:
-        """An unrecognised tool argument is passed through rather than refused
-        (`raven/agent/tools/params.py`), so a string can reach the gate from the
-        model's own call. Letting it stand would put a harmless sentence over a
-        graph that runs anything."""
-        from raven.agent.subagent.dag_tool import SubAgentDagTool
+    async def test_the_model_facing_entry_cannot_be_handed_a_question_at_all(self, tmp_path: Path) -> None:
+        """The composer of a graph must not also write the sentence it is approved by.
+
+        `execute` is what a model reaches through the registry, and it takes no
+        such argument: one sent anyway lands in `**kwargs` and goes nowhere, and
+        the gate asks what it always asked.
+        """
+        import inspect
 
         asked: list[str] = []
-
-        async def ask(_conversation: str, question: str) -> bool:
-            asked.append(question)
-            return False
-
-        tool = SubAgentDagTool(
-            workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="echo", command="cat")], ask=ask
-        )
-        tool.set_context("web", "default", "web:stint")
+        tool = self._asking_tool(tmp_path, asked)
 
         await tool.execute(
             [{"id": "a", "subagent": "echo", "node_summary": "s", "prompt_template": "p"}],
@@ -1618,9 +1784,11 @@ class TestWhatAPersonApproves:
         )
 
         assert asked == ["Run this 1 step graph?\n- a: echo"]
-        # And the argument is not one the schema offers, so a well-formed call
-        # cannot carry it at all.
+        # Not in the schema, and not in the signature either: the host's own
+        # arguments live on `run_round`, which no tool call can reach.
         assert "confirm_question" not in tool.parameters.get("properties", {})
+        taken = set(inspect.signature(tool.execute).parameters)
+        assert taken.isdisjoint({"confirm_question", "stint", "origin"})
 
 
 class TestTakingAPlanUpAgain:
@@ -1632,14 +1800,14 @@ class TestTakingAPlanUpAgain:
 
     @staticmethod
     def _driver(tmp_path: Path, tool: _FakeTool, project: Path | None = None) -> StintDriver:
-        return StintDriver(tool, plans_root=tool.plans_root, workspace_for=lambda _key: project or tmp_path)
+        return StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _key: project or tmp_path)
 
     @staticmethod
     def _plan(tmp_path: Path, tool: _FakeTool, *, status: str, rounds: int = 1, done: bool = True) -> Any:
         from raven.stint.record import StintRecord, StintStore
 
         (tmp_path / "tree").mkdir(exist_ok=True)
-        store = StintStore(tool.plans_root())
+        store = StintStore(tool.stints_root())
         record = StintRecord(
             stint_id="stint-x",
             playbook="game-dev",
@@ -1754,7 +1922,7 @@ class TestHowLongToKeepGoing:
 
     @staticmethod
     def _driver(tmp_path: Path, tool: _FakeTool) -> StintDriver:
-        return StintDriver(tool, plans_root=tool.plans_root, workspace_for=lambda _key: tmp_path)
+        return StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _key: tmp_path)
 
     @staticmethod
     def _plain():
@@ -1809,7 +1977,7 @@ class TestMoreRounds:
 
     @staticmethod
     def _driver(tmp_path: Path, tool: _FakeTool) -> StintDriver:
-        return StintDriver(tool, plans_root=tool.plans_root, workspace_for=lambda _key: tmp_path)
+        return StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _key: tmp_path)
 
     @staticmethod
     def _spent(tmp_path: Path, tool: _FakeTool, *, status: str = "finished", rounds: int = 2) -> Any:
@@ -1818,7 +1986,7 @@ class TestMoreRounds:
 
         tree = tmp_path / "tree"
         tree.mkdir(exist_ok=True)
-        store = StintStore(tool.plans_root())
+        store = StintStore(tool.stints_root())
         record = StintRecord(
             stint_id="stint-x",
             playbook="game-dev",
@@ -1916,7 +2084,7 @@ class TestMoreRounds:
 
         tool = _FakeTool(tmp_path / "stints")
         (tmp_path / "tree").mkdir()
-        store = StintStore(tool.plans_root())
+        store = StintStore(tool.stints_root())
         store.write(
             StintRecord(
                 stint_id="stint-x",
@@ -2039,7 +2207,7 @@ class TestStopping:
     def _plan(tmp_path: Path, tool: _FakeTool, *, status: str = "running") -> Any:
         from raven.stint.record import StintRecord, StintStore
 
-        store = StintStore(tool.plans_root())
+        store = StintStore(tool.stints_root())
         record = StintRecord(
             stint_id="stint-s",
             playbook="game-dev",
@@ -2055,7 +2223,7 @@ class TestStopping:
 
     @staticmethod
     def _driver(tmp_path: Path, tool: _FakeTool) -> StintDriver:
-        return StintDriver(tool, plans_root=tool.plans_root, workspace_for=lambda _key: tmp_path)
+        return StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _key: tmp_path)
 
     async def test_a_stopped_round_opens_no_further_one_and_says_nothing(self, tmp_path: Path) -> None:
         """A stop is silent everywhere else, and narrating what somebody just

@@ -137,8 +137,6 @@ def _invoke_agent_capturing_session(
     the session_id that reaches the spine turn (req.conversation is the session
     key, mirroring the old session_key arg). ``message_args`` replaces the
     default ``-m hi`` so the --message-file path can be exercised too."""
-    import os as _os
-
     from raven.config.loader import save_config
     from raven.config.schema import Config
     from raven.spine import Text, TurnOutcome, Usage

@@ -196,7 +196,25 @@ class ProjectGit:
         still there to merge by hand. Resolving code conflicts unattended is
         how a tree ends up committed and broken.
         """
-        merged = self._run("merge", "--no-ff", "--no-edit", "-m", message, branch, check=False)
+        # The run's identity, for the same reason `commit` names one: a merge
+        # writes a commit, and a machine with no ambient `user.email` -- a
+        # container, a CI runner, a fresh box -- refuses one it cannot
+        # attribute. Without this the round reports that refusal as a merge
+        # that would not take, naming no clashing file, which is not what
+        # happened.
+        merged = self._run(
+            "-c",
+            f"user.name={self.author_name}",
+            "-c",
+            f"user.email={self.author_email}",
+            "merge",
+            "--no-ff",
+            "--no-edit",
+            "-m",
+            message,
+            branch,
+            check=False,
+        )
         if merged.returncode == 0:
             return True, ()
         clashing = self._run("diff", "--name-only", "--diff-filter=U", check=False).stdout.split()

@@ -366,10 +366,11 @@ All notable changes to Raven are documented here.
   frame whatever ratio the caller asked for.
 - `mode: stint`: a playbook that takes many rounds instead of one. It declares
   roles rather than nodes, and one round is one sub-agent graph, so a thirty-round
-  run is thirty graphs on the shared dispatch path -- validated, budgeted,
-  approved once at the start, and resumable by any process because the plan is a
-  file. Roles hand over through files in the project, not through a conversation:
-  each opens a fresh one every round.
+  run is thirty graphs on the shared dispatch path -- each validated and charged
+  to the same hourly dispatch budget an ordinary graph is, approved once at the
+  start, and resumable by any process because the stint is a file. Roles hand over
+  through files in the project, not through a conversation: each opens a fresh one
+  every round.
 
   What a role may write is declared in the playbook (`owns`, `appends`), rendered
   into its prompt, refused at the write, and undone afterwards, with the file it
@@ -377,16 +378,17 @@ All notable changes to Raven are documented here.
   as the worktree, so a role that commits a stray write is caught too.
 
   `verify[]` runs real commands -- a build, a test run -- and a failure goes back
-  to the role that caused it with the failure text, up to `maxHandbacks`. When
-  that budget runs out the round records it and carries on rather than failing the
-  node, which would skip every role downstream.
+  to the role that caused it with the failure text, up to `maxHandbacks`. A role
+  that never satisfies its checks fails its node, and the question is written into
+  the stint for the next round and for whoever reads it.
 
-  A plan runs in a checkout of its own, cut from the project's head, so hours of
+  A stint runs in a checkout of its own, cut from the project's head, so hours of
   its commits do not collide with the conversation that started it.
   `stop.maxRounds` defaults to 10 and is capped at 99; `stop.until` lets a role
-  end a plan early by reporting a marker on a line of its own. A person can watch,
-  extend, pause, stop, resume and answer questions from `raven playbook plan ...`,
-  the RPC surface and the page.
+  end a stint early by reporting a marker on a line of its own. A round the
+  dispatch budget turns down pauses the stint rather than ending it, and says so.
+  A person can watch, extend, pause, stop, resume and answer questions from
+  `raven playbook stints ...`, the RPC surface and the page.
 
 - `raven playbook stint`: lay a project out for a stint (`init` writes `.stint/`:
   a guard file per role, the shared prose, a link to the project's own

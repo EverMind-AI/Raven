@@ -49,7 +49,15 @@ from loguru import logger
 
 from raven.agent import workdir
 from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN, optional_keyword
-from raven.agent.subagent.dag_adjudication import AdjudicationDesk, Final, Outbox, ReplanPlan, Report, Stopped
+from raven.agent.subagent.dag_adjudication import (
+    ABANDON,
+    AdjudicationDesk,
+    Final,
+    Outbox,
+    ReplanPlan,
+    Report,
+    Stopped,
+)
 from raven.agent.subagent.dag_capabilities import AgentCapabilities, validate_capabilities
 from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec, parse_dag_spec, validate_and_order
 from raven.agent.subagent.dag_mcp_scope import run_mcp_scope
@@ -71,7 +79,7 @@ from raven.agent.subagent.delegate import current_delegate, dispatch_charter
 from raven.agent.subagent.history import dag_root, nodes_root, session_history_root
 from raven.agent.subagent.instances import mint_handle
 from raven.agent.subagent.prompt_backend import LocalFileBackend
-from raven.agent.subagent.prompt_errors import DagValidationError
+from raven.agent.subagent.prompt_errors import DagValidationError, RoundBudgetSpentError
 from raven.agent.subagent_memory import MemoryScope
 from raven.config.raven import SubagentDagConfig
 from raven.config.schema import MCPServerConfig
@@ -116,9 +124,9 @@ class StintDriver(Protocol):
     ``advance`` runs when a round finishes: the driver either compiles the next
     round and returns None -- nothing to announce, the stint is still going -- or
     returns the whole stint's result, announced once. ``hooks`` runs when a round
-    starts, and supplies what the graph runner should use *for this stint's
-    nodes*: where the tree stood before a node ran, how its work is judged, and
-    what to do with a question nobody answered.
+    starts, and supplies what this stint's nodes are run with: where the tree
+    stood before a node ran, how its work is judged, what narrows each role, and
+    who answers a node suspended with nobody at the desk.
 
     One object rather than three callables because they are three views of one
     stint, and a host that wired two of them would be a host with a stint that
@@ -309,6 +317,23 @@ class _CharteredBackend:
     async def run(self, *args: Any, **kwargs: Any) -> str:
         with dispatch_charter(self.charter):
             return await self.backend.run(*args, **kwargs)
+
+
+def _chartered(backends: dict[str, Any], charters: "Mapping[str, Any]") -> dict[str, Any]:
+    """The same backends, with the ones a charter names wrapped in it.
+
+    Keyed by node id and matched exactly, so a round taken up again -- whose
+    nodes carry an attempt suffix -- has to be handed charters under the ids it
+    actually compiled. A miss is silent by construction: the node runs, just
+    with nothing narrowing it, which is why the match is asserted in tests
+    rather than trusted here.
+    """
+    if not charters:
+        return backends
+    return {
+        node_id: (_CharteredBackend(backend, charters[node_id]) if node_id in charters else backend)
+        for node_id, backend in backends.items()
+    }
 
 
 @dataclass
@@ -513,7 +538,7 @@ class SubAgentDagTool(Tool):
         binding_for: "Callable[[], tuple[Any, str | None]] | None" = None,
         worker_table_for: "Callable[[], DelegateTable | None] | None" = None,
         verdict_config: "SubagentDagConfig | None" = None,
-        plan_driver: StintDriver | None = None,
+        stint_driver: StintDriver | None = None,
     ) -> None:
         # Read through to SubagentManager's flag rather than mirroring it: this
         # tool dispatches to its own backends without ever calling ``spawn``, so
@@ -531,10 +556,10 @@ class SubAgentDagTool(Tool):
         self._gate = gate if gate is not None else asyncio.Semaphore(max_concurrency)
         self._announce = announce
         self._announce_exception = announce_exception
-        self._stint_driver = plan_driver
+        self._stint_driver = stint_driver
         # run id -> the stint it is a round of, for the one question asked off
         # the dispatch path: may this run be replanned into another graph?
-        self._plans: dict[str, StintRef] = {}
+        self._stints: dict[str, StintRef] = {}
         # The manager's instance-state derivation, so a node that names an
         # `instance` continues that conversation on the same terms `spawn` and a
         # direct chat do. Injected rather than imported: this tool is built from
@@ -655,40 +680,33 @@ class SubAgentDagTool(Tool):
         turn = self._origin.get()
         return turn.conversation if turn is not None else None
 
-    async def _session_nodes(self) -> SessionNodes:
-        """What this session's earlier runs did with each node id.
-
-        Runs during validation, so it must not create anything: a rejected
-        graph has to leave the session's directories exactly as it found them.
-        The injected resolver only reads, but the fallback ``SessionManager``
-        creates ``sessions/`` when it is constructed -- so with no resolver and
-        no ``sessions/`` yet there is provably no history to read, and building
-        one just to learn that would itself be the write we are avoiding.
-
-        Guarded on ``_history_root()`` -- the same root ``run_dag`` now locks
-        to claim ids -- so the pre-check and the claim can never disagree
-        about which registry they mean.
-        """
-        if (history := self._history_root()) is None:
-            return SessionNodes()
-        # Guarded like every other read that decides something, so this cannot
-        # see a half-written registry. It is still only a pre-check -- ``run_dag``
-        # repeats it inside the guard that also claims the ids.
-        async with index_guard(history):
-            return await read_session_nodes(self._backend, history)
-
     async def session_nodes(self, session_key: str | None = None) -> SessionNodes:
         """What every run of one session did with each node id.
 
-        The public reading of the same registry validation consults, for a
-        caller asking after the fact rather than before: a stint taking an
-        interrupted round up again needs to know which of its roles finished, so
-        it can name those nodes instead of running them a second time.
+        Reads, and creates nothing: validation calls it on a graph that may be
+        rejected, which has to leave the session's directories exactly as it
+        found them. The injected resolver only reads, but the fallback
+        ``SessionManager`` creates ``sessions/`` when it is constructed -- so
+        with no resolver and no ``sessions/`` yet there is provably no history
+        to read, and building one just to learn that would itself be the write
+        we are avoiding.
+
+        Guarded on the history root -- the same root ``run_dag`` locks to claim
+        ids -- so a pre-check and the claim can never disagree about which
+        registry they mean, and neither can see a half-written one. A caller
+        after the fact reads the same answer: a stint taking an interrupted
+        round up again needs to know which of its roles finished, so it can
+        name those nodes instead of running them a second time.
         """
         if (history := self._history_root(session_key)) is None:
             return SessionNodes()
         async with index_guard(history):
             return await read_session_nodes(self._backend, history)
+
+    async def _session_nodes(self) -> SessionNodes:
+        """This turn's session, for validation. Still only a pre-check --
+        ``run_dag`` repeats the read inside the guard that also claims the ids."""
+        return await self.session_nodes()
 
     def _reference_roots(self) -> tuple[str, ...]:
         """The directories a node's file references may resolve into.
@@ -854,6 +872,56 @@ class SubAgentDagTool(Tool):
 
         return _announce
 
+    def _answered_by(
+        self,
+        desk: AdjudicationDesk,
+        adjudicate: "Callable[[str, str], Awaitable[tuple[str, str]]]",
+        announce: "ExceptionAnnouncer | None",
+    ) -> "ExceptionAnnouncer":
+        """An announcer whose suspended nodes are answered by the run's driver.
+
+        A stint's round runs between turns, so the main agent this report would
+        wake is not in one -- and on an unattended host there is nobody to read
+        it out. The driver is what is watching, so it decides, through the same
+        desk and the same continue/abandon vocabulary a person would use. A node
+        it abandons is `failed`, exactly as an unanswered one has always been:
+        the stint records the question in its own file, where the next round and
+        the person reading between rounds both find it.
+
+        Only the decision is taken over. A stall notice and anything not waiting
+        on an answer go on to the host's own announcer untouched.
+        """
+
+        async def _announce(
+            run_id: str,
+            node_id: str,
+            report: str,
+            origin: dict,
+            *,
+            awaiting_decision: bool,
+            informational: bool = False,
+        ) -> None:
+            if not awaiting_decision or informational:
+                if announce is not None:
+                    await announce(
+                        run_id,
+                        node_id,
+                        report,
+                        origin,
+                        awaiting_decision=awaiting_decision,
+                        informational=informational,
+                    )
+                return
+            try:
+                decision, message = await adjudicate(node_id, report)
+            except Exception as exc:  # noqa: BLE001 - a driver that cannot decide must not hang the node
+                logger.opt(exception=True).error("run {} node {} could not be adjudicated: {}", run_id, node_id, exc)
+                decision, message = ABANDON, "The stint could not decide, so the node was abandoned."
+            if not desk.resolve(node_id, decision, message):
+                logger.debug("run {} node {} was answered by its driver with nobody waiting", run_id, node_id)
+
+        return _announce
+
     def _final_announcer(self, run_id: str, origin: _DagOrigin):
         async def _announce(result: Any) -> None:
             if self._announce is None:
@@ -881,7 +949,7 @@ class SubAgentDagTool(Tool):
         except Exception as exc:  # noqa: BLE001 - progress that cannot be said must not end the round
             logger.warning("run {} could not report progress: {}", run_id, exc)
 
-    def plans_root(self, session_key: str | None = None) -> Path:
+    def stints_root(self, session_key: str | None = None) -> Path:
         """Where this session's multi-round stints are kept.
 
         Beside the run directories rather than inside one: a stint outlives every
@@ -1319,20 +1387,9 @@ class SubAgentDagTool(Tool):
         mcp_servers: "Mapping[str, MCPServerConfig] | Callable[[], Mapping[str, MCPServerConfig]] | None" = None,
         mcp_scope: str | None = None,
         mcp_credential_gaps: "Callable[[], frozenset[str]] | None" = None,
-        stint: StintRef | None = None,
-        origin: "Mapping[str, str] | None" = None,
-        confirm_question: "Callable[[], str] | None" = None,
         **kwargs: Any,
     ) -> str | ToolResult:
         """Run one graph. ``mcp_servers`` is this run's own MCP definitions.
-
-        ``stint`` says this graph is one round of a multi-round run. It travels
-        as an argument all the way to the finish rather than being looked up
-        there, which is what keeps an ordinary run's finish free of a disk read:
-        no stint is ``None`` here, exactly as no waiting caller is ``None`` for
-        the outbox. ``origin`` is for the same reason -- a round after the first
-        is submitted from a finished run's own task, where there is no turn left
-        to read an address off, so the stint carries the one it started with.
 
         Not a model-facing argument: it is absent from :meth:`parameters`, and
         ``run_mcp_scope`` accepts only already-validated ``MCPServerConfig``
@@ -1355,15 +1412,50 @@ class SubAgentDagTool(Tool):
         # definitions. Reset on the way out, so the turn that dispatched a
         # background run does not carry them into whatever it does next.
         with run_mcp_scope(mcp_servers, scope=mcp_scope, credential_gaps=mcp_credential_gaps):
-            return await self._execute(
-                nodes,
-                background,
-                confirm=confirm,
-                task_summary=task_summary,
-                stint=stint,
-                origin=_DagOrigin.from_dict(origin) if origin is not None else None,
-                confirm_question=confirm_question,
-            )
+            return await self._execute(nodes, background, confirm=confirm, task_summary=task_summary)
+
+    async def run_round(
+        self,
+        nodes: list[dict],
+        *,
+        stint: StintRef,
+        task_summary: str = "",
+        confirm: bool = False,
+        origin: "Mapping[str, str] | None" = None,
+        confirm_question: "Callable[[], str] | None" = None,
+    ) -> str | ToolResult:
+        """Run one graph as a round of a multi-round stint. Not for a model.
+
+        Separate from :meth:`execute` rather than three more keywords on it.
+        ``execute`` is what a model reaches through the registry, and every
+        keyword it takes that :meth:`parameters` does not declare is a keyword
+        the host fills for itself -- ``origin`` alone decides the session
+        directory this run writes into, the conversation its approval is put
+        to, the quota it is charged against and the address its result is
+        announced to. An in-process driver has a reference to this object and
+        needs no schema, so it gets its own door and ``execute`` keeps the one
+        signature it had.
+
+        ``stint`` travels as an argument all the way to the finish rather than
+        being looked up there, which is what keeps an ordinary run's finish free
+        of a disk read: no stint is ``None`` there, exactly as no waiting caller
+        is ``None`` for the outbox. ``origin`` is for the same reason -- a round
+        after the first is submitted from a finished run's own task, where there
+        is no turn left to read an address off, so the stint carries the one it
+        started with.
+
+        Always backgrounded: the hand-over that opens the next round only exists
+        on that path, and a round is not something a turn waits for.
+        """
+        return await self._execute(
+            nodes,
+            True,
+            confirm=confirm,
+            task_summary=task_summary,
+            stint=stint,
+            origin=_DagOrigin.from_dict(origin) if origin is not None else None,
+            confirm_question=confirm_question,
+        )
 
     async def _execute(
         self,
@@ -1424,20 +1516,23 @@ class SubAgentDagTool(Tool):
         # approved with named the round budget and the commands it runs. Asking
         # again every round asks about something already decided, in a session
         # that has usually moved on.
-        first_round = stint is None or stint.round_index <= 1
-        if spec.confirm and first_round and not await self._confirmed(spec, origin, confirm_question):
-            return (
-                "The user did not approve this graph, so nothing was run. Do not re-submit it; "
-                "ask them what to change, or do the work another way."
-            )
+        if spec.confirm and (stint is None or stint.round_index <= 1):
+            if not await self._confirmed(spec, origin, confirm_question):
+                return (
+                    "The user did not approve this graph, so nothing was run. Do not re-submit it; "
+                    "ask them what to change, or do the work another way."
+                )
         # Charged after validation so a rejected graph costs no budget, and
         # before either mode starts so the refusal is the caller's own result.
-        # Charged once for the stint, not once a round. The per-hour budget
-        # exists to stop an unattended loop nobody asked for; a stint is that
-        # loop with somebody's approval on it and a ceiling of its own, so
-        # charging every round would spend a session's whole allowance on one
-        # authorised run and leave the person unable to dispatch anything else.
-        if first_round and self._charge is not None and (refusal := self._charge(origin.conversation)) is not None:
+        # Every round, not once a stint: one approval buying an unmetered run
+        # would make the budget a formality -- a stint may declare 99 rounds of
+        # as many roles, which is orders of magnitude past the hourly allowance
+        # the budget exists to hold. A stint is told rather than refused,
+        # because a round the budget turns down is a round that will be fine an
+        # hour later; that is a pause, not a failure.
+        if self._charge is not None and (refusal := self._charge(origin.conversation)) is not None:
+            if stint is not None:
+                raise RoundBudgetSpentError(refusal)
             return refusal
         call_id = self._tool_call_id.get()
         run_id = make_run_id()
@@ -1484,7 +1579,7 @@ class SubAgentDagTool(Tool):
             self._outboxes[run_id] = outbox
 
         if stint is not None:
-            self._plans[run_id] = stint
+            self._stints[run_id] = stint
         task = asyncio.create_task(
             self._run_detached(spec, run_id, cancel, origin, dirs, call_id, auto_instances, backends, outbox, stint)
         )
@@ -1511,7 +1606,7 @@ class SubAgentDagTool(Tool):
             # once it lasts long enough to lose the race, and the claim here is
             # about any yield at all.
             self._outboxes.pop(run_id, None)
-            self._plans.pop(run_id, None)
+            self._stints.pop(run_id, None)
 
         task.add_done_callback(_retire)
         if self._adopt is not None and (refusal := self._adopt(run_id, task, origin.conversation)) is not None:
@@ -1579,7 +1674,7 @@ class SubAgentDagTool(Tool):
         )
 
     async def _submit_replan(self, plan: "ReplanPlan", *, bound: bool) -> "str | ToolResult":
-        """`_execute`'s post-validation half, replayed for an already-validated stint.
+        """`_execute`'s post-validation half, replayed for an already-validated plan.
 
         A second, cheap check regardless: the old run's id and its nodes' ids only
         became free again once `await_finalized` returned, and a fresh submission
@@ -1608,7 +1703,7 @@ class SubAgentDagTool(Tool):
     async def prepare_replan(
         self, run_id: str, from_node: str, nodes: list[dict], reason: str, session_key: str | None, live: dict
     ) -> "ReplanPlan | str":
-        """Validate a replacement graph and charge for it. The stint, or a refusal.
+        """Validate a replacement graph and charge for it. The plan, or a refusal.
 
         Runs the same phases a submitted graph runs, in the same order and for the
         same reasons (see ``_execute``): a refused graph must cost zero dispatches
@@ -1622,7 +1717,7 @@ class SubAgentDagTool(Tool):
         reference to the agent loop -- the control tool does, and its own
         ``_read_live`` already asks exactly that question with the right source.
         """
-        if (member := self._plans.get(run_id)) is not None:
+        if (member := self._stints.get(run_id)) is not None:
             # A replanned run finishes as "replanned into", which is the one
             # finish that announces nothing and hands nothing on -- so a round
             # replanned this way would leave its stint waiting for a hand-over
@@ -1765,7 +1860,7 @@ class SubAgentDagTool(Tool):
         ``emit_replanned`` and ``await_finalized`` run in it, and an interruption
         there (a ``/stop`` cancelling this call is realistic) would otherwise
         leave the link unrecorded -- even though the desk already answered and
-        every node's wind-down reason already names ``stint.run_id`` as the
+        every node's wind-down reason already names ``plan.run_id`` as the
         successor. Without this, a reader of ``run_id``'s graph.json sees nodes
         pointing at a run this file never admits was even attempted.
 
@@ -1882,15 +1977,10 @@ class SubAgentDagTool(Tool):
         ``question`` lets a caller that knows more about the run than its nodes
         ask a better question -- a stint's first round is a graph of three steps
         and also thirty rounds of them running shell commands, and the node list
-        says none of that.
-
-        **A callable, deliberately not a string.** Tool arguments are not
-        refused for being unknown (``raven/agent/tools/params.py`` passes an
-        unrecognised key straight through) and this method's whole job is to
-        show a person what they are agreeing to, so a text argument would let
-        the caller that composed the graph also write its description -- a
-        harmless sentence over a graph that runs anything. A function cannot
-        arrive through JSON, so only in-process code can supply one.
+        says none of that. Only :meth:`run_round` can fill it: it is absent from
+        :meth:`execute`, so the composer of a graph never also writes the text a
+        person approves it by. Deferred rather than a string so a round nobody
+        is going to be asked about does not pay for building one.
 
         The gate is graph-level and there is exactly one of it, which puts a
         requirement on what the question shows: approving a graph means approving
@@ -1919,11 +2009,7 @@ class SubAgentDagTool(Tool):
                 len(spec.nodes),
             )
             return True
-        # `callable`, not `is not None`: an unrecognised tool argument is passed
-        # through rather than refused, so a string could arrive here from the
-        # model's own call. A string is not what this accepts, and the answer to
-        # being handed one is the question this method would have asked anyway.
-        if callable(question):
+        if question is not None:
             asked = question()
         else:
             lines = [f"- {node.id}: {node.subagent}" for node in spec.nodes]
@@ -2189,15 +2275,12 @@ class SubAgentDagTool(Tool):
         # Asked once per run, not per node: what a stint changes about a round
         # is settled before the first node is dispatched.
         hooks = self._stint_hooks(stint)
+        if (adjudicate := hooks.get("adjudicate")) is not None:
+            announce_exception = self._answered_by(desk, adjudicate, announce_exception)
         # Applied here rather than at pre-flight because a charter belongs to
         # the role, and which role a node plays is the stint's answer, not the
         # graph's. An ordinary run has no charters and this rebinds nothing.
-        charters = hooks.get("charters") or {}
-        if charters:
-            dispatch_backends = {
-                node_id: (_CharteredBackend(backend, charters[node_id]) if node_id in charters else backend)
-                for node_id, backend in dispatch_backends.items()
-            }
+        dispatch_backends = _chartered(dispatch_backends, hooks.get("charters") or {})
         try:
             provider, model = self._binding_for() if self._binding_for is not None else (None, None)
             result = await run_dag(
@@ -2223,10 +2306,13 @@ class SubAgentDagTool(Tool):
                 desk=desk,
                 judge_node=hooks.get("judge_node") or self._judge_node(),
                 on_node_start=hooks.get("on_node_start"),
-                unanswered=hooks.get("unanswered"),
                 announce_exception=announce_exception,
                 origin=origin.as_dict(),
-                max_continuations=int(hooks.get("max_continuations") or self._verdict_config.max_continuations),
+                max_continuations=(
+                    self._verdict_config.max_continuations
+                    if (declared := hooks.get("max_continuations")) is None
+                    else int(declared)
+                ),
                 adjudication_timeout_s=self._verdict_config.adjudication_timeout_seconds,
                 control_reachable=self._control_reachable,
                 control_advert=self._control_advert,

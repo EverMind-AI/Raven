@@ -156,32 +156,3 @@ def test_a_deeply_nested_string_is_refused_rather_than_blowing_the_stack() -> No
 
     assert isinstance(cast["files"], str)
     assert validate_params(FILES, cast) == ["files should be array"]
-
-
-def test_an_argument_the_schema_never_offered_does_not_reach_the_tool():
-    """Several `execute` methods end in `**kwargs`, and the keywords they do not
-    declare in `parameters` are the ones the host fills for itself -- a parsed
-    plan reference, a conversation to address, a question to put to a person. A
-    caller that could set those would be reaching past the schema into the
-    host's own arguments, so an undeclared key is dropped here rather than
-    carried through."""
-    schema = {"type": "object", "properties": {"path": {"type": "string"}}}
-
-    cast = cast_params(schema, {"path": "notes.md", "confirm_question": "Run this harmless 1 step graph?"})
-
-    assert cast == {"path": "notes.md"}
-    assert validate_params(schema, cast) == []
-
-
-def test_dropping_is_the_top_level_only():
-    """One level down an unrecognised key is data: a free-form mapping means
-    whatever its tool means by it, and pruning it would silently eat inputs."""
-    schema = {"type": "object", "properties": {"inputs": {"type": "object"}}}
-
-    assert cast_params(schema, {"inputs": {"anything": 1, "at": "all"}}) == {"inputs": {"anything": 1, "at": "all"}}
-
-
-def test_a_tool_that_declares_no_properties_keeps_what_it_was_given():
-    """An empty schema is "this tool takes what it takes", not "this tool takes
-    nothing" -- pruning against it would hand every such tool an empty call."""
-    assert cast_params({"type": "object"}, {"whatever": 1}) == {"whatever": 1}

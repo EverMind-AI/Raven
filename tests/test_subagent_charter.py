@@ -9,6 +9,8 @@ a name outside a named handful.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from raven.agent.subagent.charter import (
@@ -507,3 +509,66 @@ def test_a_participant_that_says_nothing_lets_the_next_one_speak() -> None:
             "write under ./out/",
             "read it first",
         ]
+
+
+# --------------------------------------------------------------------------- #
+# The seat a DAG node's charter travels in                                     #
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_chartered_node_dispatches_inside_its_charter() -> None:
+    """The layer that refuses a stray write before it lands, rather than after.
+
+    The three other layers all act on a write that already happened; this one
+    is the only one that can stop one, and it reaches the worker by being in
+    scope for the call -- which is what the transport asks for on the way out --
+    rather than by changing any signature.
+    """
+    from raven.agent.subagent.dag_tool import _CharteredBackend
+    from raven.agent.subagent.delegate import outbound_charter
+
+    payload = {"capability": {"tools": ["read_file"]}}
+    seen: list[Any] = []
+
+    class _Backend:
+        name = "echo"
+
+        async def run(self, *_args: Any, **_kwargs: Any) -> str:
+            seen.append(outbound_charter())
+            return "done"
+
+    wrapped = _CharteredBackend(_Backend(), payload)
+
+    assert await wrapped.run("a prompt") == "done"
+    assert seen == [payload], "the call went out without its charter"
+    assert outbound_charter() is None, "the charter outlived the call"
+
+
+def test_a_wrapped_backend_is_the_backend_in_every_other_respect() -> None:
+    """The runner reads attributes off a backend that is not `run`, and a proxy
+    that answered only its own would change what the node is."""
+    from raven.agent.subagent.dag_tool import _CharteredBackend
+
+    class _Backend:
+        name = "echo"
+        supports_instances = True
+
+    wrapped = _CharteredBackend(_Backend(), {})
+
+    assert wrapped.name == "echo"
+    assert wrapped.supports_instances is True
+
+
+def test_only_the_nodes_a_charter_names_are_wrapped() -> None:
+    """Matched on the node id exactly, which is what a round taken up again has
+    to get right: its nodes carry an attempt suffix, and a charter keyed without
+    one reaches nothing at all -- silently, because an unwrapped node runs."""
+    from raven.agent.subagent.dag_tool import _chartered, _CharteredBackend
+
+    backends = {"pb-r01x1-planner": object(), "pb-r01x1-developer": object()}
+
+    bound = _chartered(backends, {"pb-r01x1-planner": {"capability": {"tools": []}}})
+
+    assert isinstance(bound["pb-r01x1-planner"], _CharteredBackend)
+    assert bound["pb-r01x1-developer"] is backends["pb-r01x1-developer"]
+    assert _chartered(backends, {}) is backends, "an ordinary run rebinds nothing"

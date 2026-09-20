@@ -35,6 +35,7 @@ from typing import Any, Sequence
 
 from loguru import logger
 
+from raven.agent.subagent.dag_adjudication import ABANDON
 from raven.agent.subagent.dag_verdict import Verdict
 from raven.i18n import t
 from raven.playbook.stint_prompt import render
@@ -183,12 +184,28 @@ class RoundContext:
         self._record(report, failures)
         return Verdict(accomplished=True)
 
+    async def adjudicate(self, node_id: str, report: str) -> tuple[str, str]:
+        """Answer a suspended node on behalf of a stint nobody is watching.
+
+        The desk is waiting for a person or for the main agent, and a round
+        dispatched between turns has neither -- left alone it waits out the
+        whole adjudication timeout and fails anyway. Abandoning says the same
+        thing sooner, and in the vocabulary the desk already has: the node is
+        `failed`, its dependents are skipped, and the round ends rather than
+        stalling.
+
+        The question is written down first, which is the part that is not just
+        a faster failure: the next round carries it into its prompts and a
+        person reading the stint between rounds finds it there.
+        """
+        await self.record_question(node_id, report)
+        return ABANDON, "Nobody was watching this stint, so the round recorded the question and moved on."
+
     async def record_question(self, node_id: str, reason: str) -> bool:
         """Put a question nobody answered where a person will find it.
 
-        Always accepted. The alternative is failing the node, and on an
-        unattended run that skips the rest of the round over a question nobody
-        was even asked -- the stint stops having ever told anybody why.
+        Written down whatever is decided about the node: a stint that failed a
+        role and never said why is a stint nobody can take up again.
         """
         role = self.role_of(node_id)
         self.record.questions.append(

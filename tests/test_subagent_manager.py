@@ -26,7 +26,6 @@ import pytest
 from pydantic import ValidationError
 
 from raven.agent import workdir
-from raven.agent.subagent import dispatch_ledger as ledger_mod
 from raven.agent.subagent import manager as manager_mod
 from raven.agent.subagent.backends.base import clamp_output
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
@@ -104,12 +103,9 @@ async def _settle(predicate, *, tries: int = 2000) -> None:
 
 
 def _make_manager(max_concurrent: int) -> SubagentManager:
-    # A home of its own, because the rolling-hour budget is a file under it: a
-    # shared one carries one test's spawns into the next, and a concurrency test
-    # that spawns twenty would be refused by a budget it never meant to test.
     return SubagentManager(
         provider=_StubProvider(),
-        workspace=Path(tempfile.mkdtemp()),
+        workspace=Path("/tmp"),
         max_concurrent=max_concurrent,
     )
 
@@ -128,7 +124,7 @@ class _MissingMcpSource:
 async def test_spawn_rejects_a_raven_loop_with_a_missing_declared_mcp_before_scheduling() -> None:
     manager = SubagentManager(
         provider=_StubProvider(),
-        workspace=Path(tempfile.mkdtemp()),
+        workspace=Path("/tmp"),
         agents=[BuiltinAgentConfig(name=GENERIC_AGENT, mcps=["ghost"])],
     )
     manager.set_mcp_source(_MissingMcpSource())
@@ -145,7 +141,7 @@ async def test_spawn_reports_external_mcp_degradation_but_still_schedules(
 ) -> None:
     manager = SubagentManager(
         provider=_StubProvider(),
-        workspace=Path(tempfile.mkdtemp()),
+        workspace=Path("/tmp"),
         agents=[
             ThirdPartyCliSubagentConfig(
                 name="external",
@@ -741,24 +737,16 @@ def test_max_subagent_spawns_per_hour_must_be_positive(bad):
         AgentDefaults(max_subagent_spawns_per_hour=bad)
 
 
-def _fixed_clock(monkeypatch, start: float = 1_700_000_000.0) -> list[float]:
-    """Pin the dispatch budget's clock to a mutable value (advance via holder[0]).
-
-    Wall clock, not monotonic: the budget is a file two processes share, and a
-    monotonic reading is measured from a zero that changes every time a process
-    starts, so neither of them could read the other's.
-    """
+def _fixed_clock(monkeypatch, start: float = 1000.0) -> list[float]:
+    """Pin manager's monotonic clock to a mutable value (advance via holder[0])."""
     holder = [start]
-    monkeypatch.setattr(ledger_mod.time, "time", lambda: holder[0])
+    monkeypatch.setattr(manager_mod.time, "monotonic", lambda: holder[0])
     return holder
 
 
 def _stub_mgr(monkeypatch, **kw) -> SubagentManager:
-    # A workspace of its own per manager: the rolling-hour budget is a file
-    # under it now, and a shared one carries one test's spawns into the next.
-    kw.setdefault("workspace", Path(tempfile.mkdtemp()))
     monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
-    mgr = SubagentManager(provider=_StubProvider(), **kw)
+    mgr = SubagentManager(provider=_StubProvider(), workspace=Path("/tmp"), **kw)
 
     async def _noop_inner(*a, **k) -> None:  # complete immediately, no VM
         return None
@@ -805,9 +793,7 @@ async def test_spawn_rate_limit_is_per_session(monkeypatch):
 
 
 async def test_cancel_by_session_clears_spawn_history(monkeypatch):
-    """Session teardown drops its window: a cancelled session's recent
-    dispatches are not something to still hold against anything, and the
-    budget is a file now, so an entry nobody drops outlives the process."""
+    """Session teardown drops its rate-limit history (bounds the dict)."""
     _fixed_clock(monkeypatch)
     mgr = _stub_mgr(monkeypatch, max_spawns_per_hour=1)
 
@@ -816,29 +802,7 @@ async def test_cancel_by_session_clears_spawn_history(monkeypatch):
     await asyncio.gather(*mgr._running_tasks.values(), return_exceptions=True)
 
     await mgr.cancel_by_session("sessA")
-
-    assert mgr._ledger.spent("sessA") == 0
-    assert "started" in await mgr.spawn(task="a3", session_key="sessA")
-
-
-async def test_the_budget_outlives_the_process_holding_it(monkeypatch):
-    """The loop the budget exists to bound can restart the gateway.
-
-    In memory the cap was per process, so "thirty an hour" became thirty per
-    restart -- and two processes sharing one home each counted to thirty. A
-    second manager over the same home reads the first one's spending.
-    """
-    _fixed_clock(monkeypatch)
-    home = Path(tempfile.mkdtemp())
-    first = _stub_mgr(monkeypatch, workspace=home, max_spawns_per_hour=1)
-
-    assert "started" in await first.spawn(task="a", session_key="sessA")
-    await asyncio.gather(*first._running_tasks.values(), return_exceptions=True)
-
-    second = _stub_mgr(monkeypatch, workspace=home, max_spawns_per_hour=1)
-
-    assert "Spawn refused" in await second.spawn(task="b", session_key="sessA")
-    assert "started" in await second.spawn(task="c", session_key="sessB"), "still per session"
+    assert "sessA" not in mgr._session_spawn_times
 
 
 async def test_cancel_by_session_cancels_live_task(monkeypatch):
@@ -1183,7 +1147,7 @@ async def test_subagent_reuses_main_provider_and_forwards_api_key(monkeypatch):
     )
 
     provider = LiteLLMProvider(api_key="k-main", default_model="openai/gpt-4o")
-    manager = SubagentManager(provider=provider, workspace=Path(tempfile.mkdtemp()))
+    manager = SubagentManager(provider=provider, workspace=Path("/tmp"))
 
     assert manager.provider is provider
 
@@ -3426,7 +3390,7 @@ def test_refresh_keeps_the_hot_applied_configs() -> None:
     table back to the startup list after a user hot-applied a new one."""
     startup = ThirdPartyAcpSubagentConfig.model_validate({"name": "startup", "kind": "acp", "command": ""})
     hot = ThirdPartyAcpSubagentConfig.model_validate({"name": "hot-applied", "kind": "acp", "command": ""})
-    mgr = SubagentManager(provider=_StubProvider(), workspace=Path(tempfile.mkdtemp()), agents=[startup])
+    mgr = SubagentManager(provider=_StubProvider(), workspace=Path("/tmp"), agents=[startup])
     assert {r.name for r in mgr.registry.rows()} == {GENERIC_AGENT, "startup"}
 
     mgr.apply_agents([hot])
@@ -4501,7 +4465,7 @@ async def test_the_manager_lends_its_model_to_the_tables_routing_entries() -> No
     provider = _ClassifyingProvider(" `Deck` ")
     manager = SubagentManager(
         provider=provider,
-        workspace=Path(tempfile.mkdtemp()),
+        workspace=Path("/tmp"),
         agents=[
             ThirdPartyAcpSubagentConfig(name="Design", command="design-agent", routes=[{"to": "Deck"}]),
             ThirdPartyAcpSubagentConfig(name="Deck", command="deck-agent", description="builds a .pptx", hidden=True),

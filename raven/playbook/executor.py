@@ -388,7 +388,7 @@ class PlaybookExecutor:
             fixed = Path(workspace) if workspace is not None else Path.cwd()
             self._rounds = StintDriver(
                 dag_tool,
-                plans_root=dag_tool.plans_root,
+                stints_root=dag_tool.stints_root,
                 # A host that keeps a working directory per conversation answers
                 # per conversation; one that does not gives every plan the same
                 # project, which is what a single-workspace host has anyway.

@@ -5475,7 +5475,6 @@ async def _run_two_node_dag(
     desk=None,
     judge_node,
     announce_exception=None,
-    unanswered=None,
     max_continuations=2,
     exec_backend=None,
     instance_a=None,
@@ -5524,7 +5523,6 @@ async def _run_two_node_dag(
         history_root=str(tmp_path),
         desk=desk,
         judge_node=judge_node,
-        unanswered=unanswered,
         announce_exception=announce_exception,
         max_continuations=max_continuations,
         origin=origin,
@@ -5603,36 +5601,13 @@ async def test_a_judge_with_a_follow_up_and_no_budget_left_falls_back_to_asking(
     assert reports == ["a"]
 
 
-async def test_a_caller_that_takes_an_unanswerable_finding_keeps_the_round_going(tmp_path):
-    """Nobody could be asked, and the caller said it has the question.
+async def test_an_unanswerable_node_fails_and_its_dependents_skip(tmp_path):
+    """A node that did not accomplish its task, with nobody to ask about it.
 
-    Failing the node here would skip everything downstream over something nobody
-    was even asked -- which, for a run with no main agent watching, is most of
-    the round thrown away for a question that went nowhere.
+    It stays `failed`. Recording it as `completed` would hand the output a
+    judge rejected to every node downstream -- and a dependent reads its
+    dependency's output as fact.
     """
-    from raven.agent.subagent.dag_verdict import Verdict
-
-    filed = []
-
-    async def _judge(*, node, **_):
-        return (
-            Verdict(accomplished=False, what_is_missing="which of the two?")
-            if node.id == "a"
-            else Verdict(accomplished=True)
-        )
-
-    async def _unanswered(node_id, reason):
-        filed.append((node_id, reason))
-        return True
-
-    result = await _run_two_node_dag(tmp_path, judge_node=_judge, unanswered=_unanswered)
-
-    assert result.summary["completed"] == 2, "the dependent still ran"
-    assert filed == [("a", "which of the two?")]
-
-
-async def test_without_that_caller_the_unanswerable_node_still_fails(tmp_path):
-    """The default is unchanged, which is what makes the hook safe to add."""
     from raven.agent.subagent.dag_verdict import Verdict
 
     async def _judge(*, node, **_):

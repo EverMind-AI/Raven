@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -301,6 +302,30 @@ def test_an_instances_branch_merges_back_when_nothing_clashes(project: Path, ins
     assert (project / "project" / "arena.gd").read_text(encoding="utf-8") == "# the arena\n"
 
 
+def test_a_merge_takes_on_a_machine_with_no_git_identity_of_its_own(
+    project: Path, instances: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A merge writes a commit, and an unattended box has nobody to attribute it to.
+
+    A container, a CI runner and a fresh devbox all run git with no configured
+    `user.email`, which git refuses a commit for. The round read that refusal
+    as a merge that would not take, named no clashing file, and left the
+    instance's work on its branch.
+    """
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
+    git = ProjectGit(project)
+    git.ensure_repo()
+    tree = git.worktree_add(instances / "dev-a", "rounds/dev-a", git.head())
+    (tree / "project" / "arena.gd").write_text("# the arena\n", encoding="utf-8")
+    _commit_by_hand(tree, "feat: the arena")
+
+    took, clashing = git.merge_branch("rounds/dev-a", "merge dev-a")
+
+    assert (took, clashing) == (True, ())
+    assert (project / "project" / "arena.gd").is_file()
+
+
 def test_two_instances_that_wrote_the_same_file_leave_it_to_be_merged_by_hand(project: Path, instances: Path) -> None:
     """Resolving code conflicts unattended is how a tree ends up committed and broken."""
     git = ProjectGit(project)
@@ -449,7 +474,7 @@ def test_a_stray_directory_is_removed_when_there_is_nowhere_to_keep_it(project: 
 #: A filename git escapes under its default ``core.quotePath``: every byte >=
 #: 0x80 comes back as an octal run. Written as escapes to keep this source
 #: ASCII; on disk it is an ordinary name a role could plausibly write.
-_QUOTED_NAME = "报告.md"  # bao gao: "report"
+_QUOTED_NAME = "\u62a5\u544a.md"  # "report" in Chinese
 
 
 def test_a_stray_write_to_a_non_ascii_path_is_still_undone(project: Path) -> None:
