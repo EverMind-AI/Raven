@@ -41,6 +41,12 @@ describe('tools page', () => {
       expect(sw.tagName).toBe('SPAN')
       expect(sw.classList.contains('settings-swi-fixed')).toBe(true)
     }
+    /* Fixed says the reader cannot move it, not that it is on. `tool_search`
+       is reported with the fold off, so a control hard-coded to checked drew
+       it as running and read that way aloud -- the opposite of the note beside
+       it. The thumb follows the same attribute, so this is the drawing too. */
+    expect(screen.getByLabelText('tool_search').getAttribute('aria-checked')).toBe('false')
+    expect(screen.getByLabelText('tool_call').getAttribute('aria-checked')).toBe('true')
     const dag = screen.getByLabelText('cancel_dag')
     expect(dag.getAttribute('aria-disabled'), 'cancel_dag answers to the switch, so it carries one').toBeNull()
     expect(dag.classList.contains('settings-swi-fixed')).toBe(false)
