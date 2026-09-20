@@ -202,8 +202,10 @@ RoutineLearner 按星期与时间段对带时间戳的历史分组，不调用 L
 提议。仅仅没有回应，不会让例行任务变成已确认状态。
 
 开启后，TaskDiscoverer 刷新候选项、按配置验证、合并整理后生成 `PendingDecision` 菜单。
-PendingDecisionStore 管理过期、取代与确认状态。DecisionRouter 确定性匹配数字和
-`/pick N`，并可使用模型分类器兜底。DecisionConsumer 在普通 Agent 轮次继续前处理匹配的回复。
+PendingDecisionStore 管理过期、取代与确认状态。DecisionRouter 通过确定性规则匹配
+`/pick N`。其他回复（包括纯数字）在已配置服务商和模型时由带置信度门槛的模型分类器处理；
+缺少任一项配置时，只有 `/pick N` 能选择选项。DecisionConsumer 在普通 Agent 轮次继续前
+处理匹配的回复。
 
 完成所配置的确认步骤后，ActionExecutor 按类别派发：
 

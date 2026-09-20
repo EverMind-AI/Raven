@@ -251,9 +251,10 @@ it can be proposed again. Silence alone does not create a confirmed routine.
 When enabled, TaskDiscoverer refreshes candidates, optionally validates them,
 groups them for presentation, and proposes a `PendingDecision` menu.
 PendingDecisionStore maintains its expiry, supersession, and confirmation state.
-DecisionRouter matches numbers and `/pick N` deterministically, with an
-optional model-classifier fallback. DecisionConsumer handles the matched reply
-before the normal agent turn continues.
+DecisionRouter matches `/pick N` deterministically. Other replies, including bare
+numbers, use a confidence-gated model classifier when a provider and model are
+configured; if either is missing, only `/pick N` selects an option. DecisionConsumer
+handles the matched reply before the normal agent turn continues.
 
 After the configured confirmation step, ActionExecutor dispatches by kind:
 

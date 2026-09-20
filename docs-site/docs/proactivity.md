@@ -164,7 +164,10 @@ at an exact minute. Targets default to an empty list, so enabling discovery
 alone does not deliver a menu. By default a menu has at most four options and
 expires after 60 minutes.
 
-Reply with the option number or `/pick N` in the same conversation, then
+Reply with `/pick N` in the same conversation for deterministic option selection
+without a classifier call. Bare numbers and natural-language choices require a
+configured model provider and model for the classifier, and sufficient confidence
+in its result. Without that classifier, use `/pick N` to select an option. Then
 answer the confirmation if requested. A selected option can start agent work,
 invoke a tool, spawn a subagent, or confirm a learned routine. The confirmation
 setting applies to menu choices; it is not an approval step for every

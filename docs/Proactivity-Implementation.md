@@ -560,9 +560,10 @@ of candidate tasks for the user to pick from. The pipeline:
   `fcntl`-locked JSON store with TTL, awaiting-confirm state, and supersede
   semantics.
 - DecisionRouter (`sentinel/executor/decision_router.py`): watches user replies,
-  matching a number / `/pick N` deterministically with an LLM classifier
-  fallback (above a confidence threshold). A match consumes the reply so it does
-  not reach the agent loop.
+  matching `/pick N` deterministically. Other replies, including bare numbers,
+  require a configured provider and model for the confidence-gated LLM
+  classifier; if either is missing, only `/pick N` selects an option. A match consumes
+  the reply so it does not reach the normal conversational LLM.
 - DecisionConsumer (`sentinel/executor/decision_consumer.py`): turns a matched
   pick into an ActionExecutor call, optionally behind a confirm step.
 - ActionExecutor (`sentinel/executor/action_executor.py`): executes a `reply`
