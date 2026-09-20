@@ -49,17 +49,30 @@ jobs:
         run: npm ci
 
       - name: Validate commit messages
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
+          EXCLUDE=""
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             BASE="${{ github.event.pull_request.base.sha }}"
+            # A commit already on the default branch passed this gate when it
+            # landed, and nobody can rewrite it now. A PR that merges that
+            # branch into a long-lived one carries its whole history in
+            # BASE..HEAD, so exclude it instead of re-linting it.
+            git fetch --no-tags --quiet origin "$DEFAULT_BRANCH"
+            EXCLUDE="^FETCH_HEAD"
           else
             BASE="${{ github.event.before }}"
           fi
           if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
             BASE="$(git rev-list --max-parents=0 HEAD)"
           fi
-          npx commitlint --from "$BASE" --to HEAD --config commitlint.config.cjs
-          PYTHONPATH=. python3 scripts/check_commit_messages.py "$BASE..HEAD"
+          FAILED=0
+          for sha in $(git rev-list --no-merges "$BASE..HEAD" $EXCLUDE); do
+            git log -1 --format=%B "$sha" | npx commitlint --config commitlint.config.cjs || FAILED=1
+          done
+          PYTHONPATH=. python3 scripts/check_commit_messages.py "$BASE..HEAD" $EXCLUDE || FAILED=1
+          exit "$FAILED"
 
       - name: Validate prospective squash header
         if: github.event_name == 'pull_request'
