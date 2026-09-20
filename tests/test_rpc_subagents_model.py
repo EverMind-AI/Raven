@@ -128,6 +128,59 @@ async def test_update_accepts_a_builtin_model_a_configured_section_lists_by_hand
     assert entry["model"] == "custom/my-local-model"
 
 
+async def test_update_accepts_a_pick_under_a_section_no_spec_matches_when_sent_with_its_provider(
+    config_path: Path,
+) -> None:
+    """The picker offers a passthrough section's own list (``model.options``
+    adds config extras on purpose), so the pick arrives with ``provider`` and
+    is prefixed before the check. The prefixed id names no spec; it names the
+    section, and the tail is what the section's list holds."""
+    _with_providers(
+        config_path, {"mylocal": {"apiBase": "http://127.0.0.1:8000/v1", "apiKey": "k", "models": ["my-local-model"]}}
+    )
+
+    await subagents_update({"name": "Raven", "model": "my-local-model", "provider": "mylocal"})
+    entry = next(e for e in _stored(config_path) if e["name"] == "Raven")
+    assert entry["model"] == "mylocal/my-local-model"
+
+
+async def test_update_rejects_an_id_a_section_no_spec_matches_does_not_list(config_path: Path) -> None:
+    """A section raven has no spec for serves only what it lists: there is no
+    catalogue to say a typed id exists there."""
+    _with_providers(
+        config_path, {"mylocal": {"apiBase": "http://127.0.0.1:8000/v1", "apiKey": "k", "models": ["my-local-model"]}}
+    )
+
+    with pytest.raises(ConfigValidationError, match="none of them can serve 'mylocal/other-model'"):
+        await subagents_update({"name": "Raven", "model": "other-model", "provider": "mylocal"})
+
+
+async def test_update_stores_a_bare_id_claimed_by_keyword_naming_its_provider(config_path: Path) -> None:
+    """A bare id sent without a provider still lands prefixed: the pin reads
+    the provider off the stored id, and a bare one would be re-claimed by
+    keyword on every dispatch instead of naming the pair once."""
+    _with_providers(config_path, {"openai": {"apiKey": "sk-test"}})
+
+    await subagents_update({"name": "Raven", "model": "gpt-5"})
+    entry = next(e for e in _stored(config_path) if e["name"] == "Raven")
+    assert entry["model"] == "openai/gpt-5"
+
+
+def test_host_pair_lets_an_unreadable_config_raise_rather_than_blame_the_pick(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ``PermissionError`` on the config file is the server's failure. Swallowed
+    into ``None`` it came out as "your model or key is wrong", which asserts a
+    fact about the reader's pick that nothing checked."""
+    import raven.config.loader as loader_mod
+    from raven.rpc.methods.subagents import _host_pair
+
+    def unreadable() -> None:
+        raise PermissionError("config.json")
+
+    monkeypatch.setattr(loader_mod, "load_config", unreadable)
+    with pytest.raises(PermissionError):
+        _host_pair("openai/gpt-5")
+
+
 async def test_update_rejects_a_builtin_model_no_provider_of_ravens_serves(config_path: Path) -> None:
     with pytest.raises(ConfigValidationError, match="none of them can serve 'nonsense-model-xyz'"):
         await subagents_update({"name": "Raven", "model": "nonsense-model-xyz"})

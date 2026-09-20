@@ -32,6 +32,7 @@ from __future__ import annotations
 
 from raven.providers.registry import (
     ProviderSpec,
+    canonical_provider_name,
     find_by_model,
     find_by_name,
     normalize_provider_name,
@@ -185,6 +186,31 @@ def stored_model_id(provider: str, model: str) -> str:
     if spec and any(model.startswith(skip) for skip in spec.skip_prefixes):
         return model
     return f"{public}/{model}"
+
+
+def stored_provider_name(model: str) -> str | None:
+    """The provider a stored id names, or ``None`` when it names none.
+
+    The inverse of :func:`stored_model_id`, and the one reading every consumer
+    of a persisted id shares: the write that checks a pick before storing it
+    and the dispatch that pairs the stored id with a credential both resolve
+    the provider here, so one id cannot come out as two providers -- or as a
+    provider on one side and nothing on the other.
+
+    A spec'd provider is found by its route names (:func:`find_by_model`, which
+    for a prefixed id decides on the prefix alone). A prefix no spec claims is a
+    section raven carries no spec for -- a passthrough vendor reached by
+    address -- and names that section, in the config's own spelling, because
+    that is what :func:`stored_model_id` wrote there. A bare id resolves by
+    keyword or not at all.
+    """
+    if not model:
+        return None
+    spec = find_by_model(model)
+    if spec is not None:
+        return spec.name
+    head, _ = split_model_id(model)
+    return canonical_provider_name(head) if head else None
 
 
 def merge_key(provider: str, model: str) -> str:

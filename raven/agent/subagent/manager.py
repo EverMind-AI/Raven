@@ -87,15 +87,17 @@ def _row_pin(config: Any) -> tuple[str | None, str | None]:
     The pair, not the id alone: ``subagents.update`` stores the id naming the
     provider it was picked under, and the pool handed only the id would let a
     configured gateway take the pin instead (``ProviderPool.bind_pin``) -- the
-    reader's credential choice, silently swapped for another bill.
+    reader's credential choice, silently swapped for another bill. Read with
+    ``stored_provider_name``, the function the write checked the pair with, so
+    a section raven has no spec for resolves here to that section rather than
+    to nothing, which the pool would have read as "derive one".
     """
-    from raven.providers.registry import find_by_model
+    from raven.providers.wire import stored_provider_name
 
     model = getattr(config, "model", None)
     if not model:
         return None, None
-    spec = find_by_model(model)
-    return model, spec.name if spec is not None else None
+    return model, stored_provider_name(model)
 
 
 # Tier mismatches already reported, so a busy session logs one line per agent

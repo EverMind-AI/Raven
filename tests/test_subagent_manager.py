@@ -4270,7 +4270,7 @@ def test_the_manager_pairs_a_builtin_rows_model_through_the_pool() -> None:
 
     binding = backend._pin()
     assert (binding.provider, binding.model) == (served, "vendor/pinned")
-    assert asked == [("vendor/pinned", None)]
+    assert asked == [("vendor/pinned", "vendor")]
     assert backend.model == mgr.model, "nothing of the row's is baked into the backend itself"
 
 
@@ -4313,3 +4313,28 @@ def test_a_builtin_rows_pin_names_the_provider_its_stored_id_carries() -> None:
     mgr.registry.backend(GENERIC_AGENT)._pin()
 
     assert asked == [("openai/gpt-5", "openai")]
+
+
+def test_a_builtin_rows_pin_under_a_section_no_spec_matches_names_that_section() -> None:
+    """``subagents.update`` stores a passthrough vendor's pick as
+    ``<section>/<id>``. Handed ``None`` for the provider, the pool would derive
+    one -- a configured gateway, or nothing -- and the stored pair would never
+    run; the section the id names is the credential the reader picked."""
+    from raven.providers.binding import ModelBinding
+
+    asked: list[tuple[str | None, str | None]] = []
+
+    class _Pool:
+        def bind_pin(self, model, provider_name=None):
+            asked.append((model, provider_name))
+            return ModelBinding(_NamedProvider("pool"), model)
+
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=Path("/tmp"),
+        agents=[BuiltinAgentConfig(name=GENERIC_AGENT, model="custom/my-local-model")],
+        provider_pool=_Pool(),
+    )
+    mgr.registry.backend(GENERIC_AGENT)._pin()
+
+    assert asked == [("custom/my-local-model", "custom")]

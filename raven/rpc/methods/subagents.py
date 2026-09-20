@@ -492,35 +492,43 @@ def _host_pair(model: str) -> str | None:
     of raven's can serve it.
 
     The built-in row runs in this process, on raven's providers, so its model is
-    checked against the pairing the dispatch will make (``ProviderPool.bind_pin``
-    with the provider the id names) rather than against any agent's menu -- and
-    decided here so a write that lands is a write that runs: the id names a
+    checked against the pairing the dispatch will make -- ``ProviderPool.bind_pin``
+    with the provider the stored id names, read by ``stored_provider_name``, the
+    same function the pin reads it with -- rather than against any agent's menu,
+    and decided here so a write that lands is a write that runs: the id names a
     provider raven knows, by its prefix or by appearing in a configured section's
     own model list (a passthrough vendor no spec matches, stored naming that
-    section), and that provider's section holds a usable credential. Answered
-    from config alone. The picker's own listing (``model.options``) also asks the
-    codex account and a local runtime what they hold, which is seconds of network
-    a write has no reason to wait on.
+    section, which then serves only the ids it lists), and that provider's
+    section holds a usable credential. Answered from config alone. The picker's
+    own listing (``model.options``) also asks the codex account and a local
+    runtime what they hold, which is seconds of network a write has no reason to
+    wait on.
+
+    A config that cannot be read raises out of here: that is the server's
+    failure, not a fact about the reader's model or key, and the refusal this
+    answer feeds would have blamed both.
     """
     from raven.config.loader import load_config
     from raven.config.schema import section_has_credentials
-    from raven.providers.registry import find_by_model, find_by_name
-    from raven.providers.wire import stored_model_id
+    from raven.providers.registry import find_by_name, split_model_id
+    from raven.providers.wire import stored_model_id, stored_provider_name
 
-    try:
-        providers = load_config().providers
-    except Exception:  # noqa: BLE001 - a config that cannot be read serves nothing
-        return None
+    providers = load_config().providers
 
     def usable(provider: str) -> bool:
         section = providers.get(provider)
         return section is not None and bool(section_has_credentials(section, find_by_name(provider)))
 
-    spec = find_by_model(model)
-    if spec is not None:
-        return model if usable(spec.name) else None
+    def listed(provider: str, model_id: str) -> bool:
+        return model_id in (getattr(providers.get(provider), "models", None) or [])
+
+    provider = stored_provider_name(model)
+    if provider is not None:
+        if find_by_name(provider) is None and not listed(provider, split_model_id(model)[1]):
+            return None
+        return stored_model_id(provider, model) if usable(provider) else None
     names = [*type(providers).model_fields, *(providers.model_extra or {})]
-    listing = next((n for n in names if model in (getattr(providers.get(n), "models", None) or [])), None)
+    listing = next((n for n in names if listed(n, model)), None)
     if listing is None or not usable(listing):
         return None
     return stored_model_id(listing, model)

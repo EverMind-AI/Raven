@@ -235,6 +235,36 @@ def test_storing_an_already_qualified_id_is_idempotent(spec: ProviderSpec) -> No
 
 
 @pytest.mark.parametrize("spec", PROVIDERS, ids=lambda s: s.name)
+def test_a_stored_id_reads_back_to_the_provider_it_was_stored_under(spec: ProviderSpec) -> None:
+    """``stored_provider_name`` is the inverse of ``stored_model_id``: the write
+    checks a pick with one and the dispatch pairs the stored id with the other,
+    so an id that stores under a provider has to read back to that provider."""
+    from raven.providers.wire import stored_model_id, stored_provider_name
+
+    assert stored_provider_name(stored_model_id(spec.name, PLAIN)) == spec.name
+
+
+def test_a_stored_id_under_a_section_no_spec_matches_reads_back_to_that_section() -> None:
+    """A passthrough vendor is a config section with no spec; its id is stored
+    naming the section, and reads back to it rather than to nothing -- which
+    the pool would take as "derive a provider" and hand to a gateway."""
+    from raven.providers.wire import stored_model_id, stored_provider_name
+
+    stored = stored_model_id("custom", "my-local-model")
+    assert stored == "custom/my-local-model"
+    assert stored_provider_name(stored) == "custom"
+    assert stored_provider_name("Custom-Lab/my-local-model") == "custom_lab"
+
+
+def test_a_bare_id_reads_back_by_keyword_or_not_at_all() -> None:
+    from raven.providers.wire import stored_provider_name
+
+    assert stored_provider_name("gpt-5") == "openai"
+    assert stored_provider_name("nonsense-model-xyz") is None
+    assert stored_provider_name("") is None
+
+
+@pytest.mark.parametrize("spec", PROVIDERS, ids=lambda s: s.name)
 def test_a_bare_id_and_its_qualified_form_are_one_model(spec: ProviderSpec) -> None:
     """Configs written before ids carried a provider still match the new form."""
     from raven.providers.wire import merge_key, stored_model_id
