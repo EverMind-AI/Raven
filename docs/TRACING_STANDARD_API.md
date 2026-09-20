@@ -219,8 +219,9 @@ Rules:
 - Pass `kind` explicitly (falls back to a generic node kind otherwise).
 - The viewer renders unknown names generically (title from `name`, subtitle from
   a chosen attribute). For bespoke rendering, ship a **descriptor** entry
-  (`descriptors/*.json`, keyed by `name`) — the viewer's rendering standard,
-  shipped under `raven/tracing/viewer/descriptors/`.
+  (`descriptors/*.json`) whose `type` field matches the span's `name`.
+  Bundled descriptors are shipped under `raven/cli/tracing_viewer/descriptors/`;
+  the viewer merges descriptor entries by `type`.
 
 ---
 

@@ -184,8 +184,8 @@ with trace.span("raven.sentinel.tick", {"sentinel.reason": r}, kind="plugin") as
 - `name` 请使用**自有命名空间**（`raven.<subsystem>.<verb>`），以免与 §2 的标准名称冲突。
 - 显式传入 `kind`（否则会退化为通用节点类别）。
 - 查看器对未知名称采用通用渲染（标题取自 `name`，副标题取自选定的某个属性）。若需要定制
-  渲染，请提供一条**描述符**条目（`descriptors/*.json`，以 `name` 为键）——这是查看器的
-  渲染标准，随附于 `raven/tracing/viewer/descriptors/`。
+  渲染，请提供一条**描述符**条目（`descriptors/*.json`），其 `type` 字段与 span 的 `name`
+  匹配。内置描述符位于 `raven/cli/tracing_viewer/descriptors/`；查看器按 `type` 合并描述符条目。
 
 ## 4. 接入方集成契约（raven） { #4-adopter-integration-contract-raven }
 

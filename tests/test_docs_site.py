@@ -259,3 +259,16 @@ def test_proactivity_preserves_published_title_anchors(page: str, language: str)
     title_id = "_1" if language else "proactivity-reference" if page == "proactivity" else page
     root = _render_page(f"{page}{language}.md")
     assert root.find(f"h1[@id='{title_id}']") is not None
+
+
+@pytest.mark.parametrize(
+    "document",
+    [SITE / "tracing-api.md", SITE / "tracing-api.zh.md", REPO / "docs" / "TRACING_STANDARD_API.md"],
+)
+def test_tracing_descriptor_documentation_points_to_bundled_files(document: Path) -> None:
+    paths = re.findall(r"`([^`\n]+/descriptors/)`", document.read_text(encoding="utf-8"))
+    assert paths, f"{document.name} does not name the bundled descriptor directory"
+    for path in paths:
+        directory = REPO / path
+        assert directory.is_dir(), f"{document.name} points to missing directory {path}"
+        assert any(directory.glob("*.json")), f"{path} has no bundled JSON descriptors"
