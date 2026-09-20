@@ -26,6 +26,8 @@ from raven.config.live import (
     curator_pin,
     disabled_playbook_names,
     disabled_tool_names,
+    held,
+    hold_for_this_turn,
     max_tool_iterations,
     skill_gate_pin,
 )
@@ -608,3 +610,73 @@ class TestTheWindowIsResolvedPerTurn:
             assert AgentLoop.context_window_tokens.fget(loop) == 50000
 
         assert AgentLoop._with_live_window(loop, turn_binding).configured_window == 9999
+
+
+class TestOneTurnOneAnswer:
+    """A preference is read live; a turn still gets one answer for it.
+
+    A turn asks several times and sometimes minutes apart, so "read at the
+    moment of use" and "one answer per turn" are not the same rule. The cap is
+    the sharp case: it is first read after context assembly, which can spend
+    minutes in the curator, so an edit made while a turn is running would
+    otherwise change that turn.
+    """
+
+    def test_a_held_value_is_read_once(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.json"
+        _write(path, {"agents": {"defaults": {"maxToolIterations": 7}}})
+        live = LiveConfig(path)
+
+        with hold_for_this_turn():
+            assert held("cap", lambda: max_tool_iterations(live)) == 7
+            _write(path, {"agents": {"defaults": {"maxToolIterations": 99}}})
+            assert held("cap", lambda: max_tool_iterations(live)) == 7
+
+        assert held("cap", lambda: max_tool_iterations(live)) == 99
+
+    def test_a_hold_ends_with_its_turn(self, tmp_path: Path) -> None:
+        """Outside one, every read is live again -- which is what a caller below
+        ``run_turn`` and every background path gets, and what this did before
+        there was a hold at all. A hold that outlived its turn would freeze the
+        setting for the rest of the process."""
+        path = tmp_path / "config.json"
+        _write(path, {"agents": {"defaults": {"maxToolIterations": 7}}})
+        live = LiveConfig(path)
+
+        with hold_for_this_turn():
+            assert held("cap", lambda: max_tool_iterations(live)) == 7
+
+        _write(path, {"agents": {"defaults": {"maxToolIterations": 99}}})
+        assert held("cap", lambda: max_tool_iterations(live)) == 99
+        _write(path, {"agents": {"defaults": {"maxToolIterations": 55}}})
+        assert held("cap", lambda: max_tool_iterations(live)) == 55
+
+    def test_the_cap_is_resolved_when_the_turn_opens_not_at_its_first_read(self, tmp_path: Path) -> None:
+        """The crux: resolved lazily it would still be read after assembly,
+        which is exactly the window an operator's edit lands in."""
+        from types import SimpleNamespace
+
+        from raven.agent.loop import AgentLoop
+
+        path = tmp_path / "config.json"
+        _write(path, {"agents": {"defaults": {"maxToolIterations": 7}}})
+        loop = SimpleNamespace(_live_config=LiveConfig(path), _default_max_iterations=40)
+
+        with AgentLoop._turn_scope(loop):
+            _write(path, {"agents": {"defaults": {"maxToolIterations": 99}}})
+            assert AgentLoop.max_iterations.fget(loop) == 7
+
+        assert AgentLoop.max_iterations.fget(loop) == 99
+
+    def test_a_turn_with_no_override_keeps_the_built_cap(self, tmp_path: Path) -> None:
+        from types import SimpleNamespace
+
+        from raven.agent.loop import AgentLoop
+
+        path = tmp_path / "config.json"
+        _write(path, {})
+        loop = SimpleNamespace(_live_config=LiveConfig(path), _default_max_iterations=40)
+
+        with AgentLoop._turn_scope(loop):
+            _write(path, {"agents": {"defaults": {"maxToolIterations": 99}}})
+            assert AgentLoop.max_iterations.fget(loop) == 40

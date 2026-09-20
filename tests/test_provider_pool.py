@@ -502,3 +502,26 @@ def test_an_unusable_pin_is_reported_once() -> None:
     mine = [m for m in said if "context.curator_model" in m]
     assert len(mine) == 1
     assert "the curator follows the conversation's model instead" in mine[0]
+
+
+def test_a_pin_is_resolved_once_for_the_turn_that_holds_it() -> None:
+    """The curator asks for its pin once per step of a tool-calling
+    conversation that carries the previous steps with it. Answering two steps
+    differently sends the continuation to another provider, and the new model
+    picks up the old one's partial plan."""
+    from raven.config.live import hold_for_this_turn
+    from raven.providers.pool import live_pin_resolver
+
+    pool = _AskedPool()
+    configured = {"pin": ("first", None)}
+    resolve_pin = live_pin_resolver(
+        pool, lambda: configured["pin"], key="context.curator_model", follower="the curator"
+    )
+
+    with hold_for_this_turn():
+        assert resolve_pin().model == "first"
+        configured["pin"] = ("second", None)
+        assert resolve_pin().model == "first"
+
+    assert resolve_pin().model == "second"
+    assert pool.asked == [("first", None), ("second", None)]

@@ -58,6 +58,10 @@ if TYPE_CHECKING:
     from raven.skill_hub import SkillHubClient
 
 
+#: What the iteration cap is held under for the length of a turn.
+_CAP_KEY = "agents.defaults.maxToolIterations"
+
+
 class WiringMixin:
     """Construction-time wiring: providers, bindings, tool registration, playbooks,
     workdir and sinks."""
@@ -393,6 +397,17 @@ class WiringMixin:
         binding = active_binding() or self._default_binding
         return binding.context_window
 
+    def _turn_scope(self):
+        """Hold the settings a turn reads more than once, from here on.
+
+        Entered beside ``use_binding`` at the turn boundary and for the same
+        reason: one turn, one answer. The cap is resolved here rather than at
+        its first read, which happens after context assembly.
+        """
+        from raven.config.live import hold_for_this_turn, max_tool_iterations
+
+        return hold_for_this_turn(**{_CAP_KEY: max_tool_iterations(self._live_config)})
+
     def _with_live_window(self, binding: ModelBinding) -> ModelBinding:
         """This turn's binding, carrying the window the config has right now.
 
@@ -422,12 +437,15 @@ class WiringMixin:
 
         Read live rather than frozen at build for the reason the permission
         mode is: a cap is a sentence about the next turn, not work to redo.
-        The turn reads it once at its start, so a change lands on the next
-        turn rather than halfway through one.
+        A turn holds the value it starts on (``run_turn`` passes it to
+        ``hold_for_this_turn``), because the cap is first read after context
+        assembly -- which can spend minutes in the curator -- and an edit made
+        in that window would otherwise change the request already running.
         """
-        from raven.config.live import max_tool_iterations
+        from raven.config.live import held, max_tool_iterations
 
-        return max_tool_iterations(self._live_config) or self._default_max_iterations
+        configured = held(_CAP_KEY, lambda: max_tool_iterations(self._live_config))
+        return configured or self._default_max_iterations
 
     @property
     def provider_pool(self) -> "ProviderPool | None":

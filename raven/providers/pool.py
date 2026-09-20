@@ -47,7 +47,7 @@ def live_pin_resolver(
     """
     warned = False
 
-    def resolve() -> "ModelBinding | None":
+    def _resolve_now() -> "ModelBinding | None":
         nonlocal warned
         model, provider_name = read_pin()
         if not model:
@@ -62,6 +62,11 @@ def live_pin_resolver(
                 follower,
             )
         return binding
+
+    def resolve() -> "ModelBinding | None":
+        from raven.config.live import held
+
+        return held(key, _resolve_now)
 
     return resolve
 

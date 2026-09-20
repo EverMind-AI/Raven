@@ -32,15 +32,19 @@ from __future__ import annotations
 
 import json
 import weakref
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterator
 
 from loguru import logger
 from pydantic.alias_generators import to_camel
 
 __all__ = [
     "LiveConfig",
+    "hold_for_this_turn",
+    "held",
     "context_window_tokens",
     "curator_pin",
     "default_model",
@@ -55,6 +59,49 @@ __all__ = [
     "skill_gate_pin",
     "web_search_key",
 ]
+
+
+#: The values one unit of work has already read, or None outside such a unit.
+#: A ContextVar for the reason the model binding is one: work detached during a
+#: turn copies the context, so a sub-agent keeps the values its turn started on.
+_HELD: ContextVar[dict[str, Any] | None] = ContextVar("raven_live_held", default=None)
+
+
+@contextmanager
+def hold_for_this_turn(**resolved: Any) -> Iterator[None]:
+    """Read each of these values once for the work inside, not once per use.
+
+    Reading live is right for a preference and wrong in the middle of a turn: a
+    turn asks several times, sometimes minutes apart -- the iteration cap is
+    first read after context assembly, and the curator asks for its pin once per
+    step of a tool-calling conversation that carries the previous steps with it.
+    Answering those differently splits one piece of work across two settings:
+    the new model continues the old one's partial plan, or a cap lowered
+    mid-flight stops a request that was already running.
+
+    So a turn holds what it reads, the way it holds its model binding. Values
+    passed here are resolved at the boundary, which is what the cap needs: read
+    lazily it would still be read after assembly, which is the window the edit
+    lands in. Everything else is held at its first read inside.
+
+    Outside a hold -- a caller below ``run_turn``, a background path -- every
+    read is live, which is the behaviour that was there before.
+    """
+    token = _HELD.set(dict(resolved))
+    try:
+        yield
+    finally:
+        _HELD.reset(token)
+
+
+def held(key: str, read: "Callable[[], Any]") -> Any:
+    """``read()``, once per hold; every time outside one."""
+    values = _HELD.get()
+    if values is None:
+        return read()
+    if key not in values:
+        values[key] = read()
+    return values[key]
 
 
 class LiveConfig:

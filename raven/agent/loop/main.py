@@ -960,6 +960,10 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             charter = self._take_session_charter(session_key)
             with (
                 use_binding(binding),
+                # Beside the binding and for the same reason: the settings a
+                # turn reads more than once answer the same way all the way
+                # through it.
+                self._turn_scope(),
                 self.tools.session_scope_for(session_key),
                 self.tools.turn_scope(),
                 delegate_scope(delegate_table),
