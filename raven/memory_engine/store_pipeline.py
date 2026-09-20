@@ -283,8 +283,10 @@ class StorePipeline:
         # closes the backend's HTTP client next, and a request still in flight
         # against a closed client fails as a transport error nobody reads.
         leftover = {t for t in self._workers.values() if not t.done()}
-        # Counted before the cancellation, which unwinds the backend call and
-        # clears these marks on its way out.
+        # Counted before the collect below, not merely before ``cancel``: the
+        # cancellation only unwinds the backend call once this coroutine yields,
+        # and the ``finally`` it unwinds through clears exactly these marks. A
+        # count taken after that await reads zero for every record in flight.
         in_flight = len(self._in_flight)
         for task in leftover:
             task.cancel()
