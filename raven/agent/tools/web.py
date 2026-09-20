@@ -120,6 +120,33 @@ class _ProviderPageError(RuntimeError):
     """A fetch backend answered, but not with a page."""
 
 
+def _check_provider(provider: "str | Callable[[], str]", known: dict, tool: str) -> None:
+    """Refuse an unknown vendor at construction, when it is a fixed one.
+
+    A live reader is checked per read instead (see ``_resolve_provider``): the
+    file can name anything, and a turn is not the place to raise over it.
+    """
+    if not callable(provider) and provider not in known:
+        raise ValueError(f"unknown {tool} provider {provider!r}; one of {sorted(known)}")
+
+
+def _resolve_provider(source: "Callable[[], str] | None", fallback: str, known: dict) -> str:
+    """The vendor for this call: what the reader answers, else the built-with one.
+
+    An unknown name is not an error here. The file is read while a turn runs,
+    and a typo in it must not take the tool down mid-call -- the vendor the
+    tool was registered with answers instead, which is what it answered before
+    the reader existed.
+    """
+    if source is None:
+        return fallback
+    try:
+        named = source()
+    except Exception:  # noqa: BLE001 - an unreadable file keeps the tool working
+        return fallback
+    return named if named in known else fallback
+
+
 class WebSearchTool(Tool):
     """Search the web through the selected vendor."""
 
@@ -139,17 +166,24 @@ class WebSearchTool(Tool):
         api_key: "str | Callable[[], str] | None" = None,
         max_results: int = 5,
         proxy: str | None = None,
-        provider: str = DEFAULT_SEARCH_PROVIDER,
+        provider: "str | Callable[[], str]" = DEFAULT_SEARCH_PROVIDER,
     ):
-        if provider not in SEARCH_PROVIDERS:
-            raise ValueError(f"unknown web_search provider {provider!r}; one of {sorted(SEARCH_PROVIDERS)}")
+        _check_provider(provider, SEARCH_PROVIDERS, "web_search")
         # A callable is the live form (a reader over the config file), so a key
         # added there serves the next call; a plain string stays a snapshot.
         self._api_key_source: "Callable[[], str] | None" = api_key if callable(api_key) else None
         self._init_api_key: str | None = None if callable(api_key) else api_key
         self.max_results = max_results
         self.proxy = proxy
-        self.provider = provider
+        # The vendor is live for the same reason the key is, and they have to
+        # move together: ``api_key`` resolves against ``spec``, so a vendor
+        # frozen here would send the new vendor's key to the old endpoint.
+        self._provider_source: "Callable[[], str] | None" = provider if callable(provider) else None
+        self._init_provider: str = DEFAULT_SEARCH_PROVIDER if callable(provider) else provider
+
+    @property
+    def provider(self) -> str:
+        return _resolve_provider(self._provider_source, self._init_provider, SEARCH_PROVIDERS)
 
     @property
     def spec(self) -> SearchProviderSpec:
@@ -494,16 +528,20 @@ class ImageSearchTool(Tool):
         api_key: "str | Callable[[], str] | None" = None,
         max_results: int = 5,
         proxy: str | None = None,
-        provider: str = DEFAULT_SEARCH_PROVIDER,
+        provider: "str | Callable[[], str]" = DEFAULT_SEARCH_PROVIDER,
     ):
-        if provider not in IMAGE_SEARCH_VENDORS:
-            raise ValueError(f"unknown image_search provider {provider!r}; one of {sorted(IMAGE_SEARCH_VENDORS)}")
+        _check_provider(provider, IMAGE_SEARCH_VENDORS, "image_search")
         # A callable is the live form (a reader over the config file), as for web_search.
         self._api_key_source: "Callable[[], str] | None" = api_key if callable(api_key) else None
         self._init_api_key: str | None = None if callable(api_key) else api_key
         self.max_results = max_results
         self.proxy = proxy
-        self.provider = provider
+        self._provider_source: "Callable[[], str] | None" = provider if callable(provider) else None
+        self._init_provider: str = DEFAULT_SEARCH_PROVIDER if callable(provider) else provider
+
+    @property
+    def provider(self) -> str:
+        return _resolve_provider(self._provider_source, self._init_provider, IMAGE_SEARCH_VENDORS)
 
     @property
     def spec(self) -> SearchProviderSpec:
@@ -753,14 +791,35 @@ class WebFetchTool(Tool):
         api_key: str | None = None,
         max_chars: int = 50000,
         proxy: str | None = None,
-        provider: str = DEFAULT_FETCH_PROVIDER,
+        provider: "str | Callable[[], str]" = DEFAULT_FETCH_PROVIDER,
     ):
-        if provider not in FETCH_PROVIDERS:
-            raise ValueError(f"unknown web_fetch provider {provider!r}; one of {sorted(FETCH_PROVIDERS)}")
-        self._init_api_key = api_key
+        _check_provider(provider, FETCH_PROVIDERS, "web_fetch")
+        self._provider_source: "Callable[[], str] | None" = provider if callable(provider) else None
+        # ``effective_provider`` used to run once, at registration. It runs per
+        # call now because the vendor it judges can move: a keyed backend
+        # selected without a key is still replaced by Jina, but a key added
+        # later stops the substitution instead of outliving it.
+        self._init_provider: str = DEFAULT_FETCH_PROVIDER if callable(provider) else provider
+        self._api_key_source: "Callable[[], str] | None" = api_key if callable(api_key) else None
+        self._init_api_key: str | None = None if callable(api_key) else api_key
         self.max_chars = max_chars
         self.proxy = proxy
-        self.provider = provider
+        self._substitution_said = False
+
+    @property
+    def provider(self) -> str:
+        """The backend this call runs on, after the Jina substitution.
+
+        Resolved per call rather than at registration: the vendor and the key
+        behind it both move now, and a substitution decided once outlived the
+        key that would have stopped it.
+        """
+        selected = _resolve_provider(self._provider_source, self._init_provider, FETCH_PROVIDERS)
+        key = self._api_key_source() if self._api_key_source is not None else self._init_api_key
+        effective = self.effective_provider(selected, key, warn=not self._substitution_said)
+        if effective != selected:
+            self._substitution_said = True
+        return effective
 
     @property
     def spec(self) -> FetchProviderSpec:
@@ -769,21 +828,27 @@ class WebFetchTool(Tool):
     @property
     def api_key(self) -> str:
         """Resolve API key at call time so env/config changes are picked up."""
-        return self._init_api_key or os.environ.get(self.spec.env_var, "")
+        configured = self._api_key_source() if self._api_key_source is not None else self._init_api_key
+        return configured or os.environ.get(self.spec.env_var, "")
 
     @classmethod
-    def effective_provider(cls, provider: str, api_key: str | None) -> str:
-        """The backend to register: the selected one, or Jina when it cannot run.
+    def effective_provider(cls, provider: str, api_key: str | None, *, warn: bool = True) -> str:
+        """The backend a call runs on: the selected one, or Jina when it cannot.
 
         ``web_fetch`` is always offered because Jina reads pages without a key.
         A keyed backend selected without a key would be offered and fail on
-        every call, so it is replaced here, out loud, rather than registered.
+        every call, so it is replaced here, out loud, rather than run.
+
+        ``warn`` is off for the repeat: this is asked per call now, and a line
+        per call for as long as the config stays keyless is noise.
         """
         if provider not in FETCH_PROVIDERS:
             raise ValueError(f"unknown web_fetch provider {provider!r}; one of {sorted(FETCH_PROVIDERS)}")
         spec = FETCH_PROVIDERS[provider]
         if not spec.needs_key or api_key or os.environ.get(spec.env_var):
             return provider
+        if not warn:
+            return DEFAULT_FETCH_PROVIDER
         logger.warning(
             "web_fetch: {} selected but no key resolves ({} / {}); reading pages through Jina instead",
             spec.label,
