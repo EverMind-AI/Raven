@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetSources, setSources } from '../../../state/sources'
-import { install, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
+import { install, modelSource, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
 import { ROLES, roleProviders, rolesUsing } from './Roles'
 
@@ -13,7 +13,7 @@ vi.mock('../../../state/toast', () => ({ show: () => {}, subscribe: () => () => 
 
 
 beforeEach(() => {
-  setSources({ settings: settingsSource })
+  setSources({ settings: settingsSource, model: modelSource })
 })
 
 afterEach(() => {
@@ -25,10 +25,18 @@ afterEach(() => {
 
 const role = (id: string) => ROLES.find((r) => r.id === id)!
 const pill = (roleName: string): HTMLElement => screen.getByLabelText(`gui.settings.roles.change {"role":"${roleName}"}`)
-const picker = (): HTMLElement => document.querySelector('.model-picker') as HTMLElement
+/* One picker for the whole page since 2026-09-20: the composer's, at the body. */
+const picker = (): HTMLElement => document.querySelector('.mpick') as HTMLElement
+/* The provider row's hit area is a button beside the name, not around it, so a
+   click on the name selects nothing. */
+const selectProvider = (name: string): void => {
+  const row = [...picker().querySelectorAll<HTMLElement>('.provs .row')]
+    .find((r) => r.querySelector('.nm')?.textContent?.includes(name))!
+  fireEvent.click(row.querySelector('.model-provider-action')!)
+}
 const pick = async (roleName: string, model: string, providerName?: string): Promise<void> => {
   await act(async () => { fireEvent.click(pill(roleName)) })
-  if (providerName) await act(async () => { fireEvent.click(within(picker()).getByText(providerName)) })
+  if (providerName) await act(async () => { selectProvider(providerName) })
   await act(async () => { fireEvent.click(within(picker()).getByText(model)) })
 }
 const sets = (calls: Array<[string, unknown]>) => calls.filter(([m]) => m === 'set').map(([, a]) => a)
@@ -72,9 +80,11 @@ describe('model roles', () => {
     const { calls } = install()
     await mount('model')
     expect(roleProviders(role('image'), snap()).map((p) => p.id)).toEqual(['openrouter'])
-    await pick('gui.settings.roles.image', 'openai/gpt-4o')
+    /* The image slot lists image models: a text model on the same provider is
+       not offered for it any more. */
+    await pick('gui.settings.roles.image', 'gemini-2.5-flash-image')
     expect(sets(calls)).toEqual([
-      { key: 'tools.media.image', value: { model: 'openai/gpt-4o', quality: '' } },
+      { key: 'tools.media.image', value: { model: 'google/gemini-2.5-flash-image', quality: '' } },
       { key: 'tools.disabledTools', value: ['deep_research'] },
     ])
   })
@@ -112,7 +122,7 @@ describe('model roles', () => {
     const { calls } = install()
     await mount('model')
     await act(async () => { fireEvent.click(pill('gui.settings.roles.gate')) })
-    const box = screen.getByPlaceholderText('gui.model.pick_search') as HTMLInputElement
+    const box = screen.getByPlaceholderText('gui.picker.search_ph') as HTMLInputElement
     await act(async () => { fireEvent.change(box, { target: { value: 'claude-haiku-4-5' } }) })
     await act(async () => { fireEvent.click(screen.getByText('gui.model.pick_use {"id":"claude-haiku-4-5"}')) })
     expect(calls).toEqual([

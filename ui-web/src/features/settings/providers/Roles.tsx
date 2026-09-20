@@ -3,18 +3,29 @@
    may serve it. The media tools' rows on the Tools page draw the same pill. */
 import { useRef } from 'react'
 
-import { ModelPicker } from '../../../components/ModelPicker'
 import { t } from '../../../i18n/t'
+import { openPicker } from '../../model/source'
 import { Card, Row, Rov, Seg, Stepper } from '../Fields'
 import * as store from '../store'
 
-import type { PickerProvider } from '../../../components/ModelPicker'
+import type { Kind, Offer } from '../../model/types'
 import type { ProviderRow, SettingsSnapshot } from '../types'
 import type { JSX } from 'react'
 
 export type RoleId =
   | 'chat' | 'curator' | 'title' | 'memllm' | 'gate'
   | 'embedding' | 'rerank' | 'multimodal' | 'image' | 'speech' | 'video'
+
+/* What each slot may be filled with. The one consumer of a model's kind: an
+   embedding slot listing a chat model is a pick that fails on the next call,
+   and the slot is the only place that knows which it wants.
+   Text for every slot that talks: `kind_of` files a model by what it WRITES, so
+   a model that also reads pictures is text, and the multimodal slot -- which
+   wants exactly that -- takes text too. */
+export const ROLE_KIND: Record<RoleId, Kind> = {
+  chat: 'text', curator: 'text', title: 'text', memllm: 'text', gate: 'text', multimodal: 'text',
+  embedding: 'embedding', rerank: 'reranker', image: 'image', speech: 'audio', video: 'video',
+}
 
 export interface Role {
   id: RoleId
@@ -127,12 +138,6 @@ const providerName = (snap: SettingsSnapshot, id: string): string => {
    before anyone has visited the provider's page to add one, and an empty
    column there is a dead end. Once something is added, the added list is
    what the picker offers, as before. */
-function pickerProviders(rows: ProviderRow[]): PickerProvider[] {
-  return rows.map((p) => ({
-    id: p.id, name: p.name, models: p.configured && p.configured.length ? p.configured : p.models, labels: p.labels,
-  }))
-}
-
 /* The write a pick makes, by role. The typed id is added to the provider
    first, so the role never names a model the provider does not list. */
 async function setRole(r: Role, model: string, provider: string, typed: boolean): Promise<SettingsSnapshot | void> {
@@ -171,7 +176,12 @@ async function clearRole(r: Role): Promise<SettingsSnapshot | void> {
   return undefined
 }
 
-/* The pill that shows a role's model and opens the picker under it. */
+/* The pill that shows a role's model and opens the picker under it.
+
+   The picker is the composer's: one component, opened with an offer that says
+   what this slot may take (its kind, the providers the role allows, the pair it
+   holds now) and what a pick means here (the role's own write, not a
+   conversation switch). */
 export function RolePill({ role }: { role: Role }): JSX.Element {
   /* The picker hangs off this button, so it has to be reachable as an element
      and not only as markup. */
@@ -179,54 +189,48 @@ export function RolePill({ role }: { role: Role }): JSX.Element {
   const s = store.get()
   const val = roleValue(role, s.snap)
   const provs = roleProviders(role, s.snap)
-  const open = s.picker === role.id
   const inherit = !!role.keys
+  const chat = roleValue(ROLES[0]!, s.snap)
+  /* No provider this role may use is connected: there is nothing to open onto,
+     and the way out is the providers page rather than an empty popover. A
+     provider that is connected but has nothing of this kind added is NOT this
+     case -- the picker lists it, says the column is empty and offers a row to
+     type an id into. */
   if (!provs.length && !val) {
     return role.media
       ? <button type="button" className="mini ghost" onClick={() => store.set({ provider: MEDIA_PROVIDER, provAdd: MEDIA_PROVIDER })}>{t('gui.settings.roles.connect_openrouter')}</button>
-      : <Rov>{t('gui.settings.roles.no_provider')}</Rov>
+      : <Rov>{t(role.everos ? 'gui.settings.roles.no_key_provider' : 'gui.settings.roles.no_provider')}</Rov>
   }
   const dim = !val
   const clearable = !!val && role.id !== 'chat'
   const cls = ['settings-mpill', dim ? 'settings-dim' : '', clearable ? 'settings-clearable' : ''].filter(Boolean).join(' ')
-  const chat = roleValue(ROLES[0]!, s.snap)
-  const emptyNote = role.media
-    ? t('gui.settings.roles.connect_openrouter')
-    : role.everos ? t('gui.settings.roles.no_key_provider') : t('gui.settings.roles.no_provider')
+  const offer: Offer = {
+    kind: ROLE_KIND[role.id],
+    providers: provs.map((p) => p.id),
+    title: roleName(role),
+    current: val ?? (inherit && chat ? chat : undefined),
+    pick: async (model, provider, typed) => {
+      await store.run(`role:${role.id}`, () => setRole(role, model, provider, typed))
+    },
+  }
   return (
-    <>
-      <span className={cls}>
-        <button ref={pill} type="button" className="settings-pm" aria-label={t('gui.settings.roles.change', { role: roleName(role) })}
-          aria-expanded={open} onClick={() => store.set({ picker: open ? null : role.id })}>
-          {val ? (
-            <><span className="settings-id">{val.model}</span><span className="settings-pv">{providerName(s.snap, val.provider)}</span></>
-          ) : (
-            <span className="settings-id">{inherit ? t('gui.settings.roles.follows_chat') : t('gui.settings.roles.unset')}</span>
-          )}
-          <span className="settings-ch">{'⌄'}</span>
-        </button>
-        {clearable && (
-          <button type="button" className="settings-px" aria-label={t('gui.settings.roles.clear', { role: roleName(role) })}
-            onClick={() => void store.run(`role:${role.id}`, () => clearRole(role))}>
-            {'×'}
-          </button>
+    <span className={cls}>
+      <button ref={pill} type="button" className="settings-pm" aria-label={t('gui.settings.roles.change', { role: roleName(role) })}
+        onClick={() => { if (pill.current) openPicker(pill.current, offer) }}>
+        {val ? (
+          <><span className="settings-id">{val.model}</span><span className="settings-pv">{providerName(s.snap, val.provider)}</span></>
+        ) : (
+          <span className="settings-id">{inherit ? t('gui.settings.roles.follows_chat') : t('gui.settings.roles.unset')}</span>
         )}
-      </span>
-      {open && (
-        <ModelPicker
-          title={roleName(role)}
-          providers={pickerProviders(provs)}
-          current={val || (inherit ? chat : null)}
-          emptyNote={emptyNote}
-          anchor={pill.current}
-          onClose={() => store.set({ picker: null })}
-          onPick={(model, provider, typed) => {
-            store.set({ picker: null })
-            void store.run(`role:${role.id}`, () => setRole(role, model, provider, typed))
-          }}
-        />
+        <span className="settings-ch">{'⌄'}</span>
+      </button>
+      {clearable && (
+        <button type="button" className="settings-px" aria-label={t('gui.settings.roles.clear', { role: roleName(role) })}
+          onClick={() => void store.run(`role:${role.id}`, () => clearRole(role))}>
+          {'×'}
+        </button>
       )}
-    </>
+    </span>
   )
 }
 
