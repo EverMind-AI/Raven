@@ -195,7 +195,8 @@ uv run raven sentinel tick --dry-run
 Dry-run disables nudge execution and task discovery, but still runs planning
 and state maintenance: it may call the model and refresh derived state. It is
 not a read-only check or a free preview. The CLI's `--live` mode uses a
-headless sink for plain nudges; it does not verify delivery to a real channel.
+headless sink for dispatcher output, including plain nudges and discovery menus;
+it does not verify delivery to a real channel.
 
 | Symptom | Check |
 | --- | --- |
