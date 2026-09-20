@@ -41,14 +41,14 @@ def workspace():
         yield Path(td)
 
 
-def _loop(workspace: Path, *, window: int, ceiling: int, monkeypatch) -> AgentLoop:
+def _loop(workspace: Path, *, window: int, ceiling: int, monkeypatch, tools: ToolWiring | None = None) -> AgentLoop:
     monkeypatch.setattr(budget_owner, "send_max_tokens", lambda *a, **k: ceiling)
     agent = AgentLoop(
         provider=_StubProvider(),
         workspace=workspace,
         model="stub",
         policy=TurnPolicy(max_iterations=2),
-        tools=ToolWiring(restrict_to_workspace=True),
+        tools=tools if tools is not None else ToolWiring(restrict_to_workspace=True),
     )
     # The window is the binding's, so the fixture sets it where it lives
     # rather than on the loop -- which no longer has one of its own.
@@ -163,3 +163,30 @@ def test_a_configured_window_smaller_than_the_model_s_still_leaves_a_budget(work
 
     assert budget.reserved_output == 32_000, "never more than the window it is carved from"
     assert budget.available_history == 0
+
+
+def test_what_enabling_a2a_costs_the_tool_surface(workspace, monkeypatch) -> None:
+    """`a2a_send` registers only with a peer configured, so the ceiling test above
+    measures a face that does not carry it. That makes the feature's real cost
+    invisible to the bound, which is the opposite of what that bound is for -- so
+    the cost is measured here instead of going unmeasured.
+
+    What is asserted is the increment, because that is what this feature controls.
+    What is NOT asserted, deliberately: the peer-configured total sits above the
+    6_000 line the test above holds for the default face. Whether that line moves
+    is a question about the whole tool surface and belongs to whoever owns it, not
+    to the feature that happened to arrive when the headroom had run out.
+    """
+    from raven.config.schema import A2aConfig, A2aPeerConfig
+
+    peers = ToolWiring(
+        restrict_to_workspace=True,
+        a2a_config=A2aConfig(peers=[A2aPeerConfig(origin="https://peer.example.com")]),
+    )
+    plain = _loop(workspace, window=200_000, ceiling=64_000, monkeypatch=monkeypatch)._make_token_budget()
+    enabled = _loop(
+        workspace, window=200_000, ceiling=64_000, monkeypatch=monkeypatch, tools=peers
+    )._make_token_budget()
+
+    cost = enabled.reserved_tools - plain.reserved_tools
+    assert 0 < cost < 200, f"a2a_send's schema now costs {cost} tokens on every turn of every conversation"

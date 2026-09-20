@@ -33,6 +33,7 @@ class ToolWiring:
     plugin_tools: Any = None
     plugin_tool_gates: Any = None
     deliverables: Any = None
+    a2a_config: Any = None
 
 
 @dataclass

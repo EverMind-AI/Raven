@@ -175,6 +175,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         tools, subagents, engine, policy, host = resolve_wiring(tools, subagents, engine, policy, host)
         exec_config = tools.exec_config
         ask_user_config = tools.ask_user_config
+        a2a_config = tools.a2a_config
         search_api_key = tools.search_api_key
         jina_api_key = tools.jina_api_key
         web_proxy = tools.web_proxy
@@ -214,7 +215,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         cron_service = host.cron_service
         channels_config = host.channels_config
         from raven.agent.hook import CompositeHook
-        from raven.config.schema import AskUserToolConfig, CompactionConfig, ExecToolConfig
+        from raven.config.schema import A2aConfig, AskUserToolConfig, CompactionConfig, ExecToolConfig
         from raven.token_wise.registry import StrategyRegistry
 
         self.channels_config = channels_config
@@ -275,6 +276,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self.memory_config = memory_config or MemoryConfig()
         self.exec_config = exec_config or ExecToolConfig()
         self.ask_user_config = ask_user_config or AskUserToolConfig()
+        self.a2a_config = a2a_config or A2aConfig()
         self._compaction = compaction_config or CompactionConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace

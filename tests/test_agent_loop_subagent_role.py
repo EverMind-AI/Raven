@@ -26,7 +26,7 @@ from raven.agent.subagent.role import WITHHELD_FROM_SUBAGENT
 from raven.agent.tools.create_playbook import CreatePlaybookTool
 from raven.agent.tools.load_playbook import LoadPlaybookTool
 from raven.agent.tools.registry import ToolRegistry, absent_tool_error
-from raven.config.schema import PlaybookConfig
+from raven.config.schema import A2aConfig, A2aPeerConfig, PlaybookConfig
 from raven.context_engine.segments import render
 from raven.context_engine.segments.render import live_dispatch_tools
 from raven.memory_engine import LocalSkillCatalog, filter_by_required_tools
@@ -77,11 +77,14 @@ def _equipped_loop(workspace: Path) -> AgentLoop:
     The two playbook tools arrive as plugin tools and unregister themselves when
     the loop builds no funnel, so a bare loop never holds them and an assertion
     that they are absent would pass over a loop that could not have had them.
+    `a2a_send` is the same shape for a different reason: it is registered only
+    with a peer configured, so a peerless loop could not have held it either.
     """
     return _loop(
         workspace,
         playbook_config=PlaybookConfig(enabled=True),
         plugin_tools=[LoadPlaybookTool(), CreatePlaybookTool()],
+        a2a_config=A2aConfig(peers=[A2aPeerConfig(origin="https://peer.example.com")]),
     )
 
 
@@ -297,3 +300,22 @@ def test_both_sub_agent_paths_withhold_the_same_tools(workspace, monkeypatch: py
     assert "read_file" in builtin and delegated.tools.has("read_file"), "baseline: neither side may be empty"
     over_acp = {name for name in WITHHELD_FROM_SUBAGENT if delegated.tools.has(name)}
     assert WITHHELD_FROM_SUBAGENT & builtin == over_acp == set()
+
+
+def test_a2a_send_is_withheld_from_a_subagent(monkeypatch):
+    from raven.agent.subagent.role import WITHHELD_FROM_SUBAGENT, is_subagent_process
+
+    monkeypatch.setenv("RAVEN_SUBAGENT", "1")
+    assert is_subagent_process() is True
+    assert "a2a_send" in WITHHELD_FROM_SUBAGENT
+
+
+def test_a2a_send_is_registered_only_with_a_peer_configured(workspace) -> None:
+    """The outbound tool is not free: its schema is reserved on every turn of
+    every conversation, and a host with no peers has nowhere to send a message.
+    The five product launcher tests pin the absent half from the other end.
+    """
+    assert not _loop(workspace, a2a_config=A2aConfig()).tools.has("a2a_send")
+
+    with_peer = A2aConfig(peers=[A2aPeerConfig(origin="https://peer.example.com")])
+    assert _loop(workspace, a2a_config=with_peer).tools.has("a2a_send")

@@ -1,4 +1,4 @@
-"""Lint every commit message in a revision range against the repo's message rules."""
+"""Lint every commit message a revision range names against the repo's message rules."""
 
 from __future__ import annotations
 
@@ -13,12 +13,14 @@ ZERO_SHA = "0" * 40
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    revision_range = args[0] if args else _default_range()
-    if not revision_range:
-        print("No commit range detected; skipping commit message lint")
-        return 0
+    if not args:
+        default = _default_range()
+        if not default:
+            print("No commit range detected; skipping commit message lint")
+            return 0
+        args = [default]
 
-    messages = _commit_messages(revision_range)
+    messages = _commit_messages(args)
     failed = False
     for sha, message in messages:
         result = check_commit_message(message)
@@ -45,9 +47,9 @@ def _default_range() -> str | None:
     return os.environ.get("RANGE", "").strip() or None
 
 
-def _commit_messages(revision_range: str) -> list[tuple[str, str]]:
+def _commit_messages(revisions: list[str]) -> list[tuple[str, str]]:
     output = subprocess.check_output(
-        ["git", "log", "--no-merges", "--format=%H%x00%B%x00", revision_range],
+        ["git", "log", "--no-merges", "--format=%H%x00%B%x00", *revisions],
         text=True,
     )
     chunks = output.rstrip("\0").split("\0")

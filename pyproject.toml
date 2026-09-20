@@ -68,6 +68,13 @@ dependencies = [
     "aiohttp>=3.13.4",
     "click>=8.1",
     "pyarrow>=17",
+    "a2a-sdk>=1.1.2",
+    # The A2A object model IS protobuf, so the inbound face converts at its own
+    # boundary (raven/a2a/runtime.py, routes_aiohttp.py) rather than letting the
+    # SDK's types leak outward. That makes google.protobuf a direct import of
+    # ours, not an incidental one -- declared for the same reason as numpy and
+    # idna above, and range-matched to what a2a-sdk itself allows.
+    "protobuf>=5.29.5,<7",
 ]
 
 [project.optional-dependencies]
@@ -590,8 +597,11 @@ source_modules = [
     # (measured: zero cli/rpc/acp imports in either); seated inner so the
     # machine watches the edge instead of a ruling note.
     "raven.browser", "raven.importer", "raven.updates",
+    # The outbound shelf, seated as `acp_client`'s mirror: `a2a_client/` is
+    # raven calling somebody else's agent, `a2a/` is the entrance.
+    "raven.a2a_client",
 ]
-forbidden_modules = ["raven.cli", "raven.rpc", "raven.acp"]
+forbidden_modules = ["raven.cli", "raven.rpc", "raven.acp", "raven.a2a"]
 # Debt allowlist: none. The last allowlisted edge (market reaching the skill
 # install engine through its rpc wrapper) closed when the engine moved to
 # skill_hub; an ignore_imports entry here would be new debt, not a carry-over.
@@ -703,7 +713,7 @@ forbidden_modules = ["benchmarks", "demos", "tests"]
 # by the host).
 name = "the served surfaces do not import the launcher"
 type = "forbidden"
-source_modules = ["raven.rpc", "raven.acp"]
+source_modules = ["raven.rpc", "raven.acp", "raven.a2a"]
 forbidden_modules = ["raven.cli"]
 
 [[tool.importlinter.contracts]]
