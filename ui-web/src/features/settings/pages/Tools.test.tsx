@@ -29,23 +29,40 @@ describe('tools page', () => {
     install()
     await mount('tools')
     expect(document.querySelectorAll('.settings-card')).toHaveLength(Object.keys(TOOL_GROUPS).length)
-    /* Built in wherever it is grouped: `tool_search` sits in the meta card and
-       `cancel_dag` beside `run_subagent_dag`, and both must read as fixed. The
-       greyed class is asserted with the attribute because `aria-disabled` on
-       its own is invisible -- drawn like every other switch it reads as a
-       control that ignores clicks. */
-    for (const id of ['tool_search', 'cancel_dag']) {
+    /* The two sides of `builtin`, drawn differently. A meta-tool has no switch
+       this page could write: the greyed class is asserted with the attribute
+       because `aria-disabled` on its own is invisible -- drawn like every
+       other switch it reads as a control that ignores clicks. A schema-hidden
+       tool is not in that group: `tools.disabledTools` still takes it away, so
+       it carries a real one, and drawing it fixed told the reader its switch
+       did nothing. */
+    for (const id of ['tool_search', 'tool_call']) {
       const sw = screen.getByLabelText(id)
       expect(sw.getAttribute('aria-disabled')).toBe('true')
       expect(sw.tagName).toBe('SPAN')
       expect(sw.classList.contains('settings-swi-fixed')).toBe(true)
     }
+    /* Fixed says the reader cannot move it, not that it is on. `tool_search`
+       is reported with the fold off, so a control hard-coded to checked drew
+       it as running and read that way aloud -- the opposite of the note beside
+       it. The thumb follows the same attribute, so this is the drawing too. */
+    expect(screen.getByLabelText('tool_search').getAttribute('aria-checked')).toBe('false')
+    expect(screen.getByLabelText('tool_call').getAttribute('aria-checked')).toBe('true')
+    const dag = screen.getByLabelText('cancel_dag')
+    expect(dag.getAttribute('aria-disabled'), 'cancel_dag answers to the switch, so it carries one').toBeNull()
+    expect(dag.classList.contains('settings-swi-fixed')).toBe(false)
     expect(TOOL_GROUPS.collab).toContain('cancel_dag')
     expect(TOOL_GROUPS.search).not.toContain('cancel_dag')
-    /* Seven known tools, none of them meta: read_file, exec, spawn and
-       web_fetch (Jina reads without a key) are on and unblocked; web_search
-       lacks its key; deep_research and image_generate are switched off. */
-    expect(screen.getByText('gui.settings.tools.counter {"on":4,"total":7}')).toBeTruthy()
+    /* The note that says where `tool_search`'s switch really is. Without it the
+       row reads as a tool that cannot be turned on at all. */
+    expect(screen.getByText('gui.settings.tools.meta_elsewhere')).toBeTruthy()
+    /* Eight known tools, none of them meta: read_file, exec, spawn, web_fetch
+       (Jina reads without a key) and cancel_dag are on and unblocked;
+       web_search lacks its key; deep_research and image_generate are switched
+       off. cancel_dag counts because its switch works -- while it was drawn as
+       built in the counter left it out, so the total under-reported what the
+       reader can actually turn off. */
+    expect(screen.getByText('gui.settings.tools.counter {"on":5,"total":8}')).toBeTruthy()
   })
 
   it('the badge says needs setup where a key or a model is missing, and the panel names the missing piece', async () => {

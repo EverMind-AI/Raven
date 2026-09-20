@@ -195,7 +195,15 @@ export interface SettingsSource {
   /* Resolves once the browser tab is open; the token lands later. */
   authServer(name: string): Promise<SettingsSnapshot>
   version(): string | null
-  checkUpdate(btn: HTMLButtonElement): void | Promise<void>
+  /* The newer version when there is one, so the About row can offer the
+     upgrade the way the design asked -- a check that silently starts an
+     upgrade is a second action the reader did not ask for. */
+  checkUpdate(btn: HTMLButtonElement): Promise<void>
+  /* The newer version the page knows about, or null. Read on every draw
+     rather than handed back by the check: the check redraws the dialog, which
+     replaces the row that asked. */
+  newerVersion(): string | null
+  upgrade(): void
   /* The language pick. On the source rather than the shell because what a flip
      MEANS differs between the modes -- live persists it through config.language,
      which also drives the TUI and the language the agent replies in. */
