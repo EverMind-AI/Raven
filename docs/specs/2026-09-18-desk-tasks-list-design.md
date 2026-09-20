@@ -147,9 +147,10 @@ truth after a reconnect or a terminal event.
 `features/tasks/` derives its types from `generated.ts`, reads through `tasks.list`, and
 draws the mock: the list row, the strip (three chips and an overflow), the running count on
 the tab, the pane (status bar with `interrupted` and `cancelled`, a stop action, the why
-banner naming the failed node, file and diff chips, the board with tool and failure counts
-and a lane per shared `(agent, instance)`), the node panel (header with tokens or "not
-reported", context and order tabs, a chat dock for a stateful agent's instance). The desk's
+banner naming the failed node, file and diff chips, the board with tool counts and a lane
+per shared `(agent, instance)`), the node panel (header with the agent, its status word, the
+duration and the token total when the lane reported one, context and order tabs, a chat dock
+for a stateful agent's instance). The desk's
 deliverables and diff tabs gain a task-derived group beside the session-level rows; a
 task file's diff is built on click from the node's messages with the page's existing hunk
 builders. The offline page answers `tasks.list` from `src/rpc/fixtures/tasks.ts`.

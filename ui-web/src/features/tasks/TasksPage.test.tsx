@@ -570,22 +570,34 @@ describe('the node panel', () => {
     expect(document.querySelector('.tkspecid b')?.textContent).toBe('run-123')
   })
 
-  it('says nothing about tools rather than a dash when the lane never reported a count', () => {
+  it('subtitle is the agent, the status word and the duration when the lane reported no usage', () => {
     const done = task({
       id: 'a', kind: 'dag', status: 'completed',
-      nodes: [node({ node_id: 'n1', status: 'completed', started_at: 1000, ended_at: 2000, tool_call_count: null })],
+      nodes: [node({
+        node_id: 'n1', status: 'completed', started_at: 1000, ended_at: 2000,
+        tokens_in: null, tokens_out: null, tool_call_count: 14, tool_failure_count: 1,
+      })],
     })
     pick(done)
-    expect(document.querySelector('.tksub')?.textContent).not.toContain('—')
+    expect(document.querySelector('.tksub')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1s')
   })
 
-  it('sets the agent apart from the rest of the subtitle in its own <b>', () => {
+  it('subtitle adds the token total, grouped by thousands, when the lane reported usage', () => {
+    const done = task({
+      id: 'a', kind: 'spawn', status: 'running',
+      nodes: [node({ node_id: 'n1', status: 'running', started_at: Date.now() - 110_000, tokens_in: 4000, tokens_out: 910 })],
+    })
+    pick(done)
+    expect(document.querySelector('.tksub')?.textContent).toBe('raven · gui.tasks.node_st_running · 1m50s · gui.tasks.tokens_n {"n":"4,910"}')
+  })
+
+  it('sets the agent apart in its own <b>, without the handle', () => {
     const done = task({
       id: 'a', kind: 'dag', status: 'completed',
       nodes: [node({ node_id: 'n1', status: 'completed', agent: 'coder', instance: 'x1' })],
     })
     pick(done)
-    expect(document.querySelector('.tksub b')?.textContent).toBe('coder @x1')
+    expect(document.querySelector('.tksub b')?.textContent).toBe('coder')
   })
 
   describe('a cross-run dependency', () => {

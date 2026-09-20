@@ -375,43 +375,33 @@ function useNodeRecord(row: TaskRow, node: TaskNode): RecordLoad {
   return { ...state, retry: () => setNonce((n) => n + 1) }
 }
 
-function tokensText(node: TaskNode): string {
-  if (node.status === 'pending' || node.status === 'skipped') return ''
-  if (node.tokens_in == null && node.tokens_out == null) return t('gui.tasks.tokens_none')
-  return t('gui.tasks.tokens_n', { n: fmtN((node.tokens_in || 0) + (node.tokens_out || 0)) })
-}
-
 /* Grouped by thousands, the way the prototype's own `fmtN` reads a token
    count -- "4,321 tokens" rather than "4321 tokens". */
 const fmtN = (n: number): string => n.toLocaleString('en-US')
 
 /* The rest of the subtitle, after the agent (which the caller sets apart in
-   its own `<b>`): status word, duration, tokens, tool count -- pushed only
-   when the fact is there to push. No dash for a missing tool count: a fact
-   this node's lane never reported is a fact this line says nothing about,
-   not a line that says "—". */
+   its own `<b>`): status word, duration, tokens -- each pushed only when the
+   fact is there to push. A lane that never reported usage is a fact this
+   line says nothing about, not a line that says "not reported"; the tool
+   count is the board card's and the process fold's, not this line's. */
 function nodeSubtitleRest(node: TaskNode): string[] {
   const parts = [nodeStatusWord(node.status)]
   const dur = node.started_at ? formatDuration((node.ended_at ?? Date.now()) - node.started_at) : ''
   if (dur) parts.push(dur)
-  const tk = tokensText(node)
-  if (tk) parts.push(tk)
-  if (node.tool_call_count != null) {
-    parts.push(node.tool_failure_count
-      ? t('gui.tasks.tools_n', { n: node.tool_call_count }) + ' · ' + t('gui.tasks.tools_failed_n', { n: node.tool_failure_count })
-      : t('gui.tasks.tools_n', { n: node.tool_call_count }))
+  if (node.tokens_in != null || node.tokens_out != null) {
+    parts.push(t('gui.tasks.tokens_n', { n: fmtN((node.tokens_in || 0) + (node.tokens_out || 0)) }))
   }
   if (node.status === 'completed' && node.has_output === false) parts.push(t('gui.tasks.no_output'))
   return parts
 }
 
-/* The node panel head's subtitle line: the agent (+@instance) in its own
-   `<b>`, the rest of the sentence plain after it -- the prototype sets the
-   agent apart the same way. */
+/* The node panel head's subtitle line: the agent in its own `<b>`, the rest
+   of the sentence plain after it. The agent alone, without its handle: a
+   spawn's handle is a minted id (`TaskRow.handle`), and the work-order tab
+   already names the instance for the reader who wants it. */
 function NodeSubtitle({ node }: { node: TaskNode }): JSX.Element {
-  const agent = node.agent + (node.instance ? ' @' + node.instance : '')
   const rest = nodeSubtitleRest(node)
-  return <span className="tksub"><b>{agent}</b>{rest.length ? ' · ' + rest.join(' · ') : ''}</span>
+  return <span className="tksub"><b>{node.agent}</b>{rest.length ? ' · ' + rest.join(' · ') : ''}</span>
 }
 
 /* Why a step nobody dispatched has nothing to read: skipped names the
