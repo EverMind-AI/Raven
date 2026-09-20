@@ -6071,10 +6071,6 @@
       "en": "Graph - drag to pan, ctrl and scroll to zoom",
       "zh": "流程图 - 拖动平移，按住 ctrl 滚动缩放"
     },
-    "gui.tasks.chat_on": {
-      "en": "Continue with {agent}",
-      "zh": "继续和 {agent} 对话"
-    },
     "gui.tasks.tab_order": {
       "en": "Work order",
       "zh": "任务单"
