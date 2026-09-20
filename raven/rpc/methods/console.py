@@ -1580,12 +1580,16 @@ async def fs_dirs(params: dict, *, agent_loop_factory=None) -> dict:
     refuses agent home's ancestors), which says nothing about its children --
     the picker lets such a row be entered and only withholds the pick.
 
-    The cap bounds the scan, not just the answer, as ``fs_list`` does: the
-    first 500 names are stat'ed and the rest are never looked at, so a
-    caller-chosen directory of thirty thousand files costs 500 stats, not
-    thirty thousand. And the walk runs off the event loop, as ``fs_read``
-    does, because the directory is the caller's choice and a slow mount would
-    otherwise stall every other client on the shared socket.
+    The cap counts directories FOUND, not names examined, so a folder is never
+    dropped for sorting late among its siblings: the picker offers no typed
+    path, and a subtree left out of the listing cannot be reached at all.
+    Bounding the input instead would buy speed with the answer. The scan is
+    cheap regardless because the type comes off the dirent -- ``os.scandir``
+    answers ``is_dir`` from what the kernel already returned, so a directory of
+    thirty thousand files costs no stats at all. And the walk runs off the
+    event loop, as ``fs_read`` does, because the directory is the caller's
+    choice and a slow mount would otherwise stall every other client on the
+    shared socket.
     """
     from raven.config.loader import load_config
 
@@ -1598,7 +1602,7 @@ async def fs_dirs(params: dict, *, agent_loop_factory=None) -> dict:
 
 
 def _walk_dirs(target: Path, agent_home: Path) -> dict:
-    """The blocking half of ``fs.dirs``: resolve, list, stat, judge."""
+    """The blocking half of ``fs.dirs``: resolve, list, judge."""
     from raven.agent.workdir import validate_override
 
     target = target.resolve()
@@ -1613,17 +1617,20 @@ def _walk_dirs(target: Path, agent_home: Path) -> dict:
         return True
 
     try:
-        children = sorted((c for c in target.iterdir() if not c.name.startswith(".")), key=lambda c: c.name.lower())
+        with os.scandir(target) as scan:
+            children = sorted((c for c in scan if not c.name.startswith(".")), key=lambda c: c.name.lower())
     except OSError as e:
         raise ConfigValidationError(str(e)) from None
     entries = []
-    for child in children[:_FS_MAX_ENTRIES]:
+    for child in children:
         try:
             if not child.is_dir():
                 continue
         except OSError:
             continue
-        entries.append({"name": child.name, "path": str(child), "ok": allowed(child)})
+        entries.append({"name": child.name, "path": child.path, "ok": allowed(Path(child.path))})
+        if len(entries) >= _FS_MAX_ENTRIES:
+            break
     return {
         "path": str(target),
         "parent": None if target.parent == target else str(target.parent),

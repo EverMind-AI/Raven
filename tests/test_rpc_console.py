@@ -1797,38 +1797,44 @@ async def test_fs_dirs_reports_a_directory_it_cannot_read(tmp_path: Path, monkey
     target = tmp_path / "sealed"
     target.mkdir()
 
-    def boom(self):
+    def boom(path):
         raise PermissionError("no")
 
-    monkeypatch.setattr(Path, "iterdir", boom)
+    monkeypatch.setattr(console_module.os, "scandir", boom)
     with pytest.raises(ConfigValidationError):
         await console_module.fs_dirs({"path": str(target)})
 
 
-async def test_fs_dirs_looks_at_the_first_500_names_and_no_more(tmp_path: Path, monkeypatch) -> None:
-    """The cap bounds the work, not only the answer: a directory of many files
-    costs at most 500 stats, the way fs.list's cap does, rather than one per
-    entry until 500 directories have been found."""
+async def test_fs_dirs_finds_a_directory_that_sorts_past_the_files(tmp_path: Path, monkeypatch) -> None:
+    """The cap counts directories found, so the files a folder sits behind
+    cannot hide it. Bounding the names examined instead would answer "no
+    subfolders" here, and the picker has no typed path to reach it by."""
     _agent_home(monkeypatch, tmp_path / "home")
     root = tmp_path / "root"
     root.mkdir()
     for i in range(600):
         (root / f"f{i:04d}.txt").write_text("x")
     (root / "zzz-dir").mkdir()
-    seen: list[str] = []
-    real_is_dir = Path.is_dir
 
-    def counting(self):
-        if self.parent == root:
-            seen.append(self.name)
-        return real_is_dir(self)
-
-    monkeypatch.setattr(Path, "is_dir", counting)
     r = await console_module.fs_dirs({"path": str(root)})
-    assert len(seen) == 500
-    # The directory sorted past the first 500 names is not reached -- the
-    # price of a bounded scan, and the same one fs.list pays.
-    assert r["entries"] == []
+    assert [e["name"] for e in r["entries"]] == ["zzz-dir"]
+
+
+async def test_fs_dirs_returns_at_most_500_directories(tmp_path: Path, monkeypatch) -> None:
+    """The cap still bounds the answer, and it keeps the first 500 by name so
+    the same directory lists the same way on every machine."""
+    _agent_home(monkeypatch, tmp_path / "home")
+    root = tmp_path / "root"
+    root.mkdir()
+    for i in range(600):
+        (root / f"d{i:04d}").mkdir()
+
+    r = await console_module.fs_dirs({"path": str(root)})
+    names = [e["name"] for e in r["entries"]]
+    assert len(names) == 500
+    assert names == sorted(names)
+    assert names[0] == "d0000"
+    assert names[-1] == "d0499"
 
 
 async def test_fs_dirs_skips_a_child_that_vanishes_mid_listing(tmp_path: Path, monkeypatch) -> None:
@@ -1836,13 +1842,24 @@ async def test_fs_dirs_skips_a_child_that_vanishes_mid_listing(tmp_path: Path, m
     root = tmp_path / "root"
     (root / "keep").mkdir(parents=True)
     (root / "gone").mkdir()
-    real_is_dir = Path.is_dir
 
-    def flaky(self):
-        if self.name == "gone":
-            raise OSError("vanished")
-        return real_is_dir(self)
+    class _Entry:
+        def __init__(self, child: Path) -> None:
+            self.name = child.name
+            self.path = str(child)
 
-    monkeypatch.setattr(Path, "is_dir", flaky)
+        def is_dir(self) -> bool:
+            if self.name == "gone":
+                raise OSError("vanished")
+            return True
+
+    class _Scan:
+        def __enter__(self):
+            return iter([_Entry(root / "keep"), _Entry(root / "gone")])
+
+        def __exit__(self, *exc) -> bool:
+            return False
+
+    monkeypatch.setattr(console_module.os, "scandir", lambda path: _Scan())
     r = await console_module.fs_dirs({"path": str(root)})
     assert [e["name"] for e in r["entries"]] == ["keep"]

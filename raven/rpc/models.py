@@ -3172,7 +3172,7 @@ class FsDirsResult(_Strict):
     home: str = Field(..., description="The user's home directory, where the browser starts.")
     ok: bool = Field(..., description="Whether the listed directory itself may be a session's working directory.")
     entries: list[FsDirEntry] = Field(
-        ..., description="Subdirectories only, dotfiles omitted, sorted by name; only the first 500 names are examined."
+        ..., description="Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found."
     )
 
 
