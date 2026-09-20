@@ -152,9 +152,9 @@ class DefaultMemory:
         from raven.agent.subagent.charter import current_charter
 
         charter = current_charter()
-        if charter is None or not (charter.prompt or charter.stop_when):
+        if charter is None or not (charter.task_brief or charter.stop_when):
             return turn
-        return replace(turn, task_brief=charter.prompt, task_done_when=charter.stop_when)
+        return replace(turn, task_brief=charter.task_brief, task_done_when=charter.stop_when)
 
     async def shrink(
         self,

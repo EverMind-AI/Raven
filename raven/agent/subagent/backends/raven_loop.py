@@ -8,7 +8,7 @@ and ``_build_subagent_prompt``, extracted verbatim so a spawned sub-agent's
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Collection, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +33,7 @@ from raven.agent.tools.web import ImageSearchTool, WebFetchTool, WebSearchTool, 
 from raven.config.live import LiveConfig, exec_extra_deny_patterns
 from raven.config.schema import LLM_ERROR_RETRY_DELAYS_DEFAULT, ExecToolConfig
 from raven.contracts.llm_provider import LLMProvider
+from raven.contracts.participant import StepView
 from raven.contracts.subagent_backend import SubagentActionAbortedError, SubagentNoAnswerError
 from raven.contracts.tool import SKIPPED_AFTER_BLOCKED_CALL, Continuation
 from raven.memory_engine import filter_by_required_tools
@@ -57,6 +58,19 @@ def _live_exec_extra_deny() -> list[str] | None:
     permission gates a delegated shell the same call it gates a direct one.
     """
     return exec_extra_deny_patterns(_LIVE_CONFIG)
+
+
+def _append_participant_note(messages: list[dict[str, Any]], note: str) -> None:
+    """Append generated advice without importing the main loop back into this backend."""
+    if not messages or not note:
+        return
+    body = messages[-1].get("content")
+    if isinstance(body, str):
+        messages[-1]["content"] = f"{body}\n\n{note}" if body else note
+    elif isinstance(body, list):
+        messages[-1]["content"] = [*body, {"type": "text", "text": note}]
+    elif body is None:
+        messages[-1]["content"] = note
 
 
 def build_subagent_prompt(
@@ -262,7 +276,7 @@ class RavenLoopBackend:
         finally:
             IN_SUBAGENT_RUN.reset(token)
 
-    async def _run(
+    async def _run(  # noqa: C901 -- this is the bounded in-process worker loop
         self,
         task: str,
         *,
@@ -404,6 +418,43 @@ class RavenLoopBackend:
                 }
             ]
         )
+        iteration = 0
+        participants = charter_mod.charter_participants()
+        original_task = task
+
+        async def participant_answer(verb: str, *args: Any) -> Any:
+            if not participants:
+                return None
+            try:
+                return await getattr(participants[0], verb)(*args)
+            except Exception:
+                logger.exception("generated charter participant %s raised; treating it as silence", verb)
+                return None
+
+        def participant_step(phase: str, *, response: Any = None) -> StepView:
+            return StepView(
+                session_key=session_key or task_id,
+                iteration=iteration,
+                response=response,
+                transcript=tuple(messages),
+                history=tuple(history or ()),
+                turn_base=len(history or ()),
+                question=original_task,
+                rollbacks=0,
+                mode=None,
+                mode_overlay=None,
+                phase=phase,
+                tools=tuple(tools.get_definitions()),
+                max_iterations=self._MAX_ITERATIONS,
+            )
+
+        if participants:
+            intake = await participant_answer("intake", task, participant_step("user_inbound"))
+            if isinstance(intake, Mapping):
+                if intake.get("reply") is not None:
+                    return str(intake["reply"])
+                if isinstance(intake.get("text"), str):
+                    task = intake["text"]
         messages.append({"role": "user", "content": with_attachment_note(task, media)})
         # Where this run's own turns begin. Taken here rather than assumed to be
         # index 2, because a resumed instance arrives with its whole history in
@@ -411,7 +462,6 @@ class RavenLoopBackend:
         # node's work as this node's.
         own_turns_from = len(messages)
 
-        iteration = 0
         final_result: str | None = None
         # Whether the LAST model response of this run was cut at the output
         # ceiling, not whether any was: a round that was cut and then answered
@@ -420,6 +470,10 @@ class RavenLoopBackend:
         cut_at_ceiling = False
         while iteration < self._MAX_ITERATIONS:
             iteration += 1
+            if participants:
+                advice = await participant_answer("advise", participant_step("iteration"))
+                if isinstance(advice, str) and advice:
+                    _append_participant_note(messages, advice)
             if on_delta is None:
                 response = await provider.chat_with_retry(
                     messages=messages,
@@ -557,6 +611,10 @@ class RavenLoopBackend:
                         if getattr(result, "continuation", None) is Continuation.ABORT_TURN:
                             raise SubagentActionAbortedError
                         break
+                if participants:
+                    advice = await participant_answer("advise", participant_step("after_iteration", response=response))
+                    if isinstance(advice, str) and advice:
+                        _append_participant_note(messages, advice)
             else:
                 final_result = response.content
                 break
@@ -594,6 +652,9 @@ class RavenLoopBackend:
         # all carries the reason as well -- that is the shape this exists for.
         if cut_at_ceiling:
             activity.note_output_limit()
+        if final_result is None and participants:
+            salvaged = await participant_answer("salvage", participant_step("answerless"))
+            final_result = salvaged if isinstance(salvaged, str) and salvaged else None
         if final_result is None:
             # Nothing to hand back. Raised rather than returned, so the node
             # fails instead of completing with a sentence the next step would

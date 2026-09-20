@@ -197,13 +197,18 @@ def build_runtime(
             memory=MemoryStore(config.workspace_path),
             config=ec_config.eval_engine,
         )
-    if eval_engine is not None or plugin_hooks:
-        host = replace(
-            host,
-            hooks=hooks_stack.build_hooks_stack(
-                eval_engine=eval_engine, plugin_hooks=plugin_hooks, extra_hooks=host.hooks
-            ),
-        )
+    from raven.agent.hook.participant import ParticipantHook
+    from raven.agent.subagent.charter import CharterParticipant
+
+    charter_hook = ParticipantHook("generated-charter", CharterParticipant, rolls_back=False)
+    host = replace(
+        host,
+        hooks=hooks_stack.build_hooks_stack(
+            eval_engine=eval_engine,
+            plugin_hooks=plugin_hooks,
+            extra_hooks=[charter_hook, *(host.hooks or ())],
+        ),
+    )
     loop = agent_loop.AgentLoop(
         provider=provider,
         workspace=config.workspace_path,

@@ -1788,12 +1788,40 @@ class TurnPathMixin:
         #     (content, media) reply directly.
         #
         # Skip the user-inbound hooks for Sentinel / subagent turns (by origin).
+        inbound_original = content
         skip_user_inbound = origin in _SKIP_USER_INBOUND_ORIGINS
+        if skip_user_inbound:
+            from raven.agent.harness.participants import Intake, read_intake
+            from raven.agent.subagent.charter import charter_participants
+            from raven.contracts.participant import StepView
+
+            participants = charter_participants()
+            if participants:
+                peeked = self.sessions.peek(msg_session_key)
+                step = StepView(
+                    session_key=msg_session_key,
+                    iteration=0,
+                    response=None,
+                    transcript=(),
+                    history=tuple(peeked.messages if peeked is not None else ()),
+                    turn_base=0,
+                    question=content,
+                    rollbacks=0,
+                    mode=None,
+                    mode_overlay=None,
+                    phase="user_inbound",
+                )
+                answer = await self.harness.memory.ask_intake(content, step, participants)
+                intake = answer if answer is None or isinstance(answer, Intake) else read_intake(answer, text=content)
+                if intake is not None:
+                    if intake.reply is not None:
+                        return str(intake.reply), []
+                    content = intake.text
+
         # The turn's one hook-metadata dict, and the words the user actually
         # sent: the first crosses every phase group with the turn, the second
         # is what history keeps no matter how hooks rewrite the model's view.
         turn_hook_meta: dict[str, Any] = {}
-        inbound_original = content
         if len(self.hooks) > 0 and not skip_user_inbound:
             _peeked = self.sessions.peek(msg_session_key)
             _hook_ctx = AgentHookContext(
@@ -1805,7 +1833,10 @@ class TurnPathMixin:
             )
             _decision = await self.hooks.before_user_inbound(_hook_ctx)
             if _decision.short_circuit_result is not None:
-                return _decision.short_circuit_result
+                result = _decision.short_circuit_result
+                if isinstance(result, tuple) and len(result) == 2:
+                    return result
+                return str(result), []
             if _decision.modified_content is not None:
                 content = _decision.modified_content
 

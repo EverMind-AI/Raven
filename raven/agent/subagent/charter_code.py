@@ -28,6 +28,7 @@ from __future__ import annotations
 import ast
 import builtins
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from typing import Any
 
 from loguru import logger
@@ -102,8 +103,13 @@ ALLOWED_METHODS: frozenset[str] = frozenset(
 )
 
 ENTRY = "judge"
-"""The function a charter's code must define: ``judge(name, params, prior)``,
-answering with the refusal sentences for this call."""
+SIGNATURES: dict[str, tuple[str, ...]] = {
+    "intake": ("text", "step"),
+    "advise": ("step",),
+    "salvage": ("step",),
+    "judge": ("name", "params", "prior"),
+}
+"""Generated functions and the exact pure-data arguments the loop supplies."""
 
 
 class CharterCodeError(Exception):
@@ -143,12 +149,11 @@ def _safe_builtins() -> dict[str, Any]:
     return {name: getattr(builtins, name) for name in ALLOWED_CALLS}
 
 
-def compile_judge(source: str) -> Any:
-    """Compile a charter's judge, or raise :class:`CharterCodeError`.
-
-    The gate runs on the parse tree, before anything is compiled, so a refused
-    source was never executable rather than executable-but-unlucky.
-    """
+def compile_function(source: str, entry: str) -> Any:
+    """Compile one generated participant function behind the AST gate."""
+    expected = SIGNATURES.get(entry)
+    if expected is None:
+        raise CharterCodeError(f"unsupported charter function {entry!r}")
     if not source.strip():
         raise CharterCodeError("empty source")
     if len(source) > MAX_SOURCE_CHARS:
@@ -158,14 +163,41 @@ def compile_judge(source: str) -> Any:
     except SyntaxError as exc:
         raise CharterCodeError(f"syntax error: {exc.msg}") from exc
     if any(not isinstance(node, ast.FunctionDef) for node in tree.body):
-        raise CharterCodeError("a charter judge is function definitions and nothing else")
+        raise CharterCodeError("charter source is function definitions and nothing else")
     _check_tree(tree)
-    if ENTRY not in [node.name for node in tree.body if isinstance(node, ast.FunctionDef)]:
-        raise CharterCodeError(f"must define {ENTRY}(name, params, prior)")
+    definitions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    target = definitions.get(entry)
+    if target is None:
+        raise CharterCodeError(f"must define {entry}({', '.join(expected)})")
+    args = target.args
+    actual = tuple(arg.arg for arg in args.args)
+    if (
+        len(actual) != len(expected)
+        or args.posonlyargs
+        or args.vararg
+        or args.kwarg
+        or args.kwonlyargs
+        or args.defaults
+    ):
+        raise CharterCodeError(f"{entry} must have signature {entry}({', '.join(expected)})")
     namespace: dict[str, Any] = {"__builtins__": _safe_builtins()}
     code = compile(tree, "<charter>", "exec")
     exec(code, namespace)  # noqa: S102 - the gate above is the boundary, not this line
-    return namespace[ENTRY]
+    return namespace[entry]
+
+
+def compile_judge(source: str) -> Any:
+    """Backward-compatible compiler for ``judge(name, params, prior)``."""
+    return compile_function(source, ENTRY)
+
+
+def run_function(function: Any, *args: Any) -> Any:
+    """Run with detached pure-data inputs; a failure is participant silence."""
+    try:
+        return function(*(deepcopy(arg) for arg in args))
+    except Exception as exc:  # noqa: BLE001 - generated code must not cost the turn
+        logger.warning("charter function raised ({}); treating its answer as silence", exc)
+        return None
 
 
 def run_judge(
@@ -203,6 +235,8 @@ __all__ = [
     "ENTRY",
     "MAX_SOURCE_CHARS",
     "CharterCodeError",
+    "compile_function",
     "compile_judge",
+    "run_function",
     "run_judge",
 ]

@@ -31,6 +31,8 @@ from typing import Any
 
 from loguru import logger
 
+from raven.contracts.participant import AgentParticipant, StepView
+
 MAX_PROMPT_CHARS = 4000
 """A charter's prompt is a brief, not a second system prompt. Bounded so a
 malformed or hostile payload cannot push the turn's own identity out of the
@@ -39,6 +41,18 @@ window."""
 MAX_TOOLS = 64
 MAX_CHECKS = 32
 MAX_CODE_CHARS = 8000
+
+
+def _parameter_enabled(module: str, name: str) -> bool:
+    from raven.contracts.harness_capabilities import parameter_enabled
+
+    return parameter_enabled(module, name)
+
+
+def _function_enabled(module: str, kind: str, name: str) -> bool:
+    from raven.contracts.harness_capabilities import function_enabled
+
+    return function_enabled(module, kind, name)
 
 
 @dataclass(frozen=True)
@@ -59,9 +73,12 @@ class Charter:
     """One dispatch's brief, already narrowed."""
 
     prompt: str = ""
-    """Appended after this agent's own identity, never in place of it: replacing
-    it would drop the runtime facts (working directory, platform policy, the
-    untrusted-content rule) that the identity segment carries."""
+    """The dispatch brief, separate from generated instructions so either can
+    be disabled without erasing or impersonating the other."""
+
+    instruction_addendum: str = ""
+    """Task-specific instructions appended after the worker's existing identity,
+    never in place of the runtime facts and safety rules that identity carries."""
 
     tools: tuple[str, ...] | None = None
     """``None`` is "whatever this agent already offers". A tuple narrows to
@@ -76,6 +93,9 @@ class Charter:
     source that does not pass never runs, and one that raises at run time has
     said nothing rather than refused everything."""
 
+    functions: tuple[tuple[str, str], ...] = ()
+    """Enabled generated participant sources, stored as immutable name-source pairs."""
+
     timeout_s: int | None = None
     """A deadline for this dispatch, if the brief carried one. Tightening only:
     a worker configured with a limit keeps the smaller of the two, and one
@@ -84,9 +104,21 @@ class Charter:
 
     stop_when: str = ""
 
+    @property
+    def task_brief(self) -> str:
+        """The brief and enabled instruction delta rendered for Memory."""
+        return "\n\n".join(part for part in (self.prompt, self.instruction_addendum) if part)
+
     def __bool__(self) -> bool:
         return bool(
-            self.prompt or self.tools is not None or self.checks or self.code or self.timeout_s or self.stop_when
+            self.prompt
+            or self.instruction_addendum
+            or self.tools is not None
+            or self.checks
+            or self.code
+            or self.functions
+            or self.timeout_s
+            or self.stop_when
         )
 
 
@@ -101,10 +133,21 @@ def parse(payload: Any) -> Charter | None:
     """
     if not isinstance(payload, dict):
         return None
-    prompt = str(payload.get("prompt") or "")[:MAX_PROMPT_CHARS]
-    stop_when = str(payload.get("stopWhen") or payload.get("stop_when") or "")[:MAX_PROMPT_CHARS]
+    legacy_prompt = payload.get("prompt")
+    raw_brief = payload.get("brief") if "brief" in payload else legacy_prompt
+    prompt = str(raw_brief or "")[:MAX_PROMPT_CHARS]
+    instruction_addendum = (
+        str(payload.get("instructionAddendum") or "")[:MAX_PROMPT_CHARS]
+        if _parameter_enabled("memory", "systemPrompt")
+        else ""
+    )
+    stop_when = (
+        str(payload.get("stopWhen") or payload.get("stop_when") or "")[:MAX_PROMPT_CHARS]
+        if _parameter_enabled("memory", "stopWhen")
+        else ""
+    )
     tools: tuple[str, ...] | None = None
-    raw_tools = payload.get("tools")
+    raw_tools = payload.get("tools") if _parameter_enabled("capability", "tools") else None
     if isinstance(raw_tools, list):
         tools = tuple(str(name) for name in raw_tools[:MAX_TOOLS] if isinstance(name, str) and name)
     checks: list[CheckRule] = []
@@ -112,7 +155,7 @@ def parse(payload: Any) -> Charter | None:
     # from another process, and a non-list here (a bare number, an object the
     # sender meant as a single rule) is a ``TypeError`` raised inside the
     # request handler rather than the log line this function promises.
-    raw_checks = payload.get("checks")
+    raw_checks = payload.get("checks") if _parameter_enabled("action", "checks") else None
     for raw in raw_checks[:MAX_CHECKS] if isinstance(raw_checks, list) else ():
         if not isinstance(raw, dict) or not raw.get("tool"):
             continue
@@ -128,15 +171,29 @@ def parse(payload: Any) -> Charter | None:
                 message=str(raw.get("message") or ""),
             )
         )
+    function_modules = {"intake": "memory", "advise": "planning", "salvage": "action"}
+    raw_functions = payload.get("functions")
+    functions: list[tuple[str, str]] = []
+    if isinstance(raw_functions, dict):
+        for name, source in raw_functions.items():
+            module = function_modules.get(name)
+            if module and isinstance(source, str) and source.strip() and _function_enabled(module, "participant", name):
+                functions.append((name, source[:MAX_CODE_CHARS]))
     raw_timeout = payload.get("timeoutSeconds") or payload.get("timeout_s")
     timeout_s: int | None = None
     if isinstance(raw_timeout, (int, float)) and raw_timeout > 0:
         timeout_s = int(raw_timeout)
     charter = Charter(
         prompt=prompt,
+        instruction_addendum=instruction_addendum,
         tools=tools,
         checks=tuple(checks),
-        code=str(payload.get("code") or "")[:MAX_CODE_CHARS],
+        code=(
+            str(payload.get("code") or "")[:MAX_CODE_CHARS]
+            if _function_enabled("action", "participant", "judge")
+            else ""
+        ),
+        functions=tuple(functions),
         timeout_s=timeout_s,
         stop_when=stop_when,
     )
@@ -239,7 +296,46 @@ def _prior_satisfied(
     return False
 
 
-class CharterParticipant:
+def _pure_data(value: Any) -> Any:
+    """Detach the JSON-like part of a StepView from host runtime objects."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): _pure_data(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_pure_data(item) for item in value]
+    return str(value)
+
+
+def _step_payload(step: Any) -> dict[str, Any]:
+    response = getattr(step, "response", None)
+    response_data = None
+    if response is not None:
+        response_data = {
+            name: _pure_data(getattr(response, name, None))
+            for name in ("content", "reasoning", "finish_reason", "tool_calls", "usage")
+            if getattr(response, name, None) is not None
+        }
+    return {
+        "session_key": getattr(step, "session_key", ""),
+        "iteration": getattr(step, "iteration", 0),
+        "response": response_data,
+        "transcript": _pure_data(getattr(step, "transcript", ())),
+        "history": _pure_data(getattr(step, "history", ())),
+        "turn_base": getattr(step, "turn_base", 0),
+        "question": getattr(step, "question", ""),
+        "rollbacks": getattr(step, "rollbacks", 0),
+        "mode": getattr(step, "mode", None),
+        "mode_overlay": _pure_data(getattr(step, "mode_overlay", None)),
+        "phase": getattr(step, "phase", ""),
+        "tools": _pure_data(getattr(step, "tools", ())),
+        "window": getattr(step, "window", None),
+        "max_iterations": getattr(step, "max_iterations", None),
+        "tools_ran": bool(getattr(step, "tools_ran", False)),
+    }
+
+
+class CharterParticipant(AgentParticipant):
     """This dispatch's own judgements, as a participant.
 
     The thin shell the design calls for: a Charter is data the model sent, and
@@ -247,11 +343,20 @@ class CharterParticipant:
     being read by the role itself. Stateless, so one instance serves every call
     of a turn; what it judges comes from the scope, not from this object.
 
-    Only ``judge`` today. The other verbs stay at their defaults, which is what
-    "a Charter carries no opinion about that" already means.
+    Generated pure-data functions implement only their declared verbs; every
+    other verb keeps the base participant's no-op answer.
     """
 
     __slots__ = ()
+
+    async def intake(self, text: str, step: StepView) -> Any:
+        return _generated_answer("intake", text, _step_payload(step))
+
+    async def advise(self, step: StepView) -> Any:
+        return _generated_answer("advise", _step_payload(step))
+
+    async def salvage(self, step: StepView) -> Any:
+        return _generated_answer("salvage", _step_payload(step))
 
     def judge(
         self,
@@ -266,7 +371,7 @@ def charter_participants() -> tuple[CharterParticipant, ...]:
     """The participants this dispatch brings, or none when it brought no
     judgements. Asked after the plugins' own, so a product's rules speak first."""
     charter = current_charter()
-    if charter is None or not (charter.checks or charter.code):
+    if charter is None or not (charter.checks or charter.code or charter.functions):
         return ()
     return (CharterParticipant(),)
 
@@ -305,15 +410,40 @@ def judge(
     return refusals
 
 
-_COMPILED: dict[str, Any] = {}
+_COMPILED: dict[Any, Any] = {}
 MAX_COMPILED = 64
-"""How many distinct judges one process keeps compiled.
+"""How many distinct generated functions one process keeps compiled.
 
-Keyed by source, and a worker process outlives any one dispatch, so without a
+Generated participants are keyed by verb and source; judges by source. A worker process outlives any one dispatch, so without a
 ceiling this grows with every brief the process is ever sent. Cleared rather
 than evicted one at a time: the cost of a miss is one parse-tree walk, and a
 policy that has to decide *which* entry to drop is more machinery than the
 thing it manages."""
+
+
+def _generated_answer(name: str, *args: Any) -> Any:
+    charter = current_charter()
+    source = dict(charter.functions).get(name) if charter is not None else None
+    if not source:
+        return None
+    key = (name, source)
+    compiled = _COMPILED.get(key)
+    if compiled is None:
+        try:
+            from raven.agent.subagent.charter_code import compile_function
+
+            compiled = compile_function(source, name)
+        except Exception as exc:  # noqa: BLE001 - refused generated code is silence
+            logger.warning("charter: its {} function was refused ({}); ignoring it", name, exc)
+            compiled = False
+        if len(_COMPILED) >= MAX_COMPILED:
+            _COMPILED.clear()
+        _COMPILED[key] = compiled
+    if compiled is False:
+        return None
+    from raven.agent.subagent.charter_code import run_function
+
+    return run_function(compiled, *args)
 
 
 def _code_refusals(
