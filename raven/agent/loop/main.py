@@ -233,8 +233,9 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # case for 65536: the retired default the old bootstrap wrote to disk is
         # cleared where it lives by ``config.loader``, so what arrives here is a
         # real choice.
-        self._configured_window = context_window_tokens or None
-        self._default_binding = ModelBinding(provider, model or provider.get_default_model(), self._configured_window)
+        self._default_binding = ModelBinding(
+            provider, model or provider.get_default_model(), context_window_tokens or None
+        )
         self._session_bindings: dict[str, ModelBinding] = {}
         # Per-session operating policy (iteration cap, mode overlay); set by a
         # transport that speaks modes, read once at each turn's start.
@@ -251,7 +252,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # ``_forget_transport_verdicts`` is what the binding setters call.
         self._image_tool_result_ok: dict[str, bool] = {}
         self._vision_ok: dict[str, bool] = {}
-        self.max_iterations = max_iterations
+        self._default_max_iterations = max_iterations
         # Empty-response recovery budgets. None → enabled defaults.
         self._recovery_limits = empty_recovery if empty_recovery is not None else RecoveryLimits()
         self.search_api_key = search_api_key
@@ -923,7 +924,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             # which is exactly what the Model Binding contract in CONTEXT.md
             # forbids: a turn resolves its pair once and holds it for the whole
             # turn tree.
-            binding = self.binding_for_session(session_key)
+            binding = self._with_live_window(self.binding_for_session(session_key))
             delegate_table = await self._write_worker_table(req, session_key, binding)
             # The charter a dispatch staged for this session, taken for this turn
             # only. Both scopes below are None on an ordinary turn, which is the
@@ -931,6 +932,10 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             charter = self._take_session_charter(session_key)
             with (
                 use_binding(binding),
+                # Beside the binding and for the same reason: the settings a
+                # turn reads more than once answer the same way all the way
+                # through it.
+                self._turn_scope(),
                 self.tools.session_scope_for(session_key),
                 self.tools.turn_scope(),
                 delegate_scope(delegate_table),

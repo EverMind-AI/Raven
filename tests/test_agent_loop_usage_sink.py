@@ -270,7 +270,7 @@ def test_no_configured_window_resolves_via_the_ladder_and_is_not_explicit(worksp
     provider = UsageProvider("stub", 0, 0)
     agent = _make_agent(workspace, provider, model="stub", window=None)
 
-    assert agent._configured_window is None
+    assert agent.default_binding.configured_window is None
     assert agent.context_window_tokens == rates.DEFAULT_CONTEXT_WINDOW_TOKENS
 
 
@@ -278,7 +278,7 @@ def test_a_configured_window_is_explicit_at_construction(workspace):
     provider = UsageProvider("stub", 0, 0)
     agent = _make_agent(workspace, provider, model="stub", window=8192)
 
-    assert agent._configured_window == 8192
+    assert agent.default_binding.configured_window == 8192
     assert agent.context_window_tokens == 8192
 
 
@@ -289,7 +289,7 @@ def test_a_pinned_window_outranks_the_model_a_session_switched_to(workspace, mon
     provider = UsageProvider("stub", 0, 0)
     agent = _make_agent(workspace, provider, model="stub", window=8192)
 
-    switched = ModelBinding(provider, "openrouter/deepseek/deepseek-v4-pro", agent._configured_window)
+    switched = ModelBinding(provider, "openrouter/deepseek/deepseek-v4-pro", agent.default_binding.configured_window)
     with use_binding(switched):
         assert agent.context_window_tokens == 8192
 
