@@ -246,7 +246,7 @@ async def test_ext_list_calls_a_skill_hub_installed_whichever_installer_stamped_
     monkeypatch.setattr(console_module, "_install_meta_name", lambda: ".install-meta.json")
     loop = SimpleNamespace(
         context=SimpleNamespace(skills=_Catalog()),
-        tools=SimpleNamespace(tool_names=[], get=lambda _name: None),
+        tools=SimpleNamespace(tool_names=[], get=lambda _name: None, schema_hidden_names=frozenset),
     )
 
     result = await console_module.ext_list({}, agent_loop_factory=lambda: loop)
