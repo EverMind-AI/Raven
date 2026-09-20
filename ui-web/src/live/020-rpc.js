@@ -191,7 +191,7 @@ const rpc = {
 /* Mirrors MAX_UPLOAD_BYTES in raven/rpc/files.py, which is the source; change
    it there first. Kept as a second copy because no limit rides the wire today
    and putting one there is a contract change this fix does not need. */
-const UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+const UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
 
 /* Why the page refuses an oversized upload instead of letting the server say
    no: the bytes ride as base64 inside ONE JSON-RPC frame, so a file over the
