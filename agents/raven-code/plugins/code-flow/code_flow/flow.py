@@ -1,16 +1,18 @@
-"""The code flow's turn hooks.
+"""The code flow's turn participant.
 
 Repository instructions and workspace concurrency notices join the system
-message through before_iteration. They never rewrite the inbound query.
-The hook tracks the turn in the session ledger,
+message through the ``system_addendum`` verb. They never rewrite the inbound
+query. The participant tracks the turn in the session ledger,
 binds and restores its checklist, and files the workspace report at send.
 Session deletion discards product state; new session IDs isolate new tasks.
+One participant per turn: the checklist binding and the per-directory instruction
+cache are attributes that die with the turn.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from pydantic import ValidationError
@@ -18,11 +20,12 @@ from pydantic import ValidationError
 from code_flow.config import FlowConfig
 from code_flow.manifest import build_manifest
 from code_flow.sessions import LEDGER, SessionLedger
-from code_flow.system_context import inject_system_context
+from code_flow.system_context import sized_addendum
 from code_flow.tools.read_state import Owner, ReadSessions, forget_session, owner_for
 from code_flow.tools.todo import STORES, TodoStore
 from raven.agent import workdir
-from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.agent.hook.participant import ParticipantHook
+from raven.contracts.participant import AgentParticipant, Answer, StepView
 
 if TYPE_CHECKING:
     from raven.plugins.context import PluginContext
@@ -74,7 +77,7 @@ def project_instructions(root: Path | None, names: list[str]) -> str:
     rather than raised -- context assembly runs on every turn, and one bad
     symlink in someone's checkout must not end the conversation. Not fenced as
     untrusted: these are the project's standing instructions to whoever works
-    in it, the same footing the conduct stands on, and a data fence would tell
+    in it, the same footing the participant stands on, and a data fence would tell
     the model to ignore exactly what it is being handed to follow.
     """
     if root is None or not names:
@@ -108,8 +111,125 @@ def project_instructions(root: Path | None, names: list[str]) -> str:
     return PROJECT_INSTRUCTIONS_HEAD + "\n\n" + "\n\n".join(parts)
 
 
-class CodeFlowHook(AgentHook):
-    """The code flow's turn-frame conduct."""
+class CodeParticipant(AgentParticipant):
+    """The code flow's judgements and bookkeeping, one instance per turn.
+
+    Process-level dependencies (the ledger, the checklist store, the slice's
+    file names) arrive through ``__init__``; what used to ride the hook
+    context's metadata dict -- the turn's checklist binding, the per-directory
+    instruction cache, the pending restore note the sizing must count -- is an
+    attribute here and dies with the turn.
+    """
+
+    def __init__(
+        self,
+        ledger: SessionLedger,
+        project_files: list[str],
+        todos: TodoStore | None,
+        flow_enabled: bool,
+        reads: ReadSessions | None,
+    ) -> None:
+        self._ledger = ledger
+        self._project_files = project_files
+        # The checklist store this product's ``todo`` tool writes through, or
+        # None when the tool face is not served (nothing to bind or restore).
+        self._todos = todos
+        self._flow_enabled = flow_enabled
+        self._reads = reads
+        self._todo_binding: tuple[str, str | None] | None = None
+        self._instructions: tuple[Any, str] | None = None
+        self._pending_note: str | None = None
+
+    async def intake(self, text: str, step: StepView) -> Answer | None:
+        # Commands return before iteration or after_send, so they must not
+        # create an in-flight mark for a turn that will never report back.
+        if (text or "").strip().lower() in {"/new", "/help"}:
+            return None
+        cwd = workdir.current()
+        if self._flow_enabled:
+            self._ledger.begin_turn(step.session_key, cwd)
+        if self._todos is not None:
+            try:
+                self._todos.bind(step.session_key, cwd)
+                self._todo_binding = (step.session_key, str(cwd) if cwd is not None else None)
+            except Exception:  # noqa: BLE001 - a record problem must not cost the turn
+                logger.exception("code-flow: could not bind the checklist for {}", step.session_key)
+        return None
+
+    async def advise(self, step: StepView) -> str | None:
+        """The checklist, restored into context when the window elided it."""
+        if step.response is not None:
+            # Asked before the call and after it; everything here belongs before.
+            return None
+        if self._reads is not None:
+            self._reads.bind(step.session_key)
+        if self._flow_enabled:
+            self._ledger.touch(step.session_key)
+        note: str | None = None
+        if self._todos is not None:
+            # System turns skip inbound, and the loop can select another
+            # session after inbound. The turn's binding survives rollbacks
+            # because the participant does.
+            cwd = workdir.current()
+            binding = (step.session_key, str(cwd) if cwd is not None else None)
+            try:
+                if self._todo_binding != binding or not self._todos.is_bound:
+                    self._todos.bind(*binding)
+                    self._todo_binding = binding
+                snapshot = self._todos.snapshot_if_hidden(list(step.transcript))
+                if snapshot is not None:
+                    logger.info("code-flow: restoring the checklist into context for {}", step.session_key)
+                    note = snapshot
+            except Exception:  # noqa: BLE001 - a checklist failure must not discard repository instructions
+                logger.exception("code-flow: could not restore the checklist for {}", step.session_key)
+        # What the sizing below must count: the note lands on the prompt in
+        # the same call the addendum does.
+        self._pending_note = note
+        return note
+
+    async def system_addendum(self, step: StepView) -> Answer | None:
+        if not self._flow_enabled:
+            return None
+        cwd = workdir.current()
+        if self._instructions is None or self._instructions[0] != cwd:
+            self._instructions = (cwd, project_instructions(cwd, self._project_files))
+        peers = self._ledger.peers_in_flight(step.session_key)
+        return sized_addendum(
+            step.transcript,
+            step.tools,
+            self._instructions[1],
+            concurrency_notice(peers) if peers else "",
+            window=step.window,
+            pending_note=self._pending_note,
+        )
+
+    async def archive(self, step: StepView, reply: str | None) -> dict[str, dict[str, Any]] | None:
+        if self._reads is not None:
+            self._reads.unbind()
+        if not self._flow_enabled:
+            return None
+        record = self._ledger.record(step.session_key)
+        cwd = workdir.current()
+        if cwd is None and record is not None and record.cwd:
+            cwd = Path(record.cwd)
+        report = build_manifest(
+            step.session_key,
+            cwd,
+            record.base_commit if record is not None else None,
+            shared_with=len(record.peers) if record is not None else 0,
+        )
+        self._ledger.end_turn(step.session_key)
+        return {ACP_META_OBSERVER: {MANIFEST_META_KEY: report}}
+
+
+class CodeFlowHook(ParticipantHook):
+    """The code flow's seat in the hook chain: one participant per turn.
+
+    Kept as a named class rather than a bare ``ParticipantHook`` because the
+    constructor is the product's assembly surface -- the factory below and a
+    ledger's worth of tests wire sessions through it -- and because
+    ``isinstance`` is how the factory's admission is asserted.
+    """
 
     def __init__(
         self,
@@ -120,93 +240,15 @@ class CodeFlowHook(AgentHook):
         flow_enabled: bool = True,
         reads: ReadSessions | None = None,
     ) -> None:
-        self._ledger = ledger if ledger is not None else LEDGER
-        self._project_files = list(project_files or [])
-        # The checklist store this product's ``todo`` tool writes through, or
-        # None when the tool face is not served (nothing to bind or restore).
-        self._todos = todos
-        self._flow_enabled = flow_enabled
-        self._reads = reads
-
-    @property
-    def name(self) -> str:
-        return "code_flow"
-
-    async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
-        # Commands return before iteration or after_send, so they must not
-        # create an in-flight mark for a turn that will never report back.
-        if (ctx.inbound_content or "").strip().lower() in {"/new", "/help"}:
-            return HookDecision()
-        cwd = workdir.current()
-        if self._flow_enabled:
-            self._ledger.begin_turn(ctx.session_key, cwd)
-        if self._todos is not None:
-            try:
-                self._todos.bind(ctx.session_key, cwd)
-                ctx.metadata["code_flow.todo_binding"] = (ctx.session_key, str(cwd) if cwd is not None else None)
-            except Exception:  # noqa: BLE001 - a record problem must not cost the turn
-                logger.exception("code-flow: could not bind the checklist for {}", ctx.session_key)
-        return HookDecision()
-
-    async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
-        if self._reads is not None:
-            self._reads.bind(ctx.session_key)
-        if self._flow_enabled:
-            self._ledger.touch(ctx.session_key)
-        decision = HookDecision()
-        if self._todos is not None:
-            # System turns skip inbound, and the loop can select another
-            # session after inbound. Per-turn metadata survives rollbacks.
-            cwd = workdir.current()
-            binding = (ctx.session_key, str(cwd) if cwd is not None else None)
-            try:
-                if ctx.metadata.get("code_flow.todo_binding") != binding or not self._todos.is_bound:
-                    self._todos.bind(*binding)
-                    ctx.metadata["code_flow.todo_binding"] = binding
-                if ctx.messages is not None:
-                    snapshot = self._todos.snapshot_if_hidden(ctx.messages)
-                    if snapshot is not None:
-                        logger.info("code-flow: restoring the checklist into context for {}", ctx.session_key)
-                        decision = HookDecision(append_note=snapshot, notes=["code-flow: checklist snapshot restored"])
-            except Exception:  # noqa: BLE001 - a checklist failure must not discard repository instructions
-                logger.exception("code-flow: could not restore the checklist for {}", ctx.session_key)
-        if self._flow_enabled:
-            cwd = workdir.current()
-            key = "code_flow.repository_instructions"
-            cached = ctx.metadata.get(key)
-            if cached is None or cached[0] != cwd:
-                cached = (cwd, project_instructions(cwd, self._project_files))
-                ctx.metadata[key] = cached
-            peers = self._ledger.peers_in_flight(ctx.session_key)
-            injected = inject_system_context(
-                ctx, cached[1], concurrency_notice(peers) if peers else "", pending_note=decision.append_note
-            )
-            if injected.short_circuit_result is not None:
-                return injected
-        return decision
-
-    async def after_send(self, ctx: AgentHookContext) -> HookDecision:
-        if self._reads is not None:
-            self._reads.unbind()
-        if not self._flow_enabled:
-            return HookDecision()
-        record = self._ledger.record(ctx.session_key)
-        cwd = workdir.current()
-        if cwd is None and record is not None and record.cwd:
-            cwd = Path(record.cwd)
-        report = build_manifest(
-            ctx.session_key,
-            cwd,
-            record.base_commit if record is not None else None,
-            shared_with=len(record.peers) if record is not None else 0,
+        seated_ledger = ledger if ledger is not None else LEDGER
+        names = list(project_files or [])
+        super().__init__(
+            "code_flow",
+            lambda: CodeParticipant(seated_ledger, names, todos, flow_enabled, reads),
+            # This participant does not review, so no verdict of its can send a turn
+            # back, and the loop should stream the reply rather than hold it.
+            rolls_back=False,
         )
-        observers = ctx.metadata.setdefault("observers", {})
-        if isinstance(observers, dict):
-            stash = observers.setdefault(ACP_META_OBSERVER, {})
-            if isinstance(stash, dict):
-                stash[MANIFEST_META_KEY] = report
-        self._ledger.end_turn(ctx.session_key)
-        return HookDecision()
 
 
 class SessionForget:
@@ -283,6 +325,7 @@ __all__ = [
     "PROJECT_FILES",
     "PROJECT_FILE_MAX_CHARS",
     "PROJECT_INSTRUCTIONS_HEAD",
+    "CodeParticipant",
     "CodeFlowHook",
     "SessionForget",
     "concurrency_notice",

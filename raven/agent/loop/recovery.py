@@ -43,7 +43,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 
 from raven.config import schema as config_schema
-from raven.contracts.llm_provider import LLMResponse
+from raven.contracts.llm_provider import REASONING_EFFORT_LADDER, LLMResponse
 
 # In-content thinking markers. Some models (Ollama, certain Qwen gateways) put
 # the reasoning in ``content`` as <think>…</think> rather than in the structured
@@ -58,12 +58,6 @@ _THINK_BLOCK_RE = re.compile(
     rf"<{_NS}(think|thinking|reasoning)>[\s\S]*?</{_NS}\1>",
     re.IGNORECASE,
 )
-
-#: Reasoning efforts this repo sends, strongest first. The set the Anthropic
-#: transport can map a thinking budget for, and the set OpenRouter accepts in
-#: its native reasoning object, so a rung taken from here is a value every
-#: backend the loop talks to already understands.
-REASONING_EFFORT_LADDER: tuple[str, ...] = ("max", "xhigh", "high", "medium", "low", "minimal")
 
 
 def lower_reasoning_effort(

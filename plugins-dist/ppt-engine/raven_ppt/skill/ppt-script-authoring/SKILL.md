@@ -413,6 +413,8 @@ Three stop doing that, and their grouping becomes a grid the reader has to infer
 x-offsets. One device is the whole floor and any of them counts: `card_group` for blocks
 that are the same kind of thing, `plane` behind the one region that answers the page,
 `rule` between two halves that are not cards, or a figure the copy is set against.
+A plane under a picture takes the page's own ground -- on a dark page a dark surface,
+never a pale one -- and a picture that carries its own ground goes on the page without one.
 Measured over the 105 content pages the bundled templates ship: 104 draw at least one,
 the median page draws seven, and every page that draws exactly one draws a picture.
 `undivided_body` (§12) reports the page that draws none. This is not the previous

@@ -34,23 +34,59 @@ Checks read the live requests the replay captured
 ``tool_requests``), so they can assert actual values at and before the
 divergence point even when strict mode halted there. Failures are returned as
 human-readable strings, one per unmet expectation.
+
+Case metadata (YAML, ``case.yaml`` next to ``expect.yaml``)::
+
+    issue: https://github.com/org/repo/issues/123   # the bug this case guards
+    owner: someone                                  # who answers for the case
+    why: the contract the assertions protect        # why it must (not) diverge
+    re_record: when the baseline may be re-recorded
+    risk: low                                       # optional: low|medium|high
+    created_from: att-20260101-abcdef               # optional: source bundle id
+    reviewed_residuals:                             # optional: findings a human
+      - sha256: <64-hex digest of the full token>   # inspected and vouches benign
+        note: identifier-shaped prose, not a credential
+
+The four leading fields are required and must be non-blank — the scaffold
+writes them empty on purpose, so a case cannot pass validation until a human
+fills in the real bug link, owner, and rationale.
+
+:func:`validate_case` is the static commit gate for one case directory (never
+replays): both schemas, cassette completeness down to the replay contract
+(valid JSON is not yet a usable payload), residual-scan coverage and
+cleanliness, and the size budget. :func:`discover_case_dirs` deliberately
+lists *every* subdirectory of the cases root, so a directory missing its
+``expect.yaml`` is reported broken instead of silently skipped.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
+import tarfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
 
-from raven.trajectory.replay import REPLAY_MODES, ReplayReport, run_replay
+from raven.trajectory.cassette import replayability_problems
+from raven.trajectory.redact import scan_residuals
+from raven.trajectory.replay import REPLAY_MODES, ReplayReport, load_recording, run_replay, validate_recording
 
 EXPECTATION_FILE = "expect.yaml"
+CASE_FILE = "case.yaml"
 CASSETTE_DIR = "cassette"
 
+MAX_FILE_BYTES = 256 * 1024
+MAX_CASE_BYTES = 1024 * 1024
+
 _TOP_KEYS = {"mode", "divergence", "checks"}
+_CASE_KEYS = {"issue", "owner", "why", "re_record", "risk", "created_from", "reviewed_residuals"}
+_REVIEWED_KEYS = {"sha256", "note"}
+_CASE_REQUIRED = ("issue", "owner", "why", "re_record")
+_RISK_LEVELS = ("low", "medium", "high")
 _DIVERGENCE_KEYS = {"kind", "index", "field"}
 _CHECK_KEYS = {"call", "index", "op", "value", "message"}
 _KINDS = ("llm", "tool")
@@ -96,8 +132,15 @@ def _require(condition: bool, where: str, problem: str) -> None:
         raise ValueError(f"{where}: {problem}")
 
 
+def _require_str_keys(where: str, data: dict) -> None:
+    # Guards every unknown-key sorted() over external YAML: a mixed int/str
+    # key set would raise TypeError instead of reporting a problem.
+    _require(all(isinstance(key, str) for key in data), where, "mapping keys must be strings")
+
+
 def _parse_divergence(where: str, data: Any) -> DivergenceExpectation:
     _require(isinstance(data, dict), where, f"divergence must be a mapping, got {type(data).__name__}")
+    _require_str_keys(where, data)
     unknown = set(data) - _DIVERGENCE_KEYS
     _require(not unknown, where, f"unknown divergence key(s) {sorted(unknown)}; allowed: {sorted(_DIVERGENCE_KEYS)}")
     kind = data.get("kind")
@@ -116,6 +159,7 @@ def _parse_divergence(where: str, data: Any) -> DivergenceExpectation:
 def _parse_check(where: str, pos: int, data: Any) -> Check:
     where = f"{where}: checks[{pos}]"
     _require(isinstance(data, dict), where, f"must be a mapping, got {type(data).__name__}")
+    _require_str_keys(where, data)
     unknown = set(data) - _CHECK_KEYS
     _require(not unknown, where, f"unknown key(s) {sorted(unknown)}; allowed: {sorted(_CHECK_KEYS)}")
     call = data.get("call")
@@ -144,15 +188,29 @@ def _parse_check(where: str, pos: int, data: Any) -> Check:
     return Check(call=call, index=index, op=op, value=data["value"])
 
 
-def load_expectation(path: Path) -> RegressionExpectation:
-    """Parse and validate one ``expect.yaml``; raises ``ValueError`` on any
-    unknown key or malformed field, naming the file and the problem."""
-    path = Path(path)
+def _load_yaml_mapping(path: Path, what: str) -> dict[str, Any]:
+    """``path`` parsed as a YAML mapping; a YAML syntax error raises the same
+    file-naming ``ValueError`` malformed fields do, so callers collecting
+    problems need exactly one exception type for expected parse failures."""
     where = str(path)
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ValueError(f"{where}: cannot be parsed as YAML: {exc}") from exc
     if data is None:
         data = {}
-    _require(isinstance(data, dict), where, f"expectation must be a mapping, got {type(data).__name__}")
+    _require(isinstance(data, dict), where, f"{what} must be a mapping, got {type(data).__name__}")
+    _require_str_keys(where, data)
+    return data
+
+
+def load_expectation(path: Path) -> RegressionExpectation:
+    """Parse and validate one ``expect.yaml``; raises ``ValueError`` on any
+    unknown key, malformed field, or YAML syntax error, naming the file and
+    the problem."""
+    path = Path(path)
+    where = str(path)
+    data = _load_yaml_mapping(path, "expectation")
     unknown = set(data) - _TOP_KEYS
     _require(not unknown, where, f"unknown key(s) {sorted(unknown)}; allowed: {sorted(_TOP_KEYS)}")
     mode = data.get("mode", "strict")
@@ -255,3 +313,530 @@ async def run_regression_case(case_dir: Path) -> tuple[ReplayReport, list[str]]:
     expectation = load_expectation(case_dir / EXPECTATION_FILE)
     report = await run_replay(case_dir / CASSETTE_DIR, mode=expectation.mode)
     return report, check_report(report, expectation)
+
+
+@dataclass(frozen=True)
+class ReviewedResidual:
+    """One residual-scan finding a human reviewed and vouched benign: the
+    sha256 of the full token (never the token itself) plus the reason."""
+
+    sha256: str
+    note: str
+
+
+@dataclass(frozen=True)
+class CaseMetadata:
+    """The parsed ``case.yaml`` of one regression case — the human contract:
+    who answers for the case, what bug it guards, when re-recording the
+    baseline is legitimate, and which residual findings were reviewed."""
+
+    issue: str
+    owner: str
+    why: str
+    re_record: str
+    risk: str | None = None
+    created_from: str | None = None
+    reviewed_residuals: tuple[ReviewedResidual, ...] = ()
+
+
+def _parse_reviewed_residual(where: str, pos: int, data: Any) -> ReviewedResidual:
+    where = f"{where}: reviewed_residuals[{pos}]"
+    _require(isinstance(data, dict), where, f"must be a mapping, got {type(data).__name__}")
+    _require_str_keys(where, data)
+    unknown = set(data) - _REVIEWED_KEYS
+    _require(not unknown, where, f"unknown key(s) {sorted(unknown)}; allowed: {sorted(_REVIEWED_KEYS)}")
+    digest = data.get("sha256")
+    _require(
+        isinstance(digest, str) and len(digest) == 64 and all(c in "0123456789abcdef" for c in digest.lower()),
+        where,
+        f"sha256 must be the 64-hex digest of the full token, got {digest!r}",
+    )
+    note = data.get("note")
+    _require(
+        isinstance(note, str) and note.strip() != "",
+        where,
+        "note is required and must say why the token is benign",
+    )
+    return ReviewedResidual(sha256=digest.lower(), note=note)
+
+
+def load_case_metadata(path: Path) -> CaseMetadata:
+    """Parse and validate one ``case.yaml``; raises ``ValueError`` on any
+    unknown key, malformed field, blank required field, or YAML syntax
+    error, naming the file and the problem."""
+    path = Path(path)
+    where = str(path)
+    data = _load_yaml_mapping(path, "case metadata")
+    unknown = set(data) - _CASE_KEYS
+    _require(not unknown, where, f"unknown key(s) {sorted(unknown)}; allowed: {sorted(_CASE_KEYS)}")
+    for key in _CASE_REQUIRED:
+        value = data.get(key)
+        _require(
+            isinstance(value, str) and value.strip() != "",
+            where,
+            f"{key} is required and must be a non-blank string, got {value!r}",
+        )
+    risk = data.get("risk")
+    _require(risk is None or risk in _RISK_LEVELS, where, f"risk must be one of {_RISK_LEVELS}, got {risk!r}")
+    created_from = data.get("created_from")
+    _require(
+        created_from is None or (isinstance(created_from, str) and created_from.strip() != ""),
+        where,
+        f"created_from must be a non-blank string, got {created_from!r}",
+    )
+    raw_reviewed = data.get("reviewed_residuals") or []
+    _require(
+        isinstance(raw_reviewed, list),
+        where,
+        f"reviewed_residuals must be a list, got {type(raw_reviewed).__name__}",
+    )
+    reviewed = tuple(_parse_reviewed_residual(where, pos, entry) for pos, entry in enumerate(raw_reviewed))
+    return CaseMetadata(
+        issue=data["issue"],
+        owner=data["owner"],
+        why=data["why"],
+        re_record=data["re_record"],
+        risk=risk,
+        created_from=created_from,
+        reviewed_residuals=reviewed,
+    )
+
+
+def discover_case_dirs(root: Path) -> list[Path]:
+    """Every direct subdirectory of ``root``, sorted by name.
+
+    Deliberately not filtered by ``expect.yaml`` presence: a case directory
+    missing its expectation must reach :func:`validate_case` and be reported
+    broken, not silently skipped. Plain files under the root (a README) are
+    not cases."""
+    root = Path(root)
+    if not root.is_dir():
+        raise ValueError(f"cases root {root} is not a directory")
+    return sorted(
+        path
+        for path in root.iterdir()
+        # ".init-*" is this feature's own publish-staging pattern (skipped so
+        # an interrupted init cannot read as a broken case); any other dot
+        # directory is still discovered — the gate stays whole-directory.
+        if path.is_dir() and not path.name.startswith(".init-")
+    )
+
+
+def validate_case(case_dir: Path) -> list[str]:
+    """Statically validate one case directory; one problem string each, empty
+    list = the case is fit to commit.
+
+    Checks both schemas, cassette completeness down to the replay contract
+    (a referenced artifact must exist, parse, and carry a usable payload —
+    valid JSON alone proves nothing), that every committed file is scannable
+    (the residual scan silently skips unreadable/non-UTF-8 files, so zero
+    findings on such a file would vouch for nothing), that every residual
+    finding carries an explicit human review entry in ``case.yaml``
+    (:func:`_residual_problems`), and the size budget. Never replays; the
+    pytest suite does that.
+    """
+    case_dir = Path(case_dir)
+    if not case_dir.is_dir():
+        return [f"{case_dir} is not a directory"]
+    problems: list[str] = []
+
+    expect_path = case_dir / EXPECTATION_FILE
+    if expect_path.is_file():
+        try:
+            load_expectation(expect_path)
+        except ValueError as exc:
+            problems.append(str(exc))
+        except OSError as exc:
+            problems.append(f"{expect_path} cannot be read: {exc}")
+    else:
+        problems.append(f"{EXPECTATION_FILE} is missing")
+
+    metadata: CaseMetadata | None = None
+    case_path = case_dir / CASE_FILE
+    if case_path.is_file():
+        try:
+            metadata = load_case_metadata(case_path)
+        except ValueError as exc:
+            problems.append(str(exc))
+        except OSError as exc:
+            problems.append(f"{case_path} cannot be read: {exc}")
+    else:
+        problems.append(f"{CASE_FILE} is missing")
+
+    cassette_dir = case_dir / CASSETTE_DIR
+    if cassette_dir.is_dir():
+        problems.extend(_cassette_problems(cassette_dir))
+    else:
+        problems.append(f"{CASSETTE_DIR}/ directory is missing")
+
+    problems.extend(_scannability_problems(case_dir))
+    problems.extend(_residual_problems(case_dir, metadata))
+    problems.extend(_size_problems(case_dir))
+    return problems
+
+
+def _residual_problems(case_dir: Path, metadata: CaseMetadata | None) -> list[str]:
+    """Residual findings without an explicit human review entry.
+
+    The scanner reports false positives on legitimate prose (identifier-shaped
+    tokens in tool descriptions, ``redaction.json``'s own stat keys), so
+    absolute zero findings would fail every honestly-built case. The gate for
+    each finding is the ``reviewed_residuals`` list in ``case.yaml``: a human
+    inspects the token, vouches for it by full-token sha256 with a note, and
+    that entry goes through git review like the rest of the case. Nothing is
+    exempted automatically — a machine-produced report proves a scan ran, not
+    that a person approved what it found — and the digest covers the whole
+    token, so a different token sharing the visible prefix/suffix of a masked
+    sample cannot ride along. A missing or unparseable ``case.yaml`` means an
+    empty review list: every finding fails."""
+    reviewed = {entry.sha256 for entry in metadata.reviewed_residuals} if metadata else set()
+    problems: list[str] = []
+    for finding in scan_residuals(case_dir):
+        digest = hashlib.sha256(finding.token.encode("utf-8")).hexdigest()
+        if digest in reviewed:
+            continue
+        if finding.token.lower() in reviewed:
+            # The finding is a listed digest itself: the 64-hex review entries
+            # in case.yaml are high-entropy tokens to the scanner. A digest
+            # literal carries no secret — it is the review record.
+            continue
+        problems.append(
+            f"residual scan flagged a {finding.category} token in {finding.file} with no"
+            f" reviewed_residuals entry in {CASE_FILE}; if a human inspects it and finds it"
+            f" benign, record sha256 {digest} with a note"
+        )
+    return problems
+
+
+def _cassette_problems(cassette_dir: Path) -> list[str]:
+    problems: list[str] = []
+    manifest_path = cassette_dir / "manifest.json"
+    spans_path = cassette_dir / "spans.jsonl"
+    if not (cassette_dir / "redaction.json").is_file():
+        problems.append("cassette/redaction.json is missing (the cassette never went through redaction)")
+    if not (cassette_dir / "artifacts").is_dir():
+        problems.append("cassette/artifacts/ is missing")
+
+    if manifest_path.is_file():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            problems.append(f"cassette/manifest.json cannot be parsed: {exc}")
+        else:
+            # A parsed non-object (null included) is its own failure, distinct
+            # from a parse error — it must not skip the content checks.
+            if not isinstance(manifest, dict):
+                problems.append("cassette/manifest.json must hold a JSON object")
+            else:
+                if "format_version" not in manifest:
+                    problems.append("cassette/manifest.json has no format_version")
+                if not isinstance(manifest.get("minimized"), dict):
+                    problems.append(
+                        "cassette/manifest.json has no minimized block"
+                        " (cassettes come from trajectory minimize, not from copying a raw bundle)"
+                    )
+    else:
+        problems.append("cassette/manifest.json is missing")
+
+    structural: list[str] = []
+    if spans_path.is_file():
+        structural, references = _span_problems(cassette_dir, spans_path)
+        problems.extend(structural)
+        problems.extend(references)
+    else:
+        problems.append("cassette/spans.jsonl is missing")
+
+    # Semantic completeness on top of the static checks: load the recording
+    # the way replay does and hold it to the minimize gate's contract. Gated
+    # on structurally sound spans — load_recording assumes well-formed span
+    # records (a non-mapping attributes value would crash it), and the
+    # structural problems above already fail the case.
+    if manifest_path.is_file() and spans_path.is_file() and not structural:
+        try:
+            recording = load_recording(cassette_dir)
+        except (OSError, ValueError) as exc:
+            problems.append(f"cassette cannot be parsed for replay: {exc}")
+        else:
+            problems.extend(f"cassette is not replayable: {p}" for p in replayability_problems(recording))
+            # replayability_problems only covers missing payloads; the shapes
+            # inside a present payload are the replay consumption contract,
+            # stated by validate_recording — without it a corrupt field (say
+            # tool_calls: [1]) passes here, halts the replay mid-run, and that
+            # halt can even masquerade as the expected divergence.
+            problems.extend(f"cassette is not replayable: {p}" for p in validate_recording(recording))
+            problems.extend(_tool_contract_problems(recording))
+            problems.extend(_llm_contract_problems(recording))
+    return problems
+
+
+def _tool_contract_problems(recording: Any) -> list[str]:
+    """Recorded tool calls the replay would compare only partially.
+
+    The tool feed skips the name comparison when the recorded name is None
+    and the whole argument comparison when the recorded params is None, and a
+    non-string name can only ever produce a synthetic "tool name" divergence
+    an expectation could declare as expected — either way the comparison this
+    gate protects is silently disabled. A committed case therefore needs a
+    non-empty string name and a mapping params on every recorded tool call.
+    This is the gate's guarding contract, not replay's crash contract, so it
+    lives here rather than in validate_recording."""
+    problems: list[str] = []
+    for i, call in enumerate(recording.tool_calls):
+        if call.name is not None and (not isinstance(call.name, str) or not call.name):
+            problems.append(f"cassette tool call #{i + 1} name must be a non-empty string, got {call.name!r}")
+        if not isinstance(call.params, dict):
+            problems.append(
+                f"cassette tool call #{i + 1} params must be a mapping, got {type(call.params).__name__}"
+                " — a missing params disables the replay's argument comparison"
+            )
+    return problems
+
+
+def _llm_contract_problems(recording: Any) -> list[str]:
+    """Recorded model calls whose comparison-bearing input fields are gone.
+
+    compare_llm_request skips the model check when the recorded model is
+    absent, and a recording without tools meets the replay registry's equally
+    empty live tool surface, so both compare green while guarding nothing (a
+    missing messages list at least diverges, but that divergence can be
+    declared expected). The recorder always emits model/messages/tools and
+    minimize preserves exactly those keys — their absence means the cassette
+    was tampered with, so a committed case requires all three. The gate's
+    guarding contract again, not replay's crash contract."""
+    problems: list[str] = []
+    for i, call in enumerate(recording.llm_calls):
+        payload = call.input
+        if not isinstance(payload, dict):
+            continue
+        model = payload.get("model")
+        if not isinstance(model, str) or not model:
+            problems.append(
+                f"cassette llm call #{i + 1} input must record model as a non-empty string, got {model!r}"
+                " — a missing model disables the replay's model comparison"
+            )
+        if not isinstance(payload.get("messages"), list):
+            problems.append(f"cassette llm call #{i + 1} input must record messages as a list")
+        if not isinstance(payload.get("tools"), list):
+            problems.append(
+                f"cassette llm call #{i + 1} input must record tools as a list"
+                " — a missing tools list compares equal to the replay's empty live tool surface"
+            )
+    return problems
+
+
+def _span_problems(cassette_dir: Path, spans_path: Path) -> tuple[list[str], list[str]]:
+    """Static span checks: (structural problems, artifact reference problems).
+
+    Structural problems mean the span records themselves are malformed and
+    the caller must not feed the file to ``load_recording``; reference
+    problems leave the structure sound (replay tolerates a missing payload,
+    the semantic pass reports it)."""
+    structural: list[str] = []
+    references: list[str] = []
+    try:
+        lines = spans_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError) as exc:
+        return [f"cassette/spans.jsonl cannot be read: {exc}"], []
+    for line_no, line in enumerate(lines, 1):
+        if not line.strip():
+            continue
+        try:
+            span = json.loads(line)
+        except json.JSONDecodeError:
+            structural.append(f"cassette/spans.jsonl line {line_no} is not valid JSON")
+            continue
+        if not isinstance(span, dict):
+            structural.append(f"cassette/spans.jsonl line {line_no} is not a JSON object")
+            continue
+        span_id = span.get("spanId")
+        if span_id is not None and not isinstance(span_id, str):
+            structural.append(f"cassette/spans.jsonl line {line_no}: spanId must be a string")
+            continue
+        attrs = span.get("attributes")
+        if attrs is None:
+            continue
+        if not isinstance(attrs, dict):
+            structural.append(f"cassette/spans.jsonl line {line_no}: attributes must be a mapping")
+            continue
+        for key, ref in attrs.items():
+            if isinstance(key, str) and key.endswith(".artifact_path"):
+                ref_structural, ref_references = _artifact_ref_problems(cassette_dir, line_no, key, ref)
+                structural.extend(ref_structural)
+                references.extend(ref_references)
+    return structural, references
+
+
+def _artifact_ref_problems(cassette_dir: Path, line_no: int, key: str, ref: Any) -> tuple[list[str], list[str]]:
+    """Checks for one artifact reference: (structural problems, reference problems).
+
+    A missing, unreadable, or non-JSON payload is a reference problem —
+    ``load_recording`` degrades those to ``None`` and the semantic pass
+    reports the gap. A payload that parses to a non-object is structural:
+    the loaders index into it and must not be fed the file."""
+    label = f"cassette/spans.jsonl line {line_no}: {key} {ref!r}"
+    if not isinstance(ref, str) or not ref:
+        return [], [f"{label} is not a usable reference"]
+    if PurePosixPath(ref).is_absolute() or ".." in PurePosixPath(ref).parts:
+        return [], [f"{label} escapes the cassette"]
+    resolved = (cassette_dir / ref).resolve()
+    if cassette_dir.resolve() not in resolved.parents:
+        return [], [f"{label} escapes the cassette"]
+    if not resolved.is_file():
+        return [], [f"{label} does not exist"]
+    try:
+        payload = json.loads(resolved.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError) as exc:
+        return [], [f"{label} cannot be read: {exc}"]
+    except json.JSONDecodeError:
+        return [], [f"{label} is not valid JSON"]
+    if not isinstance(payload, dict):
+        return [f"{label} must hold a JSON object"], []
+    return [], []
+
+
+def _scannability_problems(case_dir: Path) -> list[str]:
+    problems: list[str] = []
+    for path in sorted(p for p in case_dir.rglob("*") if p.is_file()):
+        try:
+            path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            problems.append(
+                f"{path.relative_to(case_dir)} is not readable as UTF-8 text —"
+                " the residual scan silently skips such files and cannot vouch for them"
+            )
+    return problems
+
+
+def _size_problems(case_dir: Path) -> list[str]:
+    problems: list[str] = []
+    total = 0
+    for path in sorted(p for p in case_dir.rglob("*") if p.is_file()):
+        size = path.stat().st_size
+        total += size
+        if size > MAX_FILE_BYTES:
+            problems.append(
+                f"{path.relative_to(case_dir)} is {size} bytes, over the {MAX_FILE_BYTES}-byte per-file budget"
+                " (sized to stay well under the repo's 1 MiB large-file gate)"
+            )
+    if total > MAX_CASE_BYTES:
+        problems.append(
+            f"the case totals {total} bytes, over the {MAX_CASE_BYTES}-byte budget (the repo's 1 MiB large-file gate)"
+        )
+    return problems
+
+
+_CASE_NAME = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
+_VERSIONISH_SEGMENT = re.compile(r"^(?:v|eve|phase|ticket|issue|pr)?\d+$")
+
+EXPECT_TEMPLATE = """\
+# Regression expectation (see raven/trajectory/regression.py).
+# TODO: point `divergence` at the call where the fixed harness must depart
+# from this recording and add `checks` asserting the fixed live behavior.
+# Keep `divergence: null` only to guard faithful reproduction.
+mode: strict
+divergence: null
+checks: []
+"""
+
+
+def case_name_problem(name: str) -> str | None:
+    """Why ``name`` cannot name a case directory (None = acceptable)."""
+    if not _CASE_NAME.match(name):
+        return f"case name {name!r} must be lower snake_case, starting with a letter"
+    for segment in name.split("_"):
+        if _VERSIONISH_SEGMENT.match(segment):
+            return f"case name {name!r} must not carry a version or ticket segment ({segment!r})"
+    return None
+
+
+def render_case_template(created_from: str, reviewed: list[ReviewedResidual]) -> str:
+    """The ``case.yaml`` draft the scaffold publishes: required fields empty
+    on purpose (validation must fail until a human fills them), plus the
+    residual review entries collected interactively. Hand-rendered — the YAML
+    dumper would drop the TODO comments; user-supplied strings are embedded
+    as JSON string literals (valid YAML scalars, safely quoted)."""
+    lines = [
+        "# Case metadata (see raven/trajectory/regression.py). Required by",
+        "# `raven trajectory regression validate`; fill every TODO before commit.",
+        'issue: ""  # TODO: bug/issue/PR link this case guards',
+        'owner: ""  # TODO: who answers for this case',
+        'why: ""  # TODO: the contract the assertions protect',
+        're_record: ""  # TODO: when re-recording the baseline is legitimate',
+        f"created_from: {json.dumps(created_from)}",
+    ]
+    if reviewed:
+        lines.append("reviewed_residuals:")
+        for entry in reviewed:
+            lines.append(f"  - sha256: {entry.sha256}")
+            lines.append(f"    note: {json.dumps(entry.note)}")
+    return "\n".join(lines) + "\n"
+
+
+def _tar_member_problem(member: tarfile.TarInfo) -> str | None:
+    name = member.name
+    if name.startswith("/") or PurePosixPath(name).is_absolute():
+        return f"member {name!r} has an absolute name"
+    if ".." in PurePosixPath(name).parts:
+        return f"member {name!r} escapes the extraction root"
+    if not (member.isreg() or member.isdir()):
+        return f"member {name!r} is not a regular file or directory"
+    return None
+
+
+def _extract_tar(tar_path: Path, dest: Path) -> None:
+    """Extract ``tar_path`` under ``dest``, accepting only regular files and
+    directories with root-contained relative names. The explicit member check
+    is the gate; ``filter="data"`` stays on as defense in depth (on its own it
+    strips a leading ``/`` instead of rejecting it and allows links whose
+    target lands inside the root)."""
+    dest.mkdir(parents=True, exist_ok=True)
+    try:
+        with tarfile.open(tar_path, "r:gz") as tar:
+            for member in tar.getmembers():
+                problem = _tar_member_problem(member)
+                if problem is not None:
+                    raise ValueError(f"{tar_path}: {problem}")
+            tar.extractall(dest, filter="data")
+    except (OSError, tarfile.TarError) as exc:
+        raise ValueError(f"{tar_path} cannot be extracted: {exc}") from exc
+
+
+def _single_bundle_root(extracted: Path, source: Path) -> Path:
+    dirs = [path for path in extracted.iterdir() if path.is_dir()]
+    if len(dirs) != 1 or not (dirs[0] / "manifest.json").is_file():
+        raise ValueError(f"{source} does not hold a single bundle directory with a manifest.json")
+    return dirs[0]
+
+
+def _bug_report_root(outer: Path) -> Path | None:
+    if (outer / "bugreport.json").is_file():
+        return outer
+    dirs = [path for path in outer.iterdir() if path.is_dir()]
+    if len(dirs) == 1 and (dirs[0] / "bugreport.json").is_file():
+        return dirs[0]
+    return None
+
+
+def extract_bundle_source(tar_path: Path, work_dir: Path) -> Path:
+    """The bundle directory inside ``tar_path``, extracted under ``work_dir``.
+
+    Accepts both report shapes: a trajectory report tarball (a single root
+    directory holding a bundle) and a bug report package (``bugreport.json``
+    beside ``trajectory/<attempt-id>.tar.gz``, extracted through a second,
+    equally-guarded pass). Raises ``ValueError`` on unsafe members or an
+    unrecognized layout."""
+    tar_path = Path(tar_path)
+    outer = work_dir / "outer"
+    _extract_tar(tar_path, outer)
+    package_root = _bug_report_root(outer)
+    if package_root is not None:
+        trajectory_dir = package_root / "trajectory"
+        inner_tars = sorted(trajectory_dir.glob("*.tar.gz")) if trajectory_dir.is_dir() else []
+        if len(inner_tars) != 1:
+            raise ValueError(
+                f"{tar_path}: a bug report package must embed exactly one trajectory/*.tar.gz, found {len(inner_tars)}"
+            )
+        inner = work_dir / "inner"
+        _extract_tar(inner_tars[0], inner)
+        return _single_bundle_root(inner, inner_tars[0])
+    return _single_bundle_root(outer, tar_path)

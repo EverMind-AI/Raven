@@ -417,12 +417,14 @@ def test_an_operators_explicit_opt_out_survives_the_render(grounded, tmp_path):
     assert flow["enabled"] is False
 
 
-def test_everos_stays_factory_off_through_the_render(grounded):
-    """The vendored twin ships everos double-off (backend null plus the
-    plugin opt-out); the migrated factory state is the shipped state."""
+def test_everos_ships_on_through_the_render(grounded):
+    """Fleet parity: design, oncall, ppt and research all run everos, and the
+    coding agent remembers too. The old double-off posture (backend null plus
+    the plugin opt-out) was inherited from the vendored twin's comparison
+    hygiene, and the twin is retired."""
     data = json.loads(_render(grounded).read_text())
-    assert data["memory"]["backend"] is None
-    assert "everos-memory" in data["plugins"]["disabled"]
+    assert data["memory"]["backend"] == "everos"
+    assert "everos-memory" not in (data["plugins"].get("disabled") or [])
 
 
 def test_the_product_config_ships_compaction_enabled(grounded):
@@ -457,7 +459,7 @@ def test_the_render_loads_through_trunks_own_loader(grounded):
     config = load_config(rendered)
     assert config.agents.defaults.model == "anthropic/claude-opus-5"
     extensions = load_raven_config(rendered)
-    assert extensions.plugins.disabled == ["everos-memory"]
+    assert extensions.plugins.disabled == []
     assert extensions.plugins.config["code-flow"] == {
         "enabled": True,
         "tools": {
@@ -467,8 +469,11 @@ def test_the_render_loads_through_trunks_own_loader(grounded):
         },
         "projectFiles": ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"],
     }
-    assert extensions.skill_forge.rewrite_enabled is False
-    assert extensions.skill_forge.llm_gate_enabled is False
+    # No skillForge block in the product config (fleet parity): the trunk
+    # defaults land. Both knobs act only under push discovery, and this
+    # product runs pull, so neither buys a per-turn LLM call here.
+    assert extensions.skill_forge.rewrite_enabled is True
+    assert extensions.skill_forge.llm_gate_enabled is True
 
 
 def test_no_llm_key_anywhere_refuses_before_serving(grounded, monkeypatch):
@@ -841,20 +846,38 @@ PENDING_WAVE_TOOLS = {
 #: new name alone and ``cast_params`` still accepts the old call shape.
 RESPELLED: dict[str, str] = {"todowrite": "todo"}
 
+#: The skill lane, opened for parity with the shipped fleet: the other four
+#: agents run everos, and raven-design serves all three skill tools. Trunk's
+#: skills are pull-discovery -- a name+description menu rides the user
+#: envelope and the model fetches bodies itself via these tools -- so with
+#: their disable rows in place the menu advertised a route that did not
+#: exist, and everything the router retrieved was dropped unread. All three
+#: register off the skill registry alone (wiring.py); a Hub endpoint only
+#: adds their hub/ branch, and ``hub`` itself stays disabled.
+SKILL_LANE_TOOLS = {
+    "find_skill",
+    "read_skill",
+    "use_skill",
+}
+
 #: The product's visible tool face, hermetically rebuilt from the render:
-#: the fork's config intent minus the ledgered pending waves.
-#: Trunk also grew six tools the fork never had, and every one must be
-#: disabled by the product config, not by luck; the two playbook tools only
-#: register outside this hermetic fixture, so their disable rows are the pin.
+#: the fork's config intent minus the ledgered pending waves, plus the
+#: opened skill lane. Trunk also grew tools the fork never had; the withheld
+#: ones must be disabled by the product config, not by luck -- the two
+#: playbook tools only register outside this hermetic fixture, so their
+#: disable rows are the pin.
 VENDORED_TOOL_FACE = {
     "ask_user",
     "edit_file",
     "exec",
+    "find_skill",
     "glob",
     "grep",
     "list_dir",
     "read_file",
+    "read_skill",
     "todo",
+    "use_skill",
     "web_fetch",
     "write_file",
 }
@@ -864,11 +887,20 @@ VENDORED_TOOL_FACE = {
 #: hold the line (Rank A audit, G1).
 ACP_HOST_EXTRAS = {"cron"}
 
-#: Tools trunk grew after the fork was cut; none may reach this product's face.
-TRUNK_NEW_SIX = {
+#: Tools a distributed plugin contributes through the entry-point lane, which
+#: this hermetic fixture cannot see either. Turning everos-memory on for the
+#: backend also offers its ``understand_media`` tool, and memory boarding a
+#: media tool onto the coding face as a side effect is exactly the kind of
+#: unledgered move this file exists to refuse -- so the disable row is the
+#: pin, as it is for the playbook rows above. raven-research holds the same
+#: line; design, oncall and ppt serve the tool deliberately.
+PLUGIN_LANE_WITHHELD = {"understand_media"}
+
+#: Tools trunk grew after the fork was cut and this product withholds.
+#: ``find_skill`` left for the skill lane above; the rest stay off the face.
+TRUNK_NEW_WITHHELD = {
     "create_playbook",
     "deliver_files",
-    "find_skill",
     "load_playbook",
     "plugin",
     "run_subagent_dag",
@@ -879,15 +911,15 @@ def test_the_face_arithmetic_is_the_ledger():
     """The literal above is not free-standing: it is the measured fork intent
     minus the ledgered pending waves, respelled -- so a tool can only leave
     or join the face by moving on this ledger."""
-    expected = (FORK_CONFIG_INTENT - PENDING_WAVE_TOOLS - set(RESPELLED)) | set(RESPELLED.values())
+    expected = (FORK_CONFIG_INTENT - PENDING_WAVE_TOOLS - set(RESPELLED)) | set(RESPELLED.values()) | SKILL_LANE_TOOLS
     assert VENDORED_TOOL_FACE == expected
 
 
 def test_the_products_tool_face_is_the_forks_config_intent_minus_the_ledger(grounded, tmp_path, monkeypatch):
     """Build the loop from the rendered config; the model-visible tool set is
     the ledgered face and nothing more, the code-flow plugin is discovered
-    for real (and casts no tool gate), and the trunk-new six stay disabled
-    by name."""
+    for real (and casts no tool gate), and the withheld trunk-new tools stay
+    disabled by name."""
     visible, gates, definitions = _hermetic_build(_render(grounded), tmp_path, monkeypatch)
     assert visible == VENDORED_TOOL_FACE
     assert gates == [], "no tool gate is cast: the write gate retired with worktree isolation"
@@ -902,7 +934,12 @@ def test_the_products_tool_face_is_the_forks_config_intent_minus_the_ledger(grou
     assert "occurrence" in schemas["edit_file"]["properties"]
     assert "path" not in schemas["read_file"]["properties"]
     disabled = set(json.loads((RUN_PY.parent / "config.json").read_text())["tools"]["disabledTools"])
-    assert TRUNK_NEW_SIX <= disabled, "the trunk-new six stay disabled by config, not by luck"
+    assert TRUNK_NEW_WITHHELD <= disabled, "the withheld trunk-new tools stay disabled by config, not by luck"
+    assert SKILL_LANE_TOOLS & disabled == set(), "the skill lane is open by config, not by luck"
+    assert PLUGIN_LANE_WITHHELD <= disabled, (
+        "everos-memory's tool contribution boards through plugin discovery, which this fixture "
+        "does not run: the disable row is the only pin keeping the plugin's media tool off the face"
+    )
     rendered_disabled = set(json.loads(_render(grounded).read_text())["tools"]["disabledTools"])
     superseded = grounded.superseded_host_tools()
     assert set(superseded) <= rendered_disabled, "a host name this face replaces is withheld while it serves"

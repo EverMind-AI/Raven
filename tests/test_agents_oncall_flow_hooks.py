@@ -1,11 +1,12 @@
-"""The turn-frame hook: four axes on the v3 surface, driven through ctx objects.
+"""The turn-frame hook: two mechanism axes and one participant, driven through ctx objects.
 
-Part 2c of the oncall-flow plugin. Each axis is exercised the way the loop
-drives it -- ``AgentHookContext`` objects sharing ONE metadata dict per turn
-(the trunk pins that shape) -- and the assertions pin the fork behaviours the
-axes carry: the window context reaches the SAME tool instances the factories
-adopted (the hook-to-tool bridge), the owner's words land in the watched
-campaign's notes and pull a waited-on wake to now, the work-to-watch
+Part 2c of the oncall-flow plugin. Each seat is exercised the way the loop
+drives it -- the mechanism axes through ``AgentHookContext`` objects sharing
+ONE metadata dict per turn (the trunk pins that shape), the judgements through
+``OncallParticipant`` seated in a ``ParticipantHook`` -- and the assertions pin the
+fork behaviours they carry: the window context reaches the SAME tool instances
+the factories adopted (the hook-to-tool bridge), the owner's words land in the
+watched campaign's notes and pull a waited-on wake to now, the work-to-watch
 judgement is bought once per turn and its line rides ``append_note``, a
 successful ops_check_later ends the turn on its own note (and a refusal does
 not), and the turn's summed usage is stamped through ``observers`` with every
@@ -32,11 +33,9 @@ sys.path.insert(0, str(PLUGIN_DIR))
 from oncall_flow import wakes, watched  # noqa: E402
 from oncall_flow.escalation import NOTES_FILE  # noqa: E402
 from oncall_flow.flow import (  # noqa: E402
-    ExecCapKillHook,
     OncallFlowHook,
-    TurnCloseHook,
+    OncallParticipant,
     TurnContextHook,
-    WatchedPathHook,
     make_flow_hook,
 )
 from oncall_flow.instrument import log_event, read_events, write_meta  # noqa: E402
@@ -44,6 +43,7 @@ from oncall_flow.tools import base as tools_base  # noqa: E402
 from oncall_flow.tools.ops import OpsCheckLaterTool, OpsKillTool, OpsSubmitTool  # noqa: E402
 from oncall_flow.window import bind_window, task_fingerprint  # noqa: E402
 
+from raven.agent.hook.participant import ParticipantHook  # noqa: E402
 from raven.contracts.llm_provider import LLMResponse, ToolCallRequest  # noqa: E402
 from raven.contracts.loop_hooks import AgentHookContext  # noqa: E402
 from raven.plugins.context import PluginContext, RuntimeHandles, ServiceLocator  # noqa: E402
@@ -118,6 +118,11 @@ def _iteration(
         turn_question=turn_question,
         metadata=meta,
     )
+
+
+def _seated(participant: OncallParticipant) -> ParticipantHook:
+    """The participant in the hook chain, one instance for the test the way one turn has one."""
+    return ParticipantHook("oncall_flow", lambda: participant)
 
 
 class _Judge:
@@ -251,7 +256,7 @@ def test_a_volunteered_direction_writes_the_note_but_wakes_nothing(tmp_path: Pat
     )
 
 
-# ── Axis 3: the work-to-watch judgement and its nudge ────────────────
+# ── The participant: the work-to-watch judgement and its nudge ───────────
 
 
 def _look(meta: dict, command: str = "ls /srv/case", tool: str = "exec", question: str = "") -> AgentHookContext:
@@ -265,22 +270,26 @@ def _look(meta: dict, command: str = "ls /srv/case", tool: str = "exec", questio
 def test_one_judgement_per_turn_and_the_nudge_rides_the_note(tmp_path: Path) -> None:
     tools_base.set_home(tmp_path / "state")
     judge = _Judge('{"watched": true, "subjects": ["/srv/case"]}')
-    hook = WatchedPathHook(judge)
+    hook = _seated(OncallParticipant(judge))
     meta: dict = {}
     first = asyncio.run(hook.after_iteration(_look(meta)))
     second = asyncio.run(hook.after_iteration(_look(meta, command="cat /srv/case/log")))
     assert first.append_note == watched.provenance_line().strip()
     assert second.append_note == watched.provenance_line().strip(), "the fork re-added the line per matching look"
-    assert len(judge.calls) == 1, "one judgement per turn, cached on the turn's own metadata dict"
+    assert len(judge.calls) == 1, "one judgement per turn, cached on the turn's own participant"
     assert judge.calls[0]["messages"] == watched.build_prompt("run the case at /srv/case and stay with it")
 
 
 def test_not_watched_or_an_unclaimed_subject_adds_no_line(tmp_path: Path) -> None:
     tools_base.set_home(tmp_path / "state")
-    quiet = asyncio.run(WatchedPathHook(_Judge('{"watched": false, "subjects": []}')).after_iteration(_look({})))
+    quiet = asyncio.run(
+        _seated(OncallParticipant(_Judge('{"watched": false, "subjects": []}'))).after_iteration(_look({}))
+    )
     assert quiet.append_note is None
     miss = asyncio.run(
-        WatchedPathHook(_Judge('{"watched": true, "subjects": ["/opt/elsewhere"]}')).after_iteration(_look({}))
+        _seated(OncallParticipant(_Judge('{"watched": true, "subjects": ["/opt/elsewhere"]}'))).after_iteration(
+            _look({})
+        )
     )
     assert miss.append_note is None, "a verdict only claims the subjects it named"
 
@@ -289,7 +298,7 @@ def test_a_bound_window_skips_the_judgement(tmp_path: Path) -> None:
     _campaign(tmp_path)
     bind_window(tools_base.ops_home(), "tui:w1", "camp-a", pid=os.getpid())
     judge = _Judge('{"watched": true, "subjects": ["/srv/case"]}')
-    decision = asyncio.run(WatchedPathHook(judge).after_iteration(_look({})))
+    decision = asyncio.run(_seated(OncallParticipant(judge)).after_iteration(_look({})))
     assert decision.append_note is None and judge.calls == [], (
         "already recording something: asking again would tell a driving loop to declare a second campaign"
     )
@@ -298,14 +307,14 @@ def test_a_bound_window_skips_the_judgement(tmp_path: Path) -> None:
 def test_a_judge_failure_leaves_the_look_alone_and_is_not_cached(tmp_path: Path) -> None:
     tools_base.set_home(tmp_path / "state")
     judge = _Judge(RuntimeError("provider down"))
-    hook = WatchedPathHook(judge)
+    hook = _seated(OncallParticipant(judge))
     meta: dict = {}
     assert asyncio.run(hook.after_iteration(_look(meta))).append_note is None
     assert asyncio.run(hook.after_iteration(_look(meta))).append_note is None
     assert len(judge.calls) == 2, "a failed judgement is retried on the next look, never cached as an answer"
 
 
-# ── Axis 4: the turn close ──────────────────────────────────────────
+# ── The participant: the turn close ─────────────────────────────────────
 
 
 def _check_later_turn(meta: dict, note: str) -> AgentHookContext:
@@ -327,13 +336,13 @@ def _check_later_turn(meta: dict, note: str) -> AgentHookContext:
 
 def test_a_scheduled_wake_ends_the_turn_on_its_own_note() -> None:
     note = "Scheduled a wake at ~2026-09-01T09:00:00 (job ops:camp-a)."
-    decision = asyncio.run(TurnCloseHook().after_iteration(_check_later_turn({}, note)))
+    decision = asyncio.run(_seated(OncallParticipant()).after_iteration(_check_later_turn({}, note)))
     assert decision.short_circuit_result == note, "the note comes back out of the loop's untrusted fence intact"
 
 
 def test_a_refused_check_later_does_not_end_the_turn() -> None:
     decision = asyncio.run(
-        TurnCloseHook().after_iteration(_check_later_turn({}, "REFUSED: cite a fresh observation first."))
+        _seated(OncallParticipant()).after_iteration(_check_later_turn({}, "REFUSED: cite a fresh observation first."))
     )
     assert decision.short_circuit_result is None and decision.pass_through, (
         "a refusal arranged nothing, and closing on it would end the turn with nothing decided"
@@ -367,7 +376,10 @@ def test_turn_totals_sum_across_iterations_and_stamp_the_observers(tmp_path: Pat
     assert (stamped["calls"], stamped["calls_without_usage"]) == (2, 1)
     assert (stamped["prompt_tokens"], stamped["completion_tokens"], stamped["total_tokens"]) == (100, 20, 120)
     assert stamped["faces"] == 2, "the two context-taking faces, counted by the bridge"
-    assert set(meta) == {"observers"}, "every freight key is spent at the send fire; nothing leaks into the next turn"
+    # The seat the host parks here is this turn's participant; it dies with this dict.
+    assert {k for k in meta if not k.startswith("raven.participant.")} == {"observers"}, (
+        "every freight key is spent at the send fire; nothing leaks into the next turn"
+    )
 
 
 def test_the_composed_hook_counts_the_closing_call_before_it_halts(tmp_path: Path) -> None:
@@ -379,10 +391,13 @@ def test_the_composed_hook_counts_the_closing_call_before_it_halts(tmp_path: Pat
 
     async def turn():
         await hook.before_user_inbound(_inbound(meta, "keep watching"))
+        # One ctx from the iteration to the send: the loop mutates one context
+        # per turn, and the participant's identity (so its closed_by counter) rides it.
         ctx = _check_later_turn(meta, note)
         ctx.response.usage = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
         closed = await hook.after_iteration(ctx)
-        await hook.after_send(AgentHookContext(session_key="tui:w1", outbound_content=note, metadata=meta))
+        ctx.outbound_content = note
+        await hook.after_send(ctx)
         return closed
 
     closed = asyncio.run(turn())
@@ -392,7 +407,7 @@ def test_the_composed_hook_counts_the_closing_call_before_it_halts(tmp_path: Pat
     assert stamped["calls"] == 1, "accounting runs before the close in the axis order, so the closing call is counted"
 
 
-# ── Axis 4: work killed at the local exec cap ───────────────────────
+# ── The participant: work killed at the local exec cap ──────────────────
 
 
 def _killed_exec_turn(command: str = "python train.py", cap: int = 600, *, exit_code: int = -1) -> AgentHookContext:
@@ -412,14 +427,17 @@ def test_a_cap_kill_earns_the_ops_submit_pointer() -> None:
     meta: dict = {}
     ctx = _killed_exec_turn(cap=600)
     ctx.metadata = meta
-    decision = asyncio.run(ExecCapKillHook().after_iteration(ctx))
+    hook = _seated(OncallParticipant())
+    decision = asyncio.run(hook.after_iteration(ctx))
 
     assert decision.append_note is not None
     assert "600s exec cap" in decision.append_note
     assert "ops_submit" in decision.append_note
     assert "gone with it" in decision.append_note, "the loss is stated, or the retry looks free"
-    assert meta["oncall_turn"]["exec_cap_kill"] == {"cap_s": 600}, (
-        "the kill is on the turn's account, so the send fire stamps it into observers"
+    ctx.outbound_content = "stopping here"
+    asyncio.run(hook.after_send(ctx))
+    assert meta["observers"]["oncall_flow"]["exec_cap_kill"] == {"cap_s": 600}, (
+        "the kill is on the turn's participant, and its archive stamps it into observers at the send fire"
     )
 
 
@@ -429,7 +447,9 @@ def test_an_ordinary_exec_result_earns_no_note() -> None:
         tool_calls=[ToolCallRequest(id="t1", name="exec", arguments={"command": "ls"})],
     )
     messages = [{"role": "tool", "tool_call_id": "t1", "name": "exec", "content": "a.txt\n\nExit code: 0"}]
-    decision = asyncio.run(ExecCapKillHook().after_iteration(_iteration({}, response=response, messages=messages)))
+    decision = asyncio.run(
+        _seated(OncallParticipant()).after_iteration(_iteration({}, response=response, messages=messages))
+    )
 
     assert decision.append_note is None and decision.pass_through
 
@@ -449,14 +469,16 @@ def test_the_kill_shape_quoted_by_another_tool_is_not_a_kill() -> None:
             "content": "STDERR:\nTimed out after 600s\n\nExit code: -1",
         }
     ]
-    decision = asyncio.run(ExecCapKillHook().after_iteration(_iteration({}, response=response, messages=messages)))
+    decision = asyncio.run(
+        _seated(OncallParticipant()).after_iteration(_iteration({}, response=response, messages=messages))
+    )
 
     assert decision.append_note is None
 
 
 def test_a_nonkill_timeout_sentence_without_the_kill_exit_is_ignored() -> None:
     ctx = _killed_exec_turn(exit_code=0)
-    decision = asyncio.run(ExecCapKillHook().after_iteration(ctx))
+    decision = asyncio.run(_seated(OncallParticipant()).after_iteration(ctx))
 
     assert decision.append_note is None, "the sentence alone is not the executor's kill report"
 
@@ -466,7 +488,9 @@ def test_a_killed_transfer_is_routed_to_the_background_lane_not_ops_submit() -> 
     ops_submit; a transfer's client runs locally and spends no budget, so its
     door is exec's run_in_background, and the note now says which."""
     decision = asyncio.run(
-        ExecCapKillHook().after_iteration(_killed_exec_turn("scp -r -P 58717 root@host:/w/tree ./stage", cap=180))
+        _seated(OncallParticipant()).after_iteration(
+            _killed_exec_turn("scp -r -P 58717 root@host:/w/tree ./stage", cap=180)
+        )
     )
 
     assert decision.append_note is not None
@@ -475,7 +499,9 @@ def test_a_killed_transfer_is_routed_to_the_background_lane_not_ops_submit() -> 
 
 
 def test_a_killed_job_still_points_at_ops_submit() -> None:
-    decision = asyncio.run(ExecCapKillHook().after_iteration(_killed_exec_turn("python train.py --cfg a.json")))
+    decision = asyncio.run(
+        _seated(OncallParticipant()).after_iteration(_killed_exec_turn("python train.py --cfg a.json"))
+    )
 
     assert decision.append_note is not None and "ops_submit" in decision.append_note
     assert "run_in_background" not in decision.append_note
@@ -516,7 +542,9 @@ def test_a_turn_that_leaves_a_wake_pending_files_the_acp_hold(tmp_path: Path) ->
     assert "camp-a" in hold["why"]
     assert isinstance(hold["untilMs"], int) and hold["untilMs"] > int(time.time() * 1000)
     assert meta["observers"]["oncall_flow"]["held"] is True
-    assert set(meta) == {"observers"}, "the hold rides the observers stash; no freight leaks"
+    assert {k for k in meta if not k.startswith("raven.participant.")} == {"observers"}, (
+        "the hold rides the observers stash; no freight leaks"
+    )
 
 
 def test_no_hold_without_a_pending_wake_or_once_the_campaign_concluded(tmp_path: Path) -> None:

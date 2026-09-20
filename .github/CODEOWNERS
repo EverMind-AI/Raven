@@ -1,0 +1,10 @@
+# Code owners for this repository.
+#
+# GitHub automatically requests a review from the owner listed for a path
+# whenever a pull request changes a file under it. This only requests the
+# review. Whether an owner's approval is required to merge is a separate
+# setting on the branch ruleset, not something this file controls.
+#
+# Patterns use gitignore syntax; when several match, the last one wins.
+
+/raven/agent/ @LivXue

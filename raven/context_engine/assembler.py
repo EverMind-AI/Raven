@@ -139,6 +139,8 @@ class ContextAssembler(ContextEngine):
             channel=turn.channel,
             chat_id=turn.chat_id,
             surface=turn.surface,
+            task_brief=turn.task_brief,
+            task_done_when=turn.task_done_when,
             session_messages=session_messages,
             budget=budget,
         )

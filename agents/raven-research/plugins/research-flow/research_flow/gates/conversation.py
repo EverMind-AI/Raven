@@ -75,7 +75,8 @@ from typing import Any
 
 from loguru import logger
 
-from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.loop_hooks import HookDecision
+from research_flow.gates.base import Gate, GateCtx
 from research_flow.support._verdict import parse_bool_verdict
 from research_flow.support.answer_text import visible_answer
 
@@ -280,7 +281,7 @@ class ConversationGate:
         return value, str(why)[:200] if isinstance(why, str) else ""
 
 
-class GatedHook(AgentHook):
+class GatedHook(Gate):
     """Forwards to a DR observer only on turns the gate called research turns.
 
     A wrapper rather than a check inside each gate, for two reasons. The DR
@@ -291,7 +292,7 @@ class GatedHook(AgentHook):
     chain is the same object graph it was before this module existed.
     """
 
-    def __init__(self, inner: AgentHook, predicate) -> None:
+    def __init__(self, inner: Gate, predicate) -> None:
         self._inner = inner
         self._predicate = predicate
 
@@ -300,30 +301,30 @@ class GatedHook(AgentHook):
         return f"Gated({self._inner.name})"
 
     @property
-    def inner(self) -> AgentHook:
+    def inner(self) -> Gate:
         return self._inner
 
-    async def _maybe(self, phase: str, ctx: AgentHookContext) -> HookDecision:
+    async def _maybe(self, phase: str, ctx: GateCtx) -> HookDecision:
         if not self._predicate():
             return HookDecision()
         return await getattr(self._inner, phase)(ctx)
 
-    async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
+    async def before_user_inbound(self, ctx: GateCtx) -> HookDecision:
         return await self._maybe("before_user_inbound", ctx)
 
-    async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def before_iteration(self, ctx: GateCtx) -> HookDecision:
         return await self._maybe("before_iteration", ctx)
 
-    async def before_execute_tools(self, ctx: AgentHookContext) -> HookDecision:
+    async def before_execute_tools(self, ctx: GateCtx) -> HookDecision:
         return await self._maybe("before_execute_tools", ctx)
 
-    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def after_iteration(self, ctx: GateCtx) -> HookDecision:
         return await self._maybe("after_iteration", ctx)
 
-    async def terminal_answerless(self, ctx: AgentHookContext) -> HookDecision:
+    async def terminal_answerless(self, ctx: GateCtx) -> HookDecision:
         return await self._maybe("terminal_answerless", ctx)
 
-    async def after_send(self, ctx: AgentHookContext) -> HookDecision:
+    async def after_send(self, ctx: GateCtx) -> HookDecision:
         return await self._maybe("after_send", ctx)
 
 

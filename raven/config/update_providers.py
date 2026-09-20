@@ -1165,10 +1165,18 @@ _HTTP_STATUS_MAP: dict[int, str] = {
 # Fallback OpenAI-compatible base URLs for providers whose registry
 # ``default_api_base`` is empty (they rely on the SDK's built-in default, which
 # a bare OpenAI client doesn't know). A bare client needs an explicit base_url.
+# groq and zai are here for the same reason and from the same place: the
+# registry already states each address as ``shown_api_base`` (registry.py), and
+# this copies it into the table this file reads. Not ``display_api_base`` --
+# that one is the settings pane's value, and ``usable_default_api_base`` is
+# empty for both on purpose, so that neither sends its own base to the router.
+# The question here is the other one: what a bare OpenAI client must be told.
 _PROVIDER_BASE_URL_FALLBACK = {
     "openai": "https://api.openai.com/v1",
     "deepseek": "https://api.deepseek.com/v1",
     "openrouter": "https://openrouter.ai/api/v1",
+    "groq": "https://api.groq.com/openai/v1",
+    "zai": "https://api.z.ai/api/paas/v4",
 }
 
 
@@ -1928,13 +1936,32 @@ def lend_provider_credentials(provider: str) -> dict[str, str]:
         )
 
     spec = find_by_name(provider)
-    base_url = str(lent.api_base or "") or str(getattr(spec, "default_api_base", "") or "")
-    out = {"api_key": lent.api_key}
-    # A provider with no address of its own leaves the section's own base_url
-    # alone rather than blanking it: the reader may have typed one that works.
-    if base_url:
-        out["base_url"] = base_url
-    return out
+    # Always answered, empty included. A borrowing section is being pointed at
+    # this provider, and what its `base_url` holds belongs to whoever it pointed
+    # at before -- leaving the field out keeps that one. An EverOS role moved
+    # from an OpenRouter model to a DeepSeek one ended up with DeepSeek's key at
+    # OpenRouter's address, which the far end refuses.
+    #
+    # The same three steps `resolve_provider_credentials` reads, for the same
+    # reason: a registry entry naming no address is not a vendor without one,
+    # and the section this feeds is read by a bare client that has no built-in
+    # default to fall back on. Answering "" for DeepSeek would trade a stale
+    # address for a missing one, which EverOS refuses just as flatly.
+    #
+    # "" is left only for a vendor no table here knows an address for, and it
+    # deletes the field rather than leaving it: what stands there was reached
+    # with somebody else's key. That is the lesser of two wrongs, not a good
+    # outcome -- the section's own readers (`role_configured_in`, and the LED
+    # beside it) ask `model and api_key` and cannot tell a section with no
+    # address from a working one, so nothing reports the gap until something
+    # calls the role. Any vendor that turns up here wants an entry in the
+    # table above rather than this branch.
+    base_url = (
+        str(lent.api_base or "")
+        or str(getattr(spec, "default_api_base", "") or "")
+        or _PROVIDER_BASE_URL_FALLBACK.get(canonical_provider_name(provider), "")
+    )
+    return {"api_key": lent.api_key, "base_url": base_url}
 
 
 # Providers whose main model can be reused as a bare-OpenAI-client memory LLM:

@@ -26,7 +26,8 @@ from __future__ import annotations
 import logging
 import re
 
-from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.loop_hooks import HookDecision
+from research_flow.gates.base import Gate, GateCtx
 from research_flow.support.budget import usage_tokens
 from research_flow.support.evidence_round import EvidenceRound
 
@@ -106,7 +107,7 @@ def _first_marker(text: str) -> str | None:
     return None
 
 
-class SpinEntryBreaker(AgentHook):
+class SpinEntryBreaker(Gate):
     """Intercept the restart moment and redirect the turn to its report."""
 
     def __init__(
@@ -131,15 +132,15 @@ class SpinEntryBreaker(AgentHook):
     def name(self) -> str:
         return "SpinEntryBreaker"
 
-    async def before_execute_tools(self, ctx: AgentHookContext) -> HookDecision:
+    async def before_execute_tools(self, ctx: GateCtx) -> HookDecision:
         return self._scan(ctx)
 
-    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def after_iteration(self, ctx: GateCtx) -> HookDecision:
         if getattr(ctx.response, "has_tool_calls", False):
             return HookDecision()
         return self._scan(ctx)
 
-    def _scan(self, ctx: AgentHookContext) -> HookDecision:
+    def _scan(self, ctx: GateCtx) -> HookDecision:
         text = _response_text(ctx.response)
         if not text:
             return HookDecision()
@@ -212,7 +213,7 @@ class SpinEntryBreaker(AgentHook):
             notes=[f"spin_breaker_trigger marker={marker}"],
         )
 
-    def _budget_ratio(self, ctx: AgentHookContext) -> float:
+    def _budget_ratio(self, ctx: GateCtx) -> float:
         ratio = 0.0
         if self._max_iterations and ctx.iteration:
             ratio = ctx.iteration / self._max_iterations

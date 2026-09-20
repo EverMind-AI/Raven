@@ -139,7 +139,7 @@ class CompactionConfig(Base):
     """In-turn transcript compaction for long agentic turns.
 
     Off by default: without it the loop's in-turn shrinks are the standing image
-    window (``_window_images``, bounded by ``image_window_budget_bytes``) and the
+    window (``shrink.window_images``, bounded by ``image_window_budget_bytes``) and the
     reactive, deterministic elision it has always run on a provider's overflow
     error. Enabled, two layers join them, on the same usage readings:
 
@@ -922,6 +922,41 @@ class AcpConfig(Base):
         if self.default_mode is not None:
             return self.default_mode
         return None if "modes" in self.model_fields_set else DEFAULT_TIER
+
+
+class A2aPeerConfig(Base):
+    """One remote A2A agent this host is allowed to call, and how to authenticate to it.
+
+    Keyed by origin rather than by full card URL: the credential belongs to the
+    host, not to one card path, and a peer that moves its card must not silently
+    become an unauthenticated call.
+    """
+
+    origin: str
+    auth_scheme: str = "bearer"
+    credential: str = ""
+
+
+class A2aServerConfig(Base):
+    """The inbound A2A face.
+
+    Declared off, with an empty token that refuses every caller: a config nobody
+    onboarded, or one assembled in-process, serves nothing by accident.
+    Onboarding mints the token but writes nothing here, so a finished install is
+    provisioned and still closed. ``raven a2a enable`` is what opens it -- a
+    second network surface is never something an unrelated install turned on."""
+
+    enabled: bool = False
+    token: str = ""
+    path: str = "/a2a"
+
+
+class A2aConfig(Base):
+    """Both A2A faces. Neither touches the sub-agent roster -- a peer is reachable,
+    not subordinate, so nothing here describes a process raven starts."""
+
+    server: A2aServerConfig = Field(default_factory=A2aServerConfig)
+    peers: list[A2aPeerConfig] = Field(default_factory=list)
 
 
 class TuiConfig(Base):
@@ -2229,6 +2264,7 @@ class Config(BaseSettings):
     playbooks: PlaybookConfig = Field(default_factory=PlaybookConfig)
     tui: TuiConfig = Field(default_factory=TuiConfig)
     acp: AcpConfig = Field(default_factory=AcpConfig)
+    a2a: A2aConfig = Field(default_factory=A2aConfig)
     # UI language chosen during onboarding. Drives the wizard/CLI copy and the
     # agent's reply language (injected into the system prompt). "en" | "zh".
     language: Literal["en", "zh"] = "en"

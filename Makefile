@@ -1,8 +1,8 @@
-.PHONY: help install install-deps lint lint-python lint-imports lint-deps lint-types lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui build-core check-commits check-pr-title check-large-files check-source-language check-core-wheel fetch-templates verify-templates beta ci clean coverage coverage-shard coverage-combine coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate docker-build docker-up docker-down
+.PHONY: help install install-deps lint lint-python lint-imports lint-deps lint-types lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui build-core check-commits check-pr-title check-large-files check-source-language check-core-wheel fetch-templates verify-templates beta ci clean coverage coverage-shard coverage-combine coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate docker-build docker-up docker-down docs-serve docs-build
 
 PYTHON ?= python3
 PYTHON_VERSION ?= 3.12
-PYTHON_LINT_TARGETS ?= raven evolver agents plugins-dist tests scripts
+PYTHON_LINT_TARGETS ?= raven evolver agents plugins-dist tests scripts docs-site
 COMMIT_RANGE ?= origin/main..HEAD
 COVERAGE_BASE_REF ?= origin/main
 # Required coverage percentage for executable lines changed by a PR.
@@ -75,9 +75,11 @@ lint-imports:
 # behind each one that is off, are in [tool.ty] in pyproject.toml. The target
 # roster is read from PYTHON_LINT_TARGETS so it cannot drift from ruff's; tests
 # are filtered out there because they are executed, and the gate is for code
-# that is not.
+# that is not. docs-site is filtered out for a different reason: its build
+# hooks import mkdocs, which install-deps does not install, so ty would read
+# a resolvable import as a missing module. ruff still covers that tree.
 lint-types:
-	uv run --frozen --python $(PYTHON_VERSION) --all-extras ty check $(filter-out tests,$(PYTHON_LINT_TARGETS))
+	uv run --frozen --python $(PYTHON_VERSION) --all-extras ty check $(filter-out tests docs-site,$(PYTHON_LINT_TARGETS))
 
 lint-ui:
 	npm run gen:check --prefix ui-web
@@ -194,3 +196,9 @@ fetch-templates:
 
 verify-templates:
 	python3 plugins-dist/ppt-engine/fetch_templates.py --verify
+
+docs-serve:
+	uv run --frozen --python $(PYTHON_VERSION) --group docs mkdocs serve -f docs-site/mkdocs.yml
+
+docs-build:
+	uv run --frozen --python $(PYTHON_VERSION) --group docs mkdocs build -f docs-site/mkdocs.yml --strict

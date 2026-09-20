@@ -25,7 +25,7 @@ from raven.contracts.memory import Memory
 from raven.memory_engine.skill_forge import RouterHit, SkillForgeRouter
 
 
-def _ctx(tmp_path: Path, msg: str = "hi", session=None) -> AssemblyContext:
+def _ctx(tmp_path: Path, msg: str = "hi", session=None, **over) -> AssemblyContext:
     return AssemblyContext(
         session_key="s",
         current_message=msg,
@@ -34,6 +34,7 @@ def _ctx(tmp_path: Path, msg: str = "hi", session=None) -> AssemblyContext:
         chat_id=None,
         session_messages=session or [],
         budget=TokenBudget(100_000, 4_000, 2_000, 1_000, 93_000),
+        **over,
     )
 
 
@@ -106,6 +107,43 @@ class TestIdentityBootstrap:
         assert f"{home}/user_memory/profile/user.md" in seg.text
         assert str(project / "user_memory") not in seg.text
 
+    async def test_the_identity_renders_the_task_it_is_handed(self, tmp_path: Path) -> None:
+        """The segment owns how the identity reads and nothing about deciding it.
+
+        It used to reach into the dispatch layer's ContextVar itself; Memory
+        fills the two strings now, so this hands them over the way the
+        assembler does and asserts only on the rendering.
+        """
+        brief = "Only look at A. Leave B alone."
+        plain = (await IdentitySegmentBuilder(tmp_path).build(_ctx(tmp_path))).text
+        briefed = (
+            await IdentitySegmentBuilder(tmp_path).build(
+                _ctx(tmp_path, task_brief=brief, task_done_when="both tables land")
+            )
+        ).text
+
+        assert "## This task" not in plain, "a turn with no brief reads as it always did"
+        assert plain in briefed.replace("\n\n## This task", ""), "the brief is appended, never substituted"
+        assert brief in briefed and "both tables land" in briefed
+
+    async def test_memory_is_what_fills_the_turn_from_the_charter(self, tmp_path: Path) -> None:
+        """The other half of the split: the role that decides what a turn shows
+        its model is the one that reads the dispatch's charter."""
+        from raven.agent.harness.memory import DefaultMemory
+        from raven.agent.subagent.charter import Charter, charter_scope
+        from raven.contracts.context import TurnContext
+
+        brief = "Only look at A. Leave B alone."
+        plain = TurnContext(current_message="hi")
+        assert DefaultMemory._briefed(plain) is plain, "no charter bound, nothing to add"
+
+        with charter_scope(Charter(prompt=brief, stop_when="both tables land")):
+            briefed = DefaultMemory._briefed(plain)
+
+        assert briefed.task_brief == brief
+        assert briefed.task_done_when == "both tables land"
+        assert plain.task_brief == "", "the turn it was handed is not mutated"
+
     async def test_identity_falls_back_to_agent_home_when_unbound(self, tmp_path: Path) -> None:
         """No binding means the pre-split single-directory behaviour."""
         seg = await IdentitySegmentBuilder(tmp_path).build(_ctx(tmp_path))
@@ -154,6 +192,84 @@ class TestIdentityBootstrap:
         cfg = _provider_config("acme/some-model", "openrouter", api_key="sk-or-v1-abc")
         monkeypatch.setattr("raven.config.loader.load_config", lambda: cfg)
         assert render._resolved_model_id() == "openrouter/acme/some-model"
+
+
+class TestIdentityNamesTheBoundModel:
+    """The identity line names the model the running turn goes out under.
+
+    The loop opens ``use_binding`` around every turn with the session's own
+    binding -- its ``/model`` pick, else the default -- so the renderer reads
+    the id there instead of from ``agents.defaults.model``. Before, the line
+    named the configured default on every turn of a switched conversation, and
+    the model, asked what it was, quoted the line back: from the page the
+    switch looked like it had never happened (#470).
+    """
+
+    def test_a_switched_conversation_is_told_the_model_it_is_bound_to(self, tmp_path: Path, monkeypatch) -> None:
+        from raven.providers.binding import ModelBinding, use_binding
+
+        cfg = _provider_config("acme/config-default", "openrouter", api_key="sk-or-v1-abc")
+        monkeypatch.setattr("raven.config.loader.load_config", lambda: cfg)
+
+        with use_binding(ModelBinding(provider=object(), model="acme/session-pick")):  # type: ignore[arg-type]
+            line = render._resolved_model_id()
+
+        assert line == "openrouter/acme/session-pick"
+        assert "config-default" not in line, "the configured default must not leak into a switched turn"
+
+    def test_the_bound_id_goes_through_the_same_storage_to_wire_conversion(self, tmp_path: Path, monkeypatch) -> None:
+        """A session's pick is stored in the storage spelling, like the default.
+        Fed through the binding it must still come out in the wire spelling the
+        request carries -- here the codex client's, which strips the prefix --
+        or the line names an id no request ever sends."""
+        from raven.providers.binding import ModelBinding, use_binding
+
+        cfg = _provider_config("openai-codex/gpt-5.1", "openai_codex")
+        monkeypatch.setattr("raven.config.loader.load_config", lambda: cfg)
+
+        with use_binding(ModelBinding(provider=object(), model="openai-codex/gpt-5.1-codex")):  # type: ignore[arg-type]
+            assert render._resolved_model_id() == "gpt-5.1-codex"
+
+    def test_outside_a_turn_the_configured_default_still_answers(self, monkeypatch) -> None:
+        from raven.providers.binding import active_binding
+
+        assert active_binding() is None
+        cfg = _provider_config("acme/config-default", "openrouter", api_key="sk-or-v1-abc")
+        monkeypatch.setattr("raven.config.loader.load_config", lambda: cfg)
+
+        assert render._resolved_model_id() == "openrouter/acme/config-default"
+
+    async def test_the_segment_names_the_bound_model(self, tmp_path: Path, monkeypatch) -> None:
+        from raven.providers.binding import ModelBinding, use_binding
+
+        cfg = _provider_config("acme/config-default", "openrouter", api_key="sk-or-v1-abc")
+        monkeypatch.setattr("raven.config.loader.load_config", lambda: cfg)
+
+        with use_binding(ModelBinding(provider=object(), model="acme/session-pick")):  # type: ignore[arg-type]
+            seg = await IdentitySegmentBuilder(tmp_path).build(_ctx(tmp_path))
+
+        assert "You are running on model: openrouter/acme/session-pick." in seg.text
+        assert "config-default" not in seg.text
+
+    async def test_the_estimation_prompt_and_the_turn_prompt_agree_on_a_switched_model(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """``ContextBuilder._get_identity`` sizes the system prompt for the token
+        budget and promises never to drift from the per-turn renderer. Both
+        read the binding, so a switched conversation is sized against the
+        line it is actually sent -- a field handed down the assembly path
+        would have reached one of the two and not the other."""
+        from raven.providers.binding import ModelBinding, use_binding
+
+        cfg = _provider_config("acme/config-default", "openrouter", api_key="sk-or-v1-abc")
+        monkeypatch.setattr("raven.config.loader.load_config", lambda: cfg)
+
+        with use_binding(ModelBinding(provider=object(), model="acme/session-pick")):  # type: ignore[arg-type]
+            seg = await IdentitySegmentBuilder(tmp_path).build(_ctx(tmp_path))
+            estimate = ContextBuilder(workspace=tmp_path)._get_identity()
+
+        assert seg.text == estimate
+        assert "openrouter/acme/session-pick" in estimate
 
 
 class TestMemory:

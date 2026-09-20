@@ -261,6 +261,18 @@ TWIN_LEADS: dict[str, str] = {
 #: fields; this table is the declared exception, and a field outside it on the twin's side
 #: is a drift, not a feature. A row nothing on the twin matches is stale and fails too.
 PRODUCT_ONLY_FIELDS: dict[str, str] = {
+    "wall_clock_seconds": (
+        "how long one turn may run, checked between iterations. The product path had no "
+        "clock of any kind: only the iteration cap could end a turn, so a research turn "
+        "that kept finding leads ran until it hit one. The fork bounded its runs from "
+        "outside, in the harness that launched them, and so never carried the knob"
+    ),
+    "dead_end_retry": (
+        "run a turn again from the original question when the first attempt answered "
+        "nothing (raven/agent/loop/dead_end.py supplies the predicate, the loop performs "
+        "the rerun). The fork ran the same selection as a second pass over persisted rows "
+        "afterwards, where a product user could never reach it; in-run it needs a knob"
+    ),
     "evidence_floor": (
         "the per-mode evidence demand that makes max a different stop rule from high "
         "(gates/evidence_floor.py). Off in the base slice and in every fork mode, so the "

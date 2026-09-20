@@ -49,7 +49,9 @@ from importlib.resources import files as pkg_files
 from pathlib import Path
 
 from raven.agent import workdir
+from raven.agent.hook.participant import ParticipantHook
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.participant import Accept, AgentParticipant, Answer, Intake, Resample, StepView
 from raven.utils.workspace import sync_workspace_templates
 from raven_ppt.plugin import ledger, materials
 from raven_ppt.services import tier
@@ -71,7 +73,6 @@ have the agent publish where nothing looks. (The fork named them in its
 per-session ACP layer, which does not board; this hook is their home now.)
 """
 
-_METADATA_KEY = "ppt_engine"
 
 # How many times one turn is sent back for ending before the deck was published. Two
 # live runs ended with a note the model meant for itself ("append needs real content
@@ -228,22 +229,35 @@ def _session_dirname(session_key: str) -> str:
     return safe[:80] or "session"
 
 
-class PptEngineHook(AgentHook):
-    """Material staging in, deck verification out, per turn."""
-
-    rolls_back_iterations = True
+class _DeckEngine:
+    """What the ppt engine keeps for the whole process: the identity seat and
+    the per-root material bookkeeping. One per plugin instance; every turn's
+    participant is built over the same one."""
 
     def __init__(self, home: Path | None = None, *, deck_per_session: bool = True) -> None:
-        self._home = home
-        self._deck_per_session = deck_per_session
+        self.home = home
+        self.deck_per_session = deck_per_session
         self._seeded = False
         self._books: dict[str, tuple[list[tuple[str, Path]], set[str]]] = {}
 
-    @property
-    def name(self) -> str:
-        return "ppt_engine"
+    def seed_once(self) -> None:
+        if self._seeded:
+            return
+        # First touch, not construction: the factory runs while the host is
+        # still assembling, and a seat this engine never serves a turn on is a
+        # home it has no business writing into.
+        self._seeded = True
+        if self.home is not None:
+            try:
+                if seeded := seed_identity(Path(self.home)):
+                    logger.info("ppt-engine: seeded the deck identity into %s: %s", self.home, seeded)
+            except OSError as exc:
+                # The turn must run either way; a home that cannot be written
+                # is loud in the log, and the next process retries because
+                # nothing was marked done on disk.
+                logger.warning("ppt-engine: seeding the deck identity failed: %s", exc)
 
-    def _bookkeeping(self, root: Path) -> tuple[list[tuple[str, Path]], set[str]]:
+    def bookkeeping(self, root: Path) -> tuple[list[tuple[str, Path]], set[str]]:
         key = str(root)
         books = self._books.get(key)
         if books is None:
@@ -251,34 +265,50 @@ class PptEngineHook(AgentHook):
             self._books[key] = books
         return books
 
-    def _ledger_after_compaction(self, ctx: AgentHookContext, root: Path) -> HookDecision:
+
+class PptParticipant(AgentParticipant):
+    """Material staging in, deck verification out, per turn.
+
+    One instance per turn: the marks taken when the turn began and the nudges
+    it has already spent are attributes here, not keys in the hook context.
+    """
+
+    def __init__(self, engine: _DeckEngine) -> None:
+        self._engine = engine
+        self._deck_mtimes_before: dict[Path, float] | None = None
+        self._build_marks_before: tuple[object, ...] | None = None
+        self._deck_stood: bool | None = None
+        self._copy_nudged = False
+        self._delivered_nudged = False
+        self._unfinished_nudges = 0
+
+    def _ledger_after_compaction(self, step: StepView, root: Path) -> str | None:
         """Once per compaction, put the deck ledger under the host's summary.
 
         The host's summary is written for code work and paraphrases the user;
         a deck's requirements are the user's own words and its state is on
-        disk (:mod:`raven_ppt.plugin.ledger`). The note rides ``append_note``,
-        so it lands on the last message before the next call, and the marker
-        it carries is how the next iteration knows this summary is answered.
+        disk (:mod:`raven_ppt.plugin.ledger`). The note lands on the last
+        message before the next call, and the marker it carries is how the
+        next iteration knows this summary is answered.
         """
-        messages = ctx.messages or []
+        messages = list(step.transcript)
         index = ledger.summary_index(messages)
         if index is None:
-            return HookDecision()
+            return None
         digest = ledger.summary_digest(messages, index)
         if ledger.ledger_stands_for(messages, digest):
-            return HookDecision()
+            return None
         try:
-            note = ledger.deck_ledger(root, ctx.session_history, digest)
+            return ledger.deck_ledger(root, list(step.history), digest)
         except Exception as exc:  # the ledger is help, never a reason to stop a turn
             logger.warning("deck ledger not written after compaction: %s", exc)
-            return HookDecision()
-        return HookDecision(append_note=note, notes=["deck ledger appended under the compaction summary"])
+            return None
 
     @staticmethod
-    def _journal_window(root: Path, ctx: AgentHookContext) -> None:
+    def _journal_window(root: Path, step: StepView) -> None:
         """Write the user's words the running turn has put in the window so far."""
-        messages = ctx.messages or []
-        ledger.journal(root, messages=messages[ctx.turn_base :] if messages else None, window=messages or None)
+        messages = list(step.transcript)
+        ledger.journal(root, messages=messages[step.turn_base :] if messages else None, window=messages or None)
 
     def _own_folder(self, bound: Path, session_key: str) -> Path:
         """Point the turn at this session's own deck folder, and say where that is.
@@ -291,7 +321,7 @@ class PptEngineHook(AgentHook):
         resets it at turn end, and the same session's next turn lands in the same
         folder. Idempotent: a turn already pointed there is left alone.
         """
-        if not self._deck_per_session:
+        if not self._engine.deck_per_session:
             return bound
         own = bound / DECKS_DIRNAME / _session_dirname(session_key)
         if bound.name == own.name and bound.parent.name == DECKS_DIRNAME:
@@ -300,8 +330,25 @@ class PptEngineHook(AgentHook):
         workdir.repoint(own)
         return own
 
-    async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
-        """Point a turn that skipped the inbound phase at the session's deck folder.
+    def _take_marks(self, root: Path, *, keep: bool) -> None:
+        """The turn-start facts a deck this turn publishes is told apart by.
+
+        ``keep`` leaves marks an earlier phase already took (the iteration
+        fallback for a turn that skipped the inbound phase); the inbound phase
+        takes them fresh.
+        """
+        if keep and self._deck_mtimes_before is not None:
+            return
+        self._deck_mtimes_before = _decks_before(root)
+        self._build_marks_before = _build_marks(root)
+        # What already stands, so a turn that is not deck work is not told to build
+        # one: read from the publish record rather than from the folder, because a
+        # copy someone put under out/ is not a deck this project published.
+        self._deck_stood = bool(_standing_decks(root))
+
+    async def advise(self, step: StepView) -> str | None:
+        """Point a turn that skipped the inbound phase at the session's deck folder,
+        journal the window, and answer a compaction with the deck ledger.
 
         The host runs ``before_user_inbound`` for a user's turn only. A turn a
         sub-agent's late result starts -- the deck agent's own research coming back
@@ -311,57 +358,39 @@ class PptEngineHook(AgentHook):
         ``ppt_build`` that found no brief, and set out to rebuild the deck from
         nothing. The first iteration is where every turn passes.
         """
+        if step.response is not None:
+            # Asked before the call and after it; this participant advises before.
+            return None
         bound = workdir.current()
         if bound is None:
-            return HookDecision()
+            return None
         root = Path(bound)
-        if ctx.iteration in (0, 1):
-            root = self._own_folder(root, ctx.session_key)
-            if ctx.metadata is not None:
-                # What the inbound phase would have taken, so a deck this turn publishes is
-                # still told apart from an earlier turn's and announced, and a deck that
-                # already stood is not something this turn failed to publish.
-                meta = ctx.metadata.setdefault(_METADATA_KEY, {})
-                meta.setdefault("deck_mtimes_before", _decks_before(root))
-                meta.setdefault("build_marks_before", _build_marks(root))
-                meta.setdefault("deck_stood", bool(_standing_decks(root)))
-                # The session's tier, for the deck tools that run outside the hook chain:
-                # the mode overlay's deck knobs (services/tier) are written where ppt_build
-                # reads them per call, so a tier switched mid-session takes effect on the
-                # next build.
-                tier.write_mode(root, ctx.metadata.get("mode_overlay"), ctx.metadata.get("mode"))
+        if step.iteration in (0, 1):
+            root = self._own_folder(root, step.session_key)
+            self._take_marks(root, keep=True)
+            # The session's tier, for the deck tools that run outside the hook chain:
+            # the mode overlay's deck knobs (services/tier) are written where ppt_build
+            # reads them per call, so a tier switched mid-session takes effect on the
+            # next build.
+            tier.write_mode(root, step.mode_overlay, step.mode)
         # Every iteration, the first included: a first call that overflowed is
         # summarised and retried as iteration 1 with the summary already in the
-        # window. The turn's ask_user answers are journaled at after_iteration,
+        # window. The turn's ask_user answers are journaled at review time,
         # because the host compacts at the top of an iteration before this fires.
-        self._journal_window(root, ctx)
-        return self._ledger_after_compaction(ctx, root)
+        self._journal_window(root, step)
+        return self._ledger_after_compaction(step, root)
 
-    async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
-        if not self._seeded:
-            # First touch, not construction: the factory runs while the host
-            # is still assembling, and a seat this instance never serves a
-            # turn on is a home it has no business writing into.
-            self._seeded = True
-            if self._home is not None:
-                try:
-                    if seeded := seed_identity(Path(self._home)):
-                        logger.info("ppt-engine: seeded the deck identity into %s: %s", self._home, seeded)
-                except OSError as exc:
-                    # The turn must run either way; a home that cannot be
-                    # written is loud in the log, and the next process
-                    # retries because nothing was marked done on disk.
-                    logger.warning("ppt-engine: seeding the deck identity failed: %s", exc)
+    async def intake(self, text: str, step: StepView) -> Answer | None:
+        self._engine.seed_once()
         bound = workdir.current()
-        text = ctx.inbound_content
         if bound is None or not text or not text.strip():
-            return HookDecision()
-        root = self._own_folder(Path(bound), ctx.session_key)
+            return None
+        root = self._own_folder(Path(bound), step.session_key)
         # The user's own words, before the staging block is written over the
         # model's view of them: the session record files this turn only after
         # it ends, and a turn long enough to compact needs them before that.
         ledger.journal(root, inbound=text)
-        staged, taken = self._bookkeeping(root)
+        staged, taken = self._engine.bookkeeping(root)
         try:
             declared = materials.inputs_from_prompt(text)
             wanted = materials.unique_sources(declared + materials.materials_from_prompt(text))
@@ -369,22 +398,14 @@ class PptEngineHook(AgentHook):
         except materials.StagingError as exc:
             # Fatal to the turn, not skipped, and reported as the turn's reply
             # -- the fork's shape on both of its transports.
-            return HookDecision(short_circuit_result=(f"The material could not be staged. {exc}", []))
+            return Intake(text=text, reply=(f"The material could not be staged. {exc}", []))
         # Taken before the turn runs, so what this turn publishes can be told
         # apart from what an earlier turn of the same session left behind.
-        meta = ctx.metadata.setdefault(_METADATA_KEY, {})
-        meta["deck_mtimes_before"] = _decks_before(root)
-        meta["build_marks_before"] = _build_marks(root)
-        # What already stands, so a turn that is not deck work is not told to build
-        # one: read from the publish record rather than from the folder, because a
-        # copy someone put under out/ is not a deck this project published.
+        self._take_marks(root, keep=False)
         standing = _standing_decks(root)
-        meta["deck_stood"] = bool(standing)
-        return HookDecision(
-            modified_content=text + materials.describe(staged, root / MATERIALS_DIRNAME, root / OUT_DIRNAME, standing)
-        )
+        return Intake(text=text + materials.describe(staged, root / MATERIALS_DIRNAME, root / OUT_DIRNAME, standing))
 
-    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def review(self, step: StepView) -> Answer:
         """Send a turn back when the model stops talking before the deck is published.
 
         The loop ends a turn on the first reply without a tool call, whatever the
@@ -401,44 +422,47 @@ class PptEngineHook(AgentHook):
         instruction, but this guard knew only whether *this* turn published, so the
         plain answer to "looks good, thanks" was rolled back twice and told to build
         and publish, and only the cap let the third reply end. The turn-start fact
-        rides `deck_stood`, and a turn that began with a deck and wrote no build of
+        rides ``_deck_stood``, and a turn that began with a deck and wrote no build of
         its own ends where it stops: the cap is an escape hatch, not an answer to a
         guard firing on the wrong turn.
         """
+        if not step.tools_ran:
+            # Asked before the tools run as well; this judgement waits for the
+            # iteration to finish.
+            return Accept()
         bound = workdir.current()
         if bound is not None:
             # The tool results of this iteration are in the window now, the ask_user
             # answer among them, and the next iteration compacts before any other
-            # phase of this hook fires: an answer not journaled here can be
+            # verb of this participant fires: an answer not journaled here can be
             # summarised out of the window unseen.
-            self._journal_window(Path(bound), ctx)
-        response = ctx.response
+            self._journal_window(Path(bound), step)
+        response = step.response
         if response is None or getattr(response, "tool_calls", None):
-            return HookDecision()
+            return Accept()
         text = str(getattr(response, "content", None) or "").strip()
         if not text:
             # Nothing said at all is the empty-recovery's case, not this one.
-            return HookDecision()
-        meta = (ctx.metadata or {}).get(_METADATA_KEY) if ctx.metadata is not None else None
-        if bound is None or not meta or "deck_mtimes_before" not in meta:
-            return HookDecision()
+            return Accept()
+        if bound is None or self._deck_mtimes_before is None:
+            return Accept()
         root = Path(bound)
         if not _deck_started(root):
-            return HookDecision()
+            return Accept()
         state = root / "deck" / "state"
         published = published_digests(state)
         delivered = delivered_decks(state)
-        deck, _ = materials.verified_deck(root / OUT_DIRNAME, text, meta["deck_mtimes_before"], published, delivered)
-        unpublished = materials.unpublished_decks(root / OUT_DIRNAME, meta["deck_mtimes_before"], published)
+        deck, _ = materials.verified_deck(root / OUT_DIRNAME, text, self._deck_mtimes_before, published, delivered)
+        unpublished = materials.unpublished_decks(root / OUT_DIRNAME, self._deck_mtimes_before, published)
         named = [path for path in unpublished if path.name in text]
-        if named and not meta.get("copy_nudged"):
+        if named and not self._copy_nudged:
             # Before the hands-back test: "delivered, would you like changes?" names the
             # copy and asks a question in the same breath. And before the delivered
             # nudge: a deck published under out/ and then copied by hand to the path the
             # user asked for is a finished deck named by the wrong file, and the answer
             # is the argument that writes it there, not the out/ path. Once; a second
             # such reply falls through to the nudges below.
-            meta["copy_nudged"] = True
+            self._copy_nudged = True
             listed = ", ".join(str(path) for path in named)
             # A file the publish step's own record names is not a copy of anything --
             # it is the delivery, edited after the fact. Two conditions, two fixes.
@@ -448,106 +472,94 @@ class PptEngineHook(AgentHook):
                 if tampered
                 else COPY_NUDGE.format(names=listed, reason=_refused_because(state))
             )
-            return HookDecision(
-                rollback=True,
-                rollback_inject=[{"role": "user", "content": nudge}],
-                notes=["ppt_engine: reply naming a copy the publish step never wrote rolled back (1/1)"],
+            return Resample(
+                "reply names a copy the publish step never wrote",
+                inject=[{"role": "user", "content": nudge}],
+                note="ppt_engine: reply naming a copy the publish step never wrote rolled back (1/1)",
             )
         if deck is not None:
-            if deck.name in text or meta.get("delivered_nudged"):
-                return HookDecision()
-            meta["delivered_nudged"] = True
+            if deck.name in text or self._delivered_nudged:
+                return Accept()
+            self._delivered_nudged = True
             pdf = deck.with_suffix(".pdf")
             paths = str(deck) + (f" (and its PDF preview {pdf})" if pdf.is_file() else "")
-            return HookDecision(
-                rollback=True,
-                rollback_inject=[{"role": "user", "content": DELIVERED_NUDGE.format(paths=paths)}],
-                notes=["ppt_engine: reply ending a turn without naming the deck it published rolled back (1/1)"],
+            return Resample(
+                "reply ends the turn without naming the deck it published",
+                inject=[{"role": "user", "content": DELIVERED_NUDGE.format(paths=paths)}],
+                note="ppt_engine: reply ending a turn without naming the deck it published rolled back (1/1)",
             )
         if _hands_back(text):
-            return HookDecision()
-        if meta.get("deck_stood") and not unpublished and _built_nothing(root, meta):
+            return Accept()
+        if self._deck_stood and not unpublished and self._built_nothing(root):
             # The deck the user has was on the record before this turn began, and this
             # turn built nothing for the record to be missing. So there is nothing this
             # reply failed to publish, and the nudge's premise -- ending here hands the
             # user nothing -- is false. It is the same fact the inbound statement turns
             # on, carried here rather than re-read.
-            #
-            # "Built nothing" is the turn-start fact and not a reading of out/. A build
-            # refused on blocking findings returns before it is staged, a draft is never
-            # published, and a build whose script failed reaches neither: all three leave
-            # out/ as they found it while being exactly the unfinished turn this guard is
-            # for. Reading out/ let a revision turn whose build was refused end here
-            # claiming it had built none.
-            return HookDecision(
-                notes=["ppt_engine: the deck on the record stands and this turn built none; letting the reply end"]
+            return Accept(
+                note="ppt_engine: the deck on the record stands and this turn built none; letting the reply end"
             )
-        nudged = int(meta.get("unfinished_nudges", 0))
-        if nudged >= UNFINISHED_NUDGES:
-            return HookDecision(notes=[f"ppt_engine: turn ending without a deck after {nudged} nudges; letting it end"])
-        meta["unfinished_nudges"] = nudged + 1
-        return HookDecision(
-            rollback=True,
-            rollback_inject=[{"role": "user", "content": UNFINISHED_NUDGE}],
-            notes=[f"ppt_engine: reply without a deck or a question rolled back ({nudged + 1}/{UNFINISHED_NUDGES})"],
+        if self._unfinished_nudges >= UNFINISHED_NUDGES:
+            return Accept(
+                note=f"ppt_engine: turn ending without a deck after {self._unfinished_nudges} nudges; letting it end"
+            )
+        self._unfinished_nudges += 1
+        return Resample(
+            "reply without a deck or a question",
+            inject=[{"role": "user", "content": UNFINISHED_NUDGE}],
+            note=f"ppt_engine: reply without a deck or a question rolled back ({self._unfinished_nudges}/{UNFINISHED_NUDGES})",
         )
 
-    async def after_send(self, ctx: AgentHookContext) -> HookDecision:
+    def _built_nothing(self, root: Path) -> bool:
+        """Whether this turn moved none of the marks a build moves.
+
+        A turn whose start was never recorded cannot answer this, and the safe answer
+        is no: the guard stays on rather than exempting a turn it cannot vouch for.
+        """
+        before = self._build_marks_before
+        return before is not None and _build_marks(root) == tuple(before)
+
+    async def outbound(self, reply: str, step: StepView) -> str | None:
         bound = workdir.current()
-        before = (ctx.metadata or {}).get(_METADATA_KEY, {}).get("deck_mtimes_before")
+        before = self._deck_mtimes_before
         if bound is None or before is None:
-            return HookDecision()
+            return None
         out_dir = Path(bound) / OUT_DIRNAME
         state = Path(bound) / "deck" / "state"
-        reply = ctx.outbound_content or ""
         published = published_digests(state)
         delivered = delivered_decks(state)
         deck, slides = materials.verified_deck(out_dir, reply, before, published, delivered)
         if deck is None:
             copied = materials.unpublished_decks(out_dir, before, published)
             if copied:
-                # A deck under out/ that the publish step never wrote: either the model
-                # copied its build there after a refused build and said it was
-                # delivered, or it edited the delivery in place. The record tells them
-                # apart -- a path the record names was published, whatever its bytes say
-                # now -- and they want opposite things said about them.
                 names = ", ".join(path.name for path in copied)
                 tampered = unrecorded_deliveries(state)
-                note = (
-                    f"\n\nThe deck under {out_dir} is not the one ppt_build published: " + tampered[0]
-                    if tampered
-                    else (
-                        f"\n\nNo deck was published this turn. {names} under {out_dir} was not written by "
-                        "ppt_build, so it did not pass the checks and is not the deliverable; the deck is "
-                        f"delivered only when ppt_build publishes it. {_refused_because(state)}"
-                    )
+                if tampered:
+                    return reply + f"\n\nThe deck under {out_dir} is not the one ppt_build published: " + tampered[0]
+                return reply + (
+                    f"\n\nNo deck was published this turn. {names} under {out_dir} was not written by "
+                    "ppt_build, so it did not pass the checks and is not the deliverable; the deck is "
+                    f"delivered only when ppt_build publishes it. {_refused_because(state)}"
                 )
-                return HookDecision(modified_content=reply + note)
             if "MEDIA:" in reply:
-                return HookDecision(
-                    modified_content=reply
-                    + (
-                        f"\n\nNo verifiable deck was published: nothing under {out_dir} opens as a "
-                        "presentation carrying slides."
-                    )
+                return reply + (
+                    f"\n\nNo verifiable deck was published: nothing under {out_dir} opens as a "
+                    "presentation carrying slides."
                 )
-            return HookDecision()
-        # The fork's three lines, minus the delivery copy: the working directory
-        # IS where the delegating conversation looks, so the deck is already
-        # delivered by being published. The PDF beside it is the same deck as the
-        # page previews it: a .pptx is a download and nothing more on the web surface.
+            return None
         announced = f"\n\nPublished a {slides}-slide deck.\nDeck: {deck}\nMEDIA: {deck}"
-        # Only a preview this publish wrote. `_pdf_beside` returns None when the build
-        # could not render one, and the older file it leaves in place is a picture of a
-        # deck that no longer exists -- announced as "the same deck", which is worse than
-        # no preview. Newer than the deck it stands for is the one test that holds
-        # whether the copy happened this turn or the render was skipped.
         preview = deck.with_suffix(".pdf")
         if not _preview_of(deck, preview):
             _preview_beside_copy(Path(bound) / "deck" / "state", deck, preview)
         if _preview_of(deck, preview):
             announced += f"\nPreview (the same deck as a PDF, for viewing): {preview}\nMEDIA: {preview}"
-        return HookDecision(modified_content=reply + announced)
+        return reply + announced
+
+
+def ppt_hook(home: Path | None = None, *, deck_per_session: bool = True) -> ParticipantHook:
+    """The engine's seat in the hook chain: one participant per turn over one engine."""
+    engine = _DeckEngine(home, deck_per_session=deck_per_session)
+    return ParticipantHook("ppt_engine", lambda: PptParticipant(engine))
 
 
 def _decks_before(root: Path) -> dict[Path, float]:
@@ -639,16 +651,6 @@ def _deck_started(root: Path) -> bool:
     return (deck / "state").is_dir() or (deck / "build").is_dir()
 
 
-def _built_nothing(root: Path, meta: dict) -> bool:
-    """Whether this turn moved none of the marks a build moves.
-
-    A turn whose start was never recorded cannot answer this, and the safe answer
-    is no: the guard stays on rather than exempting a turn it cannot vouch for.
-    """
-    before = meta.get("build_marks_before")
-    return before is not None and _build_marks(root) == tuple(before)
-
-
 def _hands_back(text: str) -> bool:
     """Whether a reply asks the user something or says the work cannot be done."""
     lowered = text.lower()
@@ -665,7 +667,8 @@ __all__ = [
     "UNFINISHED_NUDGE",
     "UNFINISHED_NUDGES",
     "MisconfiguredEngineHook",
-    "PptEngineHook",
+    "PptParticipant",
+    "ppt_hook",
     "REFUSED_UNRECORDED",
     "seed_identity",
 ]

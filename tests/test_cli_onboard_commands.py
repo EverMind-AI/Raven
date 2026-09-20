@@ -3214,6 +3214,67 @@ def test_bootstrap_leaves_a_preexisting_config_alone(tmp_env: Path, monkeypatch:
     assert rc.memory.memory_top_k == 20  # the user's value
 
 
+def _onboard_once() -> Any:
+    return runner.invoke(
+        app,
+        [
+            "onboard",
+            "--non-interactive",
+            "--provider",
+            "openai",
+            "--api-key",
+            "sk-fake",
+            "--skip-channel",
+            "--skip-memory",
+            "--yes",
+        ],
+    )
+
+
+def test_onboard_materializes_the_a2a_face(tmp_env: Path, everos_isolated: Path, stub_verify, stub_step3) -> None:
+    """A finished install provisions the A2A credential and leaves the face shut.
+
+    The token is the one write that cannot come from a schema default: it is
+    per-install secret material, and an empty one refuses every caller. Opening
+    a listening face is a separate decision, so the wizard mints and stops.
+    """
+    r = _onboard_once()
+    assert r.exit_code == 0, r.stdout
+
+    server = json.loads(tmp_env.read_text())["a2a"]["server"]
+    assert "enabled" not in server
+    assert len(server["token"]) >= 40
+    # A provisioned-but-closed face is only useful if the operator is told how
+    # to open it, so the closing recap carries the command rather than a bare
+    # "off" they would have to go looking for.
+    assert "A2A" in r.stdout
+    assert "a2a enable" in r.stdout
+
+
+def test_onboard_writes_the_a2a_token_owner_only(tmp_env: Path, everos_isolated: Path, stub_verify, stub_step3) -> None:
+    """Nothing else narrows config.json -- it is created under the umask, 0644
+    under the common one -- so the wizard must not leave an execution-granting
+    bearer token in a world-readable file.
+    """
+    assert _onboard_once().exit_code == 0
+
+    assert tmp_env.stat().st_mode & 0o777 == 0o600
+
+
+def test_reonboarding_does_not_rotate_the_a2a_token(
+    tmp_env: Path, everos_isolated: Path, stub_verify, stub_step3
+) -> None:
+    """Re-running the wizard is routine; invalidating credentials already handed
+    to peers is not.
+    """
+    assert _onboard_once().exit_code == 0
+    first = json.loads(tmp_env.read_text())["a2a"]["server"]["token"]
+
+    assert _onboard_once().exit_code == 0
+
+    assert json.loads(tmp_env.read_text())["a2a"]["server"]["token"] == first
+
+
 def test_prompt_channel_fields_gates_skip_on_required(monkeypatch: pytest.MonkeyPatch) -> None:
     """Optional fields get an ``(optional)`` label + skip hint; a required field
     that is not the first prompt (feishu ``app_secret``) must NOT show a skip
@@ -6184,19 +6245,21 @@ def test_each_provider_sits_in_the_group_its_credentials_put_it_in() -> None:
 # --------------------------------------------------------------------------- first-run hints
 
 
-def test_installers_send_first_run_to_bare_raven() -> None:
-    """Both installers' first-run block names bare ``raven``, not the wizard.
+def test_installers_send_first_run_to_the_page_not_the_wizard() -> None:
+    """Neither installer ends by naming a command to type.
 
-    The startup gate runs the wizard from bare ``raven`` and continues into the
-    TUI in the same process, so naming ``raven onboard`` here would present one
-    continuous flow as two commands to run in sequence.
+    Both now finish by starting ``raven web``, and the page carries its own
+    onboarding, so a first run is walked through in the browser. The pin that
+    matters is the one that used to matter for the closing hint: ``raven
+    onboard`` must not appear, because the startup gate runs the wizard and
+    continues in the same process -- naming it would present one continuous
+    flow as two steps.
     """
     root = Path(__file__).resolve().parents[1]
     for name in ("install.sh", "install.ps1"):
-        first_run = (root / name).read_text()
-        first_run = first_run[first_run.index("All set") :]
-        assert "sets you up on first run" in first_run, name
-        assert "raven onboard" not in first_run, name
+        text = (root / name).read_text()
+        assert "raven onboard" not in text, name
+        assert "web --foreground" in text, name
 
 
 def test_installers_build_both_web_assets_for_an_editable_install() -> None:
@@ -6285,33 +6348,50 @@ def test_the_windows_installer_reads_back_every_npm_exit_code() -> None:
     assert not unchecked, f"npm invocations with no exit-code check: {unchecked}"
 
 
-def test_installers_tell_an_upgrade_apart_from_a_first_run() -> None:
-    """A re-run over an existing config is an upgrade: say so instead of
-    repeating first-time-setup wording, and name the in-place path (which keeps
-    the channel extras rather than re-downloading everything)."""
+def test_installers_no_longer_probe_config_to_word_a_closing_hint() -> None:
+    """Both installers used to read config.json only so the closing hint could
+    say "Raven updated" instead of "All set". There is no closing hint now --
+    both paths end on the same running page -- so the probe has to go with it,
+    or it reads as a decision the script still makes.
+    """
     root = Path(__file__).resolve().parents[1]
     for name in ("install.sh", "install.ps1"):
         text = (root / name).read_text()
-        assert "config.json" in text, name
-        assert "Raven updated" in text, name
-        assert "raven upgrade" in text, name
+        assert "config.json" not in text, name
+        assert "All set" not in text, name
+        assert "Raven updated" not in text, name
 
 
-def test_readme_quickstart_matches_the_installer_hint() -> None:
-    """The README's first step and the installer's first-run hint must name the
-    same command. They drifted once -- the installer said nothing about setup
-    while the README opened with ``raven onboard`` -- and a first-time user who
-    followed the terminal hit the missing-credentials error instead."""
+def test_readme_quickstart_matches_the_installer() -> None:
+    """Both READMEs' Quick Start must describe the clone install the way the
+    installer behaves. ``./install.sh`` and a piped run do different things from
+    inside a checkout -- local mode requires ``$0`` to be a real file -- and
+    RAVEN_LOCAL_SRC is the documented opt-out. A reader who cannot see that from
+    the README installs the release wheel believing they installed their tree.
+
+    This replaces a pin on the old "Onboard and run" heading. The installers no
+    longer close with a first-run hint and the READMEs no longer carry that
+    section, so the two have no shared command left to agree on; the clone
+    install is what they must not drift on now.
+
+    The section is located by its heading text rather than by the decorative
+    prefix in front of it. Pinning that prefix meant a purely cosmetic heading
+    restyle failed here with a bare StopIteration that named neither the file
+    nor what it had been looking for. Each README carries its own heading word
+    because the two are written in different languages.
+    """
     root = Path(__file__).resolve().parents[1]
-    for name, title in (
-        ("README.md", "Onboard and run"),
-        ("README.zh-CN.md", "完成引导并运行"),
-    ):
-        text = (root / name).read_text()
-        heading = re.search(rf"^### (?:\S+\s+)?{re.escape(title)}\s*$", text, re.MULTILINE)
-        assert heading is not None, name
-        block = text[heading.start() :][:200]
-        assert "```bash\nraven\n```" in block, name
+    assert "RAVEN_LOCAL_SRC" in (root / "install.sh").read_text(encoding="utf-8")
+    for name, heading in (("README.md", "Quick Start"), ("README.zh-CN.md", "快速开始")):
+        text = (root / name).read_text(encoding="utf-8")
+        sections = [
+            b for b in re.split(r"^## ", text, flags=re.MULTILINE) if b.partition("\n")[0].rstrip().endswith(heading)
+        ]
+        assert len(sections) == 1, f"{name}: expected one '## ...{heading}' section, found {len(sections)}"
+        quickstart = sections[0]
+        assert "git clone" in quickstart, name
+        assert "./install.sh" in quickstart, name
+        assert "RAVEN_LOCAL_SRC" in quickstart, name
 
 
 def test_pick_model_shows_default_positioning_line(

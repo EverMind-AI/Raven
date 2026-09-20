@@ -14,7 +14,8 @@ const TYPES = [
   "test",
 ];
 
-// The canonical scope set mirrors README.md's repo-layout table: every
+// The canonical scope set mirrors the documentation site's repo-layout
+// table (docs-site/docs/repo-layout.md): every
 // top-level package under raven/ (plus the home.py module), computed from
 // the tree at config-load time so the enum cannot rot behind a refactor.
 function ravenPackages() {
@@ -30,7 +31,7 @@ function ravenPackages() {
 }
 
 // A change living wholly in a top-level tree outside raven/ uses that tree
-// as its scope (see README.md's repo-layout preamble).
+// as its scope (see that page's preamble).
 const TOP_LEVEL_TREES = [
   "agents",
   "benchmarks",
@@ -44,6 +45,11 @@ const TOP_LEVEL_TREES = [
   "ui-tui",
   "ui-web",
 ];
+
+// Two files at the repository root rather than a tree, so no directory scan
+// reaches them -- but a change confined to install.sh and install.ps1 is as
+// scoped as one confined to ui-web/, and `*` says less than the truth about it.
+const ROOT_SURFACES = ["installer"];
 
 const PRODUCTS = ["raven-code", "raven-design", "raven-oncall", "raven-ppt", "raven-research"];
 
@@ -70,6 +76,7 @@ const SCOPES = [
     ...ravenPackages(),
     "home",
     ...TOP_LEVEL_TREES,
+    ...ROOT_SURFACES,
     ...PRODUCTS,
     ...WHEEL_DISTRIBUTIONS,
     ...LEGACY_SCOPES,

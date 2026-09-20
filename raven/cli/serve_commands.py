@@ -894,39 +894,85 @@ def _supervise(port: int) -> None:
         sys.stdout.flush()
 
 
+_STOP_WAIT_S = 20.0
+"""How long ``--stop`` waits for a signalled process to actually be gone.
+
+Generous on purpose. Exceeding it means a process ignored SIGTERM, which is a
+thing to report rather than to paper over with a longer sleep; the cost of
+waiting is paid only when something is genuinely wedged."""
+
+_STOP_POLL_S = 0.05
+
+
+def _await_exit(pid: int, deadline: float) -> bool:
+    """Whether ``pid`` is gone by ``deadline`` (a ``time.monotonic`` stamp)."""
+    import time
+
+    while _pid_alive(pid):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(_STOP_POLL_S)
+    return True
+
+
 def _stop_resident() -> bool:
     """Stop the supervisor and the gateway it keeps up. True if anything was up.
 
     The supervisor goes first, and by SIGTERM rather than SIGKILL, so its
     ``finally`` removes ``web.json``. Killing the gateway first would only prove
     the supervisor works.
+
+    Each signal is then waited out rather than fired and forgotten, because a
+    signal delivered is not a process gone and the difference is visible to the
+    very next command. The gateway's lock is an ``flock`` the kernel holds until
+    that process exits, and ``_gateway_argv`` reads that lock to choose between
+    ``gateway`` and ``serve``. A caller that stops and relaunches back to back --
+    ``raven web --stop && raven web --foreground``, which is what install.sh
+    runs -- would otherwise read the lock of the process it just signalled, come
+    up on ``serve``, and serve the page from an engine with no ``ChannelManager``
+    for the whole session: no adapter to start, no sign-in code mintable, every
+    enabled entrance reading "state unknown". Waiting on the pid is what settles
+    it, and it settles the lock too, since the kernel drops the ``flock`` when
+    the holder dies.
+
+    Waiting for the supervisor before signalling the gateway also replaces a
+    0.4s guess at how long it takes to stop restarting things.
     """
     import os
     import signal
     import time
 
     stopped = False
+    unresponsive: list[str] = []
+    deadline = time.monotonic() + _STOP_WAIT_S
+
     supervisor = _read_web_state()
     if supervisor is not None:
         try:
             os.kill(supervisor, signal.SIGTERM)
             stopped = True
+            if not _await_exit(supervisor, deadline):
+                unresponsive.append(f"supervisor (pid {supervisor})")
         except OSError as exc:
             typer.echo(f"warning: could not stop the supervisor (pid {supervisor}): {exc}")
 
     gateway = _read_serve_pid()
     if gateway is not None and gateway != supervisor:
-        # Give the supervisor a moment to notice, so the gateway is not restarted
-        # between these two signals.
-        if stopped:
-            time.sleep(0.4)
         try:
             os.kill(gateway, signal.SIGTERM)
             stopped = True
+            if not _await_exit(gateway, deadline):
+                unresponsive.append(f"gateway (pid {gateway})")
         except ProcessLookupError:
             pass
         except OSError as exc:
             typer.echo(f"warning: could not stop the gateway (pid {gateway}): {exc}")
+
+    if unresponsive:
+        # Reported, not swallowed: a relaunch from here lands on `serve` and the
+        # page comes up without channels, which is worse than refusing to start.
+        typer.echo(f"error: still running after {_STOP_WAIT_S:.0f}s: {', '.join(unresponsive)}")
+        raise typer.Exit(1)
     return stopped
 
 

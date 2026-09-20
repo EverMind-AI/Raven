@@ -351,9 +351,16 @@ class AgentHook(ABC):
         ``modified_content`` are meaningless here -- the loop is over.
 
         Context fields populated: ``session_key``, ``messages``,
-        ``metadata["turn_end"]`` (status and iteration count),
-        ``session_history``, ``max_iterations``, ``context_window_tokens``.
-        ``response`` is ``None``.
+        ``metadata["turn_end"]``, ``session_history``, ``max_iterations``,
+        ``context_window_tokens``. ``response`` is ``None``.
+
+        ``turn_end`` is written for every turn and holds scalars only. It
+        carries ``status``, ``attempt`` (the loop runs more than once per turn
+        when a product budgets a dead-end rerun), ``iterations`` (that
+        attempt's), ``wall_clock_budget_s``, ``turn_elapsed_s`` (the turn's,
+        across attempts) and ``stopped_by``, which is the one ``status`` cannot
+        answer: the iteration cap, a stalled tool and a spent clock all land on
+        ``interrupted``. The write site in ``turn_path`` states the rest.
         """
         return HookDecision()
 
