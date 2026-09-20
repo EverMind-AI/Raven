@@ -10,10 +10,9 @@
  * stable key there. A hand-written row matching neither gets nothing, and the
  * page falls back to what the wire does say.
  *
- * The install data is the vendor's own documentation (sources are listed in
- * the PR that added them), the same commands raven/agent/subagent's presets
- * hint at where they hint at all. `site` is a bare host, spelled the way the
- * prototype spells it and linked as https.
+ * The install data is the vendor's own documentation, the same commands
+ * raven/agent/subagent's presets hint at where they hint at all. `site` is a
+ * bare host, spelled the way the prototype spells it and linked as https.
  */
 
 import { t } from '../../i18n/t'

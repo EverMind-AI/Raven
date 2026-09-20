@@ -4140,8 +4140,9 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 .keyrow .keyfield, .tkrow .keyfield { flex: 1 1 auto; }
 .mrole .ff .keyfield { width: 100%; }
 /* `[type]` only to outrank the container rules that set the input's padding --
-   `.sukey input` and `.ob-in` are as specific as a bare `.keyfield > input`,
-   and the gutter has to win or the eye sits on top of the text. */
+   `.ob-in`, and a domain's own field rule, are as specific as a bare
+   `.keyfield > input`, and the gutter has to win or the eye sits on top of the
+   text. */
 .keyfield > input[type] { width: 100%; padding-right: 32px; }
 .keyfield .peek {
   position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
