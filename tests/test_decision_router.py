@@ -157,13 +157,43 @@ async def test_pick_inside_sentence_does_not_match_regex(pending_store):
     assert result.consumed is False
 
 
+@pytest.mark.parametrize(("with_provider", "model"), [(False, None), (False, "test-model"), (True, None)])
 @pytest.mark.asyncio
-async def test_no_provider_means_only_pick_n_works(pending_store):
+async def test_missing_provider_or_model_only_recognizes_pick_command(pending_store, with_provider, model):
     pending_store.put(_decision())
-    router = DecisionRouter(pending_store=pending_store, now_fn=lambda: _NOW)
-    # Plain "1" without /pick prefix → no match (no LLM available)
+    provider = _StubProvider(intent="pick", option_index=1)
+    router = DecisionRouter(
+        pending_store=pending_store,
+        provider=provider if with_provider else None,
+        model=model,
+        now_fn=lambda: _NOW,
+    )
     result = await router.maybe_consume(channel="feishu", to="ou_xxx", content="1")
     assert result.consumed is False
+
+    result = await router.maybe_consume(channel="feishu", to="ou_xxx", content="/pick 1")
+    assert result.consumed is True
+    assert result.option.id == "opt_1"
+    assert result.raw_match_method == "regex_pick"
+    assert provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_bare_number_uses_llm_classifier(pending_store):
+    pending_store.put(_decision())
+    provider = _StubProvider(intent="pick", option_index=2)
+    router = DecisionRouter(
+        pending_store=pending_store,
+        provider=provider,
+        model="test-model",
+        now_fn=lambda: _NOW,
+    )
+
+    result = await router.maybe_consume(channel="feishu", to="ou_xxx", content="2")
+    assert result.consumed is True
+    assert result.option.id == "opt_2"
+    assert result.raw_match_method == "llm_classifier"
+    assert len(provider.calls) == 1
 
 
 # ── LLM classifier tier ───────────────────────────────────────────────
