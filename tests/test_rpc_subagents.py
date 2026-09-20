@@ -197,7 +197,7 @@ async def test_list_groups_an_installed_but_untested_acp_preset_as_installed(
     config_path: Path, tmp_path: Path, monkeypatch
 ) -> None:
     # An acp row reaches "ready" only from a recorded capability snapshot, and a
-    # preset never gets one: `_test_acp` records only for `source == "config"`.
+    # preset never gets one: `_test_acp` records for every source but `preset`.
     # Grouping acp on "ready" therefore pinned every acp preset to NOT INSTALLED,
     # where the overlay makes an unconfigured row view-only -- so the one action
     # that could have freed it was the one action unavailable there.

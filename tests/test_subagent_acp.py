@@ -368,6 +368,32 @@ async def test_a_failed_manual_test_keeps_the_capabilities_the_last_record_measu
     assert (await probe_one(cfg, source="config")).status == "missing", "the verdict itself is on the row"
 
 
+async def test_a_failed_test_after_a_config_edit_keeps_the_capabilities_the_roster_was_trusting(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The stale case the precedent is about: the roster reads a stale row's
+    capabilities (``allow_stale=True``), so the record a failed test writes over
+    it must keep them too -- under this test's fingerprint, or the row would
+    stay stale for good."""
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    good = await verify_agent(stub_config("a"))
+    SnapshotStore(path=path).record(good)
+    edited = stub_config("a", ready_timeout_ms=999)
+    assert acp_snapshot_for(edited).stale is True
+    failed = replace(good, fingerprint=snapshot_fingerprint(edited), status="missing", detail="gone", can_resume=False)
+
+    async def fake_verify(_cfg: Any) -> CapabilitySnapshot:
+        return failed
+
+    monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+    await run_test(edited, source="config")
+
+    kept = SnapshotStore(path=path).load([edited])["a"]
+    assert (kept.status, kept.stale, kept.can_resume) == ("missing", False, True)
+    assert kept.fingerprint == snapshot_fingerprint(edited)
+
+
 async def test_a_first_test_that_fails_is_recorded_as_it_is(tmp_path: Path, monkeypatch) -> None:
     """Nothing to keep: with no previous record the failed measurement is the record."""
     path = tmp_path / "caps.json"

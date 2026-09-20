@@ -532,7 +532,7 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
         # key it to a name no config claims, and the roster would then read
         # capabilities off a preset the user never installed.
         store = SnapshotStore()
-        store.record(_test_record(snapshot, store.load([cfg]).get(cfg.name)))
+        store.record(_test_record(snapshot, store.load([cfg], allow_stale=True).get(cfg.name)))
     reply = ", ".join(snapshot.available_models[:5]) or None
     return TestResult(cfg.name, source, "acp", snapshot.usable, snapshot.detail, reply, elapsed())
 
@@ -549,13 +549,18 @@ def _test_record(snapshot: Any, previous: Any) -> Any:
     status and detail. Same reasoning as ``SnapshotStore.load`` gives for a
     stale row: the old capabilities are the weaker claim and self-heal, since a
     session that really cannot be loaded fails at ``session/load`` and the
-    backend starts fresh. ``previous`` is the fingerprint-matching record or
-    ``None``; with none there is nothing to keep.
+    backend starts fresh. ``previous`` is the last record for this agent, stale
+    or not -- the roster reads a stale row's capabilities too, so a failed test
+    after a config edit must not erase what it was trusting -- or ``None``,
+    with nothing to keep. The record takes this test's fingerprint: it is a
+    measurement of the config as it stands now, whatever it kept.
     """
     if snapshot.usable or previous is None:
         return snapshot
     return replace(
         previous,
+        fingerprint=snapshot.fingerprint,
+        stale=False,
         status=snapshot.status,
         detail=snapshot.detail,
         measured_at_ms=snapshot.measured_at_ms,
