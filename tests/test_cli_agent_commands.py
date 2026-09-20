@@ -125,7 +125,12 @@ async def _skip_background_grace(*_args, **_kwargs) -> None:
 
 
 def _invoke_agent_capturing_session(
-    monkeypatch: pytest.MonkeyPatch, home: Path, extra_args: list[str]
+    monkeypatch: pytest.MonkeyPatch,
+    home: Path,
+    extra_args: list[str],
+    *,
+    backend: object | None = None,
+    drain_outcome: object | None = None,
 ) -> tuple[object, dict[str, str]]:
     """Run ``agent -m`` with the provider and AgentLoop stubbed out, capturing
     the session_id that reaches the spine turn (req.conversation is the session
@@ -169,6 +174,11 @@ def _invoke_agent_capturing_session(
         async def close_mcp(self) -> None:
             pass
 
+        async def drain_backend_stores(self, *_a, **_kw):
+            from raven.memory_engine import DrainOutcome
+
+            return drain_outcome if drain_outcome is not None else DrainOutcome(lost=0, in_flight=0)
+
     monkeypatch.setattr("raven.cli.agent_commands.make_provider", lambda _: object())
     monkeypatch.setattr("raven.agent.loop.AgentLoop", _StubAgentLoop)
     monkeypatch.setattr("raven.cli.agent_commands._wait_for_background_work", _skip_background_grace)
@@ -177,7 +187,7 @@ def _invoke_agent_capturing_session(
     # embedded everos runtime is heavy and not under test here).
     monkeypatch.setattr(
         "raven.core.plugin_stack.maybe_build_memory_backend",
-        lambda *a, **k: None,
+        lambda *a, **k: backend,
     )
     monkeypatch.setattr(
         "raven.core.plugin_stack.build_plugin_tools",
@@ -203,6 +213,47 @@ def test_agent_default_mints_fresh_session(tmp_config: Path, tmp_path: Path, mon
     r2, cap2 = _invoke_agent_capturing_session(monkeypatch, ws, [])
     assert r2.exit_code == 0
     assert cap1["session_id"] != cap2["session_id"], "each bare invocation must mint a NEW session"
+
+
+def test_a_one_shot_shutdown_tells_the_user_what_the_drain_left(
+    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``agent -m`` renders the drain outcome; it does not merely compute it.
+
+    The one-shot exit is the only place a CLI user learns a turn did not
+    settle -- there is no next screen to carry the notice. The same teardown
+    in ``tui_commands`` is driven by its own test and this copy was driven by
+    none, so dropping the render here would have cost nothing red.
+    """
+    from raven.memory_engine import DrainOutcome
+
+    class _Backend:
+        def __init__(self) -> None:
+            self.stopped = False
+
+        async def start(self) -> None:
+            pass
+
+        async def stop(self) -> None:
+            self.stopped = True
+
+    ws = tmp_path / "chanwork"
+    ws.mkdir()
+    backend = _Backend()
+
+    r, _ = _invoke_agent_capturing_session(
+        monkeypatch,
+        ws,
+        [],
+        backend=backend,
+        drain_outcome=DrainOutcome(lost=2, in_flight=0),
+    )
+
+    assert r.exit_code == 0, r.stdout
+    assert "2 turn(s) were not written" in r.stdout
+    # The drain has to precede the stop: stopping closes the HTTP client the
+    # queued writes still need.
+    assert backend.stopped
 
 
 def test_agent_continue_binds_most_recent_cli_session(
