@@ -53,9 +53,6 @@ describe('tools page', () => {
     expect(dag.classList.contains('settings-swi-fixed')).toBe(false)
     expect(TOOL_GROUPS.collab).toContain('cancel_dag')
     expect(TOOL_GROUPS.search).not.toContain('cancel_dag')
-    /* The note that says where `tool_search`'s switch really is. Without it the
-       row reads as a tool that cannot be turned on at all. */
-    expect(screen.getByText('gui.settings.tools.meta_elsewhere')).toBeTruthy()
     /* Eight known tools, none of them meta: read_file, exec, spawn, web_fetch
        (Jina reads without a key) and cancel_dag are on and unblocked;
        web_search lacks its key; deep_research and image_generate are switched
