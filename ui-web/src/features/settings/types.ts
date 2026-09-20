@@ -89,6 +89,11 @@ export interface ToolRow {
      own shape (`ToolSetupNeed`): the page reads it for truth only -- the row is
      here so a key-gated tool is visible rather than simply absent. */
   needs?: ToolSetupNeed | null
+  /* The registry's word: a tool the model reaches only through `tool_call`, so
+     no switch belongs on it. Read from the row rather than inferred from the
+     card it sits in -- the DAG controls belong beside the tool they control
+     and are still not switchable. */
+  builtin?: boolean
 }
 
 export type SkillRow = ExtSkillRow

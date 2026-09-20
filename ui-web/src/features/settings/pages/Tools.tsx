@@ -15,8 +15,11 @@ import type { ToolRow } from '../types'
 import type { JSX } from 'react'
 
 export const TOOL_GROUPS = GROUPS as Record<string, string[]>
-/* The meta tools the model uses to find the rest: built in, not switchable. */
-export const META_GROUP = 'search'
+/* Which tools carry no switch is the registry's answer, read off the row
+   (`ExtToolRow.schema_hidden`). It used to be this group's membership, which
+   made the grouping decide the affordance and kept the DAG controls in the
+   meta-tool card instead of beside `run_subagent_dag`. */
+export const isBuiltin = (row: ToolRow | undefined): boolean => !!(row && row.builtin)
 
 const GROUP_LABEL: Record<string, string> = {
   file: 'gui.settings.tools.grp_file', run: 'gui.settings.tools.grp_run', net: 'gui.settings.tools.grp_net',
@@ -198,17 +201,18 @@ export function Tools(): JSX.Element {
   }
   let on = 0
   let total = 0
-  for (const [group, ids] of Object.entries(TOOL_GROUPS)) {
-    if (group === META_GROUP) continue
+  for (const ids of Object.values(TOOL_GROUPS)) {
     for (const id of ids) {
-      if (!known.has(id)) continue
+      const r = known.get(id) as ToolRow | undefined
+      if (!r || isBuiltin(r)) continue
       total += 1
       if (wanted(id) && !blocker(id, raw)) on += 1
     }
   }
-  const row = (id: string, meta: boolean): JSX.Element | null => {
+  const row = (id: string): JSX.Element | null => {
     const known_ = known.get(id) as ToolRow | undefined
-    if (!known_ && !meta) return null
+    const meta = isBuiltin(known_)
+    if (!known_) return null
     const isOn = !meta && wanted(id)
     const blk = isOn ? blocker(id, raw) : ''
     return (
@@ -218,7 +222,9 @@ export function Tools(): JSX.Element {
         status={meta
           ? <Rov>{t('gui.settings.tools.builtin')}</Rov>
           : blk ? <Chip state="warn">{t('gui.settings.tools.setup')}</Chip> : null}
-        ctl={meta ? <span className="settings-swi" role="switch" aria-checked aria-disabled="true" aria-label={id} /> : <Switch on={isOn} label={id} onChange={(v) => flip(id, v)} />}
+        ctl={meta
+          ? <span className="settings-swi settings-swi-fixed" role="switch" aria-checked aria-disabled="true" aria-label={id} />
+          : <Switch on={isOn} label={id} onChange={(v) => flip(id, v)} />}
         panel={!meta && hasPanel(id) ? <Panel id={id} raw={raw} /> : undefined}
         open={s.toolOpen === id}
         dim={meta || !isOn}
@@ -231,7 +237,7 @@ export function Tools(): JSX.Element {
       <div className="settings-crumb"><Rov>{t('gui.settings.tools.counter', { on, total })}</Rov></div>
       {Object.entries(TOOL_GROUPS).map(([group, ids]) => (
         <Card key={group} title={t(GROUP_LABEL[group] || 'gui.settings.tools.grp_file')}>
-          {ids.map((id) => row(id, group === META_GROUP))}
+          {ids.map((id) => row(id))}
         </Card>
       ))}
     </>

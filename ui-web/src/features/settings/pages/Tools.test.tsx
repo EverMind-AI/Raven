@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetSources, setSources } from '../../../state/sources'
 import { install, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
-import { META_GROUP, TOOL_GROUPS, blocker, legacyKey, vendorKey, webVendor } from './Tools'
+import { TOOL_GROUPS, blocker, legacyKey, vendorKey, webVendor } from './Tools'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -28,11 +28,19 @@ describe('tools page', () => {
     install()
     await mount('tools')
     expect(document.querySelectorAll('.settings-card')).toHaveLength(Object.keys(TOOL_GROUPS).length)
-    for (const id of TOOL_GROUPS[META_GROUP]!) {
+    /* Built in wherever it is grouped: `tool_search` sits in the meta card and
+       `cancel_dag` beside `run_subagent_dag`, and both must read as fixed. The
+       greyed class is asserted with the attribute because `aria-disabled` on
+       its own is invisible -- drawn like every other switch it reads as a
+       control that ignores clicks. */
+    for (const id of ['tool_search', 'cancel_dag']) {
       const sw = screen.getByLabelText(id)
       expect(sw.getAttribute('aria-disabled')).toBe('true')
       expect(sw.tagName).toBe('SPAN')
+      expect(sw.classList.contains('settings-swi-fixed')).toBe(true)
     }
+    expect(TOOL_GROUPS.collab).toContain('cancel_dag')
+    expect(TOOL_GROUPS.search).not.toContain('cancel_dag')
     /* Seven known tools, none of them meta: read_file, exec, spawn and
        web_fetch (Jina reads without a key) are on and unblocked; web_search
        lacks its key; deep_research and image_generate are switched off. */

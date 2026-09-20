@@ -24,16 +24,26 @@ export type ExtMcp = ExtList['mcp'][number]
    `tools.disabledTools` rather than removed. `needs` is a tool present but
    withheld for want of a key, which the row says out loud. */
 const TOOLS: ExtTool[] = [
-  { name: 'read_file', description: 'Read a file in the working directory', enabled: true },
-  { name: 'write_file', description: 'Create a file or overwrite one', enabled: true },
-  { name: 'edit_file', description: 'Change lines of an existing file', enabled: true },
-  { name: 'list_dir', description: 'Look at the shape of a directory', enabled: true },
-  { name: 'grep', description: 'Find text across code and documents', enabled: true },
-  { name: 'exec', description: 'Run a command, run the tests, read the output', enabled: true },
-  { name: 'spawn', description: 'Split a large job across several sub-agents', enabled: true },
-  { name: 'web_fetch', description: 'Read a given address as prose', enabled: true },
-  { name: 'deep_research', description: 'Many rounds of search and cross-checking; slow and expensive', enabled: false },
-  { name: 'ask_user', description: 'Stop and ask rather than guess', enabled: true },
+  { name: 'read_file', description: 'Read a file in the working directory', enabled: true , builtin: false },
+  { name: 'write_file', description: 'Create a file or overwrite one', enabled: true , builtin: false },
+  { name: 'edit_file', description: 'Change lines of an existing file', enabled: true , builtin: false },
+  { name: 'list_dir', description: 'Look at the shape of a directory', enabled: true , builtin: false },
+  { name: 'grep', description: 'Find text across code and documents', enabled: true , builtin: false },
+  { name: 'exec', description: 'Run a command, run the tests, read the output', enabled: true , builtin: false },
+  { name: 'spawn', description: 'Split a large job across several sub-agents', enabled: true , builtin: false },
+  { name: 'web_fetch', description: 'Read a given address as prose', enabled: true , builtin: false },
+  { name: 'deep_research', description: 'Many rounds of search and cross-checking; slow and expensive', enabled: false , builtin: false },
+  { name: 'ask_user', description: 'Stop and ask rather than guess', enabled: true , builtin: false },
+  /* Reachable only through `tool_call`, so the page draws them fixed rather
+     than switchable. One in the meta card and one beside `run_subagent_dag`:
+     the offline page has to show that the state follows the tool, not the
+     card it sits in. */
+  { name: 'tool_search', description: 'Find the tool for a job among the ones installed', enabled: true, builtin: true },
+  { name: 'tool_call', description: 'Call a tool found that way', enabled: true, builtin: true },
+  { name: 'run_subagent_dag', description: 'Run a graph of sub-agent steps', enabled: true, builtin: false },
+  { name: 'cancel_dag', description: 'Stop a running graph', enabled: true, builtin: true },
+  { name: 'dag_status', description: 'Where a running graph has got to', enabled: true, builtin: true },
+  { name: 'resolve_dag_node', description: 'Answer one node of a running graph', enabled: true, builtin: true },
 ]
 
 /* The skills on disk. Their names are the hub's, because that is where these

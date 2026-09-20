@@ -187,7 +187,7 @@ async def test_ext_list_still_reports_skills_without_the_market(
     monkeypatch.setattr(console_module, "_hub_marker_name", lambda: None)
     loop = SimpleNamespace(
         context=SimpleNamespace(skills=_Catalog()),
-        tools=SimpleNamespace(tool_names=[], get=lambda _name: None),
+        tools=SimpleNamespace(tool_names=[], get=lambda _name: None, schema_hidden_names=frozenset),
     )
 
     result = await console_module.ext_list({}, agent_loop_factory=lambda: loop)
@@ -1968,3 +1968,30 @@ def test_configured_provider_section_reads_an_unreadable_config_as_absent(
 
     monkeypatch.setattr(loader, "read_raw_or_raise", broken)
     assert console_module._configured_provider_section("anthropic") is False
+
+
+async def test_ext_list_marks_the_tools_a_person_cannot_switch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The registry's hidden set travels, so the page need not infer it.
+
+    A schema-hidden tool is reachable only through ``tool_call``: a switch for
+    it would write a preference nothing reads. The page used to work this out
+    from which card a tool sat in, which tied the grouping to the affordance --
+    the DAG controls had to live in the meta-tool card to come out fixed.
+    """
+    loop = _console_loop(tmp_path, monkeypatch, {"providers": {}})
+    rows = await _ext_rows(loop, monkeypatch)
+
+    from raven.agent.tools.tool_search import META_TOOL_NAMES
+
+    fixed = META_TOOL_NAMES | loop.tools.schema_hidden_names()
+    assert loop.tools.schema_hidden_names(), "no hidden tool registered: this case would pass on an empty set"
+    # `tool_call` is the one of the two that is in the schema -- the model has
+    # to see the doorway -- and it is no more switchable for it. Asserting the
+    # hidden set alone let it through as a live switch.
+    assert "tool_call" in rows and rows["tool_call"]["builtin"] is True
+    for name in fixed:
+        if name in rows:
+            assert rows[name]["builtin"] is True, name
+    switchable = [n for n, r in rows.items() if n not in fixed and "builtin" in r]
+    assert switchable, "no switchable tool reported"
+    assert all(rows[n]["builtin"] is False for n in switchable)
