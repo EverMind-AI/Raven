@@ -602,3 +602,35 @@ async def test_an_acp_stack_runs_wakes_on_the_session_and_a_tui_stack_keeps_the_
     await stack.teardown()
     assert tui_cron.on_job is not None
     assert getattr(tui_cron.on_job, "runs_on_session", False) is False, "the served page keeps its reminders"
+
+
+async def test_a_second_assembly_keeps_the_subscriptions_the_live_one_holds() -> None:
+    """A stack rebuilt under a live socket is handed the emitter it replaces.
+
+    ``raven serve`` can assemble late: a first run comes up with no loop and
+    builds one when the page writes a model. The socket does not drop for that,
+    and the page re-subscribes only when it does -- so a replacement stack with
+    an emitter of its own would emit into one nothing is reading, and every
+    open stream would go quiet with no error anywhere.
+    """
+    frames: list[dict] = []
+
+    async def _record(frame: dict) -> None:
+        frames.append(frame)
+
+    first = await bootstrap.build_rpc_stack(_record, agent_loop=_FakeLoop(_FakeCron()))
+    await first.emitter.register("tui:default")
+
+    second = await bootstrap.build_rpc_stack(
+        _record,
+        agent_loop=_FakeLoop(_FakeCron()),
+        emitter=first.emitter,
+    )
+    try:
+        await second.emitter.emit("tui:default", {"type": "message.complete", "payload": {}})
+        await asyncio.sleep(COALESCE_WINDOW_S * 3)
+    finally:
+        await second.teardown()
+        await first.teardown()
+
+    assert [f["params"]["event"]["type"] for f in frames if f.get("method") == "event"] == ["message.complete"]
