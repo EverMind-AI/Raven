@@ -78,12 +78,16 @@ Read-only: `s.trace_id`, `s.span_id`, `s.name`.
    no-op handle: no spans or artifacts are written, and the `with` block runs
    normally.
 2. **Error boundaries.** Span creation, span emission, and artifact persistence
-   catch internal exceptions and log them at debug level. Exceptions raised
-   inside the `with` block are re-raised after marking the span as an error.
-   Handle methods still require correctly typed inputs: for example,
+   catch internal exceptions and log them at debug level. When tracing is
+   enabled and span creation succeeds, exceptions raised inside the `with`
+   block are re-raised after marking the span as an error. The handle methods
+   require correctly typed inputs: for example,
    `s.set(42)` raises `TypeError`, which also propagates out of the block.
    Pass a mapping as `s.set({...})` or `s.set(attributes={...})`;
    `attrs` is not an alias and would be stored as an ordinary attribute key.
+   When tracing is disabled, the no-op handle ignores these arguments, so
+   `s.set(42)` does not raise. Enabling tracing can therefore expose argument
+   errors that were hidden while it was off.
 3. **Import-safe.** Importing `raven.tracing` and calling the API must succeed
    even with no config present.
 

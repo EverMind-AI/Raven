@@ -69,10 +69,12 @@ with trace.span("llm.call", {"llm.provider": provider, "llm.model": model}) as s
 1. **关闭时为空操作。** 追踪被禁用时，`trace.span(...)` 返回空操作句柄：
    不写入 span 或产物，`with` 代码块照常执行。
 2. **异常处理边界。** span 创建、span 写出和产物持久化会捕获内部异常并以 debug 级别记录日志。
-   `with` 代码块内抛出的异常会在 span 被标记为错误后重新抛出。
+   追踪启用且 span 创建成功时，`with` 代码块内抛出的异常会在 span 被标记为错误后重新抛出。
    句柄方法仍要求输入类型正确：例如 `s.set(42)` 会抛出 `TypeError`，并传播到代码块外。
    请通过 `s.set({...})` 或 `s.set(attributes={...})` 传入映射；
    `attrs` 不是参数别名，会被存储为普通的属性键。
+   追踪关闭时，空操作句柄会忽略这些参数，因此 `s.set(42)` 不会报错。开启追踪后，原先被
+   空操作掩盖的参数错误可能才会暴露出来。
 3. **导入安全。** 即使没有任何配置存在，导入 `raven.tracing` 并调用该 API 也必须成功。
 
 ### `@trace.instrument(...)`——装饰器（接入方的主要机制） { #traceinstrument-the-decorator-primary-adopter-mechanism }
