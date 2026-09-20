@@ -224,6 +224,7 @@ const LEGACY_LOCAL = {
   dag: 12,
   desk: 5,
   extAgents: 7,
+  importSync: 0,
   installed: 0,
   /* Up from 6 by the same move: `.faint`, `.hubpage`, `.pmcnt`, `.pmsign` and
      `.pnote` were the memory hub's names, shared with the two hubs that are
@@ -263,6 +264,7 @@ const LEGACY_EXPR = {
   dag: 3,
   desk: 2,
   extAgents: 1,
+  importSync: 0,
   installed: 0,
   memory: 1,
   model: 2,

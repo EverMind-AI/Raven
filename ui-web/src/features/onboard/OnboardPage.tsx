@@ -43,39 +43,66 @@ function Body({ body }: { body: StepBody }): JSX.Element {
 }
 
 /* One row per agent the machine has: what the importer found for it and a
-   switch, or the chip that says the importer cannot read that agent yet. */
+   switch, or the chip that says the importer cannot read that agent yet. Then
+   the two tiers, because they are the difference between minutes and hours
+   (measured: memory files in tens of minutes, conversations in many hours),
+   and that is the reader's call. */
 function SyncBody(): JSX.Element {
   const s = store.get()
+  const counts = store.pickedCounts()
   return (
-    <div className="ob-card">
-      <div className="ob-ch"><div className="ob-t">{t('gui.onb.sync_title')}</div></div>
-      {store.found().map((agent) => {
-        const p = store.platformOf(agent)
-        const on = !!s.syncPick[agent.id]
-        return (
-          <div key={agent.id} className="ob-row">
-            <div className="ob-am">
-              <div className="ob-at">{agent.name}</div>
+    <>
+      <div className="ob-card">
+        <div className="ob-ch"><div className="ob-t">{t('gui.onb.sync_title')}</div></div>
+        {store.found().map((agent) => {
+          const p = store.platformOf(agent)
+          const on = !!s.syncPick[agent.id]
+          return (
+            <div key={agent.id} className="ob-row">
+              <div className="ob-am">
+                <div className="ob-at">{agent.name}</div>
+                {p?.scannable ? (
+                  <div className="ob-ad">{t('gui.onb.sync_counts', { files: p.memory_files, convs: p.conversations })}</div>
+                ) : null}
+              </div>
               {p?.scannable ? (
-                <div className="ob-ad">{t('gui.onb.sync_counts', { files: p.memory_files, convs: p.conversations })}</div>
-              ) : null}
+                <button
+                  type="button"
+                  className="ob-switch"
+                  role="switch"
+                  aria-checked={on}
+                  aria-label={agent.name}
+                  onClick={() => store.toggleSync(agent.id)}
+                />
+              ) : (
+                <span className="ob-chip"><span className="ob-led" />{t('gui.onb.sync_unsupported')}</span>
+              )}
             </div>
-            {p?.scannable ? (
-              <button
-                type="button"
-                className="ob-switch"
-                role="switch"
-                aria-checked={on}
-                aria-label={agent.name}
-                onClick={() => store.toggleSync(agent.id)}
-              />
-            ) : (
-              <span className="ob-chip"><span className="ob-led" />{t('gui.onb.sync_unsupported')}</span>
-            )}
-          </div>
-        )
-      })}
-    </div>
+          )
+        })}
+      </div>
+      <div className="ob-card ob-tiers" role="radiogroup" aria-label={t('gui.onb.tier')}>
+        <div className="ob-ch"><div className="ob-t">{t('gui.onb.tier')}</div></div>
+        {([
+          ['memory_files', 'gui.onb.tier_memory', t('gui.onb.tier_memory_desc', { files: counts.files })],
+          ['full', 'gui.onb.tier_full', t('gui.onb.tier_full_desc', { files: counts.files, convs: counts.convs })],
+        ] as const).map(([tier, nameKey, desc]) => (
+          <label key={tier} className="ob-row ob-tier">
+            <input
+              type="radio"
+              name="ob-tier"
+              value={tier}
+              checked={s.syncTier === tier}
+              onChange={() => store.setSyncTier(tier)}
+            />
+            <span className="ob-am">
+              <span className="ob-at">{t(nameKey)}</span>
+              <span className="ob-ad">{desc}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+    </>
   )
 }
 

@@ -202,3 +202,50 @@ describe('the wizard store', () => {
     expect(store.get().step).toBe('agents')
   })
 })
+
+describe('the tier', () => {
+  const HERMES: FoundAgent[] = [{ id: 'hermes', name: 'Hermes' }]
+
+  const readyToSync = async (): Promise<[string[], string][]> => {
+    const runs: [string[], string][] = []
+    setSources({
+      onboard: {
+        providerConfigured: async () => true,
+        scan: async () => READY,
+        startImport: async (platforms, tier) => { runs.push([platforms, tier]); return { started: true, total: 1, detail: '' } },
+      },
+    })
+    store.setBodies({ model: body(true) as StepBody, search: body(true) as StepBody, agents: body(true, HERMES) })
+    store.open()
+    await Promise.resolve()
+    await Promise.resolve()
+    store.set({ step: 'sync' })
+    store.toggleSync('hermes')
+    return runs
+  }
+
+  it('defaults to memory files -- minutes, not hours -- and travels with the start', async () => {
+    const runs = await readyToSync()
+    expect(store.get().syncTier).toBe('memory_files')
+
+    await store.finish()
+
+    expect(runs).toEqual([[['hermes'], 'memory_files']])
+  })
+
+  it('is the readers to change', async () => {
+    const runs = await readyToSync()
+    store.setSyncTier('full')
+
+    await store.finish()
+
+    expect(runs).toEqual([[['hermes'], 'full']])
+  })
+
+  it('sums the picked agents for the tier rows', async () => {
+    await readyToSync()
+    expect(store.pickedCounts()).toEqual({ files: 8, convs: 52 })
+    store.toggleSync('hermes')
+    expect(store.pickedCounts()).toEqual({ files: 0, convs: 0 })
+  })
+})

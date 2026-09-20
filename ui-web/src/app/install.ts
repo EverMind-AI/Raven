@@ -21,11 +21,13 @@ import { openDeskTask } from '../features/desk/store'
 import { AgentsStepBody } from '../features/extAgents/AgentsBody'
 import { extAgentsSource } from '../features/extAgents/source'
 import * as extAgentsStore from '../features/extAgents/store'
+import { importSyncSource } from '../features/importSync/source'
+import * as importSyncStore from '../features/importSync/store'
 import { capabilitiesSource, loadExt } from '../features/installed/source'
 import { memorySource } from '../features/memory/source'
 import { modelSource, openModelsForMissingProvider, tierSource } from '../features/model/source'
 import { onboardSource } from '../features/onboard/source'
-import { setBodies as setOnboardBodies } from '../features/onboard/store'
+import { isOpen as onboardOpen, setBodies as setOnboardBodies, subscribe as onOnboard } from '../features/onboard/store'
 import { playbooksSource } from '../features/playbooks/source'
 import { markNew } from '../features/rail/store'
 import { installSessionActions } from '../features/rail/wire'
@@ -186,6 +188,18 @@ export function installSources(): void {
       found: () => extAgentsStore.found().map((row) => ({ id: row.preset ?? row.name, name: row.name })),
     },
   })
+  sources.importSync = importSyncSource
+  /* The rail's import row reads the run the wizard's last step starts. Wired
+     here rather than by either domain reading the other: the wizard closes,
+     and the row asks the gateway what is running now. Watching the open flag's
+     edge, not every write, keeps a closed wizard's other writes from turning
+     into status reads. */
+  let wizardWasOpen = onboardOpen()
+  onOnboard(() => {
+    const open = onboardOpen()
+    if (wizardWasOpen && !open) void importSyncStore.refresh()
+    wizardWasOpen = open
+  })
   sources.browser = browserSource
   sources.subagents = agentsSource
   /* One source either way: `tasks.list` is a real gateway method now, so the
@@ -316,6 +330,10 @@ async function afterReconnect(): Promise<void> {
   /* Re-read, with nothing to repaint: the one surface these rows still reach
      is the settings dialog, which reads them when it opens. */
   void loadExt().catch(() => {})
+  /* An import that ran on while the socket was down changed its counts, or
+     ended, without this page hearing; the row reads them again the way the
+     boot did. */
+  void importSyncStore.refresh()
 }
 
 /** The composer's two actions, the rail's three writes, and the new-task button. */

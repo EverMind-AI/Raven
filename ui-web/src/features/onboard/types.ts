@@ -28,12 +28,14 @@ export interface ImportStarted {
   detail: string
 }
 
+export type ImportTier = 'memory_files' | 'full'
+
 export interface OnboardSource {
   /* Whether a provider is configured, re-read when the wizard closes so the
      page's first-run redirects stop once the reader has set one up. */
   providerConfigured(): Promise<boolean>
   scan(): Promise<ImportScan>
-  startImport(platforms: string[], tier: 'memory_files' | 'full'): Promise<ImportStarted>
+  startImport(platforms: string[], tier: ImportTier): Promise<ImportStarted>
 }
 
 /* A step body the page hands the wizard (src/app/install.ts): the owning

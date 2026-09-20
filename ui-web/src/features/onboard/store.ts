@@ -13,14 +13,12 @@ import { makeStore } from '../../state/store'
 import { setupState } from '../model/source'
 
 import type { Lang } from '../../state/lang'
-import type { FoundAgent, ImportPlatform, ImportScan, OnboardSource, StepId, StepBodies } from './types'
+import type { FoundAgent, ImportPlatform, ImportScan, ImportTier, OnboardSource, StepId, StepBodies } from './types'
 
 export const STEPS: readonly StepId[] = ['model', 'search', 'agents', 'sync']
 
 /** How long the closing fade runs before the island comes down (styles.css). */
 export const CLOSE_MS = 500
-
-export const SYNC_TIER = 'full'
 
 export interface OnboardState {
   open: boolean
@@ -33,6 +31,10 @@ export interface OnboardState {
      it has, and only when it can run. */
   scan: ImportScan | null
   syncPick: Record<string, boolean>
+  /* Memory files by default: they are the preferences and project knowledge,
+     and they land in minutes. Conversations are hours of background work, so
+     they are the reader's choice, not the wizard's. */
+  syncTier: ImportTier
   busy: boolean
   closing: boolean
   error: string
@@ -46,6 +48,7 @@ const initial = (): OnboardState => ({
   bodies: null,
   scan: null,
   syncPick: {},
+  syncTier: 'memory_files',
   busy: false,
   closing: false,
   error: '',
@@ -179,6 +182,26 @@ export function toggleSync(platform: string): void {
   set({ syncPick: pick })
 }
 
+export function setSyncTier(tier: ImportTier): void {
+  set({ syncTier: tier })
+}
+
+/* What the picked agents hold, for the tier rows: the scan's counts summed over
+   the switches that are on. */
+export function pickedCounts(): { files: number; convs: number } {
+  const s = get()
+  let files = 0
+  let convs = 0
+  for (const agent of found()) {
+    if (!s.syncPick[agent.id]) continue
+    const p = platformOf(agent)
+    if (!p) continue
+    files += p.memory_files
+    convs += p.conversations
+  }
+  return { files, convs }
+}
+
 /* The last step's primary: starts the import from the sync step, otherwise
    just hands the window to the chat page behind. On the agents step the page
    chose this verb on the answer it had; the fresh one may add a step, and then
@@ -190,7 +213,7 @@ export async function finish(): Promise<void> {
     const platforms = Object.entries(get().syncPick).filter(([, on]) => on).map(([id]) => id)
     set({ busy: true, error: '' })
     try {
-      const r = await source().startImport(platforms, SYNC_TIER)
+      const r = await source().startImport(platforms, get().syncTier)
       if (!r.started) { set({ error: r.detail || 'import did not start' }); return }
     } catch (e) {
       set({ error: failure(e) })

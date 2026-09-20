@@ -19,6 +19,7 @@ import type { ComposerSource } from '../features/composer/types'
 import type { ConnectionsSource } from '../features/connections/types'
 import type { CronSource } from '../features/cron/types'
 import type { ExtAgentsSource } from '../features/extAgents/types'
+import type { ImportSyncSource } from '../features/importSync/types'
 import type { MemorySource } from '../features/memory/types'
 import type { ModelSource } from '../features/model/types'
 import type { OnboardSource } from '../features/onboard/types'
@@ -51,6 +52,7 @@ export interface Sources {
   connections: ConnectionsSource
   cron: CronSource
   extAgents: ExtAgentsSource
+  importSync: ImportSyncSource
   memory: MemorySource
   model: ModelSource
   onboard: OnboardSource

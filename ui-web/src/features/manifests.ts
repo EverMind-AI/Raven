@@ -34,6 +34,7 @@ import { manifest as cron } from './cron/manifest'
 import { manifest as dag } from './dag/manifest'
 import { manifest as desk } from './desk/manifest'
 import { manifest as extAgents } from './extAgents/manifest'
+import { manifest as importSync } from './importSync/manifest'
 import { manifest as installed } from './installed/manifest'
 import { manifest as memory } from './memory/manifest'
 import { manifest as model } from './model/manifest'
@@ -73,7 +74,7 @@ export interface DomainManifest {
   readonly cssPrefix?: string
 }
 
-/** The eighteen, alphabetically: nothing reads them in an order. */
+/** The nineteen, alphabetically: nothing reads them in an order. */
 export const MANIFESTS: readonly DomainManifest[] = [
   browser,
   composer,
@@ -82,6 +83,7 @@ export const MANIFESTS: readonly DomainManifest[] = [
   dag,
   desk,
   extAgents,
+  importSync,
   installed,
   memory,
   model,
