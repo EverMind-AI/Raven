@@ -348,7 +348,7 @@ export interface ExtToolRow {
   mcp_server?: string;
   needs?: ToolSetupNeed;
   /**
-   * True for a tool no person switches: the two meta tools and every schema-hidden one, which the model reaches through tool_call. The page draws it as built in wherever it is grouped.
+   * True for a tool whose off switch the loop would not honour: the two tool-search meta-tools, and the MCP resource and prompt meta-tools the loop registers and withdraws on its own. The page draws these without a switch.
    */
   builtin?: boolean;
 }

@@ -45,6 +45,50 @@ describe('about page', () => {
     expect(workspacePath({}, '')).toBe('~/.raven/workspace')
   })
 
+  it('offers the upgrade after the check, across the redraw that check does', async () => {
+    /* A47 has two steps: check, and then the row offers the upgrade. The check
+       used to call `askUpgrade` itself the moment it found a newer version,
+       which made one click do two things.
+       The redraw is the half that matters here, and it is what the real check
+       does on a hit (features/settings/wire.ts): the panel is keyed by the
+       redraw's epoch, so this very row is replaced before the click that
+       started the check has finished. A version held in the row does not
+       survive that; one the page retains does. */
+    let found: string | null = null
+    const { calls } = install(snap(), {
+      checkUpdate: async () => { found = '0.3.0'; store.redraw() },
+      newerVersion: () => found,
+    })
+    await mount('about')
+    expect(screen.queryByText(/gui\.settings\.about\.upgrade/)).toBeNull()
+
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.about.check')) })
+    /* The check alone starts nothing: the upgrade seam is untouched until the
+       reader asks for it. */
+    expect(calls.map((c) => c[0])).toEqual([])
+
+    const go = screen.getByText(/gui\.settings\.about\.upgrade/)
+    expect(go.textContent).toContain('0.3.0')
+    await act(async () => { fireEvent.click(go) })
+    expect(calls.map((c) => c[0])).toEqual(['upgrade'])
+  })
+
+  it('offers the upgrade for a version the reader never asked about', async () => {
+    /* The background poll writes the same fact through the same notice, so a
+       version it found is offered here without this button being the one that
+       found it -- A47 asks the row to offer an upgrade once one is known. */
+    install(snap(), { newerVersion: () => '0.3.0' })
+    await mount('about')
+    expect(screen.getByText(/gui\.settings\.about\.upgrade/).textContent).toContain('0.3.0')
+  })
+
+  it('stays on one button when the build is already current', async () => {
+    install(snap(), { checkUpdate: async () => {} })
+    await mount('about')
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.about.check')) })
+    expect(screen.queryByText(/gui\.settings\.about\.upgrade/)).toBeNull()
+  })
+
   it('the check button hands itself to the chrome, which owns the version check', async () => {
     const { calls } = install()
     await mount('about')

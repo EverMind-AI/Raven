@@ -1,6 +1,8 @@
 /* The model roles: which model each job runs on, and the picker that changes
    it. Eleven rows; each knows where its pair is written and which providers
    may serve it. The media tools' rows on the Tools page draw the same pill. */
+import { useRef } from 'react'
+
 import { ModelPicker } from '../../../components/ModelPicker'
 import { t } from '../../../i18n/t'
 import { Card, Row, Rov, Seg, Stepper } from '../Fields'
@@ -171,6 +173,9 @@ async function clearRole(r: Role): Promise<SettingsSnapshot | void> {
 
 /* The pill that shows a role's model and opens the picker under it. */
 export function RolePill({ role }: { role: Role }): JSX.Element {
+  /* The picker hangs off this button, so it has to be reachable as an element
+     and not only as markup. */
+  const pill = useRef<HTMLButtonElement>(null)
   const s = store.get()
   const val = roleValue(role, s.snap)
   const provs = roleProviders(role, s.snap)
@@ -191,7 +196,7 @@ export function RolePill({ role }: { role: Role }): JSX.Element {
   return (
     <>
       <span className={cls}>
-        <button type="button" className="settings-pm" aria-label={t('gui.settings.roles.change', { role: roleName(role) })}
+        <button ref={pill} type="button" className="settings-pm" aria-label={t('gui.settings.roles.change', { role: roleName(role) })}
           aria-expanded={open} onClick={() => store.set({ picker: open ? null : role.id })}>
           {val ? (
             <><span className="settings-id">{val.model}</span><span className="settings-pv">{providerName(s.snap, val.provider)}</span></>
@@ -213,6 +218,7 @@ export function RolePill({ role }: { role: Role }): JSX.Element {
           providers={pickerProviders(provs)}
           current={val || (inherit ? chat : null)}
           emptyNote={emptyNote}
+          anchor={pill.current}
           onClose={() => store.set({ picker: null })}
           onPick={(model, provider, typed) => {
             store.set({ picker: null })
