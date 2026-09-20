@@ -35,6 +35,7 @@ from raven.providers.wire import stored_model_id
 from raven.rpc.errors import (
     ConfigFieldReadonlyError,
     ConfigValidationError,
+    InternalError,
     ModelNotAvailableError,
 )
 from raven.utils.atomic_io import atomic_replace
@@ -454,6 +455,68 @@ async def config_unset(params: dict) -> dict:
     return {"removed": previous is not None, "previous": previous, "default": _DEFAULTS[key]}
 
 
+def _provider_has_credentials(provider: str) -> bool:
+    """Whether this provider can be reached, asked the way every gate asks it.
+
+    Through ``ProvidersConfig`` rather than off the raw payload: the file holds
+    camelCase (``apiKey``), a section can carry its credential in more than one
+    shape (Gemini's ``apiKeyList``), and a key alone is not always enough
+    (Azure needs an address too). ``setup.py`` learned all three the hard way
+    and says so; this is the same question, so it is the same call.
+    """
+    from raven.config.schema import ProvidersConfig
+    from raven.providers.auth import credential_status
+
+    providers = _load_config().get("providers")
+    section: Any = None
+    if isinstance(providers, dict):
+        try:
+            section = ProvidersConfig.model_validate(providers).get(provider)
+        except Exception:
+            section = None
+    # Asked even with nothing on file: a provider logged in through OAuth keeps
+    # its credential in a token file and writes no section at all, and
+    # `include_external` is the half of the question that sees it. Returning
+    # early on the missing section would refuse exactly those first runs.
+    return credential_status(provider, section if section is not None else {}, include_external=True).ok
+
+
+def _loop_or_none_on_first_run(
+    agent_loop_factory: "AgentLoopFactory | None",
+    model: str,
+    provider: str,
+) -> Any:
+    """The live loop, or None when there is not one to build yet.
+
+    The loop is what validates the pair and what gets re-pointed, and it is
+    built from the config on disk. On a fresh install that config names no
+    model, so the factory refuses for want of a provider -- and the call it
+    refuses is the one that would have supplied it. Onboarding and the settings
+    page both end there, silently: the key is written, the model choice does
+    nothing, and the install cannot be finished from either surface.
+
+    So a refusal for missing credentials is read as "no loop yet" rather than
+    as an answer about this request. Nothing is validated in that case, which
+    is why the provider named here is put to the credential gate every other
+    surface asks (``providers.auth``) before the caller is allowed to persist
+    it -- the loop's refusal is about the config's current state, not about
+    whether this provider holds a key.
+    """
+    if agent_loop_factory is None:
+        return None
+    try:
+        return agent_loop_factory()
+    except InternalError as exc:
+        if (getattr(exc, "data", None) or {}).get("reason") != "missing_credentials":
+            raise
+        if not _provider_has_credentials(provider):
+            raise ModelNotAvailableError(
+                f"cannot build provider for model {model!r}",
+                data={"model": model, "provider": provider, "remedy": getattr(exc, "data", {}).get("remedy")},
+            ) from exc
+        return None
+
+
 def _set_model(
     params: dict,
     raw_value: Any,
@@ -507,7 +570,7 @@ def _set_model(
     session_id, session_scoped = _session_scope(params, "model")
     has_session = session_id is not None
 
-    loop = agent_loop_factory() if agent_loop_factory is not None else None
+    loop = _loop_or_none_on_first_run(agent_loop_factory, raw_value, new_provider)
     binding = None
     if loop is not None:
         runtime = load_runtime_config(None, None)
@@ -534,7 +597,19 @@ def _set_model(
     if session_scoped:
         if loop is None:
             # Nothing was built, so nothing was validated -- do not report a
-            # switch that did not happen.
+            # switch that did not happen. The reason is the one the default
+            # scope reports too, and it belongs here for the same cause: a
+            # refusal resolves, so a caller watching only for a raise hears
+            # nothing at all. A pick staged on a draft goes through this branch
+            # on a first run, and used to end as a chip showing a model the
+            # session does not have.
+            # Not `needs_restart`: that flag means the write landed and a
+            # restart applies it, and nothing landed here. A session binding
+            # has no loop to live on, and persisting the pick as the default
+            # instead would widen a choice made for one conversation. The
+            # refusal is what the caller gets, and it is the caller's job to
+            # say it -- a refusal resolves, so watching only for a raise
+            # leaves a chip on a model the session does not have.
             return {"applied": False, "previous": None, "value": raw_value, "scope": "session"}
         previous = loop.session_model(session_id)
         loop.set_session_binding(session_id, binding)
@@ -571,13 +646,23 @@ def _set_model(
         # outside a turn, and this is what re-points them.
         loop.set_default_binding(binding)
 
-    return {
+    out = {
         "applied": True,
         "previous": previous,
         "value": raw_value,
         "scope": "default",
         "applies_to_session": follows_default,
     }
+    if loop is None and agent_loop_factory is not None:
+        # The write landed; the process serving it did not gain a loop. This
+        # gateway built without one -- that is why nothing validated the pair --
+        # and the wiring a turn needs (the scheduler above all) is put together
+        # once, at stack build. So the config is right and this process still
+        # cannot run a turn on it. Said in the reply rather than left for the
+        # caller to discover on the next send, which is where a first run used
+        # to end up without a word.
+        out["needs_restart"] = True
+    return out
 
 
 def _remember_session_model(loop: Any, session_key: str, model: str, provider_name: str | None) -> None:

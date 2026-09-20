@@ -1843,6 +1843,14 @@ class ConfigSetResult(_Strict):
     # moves the sessions that never chose one, so scope alone cannot answer it
     # and a client that guesses shows a model the conversation is not on.
     applies_to_session: bool | None = None
+    needs_restart: bool | None = Field(
+        default=None,
+        description=(
+            "True when the write landed in a process that has no agent loop: the config is right "
+            "and this gateway still cannot run a turn on it, because the wiring a turn needs is "
+            "assembled once at stack build."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

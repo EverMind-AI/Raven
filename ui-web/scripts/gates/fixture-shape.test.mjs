@@ -167,8 +167,9 @@ const UNSENT = new Set([
   'browser.watch.can_back', 'browser.watch.can_forward', 'browser.watch.error', 'browser.watch.headful', 'browser.watch.loading', 'browser.watch.title', 'browser.watch.url', 'browser.watch.vh', 'browser.watch.vw', 'browser.watch.watching',
   // channels.qr: 2
   'channels.qr.qr', 'channels.qr.qr_text',
-  // config.set: 4
-  'config.set.applies_to_session', 'config.set.scope', 'config.set.session_id', 'config.set.value',
+  // config.set: 5 -- the model-switch group, which the offline library does not
+  // model: its gateway always has a loop, so there is no restart to report.
+  'config.set.applies_to_session', 'config.set.needs_restart', 'config.set.scope', 'config.set.session_id', 'config.set.value',
   // cron.list: 4
   'cron.list.jobs[].at_ms', 'cron.list.jobs[].every_ms', 'cron.list.jobs[].last_error', 'cron.list.jobs[].tz',
   // cron.save: 4
