@@ -48,12 +48,14 @@ export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
       { id: 'deep_research', name: 'research', group: 'net', reach: 'net', one: 'researches', on: false },
       { id: 'image_generate', name: 'draw', group: 'generate', reach: 'net', one: 'draws', on: false },
       { id: 'spawn', name: 'spawn', group: 'collab', reach: 'local', one: 'spawns', on: true },
-      /* What `ext.list` reports for a schema-hidden tool: registered, and
-         reachable only through `tool_call`. One sits in the meta card and
-         one beside the tool it controls, which is the pair the page has to
-         draw the same way. */
-      { id: 'tool_search', name: 'tool search', group: 'search', reach: 'local', one: 'finds tools', on: true, builtin: true },
-      { id: 'cancel_dag', name: 'cancel dag', group: 'collab', reach: 'local', one: 'cancels a dag', on: true, builtin: true },
+      /* The two sides `builtin` tells apart. `tool_search` is a meta-tool, so
+         no entry in `tools.disabledTools` registers it and the page draws it
+         fixed; `cancel_dag` is hidden from the schema and reached by name, and
+         that same entry still takes it away, so it carries a working switch.
+         The page has to draw them differently. */
+      { id: 'tool_search', name: 'tool search', group: 'search', reach: 'local', one: 'finds tools', on: false, builtin: true },
+      { id: 'tool_call', name: 'tool call', group: 'search', reach: 'local', one: 'calls a tool by name', on: true, builtin: true },
+      { id: 'cancel_dag', name: 'cancel dag', group: 'collab', reach: 'local', one: 'cancels a dag', on: true, builtin: false },
     ],
     skills: [
       { name: 'git-flow', description: 'Branch and merge the house way', source: 'builtin', always: true, hub: false, hub_id: '' },
