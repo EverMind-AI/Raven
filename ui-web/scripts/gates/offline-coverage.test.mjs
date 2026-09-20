@@ -32,20 +32,6 @@ const EXEMPT = {
   'confirm.respond': 'no scripted turn asks for a confirmation',
   'approval.respond': 'no scripted turn asks for an approval',
   'clarify.respond': 'no scripted turn asks a clarifying question',
-  /* The knowledge page is read-only on this canvas: the library answers the
-     four reads with an unconfigured install and an empty shelf
-     (src/rpc/fixtures/knowledge.ts), which is the state the page's own empty
-     notes are written for. The nine writes have nothing to write into. */
-  'knowledge.bases.create': 'the offline shelf is empty and unconfigured',
-  'knowledge.bases.rename': 'the offline shelf is empty and unconfigured',
-  'knowledge.bases.delete': 'the offline shelf is empty and unconfigured',
-  'knowledge.bases.settings': 'the offline shelf is empty and unconfigured',
-  'knowledge.documents.add': 'the offline shelf is empty and unconfigured',
-  'knowledge.documents.add_url': 'the offline shelf is empty and unconfigured',
-  'knowledge.documents.add_note': 'the offline shelf is empty and unconfigured',
-  'knowledge.documents.update_note': 'the offline shelf is empty and unconfigured',
-  'knowledge.documents.delete': 'the offline shelf is empty and unconfigured',
-  'knowledge.documents.index': 'the offline shelf is empty and unconfigured',
   /* A spawned run's own record. The scripted conversations carry their tool
      calls as frames rather than as spawned runs, so no call id on this page has
      a record to read (src/features/transcript/source.ts asks for one only after

@@ -32,7 +32,7 @@
 
 import { open as openConnections } from '../features/connections/wire'
 import { open as openCron } from '../features/cron/store'
-import { open as openExtAgents } from '../features/extAgents/store'
+import { open as openMemory } from '../features/memory/store'
 import { makeStore } from './store'
 
 export interface NavRow {
@@ -43,9 +43,9 @@ export interface NavRow {
 
 export const MORE_ROWS: readonly NavRow[] = [
   {
-    page: 'extAgentsPage',
-    nameKey: 'gui.nav.agents',
-    go: () => openExtAgents(),
+    page: 'cronPage',
+    nameKey: 'gui.nav.cron',
+    go: () => openCron(),
   },
   {
     page: 'connectionsPage',
@@ -53,9 +53,9 @@ export const MORE_ROWS: readonly NavRow[] = [
     go: () => openConnections(),
   },
   {
-    page: 'cronPage',
-    nameKey: 'gui.nav.cron',
-    go: () => openCron(),
+    page: 'memoryPage',
+    nameKey: 'gui.nav.mem',
+    go: () => openMemory(),
   },
 ]
 

@@ -11,7 +11,7 @@
    for the visible conversation, which is a settings question rather than the
    chip's own. */
 
-import { t } from '../../i18n/t'
+import { code as LANG, t } from '../../i18n/t'
 import { open as openUrl } from '../../lib/openUrl'
 import { current as sessionCurrent } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
@@ -34,7 +34,7 @@ import { loadSessions } from '../rail/source'
 
 import type { ParamsOf, ResultOf } from '../../rpc/generated'
 import type { BannerSource } from '../../state/banner'
-import type { ProviderOp, SettingsSnapshot, SettingsSource, SkillDetail } from './types'
+import type { AuthField, ProviderOp, SettingsSnapshot, SettingsSource, SkillDetail } from './types'
 
 /* The config settings.get returned. Keys arrive camelCased
    (agents.defaults.reasoningEffort), one level per dot. Handed to the island
@@ -130,6 +130,21 @@ export const settingsSnapshot = (): SettingsSnapshot => ({
   providers: providers(), curProvider: defaultProvider(), model: defaultModel(),
   tools: extTools(), skills: extSkillRows(), mcp: extMcpRows(),
 }) as SettingsSnapshot
+
+/* The hub serves its text fields as i18n objects; which language wins is
+   decided here, once, so the page only ever sees a plain string. */
+const hubText = (v: unknown): string =>
+  (v && typeof v === 'object'
+    ? (v as Record<string, string>)[LANG] || (v as Record<string, string>).en || ''
+    : String(v || ''))
+
+/* `plughub.detail` declares its entry as a free JSON object, so the shape read
+   out of it is this page's own. Only the MCP contribution's credential fields
+   are read, which is all the plugins page asks for. */
+interface AuthContribution {
+  kind: string
+  auth?: { fields?: AuthField[] }
+}
 
 const settingsErr = (e: unknown): string => {
   const err = e as { data?: { detail?: string }; message?: string }
@@ -237,6 +252,16 @@ export const settingsSource: SettingsSource = {
   openSkillFile: (name, file) => run(gateway().call('skills.manage', { action: 'open', query: name, file })
     .then(() => undefined)),
   uninstallSkill: (name) => run(gateway().call('skillhub.remove', { name }).then(afterExt)),
+  serverAuthFields: (name) => gateway().call('plughub.detail', { id: name })
+    .then((r) => {
+      const entry = r.item as unknown as { contributes?: AuthContribution[] }
+      const mcp = (entry.contributes || []).find((c) => c.kind === 'mcp')
+      return ((mcp && mcp.auth && mcp.auth.fields) || []).map((f) => ({ ...f, label: hubText(f.label) }))
+    })
+    /* A server the catalogue does not carry is the ordinary case, not a
+       failure to report: the panel says so itself when the list comes back
+       empty. */
+    .catch(() => []),
   toggleServer: (name, on) => run(gateway().call('plug.toggle', { name, enabled: on }).then(afterExt)),
   retryServer: (name) => run(gateway().call('plug.retry', { name }).then(afterExt)),
   revokeServer: (name) => run(gateway().call('plug.revoke', { name }).then(afterExt)),

@@ -105,9 +105,14 @@ describe('the chat column chrome', () => {
     expect(el('wsBdg').textContent).toBe('2')
     expect(el('title').textContent).not.toBe('')
     expect(document.querySelector('.chat > .top > .spacer')).toBeTruthy()
-    expect(document.querySelector('#brand .wl')?.textContent).toBe('Raven Agent')
-    /* #brand .mk:empty hides the slot, so the emptiness is load-bearing. */
-    expect(document.querySelector('#brand .mk')?.childNodes).toHaveLength(0)
+    /* The greeting comes from the catalogue now, so what is pinned is that the
+       lockup says something rather than what the copy is -- the same way the
+       session title above is asserted. */
+    expect(document.querySelector('#brand .wl')?.textContent).not.toBe('')
+    /* The slot carries the mark now (components/RavenMark.tsx), drawn rather
+       than fetched -- so it is one element, and it is hidden from the reader
+       along with the lockup around it. */
+    expect(document.querySelector('#brand .mk > svg')).toBeTruthy()
     for (const svg of [...top().querySelectorAll('svg'), ...el('backpill').querySelectorAll('svg')]) {
       expect(svg.getAttribute('aria-hidden')).toBe('true')
     }

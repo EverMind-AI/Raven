@@ -19,7 +19,9 @@ import { names } from './rpcCalls.mjs'
 
 /* The two undeclared names, and the only two allowed. Both are the manual
    plugin-add path in features/plugins/source.ts. */
-const UNCHECKED = ['raven.mcp.list', 'raven.mcp.set']
+/* Empty since the plugins page went: both were its MCP calls, and the two
+   methods the contract omits are not called from anywhere else. */
+const UNCHECKED = []
 
 /* Every module under features/, components and all, for the rule below. */
 const featureModules = (dir = 'features') => readdirSync(resolve(process.cwd(), 'src', dir), { withFileTypes: true })
@@ -40,7 +42,7 @@ describe('the method names the page calls', () => {
     /* A ratchet rather than a floor near zero: a gate that found nothing would
        pass forever, and so would one that lost a whole scan root -- the seven
        calls in app/ dropping out of the count was invisible under `> 100`. */
-    expect(called.length).toBeGreaterThan(140)
+    expect(called.length).toBeGreaterThan(110)
   })
 
   /* Where a call may be written, as opposed to what it may be named. A domain's

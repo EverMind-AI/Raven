@@ -13,12 +13,6 @@ import type { McpSnapshot } from '../../../rpc/generated'
 
 vi.mock('../../../state/toast', () => ({ show: () => {}, subscribe: () => () => {}, get: () => [] }))
 
-const detail = vi.hoisted(() => ({ fields: [{ key: 'token', label: 'Token', help_url: 'https://github.com/settings/tokens' }] }))
-vi.mock('../../plugins/source', () => ({
-  pluginsSource: { detail: async () => ({ entry: { id: 'github', name: 'GitHub', contributes: [{ kind: 'mcp', auth: { mode: 'apikey', fields: detail.fields } }] }, installed: true }) },
-}))
-
-
 beforeEach(() => {
   setSources({ settings: settingsSource })
 })

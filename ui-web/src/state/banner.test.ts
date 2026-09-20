@@ -1,8 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import * as plugins from '../features/plugins/store'
-import * as nav from '../features/plugins/wire'
 import { resetTranslator, setTranslator } from '../i18n/t'
 import { mountPageRoot } from '../test/pageRoot'
 import { draw, setFault } from './banner'
@@ -12,20 +10,8 @@ import { resetSources, setSources } from './sources'
 
 import type { BannerSource } from './banner'
 
-interface Wired {
-  opened: number
-}
-
-/* The notice's one action: the capabilities page on its plugin tab, then that
-   island's market card. Counted rather than run -- this file answers for the
-   strip, not for the page behind it. */
-const wired: Wired = { opened: 0 }
 vi.spyOn(pageStore, 'show').mockImplementation(() => {})
 vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
-vi.spyOn(nav, 'openPlugins').mockResolvedValue(undefined)
-vi.spyOn(plugins, 'openDetail').mockImplementation((_kind, id) => {
-  if (id === 'websearch') wired.opened += 1
-})
 
 /* The container page.html carries. #bannerHost itself is the page root's now
    (src/chrome/ChatTop.tsx renders the scroller's three grounds), so the bench
@@ -34,16 +20,13 @@ const MARKUP = '<div class="app"><div class="main"><div class="split"><div class
 
 let unmount = (): void => {}
 
-function wire(needsWebsearch = false, withSource = true): Wired {
-  const w = wired
-  w.opened = 0
+function wire(needsWebsearch = false, withSource = true): void {
   setTranslator((key) => key)
   const source: BannerSource = { websearchNeeds: () => needsWebsearch }
   setSources(withSource ? { banner: source } : {})
   unmount()
   document.body.innerHTML = MARKUP
   unmount = mountPageRoot()
-  return w
 }
 
 const host = (): HTMLElement => document.getElementById('bannerHost')!
@@ -100,15 +83,16 @@ describe('the banner strip', () => {
      this fix -- the source replacing the drawing override -- is in a concat
      layer vitest does not load, and is verified in a browser instead. */
 
+  /* One button, where there were two: the "set it up" button opened the
+     plugins page on its websearch entry, and that page is gone. What is left
+     is the notice and the way to wave it away. */
   it('offers the websearch notice when the capability is unconfigured', () => {
-    const w = wire(true)
+    wire(true)
     draw()
     const b = banner()!
     expect(b.className).toBe('banner')
-    const labels = [...b.querySelectorAll('button')].map((x) => x.textContent)
-    expect(labels.length).toBe(2)
-    ;(b.querySelector('button') as HTMLElement).click()
-    expect(w.opened).toBe(1)
+    expect(b.querySelectorAll('button')).toHaveLength(1)
+    expect(b.querySelector('button')?.className).toBe('x')
   })
 
   it('lets the reader wave the suggestion away', () => {
