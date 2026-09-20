@@ -19,6 +19,7 @@ from raven.providers.openai_codex_provider import (
     _build_headers,
     _consume_sse,
     _convert_messages,
+    _convert_tool_choice,
     _convert_tool_output,
     _friendly_error,
     _iter_sse,
@@ -36,6 +37,19 @@ def test_headers_declare_experimental_responses_beta():
     assert headers["Authorization"] == "Bearer tok-abc"
     assert headers["chatgpt-account-id"] == "acct-123"
     assert headers["accept"] == "text/event-stream"
+
+
+def test_named_function_tool_choice_is_converted_for_responses():
+    assert _convert_tool_choice({"type": "function", "function": {"name": "emit_worker_table"}}) == {
+        "type": "function",
+        "name": "emit_worker_table",
+    }
+
+
+def test_non_function_tool_choices_pass_through():
+    assert _convert_tool_choice("auto") == "auto"
+    choice = {"type": "allowed_tools", "tools": [{"type": "function", "name": "x"}]}
+    assert _convert_tool_choice(choice) is choice
 
 
 def test_the_model_is_the_callers_to_supply():

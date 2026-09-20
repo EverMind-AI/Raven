@@ -67,6 +67,7 @@ from raven.agent.subagent.dag_store import (
     read_session_nodes,
 )
 from raven.agent.subagent.dag_verdict import Verdict, describe_failure, judge, tail
+from raven.agent.subagent.delegate import current_delegate, dispatch_charter
 from raven.agent.subagent.history import dag_root, nodes_root, session_history_root
 from raven.agent.subagent.instances import mint_handle
 from raven.agent.subagent.prompt_backend import LocalFileBackend
@@ -78,6 +79,7 @@ from raven.contracts.tool import Tool, ToolResult
 from raven.security.trust import wrap_untrusted
 
 if TYPE_CHECKING:
+    from raven.agent.subagent.delegate import Worker
     from raven.agent.subagent.registry import AgentRegistry
 
 # Sink: (conversation_id, event_name, payload) -> awaitable. Late-bound by the
@@ -198,6 +200,30 @@ class _DispatchBackend:
             grant = resolver(kwargs.get("mcps"))
             kwargs["mcp_grant"] = await grant if inspect.isawaitable(grant) else grant
         return await self.backend.run(*args, **kwargs)
+
+
+@dataclass(frozen=True)
+class _WorkerBackend:
+    """Apply one generated worker's charter to a DAG node dispatch.
+
+    Spawn resolves a worker label before it reaches the backend and carries
+    these same two pieces independently: the readable charter prefixes the
+    task, while the structured payload is picked up by a Raven transport and
+    enforced inside the worker process. A DAG owns its backends per node, so a
+    small wrapper is the equivalent seam here and remains valid after a
+    background run outlives the turn-scoped delegate table that created it.
+    """
+
+    backend: Any
+    charter: str = ""
+    payload: Mapping[str, Any] | None = None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.backend, name)
+
+    async def run(self, task: str, *args: Any, **kwargs: Any) -> str:
+        with dispatch_charter(self.payload):
+            return await self.backend.run(self.charter + task, *args, **kwargs)
 
 
 @dataclass
@@ -856,7 +882,19 @@ class SubAgentDagTool(Tool):
         # node's `instance` field only makes sense once you know which agents
         # are stateful, and a downstream node's prompt_template has to be
         # written against the shape of what the upstream one returns.
-        names = self._registry.roster_text() or "(none configured)"
+        table = current_delegate()
+        if table:
+            lines = []
+            for label in table.labels():
+                worker = table.get(label)
+                if worker is None:
+                    continue
+                brief = worker.brief.strip()
+                tail = f" [runs on {worker.agent}]"
+                lines.append(f"- {label}: {brief}{tail}" if brief else f"- {label}{tail}")
+            names = "\n".join(lines)
+        else:
+            names = self._registry.roster_text() or "(none configured)"
         guide = ""
         if self._guide_skill_id:
             guide = (
@@ -933,6 +971,14 @@ class SubAgentDagTool(Tool):
             "required": ["task_summary", "nodes"],
         }
 
+    def to_schema(self) -> dict[str, Any]:
+        """Render the turn's worker roster instead of the admission snapshot.
+
+        A generated Harness is bound after tool registration, so the registry
+        must ask this tool for its live schema on every model call.
+        """
+        return super().to_schema()
+
     def _node_schema(self) -> dict[str, Any]:
         """Node schema with ``subagent`` constrained to the agent table.
 
@@ -948,7 +994,9 @@ class SubAgentDagTool(Tool):
         a table whose every row failed to build.
         """
         schema = deepcopy(_NODE_SCHEMA)
-        if names := self._registry.names():
+        table = current_delegate()
+        names = table.labels() if table else self._registry.names()
+        if names:
             schema["properties"]["subagent"]["enum"] = names
         return schema
 
@@ -1459,6 +1507,25 @@ class SubAgentDagTool(Tool):
         as a notice instead, on the terms those two already had.
         """
         capabilities = self._capability_map()
+        # Resolve this turn's generated worker labels like spawn does before
+        # any registry-dependent validation. The runner then receives real
+        # roster names everywhere it records identity, resolves session state,
+        # and applies capability checks. Node-specific worker data is frozen
+        # into its backend below so a background run does not depend on the
+        # turn-scoped delegate table remaining bound.
+        table = current_delegate()
+        workers: dict[str, Worker] = {}
+        resolved_nodes: list[DagNodeSpec] = []
+        for node in spec.nodes:
+            worker = table.get(node.subagent) if table else None
+            if worker is None:
+                resolved_nodes.append(node)
+                continue
+            workers[node.id] = worker
+            resolved_nodes.append(node.model_copy(update={"subagent": worker.agent}))
+        if workers:
+            spec = spec.model_copy(update={"nodes": resolved_nodes})
+
         notices = validate_capabilities(spec, capabilities)
         backends: dict[str, Any] = {}
         # ``run_dag`` checks the table too, but it does so inside the run --
@@ -1495,6 +1562,8 @@ class SubAgentDagTool(Tool):
                     backend = _DispatchBackend(backend, mcp_grant=grant)
             elif node.mcps is not None:
                 backend = _DispatchBackend(backend, drop_mcps=True)
+            if worker := workers.get(node.id):
+                backend = _WorkerBackend(backend, charter=worker.charter, payload=worker.payload)
             backends[node.id] = backend
         return Preflight(spec=spec, backends=backends, notices=notices, capabilities=capabilities)
 

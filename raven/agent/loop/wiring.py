@@ -704,7 +704,7 @@ class WiringMixin:
         nothing else.
         """
         cfg = self._playbook_config
-        if cfg is None or getattr(cfg, "agent_harness", "default") != "generate":
+        if cfg is None or not cfg.enabled or getattr(cfg, "agent_harness", "default") != "generate":
             return None
         if is_subagent_process():
             return None

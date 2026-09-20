@@ -17,7 +17,8 @@ import pytest
 
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
-from raven.agent.subagent.delegate import DelegateTable, Worker, current_delegate, delegate_scope
+from raven.agent.subagent.dag_graph import parse_dag_spec
+from raven.agent.subagent.delegate import DelegateTable, Worker, current_delegate, delegate_scope, outbound_charter
 from raven.config.schema import PlaybookConfig
 from raven.playbook.agent_generator import WorkerTableGenerator, build_table, emit_tool, render_charter
 from raven.playbook.agent_spec import AgentPlaybookSpec
@@ -38,14 +39,14 @@ def workspace():
         yield Path(td)
 
 
-def _loop(workspace: Path, harness: str = "default") -> AgentLoop:
+def _loop(workspace: Path, harness: str = "default", *, enabled: bool = True) -> AgentLoop:
     return AgentLoop(
         provider=_Stub(),
         workspace=workspace,
         model="stub",
         policy=TurnPolicy(max_iterations=2),
         tools=ToolWiring(restrict_to_workspace=True),
-        engine=EngineWiring(playbook_config=PlaybookConfig(agentHarness=harness)),
+        engine=EngineWiring(playbook_config=PlaybookConfig(enabled=enabled, agentHarness=harness)),
     )
 
 
@@ -55,6 +56,14 @@ def _spawn_schema(loop: AgentLoop) -> dict:
         if fn.get("name") == "spawn":
             return fn
     raise AssertionError("spawn is not on the tool array")
+
+
+def _dag_schema(loop: AgentLoop) -> dict:
+    for definition in loop.tools.get_definitions():
+        fn = definition.get("function", definition)
+        if fn.get("name") == "run_subagent_dag":
+            return fn
+    raise AssertionError("run_subagent_dag is not on the tool array")
 
 
 def _table() -> DelegateTable:
@@ -124,6 +133,80 @@ def test_the_workers_replace_the_roster_in_the_enum(workspace) -> None:
     with delegate_scope(_table()):
         prop = _spawn_schema(loop)["parameters"]["properties"]["subagent"]
     assert prop["enum"] == ["research-a", "research-b"]
+
+
+def test_the_workers_replace_the_dag_roster_too(workspace) -> None:
+    """A graph must dispatch through the same generated Harness as spawn."""
+    loop = _loop(workspace, "generate")
+    with delegate_scope(_table()):
+        prop = _dag_schema(loop)["parameters"]["properties"]["nodes"]["items"]["properties"]["subagent"]
+        description = _dag_schema(loop)["description"]
+
+    assert prop["enum"] == ["research-a", "research-b"]
+    assert "research-a: only A's pricing [runs on Raven-Research]" in description
+
+
+@pytest.mark.asyncio
+async def test_a_dag_worker_resolves_and_carries_its_charter(workspace, monkeypatch) -> None:
+    """The DAG freezes both halves of a worker before a background run starts."""
+
+    class _RecordingBackend:
+        kind = "raven-loop"
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, object]] = []
+
+        async def run(self, task: str, **kwargs) -> str:
+            self.calls.append((task, outbound_charter()))
+            return "done"
+
+    loop = _loop(workspace, "generate")
+    tool = loop.tools.get("run_subagent_dag")
+    backend = _RecordingBackend()
+    resolved: list[str] = []
+
+    def resolve(node):
+        resolved.append(node.subagent)
+        return backend
+
+    monkeypatch.setattr(tool, "_resolve_node", resolve)
+    payload = {"memory": {"systemPrompt": "only A"}}
+    table = DelegateTable(
+        workers={
+            "research-a": Worker(
+                "research-a",
+                "Raven",
+                "only A's pricing",
+                "BRIEF-A\n\n",
+                payload,
+            )
+        }
+    )
+
+    with delegate_scope(table):
+        preflight = await tool._preflight(
+            parse_dag_spec(
+                {
+                    "task_summary": "research A",
+                    "nodes": [
+                        {
+                            "id": "research-a-node",
+                            "subagent": "research-a",
+                            "node_summary": "research A",
+                            "prompt_template": "find pricing",
+                        }
+                    ],
+                }
+            )
+        )
+
+    # A background graph starts after this turn scope has gone away. Both the
+    # real roster identity and the worker's charter must already be frozen.
+    assert resolved == ["Raven"]
+    assert preflight.spec.nodes[0].subagent == "Raven"
+    await preflight.backends["research-a-node"].run("find pricing")
+    assert backend.calls and backend.calls[0][0].startswith("BRIEF-A\n\n")
+    assert backend.calls[0][1] == payload
 
 
 def test_each_worker_carries_its_brief_into_the_description(workspace) -> None:
@@ -382,6 +465,18 @@ async def test_an_ordinary_turn_still_reaches_the_generator(workspace) -> None:
     # One call, plus the repair round this stub provokes by emitting no table --
     # which is the cost the guard above spares every direct chat.
     assert binding.calls == ["generation", "generation"]
+
+
+@pytest.mark.asyncio
+async def test_the_master_switch_prevents_worker_generation(workspace) -> None:
+    """Enabled is the master switch even if agentHarness says generate."""
+    loop = _loop(workspace, "generate", enabled=False)
+    binding = _CountingBinding("generation")
+
+    table = await loop._write_worker_table(_request(), "s1", binding)
+
+    assert table is None
+    assert binding.calls == []
 
 
 @pytest.mark.asyncio

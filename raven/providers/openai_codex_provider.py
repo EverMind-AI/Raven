@@ -43,6 +43,18 @@ DEFAULT_CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
 DEFAULT_ORIGINATOR = "raven"
 
 
+def _convert_tool_choice(
+    tool_choice: str | dict[str, Any] | None,
+) -> str | dict[str, Any] | None:
+    """Translate Chat Completions' named-function shape for Responses."""
+    if not isinstance(tool_choice, dict):
+        return tool_choice
+    function = tool_choice.get("function")
+    if tool_choice.get("type") == "function" and isinstance(function, dict) and function.get("name"):
+        return {"type": "function", "name": function["name"]}
+    return tool_choice
+
+
 class OpenAICodexProvider(LLMProvider):
     """Use Codex OAuth to call the Responses API."""
 
@@ -81,7 +93,7 @@ class OpenAICodexProvider(LLMProvider):
             "input": input_items,
             "text": {"verbosity": "medium"},
             "include": ["reasoning.encrypted_content"],
-            "tool_choice": tool_choice or "auto",
+            "tool_choice": _convert_tool_choice(tool_choice) or "auto",
             "parallel_tool_calls": True,
         }
 
