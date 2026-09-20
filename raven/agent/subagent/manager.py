@@ -368,6 +368,18 @@ class SubagentManager:
         configured = held(_WEB_VENDORS_KEY, lambda: web_providers(default_live()))
         return configured[0] or self.web_search_provider
 
+    def _web_provider_keys_now(self) -> dict[str, str]:
+        """The per-vendor keys a spawn should hand down, as the file has them.
+
+        The vendor a sub-agent runs on is read live; handing it the keys this
+        manager was built with leaves a key added in the same settings flow
+        behind, which is the half of the pair this exists to close.
+        """
+        from raven.config.live import default_live, held, web_provider_keys
+
+        configured = held("tools.web.providers.keys", lambda: web_provider_keys(default_live()))
+        return {**(self.web_provider_keys or {}), **configured}
+
     def _web_fetch_provider_now(self) -> str:
         """The fetch vendor a spawn should use. See ``_web_search_provider_now``."""
         from raven.config.live import default_live, held, web_providers
@@ -401,7 +413,7 @@ class SubagentManager:
             web_proxy=self.web_proxy,
             web_search_provider=self._web_search_provider_now(),
             web_fetch_provider=self._web_fetch_provider_now(),
-            web_provider_keys=self.web_provider_keys,
+            web_provider_keys=self._web_provider_keys_now(),
             image_search=self.image_search,
             tools_allow=getattr(build, "tools_allow", None),
             skills_allow=getattr(build, "skills_allow", None),
@@ -429,7 +441,7 @@ class SubagentManager:
             web_proxy=self.web_proxy,
             web_search_provider=self._web_search_provider_now(),
             web_fetch_provider=self._web_fetch_provider_now(),
-            web_provider_keys=self.web_provider_keys,
+            web_provider_keys=self._web_provider_keys_now(),
             image_search=self.image_search,
             tools_allow=getattr(build, "tools_allow", None),
             skills_allow=getattr(build, "skills_allow", None),

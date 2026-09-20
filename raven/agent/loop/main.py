@@ -258,8 +258,11 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self.search_api_key = search_api_key
         self.jina_api_key = jina_api_key
         self.web_proxy = web_proxy
-        self.web_search_provider = web_search_provider
-        self.web_fetch_provider = web_fetch_provider
+        # What this process was built with. The selection itself is a property
+        # over the file (see ``wiring.web_search_provider``); these answer when
+        # the file names nothing.
+        self._boot_web_search_provider = web_search_provider
+        self._boot_web_fetch_provider = web_fetch_provider
         self.web_provider_keys = web_provider_keys
         self.image_search = image_search
         from raven.config.raven import MemoryConfig, SubagentDagConfig, SubagentQuestionsConfig
@@ -801,7 +804,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
 
         Swaps the offer stand-in for the working tool once a key appears, so a
         mid-session ``raven deep-research enable`` is picked up without a
-        restart. Called from ``run_turn`` before the per-turn tool wiring, so
+        restart -- and swaps it back when the credential is cleared, so a
+        removed key stops being spent rather than outliving its removal. Called from ``run_turn`` before the per-turn tool wiring, so
         the tool gets this turn's stream callback and routing.
 
         A key *replaced* counts too: the working tool holds the key it was built
@@ -822,24 +826,41 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         except ConfigReadError as exc:
             logger.warning("deep_research: skipping promotion, config unreadable: {}", exc)
             return
-        if not DeepResearchTool.is_configured(cfg):
+        # Identity, not the name: a plugin that shadows ``deep_research``, or a
+        # test double that replaced it, owns that entry and none of this is
+        # about it. Only the two tools this method registers are its to move.
+        current = self.tools.get("deep_research")
+        working = isinstance(current, DeepResearchTool)
+        offered = isinstance(current, DeepResearchOfferTool)
+        if not working and not offered:
             return
-        offered = isinstance(self.tools.get("deep_research"), DeepResearchOfferTool)
+        if not DeepResearchTool.is_configured(cfg):
+            if not working:
+                return
+            # Cleared on the settings page. Returning here would leave the
+            # working tool registered on the credential that was just removed,
+            # and it would keep spending against it until a restart.
+            self.tools.unregister("deep_research")
+            self.deep_research_config = cfg
+            self.deep_research_manager = None
+            self.tools.register(DeepResearchOfferTool())
+            logger.info("deep_research: credential cleared; the offer stand-in is back")
+            return
         # The whole section, not the credential alone: an endpoint or a model
         # moved is the same "saved and nothing happened" one field over, and
         # comparing the section keeps configuredness where it belongs (it was
         # settled by ``is_configured`` above).
-        if not offered and cfg == self.deep_research_config:
+        if working and cfg == self.deep_research_config:
             return
         self.deep_research_config = cfg
-        if not offered:
+        if working:
             # The registry refuses a duplicate name, so the tool this replaces
             # has to go first.
             self.tools.unregister("deep_research")
         self._register_real_deep_research(cfg)
         logger.info(
-            "deep_research: {} (key configured mid-session)",
-            "promoted offer stand-in to the working tool" if offered else "rebuilt the tool on the new key",
+            "deep_research: {} (configured mid-session)",
+            "promoted offer stand-in to the working tool" if offered else "rebuilt the tool on the new section",
         )
 
     async def run(self) -> None:

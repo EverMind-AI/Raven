@@ -720,3 +720,42 @@ def test_an_unchanged_key_leaves_the_tool_alone(tmp_path: Path, monkeypatch):
 
     assert loop.tools.get("deep_research") is built
     assert loop.deep_research_manager is manager
+
+
+def test_clearing_the_key_takes_the_working_tool_away(tmp_path: Path, monkeypatch):
+    """The settings Clear action writes an empty key.
+
+    Left alone, the working tool stays registered on the credential that was
+    just removed and keeps spending against it until a restart -- the removal
+    is the one edit where "saved and ignored" costs money.
+    """
+    import raven.config.update_tools as ut
+
+    monkeypatch.delenv("MIROTHINKER_API_KEY", raising=False)
+    loop = _offer_loop(tmp_path)
+    monkeypatch.setattr(ut, "get_deep_research", lambda **_kw: {"api_key": "sk-old", "api_base": "", "model": ""})
+    loop._maybe_promote_deep_research()
+    assert isinstance(loop.tools.get("deep_research"), DeepResearchTool)
+
+    monkeypatch.setattr(ut, "get_deep_research", lambda **_kw: {"api_key": "", "api_base": "", "model": ""})
+    loop._maybe_promote_deep_research()
+
+    assert isinstance(loop.tools.get("deep_research"), DeepResearchOfferTool)
+    assert loop.deep_research_config.api_key == ""
+    assert loop.deep_research_manager is None
+
+
+def test_an_unconfigured_process_stays_on_the_offer_tool(tmp_path: Path, monkeypatch):
+    """Called once per turn on a process that never had a key, so the clearing
+    branch must not re-register the tool it is already showing."""
+    import raven.config.update_tools as ut
+
+    monkeypatch.delenv("MIROTHINKER_API_KEY", raising=False)
+    loop = _offer_loop(tmp_path)
+    offered = loop.tools.get("deep_research")
+    monkeypatch.setattr(ut, "get_deep_research", lambda **_kw: {"api_key": "", "api_base": "", "model": ""})
+
+    loop._maybe_promote_deep_research()
+    loop._maybe_promote_deep_research()
+
+    assert loop.tools.get("deep_research") is offered

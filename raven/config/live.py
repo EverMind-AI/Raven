@@ -63,6 +63,7 @@ __all__ = [
     "permissions_config",
     "routing_profile",
     "skill_gate_pin",
+    "web_provider_keys",
     "web_search_key",
 ]
 
@@ -259,6 +260,25 @@ def web_search_key(live: LiveConfig) -> str | None:
     if raw is None:
         return _admit(live, "web_search_key", present=False, value=None)
     return _admit(live, "web_search_key", present=True, value=live_web_search_key(raw))
+
+
+def web_provider_keys(live: LiveConfig) -> dict[str, str]:
+    """Every per-vendor web key the file holds now, keyed by vendor.
+
+    The singular reader answers one vendor a caller already named; a spawn has
+    to hand the whole set down, because the sub-agent picks its own vendor.
+    """
+    raw = live.get("tools.web.providers")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for vendor in raw:
+        # Through the singular reader, which is schema-backed and memoised:
+        # the key's spelling belongs to the schema, not to every reader of it.
+        value = web_provider_key(live, str(vendor))
+        if value:
+            out[str(vendor)] = value
+    return out
 
 
 def web_provider_key(live: LiveConfig, vendor: str) -> str | None:

@@ -65,6 +65,9 @@ _CAP_KEY = "agents.defaults.maxToolIterations"
 _EFFORT_KEY = "agents.defaults.reasoningEffort"
 #: Same, for the switch both personalization gates of a turn read.
 _PERSONALIZATION_KEY = "agents.defaults.enablePersonalization"
+#: Both web vendors under one key: they come out of one section, and a turn
+#: that searches and fetches must not straddle an edit between the two.
+_WEB_VENDORS_KEY = "tools.web.providers"
 
 
 class WiringMixin:
@@ -875,6 +878,28 @@ class WiringMixin:
         self.enable_personalization = enable
         logger.info("Personalization flow: {}", "enabled" if enable else "disabled")
 
+    @property
+    def web_search_provider(self) -> str:
+        """The search vendor a call runs on, as the file has it now.
+
+        The keys have been read live since they landed and resolve against this
+        selection (``_live_web_search_key``), so a vendor frozen at startup was
+        the half that kept the pair on the old endpoint. Held for the turn, like
+        the rest of them.
+        """
+        from raven.config.live import default_live, held, web_providers
+
+        configured = held(_WEB_VENDORS_KEY, lambda: web_providers(default_live()))
+        return configured[0] or self._boot_web_search_provider
+
+    @property
+    def web_fetch_provider(self) -> str:
+        """The fetch vendor a call runs on. See :attr:`web_search_provider`."""
+        from raven.config.live import default_live, held, web_providers
+
+        configured = held(_WEB_VENDORS_KEY, lambda: web_providers(default_live()))
+        return configured[1] or self._boot_web_fetch_provider
+
     def _web_key(self, vendor: str) -> str | None:
         return resolve_vendor_key(vendor, self.web_provider_keys, self.search_api_key, self.jina_api_key)
 
@@ -917,7 +942,9 @@ class WiringMixin:
         # says nothing about the replacement's credential story.
         self._config_gated_tools: dict[str, Any] = {}
         web_search = WebSearchTool(
-            api_key=self._live_web_search_key, proxy=self.web_proxy, provider=self.web_search_provider
+            api_key=self._live_web_search_key,
+            proxy=self.web_proxy,
+            provider=lambda: self.web_search_provider,
         )
         self.tools.register(web_search)
         self._config_gated_tools[web_search.name] = web_search
@@ -926,20 +953,29 @@ class WiringMixin:
         # only where `tools.web.search.images` asks for the tool at all, so a lane
         # that never places a picture keeps the tool face it had.
         if self.image_search:
-            picture_vendor = image_search_vendor(self.web_search_provider, self._web_key)
+            # Both halves follow the selection: the picture vendor is derived
+            # from it, so freezing either one pins the pair to the boot choice.
+            def picture_vendor() -> str:
+                return image_search_vendor(self.web_search_provider, self._web_key)
+
             image_search = ImageSearchTool(
-                api_key=lambda: self._live_vendor_key(picture_vendor), proxy=self.web_proxy, provider=picture_vendor
+                api_key=lambda: self._live_vendor_key(picture_vendor()),
+                proxy=self.web_proxy,
+                provider=picture_vendor,
             )
             self.tools.register(image_search)
             self._config_gated_tools[image_search.name] = image_search
         # web_fetch registers the same way and is never withheld: Jina needs no
         # key, so a keyed backend selected without one is replaced by Jina
         # rather than left to fail.
-        fetch_provider = WebFetchTool.effective_provider(
-            self.web_fetch_provider, self._web_key(self.web_fetch_provider)
-        )
+        # The substitution moved into the tool, which asks it per call: decided
+        # here it outlived the key that would have stopped it.
         self.tools.register(
-            WebFetchTool(api_key=self._web_key(fetch_provider), proxy=self.web_proxy, provider=fetch_provider)
+            WebFetchTool(
+                api_key=lambda: self._live_vendor_key(self.web_fetch_provider),
+                proxy=self.web_proxy,
+                provider=lambda: self.web_fetch_provider,
+            )
         )
         # Media tools (image/speech/video) are opt-in: a tool is registered only
         # when the user configured it (a model or apiKey under tools.media.<tool>),

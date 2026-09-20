@@ -813,3 +813,48 @@ class TestTheRestOfWhatAWriteDidNotReach:
             assert tool.timeout == 300
 
         assert tool.timeout == 900
+
+    def test_the_main_web_tools_follow_the_saved_vendor(self, tmp_path: Path, monkeypatch) -> None:
+        """The keys have been read live since they landed and resolve against
+        the selection, so a vendor frozen at registration kept the pair on the
+        old endpoint -- with the new vendor's key never reaching anything."""
+        from raven.agent.tools.web import WebSearchTool
+
+        path = tmp_path / "config.json"
+        _write(path, {})
+        monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+        vendor = {"now": "serper"}
+        tool = WebSearchTool(api_key=lambda: f"{vendor['now']}-key", provider=lambda: vendor["now"])
+
+        assert tool.provider == "serper"
+        assert tool.api_key == "serper-key"
+
+        vendor["now"] = "exa"
+
+        assert tool.provider == "exa"
+        assert tool.api_key == "exa-key"
+
+    def test_an_unknown_vendor_keeps_the_tool_working(self, tmp_path: Path, monkeypatch) -> None:
+        """The file is read while a turn runs, so a typo in it must not take the
+        tool down mid-call; the vendor it was registered with answers."""
+        from raven.agent.tools.web import WebSearchTool
+
+        tool = WebSearchTool(api_key="k", provider=lambda: "not-a-vendor")
+
+        assert tool.provider == "serper"
+
+    def test_a_spawn_hands_down_the_keys_the_file_has(self, tmp_path: Path, monkeypatch) -> None:
+        """The vendor a sub-agent runs on is read live, so handing it the keys
+        the manager was built with leaves the other half of the pair behind."""
+        from types import SimpleNamespace
+
+        from raven.agent.subagent.manager import SubagentManager
+
+        path = tmp_path / "config.json"
+        _write(path, {"tools": {"web": {"providers": {"exa": {"apiKey": "exa-live"}}}}})
+        monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+        mgr = SimpleNamespace(web_provider_keys={"serper": "serper-boot"})
+
+        keys = SubagentManager._web_provider_keys_now(mgr)
+
+        assert keys == {"serper": "serper-boot", "exa": "exa-live"}
