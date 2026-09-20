@@ -103,11 +103,14 @@ daily-plan reminders. It is used even when task discovery is disabled.
 - `"channel"`: resolve the most recent recipient in that channel at fire time.
 - `"*"`: expand to enabled gateway channels and resolve their recent recipients.
 
-An empty list leaves the daily discovery batch without a destination. A nudge
-can still target a concrete session, but internal-target nudges need a
-resolvable destination. A literal `tui` target is not automatically forwarded
-by a gateway that has no matching outlet. Start with one explicit recipient
-before choosing broadcast.
+An empty list leaves the daily discovery batch without a destination. A plain
+nudge can still target a concrete session. For an internal target such as
+`sentinel:direct`, if the configured targets resolve to no recipients (including
+when the list is empty), the runner falls back to a single most-recent active
+session, not a broadcast. If no suitable session can be resolved, the nudge has
+no delivery target. A literal `tui` target is not automatically forwarded by a
+gateway that has no matching outlet. Start with one explicit recipient before
+choosing broadcast.
 
 ### Frequency and quiet hours
 
