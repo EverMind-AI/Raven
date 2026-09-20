@@ -535,3 +535,38 @@ def test_a_nesting_deeper_than_the_cap_still_answers(fenced: ExecTool, monkeypat
         command = f"sh -c {shlex.quote(command)}"
 
     assert refusal(fenced, command) in (None, *_REFUSALS)
+
+
+# ---------- a wrapper in front of the thing that runs -------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "command sh -c 'cat $HOME/.ssh/id_rsa'",
+        "env sh -c 'cat $HOME/.ssh/id_rsa'",
+        "env FOO=bar sh -c 'cat $HOME/.ssh/id_rsa'",
+        "sudo sh -c 'cat $HOME/.ssh/id_rsa'",
+        "FOO=bar sh -c 'cat $HOME/.ssh/id_rsa'",
+        "command cd /; cat etc/shadow",
+    ],
+    ids=["command", "env", "env-with-assignment", "sudo", "bare-assignment", "wrapped-cd"],
+)
+def test_a_wrapper_does_not_hide_what_it_wraps(
+    fenced: ExecTool, monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    """The payload search read the segment as written, while the permission
+    policy unwraps `env`, `sudo`, `command` and leading assignments first. Half
+    the machinery was reused and half was not, so a wrapper in front of the
+    nested shell put its program back out of view."""
+    monkeypatch.setenv("HOME", "/home/victim")
+
+    assert refusal(fenced, command) is not None
+
+
+def test_a_wrapper_in_front_of_inside_work_is_still_left_alone(
+    fenced: ExecTool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", "/home/victim")
+
+    assert refusal(fenced, "env sh -c 'cat notes.txt'") is None

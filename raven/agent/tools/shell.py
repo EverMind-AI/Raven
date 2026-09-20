@@ -19,6 +19,7 @@ from raven.permissions.shell_policy import (
     _MAX_EMBEDDED_SHELL_DEPTH,
     _command_segments,
     _embedded_shell_command,
+    _unwrap_command_wrappers,
     executable_text,
 )
 from raven.sandbox import DirectExecutor, SandboxExecutor
@@ -389,7 +390,11 @@ class ExecTool(Tool):
         # the deny list.
         if _depth < _MAX_EMBEDDED_SHELL_DEPTH:
             for segment in segments:
-                inner = _embedded_shell_command(segment)
+                # Unwrapped first, the way the policy reads a segment before
+                # asking what it runs. Reusing the payload helper without the
+                # unwrap that precedes it there reused half the agreement:
+                # `env sh -c '...'` put the program back out of view.
+                inner = _embedded_shell_command(_unwrap_command_wrappers(segment))
                 if not inner:
                     continue
                 nested = self._check_workspace_restriction(inner, cwd, _depth=_depth + 1)
@@ -453,8 +458,9 @@ class ExecTool(Tool):
         for segment in segments:
             # A subshell or brace group needs no unwrapping here: the splitter
             # treats `(`, `)` and a standalone `{` as operators, so `(cd /; x)`
-            # arrives as its own segment with the bracket already gone.
-            tokens = list(segment)
+            # arrives as its own segment with the bracket already gone. A
+            # wrapper does, though -- `command cd /` names the same builtin.
+            tokens = _unwrap_command_wrappers(segment)
             if not tokens or tokens[0] != "cd":
                 continue
             arguments = list(tokens[1:])
