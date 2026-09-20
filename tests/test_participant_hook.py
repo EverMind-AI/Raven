@@ -565,3 +565,314 @@ async def test_a_participant_answers_with_a_mapping_it_could_have_built_itself()
     assert decision.rollback is True
     assert decision.rollback_inject == [{"role": "user", "content": "again"}]
     assert decision.notes == ["written by hand"]
+
+
+@pytest.mark.asyncio
+async def test_composite_asks_each_role_once_with_the_turns_complete_roster():
+    """Two seats are one role call, in registration order, for every delegated verb."""
+    from raven.agent.harness import bind_harness
+    from raven.agent.hook.composite import CompositeHook
+
+    class Named(_Recording):
+        def __init__(self, name):
+            super().__init__()
+            self.name = name
+
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def seen(verb, participants):
+        calls.append((verb, tuple(p.name for p in participants)))
+
+    class Memory:
+        async def ask_intake(self, text, step, participants):
+            seen("intake", participants)
+            return None
+
+        async def ask_system_addendum(self, step, participants):
+            seen("system_addendum", participants)
+            return None
+
+        async def ask_archive(self, step, reply, participants):
+            seen("archive", participants)
+            return None
+
+    class Planning:
+        async def ask_advice(self, step, participants):
+            seen("advise", participants)
+            return None
+
+    class Capability:
+        async def ask_select_tools(self, offered, step, participants):
+            seen("select_tools", participants)
+            return None
+
+    class Action:
+        async def ask_review(self, step, participants):
+            seen("review", participants)
+            return Accept()
+
+        async def ask_salvage(self, step, participants):
+            seen("salvage", participants)
+            return None
+
+    chain = CompositeHook([ParticipantHook("a", lambda: Named("a")), ParticipantHook("b", lambda: Named("b"))])
+    harness = SimpleNamespace(memory=Memory(), planning=Planning(), capability=Capability(), action=Action())
+    ctx = _ctx(
+        iteration=1,
+        inbound_content="q",
+        outbound_content="done",
+        tools=[{"name": "read_file"}],
+        metadata={},
+    )
+    with bind_harness(harness):
+        await chain.before_user_inbound(ctx)
+        await chain.before_iteration(ctx)
+        await chain.before_execute_tools(ctx)
+        await chain.after_iteration(ctx)
+        await chain.terminal_answerless(ctx)
+        await chain.after_send(ctx)
+
+    assert calls == [
+        ("intake", ("a", "b")),
+        ("select_tools", ("a", "b")),
+        ("advise", ("a", "b")),
+        ("system_addendum", ("a", "b")),
+        ("review", ("a", "b")),
+        ("advise", ("a", "b")),
+        ("review", ("a", "b")),
+        ("salvage", ("a", "b")),
+        ("archive", ("a", "b")),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_roster_waits_for_a_nested_products_setup_axes():
+    """A product may hide its seat behind setup axes; the roster runs after them."""
+    from raven.agent.harness import bind_harness
+    from raven.agent.hook.composite import CompositeHook
+    from raven.contracts.loop_hooks import AgentHook, HookDecision
+
+    events: list[str] = []
+
+    class Setup(AgentHook):
+        @property
+        def name(self):
+            return "setup"
+
+        async def before_iteration(self, ctx):
+            events.append("setup")
+            return HookDecision()
+
+    class Named(_Recording):
+        def __init__(self, name):
+            super().__init__()
+            self.name = name
+
+    class Planning:
+        async def ask_advice(self, step, participants):
+            events.append("roster:" + ",".join(p.name for p in participants))
+            return None
+
+    class Memory:
+        async def ask_system_addendum(self, step, participants):
+            return None
+
+    class Capability:
+        async def ask_select_tools(self, offered, step, participants):
+            return None
+
+    nested = CompositeHook([Setup(), ParticipantHook("b", lambda: Named("b"))])
+    chain = CompositeHook([ParticipantHook("a", lambda: Named("a")), nested])
+    harness = SimpleNamespace(memory=Memory(), planning=Planning(), capability=Capability())
+    ctx = _ctx(iteration=1)
+    with bind_harness(harness):
+        await chain.before_iteration(ctx)
+        await chain.before_iteration(ctx)
+
+    assert events == ["setup", "roster:a,b", "setup", "roster:a,b"]
+
+
+@pytest.mark.asyncio
+async def test_unbound_composition_asks_the_complete_roster_and_drains_every_trail():
+    from raven.agent.hook.composite import CompositeHook
+
+    events: list[str] = []
+
+    class Named(AgentParticipant):
+        def __init__(self, name):
+            self.name = name
+
+        async def intake(self, text, step):
+            events.append(f"intake:{self.name}:{text}")
+            self.note(f"trail:{self.name}")
+            return Intake(text + self.name)
+
+        async def review(self, step):
+            events.append(f"review:{self.name}")
+            return End("closed") if self.name == "b" else Accept()
+
+    chain = CompositeHook(
+        [
+            ParticipantHook("a", lambda: Named("a")),
+            ParticipantHook("b", lambda: Named("b")),
+        ]
+    )
+    ctx = _ctx(inbound_content="q")
+
+    inbound = await chain.before_user_inbound(ctx)
+    review = await chain.before_execute_tools(ctx)
+
+    assert inbound.modified_content == "qab"
+    assert inbound.notes == ["trail:a", "trail:b"]
+    assert review.short_circuit_result == "closed"
+    assert events == ["intake:a:q", "intake:b:qa", "review:a", "review:b"]
+
+
+@pytest.mark.asyncio
+async def test_a_factory_failure_omits_only_that_seat_from_the_roster():
+    from raven.agent.harness import bind_harness
+    from raven.agent.hook.composite import CompositeHook
+
+    class Named(_Recording):
+        def __init__(self, name):
+            super().__init__()
+            self.name = name
+
+    def broken():
+        raise RuntimeError("factory failed")
+
+    seen: list[tuple[str, ...]] = []
+
+    class Action:
+        async def ask_review(self, step, participants):
+            seen.append(tuple(participant.name for participant in participants))
+            return Accept()
+
+    chain = CompositeHook(
+        [
+            ParticipantHook("broken", broken),
+            ParticipantHook("a", lambda: Named("a")),
+            ParticipantHook("b", lambda: Named("b")),
+        ]
+    )
+    ctx = _ctx(iteration=1)
+    with bind_harness(SimpleNamespace(action=Action())):
+        await chain.before_execute_tools(ctx)
+
+    assert seen == [("a", "b")]
+    assert ParticipantHook._ROSTER_KEY not in ctx.metadata
+
+
+@pytest.mark.asyncio
+async def test_roster_discovers_a_participant_behind_product_axes():
+    from raven.agent.harness import bind_harness
+    from raven.agent.hook.composite import CompositeHook
+    from raven.contracts.loop_hooks import AgentHook, HookDecision
+
+    events: list[str] = []
+
+    class Setup(AgentHook):
+        async def before_iteration(self, ctx):
+            events.append("setup")
+            return HookDecision()
+
+    class Named(_Recording):
+        def __init__(self, name):
+            super().__init__()
+            self.name = name
+
+    class Product(AgentHook):
+        def __init__(self):
+            self.axes = (Setup(), ParticipantHook("b", lambda: Named("b")))
+
+        async def before_iteration(self, ctx):
+            for axis in self.axes:
+                decision = await axis.before_iteration(ctx)
+                if decision.short_circuit_result is not None or decision.rollback:
+                    return decision
+            return HookDecision()
+
+    class Planning:
+        async def ask_advice(self, step, participants):
+            events.append("roster:" + ",".join(participant.name for participant in participants))
+            return None
+
+    class Memory:
+        async def ask_system_addendum(self, step, participants):
+            return None
+
+    class Capability:
+        async def ask_select_tools(self, offered, step, participants):
+            return None
+
+    chain = CompositeHook([ParticipantHook("a", lambda: Named("a")), Product()])
+    harness = SimpleNamespace(memory=Memory(), planning=Planning(), capability=Capability())
+    with bind_harness(harness):
+        await chain.before_iteration(_ctx(iteration=1))
+
+    assert events == ["setup", "roster:a,b"]
+
+
+@pytest.mark.asyncio
+async def test_roster_discovery_and_cleanup_survive_bad_neighbor_hooks():
+    from raven.agent.harness import bind_harness
+    from raven.agent.hook.composite import CompositeHook
+    from raven.contracts.loop_hooks import AgentHook
+
+    class Named(_Recording):
+        name = "a"
+
+    class BadAxes(AgentHook):
+        @property
+        def axes(self):
+            raise RuntimeError("axes failed")
+
+    class BadDecision(AgentHook):
+        async def before_execute_tools(self, ctx):
+            return object()
+
+    class Action:
+        async def ask_review(self, step, participants):
+            return Accept()
+
+    ctx = _ctx(iteration=1)
+    harness = SimpleNamespace(action=Action())
+    with bind_harness(harness):
+        await CompositeHook([BadAxes(), ParticipantHook("a", Named)]).before_execute_tools(ctx)
+        with pytest.raises(AttributeError):
+            await CompositeHook([ParticipantHook("a", Named), BadDecision()]).before_execute_tools(ctx)
+
+    assert ParticipantHook._ROSTER_KEY not in ctx.metadata
+
+
+@pytest.mark.asyncio
+async def test_an_interleaved_hook_runs_before_the_roster_short_circuits():
+    from raven.agent.hook.composite import CompositeHook
+    from raven.contracts.loop_hooks import AgentHook, HookDecision
+
+    events: list[str] = []
+
+    class Named(AgentParticipant):
+        def __init__(self, name):
+            self.name = name
+
+        async def review(self, step):
+            events.append("review:" + self.name)
+            return End("closed") if self.name == "a" else Accept()
+
+    class Middle(AgentHook):
+        async def before_execute_tools(self, ctx):
+            events.append("middle")
+            return HookDecision()
+
+    chain = CompositeHook(
+        [
+            ParticipantHook("a", lambda: Named("a")),
+            Middle(),
+            ParticipantHook("b", lambda: Named("b")),
+        ]
+    )
+    decision = await chain.before_execute_tools(_ctx(iteration=1))
+
+    assert decision.short_circuit_result == "closed"
+    assert events == ["middle", "review:a"]

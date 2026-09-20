@@ -16,6 +16,7 @@ this is only the tidy case).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
@@ -36,6 +37,8 @@ from raven.agent.harness.participants import (
 )
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
 from raven.contracts.participant import AgentParticipant, ParticipantFactory, StepView
+
+logger = logging.getLogger(__name__)
 
 
 class _Row(dict):
@@ -94,12 +97,22 @@ class _Seat:
     addendum: Any = None
 
 
+@dataclass
+class _RosterPhase:
+    phase: str
+    hooks: tuple["ParticipantHook", ...]
+    seats: tuple[_Seat, ...]
+    claimant: "ParticipantHook | None"
+    claimed: bool = False
+
+
 class ParticipantHook(AgentHook):
     """One plugin's participant, seated in the hook chain."""
 
     # The default a seat declares to the loop, overridden per seat below. Kept
     # as a class attribute because that is where the rollback registry looks.
     rolls_back_iterations = True
+    _ROSTER_KEY = "raven.participant.roster_phase"
 
     def __init__(self, name: str, factory: ParticipantFactory, *, rolls_back: bool = True) -> None:
         """``rolls_back`` is what the seat declares to the loop.
@@ -149,18 +162,61 @@ class ParticipantHook(AgentHook):
         """
         meta = getattr(ctx, "metadata", None)
         if isinstance(meta, dict):
+            if fresh:
+                meta.pop(self._seat_key, None)
             seat = meta.get(self._seat_key)
-            if fresh or not isinstance(seat, _Seat):
+            if not isinstance(seat, _Seat):
                 seat = _Seat(self._factory())
                 meta[self._seat_key] = seat
         else:
             seat = self._seat_fallback
             if fresh or seat is None or self._turn is not ctx:
+                self._seat_fallback = None
+                self._turn = ctx
                 seat = _Seat(self._factory())
                 self._seat_fallback = seat
-                self._turn = ctx
         self._last_seat = seat
         return seat
+
+    @classmethod
+    def prepare_roster(cls, ctx: Any, phase: str, hooks: list["ParticipantHook"]) -> bool:
+        """Seat a phase's whole roster before the hook chain is called."""
+        meta = getattr(ctx, "metadata", None)
+        if not isinstance(meta, dict) or not hooks:
+            return False
+        current = meta.get(cls._ROSTER_KEY)
+        if isinstance(current, _RosterPhase) and current.phase == phase:
+            return False
+        fresh = phase == "before_user_inbound"
+        seats: list[_Seat] = []
+        claimant: ParticipantHook | None = None
+        for hook in hooks:
+            try:
+                seats.append(hook._seat(ctx, fresh=fresh))
+                claimant = hook
+            except Exception:
+                logger.exception("participant %s factory raised; leaving its seat absent", hook.name)
+        meta[cls._ROSTER_KEY] = _RosterPhase(phase, tuple(hooks), tuple(seats), claimant)
+        return True
+
+    @classmethod
+    def clear_roster(cls, ctx: Any, phase: str) -> None:
+        meta = getattr(ctx, "metadata", None)
+        if not isinstance(meta, dict):
+            return
+        current = meta.get(cls._ROSTER_KEY)
+        if isinstance(current, _RosterPhase) and current.phase == phase:
+            meta.pop(cls._ROSTER_KEY, None)
+
+    def _claim_roster(self, ctx: Any, phase: str, *, fresh: bool = False) -> tuple[_Seat, ...] | None:
+        meta = getattr(ctx, "metadata", None)
+        roster = meta.get(self._ROSTER_KEY) if isinstance(meta, dict) else None
+        if not isinstance(roster, _RosterPhase) or roster.phase != phase or self not in roster.hooks:
+            return (self._seat(ctx, fresh=fresh),)
+        if roster.claimed or self is not roster.claimant:
+            return None
+        roster.claimed = True
+        return roster.seats
 
     @staticmethod
     def _step(ctx: Any, *, phase: str) -> StepView:
@@ -200,6 +256,12 @@ class ParticipantHook(AgentHook):
             return decision
         return replace(decision, notes=[*decision.notes, *trail])
 
+    @classmethod
+    def _with_trails(cls, seats: tuple[_Seat, ...], decision: HookDecision) -> HookDecision:
+        for seat in seats:
+            decision = cls._with_trail(seat, decision)
+        return decision
+
     @staticmethod
     def _decide(answer) -> HookDecision:
         """A verdict rendered as the decision the composite merges.
@@ -227,94 +289,96 @@ class ParticipantHook(AgentHook):
             return HookDecision(short_circuit_result=verdict.reply, notes=notes)
         return HookDecision(notes=notes)
 
-    async def _intake(self, text: str, step: StepView, participant: AgentParticipant):
+    async def _intake(self, text: str, step: StepView, participants: tuple[AgentParticipant, ...]):
         """What this turn reads in, decided by the Memory role when one is bound.
 
         Read here, so that a replaced role may answer with the mapping a
         participant answered with rather than with this seat's own shape."""
         harness = current_harness()
         if harness is None:
-            return await compose_intake(text, step, [participant])
-        answer = await harness.memory.ask_intake(text, step, [participant])
+            return await compose_intake(text, step, participants)
+        answer = await harness.memory.ask_intake(text, step, participants)
         return answer if answer is None or isinstance(answer, Intake) else read_intake(answer, text=text)
 
-    async def _advise(self, step: StepView, participant: AgentParticipant) -> str | None:
+    async def _advise(self, step: StepView, participants: tuple[AgentParticipant, ...]) -> str | None:
         """The turn guidance, decided by the Planning role when one is bound."""
         harness = current_harness()
         if harness is None:
-            return await compose_advice(step, [participant])
-        return await harness.planning.ask_advice(step, [participant])
+            return await compose_advice(step, participants)
+        return await harness.planning.ask_advice(step, participants)
 
-    async def _review(self, step: StepView, participant: AgentParticipant):
+    async def _review(self, step: StepView, participants: tuple[AgentParticipant, ...]):
         """The verdict on this step, decided by the Action role when one is bound."""
         harness = current_harness()
         if harness is None:
-            return await compose_review(step, [participant])
-        return await harness.action.ask_review(step, [participant])
+            return await compose_review(step, participants)
+        return await harness.action.ask_review(step, participants)
 
-    async def _salvage(self, step: StepView, participant: AgentParticipant):
+    async def _salvage(self, step: StepView, participants: tuple[AgentParticipant, ...]):
         """What a turn with no answer sends, decided by the Action role when bound."""
         harness = current_harness()
         if harness is None:
-            return await compose_salvage(step, [participant])
-        return await harness.action.ask_salvage(step, [participant])
+            return await compose_salvage(step, participants)
+        return await harness.action.ask_salvage(step, participants)
 
-    async def _addendum(self, step: StepView, participant: AgentParticipant):
+    async def _addendum(self, step: StepView, participants: tuple[AgentParticipant, ...]):
         """What this call adds to the system message, composed by Memory."""
         harness = current_harness()
         if harness is None:
-            return await compose_addendum(step, [participant])
-        answer = await harness.memory.ask_system_addendum(step, [participant])
+            return await compose_addendum(step, participants)
+        answer = await harness.memory.ask_system_addendum(step, participants)
         return answer if answer is None or isinstance(answer, Intake) else read_intake(answer)
 
-    async def _record(self, step: StepView, reply: str | None, participant: AgentParticipant):
+    async def _record(self, step: StepView, reply: str | None, participants: tuple[AgentParticipant, ...]):
         """What the turn's record is stamped with, merged by Memory."""
         harness = current_harness()
         if harness is None:
-            return await compose_record(step, reply, [participant])
-        return await harness.memory.ask_archive(step, reply, [participant])
+            return await compose_record(step, reply, participants)
+        return await harness.memory.ask_archive(step, reply, participants)
 
-    async def _tools(self, offered: list[dict[str, Any]], step: StepView, participant: AgentParticipant):
+    async def _tools(self, offered: list[dict[str, Any]], step: StepView, participants: tuple[AgentParticipant, ...]):
         """The tool array this iteration carries, composed by Capability."""
         harness = current_harness()
         if harness is None:
-            return await compose_tools(offered, step, [participant])
-        return await harness.capability.ask_select_tools(offered, step, [participant])
+            return await compose_tools(offered, step, participants)
+        return await harness.capability.ask_select_tools(offered, step, participants)
 
     async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
-        seat = self._seat(ctx, fresh=True)
+        seats = self._claim_roster(ctx, "before_user_inbound", fresh=True)
+        if seats is None:
+            return HookDecision()
+        participants = tuple(seat.participant for seat in seats)
         text = getattr(ctx, "inbound_content", None) or ""
-        intake = await self._intake(text, self._step(ctx, phase="user_inbound"), seat.participant)
+        intake = await self._intake(text, self._step(ctx, phase="user_inbound"), participants)
         if intake is None:
-            return self._with_trail(seat, HookDecision())
+            return self._with_trails(seats, HookDecision())
         notes = [intake.note] if intake.note else []
         if intake.reply is not None:
-            return self._with_trail(seat, HookDecision(short_circuit_result=intake.reply, notes=notes))
+            return self._with_trails(seats, HookDecision(short_circuit_result=intake.reply, notes=notes))
         if intake.text != text:
-            return self._with_trail(seat, HookDecision(modified_content=intake.text, notes=notes))
-        return self._with_trail(seat, HookDecision(notes=notes))
+            return self._with_trails(seats, HookDecision(modified_content=intake.text, notes=notes))
+        return self._with_trails(seats, HookDecision(notes=notes))
 
     async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
-        seat = self._seat(ctx)
-        participant = seat.participant
-        # The system message is shown without this participant's earlier addendum,
-        # so what the participant sizes its text against is the prefix it will be
-        # spliced into, and a turn that adds nothing this call leaves nothing.
-        self._strip_addendum(ctx, seat)
+        seats = self._claim_roster(ctx, "before_iteration")
+        if seats is None:
+            return HookDecision()
+        participants = tuple(seat.participant for seat in seats)
+        for seat in seats:
+            self._strip_addendum(ctx, seat)
         step = self._step(ctx, phase="iteration")
         offered = getattr(ctx, "tools", None)
-        narrowed = await self._tools(list(offered or []), step, participant) if offered is not None else None
-        note = await self._advise(step, participant)
-        addendum = await self._addendum(step, participant)
+        narrowed = await self._tools(list(offered or []), step, participants) if offered is not None else None
+        note = await self._advise(step, participants)
+        addendum = await self._addendum(step, participants)
         if addendum is not None and addendum.reply is not None:
-            return self._with_trail(
-                seat,
-                HookDecision(short_circuit_result=addendum.reply, notes=[addendum.note] if addendum.note else []),
+            return self._with_trails(
+                seats, HookDecision(short_circuit_result=addendum.reply, notes=[addendum.note] if addendum.note else [])
             )
         if addendum is not None and addendum.text:
-            self._splice_addendum(ctx, addendum.text, seat)
-        return self._with_trail(
-            seat,
+            self._splice_addendum(ctx, addendum.text, seats[0])
+        return self._with_trails(
+            seats,
             HookDecision(
                 modified_tools=narrowed if narrowed is not None and narrowed != offered else None,
                 append_note=note or None,
@@ -376,46 +440,51 @@ class ParticipantHook(AgentHook):
         seat.addendum = part
 
     async def before_execute_tools(self, ctx: AgentHookContext) -> HookDecision:
-        seat = self._seat(ctx)
-        return self._with_trail(
-            seat, self._decide(await self._review(self._step(ctx, phase="execute_tools"), seat.participant))
+        seats = self._claim_roster(ctx, "before_execute_tools")
+        if seats is None:
+            return HookDecision()
+        participants = tuple(seat.participant for seat in seats)
+        return self._with_trails(
+            seats, self._decide(await self._review(self._step(ctx, phase="execute_tools"), participants))
         )
 
     async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
-        seat = self._seat(ctx)
-        participant = seat.participant
-        # After the iteration, whatever the model proposed has run.
+        seats = self._claim_roster(ctx, "after_iteration")
+        if seats is None:
+            return HookDecision()
+        participants = tuple(seat.participant for seat in seats)
         step = self._step(ctx, phase="after_iteration")
-        # Advice first and observation always: the six hooks this seat replaces
-        # were separate entries in the chain, so one that counted something
-        # counted it whether or not a later one ended the turn. What the loop is
-        # handed still follows the chain: a decision that ends or resamples
-        # carries no appended note, because the composite drops the notes it
-        # accumulated the moment a hook answers with one of those.
-        note = await self._advise(step, participant)
-        answer = await self._review(step, participant)
+        note = await self._advise(step, participants)
+        answer = await self._review(step, participants)
         verdict = answer if isinstance(answer, Verdict) else read_verdict(answer)
         decision = self._decide(verdict)
         if not verdict.accepted:
-            return self._with_trail(seat, decision)
-        return self._with_trail(seat, replace(decision, append_note=note or None))
+            return self._with_trails(seats, decision)
+        return self._with_trails(seats, replace(decision, append_note=note or None))
 
     async def terminal_answerless(self, ctx: AgentHookContext) -> HookDecision:
-        seat = self._seat(ctx)
-        salvaged = await self._salvage(self._step(ctx, phase="answerless"), seat.participant)
+        seats = self._claim_roster(ctx, "terminal_answerless")
+        if seats is None:
+            return HookDecision()
+        participants = tuple(seat.participant for seat in seats)
+        salvaged = await self._salvage(self._step(ctx, phase="answerless"), participants)
         answer = HookDecision() if salvaged is None else HookDecision(short_circuit_result=salvaged)
-        return self._with_trail(seat, answer)
+        return self._with_trails(seats, answer)
 
     async def after_send(self, ctx: AgentHookContext) -> HookDecision:
-        seat = self._seat(ctx)
-        participant = seat.participant
+        seats = self._claim_roster(ctx, "after_send")
+        if seats is None:
+            return HookDecision()
+        participants = tuple(seat.participant for seat in seats)
         step = self._step(ctx, phase="sent")
         reply = getattr(ctx, "outbound_content", None) or ""
-        sending = await participant.outbound(reply, step)
-        filed = await self._record(step, reply or None, participant)
+        sending = reply
+        for participant in participants:
+            changed = await participant.outbound(sending, step)
+            if changed is not None:
+                sending = changed
+        filed = await self._record(step, reply or None, participants)
         if filed:
-            # Stamped where the loop files a turn's observers: one entry per
-            # observer name, merged so another participant's counters stand.
             meta = getattr(ctx, "metadata", None)
             if isinstance(meta, dict):
                 observers = meta.setdefault("observers", {})
@@ -424,9 +493,9 @@ class ParticipantHook(AgentHook):
                         observers[name].update(dict(counters))
                     else:
                         observers[name] = dict(counters) if isinstance(counters, Mapping) else counters
-        if sending is None or sending == reply:
-            return self._with_trail(seat, HookDecision())
-        return self._with_trail(seat, HookDecision(modified_content=sending))
+        if sending == reply:
+            return self._with_trails(seats, HookDecision())
+        return self._with_trails(seats, HookDecision(modified_content=sending))
 
 
 __all__ = ["ParticipantHook"]
