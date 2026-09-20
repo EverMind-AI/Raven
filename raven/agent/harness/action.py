@@ -23,9 +23,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from raven.agent.harness.conducts import compose_review, compose_salvage
-from raven.contracts.agent_conduct import AgentConduct, StepView, Verdict
+from raven.agent.harness.participants import Verdict, compose_judge, compose_review, compose_salvage
 from raven.contracts.harness import ActionModule, ActionRequest
+from raven.contracts.participant import AgentParticipant, StepView
 
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMResponse
@@ -34,13 +34,20 @@ if TYPE_CHECKING:
 class DefaultAction:
     """Dispatch one model call: streaming when a sink is attached, else retrying."""
 
-    def judge(
+    def ask_judge(
         self,
         name: str,
         params: Mapping[str, Any],
         prior: Sequence[tuple[str, Mapping[str, Any]]],
+        participants: Sequence[AgentParticipant] = (),
     ) -> list[str]:
-        """Why this dispatch's Charter refuses this call, or an empty list.
+        """Why any participant refuses this call, or an empty list.
+
+        The dispatch's own judgements are one participant among them, asked
+        after whatever the caller passes, so a product's own rules speak first
+        and their wording is what the model reads. There is one caller,
+        ``ToolRegistry._verifier_refusals``, and it passes nothing: the order
+        is real and tested, but nothing arrives in ``participants`` today.
 
         Imported in the call, not for style: ``raven.agent.subagent`` pulls its
         manager and every backend on package import, so naming the charter at
@@ -54,15 +61,15 @@ class DefaultAction:
         defect into checks that quietly stop applying, which is the failure a
         refusal exists to prevent.
         """
-        from raven.agent.subagent.charter import judge as charter_judge
+        from raven.agent.subagent.charter import charter_participants
 
-        return charter_judge(name, params, prior)
+        return compose_judge(name, params, prior, [*participants, *charter_participants()])
 
-    async def review(self, step: StepView, conducts: Sequence[AgentConduct]) -> Verdict:
-        return await compose_review(step, conducts)
+    async def ask_review(self, step: StepView, participants: Sequence[AgentParticipant]) -> Verdict:
+        return await compose_review(step, participants)
 
-    async def salvage(self, step: StepView, conducts: Sequence[AgentConduct]) -> Any | None:
-        return await compose_salvage(step, conducts)
+    async def ask_salvage(self, step: StepView, participants: Sequence[AgentParticipant]) -> Any | None:
+        return await compose_salvage(step, participants)
 
     async def decide(self, request: ActionRequest) -> "LLMResponse":
         if request.on_token_delta is not None or request.on_reasoning_delta is not None:
@@ -93,7 +100,9 @@ def bind(action: DefaultAction) -> ActionModule:
     every call a dispatch's Charter refuses through.
     """
     if not isinstance(action, ActionModule):
-        raise TypeError(f"{type(action).__name__} cannot serve as the Action role: it must provide decide and judge")
+        raise TypeError(
+            f"{type(action).__name__} cannot serve as the Action role: it must provide decide, ask_judge, ask_review and ask_salvage"
+        )
     return action
 
 

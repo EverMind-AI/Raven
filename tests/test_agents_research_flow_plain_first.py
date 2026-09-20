@@ -451,8 +451,8 @@ def test_the_turn_frame_hands_a_plain_verdict_to_the_plain_first_gate(tmp_path):
         return d, meta, is_plain_turn()
 
     d, _meta, plain = asyncio.run(turn())
-    # The verdict is the conduct's own turn fact now, not a key on the loop's dict.
-    facts = hook.conduct._facts
+    # The verdict is the participant's own turn fact now, not a key on the loop's dict.
+    facts = hook.participant._facts
     assert (
         plain is True and facts["dr_turn_mode"].source == PLAIN_TURN_SOURCE and facts["dr_turn_mode"].research is True
     )

@@ -28,10 +28,10 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent.hook.composite import CompositeHook
-from raven.agent.hook.conduct import ConductHook
+from raven.agent.hook.participant import ParticipantHook
 from raven.agent.loop import TURN_ASK_KIND_KEY, TURN_BUDGETS_KEY
-from raven.contracts.agent_conduct import Accept, AgentConduct, End, Intake, Resample, StepView, Verdict
 from raven.contracts.loop_hooks import HookDecision
+from raven.contracts.participant import Accept, AgentParticipant, Answer, End, Intake, Resample, StepView
 from research_flow.config import FlowConfig
 from research_flow.gates.ask_user import (
     AskUserGate,
@@ -892,8 +892,8 @@ class ResearchFlow:
             open_product_ledger(f"{os.getpid()}-{next(_TURN_SEQ)}")
 
 
-class ResearchFlowConduct(AgentConduct):
-    """One turn of the research flow: the chain, run over a context the conduct builds.
+class ResearchFlowParticipant(AgentParticipant):
+    """One turn of the research flow: the chain, run over a context the participant builds.
 
     The gates keep their six phases and the composite keeps its merge rules;
     what this class adds is the seam. Every phase's ``GateCtx`` is built from
@@ -960,7 +960,7 @@ class ResearchFlowConduct(AgentConduct):
         self._ran[key] = (step, decision)
         return decision
 
-    def _verdict(self, decision: HookDecision) -> Verdict:
+    def _verdict(self, decision: HookDecision) -> Answer:
         if decision.short_circuit_result is not None:
             return End(decision.short_circuit_result)
         if decision.rollback:
@@ -971,7 +971,7 @@ class ResearchFlowConduct(AgentConduct):
             )
         return Accept()
 
-    async def intake(self, text: str, step: StepView) -> Intake | None:
+    async def intake(self, text: str, step: StepView) -> Answer | None:
         decision = await self._phase("before_user_inbound", step, self._ctx(step, inbound=text))
         if decision.short_circuit_result is not None:
             return Intake(text=text, reply=decision.short_circuit_result)
@@ -990,13 +990,13 @@ class ResearchFlowConduct(AgentConduct):
             decision = await self._phase("after_iteration", step, self._ctx(step))
         return decision.append_note or None
 
-    async def system_addendum(self, step: StepView) -> Intake | None:
+    async def system_addendum(self, step: StepView) -> Answer | None:
         decision = await self._phase("before_iteration", step, self._ctx(step))
         if decision.short_circuit_result is not None:
             return Intake(text="", reply=decision.short_circuit_result)
         return None
 
-    async def review(self, step: StepView) -> Verdict:
+    async def review(self, step: StepView) -> Answer:
         phase = "after_iteration" if step.tools_ran else "before_execute_tools"
         return self._verdict(await self._phase(phase, step, self._ctx(step)))
 
@@ -1014,8 +1014,8 @@ class ResearchFlowConduct(AgentConduct):
         return dict(observers) if isinstance(observers, dict) and observers else None
 
 
-class ResearchFlowHook(ConductHook):
-    """The single contributed hook: one research conduct per turn over one flow.
+class ResearchFlowHook(ParticipantHook):
+    """The single contributed hook: one research participant per turn over one flow.
 
     Kept as a named class because its constructor is the product's assembly
     surface -- the plugin and a shelf of tests build it with the flow's
@@ -1046,7 +1046,7 @@ class ResearchFlowHook(ConductHook):
             context_window_tokens=context_window_tokens,
             session_gear=session_gear,
         )
-        super().__init__("research_flow", lambda: ResearchFlowConduct(self.flow))
+        super().__init__("research_flow", lambda: ResearchFlowParticipant(self.flow))
 
     @property
     def name(self) -> str:
@@ -1078,7 +1078,7 @@ class ResearchFlowHook(ConductHook):
 
 __all__ = [
     "ResearchFlow",
-    "ResearchFlowConduct",
+    "ResearchFlowParticipant",
     "ResearchFlowHook",
     "SessionGear",
     "ToolHandles",

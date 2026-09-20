@@ -398,7 +398,7 @@ def test_an_action_role_missing_judge_is_refused_at_assembly():
     class DecideOnly:
         async def decide(self, request): ...
 
-    with pytest.raises(TypeError, match="decide and judge"):
+    with pytest.raises(TypeError, match="decide, ask_judge"):
         bind_action(DecideOnly())
     assert bind_action(DefaultAction()) is not None
 

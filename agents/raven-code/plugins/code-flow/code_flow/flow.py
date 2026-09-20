@@ -1,11 +1,11 @@
-"""The code flow's turn conduct.
+"""The code flow's turn participant.
 
 Repository instructions and workspace concurrency notices join the system
 message through the ``system_addendum`` verb. They never rewrite the inbound
-query. The conduct tracks the turn in the session ledger,
+query. The participant tracks the turn in the session ledger,
 binds and restores its checklist, and files the workspace report at send.
 Session deletion discards product state; new session IDs isolate new tasks.
-One conduct per turn: the checklist binding and the per-directory instruction
+One participant per turn: the checklist binding and the per-directory instruction
 cache are attributes that die with the turn.
 """
 
@@ -24,8 +24,8 @@ from code_flow.system_context import sized_addendum
 from code_flow.tools.read_state import Owner, ReadSessions, forget_session, owner_for
 from code_flow.tools.todo import STORES, TodoStore
 from raven.agent import workdir
-from raven.agent.hook.conduct import ConductHook
-from raven.contracts.agent_conduct import AgentConduct, Intake, StepView
+from raven.agent.hook.participant import ParticipantHook
+from raven.contracts.participant import AgentParticipant, Answer, StepView
 
 if TYPE_CHECKING:
     from raven.plugins.context import PluginContext
@@ -77,7 +77,7 @@ def project_instructions(root: Path | None, names: list[str]) -> str:
     rather than raised -- context assembly runs on every turn, and one bad
     symlink in someone's checkout must not end the conversation. Not fenced as
     untrusted: these are the project's standing instructions to whoever works
-    in it, the same footing the conduct stands on, and a data fence would tell
+    in it, the same footing the participant stands on, and a data fence would tell
     the model to ignore exactly what it is being handed to follow.
     """
     if root is None or not names:
@@ -111,7 +111,7 @@ def project_instructions(root: Path | None, names: list[str]) -> str:
     return PROJECT_INSTRUCTIONS_HEAD + "\n\n" + "\n\n".join(parts)
 
 
-class CodeConduct(AgentConduct):
+class CodeParticipant(AgentParticipant):
     """The code flow's judgements and bookkeeping, one instance per turn.
 
     Process-level dependencies (the ledger, the checklist store, the slice's
@@ -140,7 +140,7 @@ class CodeConduct(AgentConduct):
         self._instructions: tuple[Any, str] | None = None
         self._pending_note: str | None = None
 
-    async def intake(self, text: str, step: StepView) -> Intake | None:
+    async def intake(self, text: str, step: StepView) -> Answer | None:
         # Commands return before iteration or after_send, so they must not
         # create an in-flight mark for a turn that will never report back.
         if (text or "").strip().lower() in {"/new", "/help"}:
@@ -169,7 +169,7 @@ class CodeConduct(AgentConduct):
         if self._todos is not None:
             # System turns skip inbound, and the loop can select another
             # session after inbound. The turn's binding survives rollbacks
-            # because the conduct does.
+            # because the participant does.
             cwd = workdir.current()
             binding = (step.session_key, str(cwd) if cwd is not None else None)
             try:
@@ -187,7 +187,7 @@ class CodeConduct(AgentConduct):
         self._pending_note = note
         return note
 
-    async def system_addendum(self, step: StepView) -> Intake | None:
+    async def system_addendum(self, step: StepView) -> Answer | None:
         if not self._flow_enabled:
             return None
         cwd = workdir.current()
@@ -222,10 +222,10 @@ class CodeConduct(AgentConduct):
         return {ACP_META_OBSERVER: {MANIFEST_META_KEY: report}}
 
 
-class CodeFlowHook(ConductHook):
-    """The code flow's seat in the hook chain: one conduct per turn.
+class CodeFlowHook(ParticipantHook):
+    """The code flow's seat in the hook chain: one participant per turn.
 
-    Kept as a named class rather than a bare ``ConductHook`` because the
+    Kept as a named class rather than a bare ``ParticipantHook`` because the
     constructor is the product's assembly surface -- the factory below and a
     ledger's worth of tests wire sessions through it -- and because
     ``isinstance`` is how the factory's admission is asserted.
@@ -244,8 +244,8 @@ class CodeFlowHook(ConductHook):
         names = list(project_files or [])
         super().__init__(
             "code_flow",
-            lambda: CodeConduct(seated_ledger, names, todos, flow_enabled, reads),
-            # This conduct does not review, so no verdict of its can send a turn
+            lambda: CodeParticipant(seated_ledger, names, todos, flow_enabled, reads),
+            # This participant does not review, so no verdict of its can send a turn
             # back, and the loop should stream the reply rather than hold it.
             rolls_back=False,
         )
@@ -325,7 +325,7 @@ __all__ = [
     "PROJECT_FILES",
     "PROJECT_FILE_MAX_CHARS",
     "PROJECT_INSTRUCTIONS_HEAD",
-    "CodeConduct",
+    "CodeParticipant",
     "CodeFlowHook",
     "SessionForget",
     "concurrency_notice",

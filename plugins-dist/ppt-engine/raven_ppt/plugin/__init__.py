@@ -31,7 +31,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from raven.agent.hook.conduct import ConductHook
+from raven.agent.hook.participant import ParticipantHook
 from raven.contracts.tool import Tool
 from raven_ppt.plugin.config import EngineConfig
 from raven_ppt.plugin.hook import MisconfiguredEngineHook, ppt_hook
@@ -66,7 +66,7 @@ class _Shared:
             self.cfg = EngineConfig()
         self._prototypes: dict[str, Tool] | None = None
         self._engines: dict[str, dict[str, Tool]] = {}
-        self._hook: ConductHook | None = None
+        self._hook: ParticipantHook | None = None
         self._image_search: PptImageSearchTool | None = None
         # The loop's late-bound grants, kept for the engines assembled after the
         # bind (every real one: a turn binds before the first deck call).
@@ -183,7 +183,7 @@ class _Shared:
                 self._image_search = tool
         return self._image_search
 
-    def hook(self) -> ConductHook:
+    def hook(self) -> ParticipantHook:
         if self._hook is None:
             # The locator's workspace is the agent home whose bootstrap seats
             # the host's context builder reads; it is where the first-touch
@@ -274,7 +274,7 @@ def make_ppt_image_search(ctx: "PluginContext") -> Tool | None:
     return shared.image_search() if shared else None
 
 
-def make_hook(ctx: "PluginContext") -> ConductHook | MisconfiguredEngineHook | None:
+def make_hook(ctx: "PluginContext") -> ParticipantHook | MisconfiguredEngineHook | None:
     """The turn-frame hook: staging in, verification out.
 
     Gated on the slice alone, not on the deck imports: the fork staged material

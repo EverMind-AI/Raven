@@ -168,15 +168,18 @@ LEDGER = {
         "ShrinkResult",
         "WindowPressure",
         "WindowState",
-        # -- the conduct a sub-agent writes instead of six hook phases.
+        # -- the participant a sub-agent writes instead of six hook phases. The
+        # answers are plain mappings, so what is exported are the builders that
+        # write them and the alias that names the shape; the host's own read of
+        # a verdict lives in the harness, not on the paper.
         "Accept",
-        "AgentConduct",
-        "ConductFactory",
+        "AgentParticipant",
+        "Answer",
+        "ParticipantFactory",
         "End",
         "Intake",
         "Resample",
         "StepView",
-        "Verdict",
     },
 }
 

@@ -1,9 +1,9 @@
-"""What a research gate is: the chain the conduct runs, not a hook the loop holds.
+"""What a research gate is: the chain the participant runs, not a hook the loop holds.
 
 A gate keeps the six phase methods it always had -- the chain's order and its
 composite merge are the measured surface, and every gate carries a version
 label describing a distribution -- but it is no longer an ``AgentHook`` the
-loop holds. The loop holds one ``ConductHook``; the research conduct builds a
+loop holds. The loop holds one ``ParticipantHook``; the research participant builds a
 ``GateCtx`` for each phase from the read-only fields of its ``StepView``
 and its own turn-private ``facts`` dict, and runs the chain over that. The
 attribute surface is the hook context's, so a gate reads what it always read;
@@ -23,7 +23,7 @@ from raven.contracts.loop_hooks import HookDecision
 class GateCtx:
     """One phase's view of the turn, as the research chain reads it.
 
-    Built by the conduct, never by the loop. ``metadata`` is the conduct's
+    Built by the participant, never by the loop. ``metadata`` is the participant's
     turn-private facts dict: the gates' counters, the cross-gate flags
     (``ask_user``, ``plain_first``, ``verify_gate``), and the three loop
     readings the chain consults (``mode``, ``mode_overlay``, ``hook_rollbacks``),
