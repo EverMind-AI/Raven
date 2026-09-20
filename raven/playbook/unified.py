@@ -132,13 +132,13 @@ class UnifiedPlaybookSpec(CamelBase):
         return PlaybookSpec(
             name=self.name,
             description=self.description,
-            taskSummary=self.workflow.summary,
+            task_summary=self.workflow.summary,
             version=1,
             mode="dag",
             confirm=self.workflow.confirm,
             triggers=self.triggers,
             params=self.params,
-            mcpServers=self.workflow.mcp_servers,
+            mcp_servers=self.workflow.mcp_servers,
             nodes=self.workflow.nodes,
         )
 
@@ -165,12 +165,12 @@ def unified_from_legacy(spec: PlaybookSpec, *, name: str | None = None) -> Unifi
         name=name or spec.name,
         description=spec.description,
         match=PlaybookMatch(summary=spec.description, keywords=spec.triggers.keywords),
-        inputSchema=InputSchema(properties=spec.params, required=required),
+        input_schema=InputSchema(properties=spec.params, required=required),
         workflow=WorkflowSpec(
             summary=spec.task_summary,
             confirm=spec.confirm,
             nodes=spec.nodes,
-            mcpServers=spec.mcp_servers,
+            mcp_servers=spec.mcp_servers,
         ),
     )
 

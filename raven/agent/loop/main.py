@@ -983,8 +983,9 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 except Exception:  # noqa: BLE001 - cleanup cannot replace the turn's error
                     logger.opt(exception=True).warning("playbook: failed turn record could not be saved")
             loader = self.tools.get("load_playbook")
-            if loader is not None and hasattr(loader, "set_preselected"):
-                loader.set_preselected(None)
+            setter = getattr(loader, "set_preselected", None)
+            if callable(setter):
+                setter(None)
 
             # Every way a turn ends passes here, which is what makes this the
             # place a foreground DAG run learns its turn is over. A direct chat

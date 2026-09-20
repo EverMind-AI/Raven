@@ -175,7 +175,7 @@ class WorkflowCompiler:
                 data["schemaVersion"] = 2
                 data["state"] = "ready"
                 data["harness"] = harness.model_dump(by_alias=True, exclude_none=True) if harness else None
-                data["metadata"] = PlaybookMetadata(sourceRunId=run_id).model_dump(by_alias=True)
+                data["metadata"] = PlaybookMetadata(source_run_id=run_id).model_dump(by_alias=True)
                 artifact = UnifiedPlaybookSpec.model_validate(data)
                 if errors := _preservation_errors(dag, artifact):
                     raise ValueError("; ".join(errors))
@@ -216,10 +216,10 @@ class WorkflowCompiler:
             name=name,
             description=summary,
             match=PlaybookMatch(summary=summary, keywords=words or [summary[:80]]),
-            inputSchema=InputSchema(),
+            input_schema=InputSchema(),
             harness=harness,
             workflow=WorkflowSpec(summary=dag.task_summary, confirm=dag.confirm, nodes=dag.nodes),
-            metadata=PlaybookMetadata(sourceRunId=run_id),
+            metadata=PlaybookMetadata(source_run_id=run_id),
         )
 
 

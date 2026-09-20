@@ -720,8 +720,9 @@ class WiringMixin:
         if table:
             logger.info("agent playbook: {} worker(s) for this turn: {}", len(table.workers), table.labels())
         loader = self.tools.get("load_playbook")
-        if loader is not None and hasattr(loader, "set_preselected"):
-            loader.set_preselected(resolution.selected_playbook)
+        setter = getattr(loader, "set_preselected", None)
+        if callable(setter):
+            setter(resolution.selected_playbook)
         return resolution
 
     async def _write_worker_table(self, req: Any, session_key: str, binding: Any) -> "DelegateTable | None":
@@ -761,7 +762,7 @@ class WiringMixin:
                     match=PlaybookMatch(summary=description, keywords=keywords or [description[:80]]),
                     harness=harness,
                     workflow=None,
-                    metadata=PlaybookMetadata(sourceRunId=capture.run_id),
+                    metadata=PlaybookMetadata(source_run_id=capture.run_id),
                 )
             if artifact is not None:
                 store = self._playbooks.store
@@ -783,8 +784,9 @@ class WiringMixin:
             except Exception:  # noqa: BLE001 - record failure must not cost the turn
                 logger.opt(exception=True).warning("playbook: run record could not be saved")
             loader = self.tools.get("load_playbook")
-            if loader is not None and hasattr(loader, "set_preselected"):
-                loader.set_preselected(None)
+            setter = getattr(loader, "set_preselected", None)
+            if callable(setter):
+                setter(None)
 
     def set_default_binding(self, binding: ModelBinding) -> None:
         """Change what new sessions start on.
