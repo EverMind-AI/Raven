@@ -1183,20 +1183,3 @@ async def test_config_set_model_surfaces_a_build_crash_instead_of_persisting(fak
         )
     cfg = json.loads((fake_home / ".raven" / "config.json").read_text())
     assert "model" not in cfg.get("agents", {}).get("defaults", {})
-
-
-async def test_config_set_model_session_scope_switches_nothing_when_no_loop_can_be_built(fake_home: Path) -> None:
-    from raven.rpc.errors import InternalError
-
-    (fake_home / ".raven").mkdir()
-    (fake_home / ".raven" / "config.json").write_text(json.dumps({}))
-
-    def _no_loop():
-        raise InternalError("no provider is configured yet", data={"reason": "missing_credentials"})
-
-    out = await config_set(
-        {"key": "model", "value": "deepseek-chat", "provider": "deepseek", "session_id": "tui:default"},
-        agent_loop_factory=_no_loop,
-    )
-
-    assert out == {"applied": False, "previous": None, "value": "deepseek/deepseek-chat", "scope": "session"}

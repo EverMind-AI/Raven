@@ -8,7 +8,7 @@ import { resetSources, setSources } from '../../state/sources'
 import { install, mount, snap, source as settingsSource } from '../../test/settingsHarness'
 import { _resetForTests as resetModelSource, setDefaultPair } from '../model/source'
 import { ModelStepBody, WebStepBody } from './SetupBodies'
-import { _resetForTests as resetSettingsSource, loadSettings, modelStepDone, webStepDone } from './source'
+import { _resetForTests as resetSettingsSource, loadSettingsWithProviders, modelStepDone, webStepDone } from './source'
 import * as store from './store'
 
 import type { RpcTransport } from '../../rpc/transport'
@@ -161,7 +161,8 @@ describe('the wizard step-done predicates', () => {
       on: () => () => {},
       binary: () => () => {},
     } as unknown as RpcTransport)
-    await loadSettings()
+    // The wizard's refresh runs the with-providers load; the step verdict reads both.
+    await loadSettingsWithProviders()
   }
 
   it('modelStepDone needs both a connected provider and a default model', async () => {
