@@ -592,3 +592,53 @@ def test_a_wrapper_in_front_of_inside_work_is_still_left_alone(
     monkeypatch.setenv("HOME", "/home/victim")
 
     assert refusal(fenced, "env sh -c 'cat notes.txt'") is None
+
+
+# ---------- a parameter inside a brace body ----------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat ${UNSET:-$HOME/secret}",
+        "cat ${UNSET:-${HOME}/secret}",
+        "cat ${PWD%$PWD}/etc/passwd",
+        "cat ${UNSET:-$NOPE/etc/shadow}",
+    ],
+    ids=["fallback-word", "fallback-braced", "trim-pattern", "fallback-unset-name"],
+)
+def test_a_parameter_inside_a_brace_body_is_expanded_too(
+    fenced: ExecTool, monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    """The body is emitted after the walk has passed that position, so what it
+    inserted was never itself read. The shell expands it, which made this the
+    one spelling that the resolved-or-refused contract claimed to cover and did
+    not: neither expanded nor refused, just handed through."""
+    monkeypatch.setenv("HOME", "/home/victim")
+    monkeypatch.delenv("UNSET", raising=False)
+    monkeypatch.delenv("NOPE", raising=False)
+
+    assert refusal(fenced, command) is not None
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["cat ${UNSET:-notes.txt}", "cat ${UNSET:-$PWD/notes.txt}"],
+    ids=["relative-fallback", "pwd-fallback"],
+)
+def test_a_brace_body_that_resolves_inside_still_runs(
+    fenced: ExecTool, monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    """Resolving the body, not refusing everything with one in it: the second
+    case only stays allowed if `$PWD` inside the fallback is actually expanded."""
+    monkeypatch.delenv("UNSET", raising=False)
+
+    assert refusal(fenced, command) is None
+
+
+def test_a_brace_this_cannot_parse_is_refused(fenced: ExecTool) -> None:
+    """Nesting runs past the first `}`, which this does not parse. Under the
+    contract an expansion it cannot resolve is a refusal, not a pass."""
+    error = refusal(fenced, "cat ${UNSET:-${X:-/etc/shadow}}")
+
+    assert error is not None and "unsupported shell expansion" in error

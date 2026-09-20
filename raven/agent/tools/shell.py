@@ -507,7 +507,7 @@ class ExecTool(Tool):
         return next((value for key, value in env.items() if key.casefold() == folded), None)
 
     @classmethod
-    def _resolve_brace(cls, value: str, body: str, construct: str) -> str:
+    def _resolve_brace(cls, value: str, body: str, construct: str, env: dict[str, str]) -> str:
         """The value a ``${...}`` yields, or a refusal when that cannot be known.
 
         Two bodies are resolved. A word operator offers a second word the shell
@@ -525,11 +525,18 @@ class ExecTool(Tool):
         """
         if not body:
             return value
+        # The body is inserted after this walk has passed the position it lands
+        # in, so nothing would read it again. The shell does read it, which is
+        # why it goes back through the same pass here rather than out as text:
+        # `${UNSET:-$HOME/secret}` is that path, and leaving it unread was the
+        # one spelling the resolved-or-refused rule claimed and did not cover.
         if cls._BRACE_WORD_OPERATOR.match(body):
-            return f"{value} {cls._BRACE_WORD_OPERATOR.sub(' ', body)}"
+            word = cls._as_the_shell_reads_it(cls._BRACE_WORD_OPERATOR.sub("", body), env)
+            return f"{value} {word}"
         trim = cls._BRACE_TRIM.match(body)
         if trim is not None:
-            return cls._trim(value, trim.group(1), trim.group(2))
+            pattern = cls._as_the_shell_reads_it(trim.group(2), env)
+            return cls._trim(value, trim.group(1), pattern)
         raise _UnmodelledExpansionError(construct)
 
     @staticmethod
@@ -631,11 +638,15 @@ class ExecTool(Tool):
                 name_match = cls._VARIABLE.match(command, index)
                 if name_match is not None:
                     value = env.get(name_match.group(1) or name_match.group(3), "")
-                    out.append(cls._resolve_brace(value, name_match.group(2) or "", name_match.group(0)))
+                    out.append(cls._resolve_brace(value, name_match.group(2) or "", name_match.group(0), env))
                     index = name_match.end()
                     continue
-                other = cls._BRACE_OTHER.match(command, index)
-                if other is not None:
+                if command.startswith("${", index):
+                    other = cls._BRACE_OTHER.match(command, index)
+                    if other is None:
+                        # Nesting runs past the first `}`, which this does not
+                        # parse. The contract answers that with a refusal.
+                        raise _UnmodelledExpansionError(command[index : index + 32])
                     if not other.group(1).startswith("#"):
                         raise _UnmodelledExpansionError(other.group(0))
                     # A character count. Whatever it yields is a number, and a
