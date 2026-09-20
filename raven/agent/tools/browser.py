@@ -37,11 +37,12 @@ ACTION_TEXT_CHARS = 3_000
 SNAPSHOT_TEXT_CHARS = 8_000
 MAX_REFS_SHOWN = 120
 
+# Carried by browser_navigate alone. Every tool's description is paid for on
+# every turn of every conversation, and the one place the model decides whether
+# a page is its business at all is when it opens one.
 HANDOFF_NOTE = (
-    "If the page needs something only the user can do (a login, a CAPTCHA, a payment, a "
-    "consent the user should give themselves), do not attempt it: tell the user with ask_user "
-    "to finish that step in the Browser panel, then call browser_snapshot to read the page as "
-    "they left it and continue."
+    "A login, CAPTCHA or payment is the user's to do: ask_user to finish it in the Browser "
+    "panel, then browser_snapshot to read the page as they left it."
 )
 
 # ``SITE_PARAM`` is injected by ``cast_params`` on the acting tools. The
@@ -237,10 +238,9 @@ class BrowserNavigateTool(_BrowserTool):
     @property
     def description(self) -> str:
         return (
-            "Open a URL in the shared browser, or move through its history. Only http(s) pages open. "
-            "Returns the page afterwards: its url, title, the elements you can act on (each with a ref "
-            "to pass to browser_click / browser_type) and its visible text. The user watches the same "
-            "page in the Browser panel and can act on it too. " + HANDOFF_NOTE
+            "Open an http(s) URL in the shared browser, or move through its history. Returns the page: "
+            "url, title, its actionable elements with a ref each (for browser_click / browser_type) and "
+            "its visible text. The user watches this page in the Browser panel and can act on it too. " + HANDOFF_NOTE
         )
 
     @property
@@ -288,10 +288,9 @@ class BrowserSnapshotTool(_BrowserTool):
     @property
     def description(self) -> str:
         return (
-            "Read the current page of the shared browser: url, title, actionable elements with refs, "
-            "visible text, recent console errors. Cheap; call it whenever the page may have changed -- "
-            "after the user did something in the Browser panel, or when a result said the page was "
-            "still loading. Refs are re-numbered on every read: use refs from the latest read only."
+            "Read the current page: url, title, actionable elements with refs, visible text, console "
+            "errors. Cheap; call it whenever the page may have moved -- the user acted in the panel, or "
+            "a result said it was still loading. Refs are renumbered every read: use the latest only."
         )
 
     @property
@@ -338,10 +337,9 @@ class BrowserScreenshotTool(_BrowserTool):
     @property
     def description(self) -> str:
         return (
-            "Take a picture of the current page of the shared browser and look at it. Use it to check "
-            "layout or visual state that browser_snapshot's text cannot show; prefer browser_snapshot "
-            "for finding what to click. Coordinates in the image are CSS pixels and can be passed to "
-            "browser_click as x/y."
+            "Look at the current page. For layout or visual state that browser_snapshot's text cannot "
+            "show; prefer browser_snapshot for finding what to click. Image coordinates are CSS pixels, "
+            "so they can go to browser_click as x/y."
         )
 
     @property
@@ -395,9 +393,8 @@ class BrowserClickTool(_ActingTool):
     @property
     def description(self) -> str:
         return (
-            "Click an element of the current page by the ref a snapshot gave it, or a point by x/y "
-            "(CSS pixels, as in browser_screenshot). Waits for any navigation the click starts and "
-            "returns the page afterwards. " + HANDOFF_NOTE
+            "Click an element by the ref a snapshot gave it, or a point by x/y (CSS pixels, as in "
+            "browser_screenshot). Waits for any navigation it starts and returns the page afterwards."
         )
 
     @property
@@ -445,10 +442,9 @@ class BrowserTypeTool(_ActingTool):
     @property
     def description(self) -> str:
         return (
-            "Type text into the current page. With a ref, the field is cleared and filled; without one, "
-            "the text is typed into whatever has focus. submit=true presses Enter afterwards. Returns the "
-            "page afterwards. Never type a password or a payment detail the user did not give you in this "
-            "conversation; hand those steps to the user instead."
+            "Type into the current page and return it afterwards. With a ref the field is cleared and "
+            "filled, without one the text goes to whatever has focus; submit=true presses Enter. Never "
+            "type a password or payment detail the user did not give you here -- hand that step to them."
         )
 
     @property
