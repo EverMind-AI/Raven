@@ -67,9 +67,9 @@ Shapes rejected in the discussion round:
 
 - Anything outside the settings dialog: sidebar, onboarding, playbooks, cron,
   subagents, the composer. Two pieces land outside the settings domain and
-  nothing else: `src/components/ModelPicker.tsx` and
-  `features/model/vendors.ts`. Switching the composer to the new picker is the
-  composer owner's change, not this one.
+  nothing else: `src/components/ModelPicker.tsx`, and the marks it takes from
+  `src/components/ProviderMark.tsx`. Switching the composer to the new picker
+  is the composer owner's change, not this one.
 - An install or marketplace entry for skills and plugins on the settings
   pages. The PRD removes them from the sidebar and the prototype has none in
   settings; the gap is named under "Open questions" for the sidebar owner.
@@ -305,7 +305,6 @@ ui-web/src/features/settings/
   providers/Roles.tsx         the eleven role rows and the chat parameters fold
   <module>.test.tsx           one per module; multi-aspect: <module>.<aspect>.test.tsx
 ui-web/src/components/ModelPicker.tsx   the two-column popover (providers left, models right, typed id at the bottom); props only
-ui-web/src/features/model/vendors.ts    the 43-entry vendor mark table the architecture note names (a mark is the glyph and colour shown beside a provider name, today registered inside components/ProviderMark.tsx); imported by components/ProviderMark.tsx and re-exported through features/model/types.ts for the settings domain
 ui-web/src/rpc/fixtures/settings.ts     a reply for every method above
 i18n/messages.json                      gui.settings.* in en and zh
 ui-web/src/styles/page.css              the settings- block, copied from the prototype's stylesheet with prefixes; moves to features/settings/styles.css at S8
@@ -419,7 +418,7 @@ path and storage location with copy buttons.
 | `rpc-schema/openrpc.json`, `raven/rpc/models.py`, `ui-web/src/rpc/generated.ts` | 178 methods | plus 6 methods; 5 changed results (`settings.set`, `settings.usage`, `skills.manage`, `model.options`, `ext.list`); 3 changed parameter sets (`settings.usage`, `session.list`, `model.add_model`) |
 | `ui-web/src/features/settings/` | one 2880-line page, 13 tabs, `chrome.ts` reaching `islands.*` and `../model/store` | the skeleton above, 8 pages, source-only RPC, no cross-domain store import |
 | `ui-web/src/main.tsx` | imports `SettingsApp` from `SettingsPage`, `chrome` | imports from `SettingsApp`, `wire` (three lines) |
-| `ui-web/src/components/ModelPicker.tsx`, `ui-web/src/features/model/vendors.ts` | - | new shared popover; vendor mark table |
+| `ui-web/src/components/ModelPicker.tsx` | - | new shared popover, taking the marks from `components/ProviderMark.tsx` |
 | `ui-web/src/rpc/fixtures/settings.ts` | 12 methods answered | every method the source calls |
 | `i18n/messages.json` | 302 `gui.set.*` keys | `gui.settings.*` for the new page; the `gui.set.*` keys other files reference stay |
 
@@ -427,8 +426,8 @@ path and storage location with copy buttons.
 
 Who pays: this change's author for the backend batch, the front-end rewrite,
 fixtures, tests and the manual pass; the architecture-branch owner for two
-reviews outside the settings domain (`components/ModelPicker.tsx`,
-`features/model/vendors.ts`) and for the rename pass if the conventions
+reviews outside the settings domain (`components/ModelPicker.tsx`) and for
+the rename pass if the conventions
 branch lands after this one; the composer owner for adopting the shared
 picker later.
 
@@ -475,8 +474,8 @@ on the page (would need the control channel exposed to `/rpc`).
 - **Skill list from `ext.list`, detail from an extended `skills.manage inspect`, file open through `skills.manage open`.** `ext.list` already carries the list fields; `fs.open` cannot reach a built-in skill's directory.
 - **RPC-driven skill installs are stamped with `trigger: "rpc"`.** Any client's install then shows an install line; the settings page itself has no install entry. Rejected: a `settings` trigger for an entry that does not exist.
 - **Tool groups are a front-end JSON table with no "other" bucket, pinned by a Python test against the tool registry.** Every tool is built-in; a fixture-based test would not see a new backend tool, a registry diff does.
-- **`tool_search` and `tool_call` are shown greyed, not switchable, and left out of the counter.** Built-in meta tools; the owner's call. `tools.toolSearch.enabled` is not whitelisted.
-- **One shared `ModelPicker` in `src/components/`, props only; the vendor mark table in `features/model/vendors.ts` reached through `features/model/types.ts`.** Cross-domain reach is `source.ts` / `types.ts` only; a component both domains render belongs in `components/`. Rejected: settings importing `features/model/`'s component or store.
+- **The meta-tool card is named for what it holds, and `builtin` answers the switch's own question.** `tool_search` and `tool_call` are greyed, not switchable, and left out of the counter -- no entry in `tools.disabledTools` registers either one. Two corrections landed in #540. Hidden from the schema is not the same as withheld from the model: the DAG controls are schema-hidden and still honour that switch, so drawing them greyed told the reader their switch did nothing. And `tool_search` is only registered when `tools.toolSearch.enabled` is on, off by default, so a card named after tool search held the one meta-tool that is not tool search; the card is now "Meta tools", `ext.list` reports the skipped meta-tool the way `_gated_tools` reports a key-gated one, and the row says where its switch actually is. `tools.toolSearch.enabled` is still not whitelisted.
+- **One shared `ModelPicker` in `src/components/`, props only; the marks come from `components/ProviderMark.tsx`.** A component both domains render belongs in `components/`. The mark table was going to move to `features/model/vendors.ts` and be re-exported through that domain's `types.ts`; it never needed to. The table already lives in `ProviderMark.tsx`, which is the same layer, so the picker imports it directly and no cross-domain reach arises. Reading the plan instead of the tree cost this one a round: the picker shipped without marks on the belief that the edge was forbidden, and it was put back in #540. Rejected: settings importing `features/model/`'s component or store.
 - **About reuses the existing upgrade flow through `wire.ts` injection.** `app/updates.ts` already runs it; a second state machine would be deleted at takeover; a feature importing `app/` would break the layer order.
 - **One PR to the architecture branch, backend commits first.** The RPCs have one caller; landing them on `main` first would add uncalled interfaces there. Rejected: two PRs; a PR to `main`.
 - **Backend work starts now; the first front-end commit waits for `refactor/ui_web_conventions` for as long as the backend batch takes.** The rename mapping is applied once and the page.css hash gate is gone by then; the fallback is C20's. Rejected: waiting indefinitely; starting the front end on the old gates.
