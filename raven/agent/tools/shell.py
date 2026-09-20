@@ -411,6 +411,13 @@ class ExecTool(Tool):
     # value is what let `${PWD%/*}/outside.txt` open the parent directory.
     _BRACE_TRIM = re.compile(r"^(##?|%%?)(.*)$", re.DOTALL)
 
+    # How cmd.exe spells a variable, and ``DirectExecutor`` runs the platform
+    # shell, so on Windows this is the ordinary spelling of an outside path.
+    # Substituted only for a name the child is actually given: that is cmd's
+    # own rule for an undefined one, and it is what keeps a POSIX host out of
+    # the way, where these names do not exist and `date +%Y%m%d` must survive.
+    _WINDOWS_VARIABLE = re.compile(r"%([A-Za-z_]\w*)%")
+
     # A `${` the name pattern does not accept. `${#NAME}` counts characters, so
     # whatever it yields is a number and cannot name a path; anything else here
     # is indirection, an array or a form not modelled, and gets refused.
@@ -555,6 +562,15 @@ class ExecTool(Tool):
         index = 0
         while index < len(command):
             char = command[index]
+            if char == "%":
+                # Ahead of the quote branches on purpose: cmd.exe has no
+                # quoting that suppresses this, so a run it would expand must
+                # not be hidden here by POSIX quoting rules.
+                windows_match = cls._WINDOWS_VARIABLE.match(command, index)
+                if windows_match is not None and windows_match.group(1) in env:
+                    out.append(env[windows_match.group(1)])
+                    index = windows_match.end()
+                    continue
             if quote == "'":
                 out.append(char)
                 if char == "'":

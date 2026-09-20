@@ -448,3 +448,45 @@ def test_a_construct_that_yields_a_number_is_left_alone(fenced: ExecTool, comman
     absolute path. Pinned so neither is later swept into the refusal for
     looking unresolved -- they are resolved, to something harmless."""
     assert refusal(fenced, command) is None
+
+
+# ---------- the spelling cmd.exe actually runs --------------------------------
+
+
+def test_a_percent_name_the_child_has_is_expanded(fenced: ExecTool, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``DirectExecutor`` runs the platform shell, so on Windows the ordinary
+    spelling of this defect is ``%USERPROFILE%\\.ssh\\id_rsa`` rather than
+    ``$HOME/...``. The name pattern knew only the POSIX form, and the Windows
+    path pattern wants a drive prefix the unexpanded text does not have, so
+    both halves of the scan looked straight past it.
+    """
+    monkeypatch.setenv("USERPROFILE", "/home/victim")
+
+    assert refusal(fenced, "type %USERPROFILE%/.ssh/id_rsa") is not None
+
+
+def test_a_percent_name_the_child_does_not_have_is_left_alone(
+    fenced: ExecTool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``cmd.exe`` leaves an undefined name standing as written, so this pass
+    does too. It is also what keeps a POSIX box out of the way of this rule:
+    the Windows names are absent there, so nothing is substituted, and
+    ``date +%Y%m%d`` is not quietly rewritten."""
+    monkeypatch.delenv("Y", raising=False)
+    monkeypatch.delenv("m", raising=False)
+
+    assert refusal(fenced, "date +%Y%m%d") is None
+
+
+def test_the_windows_expansion_is_what_the_scan_reads(
+    fenced: ExecTool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Asserted on the text rather than the verdict, because a Windows path is
+    not absolute to a POSIX ``Path`` and the verdict would turn on the host
+    rather than on the expansion this adds."""
+    monkeypatch.setenv("USERPROFILE", r"C:\Users\victim")
+    env = fenced._child_env(tmp_path)
+
+    assert fenced._as_the_shell_reads_it(r"type %USERPROFILE%\.ssh\id_rsa", env) == (
+        r"type C:\Users\victim\.ssh\id_rsa"
+    )
