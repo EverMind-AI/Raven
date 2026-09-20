@@ -187,7 +187,7 @@ number.
 
 - A7. The head shows the mark, the name, a link out when the registry carries a homepage or key page, and one status line: connected / needs an API key / needs authorisation / needs an address, by shape and connection.
 - A8. Key pane: pasting a key and "connect" (or "update" when connected) writes it and the status turns connected; the eye toggle shows and hides the typed text; the stored key is never shown and never sent back; the environment-variable hint names `key_env` when there is one. (prior A10)
-- A9. Address: gateways and `needs_api_base` providers show the address field in the main body; every other key provider shows it under Advanced as "override"; a reset button appears when a default exists and the value differs, and restores it. (prior A16)
+- A9. Address: gateways and `needs_api_base` providers show the address field in the main body; every other key provider shows it under Advanced as "override"; a reset button appears when a default exists and the stored value differs, and restores it. One component draws it in both places. (prior A16)
 - A10. Azure keeps deployment name and API version (prior A12) in the body under the address.
 - A11. An OAuth provider shows the browser device flow of prior A13 in the prototype's pane layout; disconnect reads "disconnect authorisation". (*)
 - A12. A local provider shows the address field and connect / update and no key field (prior A11).
@@ -288,7 +288,12 @@ export interface Offer {
 `offer.providers` when given; the kind narrows each provider's column, never
 the provider list, and the current model (the offer's, else the
 conversation's, whose provider row the wire marks `is_current`) is put at the
-top of its provider's column when the list does not carry it; `choose()` calls `offer.pick` and returns before any of today's
+top of its provider's column when the list does not carry it. A provider with
+nothing added at all offers the registry's own shortlist (`p.models`), for a
+text opening only: the first-run wizard connects a vendor and picks a chat
+model in one step, before anyone has built a list, and an empty column there
+is the whole of that step -- while an embedding slot asking for the vendor's
+entire catalogue would be a worse answer than "nothing here yet"; `choose()` calls `offer.pick` and returns before any of today's
 logic when a pick is given, and without one does what it does today, the
 `scope` derivation from the anchor included. That derivation is reached by no
 caller once every anchored opening carries a pick; open question 5 asks
@@ -492,6 +497,15 @@ Non-goals).
   like the others; capability data is incomplete ("absent means unknown, not
   cannot", `ModelTags.tsx`) and filtering by it would hide working models.
   Rejected: a capability filter per slot.
+- **A provider with nothing added at all offers the registry's shortlist, and
+  only for text.** The picker this one replaced carried that fallback for the
+  first-run wizard, whose model step is the one place a model is picked before
+  any list exists; dropping it in the merge left that step with an empty
+  column, which is the whole step. Restricted to text because the wizard only
+  ever asks for a chat model, and because a kind-filtered slice of a vendor's
+  whole catalogue is a worse answer than saying the list is empty. Rejected:
+  the fallback for every kind; no fallback (a non-goal crossed -- the wizard is
+  not redesigned here, so it must keep working).
 - **Every connected provider the offer allows is listed; a column with no
   model of the kind says so and offers the typed-id row; the current model is
   always in its provider's column.** The prototype's `drawPicker` lists every
