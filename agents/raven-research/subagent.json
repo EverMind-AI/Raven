@@ -8,7 +8,7 @@
   "cwd": "{SUBAGENT_DIR}",
   "readyTimeoutMs": 60000,
   "timeout": null,
-  "maxOutputChars": 30000,
+  "maxOutputChars": 60000,
   "everos": {
     "userId": "raven-research-ng",
     "agentId": "raven-research-ng"
