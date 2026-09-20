@@ -3010,6 +3010,10 @@ export interface ConfigSetResult {
   scope?: 'session' | 'default';
   session_id?: string;
   applies_to_session?: boolean;
+  /**
+   * True when the write landed in a process that has no agent loop: the config is right and this gateway still cannot run a turn on it.
+   */
+  needs_restart?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
