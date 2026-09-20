@@ -3,9 +3,9 @@
  *
  * The sheet element itself belongs to features/composer/clarify.ts, which files
  * it with the rack and holds the document key handler -- so this renders its
- * children, the way features/dag/DagSheet.tsx does for the graph sheet. Two
- * attributes React cannot own on a container it did not create: `data-fold`,
- * which changes, is written here; the rest are set with the element.
+ * children and not the container. Two attributes React cannot own on a
+ * container it did not create: `data-fold`, which changes, is written here;
+ * the rest are set with the element.
  *
  * The field is uncontrolled and listened to natively, for the two reasons the
  * composer's own field states (features/composer/mount.tsx): a component owning

@@ -17,7 +17,7 @@
  */
 
 import { drawMeter, goPaint as goState, turn } from '../../features/composer/mount'
-import * as dagSheet from '../../features/dag/mount'
+import * as dagRun from '../../features/dag/mount'
 import { fromStarted } from '../../features/dag/nodes'
 import { touchSession } from '../../features/rail/source'
 import { draw as sessionDraw } from '../../features/rail/store'
@@ -249,7 +249,7 @@ export const STAGES: readonly Stage[] = [
        agree. */
     const started = fromStarted(p)
     const key = sheetSession()
-    dagSheet.start(key, {
+    dagRun.start(key, {
       run_id: p.run_id,
       session: key,
       order: started.map((n) => n.id),
@@ -265,13 +265,13 @@ export const STAGES: readonly Stage[] = [
     /* Through the island rather than into the run's node map from here: what a
        report means to a node is one definition, next to the model it moves, and
        the copy that lived here had drifted into inventing a clock. */
-    dagSheet.advance(sheetSession(), p)
+    dagRun.advance(sheetSession(), p)
     sources.tasks?.onNodeUpdated?.(p)
   }),
 
   arm('dag.run_completed', (_rt, p) => {
     transcript.dagFeed('dag.run_completed', p)
-    dagSheet.settle(sheetSession(), p)
+    dagRun.settle(sheetSession(), p)
     sources.tasks?.onRunCompleted?.(p)
   }),
 

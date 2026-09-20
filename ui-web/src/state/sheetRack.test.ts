@@ -103,13 +103,13 @@ describe('the sheet rack', () => {
 
   it('drops one class in one conversation and leaves the other alone', () => {
     const here = sheet('csheet')
-    const alsoHere = sheet('dagsheet')
+    const alsoHere = sheet('gsheet')
     add(here)
     add(alsoHere)
     add(sheet('csheet'), 'b')
 
     dropClass('csheet')
-    expect([...rack().children].map((n) => (n as HTMLElement).className)).toEqual(['dagsheet'])
+    expect([...rack().children].map((n) => (n as HTMLElement).className)).toEqual(['gsheet'])
     /* The other conversation still has its pending question. */
     setCurrent('b')
     sync()
