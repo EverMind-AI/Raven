@@ -1,6 +1,17 @@
 div.app
   aside.rail
     div.railtop
+      span.wordmark
+        svg
+          rect
+          path
+          circle
+          ellipse
+          ellipse
+          circle
+          circle
+          path
+          path
       button#railBtn.ghost-ic.tipdn
         svg
           rect
@@ -14,14 +25,6 @@ div.app
         svg
           path
         span
-      button#skillBtn.navi
-        svg
-          path
-        span
-      button#plugBtn.navi
-        svg
-          path
-        span
       button#playbooksBtn.navi
         svg
           circle
@@ -29,12 +32,10 @@ div.app
           circle
           path
         span
-      button#kbBtn.navi
+      button#agentsBtn.navi
         svg
-          path
-        span
-      button#memoryBtn.navi
-        svg
+          rect
+          rect
           path
         span
       div#moreFly.moresub[data-open=false]
@@ -62,8 +63,6 @@ div.app
             path
         span.who
           span.n
-          span#meSub.s
-        span#meKbd.kbd
     div#railGrip.grip
   div.main
     div#split.split
@@ -90,10 +89,18 @@ div.app
         div#wsGrip.grip
         div#brand
           span.mk
+            svg
+              rect
+              path
+              circle
+              ellipse
+              ellipse
+              circle
+              circle
+              path
+              path
           span.wl
         div.dock
-          div.crew.crew-back
-            img.rv.rv-content
           div#sheetRack.sheets
           div.dock-in
             div#queued.queued
@@ -137,11 +144,6 @@ div.app
                 span#tierPopLab.lab
               div#tierList
               div.note
-          div.crew.crew-front
-            img.rv.rv-main
-            img.rv.rv-research
-            img.rv.rv-coding
-            img.rv.rv-data
       aside#ws.ws
         div.ws-top
           div#wsTabs.wseg

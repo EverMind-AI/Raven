@@ -17,7 +17,7 @@
  * The fallback is the other half. `deskReserve` answers 0 by REMOVING the
  * property -- for a detached panel, for a chat too narrow to spare the width --
  * so a rule without `, 0px` would resolve to an invalid value and drop the
- * declaration, taking the composer's own 22px with it.
+ * declaration, taking the composer's own 36px with it.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -31,14 +31,14 @@ describe('the chat makes room for the anchored desk', () => {
     expect(body).toMatch(/padding-right:\s*var\(--desk-reserve,\s*0px\)/)
   })
 
-  it('insets the composer by the reserve on top of its own 22px', () => {
-    /* Its own inset is not the desk's to spend: `.dock { padding: 0 22px }` is
+  it('insets the composer by the reserve on top of its own 36px', () => {
+    /* Its own inset is not the desk's to spend: `.dock { padding: 0 36px }` is
        what lines the composer card up with the prose edge, and a rule here that
        replaced it rather than adding to it would move the card every time the
        desk opened. */
     const body = rule('.chat:not([data-fresh]) .dock')
     expect(body).not.toBeNull()
-    expect(body).toMatch(/padding-right:\s*calc\(22px \+ var\(--desk-reserve,\s*0px\)\)/)
+    expect(body).toMatch(/padding-right:\s*calc\(36px \+ var\(--desk-reserve,\s*0px\)\)/)
   })
 
   it('moves the two together, so the composer stays under the column', () => {

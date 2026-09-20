@@ -26,7 +26,7 @@ const installText = moduleText('app/install.ts')
    rest of the draw shells. */
 const STEPS = [
   'lookLoad', 'paneLoad', 'setRail', 'sessionDraw', 'sessionOpen',
-  'drawPerm', 'loadTier', 'drawCtx', 'drawCaps', 'drawFoot', 'bumpWs', 'drawSettings',
+  'drawPerm', 'loadTier', 'drawCtx', 'bumpWs', 'drawSettings',
   'setRuntime', 'goState',
 ]
 
@@ -51,14 +51,12 @@ async function harness(rows = []) {
       'src/state/perm': { draw: step('drawPerm') },
       'src/state/tier': { load: step('loadTier') },
       'src/state/ctxChip': { draw: step('drawCtx') },
-      'src/state/foot': { draw: step('drawFoot') },
       'src/state/failureBar': {
         bootError: (where, error) => { throw new Error(`${where}: ${error}`) },
       },
       'src/state/rail': { set: step('setRail') },
       'src/state/envChip': { setRuntime: step('setRuntime') },
       'src/state/session/rows': { open: step('sessionOpen'), rows: () => rows },
-      'src/state/caps': { draw: step('drawCaps') },
       'src/state/ws': { bump: step('bumpWs') },
       'src/state/session/resume': { watch: step('watchNote'), landing: () => null },
       'src/app/install': { installPage: step('installPage') },

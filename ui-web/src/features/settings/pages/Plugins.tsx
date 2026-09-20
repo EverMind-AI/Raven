@@ -4,12 +4,11 @@ import { useEffect, useState } from 'react'
 
 import { KeyInput } from '../../../components/KeyInput'
 import { t } from '../../../i18n/t'
-import { pluginsSource } from '../../plugins/source'
 import { Card, Chip, KeyLink, Row, Rov, Spin, Switch, Xrow } from '../Fields'
 import * as store from '../store'
 
 import type { McpSnapshot } from '../../../rpc/generated'
-import type { AuthField } from '../../plugins/types'
+import type { AuthField } from '../types'
 import type { JSX } from 'react'
 
 type PlugChip = 'none' | 'connected' | 'connecting' | 'setup' | 'failed'
@@ -67,11 +66,8 @@ function KeyPanel({ m }: { m: McpSnapshot }): JSX.Element {
   const [fields, setFields] = useState<AuthField[] | null>(null)
   useEffect(() => {
     let live = true
-    pluginsSource.detail(m.name)
-      .then((d) => {
-        const mcp = (d.entry.contributes || []).find((c) => c.kind === 'mcp')
-        if (live) setFields((mcp && mcp.auth && mcp.auth.fields) || [])
-      })
+    store.source().serverAuthFields(m.name)
+      .then((f) => { if (live) setFields(f) })
       .catch(() => { if (live) setFields([]) })
     return () => { live = false }
   }, [m.name])

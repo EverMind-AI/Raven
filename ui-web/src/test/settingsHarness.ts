@@ -112,6 +112,9 @@ export function install(data: SettingsSnapshot = snap(), over: Partial<SettingsS
     inspectSkill: async (name) => { calls.push(['inspectSkill', name]); return { name, description: 'd', path: `/skills/${name}`, body: '# Hi\n\nbody', files: ['SKILL.md', 'notes.md'], always: false, install: null } },
     openSkillFile: async (name, file) => { calls.push(['openSkillFile', { name, file }]) },
     uninstallSkill: async (name) => rec('uninstallSkill', name),
+    /* A read the credential panel makes on its own, so it is not recorded: a
+       case asserting what a row's buttons wrote would have to skip past it. */
+    serverAuthFields: async () => [{ key: 'token', label: 'Token', help_url: 'https://github.com/settings/tokens' }],
     toggleServer: async (name, on) => rec('toggleServer', { name, on }),
     retryServer: async (name) => rec('retryServer', name),
     revokeServer: async (name) => rec('revokeServer', name),

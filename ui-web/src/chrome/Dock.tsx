@@ -122,19 +122,6 @@ function DockIn(): JSX.Element {
 export function Dock(): JSX.Element {
   return (
     <div className="dock">
-      {/* Behind the composer on purpose: this one is drawn as a torso
-           leaning over the top edge, and the card cutting off its lower
-           half is what makes it look like it is ON the box rather than
-           pasted in front of it.
-
-           The five images below serialise with src LAST, where page.html had
-           it second: react-dom sets an img's src after every other attribute
-           on purpose, so that a decoding or loading hint is in place before the
-           fetch starts. It is the one thing in this region that does not come
-           across byte for byte, and nothing reads attribute order. */}
-      <div className="crew crew-back" aria-hidden="true">
-        <img className="rv rv-content" src="assets/ravens/content.webp" alt="" decoding="async" />
-      </div>
       {/* Sheets stack here, above the composer card and apart from it:
            each is its own floating glass card over the transcript, not a
            strip embedded in the box the user types in. */}
@@ -147,13 +134,6 @@ export function Dock(): JSX.Element {
           in its own attributes which of its ends have more beyond them. */}
       <TaskRuns />
       <DockIn />
-      {/* In front of the composer: these four stand on or beside it. */}
-      <div className="crew crew-front" aria-hidden="true">
-        <img className="rv rv-main" src="assets/ravens/main-agent.webp" alt="" decoding="async" />
-        <img className="rv rv-research" src="assets/ravens/research.webp" alt="" decoding="async" />
-        <img className="rv rv-coding" src="assets/ravens/coding.webp" alt="" decoding="async" />
-        <img className="rv rv-data" src="assets/ravens/data.webp" alt="" decoding="async" />
-      </div>
     </div>
   )
 }

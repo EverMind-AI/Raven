@@ -19,15 +19,12 @@ import type { ComposerSource } from '../features/composer/types'
 import type { ConnectionsSource } from '../features/connections/types'
 import type { CronSource } from '../features/cron/types'
 import type { ExtAgentsSource } from '../features/extAgents/types'
-import type { KnowledgeSource } from '../features/knowledge/types'
 import type { MemorySource } from '../features/memory/types'
 import type { ModelSource } from '../features/model/types'
 import type { OnboardSource } from '../features/onboard/types'
 import type { PlaybooksSource } from '../features/playbooks/types'
-import type { PluginsSource } from '../features/plugins/types'
 import type { RailSource } from '../features/rail/types'
 import type { SettingsSource } from '../features/settings/types'
-import type { SkillsSource } from '../features/skills/types'
 import type { SubagentsSource } from '../features/subagents/types'
 import type { TasksSource } from '../features/tasks/types'
 import type { ArtifactsSource, TranscriptSource } from '../features/transcript/types'
@@ -39,7 +36,7 @@ import type { TierSource } from './tier'
 /* Whether the extensions list has been read, and reading it. Declared here
    rather than in a feature's types because no island has this domain: the
    capabilities page is chrome, and its opener is the only reader
-   (src/features/plugins/wire.ts). */
+*/
 export interface CapabilitiesSource {
   loaded(): boolean
   load(): Promise<boolean>
@@ -54,16 +51,13 @@ export interface Sources {
   connections: ConnectionsSource
   cron: CronSource
   extAgents: ExtAgentsSource
-  knowledge: KnowledgeSource
   memory: MemorySource
   model: ModelSource
   onboard: OnboardSource
   playbooks: PlaybooksSource
-  plugins: PluginsSource
   prose: ProseSource
   rail: RailSource
   settings: SettingsSource
-  skills: SkillsSource
   subagents: SubagentsSource
   tasks: TasksSource
   tier: TierSource

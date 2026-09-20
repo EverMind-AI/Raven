@@ -41,14 +41,12 @@
 
 import { useSyncExternalStore } from 'react'
 
-import { open as openKnowledge } from '../features/knowledge/store'
-import { open as openMemory } from '../features/memory/store'
+import { RavenMark } from '../components/RavenMark'
+import { open as openExtAgents } from '../features/extAgents/store'
 import { openPage as openPlaybooks } from '../features/playbooks/store'
-import { openPlugins, openSkills } from '../features/plugins/wire'
 import { open as openSettings } from '../features/settings/store'
 import { t } from '../i18n/t'
 import * as find from '../state/find'
-import * as foot from '../state/foot'
 import * as lang from '../state/lang'
 import * as navfly from '../state/navfly'
 import * as rail from '../state/rail'
@@ -57,13 +55,16 @@ import { MoreFly } from './MoreFly'
 import type { NavButton } from '../state/pages'
 import type { JSX } from 'react'
 
-/* The two icon buttons over the list. Neither carries a literal -- their words
-   are a tooltip and a label the language pass writes onto attributes -- so this
-   subscribes to the search row alone. */
+/* The mark and the name, then the two icon chores. Neither button carries a
+   literal -- their words are a tooltip and a label the language pass writes
+   onto attributes -- so this subscribes to the search row alone. */
 function RailTop(): JSX.Element {
   const s = useSyncExternalStore(find.subscribe, find.get)
   return (
     <div className="railtop">
+      {/* The name is the product's, not a translated string: it reads the same
+          in every language the page has. */}
+      <span className="wordmark"><RavenMark />RAVEN</span>
       {/* aria-expanded is what paints it as engaged: the toggle never moves, so
           its own state is the only thing that says whether the rail is open.
           Nothing has ever written it, so the served value stands. */}
@@ -101,27 +102,15 @@ function RailTop(): JSX.Element {
    that same table (features/rail/store.ts's markNew), which is the pair a page
    used to be able to miss in silence.
 
-   The order here is the strip's, not the table's: the capabilities page's two
-   tabs come first because they are what a reader reaches for daily, while the
-   table's order is the one the pages sit in at the body. */
+   Two destinations, not five: what a reader reaches for daily is a playbook
+   and the agents that run one. Schedules, channels and memory are set up once
+   and then left alone, so they sit behind the fold below (state/navfly.ts). */
 const NAV_ROWS: ReadonlyArray<{
   readonly button: NavButton
   readonly key: string
   readonly open: () => void
   readonly icon: JSX.Element
 }> = [
-  {
-    button: 'skillBtn',
-    key: 'gui.tab.skills',
-    open: () => void openSkills(),
-    icon: <path d="M12 4l1.9 5.3L19 11l-5.1 1.7L12 18l-1.9-5.3L5 11l5.1-1.7Z" />,
-  },
-  {
-    button: 'plugBtn',
-    key: 'gui.tab.plugins',
-    open: () => void openPlugins(),
-    icon: <path d="M9 3.5v4.5M15 3.5v4.5M7 8h10v4.5a5 5 0 0 1-10 0zM12 17.5v3" />,
-  },
   {
     button: 'playbooksBtn',
     key: 'gui.nav.pb',
@@ -134,20 +123,18 @@ const NAV_ROWS: ReadonlyArray<{
     ),
   },
   {
-    button: 'kbBtn',
-    key: 'gui.nav.kb',
-    open: () => openKnowledge(),
-    icon: <path d="M5 4.5h9.5a2 2 0 0 1 2 2v13H7a2 2 0 0 1-2-2zM16.5 6.5H19v13h-2.5M8 8.5h5M8 12h5" />,
-  },
-  {
-    button: 'memoryBtn',
-    key: 'gui.nav.mem',
-    open: () => openMemory(),
-    icon: <path d="M12 3l8 4.5-8 4.5-8-4.5zM4 12.4l8 4.5 8-4.5M4 16.6l8 4.5 8-4.5" />,
+    button: 'agentsBtn',
+    key: 'gui.nav.agents',
+    open: () => openExtAgents(),
+    icon: (
+      <>
+        <rect x="3.5" y="4" width="7" height="7" rx="1.6" /><rect x="13.5" y="13" width="7" height="7" rx="1.6" /><path d="M10.5 7.5h3.5a3 3 0 0 1 3 3v2.5" />
+      </>
+    ),
   },
 ]
 
-/* The nav strip: the draft row, the five module rows, and the fold that holds
+/* The nav strip: the draft row, the two module rows, and the fold that holds
    the three set-up-once ones. */
 function RailNav(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
@@ -232,12 +219,9 @@ function FindRow(): JSX.Element {
 
 /* The foot row. The update notice above it is written by the module that knows
    that fact (app/updates.ts), so this renders it as the page serves it: empty
-   and hidden. The two slots inside the door -- the running build and this
-   platform's shortcut for it -- come from state/foot.ts, which is served empty
-   as well and answers once the boot has asked the install what it is running. */
+   and hidden. */
 function RailFoot(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
-  const f = useSyncExternalStore(foot.subscribe, foot.get)
   return (
     <div className="rail-foot">
       <button className="upnote" id="upnote" hidden>
@@ -246,8 +230,10 @@ function RailFoot(): JSX.Element {
         <span className="rl">{t('gui.update.reload')}</span>
       </button>
       {/* The foot is the door to settings, and only that: accounts are not a
-           thing this product has, so nothing down here pretends to be one.
-           The version under the label is state/foot.ts's. */}
+           thing this product has, so nothing down here pretends to be one. The
+           build number and the shortcut that used to sit under the label went
+           with state/foot.ts -- a version string is what an About dialog is
+           for, not the one row that has to stay legible at a glance. */}
       <button className="me" id="meBtn" aria-label={lang.attr('gui.nav.set')} onClick={() => void openSettings()}>
         <span className="av anon">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2" />
@@ -255,9 +241,7 @@ function RailFoot(): JSX.Element {
         </span>
         <span className="who">
           <span className="n">{t('gui.nav.set')}</span>
-          <span className="s" id="meSub">{f.sub || null}</span>
         </span>
-        <span className="kbd" id="meKbd">{f.kbd || null}</span>
       </button>
     </div>
   )

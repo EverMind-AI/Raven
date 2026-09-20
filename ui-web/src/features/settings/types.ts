@@ -138,6 +138,16 @@ export interface ModelCatalogue {
    toasts where the wording lives and throws { handled: true }, so the island
    only redraws; a write that succeeds resolves to the fresh snapshot where the
    page behind it changed. */
+/* One credential field of a catalogue entry's MCP contribution: the key it is
+   written under, and what to call it. `label` arrives from the hub as an i18n
+   object and is flattened to this language by the source. */
+export interface AuthField {
+  key: string
+  label?: string
+  secret?: boolean
+  help_url?: string
+}
+
 export interface SettingsSource {
   load(): Promise<SettingsSnapshot>
   set(key: string, value: unknown): Promise<SettingsSnapshot>
@@ -167,6 +177,9 @@ export interface SettingsSource {
   inspectSkill(name: string): Promise<SkillDetail>
   openSkillFile(name: string, file: string): Promise<void>
   uninstallSkill(name: string): Promise<SettingsSnapshot>
+  /* The credential fields the catalogue declares for this server, empty for
+     one nobody installed from the catalogue. A read, so no snapshot back. */
+  serverAuthFields(name: string): Promise<AuthField[]>
   toggleServer(name: string, on: boolean): Promise<SettingsSnapshot>
   retryServer(name: string): Promise<SettingsSnapshot>
   revokeServer(name: string): Promise<SettingsSnapshot>

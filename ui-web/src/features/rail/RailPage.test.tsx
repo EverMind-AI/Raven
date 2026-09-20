@@ -69,8 +69,8 @@ function install(over: Partial<RailSnapshot> = {}): Harness {
   } as unknown as RailSource })
   document.body.innerHTML =
     '<div class="app" data-page="off">' +
-    '<button id="newBtn"></button><button id="skillBtn"></button>' +
-    '<button id="plugBtn"></button><button id="memoryBtn"></button><button id="moreBtn"></button>' +
+    '<button id="newBtn"></button><button id="playbooksBtn"></button>' +
+    '<button id="agentsBtn"></button><button id="moreBtn"></button>' +
     '<div id="moreFly" data-open="false"></div>' +
     PAGES.map(p => `<div id="${p}" data-open="false"></div>`).join('') +
     '<div id="list"></div><h1 id="title">t</h1><button id="renameBtn"></button></div>'
@@ -84,12 +84,12 @@ const src = (): RailSource => sources.rail as RailSource
    page table): every module page, the rail button each one lights up, and the
    More group's rows in their drawn order. The default fake above hands over an
    empty one, which is the whole page shut. */
-const PAGES = ['capsPage', 'extAgentsPage', 'connectionsPage', 'memoryPage', 'cronPage']
+const PAGES = ['playbooksPage', 'extAgentsPage', 'connectionsPage', 'memoryPage', 'cronPage']
 const BTN_OF: Record<string, string> = {
-  capsPage: 'skillBtn',
-  extAgentsPage: 'moreBtn',
+  playbooksPage: 'playbooksBtn',
+  extAgentsPage: 'agentsBtn',
   connectionsPage: 'moreBtn',
-  memoryPage: 'memoryBtn',
+  memoryPage: 'moreBtn',
   cronPage: 'moreBtn'
 }
 
@@ -646,7 +646,7 @@ describe('rail island', () => {
     const host = mount()
     const grp = [...host.querySelectorAll<HTMLElement>('.grp')]
       .find(g => g.textContent!.includes('gui.rail.recent'))!
-    expect([...grp.children].map(c => c.className)).toEqual(['lab', 'n', 'car', 'rule'])
+    expect([...grp.children].map(c => c.className)).toEqual(['lab', 'car'])
   })
 
   it('folds a group on its eyebrow and unfolds it again', () => {
@@ -672,16 +672,15 @@ describe('rail island', () => {
     /* Nothing covering the chat and no session: the draft row is current. */
     act(() => store.markNew())
     expect(current('newBtn')).toBe('true')
-    navUp('memoryPage')
+    navUp('playbooksPage')
     act(() => store.markNew())
-    expect(current('memoryBtn')).toBe('true')
+    expect(current('playbooksBtn')).toBe('true')
     expect(current('newBtn')).toBe('false')
-    /* The capabilities page lights whichever capability button is showing;
-       btnOf is the shell's answer, not a table the island keeps. */
-    navUp('capsPage')
+    /* And the mark moves with the page, rather than two rows carrying it. */
+    navUp('extAgentsPage')
     act(() => store.markNew())
-    expect(current('skillBtn')).toBe('true')
-    expect(current('memoryBtn')).toBe('false')
+    expect(current('agentsBtn')).toBe('true')
+    expect(current('playbooksBtn')).toBe('false')
   })
 
   it('hands the mark to the More row while the group is open, and takes it back when folded', () => {
@@ -695,7 +694,7 @@ describe('rail island', () => {
     const rows = [...fly.querySelectorAll('.navi')].map(b => b.getAttribute('aria-current'))
     /* morePages is [extAgents, connections, cron]: the third row is the page
        that is up. */
-    expect(rows).toEqual(['false', 'false', 'true'])
+    expect(rows).toEqual(['true', 'false', 'false'])
     expect(current('moreBtn')).toBe('false')
     /* Folded, the group has to stand in for the page it hides. */
     fly.dataset.open = 'false'

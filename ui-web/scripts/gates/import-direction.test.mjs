@@ -45,12 +45,10 @@ const SRC = root(new URL('../../src/', import.meta.url))
 /* One rank per directory, lowest first: an import may point at its own rank or
    at a higher number, never back.
 
-   Two files at the features level are not domains and are ranked as what they
-   are. `features/manifests.ts` is the assembly point -- every domain declares
-   into it, so it sits ABOVE them and a domain reading it is an upward edge,
-   which is what keeps every island out of every island's closure.
-   `features/hosts.ts` sits below them because it is a leaf with no imports of
-   its own (EXEMPT says why). */
+   One file at the features level is not a domain and is ranked as what it is.
+   `features/manifests.ts` is the assembly point -- every domain declares into
+   it, so it sits ABOVE them and a domain reading it is an upward edge, which is
+   what keeps every island out of every island's closure. */
 const RANK = {
   main: 0,
   app: 1,
@@ -58,7 +56,6 @@ const RANK = {
   chrome: 3,
   'features/manifests': 3.5,
   features: 4,
-  'features/hosts': 5,
   components: 6,
   state: 7,
   rpc: 8,
@@ -66,12 +63,10 @@ const RANK = {
   i18n: 9,
 }
 
-/* Allowed for the life of the file rather than pinned as debt, one reason each. */
-const EXEMPT = {
-  'features/hosts.ts':
-    'the three detached island hosts: a leaf with no imports of its own, so a '
-    + 'domain reaching it can neither pull a graph in nor close a cycle',
-}
+/* Allowed for the life of the file rather than pinned as debt, one reason each.
+   Empty since the capabilities page went: its two tabs owned the one file that
+   needed exempting, and nothing else has asked. */
+const EXEMPT = {}
 
 /* Every upward runtime edge in the tree today, as `importer -> target`, both
    paths from src/. Down or gone: an edge may disappear, and a new one fails. */
@@ -88,7 +83,6 @@ const PINNED = [
   'state/escapeOrder.ts -> features/composer/turn.ts',
   'state/escapeOrder.ts -> features/connections/store.ts',
   'state/escapeOrder.ts -> features/cron/store.ts',
-  'state/escapeOrder.ts -> features/knowledge/store.ts',
   'state/escapeOrder.ts -> features/memory/store.ts',
   'state/escapeOrder.ts -> features/playbooks/store.ts',
   'state/escapeOrder.ts -> features/extAgents/store.ts',
@@ -108,7 +102,7 @@ const PINNED = [
   'state/lang/effects.ts -> features/transcript/mount.tsx',
   'state/navfly.ts -> features/connections/wire.ts',
   'state/navfly.ts -> features/cron/store.ts',
-  'state/navfly.ts -> features/extAgents/store.ts',
+  'state/navfly.ts -> features/memory/store.ts',
   'state/session/conversation.ts -> features/transcript/mount.tsx',
   'state/session/conversation.ts -> features/transcript/tail.ts',
   'state/session/pipeline.ts -> features/composer/approve.ts',
@@ -203,8 +197,6 @@ const CROSS = [
   'features/desk/store.ts -> features/tasks/store.ts',
   'features/desk/store.ts -> features/workspace/deliveries.ts',
   'features/desk/store.ts -> features/workspace/store.ts',
-  'features/installed/source.ts -> features/plugins/store.ts',
-  'features/knowledge/KnowledgePage.tsx -> features/settings/store.ts',
   'features/model/source.ts -> features/settings/store.ts',
   'features/playbooks/PlaybooksPage.tsx -> features/dag/Board.tsx',
   'features/playbooks/PlaybooksPage.tsx -> features/dag/graph.ts',
@@ -214,8 +206,6 @@ const CROSS = [
   'features/tasks/TasksPage.tsx -> features/dag/graph.ts',
   'features/tasks/TasksPage.tsx -> features/desk/store.ts',
   'features/tasks/TasksPage.tsx -> features/workspace/store.ts',
-  'features/plugins/PluginsPage.tsx -> features/composer/startTaskWith.ts',
-  'features/plugins/wire.ts -> features/skills/wire.ts',
   'features/rail/RailPage.tsx -> features/cron/store.ts',
   'features/rail/wire.ts -> features/composer/mount.tsx',
   'features/rail/wire.ts -> features/dag/mount.tsx',
@@ -223,7 +213,6 @@ const CROSS = [
   'features/rail/source.ts -> features/composer/turn.ts',
   'features/rail/store.ts -> features/composer/store.ts',
   'features/settings/wire.ts -> features/model/chip.ts',
-  'features/skills/SkillsPage.tsx -> features/composer/startTaskWith.ts',
   'features/subagents/SubagentsPage.tsx -> features/composer/store.ts',
   'features/subagents/source.ts -> features/transcript/mount.tsx',
   'features/subagents/store.ts -> features/rail/title.ts',
@@ -300,7 +289,6 @@ const known = new Set(modules)
 function bucket(rel) {
   if (rel === 'main.tsx') return 'main'
   if (rel === 'App.tsx') return 'App'
-  if (rel === 'features/hosts.ts') return 'features/hosts'
   if (rel === 'features/manifests.ts') return 'features/manifests'
   const dir = rel.split('/')[0]
   if (dir === 'features') return `features/${rel.split('/')[1]}`
@@ -410,7 +398,7 @@ function violations() {
     const there = bucket(to)
     if (here === there) continue
     if (here.startsWith('features/') && there.startsWith('features/')
-      && there !== 'features/hosts' && there !== 'features/manifests'
+      && there !== 'features/manifests'
       && here !== 'features/manifests') {
       const file = to.split('/')[2]
       if (file !== 'source.ts' && file !== 'types.ts') cross.push(edge)

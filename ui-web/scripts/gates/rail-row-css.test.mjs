@@ -67,8 +67,10 @@ describe('the rail row CSS contract', () => {
        own left padding carries the indent the glyph used to occupy -- and the
        empty-group note lines up with the label rather than with the caret it no
        longer sits behind. Equality is the assertion: either one drifting alone
-       is the bug. */
-    const grpPad = /\n\.list \.grp \{[^}]*padding: 13px 4px 5px (\d+)px/.exec(css);
+       is the bug. The heading sits on the session rows' own left edge now, so
+       the shared number is 10 rather than 23, and the row's shorthand has three
+       parts instead of four. */
+    const grpPad = /\n\.list \.grp \{[^}]*padding: 17px (\d+)px 4px/.exec(css);
     expect(grpPad).toBeTruthy();
     const emptyPad = /\n\.grp-empty \{[^}]*padding: 3px 10px 5px (\d+)px/.exec(css);
     expect(emptyPad).toBeTruthy();

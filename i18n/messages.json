@@ -1203,6 +1203,10 @@
       "en": "Commands",
       "zh": "命令"
     },
+    "gui.brand.hi": {
+      "en": "Hi, I'm Raven Agent",
+      "zh": "Hi，我是 Raven Agent"
+    },
     "gui.composer_ph": {
       "en": "Do anything",
       "zh": "想做什么都可以"

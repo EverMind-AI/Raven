@@ -13,20 +13,10 @@
 
 import { useSyncExternalStore } from 'react'
 
-import { openDetail } from '../features/plugins/store'
-import { openPlugins } from '../features/plugins/wire'
 import { t } from '../i18n/t'
 import * as banner from '../state/banner'
 
 import type { JSX } from 'react'
-
-/* One verb for one action: this button opens the plugins page AND the websearch
-   entry on it, and a reader who lands on the page without the entry open has to
-   hunt for what the notice was talking about. */
-function openWebsearch(): void {
-  void openPlugins()
-  openDetail('market', 'websearch')
-}
 
 export function Banner(): JSX.Element | null {
   const s = useSyncExternalStore(banner.subscribe, banner.get)
@@ -45,7 +35,10 @@ export function Banner(): JSX.Element | null {
     <div className="banner">
       <b>{t('gui.ws.notice_title')}</b>
       <span>{t('gui.ws.notice_body')}</span>
-      <button onClick={() => openWebsearch()}>{t('gui.ws.notice_go')}</button>
+      {/* No way through from here any more: the button opened the plugins
+          page, and the entry on it, and both are gone. The notice still says
+          the true thing -- web search is not configured -- and configuring it
+          is a config-file edit. */}
       {/* Dismissable, unlike the fault above: an unconfigured capability is a
           suggestion, and the reader saying "not now" is an answer. */}
       <button className="x" aria-label={t('gui.ws.notice_dismiss')} onClick={() => banner.dismiss()}>&#10005;</button>

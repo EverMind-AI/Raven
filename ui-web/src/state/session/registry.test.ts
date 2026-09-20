@@ -51,7 +51,6 @@ async function harness({ rows, deferSubscribe }: { rows?: Row[]; deferSubscribe?
      afterwards without them. */
   await loadPart(async () => { await import('./registry'); return import('../../app/install') }, {
     fakes: {
-      'src/state/caps': { draw: () => {} },
       'src/state/page': { show: () => {} },
       'src/state/ws': { setOpen: () => {}, reset: () => {} },
       'src/state/session/conversation': {
