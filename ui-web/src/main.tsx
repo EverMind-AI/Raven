@@ -10,7 +10,7 @@ import * as panes from './chrome/behaviour/panes'
 import * as scrollbars from './chrome/behaviour/scrollbars'
 import { installLinkTrap } from './features/browser/store'
 import * as composer from './features/composer/mount'
-import * as dagSheet from './features/dag/mount'
+import * as dagRun from './features/dag/mount'
 import { DeskApp } from './features/desk/DeskApp'
 import * as desk from './features/desk/store'
 import { MANIFESTS } from './features/manifests'
@@ -82,7 +82,7 @@ workspace.setDeskOpener(desk.openDeskFile)
 
 session.onChange(() => {
   sheets.sync()
-  dagSheet.sync()
+  dagRun.sync()
   /* The desk palette is open or shut per conversation, and this is the event
      that says which one is on screen -- see features/desk/store.ts's sync. */
   desk.sync()

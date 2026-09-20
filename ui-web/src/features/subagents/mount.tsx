@@ -29,7 +29,7 @@ export function draw(box: HTMLElement): void {
   store.hook()
   root = createRoot(box)
   /* Synchronous, because the pane's mount and its callers may touch the drawn
-     DOM in the same task (the dag sheet selects its node next). */
+     DOM in the same task (a graph's own click selects its node next). */
   flushSync(() => root!.render(<SubagentsApp />))
   store.attached(true)
 }

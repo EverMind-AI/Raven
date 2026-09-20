@@ -71,9 +71,9 @@ export interface DagRun {
   done: boolean
   folded: boolean
   dir?: string | null
-  /* The line the graph was dispatched with, which is what the sheet is titled
-     by. Absent for a run started before the field existed, where the sheet
-     falls back to naming itself. */
+  /* The line the graph was dispatched with, which is what names the run
+     wherever it is listed. Absent for a run started before the field existed,
+     where the run falls back to its own id. */
   task_summary?: string | null
 }
 

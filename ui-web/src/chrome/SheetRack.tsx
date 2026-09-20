@@ -4,10 +4,9 @@
  * `#sheetRack`, and that is the whole of the arrangement. Three things ask for
  * it. `.dock .get > *` styles a sheet as the rack's flex item and the rack
  * writes `data-sess` on what it is handed (src/styles/page.css:4385-4393), so a
- * sheet cannot be wrapped. The rack's child list is mixed -- the dag sheet is a
- * host element with a React root of its own -- and a portal appends its children
- * to the container it is given, so a portal into `#sheetRack` would put a
- * question under a graph that docked before it instead of over it. And the order
+ * sheet cannot be wrapped. A portal appends its children to the container it is
+ * given, so a portal into `#sheetRack` would put a question under whatever
+ * docked before it instead of over it. And the order
  * the rack keeps is "newest first" with the caret left alone on a sync, which is
  * an insertBefore the store already does node by node.
  *

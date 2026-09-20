@@ -76,7 +76,7 @@ export function open(req: ClarifyRequest, answered: (text: string) => void): voi
   const sheet = document.createElement('div')
   sheet.className = 'csheet'
   /* This one asks: the turn is waiting on the answer. The rack passes that on to
-     whatever else is docked -- see `watchAsking` -- so a running graph steps
+     whatever else is docked -- see `watchAsking` -- so a tall tenant can step
      aside instead of pushing the question below the fold. */
   sheet.dataset.asks = '1'
   sheet.setAttribute('role', 'dialog')

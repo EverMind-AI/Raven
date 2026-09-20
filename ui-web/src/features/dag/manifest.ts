@@ -7,9 +7,10 @@
 
 import type { DomainManifest } from '../manifests'
 
-/* The delegated graph: a sheet in the rack above the composer, mounted per run
-   by features/dag/mount.tsx, and a card inside the transcript. It answers no
-   seam of its own -- what it draws arrives on the turn's own events. */
+/* The delegated graph: a card inside the transcript, and the run's own state
+   (features/dag/mount.ts) that the desk's task pane and session resume read.
+   It renders nothing of its own and answers no seam -- what the card draws
+   arrives on the turn's own events. */
 export const manifest: DomainManifest = {
   domain: 'dag',
   sources: [],

@@ -173,12 +173,12 @@ const SHARED = new Set([
 const LEGACY_SHARED = {
   a: 4, ag: 2, body: 2, btn: 3, cap: 4, cfind: 2, chev: 2, chgs: 2,
   cmd: 2, ct: 2, d: 4, empty: 2, foot: 2, gap: 3,
-  'ghost-ic': 3, h: 3, hd: 4, ic: 4, k: 3, kd: 2, key: 5, l1: 3, l2: 3, lb: 3,
+  'ghost-ic': 3, h: 3, hd: 3, ic: 3, k: 3, kd: 2, key: 5, l1: 3, l2: 3, lb: 3,
   mk: 2, n: 5, none: 2, ph: 2,
   pmdhead: 2, pmdmeta: 2, pmhero: 5, pmsec: 2,
   rm: 2, row: 2, sheet: 2, shot: 3, sk: 3, skel: 3,
   step: 2, sulist: 3, sustate: 2, sz: 2, t: 2,
-  tipdn: 3, tm: 2, v: 3, val: 2, w: 3, warn: 2, wkg: 3, wsnote: 2,
+  tipdn: 2, tm: 2, v: 3, val: 2, w: 3, warn: 2, wkg: 3, wsnote: 2,
 }
 
 // How many of a domain's own classes -- the ones no other domain names -- still
@@ -217,8 +217,11 @@ const LEGACY_LOCAL = {
      features/dag/Board.tsx so the task board could read it too, and its
      `.g*` classes came with it. The playbooks row below falls by the same six,
      so the page's total debt is unchanged -- and the prefix pass that retires
-     them is one rename over one file now instead of two. */
-  dag: 13,
+     them is one rename over one file now instead of two.
+
+     Down one from 13 with the graph sheet: `.dsheet` was this domain's, and
+     the sheet is the only thing that wrote it. */
+  dag: 12,
   desk: 5,
   extAgents: 7,
   installed: 0,

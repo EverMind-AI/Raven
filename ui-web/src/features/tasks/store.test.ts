@@ -251,3 +251,94 @@ describe('live event consumers', () => {
     expect(store.byKey('dag', 'r1')?.task_summary).not.toBe('reconciled')
   })
 })
+
+/* The read that fills the panel and the frames that move it race: the server
+   answers from the state it held when asked, so a run dispatched during the
+   round trip is not in that answer. Before this was guarded, the answer
+   replaced the whole list and took the run's own row with it -- and since
+   `dag.run_started` fires once and no other dag reducer can insert, the run
+   stayed invisible for the whole of its life. The desk pane and the strip
+   above the composer read the same rows, so both went blank together. */
+describe('a frame that lands while the list read is in flight', () => {
+  const node = (over: Partial<TaskNode> & Pick<TaskNode, 'node_id'>): TaskNode => ({
+    agent: 'raven', status: 'completed', depends_on: [], files: [], ...over,
+  })
+  const started = (runId: string): Parameters<typeof store.onRunStarted>[0] => ({
+    run_id: runId,
+    task_summary: 'a playbook',
+    nodes: [{ id: 'n1', subagent: 'Raven-Research', depends_on: [] }],
+  })
+
+  it('keeps the row a dag run inserted while the read was out', async () => {
+    let release: (r: TaskRow[]) => void = () => {}
+    source.list = () => new Promise((res) => { release = res })
+
+    const inFlight = store.refresh()
+    await Promise.resolve()
+    store.onRunStarted(started('run-1'))
+    release([])
+    await inFlight
+
+    expect(store.rows().map((r) => r.id)).toEqual(['run-1'])
+    expect(store.get().loaded).toBe(true)
+  })
+
+  /* The answer is the older copy of any row a frame moved after the read was
+     asked, so it does not get to speak for that row: a node the reader has
+     already watched finish must not go back to running, and `node_updated`
+     schedules no reconcile that would put it right again. */
+  it('does not let the answer undo a frame that moved the same row', async () => {
+    store.set((prev) => ({
+      ...prev,
+      rows: [row({ id: 'run-3', kind: 'dag', status: 'running', nodes: [node({ node_id: 'n1', status: 'running' })] })],
+      loaded: true,
+    }))
+    let release: (r: TaskRow[]) => void = () => {}
+    source.list = () => new Promise((res) => { release = res })
+
+    const inFlight = store.refresh()
+    await Promise.resolve()
+    store.onNodeUpdated({ run_id: 'run-3', node: 'n1', status: 'completed' })
+    /* What the server held when it was asked: the node still running. */
+    release([row({ id: 'run-3', kind: 'dag', status: 'running', nodes: [node({ node_id: 'n1', status: 'running' })] })])
+    await inFlight
+
+    expect(store.byKey('dag', 'run-3')?.nodes[0]?.status).toBe('completed')
+    expect(store.byKey('dag', 'run-3')?.status).toBe('completed')
+  })
+
+  /* And it still speaks for every row no frame touched in that window, which
+     is where the tokens, the files and the final error text come from. */
+  it("takes the server's copy of a row the frames left alone", async () => {
+    store.set((prev) => ({
+      ...prev,
+      rows: [row({ id: 'quiet', kind: 'dag', status: 'running' })],
+      loaded: true,
+    }))
+    let release: (r: TaskRow[]) => void = () => {}
+    source.list = () => new Promise((res) => { release = res })
+
+    const inFlight = store.refresh()
+    await Promise.resolve()
+    store.onRunStarted(started('noisy'))
+    release([
+      row({ id: 'quiet', kind: 'dag', status: 'completed', task_summary: 'from the server' }),
+    ])
+    await inFlight
+
+    expect(store.byKey('dag', 'quiet')?.status).toBe('completed')
+    expect(store.byKey('dag', 'quiet')?.task_summary).toBe('from the server')
+    expect(store.byKey('dag', 'noisy')).not.toBeNull()
+  })
+
+  /* The plain case still replaces rather than merges: with no frame in the
+     gap, a row the answer dropped is a row that is gone. */
+  it('still drops a row the answer no longer carries when nothing raced it', async () => {
+    store.set((prev) => ({ ...prev, rows: [row({ id: 'old', kind: 'dag', status: 'running' })], loaded: true }))
+    rows = []
+
+    await store.refresh()
+
+    expect(store.rows()).toEqual([])
+  })
+})

@@ -78,7 +78,7 @@ function laneIn(container: HTMLElement, main: boolean, view: (lane: Lane) => Rea
   const lane = store.newLane(`${main ? 'main' : 'agent'}:${seq}`, main)
   const root = createRoot(host)
   /* Synchronous because the very next line at the call site may read the drawn
-     DOM (the dag sheet selects its node right after). */
+     DOM (a graph selects its node right after). */
   flushSync(() => root.render(view(lane)))
   const rec: Mounted = { host, lane, root }
   HOSTS.set(host, rec)
@@ -211,8 +211,8 @@ export function redraw(): void {
 }
 
 /* ── the agent stage: a delegated run in a workspace pane ──────────────
-   Painted synchronously (the dag sheet reads the drawn DOM in the same
-   task), keeping the reader's scroll unless they were at the tail. */
+   Painted synchronously (a caller may read the drawn DOM in the same task),
+   keeping the reader's scroll unless they were at the tail. */
 export function agentStage(box: HTMLElement, ctx: AgentCtxLike | null,
   opts?: { key?: string; empty?: string; reset?: boolean } | null): void {
   const atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 4
