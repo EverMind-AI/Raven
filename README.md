@@ -104,7 +104,7 @@ Raven's modular architecture is designed for harness self-evolution and subagent
 ## ❯❯ Showcase
 
 Real runs, each captured from Raven's task graph. The graph shows the
-orchestration Raven chose for the task; below it is what the run produced.
+orchestration Raven generates for the task; below it is what the run produced.
 
 <table>
 <tr>
