@@ -29,6 +29,7 @@ from raven.config.live import (
     held,
     hold_for_this_turn,
     max_tool_iterations,
+    reasoning_effort,
     skill_gate_pin,
 )
 
@@ -680,3 +681,201 @@ class TestOneTurnOneAnswer:
         with AgentLoop._turn_scope(loop):
             _write(path, {"agents": {"defaults": {"maxToolIterations": 99}}})
             assert AgentLoop.max_iterations.fget(loop) == 40
+
+
+class TestTheRestOfWhatAWriteDidNotReach:
+    """The settings a write reached the file but not the process.
+
+    None of these was ever reload-only -- the surface said "Saved." and nothing
+    said otherwise -- so they were the silent half of the same class the
+    reload-only set named. Each is read where it is used now; what the process
+    was built with answers when the file has no opinion.
+    """
+
+    def test_the_effort_is_read_from_either_spelling(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.json"
+        _write(path, {"agents": {"defaults": {"reasoningEffort": "high"}}})
+        assert reasoning_effort(LiveConfig(path)) == "high"
+        _write(path, {"agents": {"defaults": {"reasoning_effort": "low"}}})
+        assert reasoning_effort(LiveConfig(path)) == "low"
+        _write(path, {})
+        assert reasoning_effort(LiveConfig(path)) is None
+
+    def test_the_loop_holds_its_effort_for_the_turn(self, tmp_path: Path) -> None:
+        """It rides every model call of the turn, so two calls of one turn at
+        two efforts is the split the subsystem pins were fixed for."""
+        from types import SimpleNamespace
+
+        from raven.agent.loop import AgentLoop
+
+        path = tmp_path / "config.json"
+        _write(path, {"agents": {"defaults": {"reasoningEffort": "high"}}})
+        loop = SimpleNamespace(_live_config=LiveConfig(path), _default_max_iterations=40)
+
+        with AgentLoop._turn_scope(loop):
+            _write(path, {"agents": {"defaults": {"reasoningEffort": "low"}}})
+            assert AgentLoop.default_reasoning_effort.fget(loop) == "high"
+
+        assert AgentLoop.default_reasoning_effort.fget(loop) == "low"
+
+    def test_no_configured_effort_passes_nothing(self, tmp_path: Path) -> None:
+        """None leaves the provider's own default standing; an explicit None
+        would switch it off instead."""
+        from types import SimpleNamespace
+
+        from raven.agent.loop import AgentLoop
+
+        path = tmp_path / "config.json"
+        _write(path, {})
+        loop = SimpleNamespace(_live_config=LiveConfig(path))
+
+        assert AgentLoop.default_reasoning_effort.fget(loop) is None
+
+    def test_personalization_follows_the_file_over_the_built_value(self, tmp_path: Path) -> None:
+        from types import SimpleNamespace
+
+        from raven.agent.loop import AgentLoop
+
+        path = tmp_path / "config.json"
+        _write(path, {"agents": {"defaults": {"enablePersonalization": True}}})
+        loop = SimpleNamespace(_live_config=LiveConfig(path), enable_personalization=False)
+
+        assert AgentLoop.personalization_enabled.fget(loop) is True
+
+        _write(path, {"agents": {"defaults": {"enablePersonalization": False}}})
+        assert AgentLoop.personalization_enabled.fget(loop) is False
+
+        # No opinion on file: what the process was built with answers.
+        _write(path, {})
+        assert AgentLoop.personalization_enabled.fget(loop) is False
+        loop.enable_personalization = True
+        assert AgentLoop.personalization_enabled.fget(loop) is True
+
+    def test_the_recall_depth_follows_the_file(self, tmp_path: Path, monkeypatch) -> None:
+        from raven.context_engine.segments.memory import MemorySegmentBuilder
+
+        path = tmp_path / "config.json"
+        _write(path, {"memory": {"memoryTopK": 9}})
+        monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+        builder = MemorySegmentBuilder(memory_store=None, backend=None, memory_top_k=5)
+
+        assert builder._top_k() == 9
+        _write(path, {})
+        assert builder._top_k() == 5, "what it was built with answers when the file does not"
+
+    def test_a_spawn_takes_the_web_vendors_the_file_has(self, tmp_path: Path, monkeypatch) -> None:
+        """The keys beside them have been read live since they landed; the
+        vendor was the half of the pair that still owed a restart."""
+        from types import SimpleNamespace
+
+        from raven.agent.subagent.manager import SubagentManager
+
+        path = tmp_path / "config.json"
+        _write(path, {"tools": {"web": {"search": {"provider": "brave"}, "fetch": {"provider": "exa"}}}})
+        monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+        mgr = SimpleNamespace(web_search_provider="serper", web_fetch_provider="jina")
+
+        assert SubagentManager._web_search_provider_now(mgr) == "brave"
+        assert SubagentManager._web_fetch_provider_now(mgr) == "exa"
+
+        _write(path, {})
+        assert SubagentManager._web_search_provider_now(mgr) == "serper"
+        assert SubagentManager._web_fetch_provider_now(mgr) == "jina"
+
+    def test_the_exec_ceiling_follows_the_file(self, tmp_path: Path, monkeypatch) -> None:
+        """A sub-agent's copy of this tool outlives the spawn that built it, so
+        a timeout copied at construction outlived every edit to it."""
+        from raven.agent.tools.shell import ExecTool
+
+        path = tmp_path / "config.json"
+        _write(path, {"tools": {"exec": {"timeout": 300}}})
+        monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+        tool = ExecTool(working_dir=str(tmp_path), timeout=60)
+
+        assert tool.timeout == 300
+        _write(path, {})
+        assert tool.timeout == 60
+
+    def test_these_are_held_for_the_turn_as_well(self, tmp_path: Path, monkeypatch) -> None:
+        """Same rule as the cap and the pins, and the same reason twice over: a
+        turn that runs two commands must not straddle an edit between them, and
+        the repeat read costs a dict lookup instead of a file read."""
+        from raven.agent.tools.shell import ExecTool
+
+        path = tmp_path / "config.json"
+        _write(path, {"tools": {"exec": {"timeout": 300}}})
+        monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+        tool = ExecTool(working_dir=str(tmp_path), timeout=60)
+
+        with hold_for_this_turn():
+            assert tool.timeout == 300
+            _write(path, {"tools": {"exec": {"timeout": 900}}})
+            assert tool.timeout == 300
+
+        assert tool.timeout == 900
+
+    def test_the_main_web_tools_follow_the_saved_vendor(self, tmp_path: Path, monkeypatch) -> None:
+        """The keys have been read live since they landed and resolve against
+        the selection, so a vendor frozen at registration kept the pair on the
+        old endpoint -- with the new vendor's key never reaching anything."""
+        from raven.agent.tools.web import WebSearchTool
+
+        path = tmp_path / "config.json"
+        _write(path, {})
+        monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+        vendor = {"now": "serper"}
+        tool = WebSearchTool(api_key=lambda: f"{vendor['now']}-key", provider=lambda: vendor["now"])
+
+        assert tool.provider == "serper"
+        assert tool.api_key == "serper-key"
+
+        vendor["now"] = "exa"
+
+        assert tool.provider == "exa"
+        assert tool.api_key == "exa-key"
+
+    def test_an_unknown_vendor_keeps_the_tool_working(self, tmp_path: Path, monkeypatch) -> None:
+        """The file is read while a turn runs, so a typo in it must not take the
+        tool down mid-call; the vendor it was registered with answers."""
+        from raven.agent.tools.web import WebSearchTool
+
+        tool = WebSearchTool(api_key="k", provider=lambda: "not-a-vendor")
+
+        assert tool.provider == "serper"
+
+    def test_a_spawn_hands_down_the_keys_the_file_has(self, tmp_path: Path, monkeypatch) -> None:
+        """The vendor a sub-agent runs on is read live, so handing it the keys
+        the manager was built with leaves the other half of the pair behind."""
+        from types import SimpleNamespace
+
+        from raven.agent.subagent.manager import SubagentManager
+
+        path = tmp_path / "config.json"
+        _write(path, {"tools": {"web": {"providers": {"exa": {"apiKey": "exa-live"}}}}})
+        monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+        mgr = SimpleNamespace(web_provider_keys={"serper": "serper-boot"})
+
+        keys = SubagentManager._web_provider_keys_now(mgr)
+
+        assert keys == {"serper": "serper-boot", "exa": "exa-live"}
+
+    def test_a_cleared_vendor_key_revokes_the_one_a_spawn_booted_with(self, tmp_path: Path, monkeypatch) -> None:
+        """Absent and cleared are different answers.
+
+        The caller merges this over what it booted with, so a cleared vendor
+        dropped from the answer would restore the credential the settings
+        surface just removed -- and the next sub-agent would keep spending it.
+        """
+        from types import SimpleNamespace
+
+        from raven.agent.subagent.manager import SubagentManager
+
+        path = tmp_path / "config.json"
+        _write(path, {"tools": {"web": {"providers": {"exa": {"apiKey": ""}}}}})
+        monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+        mgr = SimpleNamespace(web_provider_keys={"exa": "exa-boot", "serper": "serper-boot"})
+
+        keys = SubagentManager._web_provider_keys_now(mgr)
+
+        assert keys["exa"] == "", "the cleared vendor must not fall back to the boot credential"
+        assert keys["serper"] == "serper-boot", "a vendor the file says nothing about keeps its boot value"
