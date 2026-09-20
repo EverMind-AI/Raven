@@ -703,6 +703,26 @@ def test_build_subagent_prompt_does_not_start_skill_watcher(monkeypatch, tmp_pat
     assert calls == [False]
 
 
+def test_generated_participant_notes_preserve_each_supported_message_shape() -> None:
+    from raven.agent.subagent.backends.raven_loop import _append_participant_note
+
+    absent: list[dict] = []
+    _append_participant_note(absent, "note")
+    assert absent == []
+
+    text = [{"content": "base"}]
+    _append_participant_note(text, "note")
+    assert text[-1]["content"] == "base\n\nnote"
+
+    blocks = [{"content": [{"type": "text", "text": "base"}]}]
+    _append_participant_note(blocks, "note")
+    assert blocks[-1]["content"][-1] == {"type": "text", "text": "note"}
+
+    empty = [{"content": None}]
+    _append_participant_note(empty, "note")
+    assert empty[-1]["content"] == "note"
+
+
 def test_build_subagent_prompt_hides_orchestration_skills(tmp_path):
     """The catalog handed to a sub-agent must not advertise a skill whose
     procedure needs a tool this backend never registers — the DAG skill tells

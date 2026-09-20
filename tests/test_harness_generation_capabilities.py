@@ -122,6 +122,42 @@ def test_a_non_boolean_switch_is_refused(tmp_path, monkeypatch) -> None:
         emit_tool(["worker"], ["read_file"])
 
 
+def test_capability_loader_refuses_broken_and_undeclared_catalog_entries(tmp_path, monkeypatch) -> None:
+    checked_in = json.loads(harness_capabilities._PATH.read_text(encoding="utf-8"))
+
+    def point_at(name: str, document) -> None:
+        path = tmp_path / name
+        body = document if isinstance(document, str) else json.dumps(document)
+        path.write_text(body, encoding="utf-8")
+        monkeypatch.setattr(harness_capabilities, "_PATH", path)
+
+    point_at("bad-json.json", "{")
+    with pytest.raises(RuntimeError, match="invalid harness generation capability file"):
+        harness_capabilities.parameter_enabled("memory", "systemPrompt")
+
+    point_at("bad-root.json", {"harnessGeneration": []})
+    with pytest.raises(RuntimeError, match="harnessGeneration must be an object"):
+        harness_capabilities.parameter_enabled("memory", "systemPrompt")
+
+    missing_parameter = json.loads(json.dumps(checked_in))
+    del missing_parameter["harnessGeneration"]["memory"]["parameters"]["items"]["systemPrompt"]
+    point_at("missing-parameter.json", missing_parameter)
+    with pytest.raises(RuntimeError, match="not declared: memory.parameters.systemPrompt"):
+        harness_capabilities.parameter_enabled("memory", "systemPrompt")
+
+    missing_function = json.loads(json.dumps(checked_in))
+    del missing_function["harnessGeneration"]["memory"]["functions"]["participant"]["items"]["intake"]
+    point_at("missing-function.json", missing_function)
+    with pytest.raises(RuntimeError, match="not declared: memory.functions.participant.intake"):
+        harness_capabilities.function_enabled("memory", "participant", "intake")
+
+    unwired_parameter = json.loads(json.dumps(checked_in))
+    unwired_parameter["harnessGeneration"]["memory"]["parameters"]["items"]["temperature"] = {"enabled": True}
+    point_at("unwired-parameter.json", unwired_parameter)
+    with pytest.raises(RuntimeError, match="enabled but not wired: memory.parameters.temperature"):
+        harness_capabilities.parameter_enabled("memory", "systemPrompt")
+
+
 def test_enabling_an_unwired_catalog_item_fails_loudly(tmp_path, monkeypatch) -> None:
     document = json.loads(harness_capabilities._PATH.read_text(encoding="utf-8"))
     document["harnessGeneration"]["action"]["functions"]["participant"]["items"]["review"]["enabled"] = True
@@ -131,6 +167,36 @@ def test_enabling_an_unwired_catalog_item_fails_loudly(tmp_path, monkeypatch) ->
 
     with pytest.raises(RuntimeError, match="enabled but not wired: action.functions.participant.review"):
         emit_tool(["worker"], ["read_file"])
+
+
+@pytest.mark.parametrize(
+    ("functions", "message"),
+    [
+        ([], "functions must be an object"),
+        ({"archive": "def archive(step):\n    return None"}, "unknown generated participant function: archive"),
+        ({"intake": ""}, "functions.intake must be non-empty Python source"),
+        ({"intake": "x" * 8001}, "functions.intake exceeds 8000 characters"),
+    ],
+)
+def test_generator_refuses_malformed_function_payloads(functions, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        _spec_from_args({"workers": [{"name": "worker", "functions": functions}]}, {"worker"})
+
+
+@pytest.mark.parametrize(
+    ("playbook", "message"),
+    [
+        (
+            {"memory": {"functions": {"archive": "def archive(step):\n    return None"}}},
+            "unknown generated participant function: memory.archive",
+        ),
+        ({"memory": {"functions": {"intake": ""}}}, "generated participant function is empty: memory.intake"),
+        ({"action": {"checks": {"impl": "custom"}}}, "disabled harness field.*action.checksImpl"),
+    ],
+)
+def test_stored_playbook_refuses_unknown_empty_and_disabled_fields(playbook, message) -> None:
+    with pytest.raises(ValidationError, match=message):
+        AgentPlaybookSpec.model_validate({"delegate": [{"name": "worker", "playbook": playbook}]})
 
 
 @pytest.mark.asyncio
@@ -217,6 +283,11 @@ def test_disabling_one_function_removes_rejects_and_drops_only_that_function(tmp
         _spec_from_args(
             {"workers": [{"name": "worker", "functions": {"advise": "def advise(step):\n    return 'x'"}}]},
             {"worker"},
+        )
+
+    with pytest.raises(ValidationError, match="disabled harness field.*planning.functions.advise"):
+        AgentPlaybookSpec.model_validate(
+            {"delegate": [{"name": "worker", "playbook": {"planning": {"functions": {"advise": "x"}}}}]}
         )
 
     charter = parse(
