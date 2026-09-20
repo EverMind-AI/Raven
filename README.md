@@ -244,6 +244,10 @@ The command opens the WebUI in your browser and keeps Raven running in the backg
 
 ## ❯❯ EverMind Ecosystem
 
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/bb13d4d5-e254-4ba0-9ed0-b2c0ccd4bc6a"><img src="https://github.com/user-attachments/assets/bb13d4d5-e254-4ba0-9ed0-b2c0ccd4bc6a" alt="The EverMind ecosystem: the EverMind mark and its slogan on an orbital field" width="100%"></a>
+</p>
+
 [EverMind](https://evermind.ai/) connects memory research, production-ready products, and practical
 integrations into one open-source ecosystem.
 

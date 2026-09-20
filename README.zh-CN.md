@@ -183,6 +183,10 @@ raven web
 
 ## ❯❯ EverMind 生态
 
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/bb13d4d5-e254-4ba0-9ed0-b2c0ccd4bc6a"><img src="https://github.com/user-attachments/assets/bb13d4d5-e254-4ba0-9ed0-b2c0ccd4bc6a" alt="The EverMind ecosystem: the EverMind mark and its slogan on an orbital field" width="100%"></a>
+</p>
+
 [EverMind](https://evermind.ai/) 将记忆研究、可用于生产环境的产品与实际集成连接为一个开源生态。
 
 <table>
