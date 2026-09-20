@@ -4059,6 +4059,14 @@
       "en": "Outbound behaviour",
       "zh": "外发行为"
     },
+    "gui.set.chn.cron_ph": {
+      "zh": "如 telegram, feishu；* 表示全部",
+      "en": "e.g. telegram, feishu; * means all"
+    },
+    "gui.set.chn.cron_to": {
+      "en": "Deliver schedules to",
+      "zh": "定时提醒投递到"
+    },
     "gui.set.chn.entry": {
       "en": "Channels",
       "zh": "入口"

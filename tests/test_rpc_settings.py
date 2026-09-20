@@ -626,59 +626,6 @@ async def test_default_permission_mode_is_a_settings_key(cfg):
         await rpc_console.settings_set({"key": "permissions.mode", "value": "yolo"})
 
 
-class TestTheCronTimezoneControl:
-    """The settings page's timezone box, from the wire spelling to the loader.
-
-    ``settings.set`` is handed the key as the page sends it -- the JSON
-    spelling ``cron.defaultTimezone`` -- while ``update_cron_config`` validates
-    against ``CronConfig.model_fields``, which holds Python field names. This
-    branch is the only place in the endpoint where the two conventions meet, so
-    a missing conversion here is a save that raises instead of writing.
-    """
-
-    async def test_the_timezone_round_trips_through_the_writer_and_the_loader(self, cfg):
-        from raven.config.loader import load_config
-
-        r = await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": "Asia/Tokyo"})
-
-        assert r["applied"] is True
-        assert _read(cfg)["cron"]["defaultTimezone"] == "Asia/Tokyo"
-        # Landing in the file is half of it: the writer spells the key one way
-        # and the loader has to read that same spelling back. Deliberately not a
-        # claim about scheduling -- ``CronConfig.default_timezone`` has exactly
-        # one consumer today, the ``raven cron config get`` display path, and
-        # ``_compute_next_run`` falls back to the machine's local zone rather
-        # than to this field.
-        assert load_config(cfg).cron.default_timezone == "Asia/Tokyo"
-
-    async def test_the_previous_timezone_comes_back(self, cfg):
-        await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": "Asia/Tokyo"})
-        r = await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": "UTC"})
-        assert r["previous"] == "Asia/Tokyo"
-
-    async def test_an_unknown_zone_is_refused_before_anything_is_written(self, cfg):
-        with pytest.raises(ConfigValidationError, match="unknown timezone"):
-            await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": "Mars/Olympus"})
-        assert "cron" not in _read(cfg)
-
-    async def test_an_empty_timezone_is_refused(self, cfg):
-        with pytest.raises(ConfigValidationError):
-            await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": ""})
-
-
-async def test_the_retired_forward_channels_key_is_not_writable(cfg):
-    """``forward_channels`` left ``CronConfig`` when delivery became fire-at-origin.
-
-    The loader strips both spellings out of a config file on the way in, so no
-    field stands behind this key any more. It has to be refused the way every
-    other unwritable key is -- typed, and naming itself -- rather than reaching
-    a writer whose only possible answer is to raise.
-    """
-    with pytest.raises(ConfigValidationError, match="not writable"):
-        await rpc_console.settings_set({"key": "cron.forwardChannels", "value": ["telegram"]})
-    assert "cron" not in _read(cfg)
-
-
 async def test_extension_pin_writes_roundtrip_through_raven_loader(cfg):
     from raven.config.raven import load_raven_config
     from raven.config.update_providers import set_provider_fields

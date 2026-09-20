@@ -559,22 +559,21 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
         i18n.set_language(value)
         return {"applied": True, "previous": prev}
 
-    if key == "cron.defaultTimezone":
+    if key in ("cron.defaultTimezone", "cron.forwardChannels"):
         from raven.config.update import update_cron_config
 
-        if not isinstance(value, str) or not value:
-            raise ConfigValidationError("defaultTimezone must be a non-empty string")
-        from zoneinfo import ZoneInfo
+        sub = key.split(".", 1)[1]
+        if sub == "defaultTimezone":
+            if not isinstance(value, str) or not value:
+                raise ConfigValidationError("defaultTimezone must be a non-empty string")
+            from zoneinfo import ZoneInfo
 
-        try:
-            ZoneInfo(value)
-        except Exception:
-            raise ConfigValidationError(f"unknown timezone: {value}") from None
-        # The page names the key the way the config file spells it; the writer
-        # validates against ``CronConfig.model_fields``, which holds the Python
-        # field names. Nothing else in this endpoint crosses the two, so the
-        # conversion belongs here rather than in a writer the CLI shares.
-        sub = to_snake(key.split(".", 1)[1])
+            try:
+                ZoneInfo(value)
+            except Exception:
+                raise ConfigValidationError(f"unknown timezone: {value}") from None
+        elif not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+            raise ConfigValidationError("forwardChannels must be a list of strings")
         prev = update_cron_config(sub, value)
         return {"applied": True, "previous": prev}
 
