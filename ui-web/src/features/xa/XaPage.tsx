@@ -19,7 +19,14 @@ import type { JSX } from 'react'
  * this particular agent needs to become dispatchable -- build a shipped folder's
  * venv and its dependencies, write a config entry from a preset, take a
  * credential, or just flip the roster switch back on -- and disconnect only marks
- * it unavailable in the registry, so it is one click away from working again. What
+ * it unavailable in the registry, so it is one click away from working again.
+ *
+ * Where neither verb applies the row carries a word instead of a button, and it
+ * is not a third verb: the probe has already established that this agent cannot
+ * be connected from here at all -- its command is not on the machine, or it
+ * answered and asked to be signed in -- so the row says which, and the remedy is
+ * somewhere this page cannot reach. That is the same rule as the two verbs, not
+ * an exception to it: one row, one thing to know, decided in one place. What
  * used to be here instead was the mechanism, spread across five buttons
  * (install, connect, enable, test, switch to) that each named a step of the same
  * errand and left the reader to sequence them. Test is back, but not as a step of
