@@ -36,6 +36,10 @@ export interface ProviderRow {
   on: boolean
   /* 'key' | 'oauth' | 'local' | 'endpoint' -- the registry's auth shape. */
   kind?: string
+  /* Resells other vendors' models under vendor/model ids (the registry's
+     `is_gateway`). The catalogue's filter reads it; no client can derive it
+     from a slug. */
+  gateway?: boolean
   needsBase?: boolean
   /* Whether the provider takes an API key at all. Absent from a source that
      predates the field, where every non-local provider took one. */

@@ -32,11 +32,13 @@ describe('settings store', () => {
   })
 
   it('setTab closes every drawer of the section it leaves', () => {
-    store.set({ provider: 'openai', sheet: { slug: 'openai', q: '', sel: [], state: 'ready', items: [] }, skill: 's', toolOpen: 'exec', plugOpen: 'p', picker: 'chat', err: 'oops' })
+    store.set({ provider: 'openai', sheet: { slug: 'openai', q: '', sel: [], state: 'ready', items: [], kind: 'all', folded: {}, typed: null }, skill: 's', toolOpen: 'exec', plugOpen: 'p', err: 'oops' })
     store.setTab('tools')
     const s = store.get()
     expect(s.tab).toBe('tools')
-    expect([s.provider, s.sheet, s.skill, s.toolOpen, s.plugOpen, s.picker, s.err]).toEqual([null, null, null, null, null, null, ''])
+    /* The model picker is no longer one of them: it is the composer's, owned by
+       the model store, and it closes on its own when the dialog does. */
+    expect([s.provider, s.sheet, s.skill, s.toolOpen, s.plugOpen, s.err]).toEqual([null, null, null, null, null, ''])
   })
 
   it('run marks the key busy while the write runs and lands the snapshot it returns', async () => {

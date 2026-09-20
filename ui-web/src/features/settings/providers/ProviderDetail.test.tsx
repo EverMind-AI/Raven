@@ -3,8 +3,11 @@ import { act, cleanup, fireEvent, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetSources, setSources } from '../../../state/sources'
-import { install, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
+import { install, modelSource, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
+
+import type { Call } from '../../../test/settingsHarness'
+import type { ModelCandidate } from '../types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -12,7 +15,7 @@ vi.mock('../../../state/toast', () => ({ show: () => {}, subscribe: () => () => 
 
 
 beforeEach(() => {
-  setSources({ settings: settingsSource })
+  setSources({ settings: settingsSource, model: modelSource })
 })
 
 afterEach(() => {
@@ -26,8 +29,10 @@ afterEach(() => {
 const modelsAdd = (): HTMLElement => document.querySelectorAll('.settings-card')[1]!.querySelector('button.mini.ghost') as HTMLElement
 const formSave = (): HTMLElement => document.querySelector('.settings-kvform button.mini:not(.ghost)') as HTMLElement
 
+/* The detail pane is the Model providers page's right column since the split;
+   the Model settings page holds the roles card alone. */
 async function open(slug: string): Promise<void> {
-  await mount('model')
+  await mount('provider')
   await act(async () => { store.set({ provider: slug }) })
 }
 
@@ -118,31 +123,76 @@ describe('provider detail', () => {
     expect(calls).toEqual([['provider', { op: 'add_model', slug: 'anthropic', model: 'claude-sonnet-4-5', label: 'Sonnet 4.5', description: 'fast' }]])
   })
 
-  it('the model sheet fetches the vendor list, takes ticks plus a typed id, and adds them in one call', async () => {
+  /* The popover that replaced the tick-then-confirm sheet: a click on a row is
+     the write, and the two batch controls are what is left of collecting. */
+  const popSearch = (): HTMLInputElement => document.querySelector('.settings-apop input') as HTMLInputElement
+  /* The catalogue rows; the typed-id row shares their shape and is reached
+     through `.settings-apadd` instead. */
+  const popRows = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.settings-apm:not(.settings-apadd)')]
+  const catalogue = async (models: ModelCandidate[], status = 'ok'): Promise<Call[]> => {
     const { calls } = install(undefined, {
-      fetchModels: async (slug) => { calls.push(['fetchModels', slug]); return { models: [{ id: 'gpt-5', label: 'gpt-5', kind: 'chat', added: false }, { id: 'claude-opus-4-5', label: 'x', kind: 'chat', added: true }], status: 'ok' } },
+      fetchModels: async (slug) => { calls.push(['fetchModels', slug]); return { models, status } },
     })
     await open('anthropic')
     await act(async () => { fireEvent.click(modelsAdd()) })
+    return calls
+  }
+
+  it('fetches the vendor list on open and writes one model per click', async () => {
+    const calls = await catalogue([
+      { id: 'gpt-5', label: 'gpt-5', kind: 'text', added: false },
+      { id: 'claude-opus-4-5', label: 'x', kind: 'text', added: true },
+    ])
     expect(calls).toEqual([['fetchModels', 'anthropic']])
-    await act(async () => { fireEvent.click(screen.getByLabelText('gpt-5', { exact: false }).closest('label')!.querySelector('input')!) })
-    const box = document.getElementById('mlq') as HTMLInputElement
-    await act(async () => { fireEvent.change(box, { target: { value: 'my-finetune' } }) })
-    await act(async () => { fireEvent.click(screen.getByText('my-finetune').closest('label')!.querySelector('input')!) })
-    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add_n {"n":2}')) })
-    expect(calls[1]).toEqual(['addModels', { slug: 'anthropic', models: ['gpt-5', 'my-finetune'] }])
+    await act(async () => { fireEvent.click(popRows()[0]!) })
+    expect(calls[1]).toEqual(['provider', { op: 'add_model', slug: 'anthropic', model: 'gpt-5' }])
+  })
+
+  it('counts the kinds over the search result and narrows the rows to the tab', async () => {
+    await catalogue([
+      { id: 'gpt-5', label: 'gpt-5', kind: 'text', added: false },
+      { id: 'gpt-embed', label: 'gpt-embed', kind: 'embedding', added: false },
+      { id: 'other-embed', label: 'other-embed', kind: 'embedding', added: false },
+    ])
+    const tabs = (): string[] => [...document.querySelectorAll('.settings-mkind')].map((b) => b.textContent!)
+    /* Five, not three: the two models already on this provider are rows too,
+       or a model added by hand could never be taken off from here. */
+    expect(tabs()).toEqual(['gui.model.kind_all5', 'gui.model.type.text3', 'gui.model.type.embedding2'])
+    await act(async () => { fireEvent.change(popSearch(), { target: { value: 'gpt' } }) })
+    expect(tabs()).toEqual(['gui.model.kind_all2', 'gui.model.type.text1', 'gui.model.type.embedding1'])
+    await act(async () => { fireEvent.click([...document.querySelectorAll('.settings-mkind')][2]!) })
+    expect(popRows().map((r) => r.querySelector('.settings-apnm')!.textContent)).toEqual(['gpt-embed'])
+  })
+
+  it('a typed id carries a kind chip that cycles, and states its tags on the add', async () => {
+    const calls = await catalogue([{ id: 'gpt-5', label: 'gpt-5', kind: 'text', added: false }])
+    await act(async () => { fireEvent.change(popSearch(), { target: { value: 'my-team/bge-x' } }) })
+    const chip = (): HTMLElement => document.querySelector('.settings-apkind') as HTMLElement
+    expect(chip().textContent).toBe('gui.model.type.embedding')
+    await act(async () => { fireEvent.click(chip()) })
+    expect(chip().textContent).toBe('gui.model.type.reranker')
+    await act(async () => { fireEvent.click(document.querySelector('.settings-apadd')!) })
+    expect(calls[calls.length - 1]).toEqual(['provider', {
+      op: 'add_model', slug: 'anthropic', model: 'my-team/bge-x',
+      capabilities: ['rerank'], output_modalities: ['text'],
+    }])
   })
 
   it('a vendor with no list endpoint says so and still takes a typed id', async () => {
-    const { calls } = install(undefined, { fetchModels: async () => ({ models: [], status: 'unsupported' }) })
-    await open('anthropic')
-    await act(async () => { fireEvent.click(modelsAdd()) })
+    const calls = await catalogue([], 'unsupported')
     expect(screen.getByText('gui.settings.providers.no_list')).toBeTruthy()
-    const box = document.getElementById('mlq') as HTMLInputElement
-    await act(async () => { fireEvent.change(box, { target: { value: 'typed-one' } }) })
-    await act(async () => { fireEvent.click(screen.getByText('typed-one').closest('label')!.querySelector('input')!) })
-    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add_n {"n":1}')) })
-    expect(calls[calls.length - 1]).toEqual(['addModels', { slug: 'anthropic', models: ['typed-one'] }])
+    await act(async () => { fireEvent.change(popSearch(), { target: { value: 'typed-one' } }) })
+    await act(async () => { fireEvent.click(document.querySelector('.settings-apadd')!) })
+    expect(calls[calls.length - 1]).toEqual(['provider', { op: 'add_model', slug: 'anthropic', model: 'typed-one' }])
+  })
+
+  it('adds everything shown in one call', async () => {
+    const calls = await catalogue([
+      { id: 'a', label: 'a', kind: 'text', added: false },
+      { id: 'b', label: 'b', kind: 'text', added: false },
+    ])
+    await act(async () => { fireEvent.click(screen.getByText('gui.model.add_all {"n":"2"}')) })
+    expect(calls[calls.length - 1]).toEqual(['addModels', { slug: 'anthropic', models: ['a', 'b'] }])
   })
 
   it('an OAuth provider authorizes in the browser and shows the code until it lands or expires', async () => {

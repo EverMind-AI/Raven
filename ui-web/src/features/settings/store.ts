@@ -18,6 +18,9 @@ import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
 
+import { statedTags } from '../model/types'
+
+import type { Kind } from '../model/types'
 import type {
   ArchivedSession,
   ModelCandidate,
@@ -28,8 +31,12 @@ import type {
   UsageStats,
 } from './types'
 
-export type SectionId = 'general' | 'usage' | 'model' | 'skills' | 'tools' | 'plugins' | 'archive' | 'about'
-export const SECTIONS: SectionId[] = ['general', 'usage', 'model', 'skills', 'tools', 'plugins', 'archive', 'about']
+export type SectionId = 'general' | 'usage' | 'provider' | 'model' | 'skills' | 'tools' | 'plugins' | 'archive' | 'about'
+export const SECTIONS: SectionId[] = ['general', 'usage', 'provider', 'model', 'skills', 'tools', 'plugins', 'archive', 'about']
+
+/* The catalogue column's six. `direct` is the remainder: not a reseller, not an
+   OAuth sign-in, not something you run yourself. */
+export type ProvFilter = 'all' | 'on' | 'direct' | 'gateway' | 'oauth' | 'local'
 
 /* The vendor-list sheet under a provider's models card: what the vendor
    answered, what is ticked, and the typed filter. Kept here rather than in
@@ -37,9 +44,20 @@ export const SECTIONS: SectionId[] = ['general', 'usage', 'model', 'skills', 'to
 export interface Sheet {
   slug: string
   q: string
+  /* Kept for the batch controls -- "add all" and "add a whole vendor group" --
+     which are the only two that still collect before writing. A click on one
+     row writes that row, because a list you tick and then confirm asks twice
+     for one decision. */
   sel: string[]
   state: 'loading' | 'ready' | 'failed'
   items: ModelCandidate[]
+  /* The kind tab in force, or every kind. */
+  kind: 'all' | Kind
+  /* Vendor groups the reader has collapsed, by prefix. */
+  folded: Record<string, boolean>
+  /* What a typed id would be added as, once the reader has said; null means
+     the guess from its name still stands. */
+  typed: Kind | null
 }
 
 /* A device flow in progress: the code the vendor's page asks for, and when
@@ -72,16 +90,18 @@ export interface SettingsState {
   /* undefined = never answered (drawn as loading), null = the counter did not
      answer. */
   usage: UsageStats | null | undefined
-  /* The provider whose detail is open, or null for the list. */
+  /* The provider whose detail pane is drawn, or null for the page's own
+     default (the one serving the chat model). */
   provider: string | null
+  /* The catalogue column's search term and filter. */
+  provQ: string
+  provFilt: ProvFilter
   /* The slug picked in the add-provider block, or null when it is closed. */
   provAdd: string | null
   sheet: Sheet | null
   hdrAdd: string | null
   ovlAdd: string | null
   chatCfg: boolean
-  /* The role whose model picker is open, or null. */
-  picker: string | null
   oauth: Oauth | null
   skill: string | null
   detail: SkillDetail | null
@@ -107,12 +127,13 @@ const initial = (): SettingsState => ({
   range: { kind: '30', ...lastDays(30) },
   usage: undefined,
   provider: null,
+  provQ: '',
+  provFilt: 'all',
   provAdd: null,
   sheet: null,
   hdrAdd: null,
   ovlAdd: null,
   chatCfg: false,
-  picker: null,
   oauth: null,
   skill: null,
   detail: null,
@@ -236,8 +257,8 @@ export async function openProviderModels(slug: string): Promise<void> {
 export function setTab(id: string): void {
   settingsTab.id = id
   set({
-    tab: curTab(), err: '', provider: null, provAdd: null, sheet: null, hdrAdd: null, ovlAdd: null,
-    picker: null, skill: null, detail: null, toolOpen: null, plugOpen: null,
+    tab: curTab(), err: '', provider: null, provQ: '', provFilt: 'all', provAdd: null, sheet: null, hdrAdd: null, ovlAdd: null,
+    skill: null, detail: null, toolOpen: null, plugOpen: null,
   })
 }
 
@@ -304,7 +325,7 @@ export async function skillOpen(name: string): Promise<void> {
    with no list endpoint answers a status other than ok, and the sheet then
    takes a typed id alone. */
 export async function sheetOpen(slug: string): Promise<void> {
-  set({ sheet: { slug, q: '', sel: [], state: 'loading', items: [] } })
+  set({ sheet: { slug, q: '', sel: [], state: 'loading', items: [], kind: 'all', folded: {}, typed: null } })
   let items: ModelCandidate[] = []
   let ok = false
   try {
@@ -316,6 +337,27 @@ export async function sheetOpen(slug: string): Promise<void> {
   }
   const sheet = get().sheet
   if (sheet && sheet.slug === slug) set({ sheet: { ...sheet, state: ok ? 'ready' : 'failed', items } })
+}
+
+/* One row, one write. `add_model` states the kind for a typed id the
+   catalogues cannot describe; a listed row states nothing, because the reply
+   that listed it already carried one. Removing is refused where a role is on
+   it -- the same guard the tag list uses, in the one place that can now add
+   and remove without leaving the pane. */
+export async function sheetToggleModel(slug: string, id: string, listed: boolean, kind?: Kind): Promise<void> {
+  const src = source()
+  if (listed) {
+    const { rolesUsing, roleName } = await import('./providers/Roles')
+    const used = rolesUsing(get().snap, slug, id)
+    if (used.length) {
+      refuse(t('gui.settings.providers.model_in_use', { roles: used.map(roleName).join(', '), model: id }))
+      return
+    }
+    await run(`prov:${slug}`, () => src.provider('remove_model', { slug, model: id }))
+    return
+  }
+  const stated = kind && kind !== 'text' ? statedTags(kind) : {}
+  await run(`prov:${slug}`, () => src.provider('add_model', { slug, model: id, ...stated }))
 }
 
 export function sheetPatch(patch: Partial<Sheet>): void {
