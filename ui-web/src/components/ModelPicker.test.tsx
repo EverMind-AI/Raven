@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { resetTranslator, setTranslator } from '../i18n/t'
@@ -155,6 +155,25 @@ describe('the picker floats against the row that opened it', () => {
     top = 120
     document.dispatchEvent(new Event('scroll', { bubbles: true }))
     expect(closes).toEqual([1])
+  })
+
+  it('re-places rather than closes when a resize slides the row sideways', () => {
+    sized()
+    /* The dialog is min(1000px, 94vw), so a narrower window moves the row
+       horizontally with its top unchanged. Closing on that would take the panel
+       away for a gesture that did not touch the list. */
+    let left = 700
+    const row = anchored(200)
+    row.getBoundingClientRect = () => ({ top: 200, bottom: 230, left, right: left + 200, width: 200, height: 30, x: left, y: 200, toJSON: () => ({}) }) as DOMRect
+    const { closes } = draw({ anchor: row })
+    const pop = screen.getByRole('dialog') as HTMLDivElement
+    /* Clamped off the dialog's right edge rather than left at the row's own
+       700: 700 plus the panel's 560 would end past the dialog's 1200. */
+    expect(pop.style.left).toBe('632px')
+    left = 420
+    act(() => { window.dispatchEvent(new Event('resize')) })
+    expect(closes, 'a resize moves the dialog around the row, it does not take the row away').toEqual([])
+    expect(pop.style.left).toBe('420px')
   })
 
   it('leaves an unanchored panel where the caller put it', () => {

@@ -58,24 +58,34 @@ export function ModelPicker({ title, providers, current, onPick, onClose, emptyN
   useLayoutEffect(() => {
     if (anchor && box.current) anchorRow(box.current, anchor)
   }, [anchor])
-  /* Closed rather than followed once the row it names moves. A floating panel
-     that stays put while its row slides away is pointing at the wrong row, and
-     re-placing it on every scroll frame is geometry to maintain for a gesture
-     nobody makes while choosing.
-     The test is where the anchor sits, not that a scroll happened: focusing the
-     search field can itself scroll the panel a little, and a listener that
-     closed on the event would close the panel on the frame it opened. */
+  /* A scroll closes the panel; a resize re-places it. The two events move the
+     row for different reasons: a scroll slides it out from under the panel, and
+     a panel left pointing at a row that is no longer there is worse than no
+     panel, while re-placing on every scroll frame is geometry to maintain for a
+     gesture nobody makes while choosing. A resize leaves the row exactly where
+     it was in the list and only moves the dialog around it -- the dialog is
+     `min(1000px, 94vw)` wide, so narrowing the window slides the row sideways
+     with its `top` unchanged -- and there the panel should follow rather than
+     vanish under the reader's hands.
+     The scroll test is where the anchor sits, not that a scroll happened:
+     focusing the search field can itself scroll the panel a little, and a
+     listener that closed on the event would close the panel on the frame it
+     opened. Only `top` is compared because only `top` is what a vertical
+     scroller moves; the horizontal case is the resize, which re-places. */
   useEffect(() => {
     if (!anchor) return
     const was = anchor.getBoundingClientRect().top
     const off = (): void => {
       if (Math.abs(anchor.getBoundingClientRect().top - was) > 1) onClose()
     }
+    const again = (): void => {
+      if (box.current) anchorRow(box.current, anchor)
+    }
     document.addEventListener('scroll', off, true)
-    window.addEventListener('resize', off)
+    window.addEventListener('resize', again)
     return () => {
       document.removeEventListener('scroll', off, true)
-      window.removeEventListener('resize', off)
+      window.removeEventListener('resize', again)
     }
   }, [anchor, onClose])
   return (
