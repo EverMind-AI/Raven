@@ -11,7 +11,7 @@
  * the boot's own wiring (src/app/install.ts).
  */
 
-import { APP_VERSION, appVersionSet, askUpgrade, showUpNote } from '../../app/updates'
+import { APP_VERSION, appVersionSet, askUpgrade, showUpNote, upgradeLatest } from '../../app/updates'
 import { t } from '../../i18n/t'
 import { current as sessionCurrent } from '../../lib/session'
 import { hasUpdateFlag } from '../../rpc/capabilities'
@@ -26,7 +26,7 @@ import { redraw as redrawSettings, refreshSoon } from './store'
 
 /* The version check the rail-foot notice already does, on demand. No new
    backend: system.version carries the answer. */
-export async function checkUpdate(btn: HTMLButtonElement): Promise<string | null> {
+export async function checkUpdate(btn: HTMLButtonElement): Promise<void> {
   const was = btn.textContent
   btn.textContent = t('gui.settings.about.checking'); btn.disabled = true
   try {
@@ -36,12 +36,14 @@ export async function checkUpdate(btn: HTMLButtonElement): Promise<string | null
     if (v.raven_version) appVersionSet(v.raven_version)
     if (hasUpdateFlag(v)) {
       const latest = (v as { latest_version?: string }).latest_version || ''
+      /* Recorded rather than acted on: the design has the row offer the
+         upgrade once a newer version is known, and starting it here made the
+         check a second action the reader did not ask for. `showUpNote` is
+         where the version is kept, and the About row reads it back from there
+         -- which is what survives the redraw below replacing that row. */
       showUpNote('ver', latest)
       redrawSettings()
-      /* Handed back rather than acted on: the design has the row offer the
-         upgrade once a newer version is known, and starting it here made the
-         check a second action the reader did not ask for. */
-      return latest || null
+      return
     }
     /* The answer has to land on the button: this layer sends toasts to the
        console, and "nothing happened" is indistinguishable from a broken
@@ -49,14 +51,13 @@ export async function checkUpdate(btn: HTMLButtonElement): Promise<string | null
     btn.disabled = false
     btn.textContent = t('gui.settings.about.latest')
     setTimeout(() => { btn.textContent = was }, 2200)
-    return null
+    return
   } catch (e) {
     btn.textContent = t('gui.settings.about.check_fail')
     setTimeout(() => { btn.textContent = was }, 2600)
     if (window.console) console.error('[update check]', e)
   }
   btn.disabled = false
-  return null
 }
 
 export function install(): void {
@@ -65,6 +66,7 @@ export function install(): void {
   setSettingsChrome({
     version: APP_VERSION,
     checkUpdate,
+    newerVersion: upgradeLatest,
     upgrade: askUpgrade,
     /* Not awaited: the pick repaints synchronously and the persist speaks for
        itself if it fails. */

@@ -1,9 +1,7 @@
 /* About: the running version, the update check, and where the config and the
-   workspace live. The check is the chrome's (features/settings/wire.ts); it
-   answers with the newer version when there is one, and the row then offers
-   the upgrade -- the two steps A47 asks for. */
-import { useState } from 'react'
-
+   workspace live. The check is the chrome's (features/settings/wire.ts); once a
+   newer version is known the row offers the upgrade beside it -- the two steps
+   A47 asks for. */
 import { t } from '../../../i18n/t'
 import { open as copyOrOpen } from '../../../lib/openUrl'
 import { Card, PathVal, Row, Rov } from '../Fields'
@@ -24,10 +22,16 @@ export function workspacePath(raw: Record<string, unknown>, configPath: string):
 export function About(): JSX.Element {
   const s = store.get()
   const version = store.source().version()
-  /* Held here rather than acted on inside the check: the design has the row
-     offer the upgrade once a newer version is known (A47), and starting it
-     from the check made it a second action the reader did not ask for. */
-  const [newer, setNewer] = useState<string | null>(null)
+  /* Read, not held: a successful check redraws the settings dialog, and the
+     panel is keyed by that redraw's epoch (SettingsApp.tsx), so this component
+     is replaced between the check resolving and any setter it left behind.
+     The page already retains the version the check found -- app/updates.ts sets
+     it for the rail's own notice -- so the replacement reads the same fact and
+     draws the button its predecessor would have.
+     It also means a version found by the background poll offers the upgrade
+     here, which is what A47 asks for: the row offers it once a newer version is
+     known, not only when this button was the one that found it. */
+  const newer = store.source().newerVersion()
   return (
     <Card>
       <Row label={t('gui.settings.about.version')}>
@@ -37,7 +41,7 @@ export function About(): JSX.Element {
         <button
           type="button"
           className="mini ghost"
-          onClick={(e) => { void store.source().checkUpdate(e.currentTarget).then(setNewer) }}
+          onClick={(e) => { void store.source().checkUpdate(e.currentTarget) }}
         >
           {t('gui.settings.about.check')}
         </button>
