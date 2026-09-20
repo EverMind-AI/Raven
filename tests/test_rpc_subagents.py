@@ -2142,3 +2142,92 @@ async def test_a_reserved_name_entry_is_reported_once_and_as_ignored(config_path
     assert len(rows) == 1
     assert rows[0]["kind"] == "builtin"
     assert rows[0]["enabled"] is True
+
+
+# ---- own / model_source -----------------------------------------------------
+
+
+async def test_list_marks_the_built_in_row_and_a_discovered_product_as_ravens_own(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.agent.subagent import vendored_agents as va
+
+    root = _product_tree(tmp_path)
+    monkeypatch.setattr(va, "agents_root", lambda: root)
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+
+    assert rows["Raven"]["own"] is True and rows["Raven"]["model_source"] == "raven"
+    # Ownership and the model rule are two facts: a discovered product is
+    # raven's, and as a cli row it has no menu -- `update` refuses a model on it.
+    assert rows["Raven-Probe"]["own"] is True and rows["Raven-Probe"]["model_source"] == "fixed"
+    assert rows["Coder"]["own"] is False and rows["Coder"]["model_source"] == "fixed"
+    assert rows["Researcher"]["own"] is False and rows["Researcher"]["model_source"] == "fixed"
+
+
+async def test_list_marks_a_config_row_whose_handshake_named_raven_as_ravens_own(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shipped installer registers a product as a plain config row, with
+    neither flag; the handshake it recorded is what still says it is raven's."""
+    from raven.acp_client.capabilities import AcpModelChoice, CapabilitySnapshot, SnapshotStore, snapshot_fingerprint
+    from raven.config.schema import SubagentsConfig
+
+    raw = json.loads(config_path.read_text())
+    raw["subagents"]["agents"] += [
+        {"name": "Raven-Code", "kind": "acp", "command": "raven acp", "description": "d", "enabled": True},
+        {"name": "Other", "kind": "acp", "command": "other acp", "description": "d", "enabled": True},
+    ]
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    store_path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: store_path)
+    cfgs = {c.name: c for c in SubagentsConfig(agents=raw["subagents"]["agents"]).agents}
+    for name, agent_name in (("Raven-Code", "raven"), ("Other", "other-agent")):
+        SnapshotStore(path=store_path).record(
+            CapabilitySnapshot(
+                agent=name,
+                fingerprint=snapshot_fingerprint(cfgs[name]),
+                status="ready",
+                detail="",
+                measured_at_ms=1,
+                agent_name=agent_name,
+                model_choices=(AcpModelChoice(value="v/m", name="M", group="V"),),
+            )
+        )
+
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+
+    # Raven's own, and still an acp row: its menu is what its handshake
+    # advertised, which under the products' inherited catalogue is raven's own.
+    assert rows["Raven-Code"]["own"] is True and rows["Raven-Code"]["model_source"] == "agent"
+    assert rows["Other"]["own"] is False and rows["Other"]["model_source"] == "agent"
+    assert rows["Other"]["model_choices"] == [{"value": "v/m", "name": "M", "group": "V"}]
+
+
+async def test_test_can_target_a_discovered_product(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A product row has no config entry and is not a preset either: its folder
+    is the pool it is found in, and the verdict is recorded under that source so
+    the roster reads it back on the same row."""
+    from raven.agent.subagent import vendored_agents as va
+    from raven.agent.subagent.probe import TestResult
+    from raven.rpc.errors import SubagentNotFoundError
+
+    root = _product_tree(tmp_path)
+    monkeypatch.setattr(va, "agents_root", lambda: root)
+    seen: list[tuple[str, str]] = []
+
+    async def fake_run_test(cfg, *, source):
+        seen.append((cfg.name, source))
+        return TestResult(cfg.name, source, "cli", True, "ok", "PONG", 1)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.run_test", fake_run_test)
+
+    out = await subagents_test({"name": "Raven-Probe", "source": "vendored"})
+
+    assert out["ok"] is True
+    assert seen == [("Raven-Probe", "vendored")]
+    row = next(r for r in (await subagents_list({"probe": False}))["rows"] if r["name"] == "Raven-Probe")
+    assert row["last_test_ok"] is True
+    with pytest.raises(SubagentNotFoundError):
+        await subagents_test({"name": "Coder", "source": "vendored"})

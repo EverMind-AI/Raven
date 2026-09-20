@@ -771,6 +771,85 @@ class TestAutomaticSnapshotVerification:
         assert len(recorded) == 2  # both missing and stale round-tripped to a fresh snapshot
         assert manager.refresh_calls == 1, "the materialized rows must be rebuilt after recording"
 
+    async def test_a_snapshot_missing_the_model_choices_key_is_reverified(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A snapshot recorded before ``modelChoices`` existed is fresh and not
+        stale by every other measure, but a row stuck on it would never learn
+        the agent's model menu until the agent is edited or Test is pressed by
+        hand -- so the older format alone must trigger a re-verify."""
+        from dataclasses import dataclass
+
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        @dataclass
+        class Snap:
+            status: str = "ready"
+            stale: bool = False
+
+        row = _FakeRow("old-format")
+        recorded: list[str] = []
+
+        async def fake_verify(cfg: object) -> Snap:
+            recorded.append(getattr(cfg, "name", "?"))
+            return Snap()
+
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: Snap())
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.acp_client.capabilities.SnapshotStore",
+            lambda: type(
+                "S",
+                (),
+                {
+                    "record": staticmethod(lambda s: None),
+                    "has_model_menu": staticmethod(lambda agent: False),
+                },
+            )(),
+        )
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        task = schedule_snapshot_verification(_FakeManager([row]))
+        await task
+
+        assert recorded == ["old-format"]
+
+    async def test_a_store_without_has_model_menu_does_not_force_a_reverify(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A caller's stand-in store (a bare ``record``-only object, as several
+        tests in this class substitute) must not be treated as "every row is on
+        the older format" -- the predicate is optional, and its absence must
+        leave a fresh, non-stale snapshot alone exactly as before this hook."""
+        from dataclasses import dataclass
+
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        @dataclass
+        class Snap:
+            status: str = "ready"
+            stale: bool = False
+
+        row = _FakeRow("fresh")
+        recorded: list[str] = []
+
+        async def fake_verify(cfg: object) -> Snap:
+            recorded.append(getattr(cfg, "name", "?"))
+            return Snap()
+
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: Snap())
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.acp_client.capabilities.SnapshotStore",
+            lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
+        )
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        task = schedule_snapshot_verification(_FakeManager([row]))
+        await task
+
+        assert recorded == []
+
     async def test_failed_verification_does_not_stop_the_rest(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from raven.agent.subagent.probe import schedule_snapshot_verification
 

@@ -360,6 +360,21 @@ class SnapshotStore:
             found[name] = snapshot
         return found
 
+    def has_model_menu(self, agent: str) -> bool:
+        """Whether the stored row for ``agent`` carries a ``modelChoices`` key at all.
+
+        Distinct from the field reading empty on a loaded :class:`CapabilitySnapshot`,
+        which also happens for an agent genuinely measured to offer no menu
+        (``from_row``'s ``_choices`` defaults a missing or malformed key to
+        ``()`` either way) -- only the raw row can tell "never measured this"
+        apart from "measured, and it has none". ``True`` when there is no
+        stored row at all: that case is already the missing-snapshot branch of
+        the auto-verify backfill, and this predicate must not itself demand a
+        re-verify for a name nothing has recorded yet.
+        """
+        row = next((r for r in self._read() if r.get("agent") == agent), None)
+        return row is None or "modelChoices" in row
+
     def forget(self, agent: str) -> None:
         def drop(current: str | None) -> tuple[str, None]:
             return self._dump([r for r in self._parse(current) if r.get("agent") != agent]), None

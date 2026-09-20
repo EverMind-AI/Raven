@@ -437,6 +437,59 @@ def test_nothing_is_invented_for_an_agent_never_measured(tmp_path: Path) -> None
     assert not (tmp_path / "caps.json").exists()
 
 
+def test_has_model_menu_is_false_for_a_row_recorded_before_the_key_existed(tmp_path: Path) -> None:
+    """A fabricated older-format row: everything ``record`` would have written,
+    minus the ``modelChoices`` key that did not exist yet when it was recorded.
+
+    ``CapabilitySnapshot.from_row`` cannot tell this apart from "measured, and
+    the agent offers no menu" -- both default the field to ``()`` -- so the
+    predicate has to read the raw row, not a loaded snapshot.
+    """
+    path = tmp_path / "caps.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "snapshots": [
+                    {
+                        "agent": "a",
+                        "fingerprint": "f",
+                        "status": "ready",
+                        "detail": "",
+                        "measuredAtMs": 1,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = SnapshotStore(path=path)
+
+    assert store.has_model_menu("a") is False
+
+
+def test_has_model_menu_is_true_once_the_key_is_present_even_if_empty(tmp_path: Path) -> None:
+    """An agent genuinely measured to offer no menu is not "old format": the
+    key is there, it is just empty, and that must not force a re-verify."""
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    store.record(
+        CapabilitySnapshot(
+            agent="a", fingerprint=snapshot_fingerprint(cfg), status="ready", detail="", measured_at_ms=1
+        )
+    )
+
+    assert store.has_model_menu("a") is True
+
+
+def test_has_model_menu_is_true_for_an_agent_with_no_stored_row(tmp_path: Path) -> None:
+    """ "Never measured" is the missing-snapshot branch's job, not this one's --
+    the predicate must not itself demand a re-verify for a name nothing holds."""
+    store = SnapshotStore(path=tmp_path / "caps.json")
+
+    assert store.has_model_menu("nobody") is True
+
+
 def test_the_backend_rebuilds_the_agent_table_when_the_menu_moved(tmp_path: Path) -> None:
     """The store is only half of it: a row's caps are materialized at apply time,
     so without the rebuild the spawn schema keeps offering the old wording until

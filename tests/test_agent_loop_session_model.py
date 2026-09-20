@@ -706,11 +706,11 @@ async def test_a_spawn_holds_its_binding_through_the_gate_and_the_sandbox_boot(t
     import raven.agent.subagent.manager as manager_mod
     from raven.providers.base import LLMResponse as _Resp
 
-    served: list[str] = []
+    served: list[tuple[str, str | None]] = []
 
     class _Recording(_Provider):
         async def chat_with_retry(self, **kwargs) -> _Resp:
-            served.append(self.name)
+            served.append((self.name, kwargs.get("model")))
             return _Resp(content="done", finish_reason="stop")
 
     class _StubExecutor:
@@ -750,7 +750,10 @@ async def test_a_spawn_holds_its_binding_through_the_gate_and_the_sandbox_boot(t
     finally:
         manager_mod.build_executor = original_build
 
-    assert served == ["started-with"], "the spawn ran on the model its conversation had when it asked"
+    # The pair, not just the credential: the built-in backend is cached across
+    # bindings, and a dispatch that withheld the model once ran the switched
+    # conversation's key against the model the backend was first built with.
+    assert served == [("started-with", "started/model")], "the spawn ran on the pair its conversation had when it asked"
 
 
 @pytest.mark.asyncio

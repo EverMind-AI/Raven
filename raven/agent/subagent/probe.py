@@ -31,7 +31,7 @@ from raven.agent.subagent.presets import install_hint_for
 from raven.agent.subagent.probe_state import LastTest
 
 ProbeStatus = Literal["ready", "attention", "missing", "unknown"]
-Source = Literal["config", "preset"]
+Source = Literal["config", "preset", "vendored"]
 
 PROBE_PROMPT = "Reply with exactly: PONG"
 
@@ -502,7 +502,7 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
     from raven.acp_client.capabilities import SnapshotStore, verify_agent
 
     snapshot = await verify_agent(cfg)
-    if source == "config":
+    if source != "preset":
         # Presets are templates, not entries: recording a snapshot for one would
         # key it to a name no config claims, and the roster would then read
         # capabilities off a preset the user never installed.
@@ -565,6 +565,10 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any]) -> None:
     from raven.acp_client.capabilities import SnapshotStore, verify_agent
 
     store = SnapshotStore()
+    # Optional: a caller's own stand-in (tests substitute a bare `record`-only
+    # object) may not carry it, and its absence must not itself force a
+    # re-verify -- see `SnapshotStore.has_model_menu` for what it detects.
+    has_model_menu = getattr(store, "has_model_menu", None)
     recorded = False
     for row in rows:
         cfg = getattr(row, "config", None)
@@ -572,7 +576,12 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any]) -> None:
             continue
         try:
             snapshot = acp_snapshot_for(cfg)
-            if snapshot is not None and not snapshot.stale:
+            outdated_menu = (
+                snapshot is not None
+                and has_model_menu is not None
+                and not has_model_menu(getattr(row, "name", "") or "")
+            )
+            if snapshot is not None and not snapshot.stale and not outdated_menu:
                 continue
             result = await verify_agent(cfg)
             if result.status == "ready":
