@@ -279,6 +279,28 @@ async def test_a_snapshot_remembers_that_the_refusal_was_about_a_credential() ->
     assert ready.auth_methods, "the ready agent advertises auth methods too -- that is the whole point"
 
 
+async def test_a_refusal_about_anything_else_is_not_a_credential_verdict() -> None:
+    """The advertisement is not the evidence.
+
+    ``initialize`` lists the auth methods an agent supports, and an agent that
+    works lists them too -- the stub does, and so does every measured one. So a
+    session refusal on an agent that advertises auth is not thereby a refusal
+    ABOUT auth: any unrelated remote error would take the same branch, and the
+    page would present a disabled "Unauthorized" for a transient model or
+    configuration failure with no way back.
+
+    The coarse status keeps its old reading, which the advertisement is good
+    enough for -- it only decides whether this is worth a reader's attention.
+    """
+    other = await verify_agent(stub_config(mode="no_session_other"))
+    assert other.needs_auth is False
+    assert other.status == "attention", "still worth attention -- just not a credential story"
+    assert other.auth_methods, "the agent did advertise; that is what must not be enough"
+
+    credential = await verify_agent(stub_config(mode="no_session"))
+    assert credential.needs_auth is True
+
+
 async def test_the_credential_verdict_outlives_the_process_that_measured_it(tmp_path: Path) -> None:
     """It is read back from disk on every later page load, so it has to persist.
 

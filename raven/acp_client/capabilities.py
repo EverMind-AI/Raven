@@ -698,8 +698,18 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
             try:
                 session = await client.request("session/new", {"cwd": tmp, "mcpServers": []}, timeout=budget)
             except AcpRemoteError as exc:
-                needs_auth = bool(handshake.auth_methods) or _looks_like_auth(exc.message)
-                status: SnapshotStatus = "attention" if needs_auth else "unknown"
+                # Two readings of one refusal, and they do not take the same
+                # evidence. The advertisement is enough for the coarse status --
+                # it only decides whether a reader should look at this row -- and
+                # it is not enough for `needs_auth`, which is persisted, rendered
+                # as a disabled control and read as "go and sign in". Every agent
+                # that works advertises auth methods too, so taking the
+                # advertisement there would label any unrelated session failure,
+                # a transient one included, as a credential story with no way out.
+                advertised = bool(handshake.auth_methods)
+                refused_over_a_credential = _looks_like_auth(exc.message)
+                needs_auth = refused_over_a_credential
+                status: SnapshotStatus = "attention" if advertised or refused_over_a_credential else "unknown"
                 hint = f" (auth methods: {', '.join(handshake.auth_methods)})" if handshake.auth_methods else ""
                 return done(
                     status,
