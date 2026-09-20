@@ -1730,8 +1730,11 @@ async def test_a_cli_test_leaves_the_agent_table_alone(config_path: Path, monkey
 
 
 async def test_testing_a_preset_leaves_the_agent_table_alone(config_path: Path, monkeypatch) -> None:
-    # A preset is a template no config claims, so `_test_acp` records no snapshot
-    # for it and the table has nothing to re-derive.
+    # A Test writes a capability snapshot, never a roster entry -- for a preset as
+    # much as for a configured row -- so there is nothing here for the agent table
+    # to be rebuilt from. (It did once hold for the reason that `_test_acp` skipped
+    # recording a preset's snapshot entirely; it no longer skips it, and the
+    # assertion below is unmoved, because recording was never what applied.)
     from raven.agent.subagent.probe import TestResult
 
     applied: list[list] = []
