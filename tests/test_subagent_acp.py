@@ -4202,6 +4202,24 @@ async def test_a_model_the_agent_will_not_write_still_runs_the_task(tmp_path: Pa
     assert reply == "pong"
 
 
+async def test_a_refused_model_is_said_once_per_value_not_once_per_turn(tmp_path: Path) -> None:
+    """The push is re-asserted on every route into a session and on every
+    session a spawn opens, so a permanent refusal would otherwise be a warning
+    per turn for as long as the row keeps the pick. One line per value; the
+    rest at debug."""
+    cfg = stub_config("refuseonce")
+    backend = build_third_party_backend(cfg)
+
+    with _loguru_capture("WARNING") as said:
+        for task_id in ("t1", "t2", "t3"):
+            await backend.run(
+                "ping", task_id=task_id, workspace=tmp_path, executor=None, session_model="stub:model-never"
+            )
+
+    refusals = [ln for ln in said if "would not take model 'stub:model-never'" in ln]
+    assert len(refusals) == 1, refusals
+
+
 # ---- session modes ---------------------------------------------------------
 
 
