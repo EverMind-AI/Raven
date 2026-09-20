@@ -39,7 +39,7 @@ from raven.acp_client.protocol import AcpRemoteError
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend, third_party_agent_meta
 from raven.agent.subagent.instances import InstanceRegistry
 from raven.agent.subagent.manager import SubagentManager
-from raven.agent.subagent.probe import probe_one
+from raven.agent.subagent.probe import probe_one, run_test
 from raven.agent.subagent.probe_state import fingerprint
 from raven.agent.subagent.registry import _row_for
 from raven.config.schema import SubagentsConfig, ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
@@ -316,6 +316,45 @@ async def test_the_credential_verdict_outlives_the_process_that_measured_it(tmp_
     loaded = store.load([cfg])["a"]
     assert loaded.needs_auth is True
     assert loaded.usable is False
+
+
+async def test_a_passing_test_clears_a_recorded_credential_refusal(tmp_path: Path, monkeypatch) -> None:
+    """The way out of `Unauthorized`, and the only one there is.
+
+    The page offers no press on a row whose agent asked to be signed in -- the
+    remedy is not on the page -- so the row's whole recovery path is: sign in,
+    then press Test on the card. That works only if Test replaces the recorded
+    verdict, and for a row nobody has configured it did not: `_test_acp` records
+    on `source == "config"` alone, so the refusal outlived the sign-in and the
+    control stayed disabled with nothing left to press. A restart did not help
+    either, which is the other half of this, guarded next door.
+    """
+    import raven.acp_client.capabilities as caps_mod
+
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    monkeypatch.setattr(caps_mod, "SnapshotStore", lambda *a, **k: store)
+
+    # The agent works now -- this is the user who has just signed in -- and the
+    # store still holds what it said before they did, under this launch config.
+    cfg = stub_config("signed-in")
+    store.record(
+        CapabilitySnapshot(
+            agent="signed-in",
+            fingerprint=snapshot_fingerprint(cfg),
+            status="attention",
+            detail="connected, but no session could be opened: sign in",
+            measured_at_ms=1,
+            needs_auth=True,
+        )
+    )
+    assert store.load([cfg])["signed-in"].needs_auth is True
+
+    result = await run_test(cfg, source="preset")
+    assert result.ok is True
+
+    after = store.load([cfg])["signed-in"]
+    assert after.needs_auth is False, "the page would still be showing Unauthorized"
+    assert after.status == "ready"
 
 
 async def test_snapshot_store_round_trips_and_invalidates_on_launch_change(tmp_path: Path) -> None:

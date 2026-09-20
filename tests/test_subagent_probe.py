@@ -937,6 +937,55 @@ class TestAutomaticSnapshotVerification:
         await schedule_snapshot_verification(_FakeManager([_FakeRow("configured")]))
         assert seen == ["configured", "a-preset"], "the configured rows first: they are the ones a run can dispatch to"
 
+    async def test_a_recorded_credential_refusal_is_measured_again(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The one recorded verdict a restart must not take on trust.
+
+        Every other snapshot is skipped while it is fresh, and rightly: a `ready`
+        agent that has not been relaunched is still ready, and re-proving it
+        would spend a process per row per boot. A credential refusal is the
+        opposite kind of fact -- it is a state the user is expected to go and
+        fix, and nothing about fixing it touches the launch config, so the
+        snapshot never goes stale and the row would keep saying "Unauthorized"
+        across every restart after the sign-in that cured it.
+        """
+        from dataclasses import dataclass
+
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        @dataclass
+        class Snap:
+            status: str = "ready"
+            stale: bool = False
+            needs_auth: bool = False
+
+        fine, refused = _FakeRow("fine"), _FakeRow("refused")
+        verified: list[str] = []
+
+        def fake_snapshot_for(cfg: object) -> Snap:
+            return {
+                id(fine.config): Snap(),
+                id(refused.config): Snap(status="attention", needs_auth=True),
+            }[id(cfg)]
+
+        async def fake_verify(cfg: object) -> Snap:
+            verified.append(cfg.name)
+            return Snap()
+
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", fake_snapshot_for)
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.acp_client.capabilities.SnapshotStore",
+            lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
+        )
+        # This one pins the registry half. The preset half reads the machine's
+        # own PATH, so leaving it live would make the assertions below depend on
+        # which agents happen to be installed here.
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        await schedule_snapshot_verification(_FakeManager([fine, refused]))
+        assert verified == ["refused"], "a fresh pass is still trusted; a fresh refusal is not"
+
     async def test_failed_verification_does_not_stop_the_rest(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from raven.agent.subagent.probe import schedule_snapshot_verification
 

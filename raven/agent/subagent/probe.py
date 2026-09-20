@@ -523,11 +523,17 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
     from raven.acp_client.capabilities import SnapshotStore, verify_agent
 
     snapshot = await verify_agent(cfg)
-    if source == "config":
-        # Presets are templates, not entries: recording a snapshot for one would
-        # key it to a name no config claims, and the roster would then read
-        # capabilities off a preset the user never installed.
-        SnapshotStore().record(snapshot)
+    # A preset's snapshot is recorded too, and has to be. The page draws a
+    # preset row's verdict from it -- a recorded credential refusal is what puts
+    # "Unauthorized" there and takes the press away -- so this Test is that
+    # row's only way back, and it only is one if it replaces what it re-measured.
+    #
+    # The worry this gate carried is answered by how the store is keyed rather
+    # than by refusing to write: `SnapshotStore.load` matches on a fingerprint of
+    # the launch fields, so a row recorded under a preset's name is returned only
+    # to a config that launches the same way. One the user never adds is a row
+    # nothing asks for, and one they add under another name does not match it.
+    SnapshotStore().record(snapshot)
     reply = ", ".join(snapshot.available_models[:5]) or None
     return TestResult(cfg.name, source, "acp", snapshot.usable, snapshot.detail, reply, elapsed())
 
@@ -662,7 +668,14 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
             continue
         try:
             snapshot = acp_snapshot_for(cfg)
-            if snapshot is not None and not snapshot.stale:
+            # A fresh snapshot is taken on trust, with one exception. Staleness
+            # asks whether the launch config moved, and signing in does not move
+            # it -- so a recorded credential refusal never goes stale, and the
+            # row it came from would go on saying "Unauthorized" across every
+            # restart after the sign-in that cured it. It is also the one verdict
+            # the user is expected to go and change, which is what makes
+            # re-measuring it worth a process and re-measuring a pass not.
+            if snapshot is not None and not snapshot.stale and not getattr(snapshot, "needs_auth", False):
                 continue
             result = await verify_agent(cfg)
             # A pass, or a refusal the agent explained. Every other failure stays
