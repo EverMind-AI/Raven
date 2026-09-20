@@ -63,6 +63,11 @@ export interface SettingsState {
   err: string
   /* Writes in flight, by a key the row chooses; drawn as "connecting". */
   busy: string[]
+  /* A model write said the gateway has to restart before it can chat on it:
+     it started with no model to build a loop from. Set once and kept -- the
+     restart that clears it reloads the page. The onboarding wizard reads it
+     to say so before the reader goes to chat. */
+  needsRestart: boolean
   range: UsageRange & { kind: string }
   /* undefined = never answered (drawn as loading), null = the counter did not
      answer. */
@@ -98,6 +103,7 @@ const initial = (): SettingsState => ({
   epoch: 0,
   err: '',
   busy: [],
+  needsRestart: false,
   range: { kind: '30', ...lastDays(30) },
   usage: undefined,
   provider: null,

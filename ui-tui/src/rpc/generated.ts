@@ -5952,6 +5952,77 @@ export interface TasksListParams {
 export interface TasksListResult {
   tasks: TaskRow[];
 }
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ImportScanParams".
+ */
+export interface ImportScanParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ImportScanResult".
+ */
+export interface ImportScanResult {
+  ready: boolean;
+  reason: string;
+  platforms: {
+    platform: string;
+    scannable: boolean;
+    memory_files: number;
+    conversations: number;
+    estimated_size: number;
+  }[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ImportRunParams".
+ */
+export interface ImportRunParams {
+  platforms: string[];
+  tier: 'memory_files' | 'full';
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ImportRunResult".
+ */
+export interface ImportRunResult {
+  started: boolean;
+  total: number;
+  detail: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ImportStatusParams".
+ */
+export interface ImportStatusParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ImportStatusResult".
+ */
+export interface ImportStatusResult {
+  running: boolean;
+  total: number;
+  submitted: number;
+  failed: number;
+  by_platform: {
+    [k: string]: {
+      total: number;
+      submitted: number;
+      failed: number;
+    };
+  };
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ImportStopParams".
+ */
+export interface ImportStopParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ImportStopResult".
+ */
+export interface ImportStopResult {
+  stopped: boolean;
+}
 
 // ---- Schema-name aliases for structurally-deduplicated types ----
 export type BrowserManageResult = StubResult;

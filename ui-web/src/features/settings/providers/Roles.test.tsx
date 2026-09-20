@@ -58,6 +58,16 @@ describe('model roles', () => {
     expect(calls).toEqual([['pickModel', { model: 'claude-sonnet-4-5', provider: 'anthropic' }]])
   })
 
+  it('a chat pick the gateway cannot chat on yet sets the restart flag', async () => {
+    /* A first run: the write landed and the process has no loop to serve it.
+       The flag is what the onboarding wizard's frame reads to say so. */
+    install(snap(), { pickModel: async () => true })
+    await mount('model')
+    expect(store.get().needsRestart).toBe(false)
+    await pick('gui.settings.roles.chat', 'claude-sonnet-4-5')
+    expect(store.get().needsRestart).toBe(true)
+  })
+
   it('a media role offers OpenRouter only, writes the selection first and then unhides the tool', async () => {
     const { calls } = install()
     await mount('model')

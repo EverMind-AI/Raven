@@ -149,10 +149,10 @@ function Pick(): JSX.Element {
           {providers.map((p, i) => (
             <div
               key={p.id}
-              className={'row provider-choice-row' + (hits[i]!.length ? '' : ' dim')}
+              className={'row model-provider-row' + (hits[i]!.length ? '' : ' dim')}
             >
               <button
-                className="provider-choice-action"
+                className="model-provider-action"
                 type="button"
                 aria-label={p.name}
                 aria-selected={i === prov && hits[i]!.length > 0}

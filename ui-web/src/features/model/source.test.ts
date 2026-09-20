@@ -218,10 +218,17 @@ describe('the live model refresh', () => {
 describe('the live model persist', () => {
   it('a default write carries the visible session and repaints a chip that follows the default', async () => {
     const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: true, applies_to_session: true } } })
-    await h.settings.persistModel('m2', 'minimax', 'default')
+    await expect(h.settings.persistModel('m2', 'minimax', 'default')).resolves.toBeUndefined()
     expect(h.calls[0]).toEqual(['config.set', { key: 'model', value: 'm2', provider: 'minimax', scope: 'default', session_id: 'sess-1' }])
     expect(h.calls).toContainEqual(['model.options', { session_id: 'sess-1' }])
     expect([h.settings.defaultModelLive, h.settings.defaultProviderLive]).toEqual(['m2', 'minimax'])
+  })
+
+  it('says needs_restart when the default landed in a gateway with no loop', async () => {
+    /* A first run: the config is right and this process still cannot chat on
+       it. The wizard's model step reads this to say so. */
+    const h = await live({ answers: { 'config.set': { applied: true, needs_restart: true } } })
+    await expect(h.settings.persistModel('m2', 'minimax', 'default')).resolves.toBe('needs_restart')
   })
 
   it('rejects a refused session write, because only the caller\'s catch puts the chip back', async () => {
