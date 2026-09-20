@@ -245,7 +245,7 @@ def set_skill_blocked(
     current, wrote = atomic_update(path, _apply)
     if wrote:
         logger.info(
-            "config/update: skillForge.blocklist now {!r} ({} {!r})",
+            "config/update: skill blocklist now {!r} ({} {!r})",
             current,
             "blocked" if blocked else "unblocked",
             name,
