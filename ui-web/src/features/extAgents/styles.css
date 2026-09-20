@@ -60,10 +60,10 @@
 .extAgents-one-bad { color: var(--clay); }
 .extAgents-one-work { font-family: var(--mono); font-size: 11.5px; color: var(--amber); display: flex; align-items: center; gap: 6px; }
 
-/* One control per row, and the buttons in a column are one size: 接入 / 断开 /
-   重试 / 去安装 / 重新检测 differ in length and the frames must not. The floor is
-   the longest word in the language, so it is two values -- 64 fits the Chinese,
-   Disconnect needs 96 -- and neither fits the other. */
+/* One control per row, and the buttons in a column are one size: Connect,
+   Disconnect, Retry, Install and Re-check differ in length and the frames must
+   not. The floor is the longest word in the language, so it is two values --
+   68 fits the Chinese words, Disconnect needs 96 -- and neither fits the other. */
 .extAgents-ctl { flex: none; display: flex; align-items: center; gap: 6px; }
 .extAgents-ctl .mini, .extAgents-act .mini {
   height: 28px; min-width: 68px; padding: 0 12px; border-radius: 7px;
