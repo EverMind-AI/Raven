@@ -323,13 +323,51 @@ async def _serve_main(port: int, open_browser: bool) -> None:
     # the /oauth/callback route below stays for registrations made under the
     # old scheme, which still point at a gateway port.
 
-    stack = await build_rpc_stack(gateway.broadcast)
+    building = asyncio.Lock()
+
+    async def _ensure_stack() -> bool:
+        """Assemble the stack this process started without; True when it has one.
+
+        Reached only by a process whose loop failed to build for want of
+        credentials, which is the one state a later assembly can still resolve:
+        such a process owns no cron, no plugin services, no memory backend and
+        no MCP transports, so there is nothing running to preserve and no
+        process-global singleton for a second assembly to collide with. That is
+        what makes this a one-shot build rather than the gateway's generation
+        swap (``gateway_commands._request_swap``), which has to keep generation
+        N serving while N+1 comes up.
+
+        The stack left behind is dropped rather than torn down: its teardown
+        ends by closing the browser and the ACP pool, and both are
+        process-global -- the new stack's now.
+        """
+        nonlocal stack
+        if stack.agent_loop is not None:
+            return True
+        async with building:
+            if stack.agent_loop is not None:
+                return True
+            nxt = await build_rpc_stack(
+                gateway.broadcast,
+                emitter=stack.emitter,
+                ensure_stack=_ensure_stack,
+            )
+            if nxt.agent_loop is None:
+                return False
+            stack = nxt
+            gateway.dispatcher = nxt.dispatcher
+            return True
+
+    stack = await build_rpc_stack(gateway.broadcast, ensure_stack=_ensure_stack)
     gateway.dispatcher = stack.dispatcher
 
     app = build_app(
         gateway,
         resolve_ui_dist(),
-        deliverables=stack.deliverables,
+        # Read per request, not once: a first run assembles its stack after the
+        # app is built, and a store captured here would leave that process with
+        # no download surface for the rest of its life.
+        deliverables=lambda: stack.deliverables,
         agent_loop_factory=lambda: stack.agent_loop,
     )
     runner = web.AppRunner(app)
