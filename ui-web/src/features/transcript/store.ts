@@ -464,7 +464,7 @@ export function qa(lane: Lane, question: string, answer: string, opts?: { skippe
    because one caller is the live path's plain-JS turn handler, which has no
    import statements and only ever hands this function a raw wire string. */
 const deliveredStatus = (v: unknown): DeliveredData['status'] =>
-  v === 'error' ? 'error' : v === 'exception' ? 'exception' : 'ok'
+  v === 'error' ? 'error' : v === 'exception' ? 'exception' : v === 'cancelled' ? 'cancelled' : 'ok'
 
 export function delivered(lane: Lane, p: {
   label: string; isDag: boolean; status?: string; open: () => void; body?: string

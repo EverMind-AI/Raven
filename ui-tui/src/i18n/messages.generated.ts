@@ -312,6 +312,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.deleg.body': 'what came back',
     'gui.deleg.body_aria': 'Show what the delegated run delivered',
     'gui.deleg.delivered_err': 'failed; the error just joined this conversation',
+    'gui.deleg.delivered_cancelled': 'was cancelled before it finished; the notice just joined this conversation',
     'gui.deleg.delivered_exception':
       'hit an exception and is waiting on a decision; its report just joined this conversation',
     'gui.deleg.dag_title': 'Task graph',
@@ -2068,6 +2069,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.deleg.body': '交付内容',
     'gui.deleg.body_aria': '展开子智能体交付的内容',
     'gui.deleg.delivered_err': '运行失败，失败详情已注入本轮对话',
+    'gui.deleg.delivered_cancelled': '运行被取消，未完成，取消通知已注入本轮对话',
     'gui.deleg.delivered_exception': '遇到异常，等待裁决，报告已注入本轮对话',
     'gui.deleg.dag_title': '编排任务图',
     'gui.deleg.dag_meta': '{n} 个节点 · {m} 个 agent',

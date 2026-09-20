@@ -25,7 +25,7 @@ class _StubSubagents:
     def __init__(self, rec: _Recorder) -> None:
         self._rec = rec
 
-    async def cancel_all(self) -> None:
+    async def cancel_all(self, *, reason: str = "") -> None:
         self._rec.calls.append("subagents.cancel_all")
 
 

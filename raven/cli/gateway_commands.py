@@ -830,7 +830,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     cid = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
                     if cmd == "/stop":
                         stopped = gw_scheduler.cancel_conversation(cid)
-                        stopped += await agent.subagents.cancel_by_session(cid)
+                        stopped += await agent.subagents.cancel_by_session(cid, reason="the user sent /stop")
                         content = f"Stopped {stopped} task(s)." if stopped else "No active task to stop."
                         await gw_hub.dispatch(Text(content=content, source=req.source))
                     elif cmd == "/restart":
@@ -883,7 +883,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 # as the shutdown path: a result re-injection into a spine
                 # already gone would record as a failure rather than a stop.
                 # dispose() cancels again, which is an idempotent no-op.
-                await agent.subagents.cancel_all()
+                await agent.subagents.cancel_all(reason="the gateway reloaded")
                 if page_mount is not None:
                     await page_mount.teardown()
                     page_mount = None
@@ -1158,7 +1158,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 # every ACP server anyway and no cancelled turn is worth waiting
                 # on when its process is about to go.
                 begin_drain()
-                await agent.subagents.cancel_all()
+                await agent.subagents.cancel_all(reason="the gateway stopped")
                 # The page's spine seals after the sub-agents are cancelled, the
                 # order the generation swap already keeps: a sub-agent whose
                 # conversation lives on the page announces into that spine, and
