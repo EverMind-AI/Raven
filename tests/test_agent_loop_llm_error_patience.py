@@ -18,6 +18,7 @@ import pytest
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import ToolWiring, TurnPolicy
 from raven.agent.loop.recovery import RecoveryLimits, limits_from_defaults
+from raven.agent.window import shrink
 from raven.contracts.tool import Tool, ToolResult
 from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
@@ -188,6 +189,106 @@ async def test_a_stall_after_streamed_output_is_not_retried_by_the_outer_ladder_
     assert seen == ["partial", "answer"]
 
 
+class _ThinksThenStalls(LLMProvider):
+    """Streams a long thought and a half-built tool call, then stalls; answers next time."""
+
+    def __init__(self):
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, *args, **kwargs):  # pragma: no cover - the stream path is under test
+        raise NotImplementedError
+
+    async def chat_stream(self, *args, **kwargs):
+        from raven.providers.base import ChatDelta
+
+        self.calls += 1
+        if self.calls == 1:
+            yield ChatDelta(content=None, reasoning_content="weighing the layout")
+            yield ChatDelta(
+                content=None,
+                tool_call_delta={
+                    "tool_calls": [{"index": 0, "id": "c1", "function": {"name": "write_file", "arguments": '{"pa'}}]
+                },
+            )
+            raise TimeoutError
+        yield ChatDelta(content="answer")
+
+
+@pytest.mark.asyncio
+async def test_a_stall_during_a_silent_think_is_asked_again(workspace):
+    """Nothing reached the caller, so asking again repeats nothing. A thought is not
+    the reply unless the caller wired `on_reasoning_delta`, and the fragments of a
+    tool call are never rendered as one -- counting either as output made the long
+    quiet round, the one that writes a whole build script, the one round a dropped
+    stream could always end."""
+    provider = _ThinksThenStalls()
+    seen: list[str] = []
+
+    out = await _streamed_turn(_streaming_agent(workspace, provider, retry_after_output=False), seen)
+
+    assert out is not None and out[0] == "answer"
+    assert provider.calls == 2
+    assert seen == ["answer"], "the watcher saw the reply once"
+    assert "weighing" not in (out[0] or ""), "the abandoned thought is not part of the reply"
+
+
+@pytest.mark.asyncio
+async def test_what_the_failed_attempt_left_behind_is_dropped():
+    """`stream_llm_call` directly, for the invariant the loop cannot show: every
+    retry starts from empty buffers. While a retry was only possible with all three
+    empty, the paths that ask again did not have to clear them; once a silent think
+    retries, a slot left standing merges with the next attempt's fragments into a
+    call the model never made, and a thinking block keeps the signature of a
+    generation that no longer exists."""
+    from raven.providers.base import ChatDelta
+    from raven.providers.streaming import stream_llm_call
+
+    class _HalfCallThenAnswers(LLMProvider):
+        def __init__(self):
+            super().__init__(api_key="test")
+            self.calls = 0
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+        async def chat(self, *args, **kwargs):  # pragma: no cover - the stream path is under test
+            raise NotImplementedError
+
+        async def chat_stream(self, *args, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                yield ChatDelta(content=None, reasoning_content="first thought")
+                yield ChatDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [{"index": 0, "id": "c1", "function": {"name": "exec", "arguments": '{"comm'}}]
+                    },
+                    thinking_blocks=[{"type": "thinking", "thinking": "A", "signature": "sigA"}],
+                )
+                raise ConnectionError("upstream went away")
+            yield ChatDelta(content="here is the plan")
+
+    provider = _HalfCallThenAnswers()
+    out = await stream_llm_call(
+        provider,
+        messages=[{"role": "user", "content": "go"}],
+        tools=None,
+        model="stub",
+        on_token_delta=None,
+        max_reconnects=1,
+    )
+
+    assert provider.calls == 2
+    assert out.content == "here is the plan"
+    assert not out.tool_calls, "no call the second attempt did not make"
+    assert "first thought" not in (out.reasoning_content or "")
+    assert not out.thinking_blocks, "no signed block from a generation that is gone"
+
+
 @pytest.mark.production_timing
 def test_the_ladder_comes_from_agents_defaults():
     class _Defaults:
@@ -281,7 +382,7 @@ def test_the_image_window_keeps_the_newest_pictures_and_says_what_the_rest_showe
     messages = _with_pictures()
     before_newest = [dict(messages[3]), dict(messages[5])]
 
-    changed, withdrawn = AgentLoop._window_images(messages, 2)
+    changed, withdrawn = shrink.window_images(messages, 2)
 
     assert (changed, withdrawn) == (1, 2)
     assert [_pictures_in(m) for m in messages] == [0, 0, 0, 1, 0, 2]
@@ -303,7 +404,7 @@ def test_the_image_window_is_prefix_stable_between_iterations() -> None:
     an earlier pass, so a cached prefix is invalidated from the slide-out point and
     not rewritten from the top."""
     messages = _with_pictures()
-    AgentLoop._window_images(messages, 2)
+    shrink.window_images(messages, 2)
     first_pass = list(messages)
 
     messages.append({"role": "assistant", "content": "one more"})
@@ -315,7 +416,7 @@ def test_the_image_window_is_prefix_stable_between_iterations() -> None:
             "_image_sources": [{"tool": "ppt_build", "iteration": 4, "caption": "Page 9 of 20"}],
         }
     )
-    changed, withdrawn = AgentLoop._window_images(messages, 2)
+    changed, withdrawn = shrink.window_images(messages, 2)
 
     assert (changed, withdrawn) == (1, 1)
     same = [messages[i] is first_pass[i] for i in range(len(first_pass))]
@@ -324,7 +425,7 @@ def test_the_image_window_is_prefix_stable_between_iterations() -> None:
         _pictures_in(messages[3]) == 0
         and '"Page 7 of 20: the claim" from ppt_build at iteration 2' in messages[3]["content"][0]["text"]
     )
-    assert AgentLoop._window_images(messages, 2) == (0, 0), "a second pass over the same list is a no-op"
+    assert shrink.window_images(messages, 2) == (0, 0), "a second pass over the same list is a no-op"
 
 
 def _batch(tag: str, pictures: int, iteration: int) -> dict:
@@ -350,7 +451,7 @@ def test_the_budget_window_collapses_once_when_the_pictures_outgrow_it_and_not_b
         messages.append({"role": "assistant", "content": f"round {arrival}"})
         messages.append(_batch(f"b{arrival}", pictures=3, iteration=arrival))  # 12 wire bytes per batch
         before = list(messages)
-        changed, withdrawn = AgentLoop._window_images(messages, 2, budget=40, reason="budget")
+        changed, withdrawn = shrink.window_images(messages, 2, budget=40, reason="budget")
         breaks.append(changed)
         untouched = [messages[i] is before[i] for i in range(len(before))]
         if changed:
@@ -366,7 +467,7 @@ def test_the_budget_window_collapses_once_when_the_pictures_outgrow_it_and_not_b
     assert len(live) == 3 and live[-1] == len(messages) - 1, "the newest batches are the ones still in view"
     note = next(p["text"] for m in messages if m.get("_attached_image") for p in m["content"] if p["type"] == "text")
     assert "outgrew their byte budget" in note and "only the 2 newest image-bearing result(s) keep theirs" in note
-    assert AgentLoop._window_images(messages, 2, budget=40, reason="budget") == (0, 0), "idempotent under budget"
+    assert shrink.window_images(messages, 2, budget=40, reason="budget") == (0, 0), "idempotent under budget"
 
 
 def test_the_budget_weighs_inline_bytes_only_and_the_users_picture_is_outside_it() -> None:
@@ -380,8 +481,8 @@ def test_the_budget_weighs_inline_bytes_only_and_the_users_picture_is_outside_it
     ]
 
     # 16 wire bytes across the two batches, the remote reference weighing nothing.
-    assert AgentLoop._window_images(messages, 1, budget=16, reason="budget") == (0, 0)
-    assert AgentLoop._window_images(messages, 1, budget=15, reason="budget") == (2, 3)
+    assert shrink.window_images(messages, 1, budget=16, reason="budget") == (0, 0)
+    assert shrink.window_images(messages, 1, budget=15, reason="budget") == (2, 3)
     assert messages[0] is sketch, "the user's own picture is neither weighed nor withdrawn"
 
 
@@ -401,8 +502,8 @@ def test_the_budget_is_charged_the_base64_the_request_carries_not_the_bytes_it_d
         {"role": "tool", "tool_call_id": "2", "content": [image_block(f"data:image/png;base64,{payload}")]},
     ]
 
-    assert AgentLoop._window_images(messages, 1, budget=800, reason="budget") == (0, 0), "two pictures, 800 wire bytes"
-    assert AgentLoop._window_images(messages, 1, budget=700, reason="budget") == (1, 1), (
+    assert shrink.window_images(messages, 1, budget=800, reason="budget") == (0, 0), "two pictures, 800 wire bytes"
+    assert shrink.window_images(messages, 1, budget=700, reason="budget") == (1, 1), (
         "600 decoded would have fit 700; 800 on the wire does not"
     )
 
@@ -416,7 +517,7 @@ def test_a_picture_without_provenance_is_still_accounted_for() -> None:
         {"role": "user", "content": [_picture("c")], "_attached_image": True},
     ]
 
-    assert AgentLoop._window_images(messages, 1) == (1, 2)
+    assert shrink.window_images(messages, 1) == (1, 2)
     notes = [p["text"] for p in messages[0]["content"]]
     assert notes[0].startswith("[image no longer in context: picture 1 of 2.")
     assert notes[1].startswith("[image no longer in context: picture 2 of 2.")
@@ -430,12 +531,12 @@ def test_a_picture_the_user_sent_is_not_part_of_the_window() -> None:
     sketch = {"role": "user", "content": [text_block("make it look like this"), _picture("SKETCH")]}
     messages = [sketch, *_with_pictures()[1:]]
 
-    assert AgentLoop._window_images(messages, 1) == (2, 3)
+    assert shrink.window_images(messages, 1) == (2, 3)
     assert messages[0] is sketch and _pictures_in(messages[0]) == 1
 
-    assert AgentLoop._window_images(messages, 0, reason="refused") == (1, 2), "the tool pictures, not the sketch"
+    assert shrink.window_images(messages, 0, reason="refused") == (1, 2), "the tool pictures, not the sketch"
     assert _pictures_in(messages[0]) == 1
-    assert AgentLoop._window_images(messages, 0, reason="refused", any_role=True) == (1, 1)
+    assert shrink.window_images(messages, 0, reason="refused", any_role=True) == (1, 1)
     assert _pictures_in(messages[0]) == 0 and "refused this request's pictures" in messages[0]["content"][1]["text"]
 
 
@@ -444,7 +545,7 @@ def test_a_closed_window_withdraws_the_newest_picture_and_says_why() -> None:
     the newest included, and the note blames the endpoint rather than a newer batch."""
     messages = _with_pictures()
 
-    assert AgentLoop._window_images(messages, 0, reason="refused") == (3, 5)
+    assert shrink.window_images(messages, 0, reason="refused") == (3, 5)
     assert not any(_pictures_in(m) for m in messages)
     assert "The endpoint refused this request's pictures as too large" in messages[5]["content"][1]["text"]
     assert "Page 8 of 20" in messages[5]["content"][1]["text"]
@@ -452,21 +553,21 @@ def test_a_closed_window_withdraws_the_newest_picture_and_says_why() -> None:
     # The standing pass with the window already closed reads differently again: the
     # picture was never shown, and the model is told none will be for this turn.
     later = [{"role": "user", "content": [_picture("z")], "_attached_image": True}]
-    AgentLoop._window_images(later, 0)
+    shrink.window_images(later, 0)
     assert "so none are kept in context now" in later[0]["content"][0]["text"]
 
 
 def test_the_overflow_path_uses_the_same_notes() -> None:
-    """``_emergency_shrink`` keeps its tighter count and its copy-and-return contract,
+    """``shrink.emergency_shrink`` keeps its tighter count and its copy-and-return contract,
     and the picture it drops gets the same kind of note, with the overflow as the reason."""
     messages = _with_pictures()
-    out, elided = AgentLoop._elide_older_images(messages)
+    out, elided = shrink.elide_older_images(messages)
 
     assert elided == 2 and out is not messages
     assert [_pictures_in(m) for m in messages] == [0, 2, 0, 1, 0, 2], "the input is left alone"
     assert [_pictures_in(m) for m in out] == [0, 0, 0, 0, 0, 2]
     assert "elided to fit the context window" in out[3]["content"][0]["text"]
-    assert AgentLoop._elide_older_images(out) == (out, 0)
+    assert shrink.elide_older_images(out) == (out, 0)
 
 
 def test_the_overflow_path_sheds_the_users_own_pictures_last() -> None:
@@ -481,21 +582,21 @@ def test_the_overflow_path_sheds_the_users_own_pictures_last() -> None:
         {"role": "assistant", "content": "seen"},
         {"role": "user", "content": [text_block("third"), _picture("U3")]},
     ]
-    out, elided = AgentLoop._emergency_shrink(pasted)
+    out, elided = shrink.emergency_shrink(pasted)
 
     assert elided == 2 and out is not pasted
     assert [_pictures_in(m) for m in pasted] == [1, 0, 1, 0, 1], "the input is left alone"
     assert [_pictures_in(m) for m in out] == [0, 0, 0, 0, 1]
     assert "elided to fit the context window" in out[0]["content"][1]["text"]
-    assert AgentLoop._emergency_shrink(out) == (out, 0)
+    assert shrink.emergency_shrink(out) == (out, 0)
 
     mixed = [*_with_pictures(), {"role": "user", "content": [_picture("U9")]}]
-    first, freed = AgentLoop._emergency_shrink(mixed)
+    first, freed = shrink.emergency_shrink(mixed)
     assert freed == 2 and _pictures_in(first[-1]) == 1, "result pictures go first, the user's stays"
-    again, freed_again = AgentLoop._emergency_shrink(first)
+    again, freed_again = shrink.emergency_shrink(first)
     assert freed_again == 1 and _pictures_in(again[5]) == 0, "then the older result picture goes"
     assert _pictures_in(again[-1]) == 1, "the newest picture, the user's, is kept"
-    assert AgentLoop._emergency_shrink(again) == (again, 0)
+    assert shrink.emergency_shrink(again) == (again, 0)
 
 
 class _PageRender(Tool):
@@ -746,9 +847,9 @@ def test_every_reason_the_note_can_give_files_down_to_its_facts(reason, keep, so
     composes every reason the loop can pass and files it, so a reworded opening on
     either side fails here instead of filing the turn's business into the session.
     The caption carries the sentence break the parser must read past."""
-    from raven.agent.loop._shared import _withdrawn_image_note, filed_image_note
+    from raven.agent.window.images import filed_image_note, withdrawn_image_note
 
-    live = _withdrawn_image_note(source, index=1, total=2, reason=reason, keep=keep)
+    live = withdrawn_image_note(source, index=1, total=2, reason=reason, keep=keep)
     facts = live.partition(". ")[0] if source["caption"] is None else live[: live.index(". ", live.index("iteration"))]
 
     assert filed_image_note(live) == f"{facts}.]"
@@ -768,3 +869,100 @@ async def test_an_image_refusal_with_nothing_to_withdraw_is_not_waited_out(works
 
     assert provider.calls == 1
     assert out is not None and "Error calling LLM" in (out[0] or "")
+
+
+async def _watch(text: str) -> None:
+    """A caller watching the reply form: what puts a spawn on the streamed path."""
+
+
+class _DropsTwiceThenAnswers(LLMProvider):
+    """The connection drops before the first delta twice, then the stream answers
+    whole: one failure more than the single reconnect the helper grants on its own,
+    so only a ladder handed down from the deployment reaches the answer."""
+
+    def __init__(self):
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, *args, **kwargs):  # pragma: no cover - the fallback this test must not take
+        raise AssertionError("the spawn fell back to the waited-for call")
+
+    async def chat_stream(self, *args, **kwargs):
+        from raven.providers.base import ChatDelta
+
+        self.calls += 1
+        if self.calls <= 2:
+            raise ConnectionError("connection reset by peer")
+        yield ChatDelta(content="answer")
+
+
+class _ShowsThenDrops(LLMProvider):
+    """Streams a word, then the connection drops; answers whole next time."""
+
+    def __init__(self):
+        super().__init__(api_key="test")
+        self.calls = 0
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    async def chat(self, *args, **kwargs):  # pragma: no cover - the fallback this test must not take
+        raise AssertionError("the spawn fell back to the waited-for call")
+
+    async def chat_stream(self, *args, **kwargs):
+        from raven.providers.base import ChatDelta
+
+        self.calls += 1
+        if self.calls == 1:
+            yield ChatDelta(content="partial")
+            raise ConnectionError("connection reset by peer")
+        yield ChatDelta(content="answer")
+
+
+@pytest.mark.asyncio
+async def test_a_spawned_subagents_dropped_stream_is_asked_again_on_the_deployments_ladder(workspace):
+    """The subagent half of the wiring: `RavenLoopBackend` hands the ladder it was built
+    with to `stream_llm_call`. Left to that call's own defaults a spawn reconnects once
+    and waits never, so a stream dropped twice ended the run; with the ladder handed
+    over, the third call answers and its answer is the run's result."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    provider = _DropsTwiceThenAnswers()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=workspace / "home", retry_delays=(0.0,))
+
+    out = await backend.run("build the deck", task_id="t1", workspace=workspace, executor=None, on_delta=_watch)
+
+    assert provider.calls == 3
+    assert "answer" in (out or "")
+
+
+@pytest.mark.asyncio
+async def test_a_spawned_subagents_rendered_stream_is_retried_only_when_the_deployment_says_so(workspace):
+    """`llmRetryAfterOutput` reaches a spawn the same way. Built with it on, a stream
+    that showed a word and then dropped is asked again and the retry's word is the
+    answer; built without it, the default, the drop ends the run as the rule has
+    always read."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    seen: list[str] = []
+
+    async def watch(text: str) -> None:
+        seen.append(text)
+
+    provider = _ShowsThenDrops()
+    backend = RavenLoopBackend(
+        provider=provider, model="stub", agent_home=workspace / "home", retry_delays=(0.0,), retry_after_output=True
+    )
+    out = await backend.run("build the deck", task_id="t1", workspace=workspace, executor=None, on_delta=watch)
+    assert provider.calls == 2
+    assert "answer" in (out or "")
+    assert seen == ["partial", "answer"]
+
+    provider = _ShowsThenDrops()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=workspace / "home", retry_delays=(0.0,))
+    with pytest.raises(ConnectionError):
+        await backend.run("build the deck", task_id="t1", workspace=workspace, executor=None, on_delta=_watch)
+    assert provider.calls == 1

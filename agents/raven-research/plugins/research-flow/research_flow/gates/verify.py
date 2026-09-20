@@ -19,8 +19,9 @@ import asyncio
 import logging
 import time
 
-from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.loop_hooks import HookDecision
 from raven.security.trust import wrap_untrusted
+from research_flow.gates.base import Gate, GateCtx
 from research_flow.support._verdict import coerce_bool, parse_bool_verdict
 from research_flow.support.answer_text import closing_tag_bar, visible_answer
 from research_flow.support.evidence_round import EvidenceRound
@@ -191,7 +192,7 @@ _EVIDENCE_ROUND_PROMPT = (
 )
 
 
-class DraftReviewerGate(AgentHook):
+class DraftReviewerGate(Gate):
     """Verify-gate: review the candidate final, bounce it back up to ``max_revisions`` times."""
 
     def __init__(
@@ -327,7 +328,7 @@ class DraftReviewerGate(AgentHook):
             }
         )
 
-    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def after_iteration(self, ctx: GateCtx) -> HookDecision:
         if getattr(ctx.response, "has_tool_calls", False):
             return HookDecision()
         content = getattr(ctx.response, "content", None) or ""
@@ -463,7 +464,7 @@ class DraftReviewerGate(AgentHook):
             notes=[f"verify_gate: rejected, revision {state['revisions']}/{self._max_revisions}"],
         )
 
-    async def _review(self, ctx: AgentHookContext, draft: str) -> dict | None:
+    async def _review(self, ctx: GateCtx, draft: str) -> dict | None:
         task = task_for(ctx)
         messages = ctx.messages or []
         evidence, elided_skipped = self._evidence_pack(messages)
@@ -596,7 +597,7 @@ class DraftReviewerGate(AgentHook):
         return verdict if verdict is not None else self._fail_open(ctx, "unparsed")
 
     @staticmethod
-    def _fail_open(ctx: AgentHookContext, reason: str) -> None:
+    def _fail_open(ctx: GateCtx, reason: str) -> None:
         """Name the failure on the turn's state so the ledger row and the observer
         record say WHICH way the reviewer failed; a bare ``unavailable`` hid a 120s
         slice killing calls that finish at 180s behind a truncation that needs a

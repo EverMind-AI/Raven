@@ -37,6 +37,7 @@ from raven.utils.workspace import sync_workspace_templates
 
 if TYPE_CHECKING:
     from raven.config.schema import GatewayPageConfig
+    from raven.core.runtime import SwapCoordinator
 
 console = Console()
 
@@ -99,6 +100,38 @@ def _build_gateway_channels(config) -> set[str]:
     in :func:`register`, which runs before ``cron.start()``.
     """
     return config.channels.enabled_channel_names()
+
+
+def _wire_channel_intake(channels, dispatch) -> None:
+    """Hand ``dispatch`` to every channel the manager holds, and to every one it starts later.
+
+    The launch loop used to be the only place a channel got its spine dispatch,
+    and a channel can be born after it: the page enables an entrance by writing
+    config, and the manager builds and starts the adapter on the spot. Such a
+    channel had no ``intake._submit``, logged "no spine dispatch wired" once per
+    message and dropped every one of them -- while the page drew it connected
+    and the adapter's own login had succeeded (2026-09-14, weixin).
+
+    The outlet half of the same hazard was already covered: ``on_started``
+    registers an outlet so a hot-started channel can be replied to. The intake
+    is composed onto that same hook here, after whatever it already did, so
+    neither half can be wired without the other.
+    """
+
+    def wire(ch) -> None:
+        ch.intake.set_submit(dispatch)
+
+    for ch in channels.channels.values():
+        wire(ch)
+
+    outlet_hook = channels.on_started
+
+    def on_started(ch) -> None:
+        if outlet_hook is not None:
+            outlet_hook(ch)
+        wire(ch)
+
+    channels.on_started = on_started
 
 
 def _format_question_body(params: dict) -> str:
@@ -176,6 +209,44 @@ def page_target(page_config: "GatewayPageConfig", page_port: int | None) -> int 
     if page_port is not None:
         return page_port
     return page_config.port if page_config.enabled else None
+
+
+def _retire_generation_watchers(swaps: "SwapCoordinator", agent) -> None:
+    """Stop the skill watcher of every generation still owned at shutdown.
+
+    ``ContextBuilder`` starts a ``SkillFileWatcher`` in ``__init__``, so a
+    generation owns a daemon thread parked inside watchfiles' Rust ``watch()``
+    from the moment it is built, whether or not it ever served. Daemon status
+    does not make process exit safe while the thread sits in native code:
+    ``Py_FinalizeEx`` tears the interpreter down under that call and the
+    process dies of SIGSEGV once every Python shutdown step has already
+    succeeded, so a systemd or docker stop records a crash instead of the
+    clean stop it was.
+
+    Three seats can hold one at once -- the bound generation, a candidate
+    staged that the serving loop never consumed, and a candidate ``take``
+    handed out whose binding a cancelled unbind never finished. None of this
+    goes through ``RavenRuntime.discard``: that method is contract-bound to
+    stay call-free, because a call there would mean an organ was started
+    before FREEZE, and this watcher is exactly such an organ.
+
+    One seat raising must not strand the seats behind it; a sweep that stops
+    early still leaves a watcher parked in native code, which is the whole
+    failure being closed here.
+    """
+    seats = [agent]
+    # Read before take(), which parks a staged candidate in that same seat.
+    stranded = swaps.in_transition
+    staged = swaps.take()
+    if staged is not None:
+        seats.append(staged.runtime.loop)
+    if stranded is not None:
+        seats.append(stranded.runtime.loop)
+    for loop in seats:
+        try:
+            loop.context.skills.stop_file_watcher()
+        except Exception:
+            logger.exception("skill watcher stop failed during shutdown; continuing")
 
 
 def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, above the ceiling)
@@ -760,8 +831,12 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     else:
                         gw_scheduler.submit(req)  # fire-and-forget (no readback)
 
-                for _ch in channels.channels.values():
-                    _ch.intake.set_submit(_inbound_dispatch)
+                # Both halves of a channel's wiring outlive this generation's
+                # launch, because a channel can be born after it (see
+                # `_wire_channel_intake`). Composed here rather than beside the
+                # outlet hook above, because `_inbound_dispatch` is born in
+                # this generation and the outlet hook is not.
+                _wire_channel_intake(channels, _inbound_dispatch)
 
             from raven.core.runtime import SwapCandidate, SwapCoordinator
 
@@ -1066,6 +1141,12 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 await close_pool()
                 await agent.close_mcp()
                 agent.stop()
+                # Not folded into AgentLoop.stop: its other caller is the
+                # generation swap, which keeps the process running and has to
+                # keep auto-refresh with it. take()'s swapping flag is inert
+                # here -- only release() reads it, and this process reaches
+                # none.
+                _retire_generation_watchers(swaps, agent)
                 await channels.stop_all()
                 # Stop the memory-backend plugin last so any
                 # in-flight backend.store / backend.feedback calls

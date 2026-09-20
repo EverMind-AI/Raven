@@ -68,6 +68,7 @@ from typing import TYPE_CHECKING, Any
 
 from raven.agent import workdir
 from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.participant import Accept, AgentParticipant, Answer, Intake, Resample, StepView
 from raven.memory_engine.skill_local.registry import SkillRegistry
 from raven.utils.paths import mint_slug
 from raven_design.selector import VisualDomainSkillSelector
@@ -90,7 +91,6 @@ _PROTOTYPE_WORKSPACE = Path("/nonexistent/design-engine-prototype")
 
 _MALFORMED_SLICE_ERROR = 'the design-engine config slice is malformed; fix plugins.config["design-engine"]'
 
-_METADATA_KEY = "design_engine"
 DESIGNS_DIRNAME = "designs"
 
 # A turn ends on the first reply without a tool call, and `completion_notice`
@@ -251,10 +251,13 @@ class MisconfiguredEngineHook(AgentHook):
         return HookDecision(short_circuit_result=(f"{_MALFORMED_SLICE_ERROR}: {self._error}", []))
 
 
-class DesignEngineHook(AgentHook):
-    """Domain selection on the way in; task-state projection and nudge through."""
+class DesignParticipant(AgentParticipant):
+    """Domain selection on the way in; task-state projection and nudge through.
 
-    rolls_back_iterations = True
+    One instance per turn (the host builds it from ``make_hook``'s factory), so
+    "this turn was already nudged once" and "this turn's session directory could
+    not be made" are attributes rather than keys in the hook context's metadata.
+    """
 
     def __init__(
         self,
@@ -265,10 +268,8 @@ class DesignEngineHook(AgentHook):
         self._cfg = cfg
         self._selector = selector
         self._manager = manager
-
-    @property
-    def name(self) -> str:
-        return "design_engine"
+        self._reconcile_nudged = False
+        self._blocked: str | None = None
 
     @staticmethod
     def _state_key() -> str | None:
@@ -298,41 +299,49 @@ class DesignEngineHook(AgentHook):
         workdir.repoint(own)
         return own
 
-    async def before_user_inbound(self, ctx: AgentHookContext) -> HookDecision:
-        text = ctx.inbound_content
+    async def intake(self, text: str, step: StepView) -> Answer | None:
         # D1 clause 2: hooks fire before slash dispatch, so a command-shaped
         # inbound must pass through untouched or "/new" stops working; a blank
         # one has nothing to classify.
         if not text or not text.strip() or text.lstrip().startswith("/"):
-            return HookDecision()
+            return None
         bound = workdir.current()
         if bound is not None:
             try:
-                self._own_folder(bound, ctx.session_key)
+                self._own_folder(bound, step.session_key)
             except (OSError, RuntimeError, ValueError) as exc:
-                # The host ignores raised hooks, so a directory refusal must stop the turn explicitly.
-                return HookDecision(short_circuit_result=(f"Design session directory unavailable: {exc}", []))
+                # A directory refusal has to stop the turn explicitly, as the reply.
+                return Intake(text=text, reply=(f"Design session directory unavailable: {exc}", []))
         if self._selector is None:
-            return HookDecision()
+            return None
         try:
             selection = await self._selector.select(text)
         except Exception as exc:  # the selector already degrades; this is belt
             logger.warning("design-engine: selection failed outside the selector's own guard: %s", exc)
-            return HookDecision()
+            return None
         block = render_selection_block(selection)
         if not block:
-            return HookDecision()
+            return None
         # D1 clauses 1 and 3: cards only, below a separator, on the pull lane.
-        return HookDecision(modified_content=f"{text}\n\n---\n{block}")
+        return Intake(text=f"{text}\n\n---\n{block}")
 
-    async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def advise(self, step: StepView) -> str | None:
+        """Repoint a turn that skipped the inbound phase, then project the task state.
+
+        Asked before the call (``step.response`` None) and after it; the
+        projection belongs before. A directory refusal is remembered here and
+        ends the turn through ``system_addendum``, which the host asks next.
+        """
+        if step.response is not None:
+            return None
         blocks: list[str] = []
         bound = workdir.current()
-        if bound is not None and ctx.iteration in (0, 1):
+        if bound is not None and step.iteration in (0, 1):
             try:
-                own = self._own_folder(bound, ctx.session_key)
+                own = self._own_folder(bound, step.session_key)
             except (OSError, RuntimeError, ValueError) as exc:
-                return HookDecision(short_circuit_result=f"Design session directory unavailable: {exc}")
+                self._blocked = f"Design session directory unavailable: {exc}"
+                return None
             if own != bound:
                 blocks.append(f"Working directory for this design session: {own}. Resolve relative paths here.")
         key = self._state_key()
@@ -343,9 +352,17 @@ class DesignEngineHook(AgentHook):
                     blocks.append(block)
             except Exception as exc:
                 logger.warning("design-engine: task-state projection failed: %s", exc)
-        return HookDecision(append_note="\n\n".join(blocks) or None)
+        return "\n\n".join(blocks) or None
 
-    async def after_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def system_addendum(self, step: StepView) -> Answer | None:
+        """Nothing to add to the prefix; the seat where a turn that has no
+        session directory is ended before its first call."""
+        if self._blocked is None:
+            return None
+        blocked, self._blocked = self._blocked, None
+        return Intake(text="", reply=blocked)
+
+    async def review(self, step: StepView) -> Answer:
         """Send the turn back once when its reply would carry a stale ledger.
 
         Decided from the ledger rather than from the prose: whether the reply
@@ -355,41 +372,35 @@ class DesignEngineHook(AgentHook):
         one nudge.
         """
         if self._manager is None:
-            return HookDecision()
-        response = ctx.response
+            return Accept()
+        response = step.response
         if response is None or getattr(response, "tool_calls", None):
-            return HookDecision()
+            return Accept()
         if not str(getattr(response, "content", None) or "").strip():
-            return HookDecision()
+            return Accept()
         key = self._state_key()
         if key is None:
-            return HookDecision()
+            return Accept()
         try:
             notice = completion_notice(self._manager, key)
         except Exception as exc:
             logger.warning("design-engine: task-state read failed: %s", exc)
-            return HookDecision()
+            return Accept()
         if notice is None:
-            return HookDecision()
-        if ctx.metadata is None:
-            # Nothing here to count the nudge in, and an uncounted one would
-            # re-send on every iteration. The loop always seats this dict.
-            return HookDecision()
-        meta = ctx.metadata.setdefault(_METADATA_KEY, {})
-        if meta.get("reconcile_nudged"):
-            return HookDecision(notes=["design_engine: ledger still unfinished after one nudge; letting the turn end"])
-        meta["reconcile_nudged"] = True
-        return HookDecision(
-            rollback=True,
-            rollback_inject=[{"role": "user", "content": f"{notice}\n\n{RECONCILE_NUDGE}"}],
-            notes=["design_engine: reply ending a turn on an unfinished task-state ledger rolled back (1/1)"],
+            return Accept()
+        if self._reconcile_nudged:
+            return Accept(note="design_engine: ledger still unfinished after one nudge; letting the turn end")
+        self._reconcile_nudged = True
+        return Resample(
+            "reply ends the turn on an unfinished task-state ledger",
+            inject=[{"role": "user", "content": f"{notice}\n\n{RECONCILE_NUDGE}"}],
+            note="design_engine: reply ending a turn on an unfinished task-state ledger rolled back (1/1)",
         )
 
-    async def after_send(self, ctx: AgentHookContext) -> HookDecision:
+    async def outbound(self, reply: str, step: StepView) -> str | None:
         bound = workdir.current()
-        reply = ctx.outbound_content or ""
         if bound is None or not reply.strip():
-            return HookDecision()
+            return None
         suffixes: list[str] = []
         if self._manager is not None:
             notice = completion_notice(self._manager, str(bound))
@@ -401,14 +412,13 @@ class DesignEngineHook(AgentHook):
             changes = describe_changes(Path(bound))
             if changes:
                 suffixes.append(f"--- {changes}")
-        if not suffixes:
-            return HookDecision()
-        return HookDecision(modified_content="\n\n".join([reply, *suffixes]))
+        appended = "".join(f"\n\n{part}" for part in suffixes)
+        return reply + appended if appended else None
 
 
 __all__ = [
     "FOUNDATION_SKILL_ID",
-    "DesignEngineHook",
+    "DesignParticipant",
     "MisconfiguredEngineHook",
     "RECONCILE_NUDGE",
     "build_selector",

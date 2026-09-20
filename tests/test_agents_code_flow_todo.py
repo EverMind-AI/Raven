@@ -448,12 +448,12 @@ def test_the_hook_factory_binds_the_same_store_the_tool_factory_uses(tmp_path):
     )
     hook = make_flow_hook(ctx)
     tool = factories.make_todo(ctx)
-    assert hook._todos is tool._store is STORES.for_home(tmp_path / "home")
+    assert hook.factory()._todos is tool._store is STORES.for_home(tmp_path / "home")
     off = PluginContext(
         config={"enabled": True, "tools": {"enabled": False}},
         services=ServiceLocator(workspace=tmp_path / "home", user_id="u", agent_id="a"),
     )
-    assert make_flow_hook(off)._todos is None and factories.make_todo(off) is None
+    assert make_flow_hook(off).factory()._todos is None and factories.make_todo(off) is None
 
 
 # --- through the real loop -----------------------------------------------------------
@@ -641,7 +641,8 @@ async def test_tools_keep_session_cleanup_when_flow_is_disabled(tmp_path):
     assert path.exists()
     after = AgentHookContext(session_key="acp:s1")
     await hook.after_send(after)
-    assert not after.metadata
+    # Only the seat the host parks for this turn, which dies with the dict.
+    assert not [k for k in after.metadata if not k.startswith("raven.participant.")]
     observer.on_session_deleted("acp:s1", True)
     assert not path.exists()
 

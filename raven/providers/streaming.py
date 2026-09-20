@@ -128,6 +128,43 @@ async def stream_llm_call(
             reasoning_ms = int((time.monotonic() - think_t0) * 1000)
         return reasoning_ms
 
+    def rendered() -> bool:
+        """Whether asking again would show a watcher the same words twice.
+
+        Only what went out through a delta callback counts. A thought reaches a
+        watcher solely when the caller wired ``on_reasoning_delta``, and the
+        fragments of a tool call are never rendered as the reply at all -- a
+        second attempt replaces them. Counting either as output made a stall
+        during a long silent think, or midway through a large tool argument,
+        unretryable for a turn that had put nothing on screen.
+        """
+        return bool(content_buf) or bool(reasoning_buf and on_reasoning_delta is not None)
+
+    def reset_attempt() -> None:
+        """Drop what the attempt that just failed left behind, before asking again.
+
+        Every retry path goes through here. While `rendered()` was the same test as
+        `any buffer is non-empty`, a path that did not clear could not be reached
+        with anything in them; now that a silent think retries, a slot left behind
+        merges with the next attempt's fragments into a call the model never made,
+        and a thinking block keeps a signature belonging to a generation that no
+        longer exists.
+        """
+        nonlocal final_usage, thinking_blocks, record, upstream_finish_reason
+        nonlocal think_t0, reasoning_ms
+        content_buf.clear()
+        reasoning_buf.clear()
+        tool_call_slots.clear()
+        final_usage = None
+        thinking_blocks = None
+        record = None
+        upstream_finish_reason = None
+        # Left standing, the clock spans the ladder's waits and reports a minute
+        # of sleep as a minute of thought -- the only evidence of how long a
+        # silent round actually thought for.
+        think_t0 = None
+        reasoning_ms = None
+
     final_usage: dict[str, Any] | None = None
     thinking_blocks: list[dict[str, Any]] | None = None
     # The transport facts of the stream currently open. Latest wins: the provider
@@ -247,13 +284,7 @@ async def stream_llm_call(
                     attempt + 1,
                     max_reconnects + 1,
                 )
-                content_buf.clear()
-                reasoning_buf.clear()
-                tool_call_slots.clear()
-                final_usage = None
-                thinking_blocks = None
-                record = None
-                upstream_finish_reason = None
+                reset_attempt()
                 continue
             break
         except TimeoutError as exc:
@@ -263,7 +294,7 @@ async def stream_llm_call(
             # as a retryable response, the loop's own ladder asked again and a
             # person watching the stream saw the words twice, which is the rule
             # the branch below holds and this one did not.
-            if (content_buf or reasoning_buf or tool_call_slots) and not retry_after_output:
+            if rendered() and not retry_after_output:
                 raise
             # Classified from the live exception rather than a fresh
             # TimeoutError, and its text kept when nothing was streamed: a
@@ -278,6 +309,7 @@ async def stream_llm_call(
                 content=streamed or format_llm_error(exc, classification),
                 finish_reason="error",
                 error_classification=classification,
+                usage=final_usage or {},
                 call_record=record,
             )
         except Exception as exc:
@@ -285,7 +317,7 @@ async def stream_llm_call(
             # own exception reaches the caller unchanged: per N-TURNFAILED the turn
             # must fail (the lane emits TurnFailed) rather than resolve into a
             # "Sorry" text reply.
-            emitted = bool(content_buf or reasoning_buf or tool_call_slots)
+            emitted = rendered()
             if emitted and not retry_after_output:
                 raise
             # Duck-typed providers need not implement classify_error; treat a
@@ -305,13 +337,7 @@ async def stream_llm_call(
                     sum(len(part) for part in content_buf),
                     exc,
                 )
-                content_buf.clear()
-                reasoning_buf.clear()
-                tool_call_slots.clear()
-                final_usage = None
-                thinking_blocks = None
-                record = None
-                upstream_finish_reason = None
+                reset_attempt()
             if classification.strip_images:
                 # The one recovery this function cannot make: the picture has to
                 # come out of the messages it only reads. Handed back as the error
@@ -322,6 +348,7 @@ async def stream_llm_call(
                     content=f"Error calling LLM ({classification.category}): {exc}",
                     finish_reason="error",
                     error_classification=classification,
+                    usage=final_usage or {},
                     call_record=record,
                 )
             if not classification.retryable:
@@ -334,6 +361,7 @@ async def stream_llm_call(
                     max_reconnects + 1,
                     exc,
                 )
+                reset_attempt()
                 continue
             # The reconnects were spent on a failure that is still transient. The
             # provider's ladder is seconds long and right for a dropped connection;
@@ -352,6 +380,7 @@ async def stream_llm_call(
                 len(retry_delays),
                 exc,
             )
+            reset_attempt()
             await asyncio.sleep(delay)
 
     if had_error:

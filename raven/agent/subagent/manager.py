@@ -218,12 +218,21 @@ class SubagentManager:
         session_dir: "Callable[[str], Path] | None" = None,
         session_tier: "Callable[[str | None], str] | None" = None,
         target_ready: "TargetReady | None" = None,
+        retry_delays: "Sequence[float] | None" = None,
+        retry_after_output: bool = False,
     ):
-        from raven.config.schema import ExecToolConfig
+        from raven.config.schema import LLM_ERROR_RETRY_DELAYS_DEFAULT, ExecToolConfig
 
         # Agent home. Also the working-directory fallback for a spawn that
         # captured none, which is the pre-split behaviour.
         self.workspace = workspace
+        # What a streamed spawn waits out on a dropped stream, as two plain values:
+        # this layer may not import the loop's RecoveryLimits, and the loop that
+        # holds them passes them apart. A rig that passes none keeps the defaults.
+        self.retry_delays: tuple[float, ...] = (
+            LLM_ERROR_RETRY_DELAYS_DEFAULT if retry_delays is None else tuple(retry_delays)
+        )
+        self.retry_after_output = retry_after_output
         # SessionManager.session_dir, so a call record lands beside the
         # transcript of the session that made it -- including the sessions
         # whose group only the manager can resolve (raven/agent/subagent/history.py).
@@ -373,6 +382,8 @@ class SubagentManager:
             tools_allow=getattr(build, "tools_allow", None),
             skills_allow=getattr(build, "skills_allow", None),
             mcp_allow=getattr(row.config, "mcps", None),
+            retry_delays=self.retry_delays,
+            retry_after_output=self.retry_after_output,
         )
 
     def build_role_backend(self, build: Any = None) -> "RavenLoopBackend":
@@ -398,6 +409,8 @@ class SubagentManager:
             image_search=self.image_search,
             tools_allow=getattr(build, "tools_allow", None),
             skills_allow=getattr(build, "skills_allow", None),
+            retry_delays=self.retry_delays,
+            retry_after_output=self.retry_after_output,
         )
 
     def set_mcp_source(self, source: Any) -> None:

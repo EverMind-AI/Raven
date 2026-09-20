@@ -53,6 +53,9 @@ Hard constraints only (violations get reverted / rejected). Soft suggestions and
   - `plugins-dist/design-engine/` -- the visual-design engine (owner-signed 0904): the
     fifteen-domain zh skill corpus;
   - `tests/test_design_engine_*` -- the design engine's fixtures;
+  - `docs-site/` -- the bilingual documentation site (owner-signed 0918): the
+    language-switcher label and any other display string the site config must
+    render in Chinese; the site's own pages are already exempt as `*.md`;
   - `raven/i18n/` -- the zh catalog and lexicon;
   - `raven/templates/prompts/zh/` -- the zh prompt pack;
   - `tests/test_i18n_*` -- zh-i18n test fixtures: a CJK fixture is admissible **only when
@@ -169,7 +172,7 @@ self.logger = logger.bind(channel=self.name)
 | `chore` | Other misc |
 | `revert` | Revert a prior commit |
 
-**scope** — a top-level subpackage of `raven/`. See the `Repo layout` section of `README.md` for the canonical list. Spanning multiple scopes → omit the scope, or use `(*)`.
+**scope** — a top-level subpackage of `raven/`. See the repo-layout page of the documentation site (`docs-site/docs/repo-layout.md`) for the canonical list. Spanning multiple scopes → omit the scope, or use `(*)`.
 
 **subject** — lowercase start; no trailing period; English. The whole header (`<type>(<scope>): <subject>`) must be ≤ 100 chars — the single length rule, enforced by commitlint `header-max-length`.
 

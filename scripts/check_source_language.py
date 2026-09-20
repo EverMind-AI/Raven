@@ -22,6 +22,7 @@ EXEMPT_PREFIXES = (
     "tests/test_ppt_engine_",
     "plugins-dist/design-engine/",
     "tests/test_design_engine_",
+    "docs-site/",
     "raven/i18n/",
     "raven/templates/prompts/zh/",
     "tests/test_i18n_",

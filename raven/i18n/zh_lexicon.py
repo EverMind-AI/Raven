@@ -231,3 +231,13 @@ so a playbook trigger built from them would fire on every request."""
 TASK_TITLE_EXAMPLE = "草拟回复"
 """An imperative task title in Chinese, shown beside its English form so the
 model writes a title in the user's language rather than translating one."""
+
+REFUSAL_OPENERS: tuple[str, ...] = ("作为一个人工智能语言模型",)
+"""Openers that mean the model declined rather than researched.
+
+The assistant-disclaimer sentence is what these backends actually write when they
+refuse a research question, and a turn that opens with it has produced no answer
+however long it runs. Read by ``raven.agent.loop.dead_end.REFUSAL_MARKERS``, which
+matches by substring rather than prefix: the disclaimer is sometimes led by a
+courtesy sentence.
+"""

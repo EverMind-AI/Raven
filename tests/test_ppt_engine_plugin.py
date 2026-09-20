@@ -275,7 +275,7 @@ def test_a_well_typed_slice_never_meets_the_sentinel(tmp_path: Path) -> None:
         tmp_path,
     )
     hook = plugin_module.make_hook(ctx)
-    assert type(hook).__name__ == "PptEngineHook"
+    assert type(hook).__name__ == "ParticipantHook"
 
 
 def test_a_tool_call_outside_a_turn_is_refused_with_the_reason(tmp_path: Path) -> None:
@@ -842,7 +842,7 @@ async def test_a_cancelled_turn_keeps_the_users_words_not_the_staging_block(tmp_
     from raven.agent.loop import AgentLoop
     from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
     from raven.spine import ChatType, Origin, Source, TurnRequest
-    from raven_ppt.plugin.hook import PptEngineHook
+    from raven_ppt.plugin.hook import ppt_hook
 
     class _CancellingProvider:
         async def chat_with_retry(self, **kwargs):
@@ -856,7 +856,7 @@ async def test_a_cancelled_turn_keeps_the_users_words_not_the_staging_block(tmp_
         workspace=tmp_path,
         model="fake/model",
         policy=TurnPolicy(max_iterations=2),
-        host=HostWiring(hooks=[PptEngineHook(home=None)]),
+        host=HostWiring(hooks=[ppt_hook(home=None)]),
         tools=ToolWiring(restrict_to_workspace=True),
     )
 

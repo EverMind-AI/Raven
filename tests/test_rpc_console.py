@@ -128,6 +128,23 @@ def test_the_hub_marker_is_none_when_the_market_is_absent(monkeypatch: pytest.Mo
     assert _hub_marker_name() is None
 
 
+def test_the_install_meta_name_is_none_when_the_writer_is_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The second stamp is read from the module that writes it, on the same
+    terms as the first: absent, it costs the bundle half of the hub flag and
+    nothing else -- never the skill list."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _no_audit(name, *args, **kwargs):
+        if name == "raven.skill_hub.audit":
+            raise ImportError("market not installed")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_audit)
+    assert console_module._install_meta_name() is None
+
+
 # The other half of this -- that an installed market yields *its* marker name,
 # so hub-installed skills are recognised -- belongs with the market itself and
 # is not testable here: nothing in this tree provides skillhub.
@@ -176,6 +193,68 @@ async def test_ext_list_still_reports_skills_without_the_market(
 
     assert [s["name"] for s in result["skills"]] == ["alpha", "beta"]
     assert all(s["hub"] is False and s["hub_id"] == "" for s in result["skills"])
+
+
+async def test_ext_list_calls_a_skill_hub_installed_whichever_installer_stamped_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two installers, two stamps, one flag. The market module writes
+    ``.skillhub.json`` beside the skill; the context engine and ``use_skill``
+    cache a bundle and write ``.install-meta.json`` there instead. The page
+    gates removal on ``hub`` alone, so asking about only the first stamp made
+    the common install path look local and hid the control for it.
+
+    The bundle stamp carries a slug, not a market id, so that skill is
+    hub-installed with an empty ``hub_id`` -- which is a state the page already
+    handles by not fetching market detail.
+    """
+
+    class _Skill:
+        def __init__(self, name: str, source: str) -> None:
+            self.name = name
+            self.description = "d"
+            self.source = source
+            self.always = False
+            self.path = tmp_path / name / "SKILL.md"
+
+    market = _Skill("from-market", "hub")
+    bundle = _Skill("from-bundle", "hub")
+    local = _Skill("by-hand", "workspace")
+    for skill in (market, bundle, local):
+        skill.path.parent.mkdir(parents=True)
+        skill.path.write_text("# s")
+    (market.path.parent / ".skillhub.json").write_text('{"id": "uuid-market"}')
+    (bundle.path.parent / ".install-meta.json").write_text('{"slug": "acme_bundle", "version": "v0"}')
+
+    class _Catalog:
+        def gather_all_skills(self):
+            return [market, bundle, local]
+
+    from raven.config import loader as config_loader
+    from raven.config import raven as raven_config
+
+    monkeypatch.setattr(config_loader, "load_config", lambda: SimpleNamespace(tools=SimpleNamespace(mcp_servers={})))
+    monkeypatch.setattr(
+        raven_config,
+        "load_raven_config",
+        lambda: SimpleNamespace(skill_forge=None, plugins=SimpleNamespace(disabled=[])),
+    )
+    # Pinned to the literal file names rather than read through the market
+    # module: the assertion is about which files on disk mean "installed", and
+    # a test that imported the names could not notice them drifting apart.
+    monkeypatch.setattr(console_module, "_hub_marker_name", lambda: ".skillhub.json")
+    monkeypatch.setattr(console_module, "_install_meta_name", lambda: ".install-meta.json")
+    loop = SimpleNamespace(
+        context=SimpleNamespace(skills=_Catalog()),
+        tools=SimpleNamespace(tool_names=[], get=lambda _name: None),
+    )
+
+    result = await console_module.ext_list({}, agent_loop_factory=lambda: loop)
+
+    by_name = {s["name"]: s for s in result["skills"]}
+    assert (by_name["from-market"]["hub"], by_name["from-market"]["hub_id"]) == (True, "uuid-market")
+    assert (by_name["from-bundle"]["hub"], by_name["from-bundle"]["hub_id"]) == (True, "")
+    assert (by_name["by-hand"]["hub"], by_name["by-hand"]["hub_id"]) == (False, "")
 
 
 # ---------------------------------------------------------------------------

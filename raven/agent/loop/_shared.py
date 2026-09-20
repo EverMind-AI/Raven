@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass, field, replace
@@ -316,30 +315,21 @@ def _appended_by_hook(before: str | None, after: str) -> str:
     return after[len(head) :]
 
 
-# Marks the synthetic user message that carries images a transport cannot put in
-# a tool result. Not persisted: the tool result above it already names the file
-# path, so the only thing this message would add to the transcript is a user turn
-# saying "[image]" that the user never sent -- misleading on resume and in
-# session export. Deliberately a different key from ``_recovery_synthetic``:
-# that one marks empty-response recovery scaffolding, and collapsing the two
-# would make either meaning impossible to reason about separately.
-_ATTACHED_IMAGE_KEY = "_attached_image"
-#: Where each picture in a message came from, one entry per image part in content
-#: order: ``{"tool", "iteration", "caption"}``. Stamped when the picture enters the
-#: transcript and read when it leaves it, so the note that stands in for a withdrawn
-#: picture can say which tool showed which page in which round. Not sent (the
-#: provider allow-list drops it) and not filed in the session (``_save_turn`` pops
-#: it): the picture lives for the turn only, and so does its provenance. The
-#: tracing ``llm.input`` artifact records the request as handed to the provider,
-#: before the allow-list, so on a stock install the entries do appear there,
-#: beside the pictures they describe.
-_IMAGE_SOURCES_KEY = "_image_sources"
 #: A message a hook injected on rollback: the harness re-prompting itself (a
 #: reviewer rejection, a commit nudge). It persists into history because the
 #: model was shown it, but no real user said it; the underscore key is dropped
 #: on the way to the provider, so what it changes is only how readers of the
 #: transcript classify the line.
 _HOOK_INJECTED_KEY = "_hook_injected"
+#: A user message the runtime merged into a turn that was already running
+#: (``BusyPolicy.INJECT``). It is a real user message and persists as one; the
+#: mark says only that it arrived mid-turn, and the underscore key is dropped on
+#: the way to the provider like the others here. A turn that may be re-run is
+#: what needs the mark: the rerun starts again from the question and throws the
+#: failed attempt's work away, and without this it cannot tell a correction the
+#: reader typed -- which is the question now, and which the queue has already
+#: given up -- from the research it is entitled to discard.
+_MID_TURN_USER_KEY = "_mid_turn_user"
 
 
 @dataclass(frozen=True)
@@ -447,109 +437,6 @@ def _strip_inline_images(content: list[Any]) -> list[Any]:
     return out
 
 
-_CAPTION_MAX_CHARS = 120
-
-
-def _image_sources(tool_name: str, blocks: list[Any], iteration: int) -> list[dict[str, Any]]:
-    """Provenance for every image part in ``blocks``, in content order.
-
-    A tool that returns pictures writes a text part in front of each saying what
-    it shows (``Page 7 of 20: ...``, ``[image: shot.png] | 300x200px``); its first
-    line is the caption, and it stands for every picture up to the next text part.
-    Read off the blocks as the tool returned them: before the trust fence wraps
-    the text, and before a transport that cannot carry a picture in a tool result
-    separates it from the line that named it.
-    """
-    out: list[dict[str, Any]] = []
-    caption: str | None = None
-    for part in blocks:
-        if not isinstance(part, dict):
-            continue
-        if part.get("type") == "text":
-            text = part.get("text") or ""
-            first = next((line.strip() for line in text.splitlines() if line.strip()), "")
-            caption = first[:_CAPTION_MAX_CHARS] or None
-        elif is_image_part(part):
-            out.append({"tool": tool_name, "iteration": iteration, "caption": caption})
-    return out
-
-
-def _wire_image_bytes(part: Any) -> int:
-    """What an inline picture costs the request, 0 for anything else (a remote
-    reference has no known size).
-
-    The base64 payload, not the bytes it decodes to. What the budget above it is
-    protecting is the request body, and a data URI travels encoded: counting the
-    decoded side let 11.24MB of pictures pass a 12MB budget while 16.8MB left the
-    process, which the gateway answered with an empty 200 and zero usage five times
-    over on a byte-identical payload.
-    """
-    if not is_inline_image(part):
-        return 0
-    return len(part["image_url"]["url"].partition(",")[2])
-
-
-# The opening words of every reason a withdrawal note can give. The composer starts
-# each reason with one of these and the filed-form parser finds the end of the facts
-# by them, so a caption may contain ". " without being cut short. A reason worded
-# past them would file the whole note into the session unnoticed, which is why the
-# composer takes its openings from here rather than spelling them out again.
-_REFUSED = "The endpoint refused"
-_ELIDED = "It was elided"
-_OUTGREW = "This turn's pictures"
-_SEEN = "You looked at it"
-_WITHDRAWAL_OPENINGS = (_REFUSED, _ELIDED, _OUTGREW, _SEEN)
-_WITHDRAWN_NOTE_FACTS = re.compile(
-    r"^(\[image no longer in context: .*?)\. (?:" + "|".join(map(re.escape, _WITHDRAWAL_OPENINGS)) + r").*\]$",
-    re.DOTALL,
-)
-
-
-def filed_image_note(text: str) -> str:
-    """The note as it is filed in the session: the facts, not the turn's reasons.
-
-    The live note says why the picture left and how to ask for it again, which is
-    this turn's business ("this turn's pictures outgrew their byte budget"); a
-    resumed session would replay that as current. The part that stays true across
-    turns is which picture, which tool and which round, so that is what is kept.
-    A text that is not a withdrawal note is returned unchanged.
-    """
-    match = _WITHDRAWN_NOTE_FACTS.match(text)
-    return f"{match.group(1)}.]" if match else text
-
-
-def _withdrawn_image_note(source: dict[str, Any], *, index: int, total: int, reason: str, keep: int) -> str:
-    """The text that stands where a picture was, once the picture is withdrawn.
-
-    Says what the picture showed, who showed it and when, why it is gone, and how
-    to see it again -- so the model reads "I looked at page 7 already and can ask
-    for it again" rather than a bare "elided" it has to guess about. ``reason`` is
-    ``budget`` (the turn's pictures outgrew their byte budget and collapsed to the
-    newest few), ``superseded`` (a fixed count moved past it), ``refused`` (the
-    endpoint would not take the request's pictures) or ``context`` (an overflow).
-    Written once, when the picture leaves; the same inputs always give the same
-    text.
-    """
-    caption = source.get("caption")
-    tool = source.get("tool")
-    iteration = source.get("iteration")
-    what = f'"{caption}"' if caption else f"picture {index} of {total}"
-    origin = f" from {tool}" if tool else ""
-    when = f" at iteration {iteration}" if iteration is not None else ""
-    again = f"ask {tool} for it again" if tool else "ask for it again"
-    if reason == "refused":
-        why = f"{_REFUSED} this request's pictures as too large."
-    elif reason == "context":
-        why = f"{_ELIDED} to fit the context window."
-    elif reason == "budget":
-        why = f"{_OUTGREW} outgrew their byte budget, so only the {keep} newest image-bearing result(s) keep theirs."
-    elif keep == 0:
-        why = f"{_REFUSED} this turn's pictures as too large, so none are kept in context now."
-    else:
-        why = f"{_SEEN} when it arrived; only the {keep} newest image-bearing result(s) keep their pictures."
-    return f"[image no longer in context: {what}{origin}{when}. {why} To see it again, {again}]"
-
-
 def _display_label(tool: Any, arguments: dict[str, Any]) -> str | None:
     """A tool's own label for its transcript row, or None if it cannot give one.
 
@@ -606,6 +493,18 @@ def _file_change_payload(change: Any) -> dict[str, Any] | None:
     return payload
 
 
+def monotonic() -> float:
+    """The turn's elapsed-time clock, as one name the loop calls.
+
+    A seam, and the reason is that the alternative is worse. The budgets this feeds
+    are checked against elapsed time, and a test that wants to see a deadline fire
+    cannot wait for one; replacing ``time.monotonic`` itself would replace the clock
+    asyncio schedules on, so the substitute has to be this narrow. The datetime
+    equivalent already goes through ``_now_fn`` for the same reason.
+    """
+    return time.monotonic()
+
+
 _TOOL_PREVIEW_MAX_CHARS = 4_000
 """How much of a tool's output rides the ``tool.complete`` event to a client.
 
@@ -615,3 +514,93 @@ one event lands per tool call in a live turn and again on a session replay, so
 it is a page-weight budget rather than a correctness one. Four thousand covers
 an error with its traceback, a directory listing, and a short file, which is
 most of what a reader opens a card to read."""
+
+
+TURN_BUDGETS_KEY = "turn_budgets"
+"""Where a product leaves the bounds it wants a turn run under, on the turn's metadata.
+
+The loop serves every agent and must not know any of them, so bounds arrive as data a
+hook writes rather than as config the loop reads: a hook that writes nothing leaves the
+turn bounded exactly as it was before this key existed, which is what keeps every other
+agent byte-identical. The value is a plain dict, and :func:`turn_budgets` is the only
+reader -- a malformed one leaves the turn unbounded rather than raising inside the loop.
+"""
+
+
+TURN_ASK_KIND_KEY = "turn_ask_kind"
+"""Where a product leaves the labeller for its own harness-injected asks.
+
+The same seam as ``TURN_BUDGETS_KEY`` and for the same reason, carrying a callable
+rather than a dict because what it holds is knowledge of wording: only the product that
+writes an ask can name it. The loop pairs the name with the structural marker on the
+injected message, so the boolean "the harness asked and the model never answered" holds
+whether or not this key is set, and only the sub-label depends on it.
+
+Unlike ``observers`` this entry stays in the process -- it is never filed onto a message
+or sent to a client -- so a callable here crosses no serialization boundary.
+"""
+
+
+@dataclass(frozen=True)
+class TurnBudgets:
+    """The bounds one turn runs under, beyond the iteration cap.
+
+    ``wall_clock_seconds`` is checked between iterations, never mid-generation:
+    cancelling a call in flight throws away a finished generation and leaves no
+    answer, and a deadline landing between a tool result and the model reading it
+    produces a trajectory nothing can interpret. The cost is an overrun of at most
+    one iteration, and that is the intended trade rather than an oversight.
+
+    ``dead_end_retries`` is how many times a turn that produced no answer may be
+    run again from the original question. Re-run, never salvaged: squeezing an
+    answer out of a failed attempt's leftovers was measured to convert a
+    detectable zero into a confident wrong answer, and it empties the very
+    trigger this budget reads.
+
+    ``dead_end_reasons`` narrows which dead ends are worth re-running, matched as
+    prefixes of what ``dead_reasons`` returns. Empty means all of them.
+    """
+
+    wall_clock_seconds: float | None = None
+    dead_end_retries: int = 0
+    dead_end_reasons: tuple[str, ...] = ()
+
+
+def turn_budgets(metadata: dict[str, Any] | None) -> TurnBudgets:
+    """Read the turn's budgets off its hook metadata; defaults mean unbounded.
+
+    Tolerant by construction. This reads a dict a plugin wrote, so a malformed
+    value must leave the turn bounded the way it was rather than raise inside the
+    loop: an instrument that can end the turn it measures is worse than no
+    instrument, and a budget is not even an instrument.
+    """
+    raw = (metadata or {}).get(TURN_BUDGETS_KEY)
+    if not isinstance(raw, dict):
+        return TurnBudgets()
+    wall = raw.get("wall_clock_seconds")
+    retries = raw.get("dead_end_retries")
+    reasons = raw.get("dead_end_reasons")
+    # ``bool`` is an ``int``, so a switch left in a number's place would otherwise
+    # read as one retry or a one-second deadline -- a misconfiguration that ends
+    # turns rather than one that is ignored.
+    numeric = (int, float)
+    return TurnBudgets(
+        wall_clock_seconds=(
+            float(wall) if isinstance(wall, numeric) and not isinstance(wall, bool) and wall > 0 else None
+        ),
+        dead_end_retries=(
+            int(retries) if isinstance(retries, int) and not isinstance(retries, bool) and retries > 0 else 0
+        ),
+        dead_end_reasons=tuple(str(r) for r in reasons) if isinstance(reasons, (list, tuple)) else (),
+    )
+
+
+def turn_ask_kind(metadata: dict[str, Any] | None) -> Callable[[object], "str | None"] | None:
+    """Read the product's ask labeller off the turn's hook metadata, or ``None``.
+
+    Tolerant for the reason :func:`turn_budgets` is: a non-callable left under the key
+    must leave the turn labelled the way it was rather than raise inside the loop, since
+    what this names is a measurement and an instrument may not end the turn it measures.
+    """
+    value = (metadata or {}).get(TURN_ASK_KIND_KEY)
+    return value if callable(value) else None

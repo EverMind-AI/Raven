@@ -679,25 +679,88 @@ class TestTheSupervisor:
 
 
 class TestStopping:
+    @staticmethod
+    def _resident(home: Path) -> None:
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "web.json").write_text(json.dumps({"pid": 111, "port": 18999}), encoding="utf-8")
+        (home / "serve.json").write_text(json.dumps({"port": 18999, "token": "t", "pid": 222}), encoding="utf-8")
+
+    @staticmethod
+    def _liveness(alive_for: dict[int, int], seen: list[int] | None = None):
+        """A ``_pid_alive`` whose first answer per pid is yes and whose next
+        ``alive_for[pid]`` answers are too.
+
+        The first yes is not the wait: ``_read_web_state`` and ``_read_serve_pid``
+        both probe liveness to decide whether a recorded pid counts as running, so
+        a fake that says no from the start reports nothing to stop at all.
+        """
+
+        def _alive(pid: int) -> bool:
+            if seen is not None:
+                seen.append(pid)
+            left = alive_for.get(pid)
+            if left is None:
+                alive_for[pid] = 0
+                return True
+            if left > 0:
+                alive_for[pid] = left - 1
+                return True
+            return False
+
+        return _alive
+
     def test_it_stops_the_supervisor_before_the_gateway(self, home: Path, monkeypatch) -> None:
         """The other order only proves the supervisor works: it would restart the
         gateway between the two signals."""
         import os
         import signal
-        import time
 
-        home.mkdir(parents=True, exist_ok=True)
-        (home / "web.json").write_text(json.dumps({"pid": 111, "port": 18999}), encoding="utf-8")
-        (home / "serve.json").write_text(json.dumps({"port": 18999, "token": "t", "pid": 222}), encoding="utf-8")
+        self._resident(home)
         signalled: list[tuple[int, int]] = []
         monkeypatch.setattr(os, "kill", lambda pid, sig: signalled.append((pid, sig)))
         # Separately from os.kill, which the liveness probe also uses: leaving that
         # to the fake would record the probe's own signal-0 as a stop.
-        monkeypatch.setattr(serve_commands, "_pid_alive", lambda _pid: True)
-        monkeypatch.setattr(time, "sleep", lambda _s: None)
+        monkeypatch.setattr(serve_commands, "_pid_alive", self._liveness({}))
 
         assert serve_commands._stop_resident() is True
         assert signalled == [(111, signal.SIGTERM), (222, signal.SIGTERM)]
+
+    def test_it_waits_for_each_signalled_process_to_actually_be_gone(self, home: Path, monkeypatch) -> None:
+        """A signal delivered is not a process gone, and the gateway's flock
+        outlives the signal by exactly that gap. ``raven web --stop && raven web``
+        would otherwise read the lock of the process it just killed and come up on
+        ``serve``, serving the page from an engine with no ChannelManager."""
+        import os
+        import time
+
+        self._resident(home)
+        monkeypatch.setattr(os, "kill", lambda _pid, _sig: None)
+        monkeypatch.setattr(time, "sleep", lambda _s: None)
+        # Each pid lingers for two polls after its signal, the way a process
+        # handling SIGTERM does while its lock is still held.
+        lingering = {111: 2, 222: 2}
+        monkeypatch.setattr(serve_commands, "_pid_alive", self._liveness(lingering))
+
+        assert serve_commands._stop_resident() is True
+        assert lingering == {111: 0, 222: 0}, "returned while a signalled process was still alive"
+
+    def test_a_process_that_outlives_the_deadline_fails_the_stop(self, home: Path, monkeypatch) -> None:
+        """Refusing is the honest answer: a relaunch from here lands on ``serve``
+        and the page comes up without channels, which is worse than not starting.
+        The non-zero exit is what makes install.sh's ``--stop && --foreground``
+        short-circuit instead of launching into the wrong engine."""
+        import os
+        import time
+
+        self._resident(home)
+        monkeypatch.setattr(os, "kill", lambda _pid, _sig: None)
+        monkeypatch.setattr(time, "sleep", lambda _s: None)
+        monkeypatch.setattr(serve_commands, "_pid_alive", lambda _pid: True)
+        monkeypatch.setattr(serve_commands, "_STOP_WAIT_S", 0.0)
+
+        with pytest.raises(typer.Exit) as excinfo:
+            serve_commands._stop_resident()
+        assert excinfo.value.exit_code == 1
 
     def test_nothing_running_is_not_an_error(self, home: Path) -> None:
         assert serve_commands._stop_resident() is False

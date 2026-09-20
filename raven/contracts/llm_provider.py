@@ -48,6 +48,15 @@ class ErrorClassification:
     refuses_prompt_cache: bool = False
 
 
+#: Reasoning efforts this repo sends, strongest first. The set the Anthropic
+#: transport can map a thinking budget for, and the set OpenRouter accepts in
+#: its native reasoning object, so a rung taken from here is a value every
+#: backend the loop talks to already understands. Here rather than beside the
+#: loop's recovery because the window's head summary reads its floor too, and
+#: neither the loop nor the window is allowed to import the other.
+REASONING_EFFORT_LADDER: tuple[str, ...] = ("max", "xhigh", "high", "medium", "low", "minimal")
+
+
 class ProviderHTTPError(RuntimeError):
     """Carries a real HTTP status past the point where a provider renders its
     non-200 response into a string.
@@ -428,6 +437,7 @@ __all__ = [
     "LLMProvider",
     "LLMResponse",
     "ProviderHTTPError",
+    "REASONING_EFFORT_LADDER",
     "RunMeta",
     "ChatDelta",
     "ToolCallRequest",

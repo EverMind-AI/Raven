@@ -60,6 +60,23 @@ def _hub_marker_name() -> str | None:
     return MARKER
 
 
+def _install_meta_name() -> str | None:
+    """The other installer's stamp, or ``None`` on the same terms as above.
+
+    The context engine and the ``use_skill`` tool install a bundle rather than
+    a skill, and stamp it with a different file than the market module's
+    ``MARKER``. Both mean "the hub put this here", so a skill list that asked
+    about one and not the other called most installed skills local -- and the
+    page, which gates removal on this flag, offered it for the few and hid it
+    for the many. Read from the writer so the spelling cannot drift.
+    """
+    try:
+        from raven.skill_hub.audit import INSTALL_META
+    except ImportError:
+        return None
+    return INSTALL_META
+
+
 # ---------------------------------------------------------------------------
 # ext.list
 # ---------------------------------------------------------------------------
@@ -117,23 +134,29 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
         # hub=false. Kept out of the loop's try so a missing market costs the
         # two hub fields, never the skill list itself.
         marker_name = _hub_marker_name()
+        meta_name = _install_meta_name()
         try:
             for m in catalog.gather_all_skills():
                 path = getattr(m, "path", None)
                 hub_id = ""
                 marker = path.parent / marker_name if (path and marker_name) else None
-                if marker is not None and marker.is_file():
+                from_market = marker is not None and marker.is_file()
+                if from_market:
                     try:
                         hub_id = str(json.loads(marker.read_text()).get("id") or "")
                     except Exception:
                         hub_id = ""
+                # The bundle installer's stamp names a slug, not a market id, so
+                # a skill it placed is hub-installed with no ``hub_id`` to offer:
+                # the page fetches market detail only when one is present.
+                from_bundle = bool(path and meta_name) and (path.parent / meta_name).is_file()
                 skills.append(
                     {
                         "name": m.name,
                         "description": (m.description or "")[:200],
                         "source": str(m.source),
                         "always": bool(getattr(m, "always", False)),
-                        "hub": marker is not None and marker.is_file(),
+                        "hub": from_market or from_bundle,
                         "hub_id": hub_id,
                     }
                 )
@@ -561,21 +584,22 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
         i18n.set_language(value)
         return {"applied": True, "previous": prev}
 
-    if key in ("cron.defaultTimezone", "cron.forwardChannels"):
+    if key == "cron.defaultTimezone":
         from raven.config.update import update_cron_config
 
-        sub = key.split(".", 1)[1]
-        if sub == "defaultTimezone":
-            if not isinstance(value, str) or not value:
-                raise ConfigValidationError("defaultTimezone must be a non-empty string")
-            from zoneinfo import ZoneInfo
+        if not isinstance(value, str) or not value:
+            raise ConfigValidationError("defaultTimezone must be a non-empty string")
+        from zoneinfo import ZoneInfo
 
-            try:
-                ZoneInfo(value)
-            except Exception:
-                raise ConfigValidationError(f"unknown timezone: {value}") from None
-        elif not isinstance(value, list) or not all(isinstance(x, str) for x in value):
-            raise ConfigValidationError("forwardChannels must be a list of strings")
+        try:
+            ZoneInfo(value)
+        except Exception:
+            raise ConfigValidationError(f"unknown timezone: {value}") from None
+        # The page names the key the way the config file spells it; the writer
+        # validates against ``CronConfig.model_fields``, which holds the Python
+        # field names. Nothing else in this endpoint crosses the two, so the
+        # conversion belongs here rather than in a writer the CLI shares.
+        sub = to_snake(key.split(".", 1)[1])
         prev = update_cron_config(sub, value)
         return {"applied": True, "previous": prev}
 

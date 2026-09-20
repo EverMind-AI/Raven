@@ -1152,6 +1152,30 @@ def test_backend_start_task_is_held_and_settled_before_the_drain() -> None:
     assert cancel_at < drain_at, "the start must be settled before the backend is drained and stopped"
 
 
+def test_teardown_stops_the_skill_file_watcher() -> None:
+    """The teardown must stop the skill watcher before the process exits.
+
+    ``LocalSkillCatalog`` auto-starts ``SkillFileWatcher``, a daemon thread that
+    parks inside ``watchfiles``' Rust ``watch()``. Daemon status does not make
+    process exit safe while it sits in native code: CPython runs
+    ``Py_FinalizeEx`` under that call and the process dies of SIGSEGV (-11, or
+    139 in a shell) after the turn and the teardown have both already
+    succeeded. Measured 2026-09-18: a real ``raven tui`` exited -11, and
+    building the loop this module's factory builds and then letting the
+    interpreter finalize reproduced 139 -- 0 when the watcher was stopped first.
+
+    The teardown is a closure with no import seam, so this pins the call in the
+    source the way the backend-start-task test above does.
+    """
+    import inspect
+
+    from raven.cli import tui_commands
+
+    src = inspect.getsource(tui_commands._run_rpc_server_until_done)
+    teardown = src.split("cron_service.stop()", 1)[1]
+    assert "stop_file_watcher()" in teardown
+
+
 def test_child_env_defaults_node_env_to_production(monkeypatch: pytest.MonkeyPatch) -> None:
     """An unset NODE_ENV made a stale dist bundle pick React's development
     reconciler, whose per-commit performance.measure() entries accumulate

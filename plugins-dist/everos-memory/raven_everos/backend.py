@@ -1498,12 +1498,15 @@ class EverosBackend:
                     )
                 )
             for case in getattr(data, "agent_cases", None) or []:
-                # task_intent + key_insight makes a more useful prompt
-                # bullet than task_intent alone.
-                text = getattr(case, "task_intent", "") or ""
-                insight = getattr(case, "key_insight", None)
-                if insight:
-                    text = f"{text}\n\n{insight}" if text else insight
+                # A case is only reusable if the reader sees how it was done:
+                # intent names the task, approach is the method, key_insight is
+                # the conclusion. Intent stays first because the skill router
+                # takes this text's first line as the hit's display name.
+                text = "\n\n".join(
+                    part
+                    for field in ("task_intent", "approach", "key_insight")
+                    if (part := (getattr(case, field, "") or "").strip())
+                )
                 out.append(
                     Memory(
                         text=text,

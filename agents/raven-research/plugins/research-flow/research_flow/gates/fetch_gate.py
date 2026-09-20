@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import logging
 
-from raven.contracts.loop_hooks import AgentHook, AgentHookContext, HookDecision
+from raven.contracts.loop_hooks import HookDecision
 from raven.security.trust import unwrap_untrusted
+from research_flow.gates.base import Gate, GateCtx
 from research_flow.support.fetch_gate_core import FetchGate
 from research_flow.support.harness_text import SUFFICIENCY_PREFIX, fetch_gate_notice
 from research_flow.tools.web import fetch_result_ok
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 _GATED_TOOL = "web_search"
 
 
-class FetchGateObserver(AgentHook):
+class FetchGateObserver(Gate):
     """Close ``web_search`` on a long unread-search streak; reopen on a fetch."""
 
     def __init__(self, gate: FetchGate) -> None:
@@ -32,7 +33,7 @@ class FetchGateObserver(AgentHook):
     def name(self) -> str:
         return "FetchGateObserver"
 
-    async def before_execute_tools(self, ctx: AgentHookContext) -> HookDecision:
+    async def before_execute_tools(self, ctx: GateCtx) -> HookDecision:
         """Record a ``web_search`` call made on an iteration where it was withheld.
 
         ★ 20260825: **observation only, deliberately** — same scope as
@@ -64,7 +65,7 @@ class FetchGateObserver(AgentHook):
             state["gate_called_when_closed"] = int(state.get("gate_called_when_closed") or 0) + n
         return HookDecision()
 
-    async def before_iteration(self, ctx: AgentHookContext) -> HookDecision:
+    async def before_iteration(self, ctx: GateCtx) -> HookDecision:
         messages = ctx.messages or []
         state = ctx.metadata.setdefault("fetch_gate", {})
         if "watermark" not in state:

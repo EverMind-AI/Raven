@@ -15,9 +15,7 @@ outline. Name its absolute path in the reply.
 | Facts the material does not carry | `web_search`, then `web_fetch` the page | there is no other search |
 | A real logo, product shot, published chart | `image_search` | direct image URL, pixel size and source page per hit; see `references/assets.md` |
 | A picture that does not exist yet | `image_generate` | reference pictures go in `images`, up to six |
-| Page furniture: grid, heading, text, points, card, plane, rule, footer, table, picture placement, formula | the engine's helper modules, written beside the script | `ppt_layout`; see `references/assets.md` |
-| An icon | `add_icon`, `find_icons` from `ppt_icons` | 1304 outline icons, see `references/assets.md` |
-| A connector, a timeline, a chart | `connect`, `timeline` from `ppt_shapes`; `ppt_charts` | see `references/assets.md` |
+| An icon | `raven_ppt.services.assets.icons` | 1304 outline icons, see `references/assets.md` |
 | A figure or table from a paper | PyMuPDF on `raven-python` | from the PDF you were given, else one you downloaded; crop the region or pull the embedded image; see `references/assets.md` |
 | A formula | `add_formula` from `raven_ppt.services.assets.formulas`, on `raven-python` | one line of TeX in, a picture in the deck's ink at true size out; see `references/assets.md` |
 | Symbols inside a sentence | `math_runs` from the same module | `_A`, `^2`, `θ*` become real sub- and superscript runs; see `references/assets.md` |
@@ -26,30 +24,15 @@ outline. Name its absolute path in the reply.
 With no image key configured, `image_generate` says so. Say which pages would have had a
 picture and carry them on type, grid, rule and colour.
 
-## Furniture from the modules, the rest by hand
+## The pages are yours to draw
 
-- Before the build script, write the engine's helper modules beside it, once
-  (`references/assets.md` has the command). Import from `ppt_layout`, `ppt_theme`, `ppt_icons`,
-  `ppt_shapes` and `ppt_charts`.
-- Page furniture comes from them and is not rewritten: text, points, cards, rules, heading,
-  footer, source note, chart, formula, and the grid a region divides itself into (`grid`,
-  `split_left`, `stack`; measure with `fits`, `text_size`, `table_size` first).
-- `table` is the ordinary grid: header row, columns, numbers aligned, rows as tall as their
-  text. A table that needs merged cells, a header spanning columns, an icon or a mark inside
-  a cell, a colour per cell, or more columns than fit at 14pt is drawn by hand.
-- Generic marks -- a camera, a warning, a calendar -- come from the packaged icon set
-  (`add_icon`, `find_icons`). The mark of a real thing -- a company's logo, a product's icon,
-  a framework's badge, a paper's venue -- is searched (`image_search`), downloaded and placed
-  as a picture, and a deck that names companies or products carries their marks.
-- Everything that makes a page its own is drawn by hand with python-pptx: a diagram, a
-  polygon, a map, a custom arrow, a gradient, a hero number, a cover or section composition.
-  Compose it from `plane`, `rule`, `connect` and `preset` where they fit and draw the rest.
-- A placed picture is finished by hand: a hairline or a frame, a shadow, a scrim under type
-  laid over it, a crop to the shape the page wants, a full-bleed background under a plane of
-  ink. `picture_fit` places and captions; it does not treat.
-- The theme is a copy of a packaged one with the deck's own colours and faces changed.
-- On this route there is no ANTI-SLOP-CHECK.md, no contract and no Task State. Do not
-  initialize or update one.
+Every page is drawn here, with python-pptx: the grid, the title row, the type, the marks, the
+diagrams, the pictures and their treatment. Nothing about a page is settled by a default.
+`raven_ppt.services.assets` holds the icon set, `add_formula` and `math_runs`; take those and
+draw the rest.
+
+On this route there is no ANTI-SLOP-CHECK.md, no contract and no Task State. Do not
+initialize or update one.
 
 ## Read two skills first
 
@@ -94,13 +77,16 @@ which of the four were defaults.
    `references/assets.md` says how.
    An icon is a mark and not an illustration: about 0.7in, one weight and one colour across
    the deck, and no filled disc behind it.
-7. The cover, the contents page, the closing page and every section opener get a generated
-   background. Not a flat colour block, not a body page's photograph, not nothing.
-   **Two or three backgrounds cover a deck.** Section openers share one; the cover and the
-   closing page can be the same picture at different crops. A distinct generation per
-   section is 8 serial calls where 3 would do, and a deck whose openers all look different
-   has no house. Each call takes over a minute and they do not overlap, so settle the whole
-   short list before building rather than asking for one more while drawing each page.
+7. The cover, the contents page, the closing page and every section opener get a picture
+   with weight: a photograph found for it, or a generated background where no photograph
+   says it. A real photograph of the subject beats a generated texture every time it can
+   be had, so search first. Not a flat colour block, not a picture a body page already
+   uses, not nothing. **Two or three such pictures cover a deck.** Section openers share
+   one; the cover and the closing page can be the same picture at different crops. A
+   distinct generation per section is 8 serial calls where 3 would do, and a deck whose
+   openers all look different has no house. Each generation takes over a minute and they
+   do not overlap, so settle the whole short list before building rather than asking for
+   one more while drawing each page.
 8. Before generating a picture for a page, render that page and look at it. Ask for what the
    page lacks.
 9. Give `image_generate` the brand material in `images`. Do not describe it in words.
@@ -153,9 +139,11 @@ which of the four were defaults.
 Body under **14.0pt** is reported and under **10.8pt** is refused; footers may go to 8.0pt.
 If it does not fit at these sizes, split the page or cut it -- never shrink the type.
 
-## Mechanics that bite here
+Colour carries the hierarchy that size does: ink for the body, muted for what supports it,
+the accent for what the page is saying -- the word in the title that matters, the figure, the
+row or the node that answers and so on.
 
-For what is drawn with python-pptx directly; the helper modules handle these themselves.
+## Mechanics that bite here
 
 - **A connector lands on a box at both ends.** A line into empty space is a node you did
   not draw, and nothing checks for it.

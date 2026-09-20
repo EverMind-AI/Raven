@@ -289,6 +289,99 @@ def test_a_mounted_page_takes_the_relays_that_belong_to_its_sessions() -> None:
     assert "agent.subagents.set_submit(pro_submit)" in before_mount
 
 
+class _FakeIntake:
+    def __init__(self) -> None:
+        self.submit = None
+
+    def set_submit(self, fn) -> None:
+        self.submit = fn
+
+
+class _FakeChannel:
+    def __init__(self) -> None:
+        self.intake = _FakeIntake()
+
+
+class _FakeChannelManager:
+    """The two members `_wire_channel_intake` touches: the table and the hook."""
+
+    def __init__(self, *channels, on_started=None) -> None:
+        self.channels = {f"ch{i}": ch for i, ch in enumerate(channels)}
+        self.on_started = on_started
+
+
+def test_every_channel_present_at_launch_gets_the_inbound_dispatch() -> None:
+    from raven.cli.gateway_commands import _wire_channel_intake
+
+    a, b = _FakeChannel(), _FakeChannel()
+    manager = _FakeChannelManager(a, b)
+
+    def dispatch(req) -> None: ...
+
+    _wire_channel_intake(manager, dispatch)
+
+    assert a.intake.submit is dispatch
+    assert b.intake.submit is dispatch
+
+
+def test_a_channel_started_while_the_gateway_runs_gets_the_inbound_dispatch() -> None:
+    """Both halves of a channel's wiring must survive the launch loop.
+
+    The page enables an entrance by writing config, and the manager builds and
+    starts the adapter on the spot -- after the loop that hands every channel
+    its dispatch has already run. The outlet half was taught this (`on_started`
+    registers an outlet, so a hot-started channel could be replied to); the
+    intake half was not, so such a channel logged "no spine dispatch wired" once
+    per message and dropped every one, while the page drew it connected and the
+    adapter's own login had succeeded (2026-09-14, weixin).
+    """
+    from raven.cli.gateway_commands import _wire_channel_intake
+
+    outlets: list[object] = []
+    manager = _FakeChannelManager(on_started=outlets.append)
+
+    def dispatch(req) -> None: ...
+
+    _wire_channel_intake(manager, dispatch)
+    late = _FakeChannel()
+    assert late.intake.submit is None, "nothing is wired before the manager starts it"
+
+    manager.on_started(late)
+
+    assert late.intake.submit is dispatch, "a hot-started channel must be given the dispatch"
+    assert outlets == [late], "and must keep the outlet the hook already carried"
+
+
+def test_a_manager_with_no_outlet_hook_still_wires_the_intake() -> None:
+    """A gateway built without the hub (no outlet hook) is not a reason to drop
+    the intake: the hook is composed over whatever was there, including nothing."""
+    from raven.cli.gateway_commands import _wire_channel_intake
+
+    manager = _FakeChannelManager(on_started=None)
+
+    def dispatch(req) -> None: ...
+
+    _wire_channel_intake(manager, dispatch)
+    late = _FakeChannel()
+    manager.on_started(late)
+
+    assert late.intake.submit is dispatch
+
+
+def test_the_gateway_command_wires_the_intake_through_the_helper() -> None:
+    """Pinned on the source for the reason the mounted-relay test above records:
+    the command body has no import seam, so the tie between it and the helper
+    the tests above exercise is asserted by name."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    assert "_wire_channel_intake(channels, _inbound_dispatch)" in src
+    # The old launch-only loop is gone: one path wires both the present and the late.
+    assert "_ch.intake.set_submit(_inbound_dispatch)" not in src
+
+
 def _gateway_partition_with_the_page_enabled() -> set[str]:
     """The cron partition a page-wanting gateway is built with."""
     from types import SimpleNamespace
@@ -421,6 +514,54 @@ def test_stop_dispatch_cancels_both_scheduler_and_subagents() -> None:
     assert "cancel_conversation(cid)" in stop_branch
     assert "cancel_by_session(cid)" in stop_branch
     assert "stopped +=" in stop_branch
+
+
+def test_shutdown_stops_the_skill_file_watcher() -> None:
+    """The teardown chain must stop the skill watcher before the process exits.
+
+    ``LocalSkillCatalog`` auto-starts ``SkillFileWatcher``, a daemon thread that
+    parks inside ``watchfiles``' Rust ``watch()``. Daemon status does not make
+    process exit safe here: CPython runs ``Py_FinalizeEx`` while that native
+    call is still live and the process dies of SIGSEGV (-11, or 139 in a shell)
+    *after* every Python shutdown step has already succeeded. A systemd or
+    docker stop then records a crash rather than the clean stop it was.
+
+    ``raven/trajectory/replay.py`` stops the same watcher for the same reason;
+    the teardown chain here is the other long-lived owner.
+
+    The chain is a closure inside the serve command with no import seam, so what
+    this pins is the wiring: that the teardown reaches the seam. What the seam
+    then does is pinned by the executable tests further down.
+    """
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    teardown = src.split("cron.stop()", 1)[1]
+    assert "_retire_generation_watchers(swaps, agent)" in teardown
+
+
+def test_unbinding_a_generation_retires_it_through_dispose() -> None:
+    """A generation swap must retire the outgoing generation, watcher included.
+
+    ``build_runtime`` mints a fresh ``AgentLoop`` per generation, so each swap
+    starts a new ``SkillFileWatcher`` and abandons the previous one. Measured
+    2026-09-18 on this tree -- boot, one SIGHUP, then SIGTERM -- the gateway
+    exited -11 with only the teardown chain stopping the live generation's
+    watcher, and exits 0 once the unbind retires the outgoing one too.
+
+    Retirement is ``RavenRuntime.dispose``'s job rather than this closure's, so
+    what this pins is that the unbind reaches it; that dispose stops the watcher
+    is pinned in ``test_core_runtime_swap.py``.
+    """
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    unbind = src.split("async def _unbind_generation", 1)[1].split("async def _request_swap", 1)[0]
+    assert "runtime.dispose()" in unbind
 
 
 def test_cron_config_notify_missed_defaults_on() -> None:
@@ -891,3 +1032,134 @@ def test_sigterm_cancels_the_main_task_instead_of_raising_ki() -> None:
     assert "main_task = asyncio.current_task()" in src
     assert "raise KeyboardInterrupt" not in src, "the signal-frame KI shortcut must stay gone"
     assert "if term_signalled:" in src, "the cancelled branch owns the SIGTERM case"
+
+
+def _watched_loop(stopped: list[str], name: str):
+    """A stand-in loop carrying the one collaborator retirement must reach."""
+    from types import SimpleNamespace
+
+    skills = SimpleNamespace(stop_file_watcher=lambda: stopped.append(name))
+    return SimpleNamespace(context=SimpleNamespace(skills=skills))
+
+
+class _Swaps:
+    """A coordinator stub shaped like the two seats a shutdown has to drain."""
+
+    def __init__(self, staged=None, in_transition=None) -> None:
+        self._staged = staged
+        self.in_transition = in_transition
+
+    def take(self):
+        staged, self._staged = self._staged, None
+        return staged
+
+
+def test_retiring_generation_watchers_reaches_every_seat() -> None:
+    """Three generations can own a watcher at once, and all three must go.
+
+    A generation's watcher starts in the context builder's ``__init__``, so
+    every built generation owns one whether or not it ever served: the bound
+    one, a candidate staged but never consumed, and a candidate ``take`` handed
+    out that a cancelled unbind never finished binding. Any one of them left
+    running is a daemon thread parked in watchfiles' Rust ``watch()`` when
+    ``Py_FinalizeEx`` tears the interpreter down, which is the SIGSEGV.
+    """
+    from types import SimpleNamespace
+
+    from raven.cli.gateway_commands import _retire_generation_watchers
+
+    stopped: list[str] = []
+    swaps = _Swaps(
+        staged=SimpleNamespace(runtime=SimpleNamespace(loop=_watched_loop(stopped, "staged"))),
+        in_transition=SimpleNamespace(runtime=SimpleNamespace(loop=_watched_loop(stopped, "in_transition"))),
+    )
+
+    _retire_generation_watchers(swaps, _watched_loop(stopped, "bound"))
+
+    assert sorted(stopped) == ["bound", "in_transition", "staged"]
+
+
+def test_retiring_generation_watchers_survives_a_failing_stop() -> None:
+    """One stop raising must not strand the watchers behind it.
+
+    The whole point of the sweep is that no watcher outlives it; a sweep that
+    abandons the rest on the first exception still exits -11, so the failure
+    is logged and the next seat is tried.
+    """
+    from types import SimpleNamespace
+
+    from raven.cli.gateway_commands import _retire_generation_watchers
+
+    stopped: list[str] = []
+
+    def _boom() -> None:
+        raise RuntimeError("watcher stop failed")
+
+    bound = SimpleNamespace(context=SimpleNamespace(skills=SimpleNamespace(stop_file_watcher=_boom)))
+    swaps = _Swaps(
+        staged=SimpleNamespace(runtime=SimpleNamespace(loop=_watched_loop(stopped, "staged"))),
+        in_transition=SimpleNamespace(runtime=SimpleNamespace(loop=_watched_loop(stopped, "in_transition"))),
+    )
+
+    _retire_generation_watchers(swaps, bound)
+
+    assert sorted(stopped) == ["in_transition", "staged"]
+
+
+def test_retiring_generation_watchers_tolerates_empty_seats() -> None:
+    """The common shutdown has nothing staged and nothing in transition."""
+    from raven.cli.gateway_commands import _retire_generation_watchers
+
+    stopped: list[str] = []
+    _retire_generation_watchers(_Swaps(), _watched_loop(stopped, "bound"))
+
+    assert stopped == ["bound"]
+
+
+def test_a_swap_cancelled_mid_unbind_leaves_no_live_watcher_thread(tmp_path) -> None:
+    """The cancellation window, executed against real watcher threads.
+
+    ``_serve_generations`` binds ``take``'s result to a local and only then
+    awaits the outgoing generation's unbind. A shutdown cancelling that await
+    unwinds the coroutine, and with it the only reference to a generation that
+    was fully built -- so its ``SkillFileWatcher`` thread is still parked in
+    watchfiles' Rust ``watch()`` when ``Py_FinalizeEx`` runs, which is the
+    SIGSEGV. Counting live threads by name is what makes the leak visible:
+    the candidate is reachable from neither the coordinator's staging slot nor
+    the bound loop, so no assertion about those two would catch it.
+    """
+    import threading
+    import time
+    from types import SimpleNamespace
+
+    from raven.cli.gateway_commands import _retire_generation_watchers
+    from raven.core.runtime import SwapCandidate, SwapCoordinator
+    from raven.memory_engine.skill_forge.catalog import LocalSkillCatalog
+
+    def _live() -> int:
+        return sum(1 for t in threading.enumerate() if t.name == "SkillFileWatcher")
+
+    def _loop_over(catalog):
+        return SimpleNamespace(context=SimpleNamespace(skills=catalog))
+
+    (tmp_path / "bound").mkdir()
+    (tmp_path / "candidate").mkdir()
+    before = _live()
+    bound = LocalSkillCatalog(tmp_path / "bound")
+    candidate = LocalSkillCatalog(tmp_path / "candidate")
+    assert _live() == before + 2, "both generations must really be watching"
+
+    swaps = SwapCoordinator(min_interval_s=0.0)
+    swaps.stage(SwapCandidate(None, None, None, None, SimpleNamespace(loop=_loop_over(candidate))))
+    assert swaps.take() is not None
+    # The local a cancelled unbind would drop is simply never stored.
+
+    _retire_generation_watchers(swaps, _loop_over(bound))
+
+    # stop() joins with a 1s timeout, so this only ever spans a slow join --
+    # and stays under the suite's 3s idle ceiling on the failing path too.
+    for _ in range(20):
+        if _live() == before:
+            break
+        time.sleep(0.1)
+    assert _live() == before, "a generation's watcher outlived the shutdown"

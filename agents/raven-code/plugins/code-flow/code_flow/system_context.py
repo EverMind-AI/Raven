@@ -1,63 +1,79 @@
-"""Add product instructions to system through the existing iteration hook.
+"""Size the product's system addition against the remaining prompt allowance.
 
-The host has already selected history. Size the addition against the remaining
-prompt allowance, including tools and the active model's full reply ceiling;
-never remove transcript messages to make room for product instructions.
+The host has already selected history. The allowance includes tools and the
+active model's full reply ceiling; the transcript is never shrunk to make room
+for product instructions -- when they do not fit, they are truncated, and when
+even the notice cannot fit, the turn is ended with the fix named. The splice
+itself (and taking the previous iteration's addition back out) is the participant
+adapter's job; this module only answers what the addition should say.
 """
 
 from __future__ import annotations
 
-from raven.contracts.loop_hooks import AgentHookContext, HookDecision
+from collections.abc import Sequence
+from typing import Any
+
+from raven.contracts.participant import Answer, Intake
 from raven.providers.base import send_max_tokens
 from raven.providers.binding import active_binding
 from raven.utils.tokens import estimate_prompt_tokens
 
-_ADDITION = "code_flow.system_addition"
 _TRUNCATED = (
     "\n\n[Repository instructions truncated to fit the context window. "
     "Read the relevant instruction files before changing code.]"
 )
+_NO_SYSTEM_MESSAGE = "Raven-Code could not find a system message for repository instructions."
+_UNFIT = (
+    "Raven-Code could not fit repository instructions and workspace notices alongside this conversation "
+    "and the model's reply allowance. Shorten the conversation or use a model with a larger context window."
+)
 
 
-def inject_system_context(
-    ctx: AgentHookContext, repository: str, concurrency: str, *, pending_note: str | None = None
-) -> HookDecision:
-    """Replace this hook's own addition, preserving the host's system prefix."""
-    if ctx.messages is None or (not repository and not concurrency and _ADDITION not in ctx.metadata):
-        return HookDecision()
-    system = next((message for message in ctx.messages if message.get("role") == "system"), None)
-    if system is None:
-        return HookDecision(
-            short_circuit_result="Raven-Code could not find a system message for repository instructions."
-        )
-    content = system.get("content") or ""
-    previous, offset = ctx.metadata.pop(_ADDITION, (None, 0))
-    if previous is not None:
-        if isinstance(content, str) and isinstance(previous, str):
-            if content[offset : offset + len(previous)] == previous:
-                content = content[:offset] + content[offset + len(previous) :]
-        elif isinstance(content, list):
-            content = list(content)
-            if offset < len(content) and content[offset] == previous:
-                content.pop(offset)
-    system["content"] = content
+def sized_addendum(
+    transcript: Sequence[dict[str, Any]],
+    tools: Sequence[dict[str, Any]],
+    repository: str,
+    concurrency: str,
+    *,
+    window: int | None = None,
+    pending_note: str | None = None,
+) -> Answer | None:
+    """The system addition this call carries, sized to fit, or the reply that ends the turn.
+
+    ``transcript`` is the prompt as the call will send it, without any earlier
+    addition of this participant's (the adapter strips that before asking).
+    ``pending_note`` is counted in the sizing because it lands on the prompt in
+    the same call. Nothing to add answers nothing; a prompt with no system
+    message to splice into ends the turn with the fix named.
+    """
     if not repository and not concurrency:
-        return HookDecision()
-
-    def addition(text: str):
-        text = ("\n\n" if content else "") + text
-        return {"type": "text", "text": text} if isinstance(content, list) else text
+        return None
+    messages = list(transcript)
+    if not messages:
+        # A caller with no prompt yet has nothing to splice into and nothing
+        # to protect; the missing-seat error is for a real prompt missing its
+        # system row.
+        return None
+    system = next(
+        (message for message in messages if isinstance(message, dict) and message.get("role") == "system"), None
+    )
+    if system is None:
+        return Intake(text="", reply=_NO_SYSTEM_MESSAGE)
+    content = system.get("content") or ""
 
     def render(text: str):
-        part = addition(text)
-        return [*content, part] if isinstance(content, list) else content + part
+        addition = ("\n\n" if content else "") + text
+        if isinstance(content, list):
+            return [*content, {"type": "text", "text": addition}]
+        return content + addition
 
     binding = active_binding()
-    window = binding.context_window if binding is not None else ctx.context_window_tokens
+    if binding is not None:
+        # Production turns carry a binding. A standalone caller without one has
+        # no model ceiling to consult, so it retains half of its stated window.
+        window = binding.context_window
     allowance = None
     if window:
-        # Production turns carry a binding. A standalone hook caller without
-        # one has no model ceiling to consult, so retain half of its window.
         reserved = window // 2
         if binding is not None:
             provider = binding.provider
@@ -71,12 +87,10 @@ def inject_system_context(
     def fits(text: str) -> bool:
         if allowance is None:
             return True
-        candidate = [
-            ({**message, "content": render(text)} if message is system else message) for message in ctx.messages
-        ]
+        candidate = [({**message, "content": render(text)} if message is system else message) for message in messages]
         if pending_note:
             candidate.append({"role": "user", "content": pending_note})
-        return estimate_prompt_tokens(candidate, ctx.tools) <= allowance
+        return estimate_prompt_tokens(candidate, list(tools) or None) <= allowance
 
     tail = ("\n\n" if repository and concurrency else "") + concurrency
     text = repository + tail
@@ -85,12 +99,7 @@ def inject_system_context(
         # to shrink. If even the notice cannot fit, do not send an oversized call.
         suffix = (_TRUNCATED if repository else "") + tail
         if not fits(suffix):
-            return HookDecision(
-                short_circuit_result=(
-                    "Raven-Code could not fit repository instructions and workspace notices alongside this conversation "
-                    "and the model's reply allowance. Shorten the conversation or use a model with a larger context window."
-                )
-            )
+            return Intake(text="", reply=_UNFIT)
         lo, hi = 0, len(repository)
         while lo < hi:
             mid = (lo + hi + 1) // 2
@@ -99,6 +108,4 @@ def inject_system_context(
             else:
                 hi = mid - 1
         text = repository[:lo] + suffix
-    system["content"] = render(text)
-    ctx.metadata[_ADDITION] = (addition(text), len(content))
-    return HookDecision()
+    return Intake(text=text)
