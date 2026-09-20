@@ -28,10 +28,15 @@ BRACE_CAP = 20
 #: a literal the engine writes (``file_search.FindTool``).
 _NOTICE_RE = re.compile(
     r"^\(showing first \d+(?: of \d+ results| results across \d+ patterns)(?:; PARTIAL.*)?\)$"
+    r"|^\(PARTIAL result: .*\)$"
     r"|^No files found matching pattern(?:\.|: .*)$"
     r"|^Error: |^Error running find: ",
 )
-_CHILD_TRUNCATION_RE = re.compile(r"^\(showing first \d+ of \d+ results\)$")
+#: The engine's one trailing notice, which carries a clause per condition: the
+#: listing was cut at the limit, the walk hit its traversal budget, or both.
+_CHILD_CUT_RE = re.compile(r"^\(showing first \d+ of \d+ results(?:; PARTIAL result: .*)?\)$")
+_CHILD_INCOMPLETE_RE = re.compile(r"^\((?:showing first \d+ of \d+ results; )?PARTIAL result: .*\)$")
+_NO_FILES = "No files found matching pattern."
 
 
 def is_notice(line: str) -> bool:
@@ -146,30 +151,50 @@ class GlobTool(trunk.FindTool):
         paths: list[str] = []
         seen: set[str] = set()
         cut = False
+        incomplete = False
         for one in alternatives:
             result = await super().execute(pattern=one, limit=limit, **kwargs)
             text = result.model_text if hasattr(result, "model_text") else str(result)
             if text.startswith(("Error: ", "Error running find: ")):
                 return result
-            if text == "No files found matching pattern.":
+            if text == _NO_FILES:
                 continue
             lines = text.splitlines()
-            # FindTool puts truncation after a blank line. A filename that
+            # FindTool puts its notice after a blank line. A filename that
             # merely starts with a notice's words is still a path.
-            if len(lines) >= 2 and not lines[-2] and _CHILD_TRUNCATION_RE.fullmatch(lines[-1]):
-                cut = True
+            if (
+                len(lines) >= 2
+                and not lines[-2]
+                and (_CHILD_CUT_RE.fullmatch(lines[-1]) or _CHILD_INCOMPLETE_RE.fullmatch(lines[-1]))
+            ):
+                cut = cut or bool(_CHILD_CUT_RE.fullmatch(lines[-1]))
+                incomplete = incomplete or bool(_CHILD_INCOMPLETE_RE.fullmatch(lines[-1]))
                 lines = lines[:-2]
+                # A walk that hit its budget before any match still carries
+                # the engine's no-files line above the notice.
+                if lines == [_NO_FILES]:
+                    lines = []
             for line in lines:
                 if line and line not in seen:
                     seen.add(line)
                     paths.append(line)
+        budget_clause = (
+            "PARTIAL result: a pattern hit the search's traversal budget before finishing, "
+            "so absence of a match is not conclusive -- narrow the path or pattern"
+        )
         if not paths:
-            return f"No files found matching pattern: {pattern}"
+            missing = f"No files found matching pattern: {pattern}"
+            return f"{missing}\n\n({budget_clause})" if incomplete else missing
         paths.sort(key=lambda path: self._mtime(base / path), reverse=True)
         cut = cut or len(paths) > ceiling
         shown = paths[:ceiling]
         listing = "\n".join(shown)
-        if cut:
+        if incomplete:
+            listing += (
+                f"\n(showing first {len(shown)} results across {len(alternatives)} patterns; "
+                f"{budget_clause}{', or raise limit' if cut else ''})"
+            )
+        elif cut:
             listing += (
                 f"\n(showing first {len(shown)} results across {len(alternatives)} patterns; "
                 "PARTIAL result, raise limit or narrow the pattern)"

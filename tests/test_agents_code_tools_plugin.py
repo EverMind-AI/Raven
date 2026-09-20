@@ -8,10 +8,12 @@ registered after the built-in replaces it in the registry the loop reads.
 """
 
 import asyncio
+import itertools
 import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -526,6 +528,34 @@ def test_glob_preserves_a_child_truncation_when_other_patterns_are_empty(tmp_pat
     out = _text(_run(tool.execute(pattern="*.{py,ts}", limit=1)))
     assert "PARTIAL" in out and "raise limit" in out
     assert len([line for line in out.splitlines() if not is_notice(line)]) == 1
+
+
+def test_glob_carries_a_childs_traversal_budget_into_the_merged_notice(tmp_path, monkeypatch):
+    """When the engine's walk hits its deadline the child answer ends in a
+    PARTIAL trailer, sometimes above an otherwise clean miss. Neither line is a
+    path, and the merged listing has to say the search was cut short rather
+    than report a tree that lacks the files."""
+    from raven.agent.tools import tree_walk
+
+    (tmp_path / "a.py").write_text("")
+    tool = GlobTool(workspace=tmp_path)
+    monkeypatch.setattr(tree_walk, "WALK_DEADLINE_S", -1.0)
+    merged = _text(_run(tool.execute(pattern="*.{py,ts}")))
+    assert merged.startswith("No files found matching pattern: *.{py,ts}")
+    assert "traversal budget" in merged
+    assert all(is_notice(line) for line in merged.splitlines() if line)
+
+    # Each child walk reads the clock three times over this two-directory
+    # tree: its deadline, the root (in budget), then late/ (past it).
+    monkeypatch.setattr(tree_walk, "WALK_DEADLINE_S", 20.0)
+    ticks = itertools.cycle([0.0, 0.0, tree_walk.WALK_DEADLINE_S + 1])
+    monkeypatch.setattr(tree_walk, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    (tmp_path / "late").mkdir()
+    (tmp_path / "late" / "b.ts").write_text("")
+    partial = _text(_run(tool.execute(pattern="*.{py,ts}")))
+    lines = partial.splitlines()
+    assert [line for line in lines if not is_notice(line)] == ["a.py"]
+    assert "PARTIAL result" in lines[-1] and "traversal budget" in lines[-1]
 
 
 @pytest.mark.parametrize("kind", ["missing", "not_directory", "outside"])

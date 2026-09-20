@@ -1,5 +1,6 @@
 """File system tools: read, write, edit, list."""
 
+import asyncio
 import difflib
 import mimetypes
 import os
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from raven.agent import workdir
+from raven.agent.tools import tree_walk
 from raven.contracts.tool import FileChange, Tool, ToolResult
 from raven.utils.images import detect_image_mime
 
@@ -568,21 +570,6 @@ class ListDirTool(_FsTool):
     """List directory contents with optional recursion."""
 
     _DEFAULT_MAX = 200
-    _IGNORE_DIRS = {
-        ".git",
-        "node_modules",
-        "__pycache__",
-        ".venv",
-        "venv",
-        "dist",
-        "build",
-        ".tox",
-        ".mypy_cache",
-        ".pytest_cache",
-        ".ruff_cache",
-        ".coverage",
-        "htmlcov",
-    }
 
     @property
     def name(self) -> str:
@@ -630,34 +617,60 @@ class ListDirTool(_FsTool):
                 return f"Error: Not a directory: {path}"
 
             cap = max_entries or self._DEFAULT_MAX
-            items: list[str] = []
-            total = 0
-
             if recursive:
-                for item in sorted(dp.rglob("*")):
-                    if any(p in self._IGNORE_DIRS for p in item.parts):
-                        continue
-                    total += 1
-                    if len(items) < cap:
-                        rel = item.relative_to(dp)
-                        items.append(f"{rel}/" if item.is_dir() else str(rel))
+                items, total, incomplete = await asyncio.to_thread(self._walk_entries, dp, cap)
             else:
-                for item in sorted(dp.iterdir()):
-                    if item.name in self._IGNORE_DIRS:
-                        continue
-                    total += 1
-                    if len(items) < cap:
-                        pfx = "📁 " if item.is_dir() else "📄 "
-                        items.append(f"{pfx}{item.name}")
+                entries = self._list_entries(dp)
+                items, total, incomplete = entries[:cap], len(entries), False
 
-            if not items and total == 0:
+            if not items and not incomplete:
                 return f"Directory {path} is empty"
 
             result = "\n".join(items)
+            notes = []
             if total > cap:
-                result += f"\n\n(truncated, showing first {cap} of {total} entries)"
+                notes.append(f"truncated, showing first {cap} of {total} entries")
+            if incomplete:
+                notes.append(
+                    f"PARTIAL result: the listing hit its {tree_walk.WALK_DEADLINE_S:g}s traversal budget "
+                    "before finishing, so an entry's absence is not conclusive -- narrow the path or "
+                    "list without recursive"
+                )
+            if notes:
+                result = f"{result}\n\n({'; '.join(notes)})" if result else f"({'; '.join(notes)})"
             return result
         except PermissionError as e:
             return f"Error: {e}"
         except Exception as e:
             return f"Error listing directory: {e}"
+
+    @staticmethod
+    def _list_entries(dp: Path) -> list[str]:
+        return [
+            f"{'📁 ' if item.is_dir() else '📄 '}{item.name}"
+            for item in sorted(dp.iterdir())
+            if item.name not in tree_walk.IGNORE_DIRS
+        ]
+
+    @staticmethod
+    def _walk_entries(dp: Path, cap: int) -> tuple[list[str], int, bool]:
+        """Every entry under ``dp`` in path order, the total, and whether the walk finished.
+
+        Runs in a worker thread. Entries are ordered the way ``sorted(rglob)``
+        ordered them, by path components, so a directory's contents follow it.
+        """
+        found: list[tuple[tuple[str, ...], str]] = []
+        incomplete = False
+        try:
+            for root, dirs, names in tree_walk.walk(dp):
+                rel_root = Path(root).relative_to(dp)
+                for name in dirs:
+                    rel = rel_root / name
+                    found.append((rel.parts, f"{rel}/"))
+                for name in names:
+                    rel = rel_root / name
+                    found.append((rel.parts, str(rel)))
+        except TimeoutError:
+            incomplete = True
+        found.sort(key=lambda entry: entry[0])
+        return [shown for _, shown in found[:cap]], len(found), incomplete

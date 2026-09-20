@@ -7,6 +7,11 @@ the SandboxExecutor (avoids shuttling large result sets across a VM edge).
 ``grep`` prefers the ``rg`` binary installed by ripgrep-bin for speed and
 .gitignore awareness, then a system rg on PATH. If neither is available, it
 falls back to a pure-Python scan and reports when that scan is incomplete.
+
+Every tree walk here goes through ``tree_walk``: noise directories are pruned
+as the walk goes, a wall-clock deadline turns a huge tree into a partial
+result that says so, and the walk runs in a worker thread so the event loop
+keeps serving every other session meanwhile.
 """
 
 import asyncio
@@ -15,29 +20,11 @@ import os
 import re
 import shutil
 import sysconfig
-import time
 from pathlib import Path
 from typing import Any
 
+from raven.agent.tools import tree_walk
 from raven.agent.tools.filesystem import _FsTool
-
-# Noise directories skipped by the pure-Python fallback / find. ripgrep handles
-# its own ignore logic via .gitignore, so this only gates the fallback path.
-_IGNORE_DIRS = {
-    ".git",
-    "node_modules",
-    "__pycache__",
-    ".venv",
-    "venv",
-    "dist",
-    "build",
-    ".tox",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".coverage",
-    "htmlcov",
-}
 
 # Pseudo / system filesystem roots that must never be tree-walked. A model that
 # runs `grep <pat> /` (or find over /) would otherwise traverse the entire host
@@ -45,9 +32,6 @@ _IGNORE_DIRS = {
 # run indefinitely (observed: a 47-min wedge in disk-sleep on a shared mount).
 # Searches must name a real subtree, not a system root.
 _DENY_TRAVERSAL_ROOTS = {Path(p) for p in ("/", "/proc", "/sys", "/dev", "/run", "/boot")}
-# Wall-clock cap on the pure-Python os.walk fallback so an allowed-but-huge tree
-# still cannot hang the loop. ripgrep already has its own _RG_TIMEOUT.
-_WALK_DEADLINE_S = 20.0
 
 
 def _resolve_rg() -> str | None:
@@ -170,7 +154,9 @@ class GrepTool(_FsTool):
         try:
             if rg:
                 return await self._run_rg(rg, pattern, base, glob, output_mode, case_insensitive, context, cap)
-            return self._run_python(pattern, base, glob, output_mode, case_insensitive, context, cap)
+            return await asyncio.to_thread(
+                self._run_python, pattern, base, glob, output_mode, case_insensitive, context, cap
+            )
         except Exception as e:
             return f"Error running grep: {e}"
 
@@ -195,7 +181,7 @@ class GrepTool(_FsTool):
         # rg only skips noise dirs when a .gitignore says so; add explicit excludes
         # so it matches the pure-Python fallback regardless of repo state. These come
         # after any user glob so the excludes win on last-match-wins ordering.
-        for d in _IGNORE_DIRS:
+        for d in sorted(tree_walk.IGNORE_DIRS):
             args += ["-g", f"!{d}"]
 
         if output_mode == "files_with_matches":
@@ -294,7 +280,7 @@ class GrepTool(_FsTool):
         result = self._format_lines(lines, cap, unit) if lines else ""
         if incomplete:
             warning = (
-                f"Warning: search incomplete; the Python fallback exceeded its {_WALK_DEADLINE_S:g}s "
+                f"Warning: search incomplete; the Python fallback exceeded its {tree_walk.WALK_DEADLINE_S:g}s "
                 "traversal budget. Results and counts may be partial; absence of a match is not conclusive. "
                 "Narrow the search path or glob and try again."
             )
@@ -324,11 +310,7 @@ class GrepTool(_FsTool):
         if base.is_file():
             yield base
             return
-        deadline = time.monotonic() + _WALK_DEADLINE_S
-        for root, dirs, names in os.walk(base):
-            if time.monotonic() > deadline:
-                raise TimeoutError("grep traversal deadline exceeded")
-            dirs[:] = [d for d in dirs if d not in _IGNORE_DIRS]
+        for root, _dirs, names in tree_walk.walk(base):
             for n in sorted(names):
                 if glob and not fnmatch.fnmatch(n, glob):
                     continue
@@ -367,9 +349,64 @@ class GrepTool(_FsTool):
 # find
 # ---------------------------------------------------------------------------
 
+# ``Path.glob`` folds case on Windows only; ``fnmatch`` decides the same way.
+_CASE_FLAGS = 0 if os.path.normcase("Aa") == "Aa" else re.IGNORECASE
+
+
+def _compile_pattern(pattern: str) -> tuple[re.Pattern[str] | None, ...]:
+    """One matcher per path component of ``pattern``; ``None`` stands for ``**``.
+
+    Follows what ``Path.glob`` accepted, which is what ``find`` used to call:
+    a component is an ``fnmatch`` pattern that cannot cross a slash, and a
+    component that is exactly ``**`` spans any number of components including
+    none, so ``**/x`` also matches a top-level ``x`` and ``src/**`` matches
+    ``src`` itself and everything beneath it. ``..`` is refused rather than
+    followed, since a pattern must not reach outside the directory the fence
+    resolved.
+    """
+    if pattern.startswith("/"):
+        raise ValueError("pattern must be relative to path")
+    segments = [s for s in pattern.split("/") if s not in ("", ".")]
+    if not segments:
+        raise ValueError("empty pattern")
+    if ".." in segments:
+        raise ValueError("pattern must not contain '..'")
+    compiled: list[re.Pattern[str] | None] = []
+    for segment in segments:
+        if segment == "**":
+            if not compiled or compiled[-1] is not None:
+                compiled.append(None)
+        elif "**" in segment:
+            raise ValueError("'**' can only be an entire path component")
+        else:
+            compiled.append(re.compile(fnmatch.translate(segment), _CASE_FLAGS))
+    return tuple(compiled)
+
+
+def _matches(components: list[str], segments: tuple[re.Pattern[str] | None, ...], i: int = 0, j: int = 0) -> bool:
+    """Whether the path ``components`` satisfy the compiled ``segments`` from ``i`` and ``j`` on."""
+    while j < len(segments):
+        segment = segments[j]
+        if segment is None:
+            if j == len(segments) - 1:
+                return True
+            return any(_matches(components, segments, k, j + 1) for k in range(i, len(components) + 1))
+        if i >= len(components) or not segment.match(components[i]):
+            return False
+        i += 1
+        j += 1
+    return i == len(components)
+
+
+def _partial_clause() -> str:
+    return (
+        f"PARTIAL result: the search hit its {tree_walk.WALK_DEADLINE_S:g}s traversal budget "
+        "before finishing, so absence of a match is not conclusive -- narrow the path or pattern"
+    )
+
 
 class FindTool(_FsTool):
-    """Find files by glob pattern, sorted by recency. Pure-Python (pathlib)."""
+    """Find files by glob pattern, sorted by recency, over the shared bounded walk."""
 
     _DEFAULT_LIMIT = 1000
 
@@ -432,24 +469,48 @@ class FindTool(_FsTool):
 
         # A path-bearing pattern globs literally; a bare pattern matches basenames
         # recursively (fd-style), so 'foo.py' finds it at any depth.
-        glob_expr = pattern if "/" in pattern else f"**/{pattern}"
+        glob_expr = f"**/{pattern}" if pattern and "/" not in pattern else pattern
         try:
-            matches = [
-                p for p in base.glob(glob_expr) if not any(part in _IGNORE_DIRS for part in p.relative_to(base).parts)
-            ]
-        except (ValueError, OSError) as e:
+            segments = _compile_pattern(glob_expr)
+        except (ValueError, re.error) as e:
             return f"Error running find: {e}"
-        if not matches:
+        matches, incomplete = await asyncio.to_thread(self._search, base, segments)
+        if not matches and not incomplete:
             return "No files found matching pattern."
 
-        matches.sort(key=lambda p: self._mtime(p), reverse=True)
+        matches.sort(key=lambda m: m[0], reverse=True)
         total = len(matches)
         shown = matches[:cap]
-        lines = [f"{p.relative_to(base).as_posix()}/" if p.is_dir() else p.relative_to(base).as_posix() for p in shown]
-        result = "\n".join(lines)
+        result = "\n".join(rel for _, rel in shown) or "No files found matching pattern."
+        notes = []
         if total > cap:
-            result += f"\n\n(showing first {cap} of {total} results)"
+            notes.append(f"showing first {cap} of {total} results")
+        if incomplete:
+            notes.append(_partial_clause())
+        if notes:
+            result += f"\n\n({'; '.join(notes)})"
         return result
+
+    def _search(self, base: Path, segments: tuple[re.Pattern[str] | None, ...]) -> tuple[list[tuple[float, str]], bool]:
+        """Collect ``(mtime, display path)`` for every entry under ``base`` the pattern matches.
+
+        Runs in a worker thread. An entry is matched on its path components
+        relative to ``base``, and a matched directory is shown with a trailing
+        slash. The second value says whether the walk hit its deadline, in
+        which case the list is what was found before it did.
+        """
+        matches: list[tuple[float, str]] = []
+        base_parts = len(base.parts)
+        try:
+            for root, dirs, names in tree_walk.walk(base):
+                parents = list(Path(root).parts[base_parts:])
+                prefix = "/".join(parents) + "/" if parents else ""
+                for name, is_dir in [(d, True) for d in dirs] + [(n, False) for n in names]:
+                    if _matches([*parents, name], segments):
+                        matches.append((self._mtime(Path(root, name)), f"{prefix}{name}{'/' if is_dir else ''}"))
+        except TimeoutError:
+            return matches, True
+        return matches, False
 
     @staticmethod
     def _mtime(p: Path) -> float:
