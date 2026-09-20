@@ -43,7 +43,7 @@ Raven's modular architecture is designed for harness self-evolution and subagent
 
 > All four agents are built in and ready for orchestration out of the box.
 
-### Raven-Research
+### ❯ Raven-Research
 
 **Raven-Research** enables **autonomous deep research** for complex questions, literature reviews, and technical analysis. It delivers clear, structured reports with traceable sources, helping users understand unfamiliar domains, compare alternatives, and make informed decisions.
 
@@ -53,7 +53,7 @@ Raven's modular architecture is designed for harness self-evolution and subagent
 
 <p align="center"><em>Raven-Research's performance on the DeepResearch Mixed benchmark</em></p>
 
-### Raven-Code
+### ❯ Raven-Code
 
 **Raven-Code** enables **agentic software development**, turning requirements into working, tested code. It supports feature implementation, debugging, refactoring, data processing, and data analysis, helping users build new capabilities, resolve issues, and improve code quality while following their project's conventions.
 
@@ -69,7 +69,7 @@ Raven's modular architecture is designed for harness self-evolution and subagent
 
 <p align="center"><em>Raven-Code tops on DataAgentBench for data analysis (2026-08-24 Live)</em></p>
 
-### Raven-Design
+### ❯ Raven-Design
 
 **Raven-Design** performs **visual design**, turning ideas and content into polished visual deliverables. It creates PowerPoint slide decks, brand assets, charts, diagrams, and web interfaces, refining layout, typography, and visual consistency to help users communicate clearly and bring their ideas to life.
 
@@ -85,7 +85,7 @@ Raven's modular architecture is designed for harness self-evolution and subagent
 
 <p align="center"><em>Raven-Design's performance on visual design benchmarks</em></p>
 
-### Raven-Oncall
+### ❯ Raven-Oncall
 
 **Raven-Oncall** enables **unattended workflow automation** for experimentation, optimization, and continuous monitoring. It autonomously manages workflows from start to completion, sustaining progress over hours or overnight, delivering results, and involving users only when human judgment is needed.
 

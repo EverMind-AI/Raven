@@ -43,7 +43,7 @@ Raven 的模块化架构面向 harness 自进化和子 Agent 创建。四个内�
 
 > 四个 Agent 均已内置，开箱即可进行编排。
 
-### Raven-Research
+### ❯ Raven-Research
 
 **Raven-Research** 为复杂问题、文献综述与技术分析提供**自主深度研究**能力。它交付清晰、结构化且来源可追溯的研究报告，帮助用户理解陌生领域、比较不同方案，并作出有依据的决策。
 
@@ -53,7 +53,7 @@ Raven 的模块化架构面向 harness 自进化和子 Agent 创建。四个内�
 
 <p align="center"><em>Raven-Research 在 DeepResearch Mixed 基准测试中的表现</em></p>
 
-### Raven-Code
+### ❯ Raven-Code
 
 **Raven-Code** 支持**智能体驱动的软件开发**，将需求转化为可运行、经过测试的代码。它支持功能实现、调试、重构、数据处理与数据分析，帮助用户在遵循项目规范的前提下构建新能力、解决问题并提升代码质量。
 
@@ -69,7 +69,7 @@ Raven 的模块化架构面向 harness 自进化和子 Agent 创建。四个内�
 
 <p align="center"><em>Raven-Code 在数据分析任务的 DataAgentBench 上排名第一（2026-08-24 Live）</em></p>
 
-### Raven-Design
+### ❯ Raven-Design
 
 **Raven-Design** 提供**视觉设计**能力，将想法与内容转化为精美的视觉作品。它支持 PowerPoint 幻灯片、品牌素材、图表、示意图和网页界面创作，通过持续优化布局、字体与视觉一致性，帮助用户清晰表达信息，将创意变为作品。
 
@@ -85,7 +85,7 @@ Raven 的模块化架构面向 harness 自进化和子 Agent 创建。四个内�
 
 <p align="center"><em>Raven-Design 在视觉设计基准测试中的表现</em></p>
 
-### Raven-Oncall
+### ❯ Raven-Oncall
 
 **Raven-Oncall** 为实验、优化与持续监控提供**无人值守的流程自动化**能力。它自主推进从启动到完成的整个工作流程，支持持续数小时乃至通宵运行并交付结果，仅在需要人工判断时请用户介入。
 
