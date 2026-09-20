@@ -81,6 +81,9 @@ SPAWN_REFUSED_PREFIX = "Spawn refused: "
 _SHUTDOWN_REFUSAL = (
     f"{SPAWN_REFUSED_PREFIX}the host is shutting down and is starting no more sub-agents. Nothing was run."
 )
+# The DAG's refusals carry the quota refusal's shape rather than the spawn prefix;
+# said once here for both of its doors, `charge_dag_run` and `adopt_background_run`.
+_DAG_SHUTDOWN_REFUSAL = "Error: the host is shutting down and is starting no more sub-agents. No sub-agent was run."
 # Tier mismatches already reported, so a busy session logs one line per agent
 # rather than one per dispatch. Same shape and reason as `_STALE_SNAPSHOT_SEEN`
 # in raven/agent/subagent/backends/__init__.py.
@@ -731,7 +734,16 @@ class SubagentManager:
         not bound that -- each dispatch finishes and frees its slot for the
         next. A run counts once however many nodes it carries; the gate is what
         rations the nodes.
+
+        Refuses before charging once dispatch admission has closed: the
+        refusal is the caller's own result, the way the quota refusal is, and a
+        refused graph costs zero dispatches. This door is the cheap one; the
+        caller yields between it and creating its task, so
+        ``adopt_background_run`` checks again.
         """
+        if self._dispatch_closed:
+            logger.info("DAG run refused: the host is shutting down")
+            return _DAG_SHUTDOWN_REFUSAL
         quota_key = session_key or "default"
         if self._charge_dispatch_quota(quota_key):
             return None
@@ -748,7 +760,7 @@ class SubagentManager:
             f"submitting the graph again."
         )
 
-    def adopt_background_run(self, run_id: str, task: asyncio.Task, session_key: str | None) -> None:
+    def adopt_background_run(self, run_id: str, task: asyncio.Task, session_key: str | None) -> str | None:
         """Put a task this manager did not start under the same reach as a spawn.
 
         Every ``run_subagent_dag`` run -- backgrounded or blocking, the latter
@@ -757,15 +769,22 @@ class SubagentManager:
         see :meth:`cancel_all` for what an unreachable one leaves behind.
         Indexed here rather than only on the DAG tool so every entry point's
         existing teardown covers it with no extra wiring.
+
+        None once the task is indexed. Once dispatch admission has closed, the
+        task is cancelled instead -- tracked, it would be a run the sweep has
+        already passed; left alone, one nothing can reach -- and the refusal is
+        returned for the caller to hand on. Returned rather than logged because
+        the caller creates the task and adopts it in the same step: the cancel
+        lands before the task's first tick, and a task cancelled then never
+        enters its body, so nothing the body would do on cancellation happens.
+        What the task owed is the caller's to settle, and this is how it learns.
         """
         if self._dispatch_closed:
-            # This one arrives already started, so refusing it means cancelling
-            # it: left untracked it is a run no sweep can reach, which is the
-            # leak this gate exists for.
-            logger.info("DAG run {} refused: the host is shutting down; cancelling it", run_id)
+            logger.info("DAG run {} refused: the host is shutting down; cancelling it unstarted", run_id)
             task.cancel()
-            return
+            return _DAG_SHUTDOWN_REFUSAL
         self._track(run_id, task, session_key)
+        return None
 
     @property
     def dispatch_gate(self) -> asyncio.Semaphore:

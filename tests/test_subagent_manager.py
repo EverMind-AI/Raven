@@ -478,32 +478,54 @@ async def test_a_spawn_after_the_sweep_is_turned_away_before_it_writes_anything(
     assert mgr.get_running_count() == 0
 
 
-async def test_a_dag_run_handed_over_after_the_sweep_is_cancelled_not_adopted(monkeypatch):
-    """``adopt_background_run`` is the DAG's admission, and its run arrives
-    already started, so refusing it has to cancel it: tracked it would be a run
-    the sweep has already passed, and left alone it would be one nothing can
-    reach at all."""
+async def test_a_dag_run_handed_over_after_the_sweep_is_refused_and_cancelled_unstarted(monkeypatch):
+    """``adopt_background_run`` is the DAG's admission, and the DAG tool adopts
+    the task in the same step that created it -- so the refusing cancel lands
+    before the task's first tick, and a task cancelled then never enters its
+    body. Nothing the body would do on cancellation happens, which is why the
+    refusal comes back as a value: the caller has to settle what the task owed.
+    Tracked, the run would be one the sweep has already passed; left alone, one
+    nothing can reach."""
     mgr = _stub_mgr(monkeypatch)
     await mgr.cancel_all()
-    running = asyncio.Event()
+    entered: list[int] = []
 
     async def _run() -> None:
-        running.set()
+        entered.append(1)
         await asyncio.sleep(3600)
 
     task = asyncio.create_task(_run())
-    await running.wait()
-
-    mgr.adopt_background_run("run-1", task, "web:sess1")
-    # Bounded, and the assertion is on the task rather than on this returning:
+    refusal = mgr.adopt_background_run("run-1", task, "web:sess1")
+    # Bounded, and the assertions are on the task rather than on this returning:
     # an unguarded adopt leaves the run going, and an unbounded wait would hang
     # the suite there instead of failing it.
     try:
         await asyncio.wait({task}, timeout=5)
         assert task.cancelled()
+        assert entered == [], "the task got a tick; the production shape cancels it before its first"
+        assert refusal is not None and "shutting down" in refusal
         assert mgr.get_running_count() == 0
     finally:
         task.cancel()
+
+
+async def test_a_dag_run_charged_after_the_sweep_is_refused_before_it_costs_a_dispatch(monkeypatch):
+    """``charge_dag_run`` is the DAG's first door, before minting and before the
+    task exists; refused there, the graph costs nothing and the model reads the
+    same refusal the second door would give it."""
+    mgr = _stub_mgr(monkeypatch)
+    assert mgr.charge_dag_run("web:sess1") is None
+    await mgr.cancel_all()
+
+    refusal = mgr.charge_dag_run("web:sess2")
+
+    assert refusal is not None and "shutting down" in refusal
+    assert "web:sess2" not in mgr._session_spawn_times
+    unstarted = asyncio.create_task(asyncio.sleep(0))
+    try:
+        assert mgr.adopt_background_run("run-1", unstarted, "web:sess2") == refusal
+    finally:
+        unstarted.cancel()
 
 
 async def test_subagent_continues_after_a_refused_delete(monkeypatch, tmp_path):
