@@ -53,14 +53,16 @@ interface SettingsChrome {
   /* The newer version when there is one, so the About row can offer the
      upgrade the way the design asked -- a check that silently starts an
      upgrade is a second action the reader did not ask for. */
-  checkUpdate(btn: HTMLButtonElement): Promise<string | null>
+  checkUpdate(btn: HTMLButtonElement): Promise<void>
+  newerVersion(): string | null
   upgrade(): void
   setLang(v: string): void
 }
 
 let chrome: SettingsChrome = {
   version: () => null,
-  checkUpdate: async () => null,
+  checkUpdate: async () => {},
+  newerVersion: () => null,
   upgrade: () => {},
   setLang: () => {},
 }
@@ -287,6 +289,7 @@ export const settingsSource: SettingsSource = {
   })),
   version: () => chrome.version(),
   checkUpdate: (btn) => chrome.checkUpdate(btn),
+  newerVersion: () => chrome.newerVersion(),
   upgrade: () => chrome.upgrade(),
   /* Not awaited: the pick repaints synchronously and the persist speaks for
      itself if it fails. */
@@ -303,5 +306,5 @@ export function _resetForTests(): void {
   RAW = {}
   configPathLive = '~/.raven/config.json'
   everosLive = null
-  chrome = { version: () => null, checkUpdate: async () => null, upgrade: () => {}, setLang: () => {} }
+  chrome = { version: () => null, checkUpdate: async () => {}, newerVersion: () => null, upgrade: () => {}, setLang: () => {} }
 }

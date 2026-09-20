@@ -1775,5 +1775,3 @@ async def test_ext_list_marks_only_the_tools_whose_switch_the_loop_ignores(
     switchable = [n for n, r in rows.items() if n not in fixed and "builtin" in r]
     assert switchable, "no switchable tool reported"
     assert all(rows[n]["builtin"] is False for n in switchable)
-
-
