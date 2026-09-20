@@ -35,6 +35,20 @@ afterEach(() => {
 })
 
 describe('model picker', () => {
+  it('marks every provider row with its own mark, not just its name', () => {
+    /* The icons were dropped on the grounds that the table lived across a
+       forbidden import edge. It does not: `ProviderMark` is in this same
+       layer, and the gate only forbids `components -> features`. The composer's
+       picker and onboarding both show them, so the settings picker was the
+       only surface without. */
+    draw()
+    const rows = document.querySelectorAll('.model-picker-prov')
+    expect(rows.length).toBe(2)
+    for (const row of rows) {
+      expect(row.querySelector('img, svg, [class*=mark], [class*=ico]'), row.textContent || '').toBeTruthy()
+    }
+  })
+
   it('opens on the current provider, shows its models with names and windows, and marks the current one', () => {
     setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
     draw()

@@ -26,7 +26,7 @@ import { redraw as redrawSettings, refreshSoon } from './store'
 
 /* The version check the rail-foot notice already does, on demand. No new
    backend: system.version carries the answer. */
-export async function checkUpdate(btn: HTMLButtonElement): Promise<void> {
+export async function checkUpdate(btn: HTMLButtonElement): Promise<string | null> {
   const was = btn.textContent
   btn.textContent = t('gui.settings.about.checking'); btn.disabled = true
   try {
@@ -35,10 +35,13 @@ export async function checkUpdate(btn: HTMLButtonElement): Promise<void> {
     const v = await checkVersion()
     if (v.raven_version) appVersionSet(v.raven_version)
     if (hasUpdateFlag(v)) {
-      showUpNote('ver', (v as { latest_version?: string }).latest_version)
+      const latest = (v as { latest_version?: string }).latest_version || ''
+      showUpNote('ver', latest)
       redrawSettings()
-      askUpgrade()
-      return
+      /* Handed back rather than acted on: the design has the row offer the
+         upgrade once a newer version is known, and starting it here made the
+         check a second action the reader did not ask for. */
+      return latest || null
     }
     /* The answer has to land on the button: this layer sends toasts to the
        console, and "nothing happened" is indistinguishable from a broken
@@ -46,13 +49,14 @@ export async function checkUpdate(btn: HTMLButtonElement): Promise<void> {
     btn.disabled = false
     btn.textContent = t('gui.settings.about.latest')
     setTimeout(() => { btn.textContent = was }, 2200)
-    return
+    return null
   } catch (e) {
     btn.textContent = t('gui.settings.about.check_fail')
     setTimeout(() => { btn.textContent = was }, 2600)
     if (window.console) console.error('[update check]', e)
   }
   btn.disabled = false
+  return null
 }
 
 export function install(): void {
@@ -61,6 +65,7 @@ export function install(): void {
   setSettingsChrome({
     version: APP_VERSION,
     checkUpdate,
+    upgrade: askUpgrade,
     /* Not awaited: the pick repaints synchronously and the persist speaks for
        itself if it fails. */
     setLang: (v: string) => { void langPick(v as 'en' | 'zh', { persist: true }) },

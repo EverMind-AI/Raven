@@ -1739,28 +1739,41 @@ def test_configured_provider_section_reads_an_unreadable_config_as_absent(
     assert console_module._configured_provider_section("anthropic") is False
 
 
-async def test_ext_list_marks_the_tools_a_person_cannot_switch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The registry's hidden set travels, so the page need not infer it.
+async def test_ext_list_marks_only_the_tools_whose_switch_the_loop_ignores(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`builtin` answers the question the switch answers, not a schema question.
 
-    A schema-hidden tool is reachable only through ``tool_call``: a switch for
-    it would write a preference nothing reads. The page used to work this out
-    from which card a tool sat in, which tied the grouping to the affordance --
-    the DAG controls had to live in the meta-tool card to come out fixed.
+    Hidden from the schema and withheld from the model are different
+    mechanisms: ``offers()`` consults ``withheld_names()``, which reads
+    ``tools.disabledTools`` whatever the schema shows. Asking the hidden set
+    drew the DAG controls as fixed while their switch worked -- measured on a
+    real gateway, putting ``cancel_dag`` in that list flips its ``enabled`` to
+    false.
+
+    What the loop really refuses is an entry naming an MCP resource or prompt
+    meta-tool, which it registers and withdraws on its own
+    (``_report_reserved_disabled_tools``), plus the two tool-search meta-tools,
+    fixed by product decision as the doorway.
     """
+    from raven.agent.tools.tool_search import META_TOOL_NAMES
+    from raven.mcp.prompts import PROMPT_TOOL_NAMES
+    from raven.mcp.resources import RESOURCE_TOOL_NAMES
+
     loop = _console_loop(tmp_path, monkeypatch, {"providers": {}})
     rows = await _ext_rows(loop, monkeypatch)
 
-    from raven.agent.tools.tool_search import META_TOOL_NAMES
-
-    fixed = META_TOOL_NAMES | loop.tools.schema_hidden_names()
-    assert loop.tools.schema_hidden_names(), "no hidden tool registered: this case would pass on an empty set"
-    # `tool_call` is the one of the two that is in the schema -- the model has
-    # to see the doorway -- and it is no more switchable for it. Asserting the
-    # hidden set alone let it through as a live switch.
+    fixed = META_TOOL_NAMES | RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES
     assert "tool_call" in rows and rows["tool_call"]["builtin"] is True
-    for name in fixed:
+
+    hidden = loop.tools.schema_hidden_names()
+    assert hidden, "no hidden tool registered: the case below would pass on an empty set"
+    for name in hidden - fixed:
         if name in rows:
-            assert rows[name]["builtin"] is True, name
+            assert rows[name]["builtin"] is False, f"{name} answers to the switch, so it carries one"
+
     switchable = [n for n, r in rows.items() if n not in fixed and "builtin" in r]
     assert switchable, "no switchable tool reported"
     assert all(rows[n]["builtin"] is False for n in switchable)
+
+
