@@ -109,6 +109,19 @@ orchestration Raven chose for the task; below it is what the run produced.
 <table>
 <tr>
 <td width="50%" valign="top">
+<p align="center"><b>A playable first-person boss fight</b></p>
+<a href="https://github.com/user-attachments/assets/240d5b5d-c6e0-4f32-8e98-3c8621299563"><img src="https://github.com/user-attachments/assets/240d5b5d-c6e0-4f32-8e98-3c8621299563" alt="Task graph: three Raven-Code nodes running in sequence across 42 game rounds" width="100%"></a>
+
+https://github.com/user-attachments/assets/f5229599-4187-43ee-a42c-473910e2d535
+
+</td>
+<td width="50%" valign="top"></td>
+</tr>
+</table>
+
+<table>
+<tr>
+<td width="50%" valign="top">
 <p align="center"><b>Song-dynasty domestic aesthetics</b></p>
 <a href="https://github.com/user-attachments/assets/8fa50c96-3d2d-4107-8a8c-7d041d1ac8b4"><img src="https://github.com/user-attachments/assets/8fa50c96-3d2d-4107-8a8c-7d041d1ac8b4" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a>
 <a href="https://github.com/user-attachments/assets/379328ea-e3ee-430f-865d-68ed90dae69f"><img src="https://github.com/user-attachments/assets/379328ea-e3ee-430f-865d-68ed90dae69f" alt="Cover, slides and closing slide of the Song-dynasty aesthetics deck" width="100%"></a>
