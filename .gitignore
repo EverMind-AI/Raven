@@ -142,3 +142,11 @@ demos/oncall_heat2d/.raven-demo-home/
 # is the agent's own folder; a dispatched run writes under the state root.
 agents/raven-ppt/deck/
 agents/raven-ppt/materials/
+
+# Model weights and dictionaries fetched by scripts/fetch_resources.py: the
+# word dictionary the tokenizer segments with, the corpora nltk reads beside
+# it, and the deepdoc vision models the PDF parser runs. Out of git because the
+# smallest of them is eight times the 1 MiB ceiling AGENTS.md section 7 sets --
+# `make install` and the image build download them instead.
+raven/core/res/
+raven/knowledge/res/

@@ -1,4 +1,4 @@
-.PHONY: help install install-deps lint lint-python lint-imports lint-deps lint-types lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui build-core check-commits check-pr-title check-large-files check-source-language check-core-wheel fetch-templates verify-templates beta ci clean coverage coverage-shard coverage-combine coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate docker-build docker-up docker-down
+.PHONY: help install install-deps fetch-resources lint lint-python lint-imports lint-deps lint-types lint-tui lint-bridge test test-python test-tui build build-tui build-bridge build-ui build-core check-commits check-pr-title check-large-files check-source-language check-core-wheel fetch-templates verify-templates beta ci clean coverage coverage-shard coverage-combine coverage-summary coverage-diff coverage-ratchet coverage-baseline-check coverage-baseline-candidate docker-build docker-up docker-down
 
 PYTHON ?= python3
 PYTHON_VERSION ?= 3.12
@@ -21,7 +21,8 @@ COVERAGE_DATA_DIR ?= coverage-data
 
 help:
 	@echo "Targets:"
-	@echo "  install        Install Python deps, Node deps, and git hooks"
+	@echo "  install        Install Python deps, Node deps, git hooks and the fetched resources"
+	@echo "  fetch-resources Download the tokenizer dictionary and the deepdoc models (idempotent)"
 	@echo "  install-deps   Install Python deps only (CI uses this)"
 	@echo "  lint           Run Python, TUI, and bridge lint gates"
 	@echo "  lint-python    Ruff check + format gate over raven/, evolver/, tests/, scripts/"
@@ -51,13 +52,24 @@ help:
 install-deps:
 	uv sync --frozen --python $(PYTHON_VERSION) --extra dev --dev
 
-install: install-deps
+install: install-deps fetch-resources
 	uv run --frozen --python $(PYTHON_VERSION) pre-commit install
 	uv run --frozen --python $(PYTHON_VERSION) pre-commit install --hook-type commit-msg
 	npm ci
 	npm ci --prefix ui-web
 	npm ci --prefix ui-tui
 	npm ci --prefix bridge
+
+# The word dictionary, the nltk corpora beside it and the deepdoc vision
+# models: ~160 MB that cannot live in git (AGENTS.md section 7 caps a file at
+# 1 MiB). Idempotent, so `make install` can call it every time.
+#
+# `--optional` on purpose: a developer behind a firewall that cannot reach
+# huggingface should still get a working checkout. What they lose is Chinese
+# segmentation and PDF layout, and both say so when asked rather than failing
+# the install that would have told them nothing.
+fetch-resources:
+	uv run --frozen --python $(PYTHON_VERSION) python scripts/fetch_resources.py --optional
 
 lint: lint-python lint-imports lint-deps lint-types lint-ui lint-tui lint-bridge
 
