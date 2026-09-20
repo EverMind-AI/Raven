@@ -20,6 +20,7 @@ import type { JSX } from 'react'
 interface FakeBody extends AgentsBody {
   setDone(v: boolean): void
   setLoaded(v: boolean): void
+  setNeedsRestart(v: boolean): void
   agents: FoundAgent[]
 }
 
@@ -27,6 +28,7 @@ function fakeBody(name: string): FakeBody {
   const listeners = new Set<() => void>()
   let loaded = false
   let done = false
+  let needsRestart = false
   const notify = (): void => { for (const fn of [...listeners]) fn() }
   const body: FakeBody = {
     Body: (): JSX.Element => <div className={`fake-${name}`} />,
@@ -35,9 +37,11 @@ function fakeBody(name: string): FakeBody {
     loaded: () => loaded,
     done: () => done,
     found: () => body.agents,
+    needsRestart: () => needsRestart,
     agents: [],
     setDone: (v) => { done = v; notify() },
     setLoaded: (v) => { loaded = v; notify() },
+    setNeedsRestart: (v) => { needsRestart = v; notify() },
   }
   return body
 }
@@ -260,6 +264,20 @@ describe('the onboarding wizard', () => {
     expect(button('gui.onb.start_sync')).toBeDefined()
     expect(store.isOpen()).toBe(true)
     expect(host().dataset.off).toBeUndefined()
+  })
+
+  it('says the gateway needs a restart once the model step reports it, on every step after', async () => {
+    /* A first run: the gateway started with no model, the write landed, and
+       this process cannot chat on it until it comes back. Said in the frame
+       rather than learnt from the first send failing. */
+    const h = install()
+    mount()
+    await open()
+    expect(document.querySelector('.ob-err')).toBeNull()
+    await act(async () => { h.model.setDone(true); h.model.setNeedsRestart(true) })
+    expect(document.querySelector('.ob-err')?.textContent).toBe('gui.onb.restart')
+    await click(button('gui.onb.next'))
+    expect(document.querySelector('.ob-err')?.textContent).toBe('gui.onb.restart')
   })
 
   it('stays open and says why when the import does not start', async () => {

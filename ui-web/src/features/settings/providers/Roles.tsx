@@ -136,7 +136,10 @@ function pickerProviders(rows: ProviderRow[]): PickerProvider[] {
 async function setRole(r: Role, model: string, provider: string, typed: boolean): Promise<SettingsSnapshot | void> {
   const src = store.source()
   if (typed) await src.provider('add_model', { slug: provider, model })
-  if (r.id === 'chat') { await src.pickModel(model, provider); return src.load() }
+  if (r.id === 'chat') {
+    if (await src.pickModel(model, provider)) store.set({ needsRestart: true })
+    return src.load()
+  }
   if (r.keys) { await src.set(r.keys[0], model); return src.set(r.keys[1], provider) }
   if (r.everos) return src.everosSet(r.everos, { model }, provider)
   if (r.media) {

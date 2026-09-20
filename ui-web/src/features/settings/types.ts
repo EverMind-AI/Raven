@@ -173,7 +173,9 @@ export interface SettingsSource {
   oauthLogin(slug: string): Promise<OauthStart>
   /* The chat role: agents.defaults.model and .provider, through the same write
      the composer's picker makes. */
-  pickModel(model: string, provider: string): Promise<void>
+  /** Resolves true when the write landed in a gateway that has to restart
+      before it can chat on it (a first run). */
+  pickModel(model: string, provider: string): Promise<boolean>
   model(): string
   defaultProvider(): string
   archived(): Promise<ArchivedSession[]>

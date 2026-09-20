@@ -248,7 +248,7 @@ export const settingsSource: SettingsSource = {
     openUrl(r.verification_uri)
     return r
   })),
-  pickModel: (model, provider) => run(persistModel(model, provider, 'default').then(() => undefined)),
+  pickModel: (model, provider) => run(persistModel(model, provider, 'default').then((r) => r === 'needs_restart')),
   model: () => defaultModel(),
   defaultProvider: () => defaultProvider(),
   archived: () => gateway().call('session.list', { archived: true }).then((r) => r.sessions || []),

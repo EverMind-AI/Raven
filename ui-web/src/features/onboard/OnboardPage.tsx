@@ -150,7 +150,11 @@ function Wizard(): JSX.Element {
             </button>
           ) : null}
           <span className="ob-grow" />
-          {s.error ? <span className="ob-err" role="alert">{s.error}</span> : null}
+          {s.error ? (
+            <span className="ob-err" role="alert">{s.error}</span>
+          ) : bodies.model.needsRestart?.() ? (
+            <span className="ob-err" role="alert">{t('gui.onb.restart')}</span>
+          ) : null}
           {/* The first step has nothing to skip: without a chat model nothing runs. */}
           {at > 0 ? (
             <button type="button" className="ob-btn ob-ghost" disabled={done || s.busy} onClick={() => void store.skip()}>

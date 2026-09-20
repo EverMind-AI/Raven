@@ -155,7 +155,7 @@ export async function loadProviders(sid?: string | null, gen?: number): Promise<
      is said back to the caller: it is not an applied switch yet. */
 export async function persistModel(
   m: string, provider: string, scope: 'session' | 'default',
-): Promise<void | 'staged'> {
+): Promise<void | 'staged' | 'needs_restart'> {
   const sid = sessionCurrent()
   // Captured with sid, before the write: the repaint below must prove the page
   // it would paint is still the page the reader is on. config.set and the
@@ -184,7 +184,11 @@ export async function persistModel(
     // (every view switch does) -- so without this the resolved draft write
     // repaints a chip that has since been loaded correctly for someone else.
     if (!sid && !staging().model && gen === generation()) showModel(m)
-    return
+    /* The write landed in a process with no agent loop -- a first run, where
+       the gateway started before there was a model to build one from. Said
+       back so the onboarding wizard can tell the reader, instead of the next
+       send answering with the startup error. */
+    return r && r.needs_restart ? 'needs_restart' : undefined
   }
   if (sid) {
     const r = await gateway().call('config.set', { key: 'model', value: m, provider, session_id: sid })

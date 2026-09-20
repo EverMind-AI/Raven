@@ -47,6 +47,11 @@ export interface StepBody {
   subscribe(listener: () => void): () => void
   loaded(): boolean
   done(): boolean
+  /* Whether a write this step made landed in a gateway that has to restart
+     before it can chat on it -- a first run, where the process started with
+     no model to build a loop from. The frame says so on every step after,
+     since the reader would otherwise learn it from the first send failing. */
+  needsRestart?(): boolean
 }
 
 /** An agent the machine has, by the id the importer knows it under. */

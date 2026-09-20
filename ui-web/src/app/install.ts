@@ -166,6 +166,7 @@ export function installSources(): void {
       subscribe: settingsStore.subscribe,
       loaded: () => settingsStore.get().loaded,
       done: modelStepDone,
+      needsRestart: () => settingsStore.get().needsRestart,
     },
     search: {
       Body: WebStepBody,
