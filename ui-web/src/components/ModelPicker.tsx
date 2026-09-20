@@ -74,12 +74,20 @@ export function ModelPicker({ title, providers, current, onPick, onClose, emptyN
      scroller moves; the horizontal case is the resize, which re-places. */
   useEffect(() => {
     if (!anchor) return
-    const was = anchor.getBoundingClientRect().top
+    let was = anchor.getBoundingClientRect().top
     const off = (): void => {
       if (Math.abs(anchor.getBoundingClientRect().top - was) > 1) onClose()
     }
+    /* The baseline moves with the panel. A height resize re-centres the dialog,
+       which moves the row vertically without scrolling anything; leaving the
+       opening-time top behind would make the next scroll read that resize as a
+       row that had slid away. And the next scroll is likely: the model list
+       inside this panel is its own scroller, and the listener below is on the
+       document in capture phase, so choosing a model reaches it. */
     const again = (): void => {
-      if (box.current) anchorRow(box.current, anchor)
+      if (!box.current) return
+      anchorRow(box.current, anchor)
+      was = anchor.getBoundingClientRect().top
     }
     document.addEventListener('scroll', off, true)
     window.addEventListener('resize', again)

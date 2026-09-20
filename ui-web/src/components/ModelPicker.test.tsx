@@ -176,6 +176,29 @@ describe('the picker floats against the row that opened it', () => {
     expect(pop.style.left).toBe('420px')
   })
 
+  it('does not read a height resize as a row that scrolled away', () => {
+    sized()
+    /* The dialog is min(680px, 88vh) and centred, so a shorter window moves the
+       row vertically without anything scrolling. The panel follows; the guard's
+       baseline has to follow with it, or the next scroll compares against where
+       the row used to be. That scroll is the likely one: the model list in this
+       panel is its own scroller and the listener is on the document in capture
+       phase, so choosing a model reaches it. */
+    let top = 200
+    const row = anchored(top)
+    row.getBoundingClientRect = () => ({ top, bottom: top + 30, left: 700, right: 900, width: 200, height: 30, x: 700, y: top, toJSON: () => ({}) }) as DOMRect
+    const { closes } = draw({ anchor: row })
+    top = 140
+    act(() => { window.dispatchEvent(new Event('resize')) })
+    expect(closes).toEqual([])
+    document.dispatchEvent(new Event('scroll', { bubbles: true }))
+    expect(closes, 'the row has not moved since the panel was re-placed').toEqual([])
+    /* A real scroll after that still closes it. */
+    top = 60
+    document.dispatchEvent(new Event('scroll', { bubbles: true }))
+    expect(closes).toEqual([1])
+  })
+
   it('leaves an unanchored panel where the caller put it', () => {
     sized()
     draw()
