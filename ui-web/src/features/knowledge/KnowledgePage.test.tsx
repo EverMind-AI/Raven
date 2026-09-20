@@ -1171,8 +1171,8 @@ describe('adding a data source', () => {
   })
 
   it('uploads several files one after another, not all at once', async () => {
-    /* Each upload carries its bytes base64 in one websocket frame under a
-       25 MB ceiling: N at once is N of those in memory and a frame ceiling
+    /* Each upload carries its bytes base64 in one websocket frame under the
+       upload ceiling: N at once is N of those in memory and a frame ceiling
        nobody raised. */
     const order: string[] = []
     let live = 0

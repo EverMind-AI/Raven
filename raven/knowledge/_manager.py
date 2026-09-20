@@ -386,7 +386,7 @@ class KnowledgeManager:
 
         Beside ``read_document`` rather than instead of it: the indexer wants
         the bytes, and a viewer wants a handle it can stream and convert from.
-        Reading a 25 MB upload into memory to hand it back out again is the
+        Reading a 100 MB upload into memory to hand it back out again is the
         thing this exists to avoid.
 
         The path is inside raven's state directory, which the viewer's own path

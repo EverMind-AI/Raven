@@ -254,7 +254,7 @@ export async function upload(file: File): Promise<void> {
 /* Files, in order, one at a time.
 
    Sequential rather than parallel: each upload carries its bytes base64 in a
-   single websocket frame under a 25 MB ceiling, so N at once is N of those in
+   single websocket frame under the upload ceiling, so N at once is N of those in
    memory at once and a frame ceiling nobody raised.
 
    One file's failure is reported at the end rather than thrown: a folder of
