@@ -1,3 +1,7 @@
+/* The agent catalogue: what the page says about a row beyond the wire -- the
+   one-liner, who makes it, where an absent one is installed from -- keyed by
+   preset first and by name second, and the ownership rule that puts the
+   wire's own flag ahead of both. */
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import { setTranslator } from '../../i18n/t'

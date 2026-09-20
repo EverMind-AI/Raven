@@ -81,7 +81,7 @@ _CANCEL_DRAIN_TIMEOUT_S = 5.0
 SPAWN_REFUSED_PREFIX = "Spawn refused: "
 
 
-def _row_pin(config: Any) -> tuple[str | None, str | None]:
+def _row_pin(config: Any, pool: Any = None) -> tuple[str | None, str | None]:
     """A built-in row's own ``model``, with the provider its stored id names.
 
     The pair, not the id alone: ``subagents.update`` stores the id naming the
@@ -91,13 +91,19 @@ def _row_pin(config: Any) -> tuple[str | None, str | None]:
     ``stored_provider_name``, the function the write checked the pair with, so
     a section raven has no spec for resolves here to that section rather than
     to nothing, which the pool would have read as "derive one".
+
+    ``pool`` lends its provider table for the other direction of that mistake:
+    a hand-written ``deepseek-ai/DeepSeek-V3`` names no section, so its head is
+    part of the id and the provider is left to the pool to derive -- the gateway
+    branch such an id ran through before rows carried their provider.
     """
     from raven.providers.wire import stored_provider_name
 
     model = getattr(config, "model", None)
     if not model:
         return None, None
-    return model, stored_provider_name(model)
+    providers = getattr(getattr(pool, "config", None), "providers", None)
+    return model, stored_provider_name(model, providers=providers)
 
 
 # Tier mismatches already reported, so a busy session logs one line per agent
@@ -439,7 +445,7 @@ class SubagentManager:
         confine = getattr(row.config, "restrict_to_workspace", None)
         pin = live_pin_resolver(
             self.provider_pool,
-            lambda: _row_pin(row.config),
+            lambda: _row_pin(row.config, self.provider_pool),
             key=f"subagents.{row.name}.model",
             follower=f"built-in agent {row.name!r}",
         )

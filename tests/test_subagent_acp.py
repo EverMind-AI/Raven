@@ -16,6 +16,7 @@ import json
 import sys
 import time
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -39,7 +40,7 @@ from raven.acp_client.protocol import AcpRemoteError
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend, third_party_agent_meta
 from raven.agent.subagent.instances import InstanceRegistry
 from raven.agent.subagent.manager import SubagentManager
-from raven.agent.subagent.probe import probe_one
+from raven.agent.subagent.probe import probe_one, run_test
 from raven.agent.subagent.probe_state import fingerprint
 from raven.agent.subagent.registry import _row_for
 from raven.config.schema import SubagentsConfig, ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
@@ -325,6 +326,95 @@ def test_snapshot_store_ignores_a_row_it_cannot_read(tmp_path: Path) -> None:
     path = tmp_path / "caps.json"
     path.write_text(json.dumps({"version": 1, "snapshots": [{"agent": "a"}, "not-a-dict"]}), encoding="utf-8")
     assert SnapshotStore(path=path).load([stub_config("a")]) == {}
+
+
+async def test_a_failed_manual_test_keeps_the_capabilities_the_last_record_measured(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A verify that fails before ``session/new`` carries no menu and no
+    statefulness. Recorded whole, one flaky Test cost the row both until the
+    next success -- the verdict visible, the loss not. The verdict is recorded;
+    the capabilities are the previous record's, the way ``SnapshotStore.load``
+    already trusts a stale row's."""
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    good = await verify_agent(cfg)
+    SnapshotStore(path=path).record(good)
+    assert good.can_resume is True and good.available_models
+
+    failed = replace(
+        good,
+        status="missing",
+        detail="executable not found",
+        can_resume=False,
+        can_load=False,
+        available_models=(),
+        model_choices=(),
+        measured_at_ms=good.measured_at_ms + 1,
+    )
+
+    async def fake_verify(_cfg: Any) -> CapabilitySnapshot:
+        return failed
+
+    monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+    result = await run_test(cfg, source="config")
+
+    assert result.detail == "executable not found"
+    kept = SnapshotStore(path=path).load([cfg])["a"]
+    assert (kept.status, kept.detail, kept.measured_at_ms) == ("missing", "executable not found", failed.measured_at_ms)
+    assert kept.can_resume is True
+    assert kept.available_models == good.available_models
+    assert (await probe_one(cfg, source="config")).status == "missing", "the verdict itself is on the row"
+
+
+async def test_a_first_test_that_fails_is_recorded_as_it_is(tmp_path: Path, monkeypatch) -> None:
+    """Nothing to keep: with no previous record the failed measurement is the record."""
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    failed = replace(await verify_agent(cfg), status="missing", detail="gone", can_resume=False)
+
+    async def fake_verify(_cfg: Any) -> CapabilitySnapshot:
+        return failed
+
+    monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+    await run_test(cfg, source="config")
+
+    kept = SnapshotStore(path=path).load([cfg])["a"]
+    assert (kept.status, kept.can_resume) == ("missing", False)
+
+
+async def test_a_row_recorded_before_the_menu_reads_attention_until_it_is_measured(tmp_path: Path, monkeypatch) -> None:
+    """A "ready" written before ``modelChoices`` existed predates a capability
+    the sheet now draws from; reporting it put a disabled "managed by itself"
+    pill on an agent that may offer a menu, with an INFO line as the only trace
+    when the boot backfill's re-verify failed. The row says what is missing
+    instead, and a verdict re-recorded over it keeps "never measured" apart
+    from "measured, none"."""
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    store = SnapshotStore(path=path)
+    store.record(await verify_agent(cfg))
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    for row in raw["snapshots"]:
+        row.pop("modelChoices", None)
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    old = store.load([cfg])["a"]
+    assert old.model_menu_measured is False
+    assert store.has_model_menu("a") is False
+    probed = await probe_one(cfg, source="config")
+    assert probed.status == "attention"
+    assert "model menu has not been measured" in probed.detail
+
+    store.record(replace(old, status="missing", detail="a verdict over the old row"))
+    assert store.has_model_menu("a") is False, "re-recording a verdict must not mint a measured-empty menu"
+
+    store.record(await verify_agent(cfg))
+    assert store.has_model_menu("a") is True
+    assert (await probe_one(cfg, source="config")).status == "ready"
 
 
 # ---- relearning the mode menu from a live session --------------------------

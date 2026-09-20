@@ -260,6 +260,17 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
             f"installed at {resolved}, but its launch config changed since the last test -- run a test",
             resolved,
         )
+    if not getattr(snapshot, "model_menu_measured", True):
+        # A row recorded before the menu was: its "ready" predates a capability
+        # the sheet now draws from, and reporting it would put a disabled
+        # "managed by itself" pill on an agent that may well offer a menu. The
+        # boot-time backfill re-measures such rows; until one succeeds, the row
+        # says what is missing rather than claiming a verdict it does not have.
+        return done(
+            "attention",
+            f"installed at {resolved}, but its model menu has not been measured yet -- run a test",
+            resolved,
+        )
     return done(snapshot.status, snapshot.detail, resolved)
 
 
@@ -520,9 +531,36 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
         # Presets are templates, not entries: recording a snapshot for one would
         # key it to a name no config claims, and the roster would then read
         # capabilities off a preset the user never installed.
-        SnapshotStore().record(snapshot)
+        store = SnapshotStore()
+        store.record(_test_record(snapshot, store.load([cfg]).get(cfg.name)))
     reply = ", ".join(snapshot.available_models[:5]) or None
     return TestResult(cfg.name, source, "acp", snapshot.usable, snapshot.detail, reply, elapsed())
+
+
+def _test_record(snapshot: Any, previous: Any) -> Any:
+    """What a manual test writes down: its verdict always, its capabilities only
+    when it reached them.
+
+    A verify that fails before ``session/new`` -- a cold shim start, a machine
+    under load, a login that lapsed -- carries no menu and no statefulness, and
+    recorded whole it would cost the row both until the next success, silently:
+    the verdict is visible, the loss of the previous measurement is not. So an
+    unusable result keeps the previous record's capabilities under its own
+    status and detail. Same reasoning as ``SnapshotStore.load`` gives for a
+    stale row: the old capabilities are the weaker claim and self-heal, since a
+    session that really cannot be loaded fails at ``session/load`` and the
+    backend starts fresh. ``previous`` is the fingerprint-matching record or
+    ``None``; with none there is nothing to keep.
+    """
+    if snapshot.usable or previous is None:
+        return snapshot
+    return replace(
+        previous,
+        status=snapshot.status,
+        detail=snapshot.detail,
+        measured_at_ms=snapshot.measured_at_ms,
+        elapsed_ms=snapshot.elapsed_ms,
+    )
 
 
 _SCHEDULED = False

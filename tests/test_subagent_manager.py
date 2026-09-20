@@ -4338,3 +4338,37 @@ def test_a_builtin_rows_pin_under_a_section_no_spec_matches_names_that_section()
     mgr.registry.backend(GENERIC_AGENT)._pin()
 
     assert asked == [("custom/my-local-model", "custom")]
+
+
+def test_a_prefix_that_names_no_section_is_left_to_the_pool_to_derive() -> None:
+    """``deepseek-ai/DeepSeek-V3`` written by hand before ids carried their
+    provider: the head is a vendor path segment, not a section, and reading it
+    as a provider would drop a pin a configured gateway serves. Handed no
+    provider, the pool takes its gateway branch, where such an id always ran."""
+    from raven.config.schema import Config
+    from raven.providers.binding import ModelBinding
+
+    asked: list[tuple[str | None, str | None]] = []
+
+    class _Pool:
+        config = Config.model_validate(
+            {"providers": {"mylocal": {"apiKey": "k", "apiBase": "http://127.0.0.1:1/v1", "models": ["m"]}}}
+        )
+
+        def bind_pin(self, model, provider_name=None):
+            asked.append((model, provider_name))
+            return ModelBinding(_NamedProvider("pool"), model)
+
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=Path("/tmp"),
+        agents=[
+            BuiltinAgentConfig(name=GENERIC_AGENT, model="deepseek-ai/DeepSeek-V3"),
+            BuiltinAgentConfig(name="local", model="mylocal/m"),
+        ],
+        provider_pool=_Pool(),
+    )
+    mgr.registry.backend(GENERIC_AGENT)._pin()
+    mgr.registry.backend("local")._pin()
+
+    assert asked == [("deepseek-ai/DeepSeek-V3", None), ("mylocal/m", "mylocal")]

@@ -522,7 +522,7 @@ def _host_pair(model: str) -> str | None:
     def listed(provider: str, model_id: str) -> bool:
         return model_id in (getattr(providers.get(provider), "models", None) or [])
 
-    provider = stored_provider_name(model)
+    provider = stored_provider_name(model, providers=providers)
     if provider is not None:
         if find_by_name(provider) is None and not listed(provider, split_model_id(model)[1]):
             return None

@@ -149,6 +149,15 @@ class CapabilitySnapshot:
     would drift the first time the agent gained or dropped a mode."""
     auth_methods: tuple[str, ...] = ()
     elapsed_ms: int = 0
+    model_menu_measured: bool = True
+    """Whether ``model_choices`` was measured, or only defaulted at load.
+
+    A row written before the menu was recorded reads back with an empty
+    ``model_choices``, exactly like an agent measured to offer none; only the
+    raw row tells the two apart (``SnapshotStore.has_model_menu``). Set at load
+    time from the row's keys and never written as a field of its own: an
+    unmeasured menu is written as the key's absence, so a verdict re-recorded
+    over such a row does not turn "never measured" into "measured, none"."""
     stale: bool = False
     """Measured against a launch config this agent no longer has.
 
@@ -192,6 +201,8 @@ class CapabilitySnapshot:
     def to_row(self) -> dict[str, Any]:
         row = self.to_wire()
         row["fingerprint"] = self.fingerprint
+        if not self.model_menu_measured:
+            del row["modelChoices"]
         return row
 
     @classmethod
@@ -256,6 +267,7 @@ class CapabilitySnapshot:
             available_modes=_modes("availableModes"),
             auth_methods=_strs("authMethods"),
             elapsed_ms=int(row.get("elapsedMs") or 0),
+            model_menu_measured="modelChoices" in row,
         )
 
 

@@ -256,6 +256,19 @@ def test_a_stored_id_under_a_section_no_spec_matches_reads_back_to_that_section(
     assert stored_provider_name("Custom-Lab/my-local-model") == "custom_lab"
 
 
+def test_a_prefix_that_names_no_configured_section_is_part_of_the_id() -> None:
+    """Given the config's provider table, a head that is neither a spec nor a
+    section is a vendor path segment -- ``deepseek-ai/`` on an id a gateway
+    serves -- and names no provider; a head that is an extra section does."""
+    from raven.config.schema import Config
+    from raven.providers.wire import stored_provider_name
+
+    table = Config.model_validate({"providers": {"mylocal": {"apiKey": "k"}}}).providers
+    assert stored_provider_name("deepseek-ai/DeepSeek-V3", providers=table) is None
+    assert stored_provider_name("mylocal/m", providers=table) == "mylocal"
+    assert stored_provider_name("openrouter/deepseek-ai/DeepSeek-V3", providers=table) == "openrouter"
+
+
 def test_a_bare_id_reads_back_by_keyword_or_not_at_all() -> None:
     from raven.providers.wire import stored_provider_name
 
