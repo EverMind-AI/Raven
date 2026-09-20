@@ -78,6 +78,9 @@ _CANCEL_DRAIN_TIMEOUT_S = 5.0
 # refusals below open with this, and the spawn tool tests for it before publishing
 # anything that presumes the run exists.
 SPAWN_REFUSED_PREFIX = "Spawn refused: "
+_SHUTDOWN_REFUSAL = (
+    f"{SPAWN_REFUSED_PREFIX}the host is shutting down and is starting no more sub-agents. Nothing was run."
+)
 # Tier mismatches already reported, so a busy session logs one line per agent
 # rather than one per dispatch. Same shape and reason as `_STALE_SNAPSHOT_SEEN`
 # in raven/agent/subagent/backends/__init__.py.
@@ -303,6 +306,10 @@ class SubagentManager:
         # because pausing is how a user stops a fan-out from growing without
         # throwing away the work already in flight.
         self._paused = False
+        # One-way, set by `cancel_all`: this manager is being retired, by the
+        # process shutting down or by a generation swap that builds a new one.
+        # Closing dispatch admission is what makes that sweep's snapshot final.
+        self._dispatch_closed = False
         self._max_spawns_per_hour = max_spawns_per_hour
         # Per-session spawn timestamps (monotonic), kept per session (not
         # per-process) so one busy session can't throttle others. Each deque is
@@ -751,6 +758,13 @@ class SubagentManager:
         Indexed here rather than only on the DAG tool so every entry point's
         existing teardown covers it with no extra wiring.
         """
+        if self._dispatch_closed:
+            # This one arrives already started, so refusing it means cancelling
+            # it: left untracked it is a run no sweep can reach, which is the
+            # leak this gate exists for.
+            logger.info("DAG run {} refused: the host is shutting down; cancelling it", run_id)
+            task.cancel()
+            return
         self._track(run_id, task, session_key)
 
     @property
@@ -819,6 +833,9 @@ class SubagentManager:
                 f"{SPAWN_REFUSED_PREFIX}delegation is paused. The user paused sub-agent "
                 "spawning; do the work in this turn instead, or ask them to resume."
             )
+        if self._dispatch_closed:
+            logger.info("Spawn refused: the host is shutting down")
+            return _SHUTDOWN_REFUSAL
         try:
             backend = self._resolve_backend(agent)
         except RuntimeError as exc:
@@ -895,6 +912,19 @@ class SubagentManager:
         # below: the argument is new here, and a caller that replaces this method
         # keeps working as long as it is not handed something it never declared.
         extra = {"mcp_grant": mcp_grant} if mcp_grant is not None else {}
+        # Read again after the last await above: `cancel_all` can close
+        # admission while a spawn waits on the MCP preflight or on its registry
+        # row, and a task created after that sweep took its snapshot is a task
+        # nothing sweeps -- the hosts seal the spine next, and a CLI child runs
+        # in its own session, so it would outlive the process. Nothing awaits
+        # between here and `_track`, so a spawn that passes this is indexed and
+        # therefore reachable. The `pending` row already written needs no
+        # undoing: a pending row with no live handle reads back `interrupted`
+        # (`reconcile_instance_rows` in raven/agent/subagent/instances.py).
+        if self._dispatch_closed:
+            logger.info("Spawn refused: the host began shutting down while [{}] was starting", task_id)
+            return _SHUTDOWN_REFUSAL
+
         # The last thing done to the task before it leaves. `origin` already
         # holds the undecorated wording, so the announcement quotes what was
         # asked rather than this line as well.
@@ -2273,7 +2303,19 @@ Read it against the plan this instance serves. If it reports finished work, resu
         cancelled -- how many were asked to stop, not how many obeyed in time:
         the wait for them is bounded, so a run that ignores its cancellation is
         left to the process exit rather than holding the shutdown open.
+
+        Terminal for this manager: dispatch admission closes here and does not
+        reopen, so a caller that means to keep serving wants ``cancel_by_session``
+        or ``set_paused`` instead. Every caller does mean to retire it -- the
+        three host shutdowns, and the generation swap, which builds a new
+        manager with the generation that replaces this one.
         """
+        # Admission closes before the snapshot and stays closed. The drain
+        # below yields for up to five seconds, and every caller here is retiring
+        # this manager -- the process shutting down, or a generation swap that
+        # builds a new one. Left open, a turn still running could dispatch into
+        # that window and this snapshot would not hold it.
+        self._dispatch_closed = True
         tasks = [t for t in self._running_tasks.values() if not t.done()]
         for t in tasks:
             t.cancel()

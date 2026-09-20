@@ -433,6 +433,79 @@ async def test_a_run_ending_while_the_host_drains_does_not_die_of_its_own_announ
     assert task.exception() is None
 
 
+async def test_a_spawn_is_refused_when_the_shutdown_sweep_lands_while_it_is_starting(monkeypatch):
+    """The sweep snapshots the running tasks once and then yields for up to
+    five seconds while it drains them. A spawn that passed its first check
+    before the sweep began and creates its task inside that drain is a task the
+    snapshot never held and nothing else sweeps: the host seals the spine next,
+    so no later pass reaches it, and a CLI child runs in its own session and
+    would outlive the process. The sweep lands here from inside the spawn's own
+    registry write -- the last await before the task would be created."""
+    mgr = _stub_mgr(monkeypatch)
+    swept: list[int] = []
+
+    async def _sweep_mid_spawn(*_a, **_k) -> None:
+        swept.append(await mgr.cancel_all())
+
+    monkeypatch.setattr(manager_mod, "_write_spawn_status", _sweep_mid_spawn)
+
+    receipt = await mgr.spawn(task="write the report", session_key="web:sess1")
+
+    assert swept == [0], "the sweep did not run inside the spawn, so the race was never posed"
+    assert "Spawn refused" in receipt
+    assert "shutting down" in receipt
+    assert mgr.get_running_count() == 0
+
+
+async def test_a_spawn_after_the_sweep_is_turned_away_before_it_writes_anything(monkeypatch):
+    """Shutdown has already begun, so this one is refused at the top of
+    ``spawn`` -- before the MCP preflight and before a registry row exists for
+    a run that is never going to start."""
+    mgr = _stub_mgr(monkeypatch)
+    await mgr.cancel_all()
+    rows: list[str] = []
+
+    async def _record_row(_session_key, _agent, _handle, status) -> None:
+        rows.append(status)
+
+    monkeypatch.setattr(manager_mod, "_write_spawn_status", _record_row)
+
+    receipt = await mgr.spawn(task="write the report", session_key="web:sess1")
+
+    assert "Spawn refused" in receipt
+    assert "shutting down" in receipt
+    assert rows == []
+    assert mgr.get_running_count() == 0
+
+
+async def test_a_dag_run_handed_over_after_the_sweep_is_cancelled_not_adopted(monkeypatch):
+    """``adopt_background_run`` is the DAG's admission, and its run arrives
+    already started, so refusing it has to cancel it: tracked it would be a run
+    the sweep has already passed, and left alone it would be one nothing can
+    reach at all."""
+    mgr = _stub_mgr(monkeypatch)
+    await mgr.cancel_all()
+    running = asyncio.Event()
+
+    async def _run() -> None:
+        running.set()
+        await asyncio.sleep(3600)
+
+    task = asyncio.create_task(_run())
+    await running.wait()
+
+    mgr.adopt_background_run("run-1", task, "web:sess1")
+    # Bounded, and the assertion is on the task rather than on this returning:
+    # an unguarded adopt leaves the run going, and an unbounded wait would hang
+    # the suite there instead of failing it.
+    try:
+        await asyncio.wait({task}, timeout=5)
+        assert task.cancelled()
+        assert mgr.get_running_count() == 0
+    finally:
+        task.cancel()
+
+
 async def test_subagent_continues_after_a_refused_delete(monkeypatch, tmp_path):
     """A refused command no longer ends the run: the sub-agent reads the
     refusal, neither spelling of the catastrophic delete executes, and the
