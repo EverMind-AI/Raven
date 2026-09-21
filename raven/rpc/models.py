@@ -1558,6 +1558,9 @@ class ModelLabel(_Strict):
     capabilities: list[str] = Field(default_factory=list)
     input_modalities: list[str] = Field(default_factory=list)
     output_modalities: list[str] = Field(default_factory=list)
+    #: The bucket a model list files this model under, from what it writes
+    #: (``registry_data.kind_of``): a model that reads images is still text.
+    kind: Literal["text", "image", "audio", "video", "embedding", "reranker"]
     #: Tokens the model reads in one request. Resolved from the tables that also
     #: route, never from the display registry -- a window sizes trimming, so the
     #: number a picker shows has to be the number a request is sized with. None
@@ -1613,6 +1616,10 @@ class ModelOptionProvider(_Strict):
     extra_headers: dict[str, str] = Field(default_factory=dict)
     total_models: int
     needs_api_base: bool
+    #: The registry's ``is_gateway``: resells other vendors' models under
+    #: vendor/model ids. The catalogue's filter reads it; no client can derive
+    #: it from a slug.
+    gateway: bool = False
     #: Addresses to pick between, empty for the providers that have only one.
     #: A row that states these is drawn with the list in place of a host field.
     platforms: list[ModelOptionPlatform] = Field(default_factory=list)

@@ -4,9 +4,11 @@
 import { useState } from 'react'
 
 import { KeyInput } from '../../../components/KeyInput'
+import { ProviderIcon } from '../../../components/ProviderMark'
 import { t } from '../../../i18n/t'
-import { Card, Chip, Crumb, Grow, IconBtn, KeyLink, Row, Rov, Spin, Tag } from '../Fields'
+import { Card, IconBtn, KeyLink, Row, Rov, Tag } from '../Fields'
 import * as store from '../store'
+import { AddModelPop } from './AddModelPop'
 import { AZURE, OauthNote, kindLabel, kindOf, needsKey, takesBase, takesKey } from './Providers'
 import { roleName, rolesUsing } from './Roles'
 
@@ -14,6 +16,43 @@ import type { ProviderRow } from '../types'
 import type { JSX } from 'react'
 
 const busy = (slug: string): string => `prov:${slug}`
+
+/* The address a provider is reached at, wherever it is drawn.
+ *
+ * An aggregator's address is a first-class field -- you point one at a proxy or
+ * a regional host the way you would type a key -- so it sits in the body beside
+ * the key. Every other vendor has one address that works, and a box for
+ * overriding it belongs under Advanced with the other things few people touch.
+ * Both need the same control, and the same way back: a reset appears once the
+ * value differs from what the registry ships, because an address typed by hand
+ * is not one you can retype from memory. */
+function AddressRow({ p, sub, placeholder }: { p: ProviderRow; sub?: string; placeholder: string }): JSX.Element {
+  const [base, setBase] = useState(p.apiBase || '')
+  const write = (value: string): void => {
+    void store.run(busy(p.id), () => store.source().setFields(p.id, { api_base: value }))
+  }
+  const commit = (): void => {
+    const b = base.trim()
+    if (b === (p.apiBase || '')) return
+    write(b)
+  }
+  const shipped = p.defaultApiBase || ''
+  const resettable = !!shipped && (p.apiBase || '') !== '' && (p.apiBase || '') !== shipped
+  return (
+    <Row label={t('gui.settings.providers.base')} sub={sub}>
+      <span className="settings-taglist">
+        <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')} placeholder={placeholder}
+          onChange={(e) => setBase(e.currentTarget.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === 'Enter') commit() }} />
+        {resettable && (
+          <button type="button" className="mini ghost" aria-label={t('gui.settings.providers.base_reset')}
+            onClick={() => { setBase(''); write('') }}>
+            {t('gui.settings.providers.base_reset')}
+          </button>
+        )}
+      </span>
+    </Row>
+  )
+}
 
 function Connection({ p }: { p: ProviderRow }): JSX.Element {
   const [key, setKey] = useState('')
@@ -34,13 +73,14 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
     if (b) params.api_base = b
     void store.run(busy(p.id), () => store.source().provider('save_key', params)).then((ok) => { if (ok) setKey('') })
   }
-  const setBaseField = (): void => {
-    const b = base.trim()
-    if (b === (p.apiBase || '')) return
-    void store.run(busy(p.id), () => store.source().setFields(p.id, { api_base: b }))
-  }
   const btn = p.on ? t('gui.settings.update') : t('gui.settings.providers.connect')
-  const off = p.on && <button type="button" className="mini ghost" onClick={disconnect}>{t('gui.settings.providers.disconnect')}</button>
+  const off = p.on && (
+    <button type="button" className="mini ghost" onClick={disconnect}>
+      {t(kind === 'oauth' ? 'gui.settings.providers.disconnect_auth'
+        : kind === 'local' ? 'gui.settings.providers.disconnect_local'
+        : 'gui.settings.providers.disconnect_key')}
+    </button>
+  )
   return (
     <Card title={t('gui.settings.providers.connection')}>
       {kind === 'oauth' && (
@@ -90,12 +130,8 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
           </span>
         </Row>
       )}
-      {kind !== 'oauth' && needsKey(p) && (takesBase(p) || p.kind === 'endpoint') && (
-        <Row label={t('gui.settings.providers.base')}>
-          <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')}
-            placeholder={p.needsBase ? 'https://' : t('gui.settings.providers.base_default')}
-            onChange={(e) => setBase(e.currentTarget.value)} onBlur={setBaseField} onKeyDown={(e) => { if (e.key === 'Enter') setBaseField() }} />
-        </Row>
+      {kind !== 'oauth' && needsKey(p) && (takesBase(p) || p.gateway || p.kind === 'endpoint') && (
+        <AddressRow p={p} placeholder={p.needsBase ? 'https://' : (p.defaultApiBase || t('gui.settings.providers.base_default'))} />
       )}
       {p.id === AZURE && <AzureFields p={p} />}
     </Card>
@@ -132,70 +168,6 @@ function AzureFields({ p }: { p: ProviderRow }): JSX.Element {
   )
 }
 
-/* The vendor's list, filtered, plus a typed id; one click adds them all. */
-function Sheet({ p }: { p: ProviderRow }): JSX.Element {
-  const sheet = store.get().sheet!
-  const listed = p.configured || []
-  const q = sheet.q.trim()
-  const ql = q.toLowerCase()
-  const items = sheet.items.filter((m) => !ql || m.id.toLowerCase().includes(ql))
-  const exact = sheet.items.some((m) => m.id.toLowerCase() === ql) || listed.some((m) => m.toLowerCase() === ql)
-  const picks = sheet.sel.filter((m) => !listed.includes(m))
-  const manual = q && !exact ? (
-    <label className="settings-mli settings-add">
-      <input type="checkbox" checked={sheet.sel.includes(q)} onChange={() => store.sheetToggle(q)} />
-      <span className="settings-id">{q}</span><span className="settings-sd">{t('gui.settings.providers.typed')}</span>
-    </label>
-  ) : null
-  const add = (): void => {
-    void store.run(busy(p.id), () => store.source().addModels(p.id, picks)).then((ok) => { if (ok) store.set({ sheet: null }) })
-  }
-  return (
-    <div className="settings-mlist">
-      <div className="settings-mls">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></svg>
-        <input id="mlq" value={sheet.q} placeholder={t('gui.model.pick_search')} autoComplete="off" spellCheck={false} autoFocus
-          onChange={(e) => store.sheetPatch({ q: e.currentTarget.value })} />
-      </div>
-      <div className="settings-mlb">
-        {sheet.state === 'loading' && <div className="settings-mlempty"><Spin>{t('gui.settings.providers.fetching', { name: p.name })}</Spin></div>}
-        {sheet.state !== 'loading' && (
-          <>
-            {!items.length && manual}
-            {items.map((m) => {
-              const has = listed.includes(m.id)
-              return (
-                <label key={m.id} className={has ? 'settings-mli settings-has' : 'settings-mli'}>
-                  <input type="checkbox" checked={has || sheet.sel.includes(m.id)} disabled={has} onChange={() => store.sheetToggle(m.id)} />
-                  <span className="settings-id">{m.id}</span>
-                  {has && <span className="settings-sd">{t('gui.settings.providers.added')}</span>}
-                </label>
-              )
-            })}
-            {items.length > 0 && manual}
-            {!items.length && !manual && (
-              <div className="settings-mlempty">
-                {sheet.state === 'failed' ? t('gui.settings.providers.no_list') : t('gui.settings.providers.no_match')}
-              </div>
-            )}
-          </>
-        )}
-      </div>
-      <div className="settings-mlf">
-        <Rov>
-          {sheet.state === 'ready' ? t('gui.settings.providers.n_available', { n: sheet.items.length }) : ''}
-          {picks.length ? `${sheet.state === 'ready' ? ' · ' : ''}${t('gui.settings.providers.n_picked', { n: picks.length })}` : ''}
-        </Rov>
-        <Grow />
-        <button type="button" className="mini ghost" onClick={() => store.set({ sheet: null })}>{t('gui.cancel')}</button>
-        <button type="button" className="mini" disabled={!picks.length || store.isBusy(busy(p.id))} onClick={add}>
-          {picks.length ? t('gui.settings.providers.add_n', { n: picks.length }) : t('gui.add')}
-        </button>
-      </div>
-    </div>
-  )
-}
-
 function Models({ p }: { p: ProviderRow }): JSX.Element {
   const s = store.get()
   const listed = p.configured || []
@@ -206,19 +178,24 @@ function Models({ p }: { p: ProviderRow }): JSX.Element {
     void store.run(busy(p.id), () => store.source().provider('remove_model', { slug: p.id, model: m }))
   }
   return (
-    <Card title={t('gui.settings.providers.models')} raw>
+    <Card title={t('gui.settings.providers.models')} raw
+      act={
+        <button type="button" className="mini ghost" data-addmodel={p.id} aria-expanded={open}
+          onClick={() => { if (open) store.set({ sheet: null }); else void store.sheetOpen(p.id) }}>
+          {t('gui.settings.providers.add_model')}
+        </button>
+      }>
       <div className="settings-rows">
         <Row stack label={t('gui.settings.providers.models_listed')}>
           <span className="settings-taglist">
             {listed.map((m) => (
-              <span key={m} className="settings-tag2">{m}<span className="settings-x" role="button" aria-label={t('gui.settings.providers.remove_model', { model: m })} onClick={() => remove(m)}>{'×'}</span></span>
+              <span key={m} className="settings-tag2">{m}<span className="settings-x" role="button" aria-label={t('gui.settings.providers.remove_model', { model: m })} onClick={() => remove(m)}>{'\u00d7'}</span></span>
             ))}
             {!listed.length && <span className="settings-rov" style={{ fontSize: 12 }}>{t('gui.settings.providers.no_models_yet')}</span>}
-            {!open && <button type="button" className="mini ghost" onClick={() => void store.sheetOpen(p.id)}>{t('gui.add')}</button>}
           </span>
         </Row>
       </div>
-      {open && <Sheet p={p} />}
+      {open && <AddModelPop p={p} />}
     </Card>
   )
 }
@@ -264,13 +241,7 @@ function Advanced({ p }: { p: ProviderRow }): JSX.Element {
   const listed = p.configured || []
   /* The address of a vendor whose connection card has no address row: an
      override of the registry's default, written on its own. */
-  const [base, setBase] = useState(p.apiBase || '')
-  const showBase = takesKey(p) && !takesBase(p) && p.kind !== 'endpoint'
-  const setBaseField = (): void => {
-    const b = base.trim()
-    if (b === (p.apiBase || '')) return
-    void store.run(busy(p.id), () => store.source().setFields(p.id, { api_base: b }))
-  }
+  const showBase = takesKey(p) && !takesBase(p) && !p.gateway && p.kind !== 'endpoint'
   const setHeader = (name: string, value: string | null): void => {
     void store.run(busy(p.id), () => store.source().setFields(p.id, { extra_headers: { [name]: value } }))
   }
@@ -293,10 +264,8 @@ function Advanced({ p }: { p: ProviderRow }): JSX.Element {
   return (
     <Card title={t('gui.settings.providers.advanced')}>
       {showBase && (
-        <Row label={t('gui.settings.providers.base')} sub={t('gui.settings.providers.base_override')}>
-          <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')} placeholder={p.defaultApiBase || t('gui.settings.providers.base_default')}
-            onChange={(e) => setBase(e.currentTarget.value)} onBlur={setBaseField} onKeyDown={(e) => { if (e.key === 'Enter') setBaseField() }} />
-        </Row>
+        <AddressRow p={p} sub={t('gui.settings.providers.base_override')}
+          placeholder={p.defaultApiBase || t('gui.settings.providers.base_default')} />
       )}
       <Row stack label={t('gui.settings.providers.headers')}>
         <div style={{ width: '100%' }}>
@@ -355,23 +324,41 @@ function Advanced({ p }: { p: ProviderRow }): JSX.Element {
   )
 }
 
+/* The head of the pane: the vendor, where to reach it, and one line of state.
+   The breadcrumb this replaces was the way back to a list that is now beside
+   it -- on a two-column page there is nothing to go back to. */
+function Head({ p }: { p: ProviderRow }): JSX.Element {
+  const state = p.on
+    ? t('gui.settings.providers.connected')
+    : t(kindOf(p) === 'oauth' ? 'gui.settings.providers.needs_auth' : kindOf(p) === 'local' ? 'gui.settings.providers.needs_base' : 'gui.settings.providers.needs_key')
+  const link = p.keyUrl || p.homepage
+  return (
+    <div className="settings-tp-head">
+      <ProviderIcon id={p.id} name={p.name} />
+      <div className="settings-tp-ttl">
+        <div className="settings-tp-name">
+          {p.name}
+          {link ? <a className="settings-exlink" href={link} target="_blank" rel="noopener" aria-label={p.name}>{'\u2197'}</a> : null}
+          <Tag>{kindLabel(p)}</Tag>
+        </div>
+        <div className={p.on ? 'settings-tp-state settings-tp-live' : 'settings-tp-state'}>{state}</div>
+      </div>
+    </div>
+  )
+}
+
 export function ProviderDetail({ slug }: { slug: string }): JSX.Element | null {
   const s = store.get()
   const p = s.snap.providers.find((x) => x.id === slug)
   if (!p) { store.set({ provider: null }); return null }
-  const state: [ 'on' | 'off', string ] = p.on
-    ? ['on', t('gui.settings.providers.connected')]
-    : ['off', t(kindOf(p) === 'oauth' ? 'gui.settings.providers.needs_auth' : kindOf(p) === 'local' ? 'gui.settings.providers.needs_base' : 'gui.settings.providers.needs_key')]
+  /* One element, because the page around it is a two-column grid: a fragment
+     put every card in it into a column of its own. */
   return (
-    <>
-      <Crumb back={t('gui.settings.nav.model')} onBack={() => store.set({ provider: null, sheet: null, err: '' })} name={p.name}>
-        <Tag>{kindLabel(p)}</Tag>
-        <Grow />
-        <Chip state={state[0]}>{state[1]}</Chip>
-      </Crumb>
+    <div className="settings-tp-main">
+      <Head p={p} />
       <Connection p={p} />
       <Models p={p} />
       {kindOf(p) !== 'oauth' && <Advanced p={p} />}
-    </>
+    </div>
   )
 }

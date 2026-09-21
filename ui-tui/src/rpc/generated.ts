@@ -1017,6 +1017,10 @@ export interface ModelOptionProvider {
   };
   total_models: number;
   needs_api_base: boolean;
+  /**
+   * The registry's is_gateway: resells other vendors' models under vendor/model ids. The catalogue's gateway filter reads this; absent means false.
+   */
+  gateway?: boolean;
   platforms?: {
     label: string;
     api_base: string;
@@ -1051,6 +1055,10 @@ export interface ModelLabel {
    * What the model writes: text, image, video, audio, vector.
    */
   output_modalities?: string[];
+  /**
+   * The bucket a model list files this model under, from what it writes (registry_data.kind_of): a model that reads images is still text. A model with no label entry is text.
+   */
+  kind: 'text' | 'image' | 'audio' | 'video' | 'embedding' | 'reranker';
   /**
    * Tokens the model reads in one request, from the tables that also route rather than from the display registry -- the number shown has to be the number a request is sized with. Absent where no such table names the model.
    */

@@ -2307,6 +2307,8 @@ textarea:focus, textarea:focus-visible,
 /* capability popover above the composer */
 /* model picker: provider column + model column, fixed height so a provider
    with 100+ models cannot grow the popover past the window */
+/* model picker: provider column + model column, fixed height so a provider
+   with 100+ models cannot grow the popover past the window */
 /* The shared model picker's own rules (components/ModelPicker.tsx).
  *
  * Unprefixed on purpose: a component is page vocabulary, not a domain's, and
@@ -2404,6 +2406,21 @@ textarea:focus, textarea:focus-visible,
 .mpick .models .row .nm.named { font-family: var(--sans); font-size: 12.5px; }
 .mpick .models .row .model-tags { margin-left: auto; }
 .mpick .empty { padding: 18px 12px; font-size: 12.5px; color: var(--faint); text-align: center; }
+/* The slot's name, where a settings row opened the picker; absent for the
+   composer chip, whose own label already says what is being changed. */
+.mpick .model-slot { font-family: var(--disp); font-weight: 600; font-size: 13px; color: var(--text); }
+/* The row for an id the provider does not list yet, and the chip saying what
+   the person is declaring it to be. */
+.mpick .model-typed { color: var(--amber); }
+.mpick .model-typed .nm { font-family: var(--mono); }
+.mpick .model-typed-hr { height: 1px; background: var(--line-soft); margin: 6px 4px; }
+.mpick .model-kind {
+  display: inline-flex; align-items: center; gap: 4px; flex: none; cursor: pointer;
+  padding: 1px 6px; border: 1px solid var(--line); border-radius: 99px;
+  font-family: var(--sans); font-size: 10.5px; color: var(--muted);
+}
+.mpick .model-kind:hover { border-color: var(--amber); color: var(--text); }
+.mpick .model-kind .model-tag { width: 11px; height: 11px; color: inherit; }
 .mpick .foot { border-top: 1px solid var(--line-soft); padding: 7px 12px;
   display: flex; justify-content: space-between; align-items: center; }
 .mpick .foot button { font-size: 11.5px; color: var(--amber); }

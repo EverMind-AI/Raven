@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetSources, setSources } from '../../../state/sources'
-import { install, mount, source as settingsSource } from '../../../test/settingsHarness'
+import { install, modelSource, mount, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
 import { plugChip } from './Plugins'
 
@@ -14,7 +14,7 @@ import type { McpSnapshot } from '../../../rpc/generated'
 vi.mock('../../../state/toast', () => ({ show: () => {}, subscribe: () => () => {}, get: () => [] }))
 
 beforeEach(() => {
-  setSources({ settings: settingsSource })
+  setSources({ settings: settingsSource, model: modelSource })
 })
 
 afterEach(() => {

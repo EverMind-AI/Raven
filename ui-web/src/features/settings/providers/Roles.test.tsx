@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetSources, setSources } from '../../../state/sources'
-import { install, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
+import { install, modelSource, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
 import { ROLES, roleProviders, rolesUsing } from './Roles'
 
@@ -13,7 +13,7 @@ vi.mock('../../../state/toast', () => ({ show: () => {}, subscribe: () => () => 
 
 
 beforeEach(() => {
-  setSources({ settings: settingsSource })
+  setSources({ settings: settingsSource, model: modelSource })
 })
 
 afterEach(() => {
@@ -25,10 +25,18 @@ afterEach(() => {
 
 const role = (id: string) => ROLES.find((r) => r.id === id)!
 const pill = (roleName: string): HTMLElement => screen.getByLabelText(`gui.settings.roles.change {"role":"${roleName}"}`)
-const picker = (): HTMLElement => document.querySelector('.model-picker') as HTMLElement
+/* One picker for the whole page since 2026-09-20: the composer's, at the body. */
+const picker = (): HTMLElement => document.querySelector('.mpick') as HTMLElement
+/* The provider row's hit area is a button beside the name, not around it, so a
+   click on the name selects nothing. */
+const selectProvider = (name: string): void => {
+  const row = [...picker().querySelectorAll<HTMLElement>('.provs .row')]
+    .find((r) => r.querySelector('.nm')?.textContent?.includes(name))!
+  fireEvent.click(row.querySelector('.model-provider-action')!)
+}
 const pick = async (roleName: string, model: string, providerName?: string): Promise<void> => {
   await act(async () => { fireEvent.click(pill(roleName)) })
-  if (providerName) await act(async () => { fireEvent.click(within(picker()).getByText(providerName)) })
+  if (providerName) await act(async () => { selectProvider(providerName) })
   await act(async () => { fireEvent.click(within(picker()).getByText(model)) })
 }
 const sets = (calls: Array<[string, unknown]>) => calls.filter(([m]) => m === 'set').map(([, a]) => a)
@@ -72,9 +80,11 @@ describe('model roles', () => {
     const { calls } = install()
     await mount('model')
     expect(roleProviders(role('image'), snap()).map((p) => p.id)).toEqual(['openrouter'])
-    await pick('gui.settings.roles.image', 'openai/gpt-4o')
+    /* The image slot lists image models: a text model on the same provider is
+       not offered for it any more. */
+    await pick('gui.settings.roles.image', 'gemini-2.5-flash-image')
     expect(sets(calls)).toEqual([
-      { key: 'tools.media.image', value: { model: 'openai/gpt-4o', quality: '' } },
+      { key: 'tools.media.image', value: { model: 'google/gemini-2.5-flash-image', quality: '' } },
       { key: 'tools.disabledTools', value: ['deep_research'] },
     ])
   })
@@ -112,7 +122,7 @@ describe('model roles', () => {
     const { calls } = install()
     await mount('model')
     await act(async () => { fireEvent.click(pill('gui.settings.roles.gate')) })
-    const box = screen.getByPlaceholderText('gui.model.pick_search') as HTMLInputElement
+    const box = screen.getByPlaceholderText('gui.picker.search_ph') as HTMLInputElement
     await act(async () => { fireEvent.change(box, { target: { value: 'claude-haiku-4-5' } }) })
     await act(async () => { fireEvent.click(screen.getByText('gui.model.pick_use {"id":"claude-haiku-4-5"}')) })
     expect(calls).toEqual([
@@ -120,6 +130,44 @@ describe('model roles', () => {
       ['set', { key: 'skillForge.llmGateModel', value: 'claude-haiku-4-5' }],
       ['set', { key: 'skillForge.llmGateProvider', value: 'anthropic' }],
     ])
+  })
+
+  it('a slot with no provider offers the providers page and goes there', async () => {
+    /* A fresh install starts here: every slot empty, and the way out has to be
+       reachable. A sentence naming the page is not. */
+    const data = snap()
+    data.providers = data.providers.map((p) => ({ ...p, on: false }))
+    install(data)
+    await mount('model')
+    const out = screen.getAllByText('gui.settings.roles.no_provider')[0]!
+    expect(out.tagName).toBe('BUTTON')
+    await act(async () => { fireEvent.click(out) })
+    expect(store.get().tab).toBe('provider')
+  })
+
+  it('a media slot with OpenRouter off opens that row on the providers page', async () => {
+    const data = snap()
+    data.providers = data.providers.map((p) => (p.id === 'openrouter' ? { ...p, on: false } : p))
+    install(data)
+    await mount('model')
+    await act(async () => { fireEvent.click(screen.getAllByText('gui.settings.roles.connect_openrouter')[0]!) })
+    expect([store.get().tab, store.get().provider]).toEqual(['provider', 'openrouter'])
+  })
+
+  it('a typed id keeps the kind the chip stated, not the one its name implies', async () => {
+    /* "our-finetune" matches neither name pattern, so without the chip's answer
+       it is stored as text and disappears from the embedding slot it was just
+       typed into. */
+    const { calls } = install()
+    await mount('model')
+    await act(async () => { fireEvent.click(pill('gui.settings.roles.embedding')) })
+    const box = screen.getByPlaceholderText('gui.picker.search_ph') as HTMLInputElement
+    await act(async () => { fireEvent.change(box, { target: { value: 'our-finetune' } }) })
+    await act(async () => { fireEvent.click(screen.getByText('gui.model.pick_use {"id":"our-finetune"}')) })
+    expect(calls[0]).toEqual(['provider', {
+      op: 'add_model', slug: 'anthropic', model: 'our-finetune',
+      capabilities: ['embedding'], output_modalities: ['vector'],
+    }])
   })
 
   it('rolesUsing counts a role following the chat model through the chat provider', () => {
