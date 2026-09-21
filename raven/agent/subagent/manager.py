@@ -72,6 +72,10 @@ _STEER_HOOK_GRACE_S = 3.0
 # schedules the cancellation: a run parked in an in-flight provider call reaches
 # its `finally` when that call returns, so waiting unbounded made a Ctrl-C last
 # as long as whatever the sub-agent happened to be waiting on.
+# What a run's parent is told when the cancellation came from a caller that
+# recorded no reason -- a bare task.cancel(), or a cancellation that reached
+# the run through its parent task rather than through a cancel method here.
+UNEXPLAINED_CANCEL = "the run was cancelled without a stated reason"
 _CANCEL_DRAIN_TIMEOUT_S = 5.0
 # ``spawn`` reports a refusal by returning its reason rather than raising, so a
 # caller that has to tell "dispatched" from "declined" has only the string. Both
@@ -288,6 +292,19 @@ class SubagentManager:
         self._owned_ids = owned_ids
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
+        # Why a run is being cancelled, by task id: written by the cancel
+        # methods just before they cancel and read by the run on its way out.
+        # asyncio's CancelledError carries no reason of its own, and the
+        # announcement the parent conversation gets has to name one.
+        self._cancel_reasons: dict[str, str] = {}
+        # What ``spawn`` put aside for a task that may be cancelled before its
+        # first step: the task text, the display summary and the origin. A
+        # task cancelled before it ever runs never enters ``_run_subagent``, so
+        # neither CancelledError handler in it can report the stop; the cancel
+        # methods report it from this record instead. The run pops its own
+        # entry as its first act, so an entry still here when the task is done
+        # means the body never ran.
+        self._unstarted: dict[str, tuple[str, str, dict[str, Any]]] = {}
         # (session_key, agent, handle) -> {task_id, ...}, for one-instance
         # cancellation (a stop button) without touching the rest of the
         # session's spawns. A set, not a single id: the main agent can spawn
@@ -961,6 +978,7 @@ class SubagentManager:
                 **extra,
             )
         )
+        self._unstarted[task_id] = (task, display_summary, origin)
         self._track(task_id, bg_task, session_key, instance_key)
 
         logger.info("Spawned subagent [{}]: {}", task_id, display_summary)
@@ -1482,6 +1500,9 @@ class SubagentManager:
         mcp_grant: Any = None,
     ) -> None:
         """Execute the subagent task and announce the result."""
+        # First, before any await: from here on this frame reports the run's
+        # end, including a cancellation, and the cancel methods must not.
+        self._unstarted.pop(task_id, None)
         logger.info("Subagent [{}] starting task: {}", task_id, task_summary)
 
         effective_workspace = origin.get("workspace") or self.workspace
@@ -1508,7 +1529,8 @@ class SubagentManager:
                     )
         except asyncio.CancelledError:
             if not dispatched:
-                self._emit_status(origin, task_id, task_summary, "cancelled", ended_at=int(time.time() * 1000))
+                reason = self._cancel_reasons.pop(task_id, UNEXPLAINED_CANCEL)
+                await self._report_undispatched_cancel(task_id, task_summary, task, origin, reason)
             raise
         except Exception as e:
             error_msg = f"Error: {str(e)}"
@@ -1713,11 +1735,21 @@ class SubagentManager:
                 )
             except asyncio.CancelledError:
                 cancelled = True
+                reason = self._cancel_reasons.pop(task_id, UNEXPLAINED_CANCEL)
                 await _write_spawn_status(session_key, agent, handle, "cancelled")
                 self._emit_status(
                     origin, task_id, task_summary, "cancelled", call_id=call_id, ended_at=int(time.time() * 1000)
                 )
-                record.finish(status="cancelled", activity=did)
+                record.finish(status="cancelled", error=f"Cancelled: {reason}", activity=did)
+                await self._announce_cancelled(
+                    task_id,
+                    task_summary,
+                    task,
+                    origin,
+                    reason,
+                    record_path=str(record.file("out.md")) if record.file("out.md").is_file() else None,
+                    activity=did,
+                )
                 raise
             except SubagentActionAbortedError:
                 await _write_spawn_status(session_key, agent, handle, "failed")
@@ -1897,7 +1929,7 @@ class SubagentManager:
         # reads the result text. Calling that success framed a run that had said
         # it could not do the task as a completed one.
         self.remember_origin(origin)
-        status_text = "returned" if status == "ok" else "failed"
+        status_text = {"ok": "returned", "cancelled": "was cancelled"}.get(status, "failed")
 
         # The subagent's result is attacker-influenceable (it may have fetched
         # web pages / read files), so fence it as untrusted before it re-enters
@@ -1912,6 +1944,9 @@ class SubagentManager:
             if origin.get("instance")
             else ""
         )
+        # Where the run was dispatched to work, so the parent can find what it
+        # left there without searching the disk for it.
+        workdir_line = f"Working directory: {origin['workspace']}\n" if origin.get("workspace") else ""
         record_line = f"\n\nRecord: {record_path}" if record_path else ""
         # How the run's calls went, which nothing on this path carried. Measured
         # on a real dispatch: two of three calls timed out, the run produced no
@@ -1936,7 +1971,7 @@ class SubagentManager:
         announce_content = f"""[Subagent '{task_summary}' {status_text}]
 
 Task: {asked}
-{handle_line}
+{handle_line}{workdir_line}
 Result:
 {fenced_result}{record_line}{trouble}
 
@@ -1955,6 +1990,73 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         # disagree about what was delivered.
         self._emit_delivered(origin, {**mark, "content": announce_content})
         logger.debug("Subagent [{}] announced result to {}", task_id, origin["session_key"])
+
+    async def _report_undispatched_cancel(
+        self, task_id: str, task_summary: str, task: str, origin: dict[str, Any], reason: str
+    ) -> None:
+        """Report a run cancelled before it was dispatched: registry row, status event, announcement.
+
+        Before dispatch there is no record to finish and no inner frame to
+        report, only the ``pending`` row and status ``spawn`` wrote; this is
+        what turns both into ``cancelled`` and tells the parent.
+        """
+        await _write_spawn_status(
+            origin.get("session_key"),
+            origin.get("agent") or GENERIC_AGENT,
+            origin.get("handle") or task_id,
+            "cancelled",
+        )
+        self._emit_status(origin, task_id, task_summary, "cancelled", ended_at=int(time.time() * 1000))
+        await self._announce_cancelled(task_id, task_summary, task, origin, reason)
+
+    async def _finish_unstarted(self, task_id: str, reason: str) -> None:
+        """Report a run cancelled before its first step, which nothing inside it could.
+
+        ``task.cancel()`` on a task that has not run yet closes the coroutine
+        without entering it -- no ``except CancelledError`` and no ``finally``
+        in ``_run_subagent`` executes -- so the cancel methods owe what the
+        body's handler would have done. A no-op for a task whose body ran:
+        the run popped its entry as its first act.
+        """
+        pending = self._unstarted.pop(task_id, None)
+        if pending is None:
+            return
+        task, task_summary, origin = pending
+        await self._report_undispatched_cancel(task_id, task_summary, task, origin, reason)
+
+    async def _announce_cancelled(
+        self,
+        task_id: str,
+        task_summary: str,
+        task: str,
+        origin: dict[str, Any],
+        reason: str,
+        *,
+        record_path: str | None = None,
+        activity: Any = None,
+    ) -> None:
+        """Tell the parent conversation that a run it started was stopped, and why.
+
+        Runs inside the CancelledError handler of a run being torn down, so
+        nothing here may replace that exception: a manager with no submit
+        wired logs instead of asserting, and an announce that fails is logged.
+        Without this the parent never hears of the stop -- the status event
+        is live-only and not replayed, so a session whose run was cancelled
+        under it kept a "started" receipt with nothing after it.
+        """
+        if self._submit is None:
+            logger.warning("Subagent [{}] cancelled ({}) with no submit wired; not announced", task_id, reason)
+            return
+        result = (
+            f"Cancelled: {reason}. The run did not finish and returned no result, so nothing it was "
+            "asked for is delivered. Its record holds whatever it wrote before it stopped."
+        )
+        try:
+            await self._announce_result(
+                task_id, task_summary, task, result, origin, "cancelled", record_path=record_path, activity=activity
+            )
+        except Exception:  # noqa: BLE001 - the cancellation must still propagate
+            logger.opt(exception=True).warning("Subagent [{}] cancellation could not be announced", task_id)
 
     async def announce_dag_result(self, run_id: str, summary: str, origin: dict[str, str]) -> None:
         """Announce a background DAG run's outcome, the way a spawn's is announced.
@@ -2219,17 +2321,31 @@ Read it against the plan this instance serves. If it reports finished work, resu
             return False
         return True
 
-    async def cancel_by_session(self, session_key: str) -> int:
-        """Cancel all subagents for the given session. Returns count cancelled."""
-        tasks = [
-            self._running_tasks[tid]
+    async def _cancel(self, live: dict[str, asyncio.Task], reason: str) -> list[asyncio.Task]:
+        """Cancel ``live`` with ``reason`` on record for each run, and wait them out."""
+        for tid, task in live.items():
+            self._cancel_reasons[tid] = reason
+            task.cancel()
+        if live:
+            await asyncio.gather(*live.values(), return_exceptions=True)
+        for tid, task in live.items():
+            if task.cancelled():
+                await self._finish_unstarted(tid, reason)
+            # A run that finished before its cancellation landed never read this.
+            self._cancel_reasons.pop(tid, None)
+        return list(live.values())
+
+    async def cancel_by_session(self, session_key: str, *, reason: str = "its session was stopped") -> int:
+        """Cancel all subagents for the given session. Returns count cancelled.
+
+        ``reason`` is what each run's parent conversation is told.
+        """
+        live = {
+            tid: self._running_tasks[tid]
             for tid in self._session_tasks.get(session_key, [])
             if tid in self._running_tasks and not self._running_tasks[tid].done()
-        ]
-        for t in tasks:
-            t.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        }
+        tasks = await self._cancel(live, reason)
         # The memory pollers this session left running. Reaped here so a closing
         # session is not held open by one, and counted separately because they
         # are bookkeeping, not the sub-agents the caller asked to stop.
@@ -2244,7 +2360,9 @@ Read it against the plan this instance serves. If it reports finished work, resu
         self._session_spawn_times.pop(session_key, None)
         return len(tasks)
 
-    async def cancel_by_instance(self, session_key: str, agent: str, handle: str) -> bool:
+    async def cancel_by_instance(
+        self, session_key: str, agent: str, handle: str, *, reason: str = "a user stopped this instance"
+    ) -> bool:
         """Cancel every spawn on one (session_key, agent, handle).
 
         This is the granularity a stop button needs: cancelling unwinds each
@@ -2257,12 +2375,10 @@ Read it against the plan this instance serves. If it reports finished work, resu
         """
         quota_key = session_key or "default"
         task_ids = self._instance_tasks.get((quota_key, agent, handle), set())
-        tasks = [t for tid in task_ids if (t := self._running_tasks.get(tid)) is not None and not t.done()]
-        if not tasks:
+        live = {tid: t for tid in task_ids if (t := self._running_tasks.get(tid)) is not None and not t.done()}
+        if not live:
             return False
-        for t in tasks:
-            t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await self._cancel(live, reason)
         return True
 
     @property
@@ -2275,7 +2391,7 @@ Read it against the plan this instance serves. If it reports finished work, resu
         self._paused = bool(paused)
         return self._paused
 
-    async def cancel_by_id(self, task_id: str) -> bool:
+    async def cancel_by_id(self, task_id: str, *, reason: str = "a user stopped this run") -> bool:
         """Cancel one spawn by the id ``spawn`` handed back. Returns whether it was live.
 
         The instance-keyed variant cannot serve the overlay's kill button: rows
@@ -2285,8 +2401,7 @@ Read it against the plan this instance serves. If it reports finished work, resu
         task = self._running_tasks.get(task_id)
         if task is None or task.done():
             return False
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        await self._cancel({task_id: task}, reason)
         return True
 
     def has_active(self, session_key: str) -> bool:
@@ -2313,7 +2428,7 @@ Read it against the plan this instance serves. If it reports finished work, resu
         """Return the number of currently running subagents."""
         return len(self._running_tasks)
 
-    async def cancel_all(self) -> int:
+    async def cancel_all(self, *, reason: str = "the gateway stopped or reloaded") -> int:
         """Cancel every subagent still running, across every session.
 
         Used at gateway shutdown: `CliAgentBackend` runs its child with
@@ -2338,9 +2453,11 @@ Read it against the plan this instance serves. If it reports finished work, resu
         # builds a new one. Left open, a turn still running could dispatch into
         # that window and this snapshot would not hold it.
         self._dispatch_closed = True
-        tasks = [t for t in self._running_tasks.values() if not t.done()]
-        for t in tasks:
+        live = {tid: t for tid, t in self._running_tasks.items() if not t.done()}
+        for tid, t in live.items():
+            self._cancel_reasons[tid] = reason
             t.cancel()
+        tasks = list(live.values())
         # A report held for the trailing wake belongs to this generation: after
         # disposal its task would submit to a drained scheduler. It is cancelled
         # with the rest; the words are not lost, the instance's log has them, and
@@ -2355,6 +2472,13 @@ Read it against the plan this instance serves. If it reports finished work, resu
         self._unprompted_held.clear()
         if tasks:
             await _drain_cancelled(tasks, "sub-agent runs")
+        for tid, t in live.items():
+            # Only for a run that is done: one still ignoring its cancellation
+            # has yet to read its reason.
+            if t.done():
+                if t.cancelled():
+                    await self._finish_unstarted(tid, reason)
+                self._cancel_reasons.pop(tid, None)
         # Same for the memory pollers: at shutdown an unreaped one dies pending,
         # with its httpx client never closed and its record never written.
         records = [t for t in self._record_tasks if not t.done()]

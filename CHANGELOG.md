@@ -92,6 +92,18 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- A sub-agent run that is stopped now tells the conversation that started
+  it, and says why: `[Subagent '...' was cancelled]` with the reason (`the
+  gateway stopped`, `the user sent /stop`, `a user stopped this run`, ...),
+  the instance handle to resume from, and the directory the run was
+  dispatched to work in. The parent used to hear nothing: the cancel branch
+  wrote the record and a live-only status event, so a session whose run was
+  cancelled under it kept a "started" receipt with nothing after it, and
+  the artifacts that run had produced were never mentioned again. The
+  record's `error.md` carries the same reason, every announcement now names
+  its working directory, and the delivered marker both UIs draw gained a
+  `cancelled` status so a stop is not drawn as a result or a failure.
+
 - A sub-agent that finishes while the host is shutting down no longer loses its
   result. Its announce submits a turn to a scheduler that is already draining;
   the refusal escaped the announcing task, and the only trace was asyncio's

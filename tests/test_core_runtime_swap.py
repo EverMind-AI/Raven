@@ -455,7 +455,7 @@ async def test_a_backend_whose_stop_raises_does_not_break_the_generation_swap():
             raise RuntimeError("plugin teardown exploded")
 
     class _Subagents:
-        async def cancel_all(self):
+        async def cancel_all(self, *, reason: str = ""):
             order.append("cancel_all")
 
     class _Skills:
@@ -506,7 +506,7 @@ def _runtime_with_watcher(stopped: list[str]):
         skills = _Skills()
 
     class _Subagents:
-        async def cancel_all(self):
+        async def cancel_all(self, *, reason: str = ""):
             pass
 
     class _Loop:

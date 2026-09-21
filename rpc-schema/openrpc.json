@@ -8504,7 +8504,8 @@
               "ok",
               "error",
               "exception",
-              "notice"
+              "notice",
+              "cancelled"
             ],
             "type": "string"
           },
@@ -10392,7 +10393,8 @@
                       "ok",
                       "error",
                       "exception",
-                      "notice"
+                      "notice",
+                      "cancelled"
                     ]
                   },
                   "node_id": {
@@ -11027,7 +11029,8 @@
                   "ok",
                   "error",
                   "exception",
-                  "notice"
+                  "notice",
+                  "cancelled"
                 ]
               },
               "run_id": {

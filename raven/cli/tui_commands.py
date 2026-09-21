@@ -572,7 +572,7 @@ async def _run_rpc_server_until_done(
 
             begin_drain()
             if agent_loop is not None:
-                await agent_loop.subagents.cancel_all()
+                await agent_loop.subagents.cancel_all(reason="the TUI exited")
         except Exception:
             from loguru import logger as _logger
 
