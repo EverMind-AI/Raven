@@ -78,8 +78,8 @@ describe('the stage table against the contract', () => {
 
   it('read both lists at all', () => {
     /* A parse that found nothing would make every assertion below vacuous. */
-    expect(contract.length).toBe(24)
-    expect(handles.length).toBeGreaterThanOrEqual(24)
+    expect(contract.length).toBe(25)
+    expect(handles.length).toBeGreaterThanOrEqual(25)
   })
 
   it('has a stage for every event the contract declares', () => {
