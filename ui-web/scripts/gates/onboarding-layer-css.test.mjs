@@ -33,3 +33,19 @@ describe('the confirm veil while the wizard is open', () => {
     expect(token('--z-onboarding') + 1).toBeLessThan(token('--z-toast'))
   })
 })
+
+describe('the model picker while the wizard is open', () => {
+  it('rests at the picker layer, under the wizard', () => {
+    expect(token('--z-picker')).toBeLessThan(token('--z-onboarding'))
+    expect(rule('.mpick')).toMatch(/z-index:\s*var\(--z-picker\)/)
+  })
+
+  it('is lifted one above the wizard only while the host is shown', () => {
+    /* The roles card's pill opens the composer's picker, a body-level
+       surface; the wizard's model step is the one place that pill sits inside
+       #onb, and the picker opened behind it there. */
+    const lifted = rule('body:has(#onb:not([hidden])) .mpick')
+    expect(lifted).toBeTruthy()
+    expect(lifted).toMatch(/z-index:\s*calc\(var\(--z-onboarding\)\s*\+\s*1\)/)
+  })
+})
