@@ -80,7 +80,7 @@ Raven 的模块化架构面向 harness 自进化和子 Agent 创建。四个内�
 <p align="center"><em>Raven-Design 在 PresentBench 幻灯片生成测试中排名第一</em></p>
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/061b5818-595b-4392-b9b6-53a1effb8347"><img src="https://github.com/user-attachments/assets/061b5818-595b-4392-b9b6-53a1effb8347" alt="Visual Design: Raven-Design, Claude Code, and Hermes on ArtifactsBench Dashboard, ArtifactsBench SVG, and GDPVal" width="95%"></a>
+  <a href="https://github.com/user-attachments/assets/103c49f8-f31d-4735-8bfd-84cae9baee46"><img src="https://github.com/user-attachments/assets/103c49f8-f31d-4735-8bfd-84cae9baee46" alt="Visual Design: Raven-Design, Claude Code, and Hermes on ArtifactsBench Dashboard, ArtifactsBench SVG, and GDPVal" width="95%"></a>
 </p>
 
 <p align="center"><em>Raven-Design 在视觉设计基准测试中的表现</em></p>
@@ -256,11 +256,17 @@ raven web
 
 该命令会在浏览器中打开 WebUI，并让 Raven 在后台持续运行。使用 `raven web --stop` 停止后台服务。
 
-> **截图占位 1：** 对话与工作区。
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/28248163-3607-408f-86cf-a1acb621767b"><img src="https://github.com/user-attachments/assets/28248163-3607-408f-86cf-a1acb621767b" alt="Raven WebUI new task page" width="90%"></a>
+</p>
 
-> **截图占位 2：** Agent 协作与任务图。
+<p align="center"><em>新建任务：一个输入框，技能、剧本、知识库与记忆都在一侧。</em></p>
 
-> **截图占位 3：** 记忆与技能管理。
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/76bf13ac-763b-4120-b323-0f694c237365"><img src="https://github.com/user-attachments/assets/76bf13ac-763b-4120-b323-0f694c237365" alt="Raven WebUI subagents page" width="90%"></a>
+</p>
+
+<p align="center"><em>子智能体：内置与第三方 Agent 汇总在同一张花名册里。</em></p>
 
 ## ❯❯ EverMind 生态
 

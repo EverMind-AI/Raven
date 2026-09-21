@@ -80,7 +80,7 @@ Raven's modular architecture is designed for harness self-evolution and subagent
 <p align="center"><em>Raven-Design tops on PresentBench for slide generation</em></p>
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/061b5818-595b-4392-b9b6-53a1effb8347"><img src="https://github.com/user-attachments/assets/061b5818-595b-4392-b9b6-53a1effb8347" alt="Visual Design: Raven-Design, Claude Code, and Hermes on ArtifactsBench Dashboard, ArtifactsBench SVG, and GDPVal" width="95%"></a>
+  <a href="https://github.com/user-attachments/assets/103c49f8-f31d-4735-8bfd-84cae9baee46"><img src="https://github.com/user-attachments/assets/103c49f8-f31d-4735-8bfd-84cae9baee46" alt="Visual Design: Raven-Design, Claude Code, and Hermes on ArtifactsBench Dashboard, ArtifactsBench SVG, and GDPVal" width="95%"></a>
 </p>
 
 <p align="center"><em>Raven-Design's performance on visual design benchmarks</em></p>
@@ -268,11 +268,17 @@ raven web
 
 The command opens the WebUI in your browser and keeps Raven running in the background. Use `raven web --stop` to stop the background service.
 
-> **Screenshot placeholder 1:** Conversations and workspace.
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/9ecddecc-c73f-4249-97bd-58a68ef2c7c1"><img src="https://github.com/user-attachments/assets/9ecddecc-c73f-4249-97bd-58a68ef2c7c1" alt="Raven WebUI new task page" width="90%"></a>
+</p>
 
-> **Screenshot placeholder 2:** Agent collaboration and task graph.
+<p align="center"><em>New task: one composer, with skills, playbooks, knowledge and memory a click away.</em></p>
 
-> **Screenshot placeholder 3:** Memory and skill management.
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/68c6f1c7-a709-4742-9e32-1c2cbe98b500"><img src="https://github.com/user-attachments/assets/68c6f1c7-a709-4742-9e32-1c2cbe98b500" alt="Raven WebUI subagents page" width="90%"></a>
+</p>
+
+<p align="center"><em>Subagents: every connected agent in one roster, built-in and third-party alike.</em></p>
 
 ## ❯❯ EverMind Ecosystem
 

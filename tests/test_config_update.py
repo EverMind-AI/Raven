@@ -22,6 +22,7 @@ from raven.config.update import (
     set_playbook_disabled,
     set_sandbox_backend,
     set_sentinel_nudge_quota,
+    set_skill_blocked,
     update_cron_config,
 )
 
@@ -517,3 +518,57 @@ def test_a2a_toggle_leaves_a_mode_the_operator_chose(cfg_path: Path) -> None:
     set_a2a_server_enabled(False, config_path=cfg_path)
 
     assert cfg_path.stat().st_mode & 0o777 == 0o640
+
+
+# ---------------------------------------------------------------------------
+# set_skill_blocked
+# ---------------------------------------------------------------------------
+
+
+def test_skill_block_writes_camel_into_empty_config(cfg_path: Path) -> None:
+    assert set_skill_blocked("alpha", True, config_path=cfg_path) == ["alpha"]
+    assert _read(cfg_path)["skillForge"] == {"blocklist": ["alpha"]}
+
+
+def test_skill_block_respects_existing_snake_casing(cfg_path: Path) -> None:
+    cfg_path.write_text(
+        json.dumps({"skill_forge": {"auto_install": "off"}}),
+        encoding="utf-8",
+    )
+    set_skill_blocked("alpha", True, config_path=cfg_path)
+    data = _read(cfg_path)
+    # a second block under the other spelling is what makes the file unloadable
+    assert "skillForge" not in data
+    assert data["skill_forge"] == {"auto_install": "off", "blocklist": ["alpha"]}
+
+
+def test_skill_block_on_a_snake_config_leaves_it_loadable(cfg_path: Path) -> None:
+    from raven.config.raven import load_raven_config
+
+    cfg_path.write_text(
+        json.dumps({"skill_forge": {"auto_install": "off"}}),
+        encoding="utf-8",
+    )
+    set_skill_blocked("alpha", True, config_path=cfg_path)
+    cfg = load_raven_config(cfg_path)
+    assert cfg.skill_forge.blocklist == ["alpha"]
+    assert cfg.skill_forge.auto_install == "off"
+
+
+def test_skill_block_reads_the_existing_snake_blocklist(cfg_path: Path) -> None:
+    cfg_path.write_text(
+        json.dumps({"skill_forge": {"blocklist": ["alpha"]}}),
+        encoding="utf-8",
+    )
+    # already listed -> no-op, not a second entry in a second block
+    assert set_skill_blocked("alpha", True, config_path=cfg_path) == ["alpha"]
+    assert _read(cfg_path) == {"skill_forge": {"blocklist": ["alpha"]}}
+
+
+def test_skill_unblock_removes_from_an_existing_snake_blocklist(cfg_path: Path) -> None:
+    cfg_path.write_text(
+        json.dumps({"skill_forge": {"blocklist": ["alpha", "beta"]}}),
+        encoding="utf-8",
+    )
+    assert set_skill_blocked("alpha", False, config_path=cfg_path) == ["beta"]
+    assert _read(cfg_path)["skill_forge"]["blocklist"] == ["beta"]

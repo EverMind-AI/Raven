@@ -27,7 +27,7 @@ from raven.cli._helpers import (
     print_config_migration_notices,
     print_deprecated_allow_destructive_notice,
     print_deprecated_memory_window_notice,
-    report_dropped_memory_writes,
+    report_memory_write_outcome,
 )
 from raven.core.provider_stack import build_model_routing
 from raven.providers.factory import make_resolving_provider
@@ -1157,8 +1157,8 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     _logger.exception("plugin services stop failed; continuing shutdown")
                 if backend is not None:
                     try:
-                        dropped = await agent.drain_backend_stores()
-                        report_dropped_memory_writes(dropped, console)
+                        outcome = await agent.drain_backend_stores()
+                        report_memory_write_outcome(outcome, console)
                         await backend.stop()
                     except Exception:
                         _logger.exception(

@@ -6,6 +6,7 @@ dispatched. What stays here is the tool's own integrity boundary -- the
 operator's allowlist and the workspace fence -- and the execution itself.
 """
 
+import fnmatch
 import os
 import re
 import shlex
@@ -14,8 +15,31 @@ from typing import Any
 
 from raven.agent import workdir
 from raven.contracts.tool import STOP_RETRY_INSTRUCTION, Continuation, Tool, ToolOutput, ToolResult
-from raven.permissions.shell_policy import executable_text
+from raven.permissions.shell_policy import (
+    _MAX_EMBEDDED_SHELL_DEPTH,
+    _command_segments_with_separators,
+    _embedded_shell_command,
+    _unwrap_command_wrappers,
+    executable_text,
+)
 from raven.sandbox import DirectExecutor, SandboxExecutor
+
+
+class _UnmodelledExpansionError(Exception):
+    """A parameter expansion the fence cannot resolve to the text the shell runs.
+
+    The fence's promise is that it reads what will run. Where it cannot, the
+    honest answer is a refusal rather than a scan of text the shell will
+    replace: an expansion it does not model can hand the command any path at
+    all, and every spelling that reached this point before was a silent bypass.
+    Command substitution is not this case -- it holds an arbitrary program,
+    which no textual guard can resolve, and it is a declared limit of the fence
+    rather than a gap in it.
+    """
+
+    def __init__(self, construct: str) -> None:
+        super().__init__(construct)
+        self.construct = construct
 
 
 class ExecTool(Tool):
@@ -293,7 +317,7 @@ class ExecTool(Tool):
         }
     )
 
-    def _check_workspace_restriction(self, command: str, cwd: str) -> str | None:
+    def _check_workspace_restriction(self, command: str, cwd: str, *, _depth: int = 0) -> str | None:
         """Check only the workspace boundary constraints (no allow-list).
 
         Reads the executable view rather than trusting the caller to strip: the
@@ -301,6 +325,22 @@ class ExecTool(Tool):
         discards, and there are two call sites -- the guard and the sandboxed
         path -- so doing it here is what keeps them from diverging. Reading the
         raw text refused ``ls -la  # see ../notes for why`` as path traversal.
+
+        The contract, because the fence is a reader of shell and a reader can
+        always meet syntax it does not know:
+
+        **A parameter expansion is resolved faithfully or the command is
+        refused.** The set of spellings is finite, so the residue is closed:
+        there is no further form that quietly passes. Refusing is visible and
+        arguable; the failure it replaces was silent, and silence is what let
+        four spellings through at once.
+
+        **Command substitution is a declared limit, not a gap.** It holds an
+        arbitrary program, so no textual guard can resolve it, and refusing it
+        would refuse ``echo "built at $(date)"`` along with everything else.
+        Paths written literally inside one are still scanned; a path the
+        substitution computes is beyond this fence, as a symlink inside the
+        workspace is, and the sandbox executor is the boundary for both.
         """
         if not self.restrict_to_workspace:
             return None
@@ -312,12 +352,28 @@ class ExecTool(Tool):
 
         cwd_path = Path(cwd).resolve()
         roots = [cwd_path, *(Path(d).resolve() for d in self.extra_allowed_dirs)]
-        for raw in self._extract_absolute_paths(cmd):
+        env = self._child_env(cwd_path)
+        try:
+            readable = self._as_the_shell_reads_it(cmd, env)
+        except _UnmodelledExpansionError as unresolved:
+            return f"Error: Command blocked by safety guard (unsupported shell expansion: {unresolved.construct})"
+
+        try:
+            segments = list(_command_segments_with_separators(readable))
+        except ValueError:
+            # Quoting the lexer cannot close. The permission gate reads the
+            # same text through the same lexer and refuses it there, so
+            # answering here would only duplicate that refusal.
+            segments = []
+
+        if self._steps_outside(segments, cwd_path, roots, env):
+            return "Error: Command blocked by safety guard (directory change outside working dir)"
+
+        for raw in self._extract_absolute_paths(readable):
             try:
-                expanded = os.path.expandvars(raw.strip())
-                if expanded in self._DEVICE_FILES:
+                if raw in self._DEVICE_FILES:
                     continue
-                p = Path(expanded).expanduser().resolve()
+                p = Path(raw.strip()).expanduser().resolve()
             except Exception:
                 continue
             if not p.is_absolute():
@@ -326,7 +382,373 @@ class ExecTool(Tool):
                 continue
             return "Error: Command blocked by safety guard (path outside working dir)"
 
+        # A nested shell's payload is a program, not an argument: the quoting
+        # that stopped this pass expanding it is what hands it to that shell
+        # intact, and the names in it expand there. Scanning it with the same
+        # rules is the only reading that matches what runs. Depth-capped with
+        # the policy's own bound, which is what decides the same question for
+        # the deny list.
+        if _depth < _MAX_EMBEDDED_SHELL_DEPTH:
+            for segment, _ in segments:
+                # Unwrapped first, the way the policy reads a segment before
+                # asking what it runs. Reusing the payload helper without the
+                # unwrap that precedes it there reused half the agreement:
+                # `env sh -c '...'` put the program back out of view.
+                inner = _embedded_shell_command(_unwrap_command_wrappers(segment))
+                if not inner:
+                    continue
+                nested = self._check_workspace_restriction(inner, cwd, _depth=_depth + 1)
+                if nested:
+                    return nested
+
         return None
+
+    # `$NAME` and `${NAME}`, the two spellings that carry a path. `$(`, `$$`
+    # and `$?` are deliberately not names, so they fall through untouched.
+    _VARIABLE = re.compile(r"\$(?:\{([A-Za-z_]\w*)([^}]*)\}|([A-Za-z_]\w*))")
+
+    # The brace bodies that offer a second word the shell may substitute
+    # instead of the value (`:-`, `:=`, `:?`, `:+` and their colon-less forms).
+    _BRACE_WORD_OPERATOR = re.compile(r"^:?[-=?+]")
+
+    # Suffix and prefix removal. These shorten a path, which walks it UP and
+    # out of the workspace, so reading them as decoration beside an in-root
+    # value is what let `${PWD%/*}/outside.txt` open the parent directory.
+    _BRACE_TRIM = re.compile(r"^(##?|%%?)(.*)$", re.DOTALL)
+
+    # How cmd.exe spells a variable, and ``DirectExecutor`` runs the platform
+    # shell, so on Windows this is the ordinary spelling of an outside path.
+    # Substituted only for a name the child is actually given, which is cmd's
+    # own rule for an undefined one.
+    _WINDOWS_VARIABLE = re.compile(r"%([A-Za-z_]\w*)%")
+
+    # Whether the shell that will run the command reads that spelling at all.
+    # `%VAR%` is cmd.exe syntax and means nothing to `sh`, which prints it --
+    # and HOME, PWD, USER and TMPDIR are on the executor's allowlist on POSIX
+    # too, so reading it there refused `echo '%HOME%/notes'`, which names no
+    # path. A class attribute rather than a call to `os.name`, so the Windows
+    # branch can be driven from a POSIX host.
+    _WINDOWS_SHELL = os.name == "nt"
+
+    # A `${` the name pattern does not accept. `${#NAME}` counts characters, so
+    # whatever it yields is a number and cannot name a path; anything else here
+    # is indirection, an array or a form not modelled, and gets refused.
+    _BRACE_OTHER = re.compile(r"\$\{(#[A-Za-z_]\w*|[^}]*)\}")
+
+    @staticmethod
+    def _child_env(cwd: Path) -> dict[str, str]:
+        """The environment the command will be run with.
+
+        ``PWD`` is overridden because a shell sets it from the directory it is
+        started in: this command's ``$PWD`` is the workspace, whatever this
+        process inherited.
+        """
+        from raven.sandbox.direct_executor import _baseline_env
+
+        env = _baseline_env()
+        env["PWD"] = str(cwd)
+        return env
+
+    @classmethod
+    def _steps_outside(
+        cls,
+        segments: list[tuple[list[str], str]],
+        cwd: Path,
+        roots: list[Path],
+        env: dict[str, str],
+    ) -> bool:
+        """Whether the command leaves the workspace before doing its work.
+
+        Reaching out and stepping out are the same escape, but only the first
+        leaves a path for :meth:`_extract_absolute_paths` to find. A ``cd``
+        whose destination is spelled out is already refused there, because
+        ``/etc`` is a path like any other. What is left are the destinations
+        the pattern cannot take: ``/`` has nothing after it, ``..`` is not
+        absolute, and a ``cd`` with no argument names ``$HOME`` by saying
+        nothing -- and after any of them, every relative path in the rest of
+        the command resolves somewhere the operator did not allow.
+
+        ``pushd`` moves the shell exactly as far and is read the same way. Its
+        stack is what this cannot follow: ``popd`` and a bare ``pushd`` take
+        their destination from entries earlier pushes already cleared, so the
+        walk falls back to the shallowest of those, which is where the command
+        began.
+
+        Each `cd` starts from where the last one landed, so
+        `cd subdir && cd ..` ends where it began rather than being read as
+        leaving. Which is knowable only where the separator says so: `&&` runs
+        its right side *because* the left one returned zero, so after one of
+        those the shell is at the destination and nowhere else. After every
+        other separator the move may not have happened -- the directory may
+        not exist, the operator may have skipped it, a pipe or a bracket may
+        have run it in a subshell that took its directory with it -- so both
+        readings stay in view and a later step that leaves the workspace from
+        either one is refused.
+        """
+        # Where the shell can be standing. More than one entry because a `cd`
+        # the separator after it does not prove may or may not have moved it,
+        # and both readings have to stay in view until one of them leaves.
+        here = [cwd]
+        # Where the running `&&` chain could leave the shell. A chain stops at
+        # its first failure, so what follows one inherits the position after
+        # any prefix of it, from none of it to all of it.
+        chain = [cwd]
+        for raw_tokens, separator in segments:
+            # A wrapper needs unwrapping here -- `command cd /` names the same
+            # builtin. A subshell does not: the splitter treats `(`, `)` and a
+            # standalone `{` as operators, so `(cd /; x)` arrives as its own
+            # segment with the bracket already gone, and the bracket is now
+            # one more separator that ends a chain.
+            tokens = _unwrap_command_wrappers(raw_tokens)
+            if tokens and tokens[0] in ("cd", "pushd", "popd"):
+                moved = cls._moved(tokens, here, cwd, roots, env)
+                if moved is None:
+                    return True
+                here = moved
+                chain = cls._either(chain, here)
+            if separator != "&&":
+                # Only `&&` proves the command before it succeeded, and it
+                # proves nothing about whether that command ran: a condition
+                # standing earlier in the chain can skip the `cd` entirely.
+                # The chain is therefore the unit, and this is where it ends.
+                here = chain = cls._either(chain, here)
+            if len(here) > cls._MAX_WALK_POSITIONS:
+                # Unreachable for a command a person or a model writes: the
+                # list only grows on a `cd` into a directory no earlier step
+                # named, and repeats collapse. Refusing past the bound keeps
+                # the walk from being a place to spend the caller's time.
+                return True
+        return False
+
+    @classmethod
+    def _moved(
+        cls,
+        tokens: list[str],
+        here: list[Path],
+        cwd: Path,
+        roots: list[Path],
+        env: dict[str, str],
+    ) -> list[Path] | None:
+        """Where a directory builtin can leave the shell, or ``None`` to refuse.
+
+        ``None`` is the refusal: a destination outside every root, reached from
+        any of the places the shell can currently be.
+        """
+
+        if tokens[0] == "popd":
+            # A stack return lands on a directory some earlier push put there,
+            # and each of those was cleared on the way in. The shallowest of
+            # them is where the command began.
+            return cls._either(here, [cwd])
+        arguments = list(tokens[1:])
+        while arguments and arguments[0] in ("-L", "-P"):
+            arguments.pop(0)
+        if arguments and arguments[0] == "--":
+            # The option terminator is not a destination. Past it every word is
+            # an operand, so a `-` there names a directory rather than $OLDPWD,
+            # and nothing there means what a bare `cd` means.
+            arguments.pop(0)
+        elif arguments and arguments[0] == "-":
+            # ``$OLDPWD`` is a directory some earlier ``cd`` already passed.
+            return here
+        if not arguments and tokens[0] == "pushd":
+            # A bare `pushd` swaps the top two entries rather than naming a
+            # destination. Both were cleared on the way in, so the worst case
+            # is the one `popd` gets.
+            return cls._either(here, [cwd])
+        target = arguments[0] if arguments else env.get("HOME", "")
+        if not target:
+            return here
+        landings: list[Path] = []
+        for start in here:
+            try:
+                destination = (start / Path(target).expanduser()).resolve()
+            except Exception:
+                return None
+            if not any(root == destination or root in destination.parents for root in roots):
+                return None
+            landings.append(destination)
+        return landings
+
+    #: How many places the walk will hold at once; see the walk for why the
+    #: list grows and why nothing real reaches this.
+    _MAX_WALK_POSITIONS = 64
+
+    @staticmethod
+    def _either(*groups: list[Path]) -> list[Path]:
+        """The places from every group, each once, in the order first seen."""
+
+        seen: dict[Path, None] = {}
+        for group in groups:
+            for path in group:
+                seen.setdefault(path, None)
+        return list(seen)
+
+    @staticmethod
+    def _windows_value(env: dict[str, str], name: str) -> str | None:
+        """``env``'s value for ``name`` the way cmd.exe finds it, or ``None``.
+
+        cmd.exe resolves an environment name without regard to case, so an
+        exact-key lookup leaves `%UserProfile%` standing and the path scan then
+        sees no drive prefix. ``None`` means the child has no such name, which
+        cmd answers by leaving the text as written.
+        """
+        if name in env:
+            return env[name]
+        folded = name.casefold()
+        return next((value for key, value in env.items() if key.casefold() == folded), None)
+
+    @classmethod
+    def _resolve_brace(cls, value: str, body: str, construct: str, env: dict[str, str]) -> str:
+        """The value a ``${...}`` yields, or a refusal when that cannot be known.
+
+        Two bodies are resolved. A word operator offers a second word the shell
+        may substitute instead of the value, and which one it picks depends on a
+        value this cannot read -- so both are emitted, the operator becoming a
+        space so the word it introduces starts on a boundary the scan can take.
+        A trim shortens the value, which is the case that matters: it walks a
+        path UP, so reading it as decoration beside an in-root value is what let
+        ``${PWD%/*}/outside.txt`` open the parent.
+
+        Every other body is refused. Substitution, case folding and indirection
+        can each hand the command a path this cannot compute, and allowing them
+        would make the fence's promise depend on which spellings happen to be
+        implemented -- which is the defect, not a smaller version of it.
+        """
+        if not body:
+            return value
+        # The body is inserted after this walk has passed the position it lands
+        # in, so nothing would read it again. The shell does read it, which is
+        # why it goes back through the same pass here rather than out as text:
+        # `${UNSET:-$HOME/secret}` is that path, and leaving it unread was the
+        # one spelling the resolved-or-refused rule claimed and did not cover.
+        if cls._BRACE_WORD_OPERATOR.match(body):
+            word = cls._as_the_shell_reads_it(cls._BRACE_WORD_OPERATOR.sub("", body), env)
+            return f"{value} {word}"
+        trim = cls._BRACE_TRIM.match(body)
+        if trim is not None:
+            pattern = cls._as_the_shell_reads_it(trim.group(2), env)
+            return cls._trim(value, trim.group(1), pattern)
+        raise _UnmodelledExpansionError(construct)
+
+    @staticmethod
+    def _trim(value: str, operator: str, pattern: str) -> str:
+        """``value`` with the matching prefix or suffix removed, as the shell does.
+
+        A doubled operator takes the longest match and a single one the
+        shortest, which is why each direction is walked from its own end. No
+        match leaves the value alone, exactly as the shell leaves it.
+        """
+        from_end = operator.startswith("%")
+        longest = len(operator) == 2
+        if from_end:
+            cuts = range(0, len(value) + 1) if longest else range(len(value), -1, -1)
+            for cut in cuts:
+                if fnmatch.fnmatchcase(value[cut:], pattern):
+                    return value[:cut]
+            return value
+        cuts = range(len(value), -1, -1) if longest else range(0, len(value) + 1)
+        for cut in cuts:
+            if fnmatch.fnmatchcase(value[:cut], pattern):
+                return value[cut:]
+        return value
+
+    @classmethod
+    def _as_the_shell_reads_it(cls, command: str, env: dict[str, str]) -> str:
+        """``command`` with its parameters expanded, as the child will expand them.
+
+        The scan below reads text, so it can only refuse a path it can see, and
+        a name is where a path hides: ``$HOME/.ssh/id_rsa`` put a letter in
+        front of the ``/`` that :meth:`_extract_absolute_paths` looks for, and
+        the whole command went through as naming no path at all. Expanding
+        first is what puts the path back in view -- expanding afterwards, which
+        is what this used to do, only ever saw candidates the scan had already
+        passed.
+
+        Three rules, each taken from the shell rather than invented:
+
+        - **An unknown name is nothing.** ``$NOPE/etc/shadow`` *is*
+          ``/etc/shadow``, and it is the case with no literal spelling to fall
+          back on.
+        - **The child's environment decides.** ``DirectExecutor`` hands over an
+          allowlisted baseline, so a name outside that list arrives unset
+          however this process reads it; ``os.environ`` would answer for a
+          variable the command will never have.
+        - **Single quotes expand nothing.** ``echo 'keys go in $HOME/.ssh'`` is
+          a sentence, and refusing it would teach the operator to turn the
+          fence off.
+
+        A sandboxed executor runs somewhere with its own environment, which
+        nothing here can read. The values are a host-side approximation there;
+        the rule that carries is the first one, which needs no value to hold.
+        """
+        out: list[str] = []
+        quote = ""
+        index = 0
+        while index < len(command):
+            char = command[index]
+            if char == "%" and cls._WINDOWS_SHELL:
+                # Ahead of the quote branches on purpose: cmd.exe has no
+                # quoting that suppresses this, so a run it would expand must
+                # not be hidden here by POSIX quoting rules.
+                windows_match = cls._WINDOWS_VARIABLE.match(command, index)
+                if windows_match is not None:
+                    value = cls._windows_value(env, windows_match.group(1))
+                    if value is not None:
+                        out.append(value)
+                        index = windows_match.end()
+                        continue
+            if quote == "'":
+                out.append(char)
+                if char == "'":
+                    quote = ""
+                index += 1
+                continue
+            if char == "\\" and index + 1 < len(command):
+                escaped = command[index + 1]
+                # An escaped `$` is a literal `$` that this level does not
+                # expand -- but the character still travels on, and a nested
+                # shell handed it does expand it. Keeping the backslash here
+                # hid `sh -c "sh -c 'cat \\$HOME/x'"` from the nested scan,
+                # because the payload it was given no longer looked like a
+                # name. Every other escape keeps both characters: only these
+                # two decide whether something expands.
+                out.append(escaped if escaped in "$`" else char + escaped)
+                index += 2
+                continue
+            if quote == '"' and char == '"':
+                quote = ""
+                out.append(char)
+                index += 1
+                continue
+            if not quote and char in "'\"":
+                quote = char
+                out.append(char)
+                index += 1
+                continue
+            if char == "$":
+                name_match = cls._VARIABLE.match(command, index)
+                if name_match is not None:
+                    value = env.get(name_match.group(1) or name_match.group(3), "")
+                    out.append(cls._resolve_brace(value, name_match.group(2) or "", name_match.group(0), env))
+                    index = name_match.end()
+                    continue
+                if command.startswith("${", index):
+                    other = cls._BRACE_OTHER.match(command, index)
+                    if other is None:
+                        # Nesting runs past the first `}`, which this does not
+                        # parse. The contract answers that with a refusal.
+                        raise _UnmodelledExpansionError(command[index : index + 32])
+                    if not other.group(1).startswith("#"):
+                        raise _UnmodelledExpansionError(other.group(0))
+                    # A character count. Whatever it yields is a number, and a
+                    # number cannot name a path, so it needs no value here.
+                    out.append("0")
+                    index = other.end()
+                    continue
+            out.append(char)
+            index += 1
+        return "".join(out)
 
     @staticmethod
     def _extract_absolute_paths(command: str) -> list[str]:
