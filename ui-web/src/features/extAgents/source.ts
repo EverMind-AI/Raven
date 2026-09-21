@@ -49,6 +49,7 @@ export function extAgentRowOf(r: ExtAgentRowWire): ExtAgentRow {
     upgrade_to: r.upgrade_to || null,
     probe_detail: r.probe_detail || '',
     has_api_key: !!r.has_api_key,
+    needs_auth: !!r.needs_auth,
     description: r.description || '',
     last_test_ok: r.last_test_ok ?? null,
     last_test_detail: r.last_test_detail || '',
@@ -71,7 +72,7 @@ export function extAgentRowOf(r: ExtAgentRowWire): ExtAgentRow {
  * and they are not the same job: a folder whose venv was never built needs the
  * installer (minutes, hundreds of MB), while one that was switched off needs
  * its manifest flag back. The probe verdict is what separates them. */
-export type Stage = 'builtin' | 'building' | 'install' | 'add' | 'key' | 'stale' | 'off' | 'live'
+export type Stage = 'builtin' | 'building' | 'install' | 'add' | 'key' | 'stale' | 'off' | 'live' | 'unauthorized'
 
 export function stageOf(row: ExtAgentRow): Stage {
   if (row.builtin) return 'builtin'
@@ -84,6 +85,13 @@ export function stageOf(row: ExtAgentRow): Stage {
      writing an entry -- the key is the missing part, whether the entry exists
      yet or not. */
   if (row.kind === 'openai' && !row.has_api_key) return 'key'
+  /* Named, not offered: the handshake already refused this agent for want of
+     a credential, and the remedy -- signing in -- is outside this page, so a
+     Connect here would spend a launch to arrive at the same sentence. Only
+     for a row not on the roster: a connected agent keeps Disconnect whatever
+     its credential has since done. The way back is the card's Test, which
+     re-measures. */
+  if (!row.enabled && (row.kind === 'cli' || row.kind === 'acp') && row.needs_auth) return 'unauthorized'
   if (!row.configured) return 'add'
   if (row.enabled) return 'live'
   /* Out of service and its preset has moved to another transport. Connecting it

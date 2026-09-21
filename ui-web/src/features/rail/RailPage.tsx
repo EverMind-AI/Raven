@@ -9,6 +9,7 @@ import { show as toast } from '../../state/toast'
 import { open as openCron } from '../cron/store'
 import * as store from './store'
 import { plainTitle } from './title'
+import './styles.css'
 
 import type { MenuItem } from '../../state/menu'
 import type { SessRow } from './types'
@@ -191,7 +192,7 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
           <span key="txt">{plainTitle(s.title)}</span>
         )}
         {s.workdir && !editing ? (
-          <span key="wd" className="wdt" title={s.workdir}>{folderName(s.workdir)}</span>
+          <span key="wd" className="rail-wdt" title={s.workdir}>{folderName(s.workdir)}</span>
         ) : null}
       </div>
       {/* The stamp is always rendered -- it is what gives the tail its width.

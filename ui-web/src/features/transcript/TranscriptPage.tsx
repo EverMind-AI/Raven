@@ -1210,15 +1210,13 @@ const StatusView = memo(function StatusView({ lane, seg }: { lane: Lane; seg: St
 /* One row per wire status: `error` is a failure the reader must notice,
    `exception` is neither success nor failure -- the node suspended waiting on
    a verdict -- so it wears its own class and text rather than folding into
-   either. `cancelled` is a stop, not a failure, and wears the same warning
-   class with its own text. A Record over the union rather than a lookup with a fallback, so a
+   either. A Record over the union rather than a lookup with a fallback, so a
    status added to the wire without an entry here is a type error, not a row
    that silently reads as `ok`. */
 const DELIVERED: Record<DeliveredData['status'], { cls: string; key: string }> = {
   ok: { cls: ' good', key: 'gui.deleg.delivered' },
   error: { cls: ' bad', key: 'gui.deleg.delivered_err' },
   exception: { cls: ' warn', key: 'gui.deleg.delivered_exception' },
-  cancelled: { cls: ' warn', key: 'gui.deleg.delivered_cancelled' },
 }
 
 /* The counts a graph's own receipt ends with. A graph's `status` is always ok
