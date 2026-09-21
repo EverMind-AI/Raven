@@ -1,4 +1,11 @@
-"""The upgrade flow against a real uv: the running tool replaces itself in place."""
+"""The upgrade flow against a real uv: the running tool replaces itself in place,
+and the companion package installed beside it survives.
+
+uv replaces a tool's requirement set with what one `uv tool install` names,
+so a helper that named raven alone uninstalled every plugin the installer had
+put in. The new release directory carries raven-plugins.txt; the helper
+installs from it, and the companion here stands in for those plugins.
+"""
 
 from __future__ import annotations
 
@@ -56,6 +63,11 @@ def _build_fixture(source_root: Path, output_root: Path, version: str, uv_path: 
                 if sys.argv[1:] == ["--version"]:
                     print(VERSION)
                     return 0
+                if sys.argv[1:] == ["--companion"]:
+                    import upgrade_companion  # noqa: F401
+
+                    print("companion present")
+                    return 0
                 if sys.argv[1:] != ["upgrade"]:
                     return 2
 
@@ -86,6 +98,40 @@ def _build_fixture(source_root: Path, output_root: Path, version: str, uv_path: 
     return next(output_root.glob(f"raven-{version}-*.whl"))
 
 
+def _build_companion(source_root: Path, output_root: Path, uv_path: Path) -> Path:
+    """A plugin-shaped bystander: installed beside the tool, named by nothing
+    but the release's plugin list."""
+    (source_root / "upgrade_companion").mkdir(parents=True)
+    (source_root / "upgrade_companion" / "__init__.py").write_text("", encoding="utf-8")
+    (source_root / "pyproject.toml").write_text(
+        textwrap.dedent(
+            """
+            [project]
+            name = "upgrade-companion"
+            version = "1.0.0"
+            requires-python = ">=3.12"
+
+            [build-system]
+            requires = ["hatchling"]
+            build-backend = "hatchling.build"
+
+            [tool.hatch.build.targets.wheel]
+            packages = ["upgrade_companion"]
+            """
+        ).lstrip(),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [str(uv_path), "build", "--wheel", "--out-dir", str(output_root)],
+        cwd=source_root,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    return next(output_root.glob("upgrade_companion-1.0.0-*.whl"))
+
+
 @pytest.mark.skipif(UV_PATH is None, reason="uv is required for the real self-upgrade test")
 def test_running_uv_tool_replaces_itself_in_custom_directories(tmp_path: Path) -> None:
     external_tools = tmp_path / "external tools"
@@ -95,6 +141,11 @@ def test_running_uv_tool_replaces_itself_in_custom_directories(tmp_path: Path) -
     wheels = tmp_path / "wheels"
     old_wheel = _build_fixture(tmp_path / "old", wheels, "1.0.0", external_uv)
     new_wheel = _build_fixture(tmp_path / "new", wheels, "2.0.0", external_uv)
+    companion = _build_companion(tmp_path / "companion", wheels, external_uv)
+    # The release directory the helper reads: the plugin list sits beside the
+    # wheel, exactly as release.yml lays it out. No constraints file, so the
+    # unpinned path is the one exercised.
+    (wheels / "raven-plugins.txt").write_text(f"upgrade-companion @ {companion.resolve().as_uri()}\n", encoding="utf-8")
     tool_dir = tmp_path / "custom tools"
     bin_dir = tmp_path / "custom bin"
     env = os.environ.copy()
@@ -108,7 +159,7 @@ def test_running_uv_tool_replaces_itself_in_custom_directories(tmp_path: Path) -
         }
     )
     subprocess.run(
-        [str(external_uv), "tool", "install", "--force", str(old_wheel)],
+        [str(external_uv), "tool", "install", "--force", "--with", str(companion), str(old_wheel)],
         check=True,
         env=env,
         capture_output=True,
@@ -116,6 +167,16 @@ def test_running_uv_tool_replaces_itself_in_custom_directories(tmp_path: Path) -
         timeout=120,
     )
     executable = bin_dir / ("raven.exe" if sys.platform == "win32" else "raven")
+
+    def companion_present() -> bool:
+        probe = subprocess.run(
+            [str(executable), "--companion"], check=False, env=env, capture_output=True, text=True, timeout=30
+        )
+        return probe.returncode == 0 and "companion present" in probe.stdout
+
+    assert companion_present(), (
+        "the fixture must start with the companion installed, or the assertion below proves nothing"
+    )
 
     completed = subprocess.run(
         [str(executable), "upgrade"],
@@ -137,6 +198,7 @@ def test_running_uv_tool_replaces_itself_in_custom_directories(tmp_path: Path) -
         timeout=30,
     )
     assert version.stdout.strip() == "2.0.0"
+    assert companion_present(), "the upgrade must keep the packages installed beside the tool"
 
 
 def test_windows_workflow_isolates_upgrade_test_from_shared_conftests() -> None:

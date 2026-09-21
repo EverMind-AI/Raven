@@ -6,7 +6,8 @@
 # A piped run always installs the published release wheel, even from inside a
 # clone. Set RAVEN_LOCAL_SRC=<dir> to force an editable install of a checkout.
 # Set RAVEN_MINIMAL=1 to skip the chromium download and the LibreOffice offer;
-# the wheel install itself is unchanged.
+# the wheel install itself is unchanged. Set RAVEN_NO_LAUNCH=1 to skip the
+# closing `raven web` (CI), so the script returns.
 #
 # Goal: a clean Windows machine ends up able to run `raven` / `raven tui`
 # without admin rights. The script is idempotent: it reuses existing tools when
@@ -20,6 +21,11 @@
 # It then ends in the product: `raven web` opens the page in a browser and holds
 # this session, so the install finishes on something running rather than on a
 # hint to go and start it.
+#
+# Probe rule: this script is served from main and installs the latest release,
+# which can predate a subcommand main already knows about. Every `raven <sub>`
+# call below is preceded by `raven <sub> --help`; when the probe fails, the
+# script finishes on the one command every release has.
 
 $ErrorActionPreference = "Stop"
 
@@ -238,20 +244,11 @@ function Resolve-RavenLatestVersion {
 }
 
 function Resolve-RavenWheel {
+    # One discovery step, no GitHub API: the release page redirect names the
+    # latest stable tag, and the wheel, the locked constraints and the plugin
+    # list are all derived from it, since they sit in one release directory.
     if ($env:RAVEN_WHEEL_URL) { return $env:RAVEN_WHEEL_URL }
     Write-Info "Resolving the latest Raven release from GitHub..."
-    try {
-        $release = Invoke-RestMethod "https://api.github.com/repos/EverMind-AI/Raven/releases/latest" -Headers @{ "User-Agent" = "raven-installer" }
-        # Kept for Resolve-RavenPluginWheel, which reads the same asset list.
-        # The GitHub API caps unauthenticated callers at 60 requests/hour per
-        # IP, so a shared egress can exhaust it -- one lookup serves them all.
-        $script:RavenRelease = $release
-        $asset = $release.assets | Where-Object { $_.browser_download_url -match "/raven-[^/]+\.whl$" } | Select-Object -First 1
-        if ($asset) { return $asset.browser_download_url }
-        Write-Warn "GitHub API returned no release wheel; falling back to the release page."
-    } catch {
-        Write-Warn "GitHub API lookup failed ($($_.Exception.Message)); falling back to the release page."
-    }
     $version = Resolve-RavenLatestVersion
     if (-not $version) {
         Fail "Could not resolve the latest Raven release wheel from GitHub. Retry later, or set RAVEN_WHEEL_URL to a wheel URL."
@@ -259,19 +256,23 @@ function Resolve-RavenWheel {
     return "https://github.com/EverMind-AI/Raven/releases/download/v$version/raven-$version-py3-none-any.whl"
 }
 
-function Resolve-RavenPluginWheel([string]$FilePrefix) {
-    # A product engine's wheel from the same release, or $null. Absent is not a
-    # failure: the release still installs and the roster reports the product
-    # disabled, which is what it already does when the package is missing.
-    # Reads the asset list Resolve-RavenWheel cached rather than calling the
-    # API again; a release resolved through the page fallback leaves no cache,
-    # and the engine is then treated as absent because nothing lists it.
-    if (-not $script:RavenRelease) { return $null }
-    $asset = $script:RavenRelease.assets |
-        Where-Object { $_.browser_download_url -match "/$FilePrefix-[^/]+\.whl$" } |
-        Select-Object -First 1
-    if ($asset) { return $asset.browser_download_url }
-    return $null
+function Resolve-RavenPluginList([string]$WheelUrl) {
+    # The plugin list from the same release directory: the wheels the release
+    # ships beside raven, one `name @ url` line each, written by the release
+    # workflow from what it built. What a complete install is made of lives
+    # there, not here, and `raven upgrade` installs from the same file. Returns
+    # a local temp-file path, or $null when the release carries none (0.1.13
+    # and older), which installs raven alone as it always did.
+    if ($WheelUrl -notmatch "/[^/]+\.whl$") { return $null }
+    $url = $WheelUrl -replace "/[^/]+\.whl$", "/raven-plugins.txt"
+    $dest = Join-Path ([IO.Path]::GetTempPath()) ("raven-plugins-" + [guid]::NewGuid().ToString("N") + ".txt")
+    try {
+        Invoke-WebRequest $url -OutFile $dest
+    } catch {
+        return $null
+    }
+    if (-not (Get-Content $dest | Where-Object { $_.Trim() })) { return $null }
+    return $dest
 }
 
 function Resolve-RavenConstraints([string]$WheelUrl) {
@@ -502,53 +503,41 @@ function Install-Raven([string]$UvPath, [string]$NodePath) {
             Write-Warn "Release has no locked-constraints asset; installing without version pinning."
             $cArgs = @()
         }
-        Write-Info "  installing $wheelUrl"
-        # The everos memory plugin ships as a sibling wheel from the same
-        # release; older releases carry none, and its absence only means the
-        # default memory backend degrades loudly at boot. Kept apart from the
-        # engines' arguments: the ladder below drops the engines one rung
-        # before the memory plugin, and a shared array would take
-        # everos-memory down with the first engine that cannot build.
+        $pArgs = @()
         $mArgs = @()
-        $everosUrl = Resolve-RavenPluginWheel "everos_memory"
-        if ($everosUrl) {
-            $mArgs = @("--with", "everos-memory@$everosUrl")
-            Write-Info "  with memory plugin $everosUrl"
+        $plugins = Resolve-RavenPluginList $wheelUrl
+        if ($plugins) {
+            Write-Info "  with the release's plugins:"
+            Get-Content $plugins | ForEach-Object { Write-Info "    $_" }
+            $pArgs = @("--with-requirements", $plugins)
+            $allLines = @(Get-Content $plugins | Where-Object { $_.Trim() })
+            $memoryLines = @($allLines | Where-Object { $_ -match "^everos-memory " })
+            if ($memoryLines.Count -gt 0 -and $memoryLines.Count -lt $allLines.Count) {
+                $memoryOnly = Join-Path ([IO.Path]::GetTempPath()) ("raven-plugins-memory-" + [guid]::NewGuid().ToString("N") + ".txt")
+                Set-Content -Path $memoryOnly -Value $memoryLines -Encoding ascii
+                $mArgs = @("--with-requirements", $memoryOnly)
+            }
         } else {
-            Write-Warn "This release carries no EverOS memory plugin wheel; long-term memory stays off (raven doctor explains)."
+            Write-Warn "This release carries no plugin list; long-term memory, Raven-Design and Raven-PPT stay off (raven doctor explains)."
         }
-        # The product engines ship as their own wheels from the same release.
-        # Absent ones are a warning, not a failure: the release still installs
-        # and Raven-Design / Raven-PPT stay disabled the way discovery already
-        # reports them.
-        $eArgs = @()
-        foreach ($engine in @(
-            @{ Prefix = "design_engine"; Package = "design-engine"; Label = "design engine"; Product = "Raven-Design" },
-            @{ Prefix = "ppt_engine";    Package = "ppt-engine";    Label = "deck engine";   Product = "Raven-PPT" }
-        )) {
-            $url = Resolve-RavenPluginWheel $engine.Prefix
-            if ($url) {
-                $eArgs += @("--with", "$($engine.Package)@$url")
-                Write-Info "  with $($engine.Label) $url"
-            } else {
-                Write-Warn "This release carries no $($engine.Package) wheel; $($engine.Product) stays disabled (raven doctor explains)."
-            }
+        Write-Info "  installing $wheelUrl"
+        # A rung per loss, loudest first: the engines carry native builds a
+        # platform can refuse on its own, so they go before the memory plugin,
+        # and both go before the channel extras. `raven doctor` names what is
+        # missing. Each `if` reads the exit code of the rung before it.
+        & $UvPath tool install --force @cArgs @pArgs "raven[channels] @ $wheelUrl"
+        if ($LASTEXITCODE -ne 0 -and $mArgs.Count -gt 0) {
+            Write-Warn "A product engine failed to install; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
+            & $UvPath tool install --force @cArgs @mArgs "raven[channels] @ $wheelUrl"
         }
-        try {
-            & $UvPath tool install --force @cArgs @mArgs @eArgs "raven[channels] @ $wheelUrl"
-            if ($LASTEXITCODE -ne 0) { throw "channel extras install failed" }
-        } catch {
-            Write-Warn "Channel dependencies failed to install; retrying with base raven. Some channels stay unavailable (see: raven channels list)."
-            & $UvPath tool install --force @cArgs @mArgs @eArgs $wheelUrl
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warn "A product engine failed to install; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
-                & $UvPath tool install --force @cArgs @mArgs $wheelUrl
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Warn "EverOS memory plugin failed to install; long-term memory stays off (raven doctor explains)."
-                    & $UvPath tool install --force @cArgs $wheelUrl
-                    if ($LASTEXITCODE -ne 0) { Fail "Raven install failed." }
-                }
-            }
+        if ($LASTEXITCODE -ne 0 -and $pArgs.Count -gt 0) {
+            Write-Warn "No plugin could be installed; long-term memory stays off (raven doctor explains)."
+            & $UvPath tool install --force @cArgs "raven[channels] @ $wheelUrl"
+        }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn "Channel dependencies failed to install; installing base raven only. Some channels stay unavailable (see: raven channels list)."
+            & $UvPath tool install --force @cArgs $wheelUrl
+            if ($LASTEXITCODE -ne 0) { Fail "Raven install failed." }
         }
     }
     & $UvPath tool update-shell | Out-Null
@@ -631,27 +620,32 @@ function Install-Office {
 # `uv tool dir --bin`, which this session's PATH may not carry yet, so invoke it
 # by absolute path.
 #
-# Unlike install.sh, a non-zero page exit only warns: under `irm | iex` this is
-# the caller's own interactive PowerShell, and Ctrl-C -- the ordinary way to end
-# a foreground page -- comes back non-zero, so exiting on it would close the
-# window the reader is standing in.
+# A non-zero page exit only warns: under `irm | iex` this is the caller's own
+# interactive PowerShell, and Ctrl-C -- the ordinary way to end a foreground
+# page -- comes back non-zero, so exiting on it would close the window the
+# reader is standing in.
 function Start-Web([string]$UvPath) {
     $binDir = ""
     try { $binDir = [string](& $UvPath tool dir --bin 2>$null) } catch { $binDir = "" }
     $bin = if ($binDir) { Join-Path $binDir "raven.exe" } else { $null }
     if (-not $bin -or -not (Test-Path $bin)) { $bin = Join-Path $HOME ".local\bin\raven.exe" }
     if (-not (Test-Path $bin)) {
-        Write-Warn "raven is not where this script looked for it; open a new PowerShell window and run: raven web"
+        Write-Warn "raven is not where this script looked for it; open a new PowerShell window and run: raven"
+        return
+    }
+    # The release this script just installed may predate `raven web` (0.1.13
+    # does). Ask before calling, and end on the command every release has.
+    & $bin web --help *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ""
+        Write-Ok "Raven installed. Open a new PowerShell window, then run: raven"
         return
     }
     Write-Host ""
     Write-Ok "Starting Raven -- your browser will open in a moment. Ctrl-C here stops it."
     Write-Host ""
-    & $bin web --stop > $null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warn "could not clear the gateway a previous install left running; start the page with 'raven web'"
-        return
-    }
+    & $bin web --stop *> $null
+    if ($LASTEXITCODE -ne 0) { Write-Warn "could not stop a previous gateway; continuing" }
     & $bin web --foreground
     if ($LASTEXITCODE -ne 0) {
         Write-Warn "the page ended with exit code $LASTEXITCODE; start it again with 'raven web'"
@@ -670,7 +664,7 @@ function Main {
     # `raven` has to work in the session the reader comes back to.
     Add-ProcessPath (Join-Path $HOME ".local\bin")
 
-    Start-Web $uv
+    if (-not $env:RAVEN_NO_LAUNCH) { Start-Web $uv }
 }
 
 Main
