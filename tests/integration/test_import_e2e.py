@@ -237,7 +237,7 @@ async def test_full_pipeline_memory_files(scanner: ClaudeCodeScanner, tmp_path: 
 
 @pytest.mark.asyncio
 async def test_batching_large_conversation(scanner: ClaudeCodeScanner, tmp_path: Path) -> None:
-    """160 messages -> four store calls of 50, 50, 50 and 10, is_final only on the last, every one bulk."""
+    """160 messages -> eight store calls of 20, is_final only on the last, every one bulk."""
     results = await scanner.scan()
     items = _items_of_kind(scanner, results, SourceKind.CONVERSATION, source_key="sess-large")
     assert len(items) == 1
@@ -249,8 +249,8 @@ async def test_batching_large_conversation(scanner: ClaudeCodeScanner, tmp_path:
 
     assert summary.submitted == 1
     sizes = [len(call["messages"]) for call in backend.store_calls]
-    assert sizes == [50, 50, 50, 10]
-    assert [call["metadata"]["is_final"] for call in backend.store_calls] == [False, False, False, True]
+    assert sizes == [20] * 8
+    assert [call["metadata"]["is_final"] for call in backend.store_calls] == [False] * 7 + [True]
     assert all(call["metadata"]["bulk"] is True for call in backend.store_calls)
     assert sum(sizes) == 160
 

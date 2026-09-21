@@ -250,15 +250,15 @@ class TestErrorIsolation:
 class TestBatching:
     @pytest.mark.asyncio
     async def test_msg_count_limit(self, tmp_path: Path) -> None:
-        """120 messages -> 3 batches (50 + 50 + 20), only the last one final, every one bulk."""
+        """120 messages -> 6 batches of 20, only the last one final, every one bulk."""
         state = ImportState(path=tmp_path / "state.json")
         backend = FakeBackend()
         scanner = FakeScanner({"k1": _session(n_msgs=120, session_id="s1", content="x")})
 
         await run_import([(scanner, _scan_result("k1"))], backend, state)
 
-        assert [len(c["messages"]) for c in backend.calls] == [50, 50, 20]
-        assert [c["metadata"]["is_final"] for c in backend.calls] == [False, False, True]
+        assert [len(c["messages"]) for c in backend.calls] == [20] * 6
+        assert [c["metadata"]["is_final"] for c in backend.calls] == [False] * 5 + [True]
         assert all(c["metadata"]["bulk"] is True for c in backend.calls)
 
     def test_a_batch_stays_inside_the_zone_everos_extracts_linearly(self) -> None:
@@ -269,7 +269,7 @@ class TestBatching:
         memory-file source it belonged to."""
         from raven.importer.orchestrator import _BATCH_MSG_LIMIT
 
-        assert _BATCH_MSG_LIMIT <= 50
+        assert _BATCH_MSG_LIMIT <= 20
 
     @pytest.mark.asyncio
     async def test_char_limit_fallback(self, tmp_path: Path) -> None:
@@ -288,10 +288,10 @@ class TestBatching:
 
     @pytest.mark.asyncio
     async def test_is_final_only_on_last_batch(self, tmp_path: Path) -> None:
-        """Exactly 50 messages -> 1 batch with is_final=True."""
+        """Exactly 20 messages -> 1 batch with is_final=True."""
         state = ImportState(path=tmp_path / "state.json")
         backend = FakeBackend()
-        scanner = FakeScanner({"k1": _session(n_msgs=50, session_id="s1", content="x")})
+        scanner = FakeScanner({"k1": _session(n_msgs=20, session_id="s1", content="x")})
 
         await run_import([(scanner, _scan_result("k1"))], backend, state)
 
