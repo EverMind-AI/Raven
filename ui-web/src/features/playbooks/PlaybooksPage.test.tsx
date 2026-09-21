@@ -443,14 +443,14 @@ describe('the playbook library', () => {
 
     expect(document.querySelector('.pbtab')?.textContent).toBe('gui.pb.tab_stint')
     const names = Array.from(document.querySelectorAll('.pbtbl .nm')).map((cell) => cell.textContent)
-    expect(names).toEqual(['planner', 'qagui.pb.role_terminal', 'build'])
+    expect(names).toEqual(['planner', 'verifiergui.pb.role_terminal', 'build'])
     /* The command runs on this machine, so it is shown whole rather than named. */
     expect(screen.getByText('python3 -m compileall -q src')).toBeTruthy()
     expect(screen.getByText('reports/brief_{NN}.md')).toBeTruthy()
     /* An append-only path must not read like an owned one. */
     expect(screen.getByText('.stint/FIXLOG.md (gui.pb.role_appends)')).toBeTruthy()
     /* Only the role the stint actually reads is marked as able to end it. */
-    expect(names.filter((n) => n?.includes('gui.pb.role_terminal'))).toEqual(['qagui.pb.role_terminal'])
+    expect(names.filter((n) => n?.includes('gui.pb.role_terminal'))).toEqual(['verifiergui.pb.role_terminal'])
   })
 
   it('marks no role as able to end a stint that has no word for ending one', async () => {
